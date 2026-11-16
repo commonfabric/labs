@@ -1375,6 +1375,14 @@ values in place, and over the result of another per-element construct.
   a default of its own (`execution-and-storage.md` §2.2). A `Body` has
   the `site` step of the call in its `within`, so two calls of one
   callee have two records, and each holds the default of its own call.
+  Where a callee calls another pattern that is compiled in, and both
+  calls bind one slot of the outermost caller, the entry of a body of
+  the inner callee holds the default of the outer callee where that
+  declares one, and the inner callee's own otherwise. That follows
+  from the ruling on the order of defaults: the outer callee's place
+  is nearer the end of the chain that the read resolves through, and
+  the reader's own default is read only where no place along the
+  chain declares one.
   A handler is one `Body` however many bindings name it, and which path
   of the callee's argument a state path of it is bound to is a fact of
   the binding. *Assumed* (section 8, question 110): for a state path of
@@ -1399,6 +1407,27 @@ values in place, and over the result of another per-element construct.
   path of its argument that code of the callee stores, in a state
   cell, in the argument of a child, or through a handle, as it does
   for one at a path of the result.
+
+No record of the plan holds what such a reference carries. A slot has
+the schema of its reader, and the place the caller bound has the
+caller's schema, so the schema that the callee declares for the path,
+and with it the default, is in no record that the runtime reads when
+it stores the link. And where code of the caller names a path of the
+callee's result that passes the argument path on, as `price.symbol`
+does for a callee that returns its `symbol`, the compiler resolves
+the name to the caller's slot at compile time, and no link is stored
+for that read at all. *Assumed* (section 8, question 119): value code
+supplies the default. Where value code of the callee stores the
+reference, it hands the runtime the reference together with the
+callee's default, and the runtime stores the link with that default
+in its schema unless the schema of the caller's place declares one.
+Where code of the caller reads such a path of the result, the
+compiler writes a read of the slot that takes the callee's default
+where the slot yields nothing, as expression code of the callee
+does. The prototype does the first and not the second, which is a
+defect of it. Both are the same in an element body over an array of
+references, over an array of plain values in place, and over the
+result of another per-element construct.
 
 **Where a slot of `Body.reads` sits in the body's argument.** By ruling
 each entry of `Body.reads` holds the path in the body's argument at
@@ -11707,6 +11736,11 @@ this document made.
      reader's declare different defaults for a property. The
      alternative keeps today's two answers, and a body that reads an
      object whole and one that selects the property read two values.
+     The prototype's comparison has one value of this kind, in a
+     fixture: a path of a compiled-in callee's result that passes on a
+     path the caller left empty reads the callee's default where the
+     read is addressed at the path, in the executor's run and in
+     today's, and reads nothing in today's read of the whole result.
 104. **A stored `undefined`, and a default written at setup** (for the
      project owner). Today a stored `undefined` reads as an absent
      value does, and a pattern writes its own argument defaults into
@@ -11978,3 +12012,20 @@ this document made.
      reference by key. The question decides which case a stored list
      is of. It does not arise for the result of another per-element
      construct, which is no stored form.
+119. **Which record holds the default that a stored reference to a
+     path bound by a call carries** (for the project owner). By ruling
+     a reference to a path of its argument that a compiled-in callee
+     passes on carries the callee's declared default: the link holds
+     the schema the callee declares for the path (section 1.1). No
+     record of the plan gives the runtime that schema. *Assumed:*
+     value code supplies it. Value code of the callee hands the
+     runtime the reference with the callee's default when it stores
+     it, through a function of the host that no document defines; and
+     a read by code of the caller of a path of the callee's result
+     that passes the argument path on is written as a read of the
+     caller's slot with the callee's default. The alternative gives
+     `Output`, or the slot, a member for the schema that a reference
+     passed on carries, so that the plan alone states it. The same in
+     an element body over an array of references, over an array of
+     plain values in place, and over the result of another
+     per-element construct.

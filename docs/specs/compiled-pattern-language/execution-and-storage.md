@@ -1360,6 +1360,21 @@ caller left out is that path of the instance's argument document
 nothing"). A read through the handle gives the default of the place where
 it has one, and a write through it stores a value at that path.
 
+A write below such a position has to start from something, as a write
+below the root of a state cell that holds nothing does (section 4.1).
+The ruling there names a state cell. *Assumed* (section 11, question
+92), for a place that holds nothing and is no state cell, such as a
+path of the argument whose schema declares a default array and onto
+which a handler pushes: the write starts from the default that a read
+of the place gives, by the rule of section 2.2, and stores the result
+at the path, and the members taken from the default keep the label of
+a default. The runtime of today reaches the same value by another
+route. It has written the callee's default into the argument document
+at setup (`#applySetupState` in `runtime/runner/src/runner.ts`), which
+this design is assumed not to do (`plan-and-label-templates.md` §8,
+question 104). The prototype's executor starts from the empty array,
+by a reading of its code that no test covers.
+
 Where two entries name one path, the argument holds the form that carries
 more: `value` before `enumeration`, `enumeration` before `shape`, and a
 reference stand-in where the only entries are `identity` and `shape`, since
@@ -5570,6 +5585,18 @@ Added by the ruling that the scheduler is switched per space (section 9):
     alternative gives `ComputedInput` a schema member. Not about a
     per-element construct: the same in an element body in each of the
     three cases.
+92. **A write below a place that holds nothing and is no state cell**
+    (section 2.4). By ruling a write below the root of a state cell
+    that holds nothing creates the document from the default with the
+    write applied. The ruling does not name another place, such as a
+    path of the argument at which nothing is stored and whose schema
+    declares a default array, onto which a handler pushes through a
+    handle. *Assumed:* the write starts from the default that a read
+    of the place gives and stores the result at the path, and the
+    members taken from the default keep the label of a default. The
+    alternative starts from nothing, so that a `push` yields an array
+    of the pushed value alone. The same for a handle in an element
+    body in each of the three cases of a per-element source.
 
 ### 11.2 For another document or the prototype
 
