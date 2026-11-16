@@ -765,7 +765,10 @@ export class ServingPlane {
     );
     this.#endpoint.onRequest(
       "host.heapSnapshot",
-      ({ directory }) => ({ path: host.heapSnapshot(directory) }),
+      ({ directory }) => {
+        this.#endpoint.notify("worker.heapSnapshotStarted", null);
+        return { path: host.heapSnapshot(directory) };
+      },
     );
     this.#endpoint.onRequest(
       "host.runLifecycleVerb",

@@ -2307,11 +2307,6 @@ the per-epic implementation notes).
   `SERVER_EXECUTION_COMPILE_CACHE_DIR`, the compiled-module cache directory
   every toolshed on the host shares (default `compiled-modules` under
   `CACHE_DIR`).
-  SIGUSR2 to a toolshed writes a V8 heap snapshot of its main thread and then
-  of each serving worker, one at a time, into `HEAP_SNAPSHOT_DIR` (default
-  `TMPDIR`, else `/tmp`), with a manifest that names each file and the spaces
-  placed on its worker. Each snapshot stops its thread while V8 writes it and
-  needs memory beside the heap; a worker's watchdog does not count that time.
   [`docs/plans/serving-loop-worker.md`](../plans/serving-loop-worker.md) is the
   design and its stages.
 - **Current default and planned end state.** On by default in the toolshed

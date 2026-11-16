@@ -628,6 +628,12 @@ the lease:
   process that was suspended, fires it once on waking.
 - The count starts at the worker's first message. Until its modules have loaded
   a worker has no timer to post from and no lease to release.
+- A heap snapshot the pool asks for (`heapSnapshots()`, SIGUSR2 to a toolshed)
+  holds the worker's thread while V8 writes it, which for a large heap can take
+  longer than the limit. The worker says when it begins, and the count does not
+  run from then until the snapshot's answer. Silence before that word counts,
+  so a worker that stalled ahead of the request is killed as any other, and the
+  request fails with its port.
 - A long stretch of work on the worker's thread silences the heartbeat too, since
   the heartbeat is a timer on that thread. So a serving runtime runs the
   type-check, transform and emit step of a compile in the compile workers its

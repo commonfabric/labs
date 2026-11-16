@@ -5,8 +5,11 @@
  * snapshot with. Each snapshot stops its thread until it is written, and a
  * worker's watchdog does not count that time.
  *
- * The files go to `HEAP_SNAPSHOT_DIR`, or the system's temporary directory,
- * beside a manifest naming each file and the spaces placed on its worker. A
+ * The files go to `HEAP_SNAPSHOT_DIR`, or `toolshed-heap-snapshots` in the
+ * system's temporary directory, beside a manifest naming each file and the
+ * spaces placed on its worker. A snapshot holds whatever the isolate held,
+ * secrets and people's data among it, so the directory is created readable
+ * by this process's user alone, and each file is made so once written. A
  * signal that arrives while snapshots are being written is ignored.
  */
 
@@ -31,8 +34,9 @@ export type HeapSnapshotManifest = {
 
 /**
  * Writes the main thread's snapshot and then each serving worker's into
- * `directory`, which it creates if need be, and a manifest beside them.
- * Returns the manifest's path and contents.
+ * `directory`, which it creates if need be, and a manifest beside them, each
+ * readable by this process's user alone. Returns the manifest's path and
+ * contents.
  */
 export async function writeHeapSnapshots(
   directory: string,
@@ -40,10 +44,14 @@ export async function writeHeapSnapshots(
     directory: string,
   ) => Promise<WorkerHeapSnapshot[] | undefined>,
 ): Promise<{ path: string; manifest: HeapSnapshotManifest }> {
-  await Deno.mkdir(directory, { recursive: true });
+  await Deno.mkdir(directory, { recursive: true, mode: 0o700 });
   const startedAt = new Date().toISOString();
   const main = writeThreadHeapSnapshot(directory, "main");
+  await Deno.chmod(main, 0o600);
   const workers = await workerHeapSnapshots(directory);
+  for (const worker of workers ?? []) {
+    if ("path" in worker.outcome) await Deno.chmod(worker.outcome.path, 0o600);
+  }
   const manifest: HeapSnapshotManifest = {
     pid: Deno.pid,
     startedAt,
@@ -54,7 +62,9 @@ export async function writeHeapSnapshots(
   const path = `${directory}/heap-${Deno.pid}-${
     startedAt.replaceAll(":", "-")
   }.json`;
-  await Deno.writeTextFile(path, JSON.stringify(manifest, null, 2) + "\n");
+  await Deno.writeTextFile(path, JSON.stringify(manifest, null, 2) + "\n", {
+    mode: 0o600,
+  });
   return { path, manifest };
 }
 
@@ -80,7 +90,7 @@ export function listenForHeapSnapshotSignal(options: {
     }
     writing = true;
     options.log(
-      `heap-snapshot: writing every isolate's to ${options.directory}`,
+      `heap-snapshot: writing a snapshot of every isolate to ${options.directory}`,
     );
     writeHeapSnapshots(options.directory, options.workerHeapSnapshots)
       .then(({ path, manifest }) => {

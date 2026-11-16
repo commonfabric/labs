@@ -7,20 +7,30 @@ import { assert, assertEquals } from "@std/assert";
 import type { WorkerHeapSnapshot } from "@commonfabric/runner/executor/serving-worker-host";
 import { writeHeapSnapshots } from "./heap-snapshots.ts";
 
-Deno.test("writes the main thread's snapshot and a manifest naming it and each worker's, in a directory it creates", async () => {
+/** The permission bits of `path`. */
+async function modeOf(path: string): Promise<number | null> {
+  const { mode } = await Deno.stat(path);
+  return mode === null ? null : mode & 0o777;
+}
+
+Deno.test("writes the main thread's snapshot and a manifest naming it and each worker's, in a directory it creates, each readable by its user alone", async () => {
   const root = await Deno.makeTempDir({ prefix: "heap-snapshots-" });
   try {
     const directory = `${root}/snapshots`;
     const asked: string[] = [];
+    const workerFile = `${directory}/heap-worker-1`;
     const workers: WorkerHeapSnapshot[] = [
-      { outcome: { path: `${directory}/heap-worker-1` }, spaces: ["did:a"] },
+      { outcome: { path: workerFile }, spaces: ["did:a"] },
       { outcome: { error: "the worker closed" }, spaces: [] },
     ];
     const { path, manifest } = await writeHeapSnapshots(
       directory,
-      (where) => {
+      async (where) => {
         asked.push(where);
-        return Promise.resolve(workers);
+        // As a worker's thread writes it, under the process's umask.
+        await Deno.writeTextFile(workerFile, "{}", { mode: 0o644 });
+        await Deno.chmod(workerFile, 0o644);
+        return workers;
       },
     );
     assertEquals(asked, [directory]);
@@ -29,6 +39,10 @@ Deno.test("writes the main thread's snapshot and a manifest naming it and each w
     assertEquals(head, '{"snapshot":');
     assertEquals(manifest.workers, workers);
     assertEquals(JSON.parse(await Deno.readTextFile(path)), manifest);
+    assertEquals(await modeOf(directory), 0o700);
+    for (const file of [manifest.main, workerFile, path]) {
+      assertEquals(await modeOf(file), 0o600, file);
+    }
   } finally {
     await Deno.remove(root, { recursive: true });
   }

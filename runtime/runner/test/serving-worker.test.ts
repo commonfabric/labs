@@ -415,10 +415,8 @@ describe("serving-worker", () => {
     expect(held.length).toBe(size);
   });
 
-  it("writes a heap snapshot of each worker's isolate with the spaces placed on it, and its watchdog does not count the time that takes", async () => {
-    // A watchdog that kills a worker silent for 40 ms: far shorter than a
-    // snapshot of a serving worker's heap takes to write.
-    await start({ watchdogIntervalMs: 20, watchdogLimitMs: 40 });
+  it("writes a heap snapshot of each worker's isolate with the spaces placed on it", async () => {
+    await start();
     await startParent(space, 1);
     await readTotal(space, 2);
 

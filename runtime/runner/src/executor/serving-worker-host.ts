@@ -274,7 +274,9 @@ type PoolWorker = {
 
   /**
    * Whether the worker is writing a heap snapshot the pool asked for, which
-   * holds its thread, so that its watchdog does not count that silence.
+   * holds its thread, so that its watchdog does not count that silence. Set
+   * when the worker says it has begun, not when the pool asks: a worker that
+   * stalled before then is a stalled worker.
    */
   writingHeapSnapshot: boolean;
 
@@ -677,10 +679,11 @@ export class ServingWorkerPool {
    * Has each worker, once those that are starting serve, write a heap
    * snapshot of its isolate into `directory`, one worker after another, so
    * that only one isolate at a time holds the memory V8 writes a snapshot
-   * with. A worker's watchdog does not count the time it spends writing. A
-   * worker that left the pool before it answered is left out; one
-   * that could not write is reported with its error. Rejects once the pool
-   * is closed.
+   * with. A worker's watchdog does not count the time it spends writing, from
+   * the worker's word that it has begun, and counts any silence before that,
+   * so a worker that stalled ahead of the request is killed as any other. A
+   * worker that left the pool before it answered is left out; one that could
+   * not write is reported with its error. Rejects once the pool is closed.
    */
   async heapSnapshots(directory: string): Promise<WorkerHeapSnapshot[]> {
     const workers = await this.#startedWorkers();
@@ -688,7 +691,6 @@ export class ServingWorkerPool {
     for (const worker of workers) {
       if (worker.gone) continue;
       const spaces = [...worker.spaces];
-      worker.writingHeapSnapshot = true;
       try {
         const path = await worker.bridge.requestHeapSnapshot(directory);
         snapshots.push({ outcome: { path }, spaces });
@@ -1060,6 +1062,9 @@ export class ServingWorkerPool {
         },
         onOccupancy: (occupancy) => this.#onOccupancy(started, occupancy),
         onHeartbeat: (heartbeat) => this.#onHeartbeat(started, heartbeat),
+        onHeapSnapshotStarted: () => {
+          started.writingHeapSnapshot = true;
+        },
         ...(this.#options.moduleCompiler === undefined
           ? {}
           : { moduleCompiler: this.#options.moduleCompiler }),

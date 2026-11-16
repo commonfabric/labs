@@ -97,6 +97,13 @@ export type ServingPortBridgeOptions = {
   onHeartbeat?: (heartbeat: WorkerHeartbeat) => void;
 
   /**
+   * Called once the worker has begun a heap snapshot
+   * ({@link ServingPortBridge.requestHeapSnapshot}), which holds its thread
+   * until the request is answered.
+   */
+  onHeapSnapshotStarted?: () => void;
+
+  /**
    * Where the worker's `compiler.compile` requests run: the compile workers
    * the process shares. Absent, each such request fails as a failure of the
    * place it was to run.
@@ -221,7 +228,9 @@ export class ServingPortBridge {
 
   /**
    * Has the worker write a heap snapshot of its isolate into `directory`, and
-   * returns the file's path.
+   * returns the file's path. The worker says when it begins
+   * (`onHeapSnapshotStarted`); a request queued behind a handler that holds
+   * the thread waits with it.
    */
   async requestHeapSnapshot(directory: string): Promise<string> {
     const { path } = await this.#endpoint.request("host.heapSnapshot", {
@@ -487,6 +496,9 @@ export class ServingPortBridge {
     // The endpoint has already counted it, which is all the watchdog reads.
     endpoint.onNotice("worker.heartbeat", (heartbeat) => {
       this.#options.onHeartbeat?.(heartbeat);
+    });
+    endpoint.onNotice("worker.heapSnapshotStarted", () => {
+      this.#options.onHeapSnapshotStarted?.();
     });
     endpoint.onNotice("host.occupancy", ({ occupancy }) => {
       this.#options.onOccupancy?.(occupancy);

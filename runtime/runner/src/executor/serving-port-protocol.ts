@@ -312,6 +312,13 @@ export type PlaneNotices = {
    */
   "worker.heartbeat": WorkerHeartbeat;
 
+  /**
+   * The worker has begun the heap snapshot `host.heapSnapshot` asked for, and
+   * posts nothing more until the answer: writing one holds its thread. The
+   * watchdog does not count that silence, and counts any before this notice.
+   */
+  "worker.heapSnapshotStarted": null;
+
   "server.noteExecutorCommit": { notice: AdmittedCommitNotice };
   "loopback.close": { transport: number };
   "host.stats": { stats: ServingLoopStats };

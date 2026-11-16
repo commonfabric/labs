@@ -63,7 +63,7 @@ if (import.meta.main) {
   Deno.addSignalListener("SIGTERM", shutdown.handle);
   listenForHeapSnapshotSignal({
     directory: Deno.env.get("HEAP_SNAPSHOT_DIR") ||
-      Deno.env.get("TMPDIR") || "/tmp",
+      `${Deno.env.get("TMPDIR") || "/tmp"}/toolshed-heap-snapshots`,
     workerHeapSnapshots: (directory) =>
       serverExecutionHost()?.workerHeapSnapshots(directory) ??
         Promise.resolve(undefined),

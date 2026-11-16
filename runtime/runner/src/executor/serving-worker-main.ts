@@ -52,6 +52,12 @@ export type ServingWorkerMainOptions = {
     serviceIdentity: Identity,
   ) => Promise<LifecycleVerbRun>;
 
+  /**
+   * Writes a heap snapshot of this worker's isolate into `directory` and
+   * returns the file's path; absent, {@link writeThreadHeapSnapshot}.
+   */
+  heapSnapshot?: (directory: string) => string;
+
   /** The serving runtimes' outbound fetch; absent, the platform fetch. */
   fetch?: RuntimeFetch;
 
@@ -172,8 +178,9 @@ export function serveFromPort(
       // server's thread.
       diagnostics: () => servingLoopDiagnostics(ownCompiler),
       collectedMemory,
-      heapSnapshot: (directory) =>
-        writeThreadHeapSnapshot(directory, `worker-${threadId}`),
+      heapSnapshot: options.heapSnapshot ??
+        ((directory) =>
+          writeThreadHeapSnapshot(directory, `worker-${threadId}`)),
       occupancy: () => host.occupancy,
       noteSpaceAclChanged: (space) => host.noteSpaceAclChanged(space),
       runLifecycleVerb: (space, verb) => {
