@@ -15,7 +15,7 @@
  * rewrite was not applied.
  */
 
-import { dirname, join, relative, resolve } from "@std/path";
+import { common, dirname, join, relative, resolve } from "@std/path";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import {
@@ -26,6 +26,7 @@ import {
   type PatternIndexProgramFile,
 } from "@commonfabric/pattern-index/client";
 import {
+  GARDENER_INPUT_FORMAT,
   type GardenerInput,
   type ObjectGenerator,
   type RewriteChange,
@@ -43,8 +44,21 @@ export interface PublishOptions {
   /** The entry file. */
   entry: string;
 
-  /** The program root its files are named against; the entry's directory by default. */
+  /**
+   * The program root its files are named against; by default the common
+   * directory of the entry, the tests and the data files, as for
+   * `cf piece new`.
+   */
   root?: string;
+
+  /** Test entries packaged with it, as `cf piece new --test` packages them. */
+  testPaths?: readonly string[];
+
+  /** Data files attached to it, as `cf piece new --datafile` attaches them. */
+  dataFilePaths?: readonly string[];
+
+  /** The export the program runs, as `cf piece new --main-export` names it. */
+  mainExport?: string;
 
   description?: string;
   hashtags?: readonly string[];
@@ -62,8 +76,19 @@ export interface PublishOptions {
 
 /** What publishing reaches the world through, so a test can stand in for it. */
 export interface PublishDeps {
-  /** Compiles the program on disk at `entry` under `root`. */
-  compileEntry: (entry: string, root: string) => Promise<CompiledPattern>;
+  /**
+   * Compiles the program on disk at `entry` under `program.root`, packaged
+   * as `cf piece new` packages it, so the id is the one a deploy computes.
+   */
+  compileEntry: (
+    entry: string,
+    program: {
+      root: string;
+      testPaths: readonly string[];
+      dataFilePaths: readonly string[];
+      mainExport?: string;
+    },
+  ) => Promise<CompiledPattern>;
 
   /** Compiles a program whose files were rewritten. */
   compileProgram: (program: RuntimeProgram) => Promise<CompiledPattern>;
@@ -241,10 +266,26 @@ export async function publishPatternFromDisk(
   deps: PublishDeps,
 ): Promise<PublishReport> {
   const entry = resolve(options.entry);
-  const root = resolve(options.root ?? dirname(entry));
+  const testPaths = (options.testPaths ?? []).map((path) => resolve(path));
+  const dataFilePaths = (options.dataFilePaths ?? []).map((path) =>
+    resolve(path)
+  );
+  // The rule `resolveLocalProgram` applies, stated here because the rewrite
+  // maps program names back to disk under the same root.
+  const root = resolve(
+    options.root ??
+      common([entry, ...testPaths, ...dataFilePaths].map((p) => dirname(p))),
+  );
   const meta = metadataFor(options, await deps.readTextFile(entry));
   await requireMembership(deps);
-  const original = await deps.compileEntry(entry, root);
+  const original = await deps.compileEntry(entry, {
+    root,
+    testPaths,
+    dataFilePaths,
+    ...(options.mainExport === undefined
+      ? {}
+      : { mainExport: options.mainExport }),
+  });
   if (original.patternId === undefined) {
     throw new PublishError(
       `${options.entry} compiled to no durable pattern id, so it cannot be published`,
@@ -304,11 +345,18 @@ export async function publishPatternFromDisk(
     ...(priorPatternId !== undefined ? { priorPatternId } : {}),
     ...(remixedFrom !== undefined ? { remixedFrom } : {}),
   }));
-  await deps.store.recordPublished(entry, response.patternId);
-
+  const stored = await deps.client.getPattern({
+    patternId: response.patternId,
+  }).catch(() => undefined);
+  // Only one's own publication is a version later ones continue: an
+  // unchanged copy of someone else's pattern is theirs, and the index would
+  // refuse it as a predecessor.
+  if (response.created || stored?.mine === true) {
+    await deps.store.recordPublished(entry, response.patternId);
+  }
+  if (!response.created) priorPatternId = undefined;
   const listing = await requestListing(deps, response.patternId);
-  const handle = await deps.client.getPattern({ patternId: response.patternId })
-    .then((pattern) => pattern.handle, () => undefined);
+  const handle = stored?.handle;
   return {
     outcome: "published",
     patternId: response.patternId,
@@ -380,12 +428,23 @@ async function checkLocally(
       reason: `the index served no privacy prompt (${describeFailure(error)})`,
     };
   }
+  if (
+    gardener.inputFormat !== undefined &&
+    gardener.inputFormat !== GARDENER_INPUT_FORMAT
+  ) {
+    return {
+      status: "skipped",
+      reason:
+        `the index's privacy check reads input this cf does not write (${gardener.inputFormat}); update cf`,
+    };
+  }
   const entryName = `/${relative(root, resolve(options.entry))}`;
   const rewrittenMeta = new Map<CompiledPattern, typeof meta>();
   let outcome;
   try {
     outcome = await runPrivacyCheck<CompiledPattern>({
       gardener,
+      entry: entryName,
       input: gardenerInput(original, meta),
       generate: async (request) => {
         try {
@@ -465,6 +524,20 @@ async function checkLocally(
         notApplied: `these files have uncommitted edits: ${
           dirty.map((path) => relative(Deno.cwd(), path)).join(", ")
         }; commit them and publish again, or pass --allow-dirty`,
+      };
+    }
+  }
+  // The check takes as long as the model does; a file edited meanwhile is
+  // not the file the rewrite was made from, so none is written over it.
+  for (const [i, file] of changed.entries()) {
+    const now = await deps.readTextFile(diskPaths[i]).catch(() => undefined);
+    if (now !== before.get(file.name)) {
+      return {
+        ...base,
+        applied: false,
+        notApplied: `${
+          shown[i]
+        } changed on disk while it was being checked; publish again`,
       };
     }
   }

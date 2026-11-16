@@ -43,9 +43,20 @@ export interface PatternDocMetadata {
   keywords: readonly string[];
 }
 
-/** A doc comment's text with its leading `/**`, ` * ` and `*\/` removed. */
+/**
+ * What may come before a pattern's doc comment: blank lines, `//` and `///`
+ * comments (a tier marker, a compiler directive), and import statements.
+ */
+const PREAMBLE =
+  /^(?:\s+|\/\/[^\n]*(?:\n|$)|import\s[^;]*?from\s*["'][^"']*["']\s*;?|import\s*["'][^"']*["']\s*;?)*/;
+
+/**
+ * A doc comment's text with its leading `/**`, ` * ` and `*\/` removed: the
+ * first one, where only {@link PREAMBLE} comes before it.
+ */
 const docCommentBody = (source: string): string | undefined => {
-  const match = source.match(/^\s*\/\*\*([\s\S]*?)\*\//);
+  const preamble = source.match(PREAMBLE)?.[0] ?? "";
+  const match = source.slice(preamble.length).match(/^\/\*\*([\s\S]*?)\*\//);
   if (match === null) return undefined;
   return match[1]
     .split("\n")
@@ -118,6 +129,15 @@ export interface CompileLocalPatternOptions {
   /** The program root its files are named against; the entry's directory by default. */
   root?: string;
 
+  /** Test entries packaged with it. */
+  testPaths?: readonly string[];
+
+  /** Data files attached to it. */
+  dataFilePaths?: readonly string[];
+
+  /** The export the program runs; `default` by default. */
+  mainExport?: string;
+
   /**
    * Reads the published patterns the source imports (`cf:pattern:<id>`), so
    * its compile resolves them. Without one, a source that imports any fails
@@ -142,6 +162,15 @@ export const compileLocalPattern = async (
     {
       main: options.main,
       ...(options.root === undefined ? {} : { root: options.root }),
+      ...(options.testPaths === undefined
+        ? {}
+        : { testPaths: options.testPaths }),
+      ...(options.dataFilePaths === undefined
+        ? {}
+        : { dataFilePaths: options.dataFilePaths }),
+      ...(options.mainExport === undefined
+        ? {}
+        : { mainExport: options.mainExport }),
     },
   );
   return await compileProgram(runtime, space, program, options.getClient);

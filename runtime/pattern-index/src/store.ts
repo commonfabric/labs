@@ -16,7 +16,7 @@
  * `CF_PATTERN_INDEX_HOME` when set.
  */
 
-import { dirname, join, resolve } from "@std/path";
+import { join, resolve } from "@std/path";
 import {
   type DIDKey,
   Identity,
@@ -54,7 +54,7 @@ interface PublishedFile {
   /** Absolute entry file path to the ids it published as, oldest first. */
   entries: Record<string, string[]>;
 
-  /** Absolute directory to the published pattern its source was fetched from. */
+  /** Absolute file path to the published pattern it was fetched from. */
   sources: Record<string, string>;
 
   /** Piece id to the published pattern it was created from. */
@@ -230,29 +230,31 @@ export class PatternIndexStore {
     return (await this.#readPublished()).pieces[pieceId];
   }
 
-  /** Records that the source written to `directory` came from `patternId`. */
-  async recordSource(directory: string, patternId: string): Promise<void> {
+  /**
+   * Records that each of `paths`, files just written from a published
+   * pattern's source, came from `patternId`.
+   */
+  async recordSource(
+    paths: readonly string[],
+    patternId: string,
+  ): Promise<void> {
     const file = await this.#readPublished();
     await this.#writeJson(PUBLISHED, {
       ...file,
-      sources: { ...file.sources, [resolve(directory)]: patternId },
+      sources: {
+        ...file.sources,
+        ...Object.fromEntries(paths.map((path) => [resolve(path), patternId])),
+      },
     });
   }
 
   /**
-   * The published pattern the source at `entryPath` was fetched from: the
-   * record for the nearest directory holding it, or `undefined`.
+   * The published pattern the entry file at `entryPath` was fetched from, or
+   * `undefined`. Only a file written from it counts, so new work beside or
+   * below a fetched pattern is not credited to it.
    */
   async sourceOf(entryPath: string): Promise<string | undefined> {
-    const { sources } = await this.#readPublished();
-    let dir = dirname(resolve(entryPath));
-    while (true) {
-      const found = sources[dir];
-      if (found !== undefined) return found;
-      const parent = dirname(dir);
-      if (parent === dir) return undefined;
-      dir = parent;
-    }
+    return (await this.#readPublished()).sources[resolve(entryPath)];
   }
 
   async #readMembership(): Promise<MembershipFile | undefined> {

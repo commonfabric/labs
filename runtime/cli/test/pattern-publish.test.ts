@@ -324,7 +324,7 @@ describe("pattern-publish", () => {
         hashtags: [],
         program: { main: "/x.tsx", files: [] },
       });
-      await store.recordSource(dir, "id-theirs");
+      await store.recordSource([entry], "id-theirs");
       const report = await publishedReport(
         { entry },
         depsWith(scripted([PASS], [])),
@@ -345,7 +345,7 @@ describe("pattern-publish", () => {
         hashtags: [],
         program: { main: "/x.tsx", files: [] },
       });
-      await store.recordSource(dir, "id-mine-earlier");
+      await store.recordSource([entry], "id-mine-earlier");
       const report = await publishedReport(
         { entry },
         depsWith(scripted([PASS], [])),
@@ -356,7 +356,7 @@ describe("pattern-publish", () => {
     });
 
     it("names no remix for source published unchanged from the pattern it was fetched from", async () => {
-      await store.recordSource(dir, "id-original");
+      await store.recordSource([entry], "id-original");
       const report = await publishedReport(
         { entry },
         depsWith(scripted([PASS], [])),
@@ -365,6 +365,99 @@ describe("pattern-publish", () => {
       expect(report.remixedFrom).toBeUndefined();
       const publish = index.calls.find((call) => call.fn === "publishPattern")!;
       expect(publish.body).not.toHaveProperty("remixedFrom");
+    });
+
+    it("credits no remix to a new file beside one fetched from a published pattern", async () => {
+      await store.recordSource([join(dir, "fetched.tsx")], "id-theirs");
+      const report = await publishedReport(
+        { entry },
+        depsWith(scripted([PASS], [])),
+      );
+
+      expect(report.remixedFrom).toBeUndefined();
+    });
+
+    it("names no predecessor after an unchanged copy of someone else's pattern is published and then edited", async () => {
+      const someoneElse = await Identity.fromPassphrase(
+        "pattern publish other",
+      );
+      index.admit(someoneElse.did(), "p-other");
+      await new PatternIndexClient({
+        baseUrl: "https://index.test",
+        signer: someoneElse,
+        fetchFn: index.fetchFn,
+      }).publishPattern({
+        patternId: "id-original",
+        description: "theirs",
+        hashtags: [],
+        program: { main: "/x.tsx", files: [] },
+      });
+      await store.recordSource([entry], "id-original");
+      const unchanged = await publishedReport(
+        { entry },
+        depsWith(scripted([PASS], [])),
+      );
+      expect(unchanged.created).toBe(false);
+
+      await Deno.writeTextFile(entry, GENERALIZED);
+      await store.recordSource([entry], "id-original");
+      const edited = await publishedReport(
+        { entry },
+        depsWith(scripted([PASS], [])),
+      );
+
+      expect(edited.priorPatternId).toBeUndefined();
+      expect(edited.remixedFrom).toBe("id-original");
+    });
+
+    it("writes nothing and publishes nothing when the file changed on disk during the check", async () => {
+      const deps = depsWith(scripted([FAIL, PASS], [REWRITE]));
+      const report = await publishPatternFromDisk({ entry }, {
+        ...deps,
+        compileProgram: async (program) => {
+          // The person's agent edits the file while the model is working.
+          await Deno.writeTextFile(entry, `${SOURCE}// edited\n`);
+          return deps.compileProgram(program);
+        },
+      });
+
+      expect(report.outcome).toBe("blocked");
+      expect(written.size).toBe(0);
+      expect(await Deno.readTextFile(entry)).toBe(`${SOURCE}// edited\n`);
+    });
+
+    it("skips the local check for a prompt whose input format this cf does not write", async () => {
+      index = new FakePatternIndex({
+        privacyPrompt: { ...PRIVACY_PROMPT, inputFormat: "pattern-json-2" },
+      });
+      index.admit(signer.did(), "p-me");
+      const report = await publishedReport(
+        { entry },
+        depsWith(scripted([FAIL], [])),
+      );
+
+      expect(report.localCheck).toMatchObject({ status: "skipped" });
+    });
+
+    it("compiles with the tests and data files under their common directory, as cf piece new does", async () => {
+      await Deno.mkdir(join(dir, "tests"));
+      const test = join(dir, "tests", "bins.test.tsx");
+      const deps = depsWith(undefined);
+      let seen: Parameters<PublishDeps["compileEntry"]>[1] | undefined;
+      await publishedReport({ entry, testPaths: [test], mainExport: "Bins" }, {
+        ...deps,
+        compileEntry: (path, program) => {
+          seen = program;
+          return deps.compileEntry(path, program);
+        },
+      });
+
+      expect(seen).toEqual({
+        root: dir,
+        testPaths: [test],
+        dataFilePaths: [],
+        mainExport: "Bins",
+      });
     });
 
     it("reads the daily cap as when to try again, having published", async () => {

@@ -2711,7 +2711,10 @@ export async function savePiecePattern(
     );
   }
   await writeSourcePackage(program, outPath);
-  await recordSavedIndexSource(piece.id, outPath);
+  await recordSavedIndexSource(
+    piece.id,
+    program.files.map((file) => join(outPath, file.name)),
+  );
   // Finding what the source declares parses it, which reaches the compiler.
   // deno-lint-ignore cf-imports/no-inline-module-import
   const { undeclaredDataFileWarning } = await import(
@@ -2723,20 +2726,20 @@ export async function savePiecePattern(
 
 /**
  * Where the piece came from the pattern index (`cf piece new --from-index`),
- * remembers that the source now under `outPath` is that pattern's, so
+ * remembers that the files `written` are that pattern's source, so
  * publishing it again credits the original as `remixedFrom`. Best effort: a
  * missing or unreadable record costs that credit and nothing else.
  */
 async function recordSavedIndexSource(
   pieceId: string,
-  outPath: string,
+  written: readonly string[],
 ): Promise<void> {
   try {
     const store = new PatternIndexStore(
       patternIndexStoreDir(resolvePatternIndexUrl(undefined)),
     );
     const patternId = await store.indexedPiece(pieceId);
-    if (patternId !== undefined) await store.recordSource(outPath, patternId);
+    if (patternId !== undefined) await store.recordSource(written, patternId);
   } catch (error) {
     console.error(
       `Could not record where this source came from: ${describeFailure(error)}`,

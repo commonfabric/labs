@@ -39,6 +39,9 @@ import {
 /** What `cf pattern publish` takes beyond the target options. */
 interface PublishCLIOptions extends PieceCLIOptions {
   root?: string;
+  test?: string[];
+  datafile?: string[];
+  mainExport?: string;
   description?: string;
   hashtags?: string;
   keywords?: string;
@@ -55,29 +58,47 @@ const listFlag = (value: string | undefined): string[] | undefined =>
     .filter((v) => v !== "");
 
 /**
- * Which of `paths` git reports as changed or untracked, or `undefined`
- * where they are not in a git working tree.
+ * Which of `paths` a rewrite may not be written over, or `undefined` where
+ * they are not in a git working tree. A path may be written over only when
+ * `git checkout` can take the rewrite back: git tracks it, it has no
+ * uncommitted edits, and it is not a symbolic link, whose target is a
+ * different file from the one git compared.
  */
 export const gitUncommitted = async (
   paths: readonly string[],
 ): Promise<string[] | undefined> => {
-  const dirty: string[] = [];
-  for (const path of paths) {
+  const git = async (cwd: string, ...args: string[]) => {
     const { code, stdout } = await new Deno.Command("git", {
-      args: [
-        "-C",
-        dirname(path),
-        "status",
-        "--porcelain",
-        "--untracked-files=all",
-        "--",
-        basename(path),
-      ],
+      args: ["-C", cwd, ...args],
       stdout: "piped",
       stderr: "null",
     }).output();
-    if (code !== 0) return undefined;
-    if (new TextDecoder().decode(stdout).trim() !== "") dirty.push(path);
+    return { code, stdout: new TextDecoder().decode(stdout) };
+  };
+  const dirty: string[] = [];
+  for (const path of paths) {
+    const cwd = dirname(path);
+    if ((await git(cwd, "rev-parse", "--is-inside-work-tree")).code !== 0) {
+      return undefined;
+    }
+    const link = await Deno.lstat(path).then(
+      (info) => info.isSymlink,
+      () => false,
+    );
+    const tracked =
+      (await git(cwd, "ls-files", "--error-unmatch", "--", basename(path)))
+        .code === 0;
+    const status = await git(
+      cwd,
+      "status",
+      "--porcelain",
+      "--untracked-files=all",
+      "--",
+      basename(path),
+    );
+    if (link || !tracked || status.code !== 0 || status.stdout.trim() !== "") {
+      dirty.push(path);
+    }
   }
   return dirty;
 };
@@ -111,6 +132,15 @@ async function publish(
       {
         entry: absPath(entry),
         ...(options.root === undefined ? {} : { root: absPath(options.root) }),
+        ...(options.test === undefined
+          ? {}
+          : { testPaths: options.test.map((path) => absPath(path)) }),
+        ...(options.datafile === undefined
+          ? {}
+          : { dataFilePaths: options.datafile.map((path) => absPath(path)) }),
+        ...(options.mainExport === undefined
+          ? {}
+          : { mainExport: options.mainExport }),
         ...(options.description === undefined
           ? {}
           : { description: options.description }),
@@ -127,8 +157,12 @@ async function publish(
           : { remixedFrom: options.remixedFrom }),
       },
       {
-        compileEntry: (main, root) =>
-          compileLocalPattern(runtime, space, { main, root, getClient }),
+        compileEntry: (main, program) =>
+          compileLocalPattern(runtime, space, {
+            main,
+            ...program,
+            getClient,
+          }),
         compileProgram: (program) =>
           compileProgram(runtime, space, program, getClient),
         client,
@@ -189,8 +223,22 @@ export const pattern = new Command()
         .arguments("<entry:string>")
         .option(
           "--root <path:string>",
-          "The program root its files are named against; the entry's " +
-            "directory by default, as for cf piece new.",
+          "The program root its files are named against; as for cf piece new.",
+        )
+        .option(
+          "--test <path:string>",
+          "A test entry packaged with it, as for cf piece new. Repeatable; " +
+            "pass the same ones the piece was deployed with, so the id matches.",
+          { collect: true },
+        )
+        .option(
+          "--datafile <path:string>",
+          "A data file attached to it, as for cf piece new. Repeatable.",
+          { collect: true },
+        )
+        .option(
+          "--main-export <name:string>",
+          "The export it runs, as for cf piece new.",
         )
         .option(
           "--description <text:string>",

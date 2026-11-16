@@ -53,6 +53,31 @@ describe("pattern", () => {
       ).toEqual([join(dir, "edited.tsx"), join(dir, "new.tsx")]);
     });
 
+    it("returns a gitignored file and a committed symbolic link, which git checkout cannot restore", async () => {
+      await git(dir, "init", "-q");
+      await Deno.writeTextFile(join(dir, ".gitignore"), "ignored.tsx\n");
+      await Deno.writeTextFile(join(dir, "target.tsx"), "export {};\n");
+      await Deno.symlink("target.tsx", join(dir, "link.tsx"));
+      await git(dir, "add", ".");
+      await git(
+        dir,
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.com",
+        "commit",
+        "-qm",
+        "x",
+      );
+      await Deno.writeTextFile(join(dir, "ignored.tsx"), "export {};\n");
+
+      expect(
+        await gitUncommitted(
+          ["ignored.tsx", "link.tsx", "target.tsx"].map((n) => join(dir, n)),
+        ),
+      ).toEqual([join(dir, "ignored.tsx"), join(dir, "link.tsx")]);
+    });
+
     it("returns undefined outside a git working tree", async () => {
       await Deno.writeTextFile(join(dir, "a.tsx"), "export {};\n");
 
