@@ -104,13 +104,20 @@ describe("console/index-inspector", () => {
   });
 
   describe("listingLabel", () => {
-    it("joins the listing state, the bucket and both flags in that order", () => {
+    it("joins the listing state, whether it is listed, the bucket and both flags in that order", () => {
       expect(listingLabel({
         listing: "passed",
+        listed: true,
         bucket: "main",
         grandfathered: true,
         hidden: true,
-      })).toBe("passed · main · grandfathered · hidden");
+      })).toBe("passed · listed · main · grandfathered · hidden");
+    });
+
+    it("says unlisted for a pattern the index does not list", () => {
+      expect(listingLabel({ listing: "held", listed: false })).toBe(
+        "held · unlisted",
+      );
     });
 
     it("reads a listing state with no bucket on its own", () => {

@@ -266,6 +266,24 @@ describe("access", () => {
       );
     });
 
+    it("renews from the kept root a stored chain that does not decode", async () => {
+      const root = await store.createRootKey();
+      await store.recordMembership({
+        handle: "p-1",
+        role: "user",
+        root: root.did(),
+      });
+      const path = `${dir}/membership.json`;
+      const file = JSON.parse(await Deno.readTextFile(path));
+      file.chains[cfKey.did()] = "not a list of links";
+      await Deno.writeTextFile(path, JSON.stringify(file));
+      const chain = await chainForSigner(store, cfKey, NOW);
+      expect((await checkIndexChain(chain!, cfKey.did(), NOW)).root).toBe(
+        root.did(),
+      );
+      expect(await store.chainFor(cfKey.did())).toEqual(chain);
+    });
+
     it("returns the held chain as it is when the root is kept elsewhere", async () => {
       const elsewhere = await Identity.fromPassphrase("access root elsewhere");
       await store.recordMembership({
@@ -412,9 +430,32 @@ describe("access", () => {
         fetchFn: index.fetchFn,
         chain,
       });
-      expect(result).toMatchObject({ handle: "p-9", root: root.did() });
+      expect(result).toMatchObject({
+        handle: "p-9",
+        root: root.did(),
+        rootKeptHere: false,
+      });
       expect(await store.chainFor(secondMachine.did())).toEqual(chain);
       expect(await store.rootKey()).toBeUndefined();
+    });
+
+    it("returns the root as kept here when this store holds its key", async () => {
+      const root = await store.createRootKey();
+      const index = new FakePatternIndex();
+      index.admit(root.did(), "p-9");
+      const chain = await issueIndexChain({
+        issuer: root,
+        to: secondMachine.did(),
+        held: [],
+      });
+      const result = await adoptIndexChain({
+        baseUrl: BASE,
+        signer: secondMachine,
+        store,
+        fetchFn: index.fetchFn,
+        chain,
+      });
+      expect(result.rootKeptHere).toBe(true);
     });
 
     it("throws for a chain rooted elsewhere than the membership already recorded", async () => {

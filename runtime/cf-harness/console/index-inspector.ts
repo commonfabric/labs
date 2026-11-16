@@ -50,11 +50,16 @@ export const eventBadges = (
 export const listingLabel = (
   pattern: Pick<
     PatternIndexListedPattern,
-    "listing" | "bucket" | "hidden" | "grandfathered"
+    "listing" | "listed" | "bucket" | "hidden" | "grandfathered"
   >,
 ): string | undefined => {
   const parts = [
     pattern.listing,
+    pattern.listed === undefined
+      ? undefined
+      : pattern.listed
+      ? "listed"
+      : "unlisted",
     pattern.bucket,
     pattern.grandfathered ? "grandfathered" : undefined,
     pattern.hidden ? "hidden" : undefined,

@@ -3316,10 +3316,11 @@ Use `--launcher-help` for launcher-specific help. Normal CLI flags such as
 The pattern index is where patterns are published and found. `cf index` holds
 the membership commands and `cf pattern` the publishing ones: `cf index join`
 once, `cf pattern publish` each time a pattern is ready to share, and
-`cf pattern ls` (also `cf pattern mine`) to see where they stand. All of them
-sign with the identity (`--identity` or `CF_IDENTITY`) and talk to the index
-`--pattern-index-url` or `CF_PATTERN_INDEX_URL` names, the deployment's by
-default.
+`cf pattern ls` (also `cf pattern mine`) to see where they stand. Every call to
+the index signs with the identity (`--identity` or `CF_IDENTITY`), except the
+invite redemption in `cf index join`, which the index-only root key it creates
+signs (see "Joining"). All of them talk to the index `--pattern-index-url` or
+`CF_PATTERN_INDEX_URL` names, the deployment's by default.
 
 ### Joining
 

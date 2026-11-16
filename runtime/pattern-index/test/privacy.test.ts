@@ -310,6 +310,29 @@ describe("privacy", () => {
       expect(outcome.status).toBe("rewritten");
     });
 
+    it("counts a rewrite that changes nothing as failed, never checking it again", async () => {
+      const unchanged = {
+        files: [{ name: "/main.tsx", contents: INPUT.files[0].contents }],
+        changes: [],
+      };
+      // A second check of the same source that happened to pass.
+      const { generate } = scriptedModel([FAIL, PASS], [unchanged, unchanged]);
+      const { recompile, compiled } = recompileFrom();
+      const outcome = await runPrivacyCheck({
+        gardener: GARDENER,
+        input: INPUT,
+        generate,
+        recompile,
+      });
+      expect(outcome.status).toBe("held");
+      if (outcome.status !== "held") return;
+      expect(outcome.reasons).toEqual([
+        "rewrite 1: changed nothing",
+        "rewrite 2: changed nothing",
+      ]);
+      expect(compiled).toEqual([]);
+    });
+
     it("counts a rewrite whose check answers malformed as failed, and holds", async () => {
       const { generate } = scriptedModel([FAIL, { nonsense: true }, FAIL], [
         REWRITE,
@@ -359,10 +382,11 @@ describe("privacy", () => {
     });
 
     it("returns held after two rewrites, never recompiling more often", async () => {
-      const { generate } = scriptedModel([FAIL, FAIL, FAIL], [
-        REWRITE,
-        REWRITE,
-      ]);
+      const again = {
+        ...REWRITE,
+        files: [{ name: "/main.tsx", contents: "export default 2;" }],
+      };
+      const { generate } = scriptedModel([FAIL, FAIL, FAIL], [REWRITE, again]);
       const { recompile, compiled } = recompileFrom();
       const outcome = await runPrivacyCheck({
         gardener: GARDENER,

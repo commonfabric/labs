@@ -68,6 +68,17 @@ describe("pattern-mine", () => {
       );
     });
 
+    it("returns the republish command with an entry path a shell would split quoted", async () => {
+      const [held] = await mineRows(
+        [row({ patternId: "h", listing: "held" })],
+        () => Promise.resolve("/work/my patterns/main.tsx"),
+      );
+
+      expect(held.next).toBe(
+        "held: fix the findings, then run cf pattern publish '/work/my patterns/main.tsx'",
+      );
+    });
+
     it("returns no findings for a held pattern whose gates passed", async () => {
       const [held] = await mineRows([
         row({

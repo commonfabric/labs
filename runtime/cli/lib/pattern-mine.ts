@@ -11,6 +11,7 @@ import type {
   PatternIndexListedPattern,
   PatternIndexListing,
 } from "@commonfabric/pattern-index/client";
+import { shellWord } from "./shell-quote.ts";
 
 /** One lineage as `cf pattern mine` reports it. */
 export interface MinePatternRow {
@@ -46,7 +47,9 @@ const nextStep = (
   row: Pick<MinePatternRow, "listing" | "listed" | "bucket" | "patternId">,
   entry: string | undefined,
 ): string => {
-  const publish = `cf pattern publish ${entry ?? "<entry file>"}`;
+  const publish = `cf pattern publish ${
+    entry === undefined ? "<entry file>" : shellWord(entry)
+  }`;
   switch (row.listing) {
     case "not_requested":
       return `unlisted: run ${publish} to request a listing`;

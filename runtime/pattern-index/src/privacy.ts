@@ -418,6 +418,12 @@ export const runPrivacyCheck = async <C>(options: {
     }
     const replaced = new Map(rewrite.files.map((file) => [file.name, file]));
     const files = current.files.map((file) => replaced.get(file.name) ?? file);
+    if (files.every((file, i) => file.contents === current.files[i].contents)) {
+      // A check of unchanged source can only disagree with the first by
+      // chance, and the source it would pass is the one that failed.
+      reasons.push(`rewrite ${attempt}: changed nothing`);
+      continue;
+    }
     let next: { input: GardenerInput; compiled: C };
     try {
       next = await recompile(files);

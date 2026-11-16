@@ -74,7 +74,14 @@ export async function chainForSigner(
   const membership = await store.membership();
   if (membership === undefined) return undefined;
   if (membership.root === signer.did()) return undefined;
-  const held = await store.chainFor(signer.did());
+  let held: Uint8Array[] | undefined;
+  try {
+    // Reading decodes the stored links, so a corrupt value fails here and
+    // is renewed below like any other unusable chain.
+    held = await store.chainFor(signer.did());
+  } catch {
+    held = undefined;
+  }
   if (held !== undefined) {
     try {
       const checked = await checkIndexChain(held, signer.did(), nowSeconds);

@@ -1543,9 +1543,10 @@ The cloud function implementation is outside this checkout. Its matching
 contract is:
 
 - `recordEvent` accepts `{ patternId, eventType }` signed with CF1, and drops a
-  `did` or `note` an older client sends. It attributes the event to the signer's
-  member and stores only a per-lineage actor hash and a day, so no stored field
-  names the author or links their events across patterns.
+  `did` or `note` the request carries. `PatternIndexClient` still sends `did`,
+  which an older deployment checks against the signer. It attributes the event
+  to the signer's member and stores only a per-lineage actor hash and a day, so
+  no stored field names the author or links their events across patterns.
 - `listPatterns` returns each pattern's `events` as counts by event type on that
   exact generation, excluding inherited evidence, with no breakdown by author.
   Each pattern names its author by `handle`, a pseudonym stable on that index,
@@ -1553,7 +1554,8 @@ contract is:
   discovery arrives as `listing`, `listed`, `bucket`, `hidden` and
   `grandfathered`. `getPattern` names its author the same way.
 - `listEvents` answers HTTP 410: the index keeps no per-author event stream. The
-  console's read allowlist leaves it out, so the page cannot ask for it.
+  console's read allowlist leaves it out, so the page cannot ask for it, and
+  `PatternIndexClient.listEvents()` is deprecated for the same reason.
 
 ## Retracting an owned generation
 

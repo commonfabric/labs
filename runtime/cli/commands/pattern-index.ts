@@ -1,6 +1,8 @@
 import { Command, ValidationError } from "@cliffy/command";
-import { decodeDelegationChains } from "@commonfabric/identity";
-import { isDIDKey } from "@commonfabric/identity/did";
+import {
+  decodeDelegationChains,
+  isCanonicalEd25519DID,
+} from "@commonfabric/identity";
 import { PatternIndexError } from "@commonfabric/pattern-index/client";
 
 import { cliText } from "../lib/cli-name.ts";
@@ -119,8 +121,8 @@ async function whoami(options: IndexOptions): Promise<void> {
 }
 
 async function admit(options: IndexOptions, did: string): Promise<void> {
-  if (!isDIDKey(did)) {
-    throw new ValidationError(`"${did}" is not a did:key.`);
+  if (!isCanonicalEd25519DID(did)) {
+    throw new ValidationError(`"${did}" is not an ed25519 did:key.`);
   }
   const signer = await loadIdentity(requireIdentityPath(options));
   const client = await openPatternIndexClient({

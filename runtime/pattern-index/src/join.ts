@@ -255,7 +255,8 @@ export async function adoptIndexChain(
     signer: options.signer.did(),
     joined: recorded === undefined,
     storeDir: store.dir,
-    rootKeptHere: false,
+    // A root made here by an earlier join may also have issued this chain.
+    rootKeptHere: (await store.rootKey())?.did() === checked.root,
   };
 }
 
