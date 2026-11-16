@@ -1,7 +1,7 @@
 /**
  * Synthetic Topics data, and reach into the unmodified Topics sources, for
- * measuring the board's mention pivot and a topic's backlink lift in one
- * process with no browser and no server.
+ * measuring the board's mention pivot, its index by number, and a topic's
+ * backlink lift in one process with no browser and no server.
  *
  * A fixture is written straight to storage as one linked document per topic
  * and the board's list of links to them. Nothing goes through the board's
@@ -129,6 +129,14 @@ export interface TopicsFixtureOptions {
    * formed or not, or `null` for a topic that stores none.
    */
   readonly shortNames?: Readonly<Record<number, string | null>>;
+
+  /**
+   * Every topic is one filed before its board published an index, and not
+   * bound to it since: its lookup is handed the pivot and no index, so it
+   * reads the whole pivot. Absent, every topic is wired as `addTopic` wires
+   * one, to the pivot and to its index.
+   */
+  readonly unbound?: boolean;
 }
 
 /** A comment's timestamps, which are what the reached lifts read of it. */
@@ -186,6 +194,9 @@ export interface TopicsFixture {
 
   /** The topic index at each board entry, in board order. */
   readonly board: readonly number[];
+
+  /** Whether every topic's lookup is handed no index; see the option. */
+  readonly unbound?: boolean;
 }
 
 /**
@@ -264,7 +275,9 @@ export function buildTopicsFixture(
   if (options.duplicateBoardEntry !== undefined) {
     board.push(options.duplicateBoardEntry);
   }
-  return { topics, board };
+  return options.unbound === true
+    ? { topics, board, unbound: true }
+    : { topics, board };
 }
 
 /**
@@ -371,14 +384,21 @@ function fixtureTopic(
 //
 
 /** The Topics lifts reached by authored name. */
-export const TOPICS_LIFT_NAMES = ["crossrefTable", "backlinksOf"] as const;
+export const TOPICS_LIFT_NAMES = [
+  "crossrefTable",
+  "crossrefIndexOf",
+  "backlinksOf",
+] as const;
 
 /** The authored name of one reached Topics lift. */
 export type TopicsLiftName = typeof TOPICS_LIFT_NAMES[number];
 
 /** Which module of a Topics program defines each lift. */
-const LIFT_MODULES: Readonly<Record<TopicsLiftName, "board" | "topic">> = {
+const LIFT_MODULES: Readonly<
+  Record<TopicsLiftName, "board" | "crossrefIndex" | "topic">
+> = {
   crossrefTable: "board",
+  crossrefIndexOf: "crossrefIndex",
   backlinksOf: "topic",
 };
 
@@ -424,7 +444,8 @@ export function resolveTopicsProgram(
 
 /**
  * Compiles `program`, a Topics board whose entry module imports its topic
- * from a sibling `topic.tsx`, and returns its lifts by authored name from the
+ * from a sibling `topic.tsx` and its pivot's index from a sibling
+ * `crossref-index.ts`, and returns its lifts by authored name from the
  * runtime's artifact index, and `mentionedBy` from the board's exports.
  *
  * @throws Error naming the module `program` does not evaluate, or naming
@@ -444,11 +465,12 @@ export async function reachTopicsDerivations(
     throw new Error(`The Topics program evaluated no module \`${path}\`.`);
   };
   const boardPath = program.main;
+  const sibling = (name: string) =>
+    identityOf(`${boardPath.slice(0, boardPath.lastIndexOf("/") + 1)}${name}`);
   const identities = {
     board: identityOf(boardPath),
-    topic: identityOf(
-      `${boardPath.slice(0, boardPath.lastIndexOf("/") + 1)}topic.tsx`,
-    ),
+    crossrefIndex: sibling("crossref-index.ts"),
+    topic: sibling("topic.tsx"),
   };
 
   const missing: string[] = [];
@@ -570,6 +592,21 @@ export interface PivotRow {
 
   /** The topics that mention it. */
   mentionedBy: unknown[];
+
+  /** The number the row's topic stores, absent for a topic with none. */
+  name?: string;
+}
+
+/**
+ * The board's index of its pivot by number, as a reader sees it: the pivot it
+ * indexes and, under each number, links to the pivot's positions.
+ */
+export interface PivotIndex {
+  /** The pivot the positions belong to. */
+  source?: unknown;
+
+  /** The pivot's positions, by the number their rows carry. */
+  byName: Record<string, unknown[]>;
 }
 
 /** The flags every mode pins, and so the flags a mode is recognized by. */
@@ -655,14 +692,14 @@ export type TopicsDemand =
   /** A board loaded before any topic is opened: none of the reached lifts. */
   | { readonly workload: "board" }
   /**
-   * The board with one topic open: the pivot, and that topic's backlinks. A
-   * topic's comment count and last activity are stored values its verbs keep,
-   * so opening it derives nothing else.
+   * The board with one topic open: the pivot, its index, and that topic's
+   * backlinks. A topic's comment count and last activity are stored values its
+   * verbs keep, so opening it derives nothing else.
    */
   | { readonly workload: "topic-open"; readonly topic: number }
   /**
-   * The pivot, and every topic's backlinks: a scaling probe, not what a board
-   * in use demands.
+   * The pivot, its index, and every topic's backlinks: a scaling probe, not
+   * what a board in use demands.
    */
   | { readonly workload: "all-backlinks" };
 
@@ -673,6 +710,9 @@ export interface TopicsOutputs {
    * topic, when the demand starts the pivot.
    */
   readonly table?: Cell<PivotRow[]>;
+
+  /** The pivot's index by number, started whenever the pivot is. */
+  readonly index?: Cell<PivotIndex>;
 
   /** Each demanded topic's backlinks, by topic index. */
   readonly backlinks: ReadonlyMap<number, Cell<unknown[]>>;
@@ -688,6 +728,9 @@ export interface TopicsVariantStart {
 
   /** The fixture as written to storage. */
   readonly seeded: SeededTopicsFixture;
+
+  /** The outputs of the demanded lifts this transaction starts. */
+  readonly outputs: TopicsOutputs;
 
   /**
    * Returns the cell for the variant's output called `name`, apart from every
@@ -850,7 +893,14 @@ export async function measureTopicsFixture(
       storage,
       space,
       errors,
-      { topicCount: fixture.topics.length, demanded, mode, seed, variant },
+      {
+        topicCount: fixture.topics.length,
+        demanded,
+        unbound: fixture.unbound === true,
+        mode,
+        seed,
+        variant,
+      },
     );
 
   // Unset only while `reopen()` is between disposing one session and opening
@@ -965,9 +1015,10 @@ async function openTopicsSession(
   storage: EmulatedStorageManager,
   space: MemorySpace,
   errors: string[],
-  { topicCount, demanded, mode, seed, variant }: {
+  { topicCount, demanded, unbound, mode, seed, variant }: {
     readonly topicCount: number;
     readonly demanded: DemandedLifts;
+    readonly unbound: boolean;
     readonly mode: TopicsFixtureMode;
     readonly seed?: TopicsFixture;
     readonly variant?: TopicsVariant;
@@ -1013,6 +1064,7 @@ async function openTopicsSession(
       derivations,
       seeded,
       demanded,
+      unbound,
       startVariant,
     );
     outputs = lifts.outputs;
@@ -1073,8 +1125,8 @@ function storedTopicsFixture(
 /** The reached lifts a demand starts, with the topics each topic lift runs for. */
 interface DemandedLifts {
   /**
-   * Present when the pivot runs, with the topics whose backlinks run: backlinks
-   * read the pivot's result, so no demand runs them without it.
+   * Present when the pivot and its index run, with the topics whose backlinks
+   * run: backlinks read the pivot's result, so no demand runs them without it.
    */
   readonly pivot?: { readonly backlinks: readonly number[] };
 }
@@ -1135,7 +1187,8 @@ async function seedTopicsFixture(
  * Helper for {@link openTopicsSession}, which starts the lifts `demanded`
  * names over the seeded fixture, and `startVariant`'s actions when given, in
  * one transaction begun as an initialization attempt, and returns the lifts'
- * outputs apart from the variant's.
+ * outputs apart from the variant's. Each topic's lookup is handed the pivot
+ * and its index, or the pivot alone when `unbound` is set.
  */
 async function startTopicsLifts(
   runtime: Runtime,
@@ -1143,6 +1196,7 @@ async function startTopicsLifts(
   { lifts }: TopicsDerivations,
   seeded: SeededTopicsFixture,
   demanded: DemandedLifts,
+  unbound: boolean,
   startVariant?: (start: TopicsVariantStart) => readonly Cell<unknown>[],
 ): Promise<{
   readonly outputs: TopicsOutputs;
@@ -1156,32 +1210,47 @@ async function startTopicsLifts(
   // Starts one instance of each demanded lift, with `prefix` opening the cause
   // of every output it writes.
   const start = (prefix: string): TopicsOutputs => {
-    const table = demanded.pivot === undefined ? undefined : runtime.run(
+    const backlinks = new Map<number, Cell<unknown[]>>();
+    if (demanded.pivot === undefined) return { backlinks };
+    const table = runtime.run(
       tx,
       lifts.crossrefTable,
       { sources: seeded.board },
       output<PivotRow[]>(`${prefix}crossrefs`),
     );
-    const backlinks = new Map<number, Cell<unknown[]>>();
-    seeded.topics.forEach((topic, index) => {
-      if (table !== undefined && withBacklinks.has(index)) {
+    const index = runtime.run(
+      tx,
+      lifts.crossrefIndexOf,
+      { rows: table },
+      output<PivotIndex>(`${prefix}crossref-index`),
+    );
+    seeded.topics.forEach((topic, position) => {
+      if (withBacklinks.has(position)) {
         backlinks.set(
-          index,
+          position,
           runtime.run(
             tx,
             lifts.backlinksOf,
-            { table, self: topic },
-            output<unknown[]>(`${prefix}backlinks-${index}`),
+            unbound
+              ? { table, self: topic, shortName: topic.key("shortName") }
+              : {
+                table,
+                index,
+                self: topic,
+                shortName: topic.key("shortName"),
+              },
+            output<unknown[]>(`${prefix}backlinks-${position}`),
           ),
         );
       }
     });
-    return table === undefined ? { backlinks } : { table, backlinks };
+    return { table, index, backlinks };
   };
   const outputs = start("topics-fixture-");
   const variantOutputs = startVariant?.({
     tx,
     seeded,
+    outputs,
     output: <T>(name: string) => output<T>(`topics-fixture-variant-${name}`),
     startDemandedLifts: (name) =>
       outputCellsOf(start(`topics-fixture-variant-${name}-`)),
@@ -1196,10 +1265,17 @@ async function startTopicsLifts(
   return { outputs, variantOutputs };
 }
 
-/** Returns every output cell `outputs` holds, the pivot's first when held. */
+/**
+ * Returns every output cell `outputs` holds, the pivot's and then its index's
+ * first when held.
+ */
 function outputCellsOf(outputs: TopicsOutputs): Cell<unknown>[] {
-  const { table, backlinks } = outputs;
-  return [...(table === undefined ? [] : [table]), ...backlinks.values()];
+  const { table, index, backlinks } = outputs;
+  return [
+    ...(table === undefined ? [] : [table]),
+    ...(index === undefined ? [] : [index]),
+    ...backlinks.values(),
+  ];
 }
 
 /**
@@ -1231,11 +1307,13 @@ function recordTopicsReads(
   const reads = {
     bodies: {
       crossrefTable: emptyBody(),
+      crossrefIndexOf: emptyBody(),
       backlinksOf: emptyBody(),
       other: emptyBody(),
     },
     attempts: {
       crossrefTable: emptyAttempts(),
+      crossrefIndexOf: emptyAttempts(),
       backlinksOf: emptyAttempts(),
       other: emptyAttempts(),
       unattributed: emptyAttempts(),

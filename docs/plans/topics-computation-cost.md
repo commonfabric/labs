@@ -28,8 +28,9 @@ each topic and each mention to its `equalsKey()`, and files each source under
 the topics it mentions. One run is written to grow with the topics plus the
 mentions, where comparing every pair with `equals()` grew with their product.
 It still rebuilds the whole table on every change to the board or to any
-topic's mentions. Each topic's `backlinksOf` scans the resulting table to find
-its own row. Topic rendering separately derives active
+topic's mentions. Each topic's `backlinksOf` finds its own row in the resulting
+table through the board's index of it by topic number, and scans the table
+where it cannot. Topic rendering separately derives active
 comments, active links, presence booleans, and link-resolution inputs.
 A topic's comment count and last activity are stored values its verbs keep in
 the write that changes them.
@@ -158,6 +159,43 @@ implementation and prototypes can begin earlier.
       is rollout-safe. Exit: reduced lookup-stage scaling, bounded maintenance
       cost, and a written old/new board-topic compatibility matrix. Depends on
       T0.
+
+      The board's lookup index is keyed by topic number and verified by
+      identity. `crossrefTable` writes each row's topic number as `name`, and
+      `crossrefIndexOf` in `patterns/apps/topics/crossref-index.ts`, a lift in a
+      module of its own called directly by the board, groups the pivot's
+      positions under it, recording which pivot it indexes. A topic takes it
+      through a new optional input, `boardCrossrefIndex`, which `addTopic` and
+      the composer wire and the board publishes as `crossrefIndex`; a topic
+      filed before it holds none and scans until the step 7 manifest's
+      link-bind of `<board>/crossrefIndex` onto `<topic>/boardCrossrefIndex`.
+      `backlinksOf` reads the positions under its own number only when the
+      index's source `equals` the pivot it is wired to, keeps the row whose
+      topic `equals` itself, and scans otherwise, so the number decides what is
+      read and never what is returned. Under lazy materialization a numbered
+      topic's lookup then registers the same reads at 4 and at 32 topics, and
+      filing a topic re-runs only its own lookup and those of the topics it
+      mentions, both of which `topics-lazy-lookup-reruns.test.ts` holds; the
+      cost probe (`scripts/topics-computation-cost.ts`) measures the same
+      reads at 128 and 512. An unbound topic's lookup scans, and the read
+      budget gates that scan on a case of its own. The runtime `keyBy` index over Cell identity
+      (`docs/features/collection-indexes.md`) is not used: it writes a member
+      document and maintenance records per member, which grows the stored
+      documents per topic. Carrying the index through `boardCrossrefs` is not
+      used either: that link resolves to the pivot array every existing topic
+      reads, and changing what it holds changes that shape for every reader of
+      every generation. Either generation of board pairs with either generation
+      of topic, and every pairing returns the scan's answer:
+
+      | board \ topic | topic without the input | topic with it, unbound | topic with it, bound |
+      | --- | --- | --- | --- |
+      | board without `crossrefIndex` | scans | scans | the bound index is frozen or absent: its positions read the pivot as it is now, else it scans |
+      | board with `crossrefIndex` | scans; ignores each row's `name` | scans | reads its row by number |
+
+      `scripts/topics-restore.ts` relinks `boardCrossrefIndex` where the topic
+      declares it and the board publishes `crossrefIndex`, retires it where the
+      topic does not declare it, and leaves it out, before the apply, where the
+      board does not publish it.
 - [ ] **T3 — Maintain the mention relation.** Prototype stable per-source edge
       production, per-source-occurrence mention deduplication, and shared
       grouping by destination. The derived edges reach `groupBy` through the
@@ -426,8 +464,8 @@ board's package does not upgrade those existing children.
 
 1. Inventory target piece IDs, source revisions, stored input/result contracts,
    linked spaces, active generations, each topic's stored `topicStateVersion`,
-   and which topics hold `boardCrossrefs`, `mentionable`, and the legacy
-   `boardNames`, and what each links to. A topic no longer declares
+   and which topics hold `boardCrossrefs`, `boardCrossrefIndex`,
+   `mentionable`, and the legacy `boardNames`, and what each links to. A topic no longer declares
    `boardNames` — it stores the number its board calls it by, which `addTopic`
    passes at create and `recordName` writes onto a topic that predates it — so
    what an inventory finds there is a stored link the current projection no

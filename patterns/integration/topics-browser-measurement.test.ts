@@ -268,7 +268,8 @@ describe("topics-browser-measurement", () => {
           ]),
         ).toEqual([
           ["crossrefTable", "({ sources })"],
-          ["backlinksOf", "({ table, self })"],
+          ["crossrefIndexOf", "({ rows })"],
+          ["backlinksOf", "({ table, index, self, shortName })"],
         ]);
         expect(
           sample.lifts.filter((lift) =>

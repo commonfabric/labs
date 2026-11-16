@@ -27,6 +27,7 @@ import {
   mentionableRowsOf,
 } from "../../product/collection-naming/mentionable.ts";
 import { type NamesMap } from "../../product/collection-naming/naming.ts";
+import { bucketRowsByName } from "./crossref-index.ts";
 import Topics, {
   activityOrderOf,
   distinctByIdentity,
@@ -54,6 +55,7 @@ import Topic, {
   topicAuthorFromPerson,
   topicAuthorLabel,
   type TopicComment,
+  type TopicCrossrefIndex,
   type TopicLink,
   type TopicLinkKind,
   type TopicMentionRefMap,
@@ -259,6 +261,10 @@ export default pattern(() => {
   const profileBoardCrossrefs = new Writable<TopicCrossrefRow[] | Default<[]>>(
     [],
   );
+  const profileBoardCrossrefIndex = new Writable<
+    // deno-lint-ignore ban-types
+    Default<TopicCrossrefIndex, { byName: {} }>
+  >({ byName: {} });
   // The namespace the composer is handed, standalone for the same reason: the
   // composer allocates out of it and passes what it allocated into the topic
   // it files, so a browser create is numbered exactly as a headless one is.
@@ -316,6 +322,7 @@ export default pattern(() => {
     topics: profileTopics,
     mentionable: profileTopics,
     boardCrossrefs: profileBoardCrossrefs,
+    boardCrossrefIndex: profileBoardCrossrefIndex,
     names: profileNames,
     newTitle: profileTitleDraft,
     profileName: " Ada ",
@@ -1215,6 +1222,76 @@ export default pattern(() => {
     (directTopic.referencedBy ?? []).length === 0
   );
 
+  // --- The keyed backlink lookup: a topic finds its row by number ---
+
+  // The index's grouping, pure: positions filed under each well-formed number
+  // in position order, a shared number giving one bucket of both positions,
+  // and anything that is not a member name filing nothing, including names an
+  // `Object.prototype` member carries.
+  const assert_bucket_rows_by_name_pure = assert(() => {
+    const bucketed = bucketRowsByName(
+      ["2", "1", undefined, " 3", "", "constructor", "__proto__", "1", 4, "03"],
+      (position) => position,
+    );
+    return JSON.stringify(bucketed) ===
+        JSON.stringify({ "2": [0], "1": [1, 7] }) &&
+      !Object.hasOwn(bucketed, "constructor") &&
+      !Object.hasOwn(bucketed, "__proto__");
+  });
+
+  // A board of its own, so the numbers its creates allocate are known: the
+  // first topic is `1` and the second `2`. Its list is a cell the test holds,
+  // which is how the test reaches each topic's own verbs and outputs.
+  const keyedTopics = new Writable<TopicPiece[] | Default<[]>>([]);
+  const keyedBoard = Topics({ topics: keyedTopics });
+  const action_keyed_board_files_two = action(() => {
+    keyedBoard.addTopic.send({ title: "Keyed one", agentName: "Sol" });
+    keyedBoard.addTopic.send({ title: "Keyed two", agentName: "Sol" });
+  });
+  const action_keyed_second_mentions_first = action(() => {
+    keyedTopics.key(1).resolveAsCell().key("mention").send({
+      topic: keyedTopics.key(0),
+    });
+  });
+  // The board files each row under its topic's number, and the first topic
+  // finds the second among its backlinks through that bucket.
+  const assert_keyed_index_files_each_row = assert(() =>
+    keyedBoard.crossrefIndex?.byName?.["1"]?.length === 1 &&
+    keyedBoard.crossrefIndex?.byName?.["2"]?.length === 1 &&
+    keyedBoard.crossrefs?.[0]?.name === "1" &&
+    keyedBoard.crossrefs?.[1]?.name === "2"
+  );
+  const assert_keyed_lookup_finds_its_mentioner = assert(() => {
+    const first = (keyedTopics.key(0).resolveAsCell().key("referencedBy")
+      .get() ?? []) as object[];
+    const second = (keyedTopics.key(1).resolveAsCell().key("referencedBy")
+      .get() ?? []) as object[];
+    return first.length === 1 && equals(first[0], keyedTopics.key(1)) &&
+      second.length === 0;
+  });
+  // An index alone says nothing about membership. A topic carrying the first
+  // topic's number and bound to this board's index, with no pivot of its own,
+  // finds the first topic's row under `1`, which is not its own, and shows no
+  // backlinks.
+  const indexOnlyTopic = Topic({
+    title: "Index without a pivot",
+    shortName: "1",
+    boardCrossrefIndex: keyedBoard.crossrefIndex,
+  });
+  // Bound to this board's pivot and its index, and carrying the first topic's
+  // number, but not on the board: the bucket under `1` holds another topic's
+  // row, and the scan finds none of its own.
+  const strangerTopic = Topic({
+    title: "Wired but not on the board",
+    shortName: "1",
+    boardCrossrefs: keyedBoard.crossrefs,
+    boardCrossrefIndex: keyedBoard.crossrefIndex,
+  });
+  const assert_unlisted_topics_have_no_backlinks = assert(() =>
+    (indexOnlyTopic.referencedBy ?? []).length === 0 &&
+    (strangerTopic.referencedBy ?? []).length === 0
+  );
+
   // --- setTitle: the rename verb, direct interface only ---
 
   const action_rename_direct_topic = action(() => {
@@ -1424,6 +1501,14 @@ export default pattern(() => {
       { action: action_drop_one_from_ui },
       { assertion: assert_ui_dropped_only_that_one },
       { assertion: assert_boardless_topic_has_no_backlinks },
+      { assertion: assert_bucket_rows_by_name_pure },
+      { action: action_keyed_board_files_two },
+      { action: action_keyed_second_mentions_first },
+      { assertion: assert_keyed_index_files_each_row },
+      { assertion: assert_keyed_lookup_finds_its_mentioner },
+      { render: indexOnlyTopic[UI] },
+      { render: strangerTopic[UI] },
+      { assertion: assert_unlisted_topics_have_no_backlinks },
       { action: action_rename_direct_topic },
       { assertion: assert_renamed_with_attribution },
       { render: directTopic[UI] },
