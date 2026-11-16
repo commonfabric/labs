@@ -263,6 +263,13 @@ export interface TopicsExport {
  * one points at. A document write cannot carry a `$link`, so these are routed
  * aside and re-linked after the apply.
  *
+ * Not every one is re-linked. A {@link RETIRABLE_LINK_FIELDS} entry is retired
+ * for a target that does not declare it. Where the caller says which paths the
+ * board publishes (`publishedSources`), a field whose board path is not among
+ * them is decided before the apply rather than by a refused relink after it:
+ * a retirable one is left out and reported, and any other is refused.
+ * `buildRestoreDocument` makes each of these decisions.
+ *
  * Four today: `mentionable` (the board's derived mention index),
  * `boardCrossrefs` (its reference pivot), `boardCrossrefIndex` (that pivot's
  * positions grouped by topic number), and `boardNames` (its names table). The

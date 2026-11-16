@@ -132,33 +132,30 @@ implementation and prototypes can begin earlier.
       unintentionally broaden board demand. Can proceed independently of T2;
       acceptance depends on T0.
 - [ ] **T2 — Prototype one shared backlink-row index.** Index the existing
-      cross-reference rows by topic identity once at the board level. Compare
-      direct lookup with each topic scanning the table. Prove two boundaries,
-      each without a cast or a duplicated producer. First, the rows reach one
-      index producer through a subpattern with an explicit Cell input, the shape
-      [reactive collections](../common/concepts/reactive-collections.md#choose-aggregate-semantics-deliberately)
-      gives for a computed list, under a schema that carries `topic` as a Cell
-      so the index keys by canonical Cell identity. The subpattern lives in a
-      module of its own, and the board instantiates it by a direct call rather
-      than inside a reactive `.map`. That is how a new operator leaves the
-      existing hoists' numbers unchanged, which the hoist requirement under
+      cross-reference rows once at the board level, by topic number, and have
+      each lookup verify the row it finds by topic identity. Compare direct
+      lookup with each topic scanning the table. Prove two boundaries, each
+      without a cast or a duplicated producer. First, the rows reach one index
+      producer, a lift that lives in a module of its own and that the board
+      calls directly rather than inside a reactive `.map`. That is how a new
+      operator leaves the existing hoists' numbers unchanged, which the hoist
+      requirement under
       [compatibility requirements](#compatibility-requirements) depends on.
-      `crossrefTable` is a `lift`, whose result type exposes no index operator,
-      and `TopicCrossrefRow.topic` is `unknown` so that reading the table
-      expands no topic. Second, the resulting handle reaches topics without
-      broadening demand. Topics that `addTopic` and the board's composer create
-      hold `boardCrossrefs` as a link to the board's cross-reference table;
-      older topics may not, which step 1's inventory records. Decide between
-      carrying the handle through that link, which changes the board's published
-      `crossrefs` result, and a new topic input, which needs a one-time
-      link-bind onto every existing topic that is to hold it. Classify the
-      choice under step 1 of the
+      `TopicCrossrefRow.topic` stays `unknown`, so that reading the table
+      expands no topic, and a lookup compares it as a cell. Second, the
+      resulting handle reaches topics without broadening demand. Topics that
+      `addTopic` and the board's composer create hold `boardCrossrefs` as a
+      link to the board's cross-reference table; older topics may not, which
+      step 1's inventory records. The handle is a new topic input, which needs
+      a one-time link-bind onto every existing topic that is to hold it; it is
+      not carried through that link, which would change the board's published
+      `crossrefs` result. Classify it under step 1 of the
       [stored-state procedure](#stored-state-and-deployment-procedure), and list
-      a link-bind in the step 7 manifest. Retain existing public results through
-      a compatibility bridge where needed; do not assume adding a required field
-      is rollout-safe. Exit: reduced lookup-stage scaling, bounded maintenance
-      cost, and a written old/new board-topic compatibility matrix. Depends on
-      T0.
+      the link-bind in the step 7 manifest. Retain existing public results
+      through a compatibility bridge where needed; do not assume adding a
+      required field is rollout-safe. Exit: reduced lookup-stage scaling,
+      bounded maintenance cost, and a written old/new board-topic compatibility
+      matrix. Depends on T0.
 
       The board's lookup index is keyed by topic number and verified by
       identity. `crossrefTable` writes each row's topic number as `name`, and
@@ -196,6 +193,14 @@ implementation and prototypes can begin earlier.
       declares it and the board publishes `crossrefIndex`, retires it where the
       topic does not declare it, and leaves it out, before the apply, where the
       board does not publish it.
+
+      This stage stays open until its served rehearsals have run: a `SIGKILL`
+      right after an `addTopic` commit, a rollback of the board alone with a
+      pivot shrink while the index is frozen, a half-bound board, and
+      `cf space verify --expect-migration`. Until then the rollback and the
+      shrink are held headless, by the `frozen` and `shrunk` ways of the
+      lookup differential in `topics-headless-fixture.test.ts`. The read, heap
+      and time figures also remain to be measured on the head that merges.
 - [ ] **T3 — Maintain the mention relation.** Prototype stable per-source edge
       production, per-source-occurrence mention deduplication, and shared
       grouping by destination. The derived edges reach `groupBy` through the

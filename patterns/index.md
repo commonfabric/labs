@@ -324,8 +324,8 @@ interface TopicsOutput {
   // The topics, read through { title, createdAt, createdBy, commentCount,
   //   lastActivityAt, shortName } — a row addresses the topic it describes
   index: TopicIndexRow[];
-  // { topic, mentionedBy, name } per topic — the reference graph, derived once
-  // here, each row carrying its topic's number
+  // { topic, mentionedBy, name? } per topic — the reference graph, derived
+  // once here; a row carries its topic's number when the topic has one
   crossrefs: TopicCrossrefNamedRow[];
   // { source, byName } — the pivot's positions grouped by topic number
   crossrefIndex: TopicCrossrefIndex;
