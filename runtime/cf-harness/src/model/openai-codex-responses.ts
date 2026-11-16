@@ -837,12 +837,18 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
               request.signal,
             );
           } catch (error) {
-            if (request.signal?.aborted) throw abortReason(request.signal);
-            if (!(error instanceof HarnessControlError)) throw error;
-            failure = error;
+            // An abort is thrown by `failed`, after the refusal is recorded.
+            if (!request.signal?.aborted) {
+              if (!(error instanceof HarnessControlError)) throw error;
+              failure = error;
+            }
           }
         } else if (exchange.reissued.fresh) {
-          await this.#resolver.markRejected?.(credential, request.signal);
+          try {
+            await this.#resolver.markRejected?.(credential, request.signal);
+          } catch (error) {
+            if (!request.signal?.aborted) throw error;
+          }
         }
       }
       return await failed(

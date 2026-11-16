@@ -1999,6 +1999,8 @@ describe("openai-codex-responses", () => {
       });
     });
   });
+});
+
 const completedHello = (): Response =>
   sse({
     type: "response.completed",
@@ -2157,6 +2159,48 @@ Deno.test("Codex Responses reports a refresh that could not be completed, not th
     attempts.map((a) => [a.maxTransportAttempts, a.httpStatus, a.retry]),
     [[1, 401, undefined]],
   );
+});
+
+Deno.test("Codex Responses records the refusal when the caller aborts during the refresh or the mark", async () => {
+  for (const during of ["refresh", "mark"]) {
+    const controller = new AbortController();
+    const attempts: HarnessModelAttemptDiagnostic[] = [];
+    const abort = () => {
+      controller.abort(new Error("caller stopped"));
+      return Promise.reject(controller.signal.reason);
+    };
+    const client = new OpenAICodexResponsesClient({
+      transportRetries: 0,
+      credentialResolver: {
+        resolve: () => Promise.resolve(credential),
+        refreshRejected: () =>
+          during === "refresh"
+            ? abort()
+            : Promise.resolve({ credential: refreshedCredential, fresh: true }),
+        markRejected: abort,
+      },
+      fetchFn: () => Promise.resolve(refusedToken()),
+    });
+
+    const error = await assertRejects(() =>
+      client.complete({
+        ...helloRequest,
+        signal: controller.signal,
+        onAttempt: (attempt) => {
+          attempts.push(attempt);
+        },
+      })
+    );
+
+    assertEquals((error as Error).message, "caller stopped");
+    // every refusal received is recorded, the last with no attempt after it
+    assertEquals(
+      attempts.map((a) => [a.httpStatus, a.retry?.kind]),
+      during === "refresh"
+        ? [[401, undefined]]
+        : [[401, "credential_refused"], [401, undefined]],
+    );
+  }
 });
 
 Deno.test("Codex Responses marks a credential whose refreshed token is refused too", async () => {

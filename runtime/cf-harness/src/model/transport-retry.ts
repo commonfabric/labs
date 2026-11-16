@@ -10,6 +10,11 @@
  * unbounded loop is this schedule. Every attempt, retried or not, is recorded
  * where the client records attempts, and an attempt that is followed by
  * another says so and says why.
+ *
+ * One attempt is issued again outside the schedule: a request whose access
+ * token the provider refused (a 401) is issued once more with a refreshed
+ * token, with no backoff and without using one of the schedule's attempts.
+ * Its record names that reason, `credential_refused`, with a delay of zero.
  */
 
 /**
@@ -33,9 +38,11 @@ export type HarnessModelAttemptRetryKind =
   | "credential_refused";
 
 /**
- * What an attempt record carries when the attempt failed transiently and the
- * client issues another: the kind of failure, and the backoff before the next
- * attempt starts.
+ * What an attempt record carries when the client issues another attempt: why,
+ * and the wait before the next attempt starts. For a transient failure the
+ * wait is the schedule's backoff. For a refused access token
+ * (`credential_refused`) it is zero, because the request is issued again as
+ * soon as the token has been refreshed.
  */
 export interface HarnessModelAttemptRetry {
   /** What the attempt ended in that another attempt follows. */

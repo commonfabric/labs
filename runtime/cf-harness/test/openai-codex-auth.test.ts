@@ -1643,6 +1643,8 @@ describe("openai-codex", () => {
       expect(await store.getRecord("local", "openai-codex")).toEqual({});
     });
   });
+});
+
 const unexpiredCodexCredential = (
   accessToken: string,
 ): OpenAICodexOAuthCredential => ({
@@ -1765,6 +1767,35 @@ Deno.test("a refused Codex token whose refresh cannot be completed stays connect
   assertEquals(
     (await new OpenAICodexAuthService(store, "local").status()).status,
     "connected",
+  );
+  assertEquals(
+    (await store.get("local", "openai-codex"))?.accessToken,
+    "access-refused",
+  );
+});
+
+Deno.test("a refresh that returns a token with no account id is reported as the refresh's failure", async () => {
+  const store = new InMemoryHarnessCredentialStore();
+  const refused = unexpiredCodexCredential("access-refused");
+  await store.set("local", "openai-codex", refused);
+  const { resolver } = rejectionResolver(
+    store,
+    () =>
+      new Response(
+        JSON.stringify({
+          access_token: jwt({ refreshed: true }),
+          refresh_token: "refresh-new",
+          expires_in: 3600,
+        }),
+        { status: 200 },
+      ),
+  );
+
+  const error = await assertRejects(() => resolver.refreshRejected(refused));
+  assertEquals((error as HarnessControlError).code, "provider-unavailable");
+  assertEquals(
+    (error as HarnessControlError).message,
+    "OpenAI Codex token did not include a ChatGPT account id",
   );
   assertEquals(
     (await store.get("local", "openai-codex"))?.accessToken,
