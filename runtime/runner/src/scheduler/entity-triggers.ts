@@ -321,6 +321,16 @@ function assertComponentsAreStrings(paths: SortedAndCompactPaths): void {
   }
 }
 
+/** Whether `a` and `b` are the same path. */
+function pathEqual(a: Path, b: Path): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 /** Whether `a` and `b` hold the same paths in the same order. */
 function pathsEqual(
   a: SortedAndCompactPaths,
@@ -328,12 +338,8 @@ function pathsEqual(
 ): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
-
   for (let i = 0; i < a.length; i++) {
-    if (a[i].length !== b[i].length) return false;
-    for (let j = 0; j < a[i].length; j++) {
-      if (a[i][j] !== b[i][j]) return false;
-    }
+    if (!pathEqual(a[i]!, b[i]!)) return false;
   }
   return true;
 }
@@ -508,8 +514,8 @@ export class EntityTriggers {
    * a string.
    */
   set(action: Action, paths: SortedAndCompactPaths): void {
+    if (this.#holdsExactly(action, paths)) return;
     const previous = this.#registered(action);
-    if (previous !== undefined && pathsEqual(previous, paths)) return;
     if (TRIGGER_EQUIVALENCE_CHECK) assertComponentsAreStrings(paths);
     const next = ascendingOnce(paths);
     if (next.length === 0) {
@@ -857,6 +863,36 @@ export class EntityTriggers {
       }
     }
     return lower;
+  }
+
+  /**
+   * Whether `action` reads exactly `paths` of this document, in that order:
+   * from the per-action map when there is one, and otherwise from a scan of
+   * the row that builds nothing, which {@link triggerScanWork} counts. This
+   * is the check every registration starts with, and most registrations
+   * hand back what the action already reads.
+   */
+  #holdsExactly(action: Action, paths: SortedAndCompactPaths): boolean {
+    if (this.#byAction !== undefined) {
+      const held = this.#byAction.get(action);
+      return held !== undefined && pathsEqual(held, paths);
+    }
+    let matched = 0;
+    const blocks = this.#blockCount();
+    for (let b = 0; b < blocks; b++) {
+      const row = this.#pathsIn(b);
+      const readers = this.#readersIn(b);
+      triggerScanWork.rowScanEntries += row.length;
+      for (let at = 0; at < row.length; at++) {
+        const reading = readers[at];
+        if (reading === undefined || !readersHold(reading, action)) continue;
+        if (matched === paths.length || !pathEqual(row[at]!, paths[matched]!)) {
+          return false;
+        }
+        matched++;
+      }
+    }
+    return matched > 0 && matched === paths.length;
   }
 
   /**
