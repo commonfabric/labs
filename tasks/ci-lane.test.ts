@@ -3295,6 +3295,24 @@ describe("the lane's own housekeeping", () => {
     await Deno.remove(repo, { recursive: true });
   });
 
+  it("takes both paths of a file the change moved", async () => {
+    // A declaration naming the directory a file left reaches the change,
+    // so the path it left is one the change touched.
+    const { repo, git } = await scratchRepository();
+    await Deno.mkdir(`${repo}/declared`);
+    await Deno.writeTextFile(`${repo}/declared/kept.jsonl`, "a line\n");
+    await git("add", ".");
+    await git("commit", "-q", "-m", "first");
+    await git("branch", "base");
+    await git("mv", "declared/kept.jsonl", "moved.jsonl");
+    await git("commit", "-q", "-m", "second");
+    expect([...await changedFiles(repo, "base")].sort()).toEqual([
+      "declared/kept.jsonl",
+      "moved.jsonl",
+    ]);
+    await Deno.remove(repo, { recursive: true });
+  });
+
   it("takes the files the default branch gained since the manifest's commit", async () => {
     // A pull request is tested as its merge into the default branch, so
     // the tree holds what the default branch gained since the branch was

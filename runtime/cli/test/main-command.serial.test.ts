@@ -458,13 +458,20 @@ describe("main command", () => {
             CF_IDENTITY: "/nonexistent/identity.key",
             CF_API_URL: "http://127.0.0.1:8000",
           };
+          // A command that takes a positional before it reads the space is
+          // given one, so the run reaches the space rather than stopping at
+          // the missing argument.
+          const positionals: Record<string, string[]> = {
+            "pattern publish": ["./entry.tsx"],
+          };
           for (const entry of named) {
             if (!entry.includes(" ")) continue;
-            const absent = await cf(entry.split(" "), { env: reachesSpace });
+            const args = [...entry.split(" "), ...(positionals[entry] ?? [])];
+            const absent = await cf(args, { env: reachesSpace });
             expect(stripAnsi(absent.stderr.join("\n")), entry).toContain(
               'Missing required option: "--space"',
             );
-            const ambient = await cf(entry.split(" "), {
+            const ambient = await cf(args, {
               env: { ...reachesSpace, CF_SPACE: "ambient" },
             });
             expect(stripAnsi(ambient.stderr.join("\n")), entry).not.toContain(

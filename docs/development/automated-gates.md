@@ -179,7 +179,13 @@ Each of these gates fails CI on its own, and none of them run as part of
   so; a helper module, which exports no pattern on either side, is not one. A
   run that compares no patterns fails, whatever the cause, because it has
   checked nothing, so a change that moves or edits every pattern lands apart
-  from a change to what numbers them. The gate
+  from a change to what numbers them. Continuous integration runs the gate in
+  `CAUSE_ASSIGNMENT_PARTS` parts, each a gate of its own named
+  `check-cause-assignments K of N`, so that each fits in a lane: `--part K/N`
+  compares every Nth pattern of the sorted list starting from the Kth, and
+  judges the accepted moves naming its own patterns, the first part also those
+  naming no pattern the tree holds. The rule about comparing no patterns holds
+  for each part. The gate
   compiles only for a change touching what a pattern's numbering is built by,
   which is `base/js-compiler/`, `runtime/runner/src/builder/`,
   `runtime/runner/src/builtins/`, `runtime/runner/src/harness/`,

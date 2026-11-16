@@ -6,6 +6,7 @@ import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { FIRST_PARTY_HTTP_AUTH_HEADERS } from "@commonfabric/runner/toolshed-http-auth";
 import { newPieceFromCommand, piece } from "../commands/piece.ts";
+import { PatternIndexStore } from "@commonfabric/pattern-index/store";
 import { newPiece } from "../lib/piece.ts";
 import { captureStderr } from "./utils.ts";
 
@@ -30,6 +31,7 @@ describe("piece new --from-index", () => {
     ) => {
       let entry: unknown;
       let created = false;
+      const recorded: string[][] = [];
       const error = await captureStderr(() =>
         newPieceFromCommand({ ...CONFIG, ...options }, main, {
           newPiece: (_config, received) => {
@@ -37,9 +39,13 @@ describe("piece new --from-index", () => {
             entry = received;
             return Promise.resolve("fid1:created");
           },
+          recordIndexedPiece: (url, pieceId, patternId) => {
+            recorded.push([url, pieceId, patternId]);
+            return Promise.resolve();
+          },
         })
       ).then(() => undefined, (e) => e);
-      return { entry, created, error };
+      return { entry, created, error, recorded };
     };
 
     it("hands newPiece the pattern id and the index URL in place of a file", async () => {
@@ -50,6 +56,15 @@ describe("piece new --from-index", () => {
 
       expect(error).toBeUndefined();
       expect(entry).toEqual({ patternId: "pat-1", patternIndexUrl: INDEX_URL });
+    });
+
+    it("records which published pattern the created piece came from", async () => {
+      const { recorded } = await run(
+        { fromIndex: "pat-1", patternIndexUrl: INDEX_URL },
+        undefined,
+      );
+
+      expect(recorded).toEqual([[INDEX_URL, "fid1:created", "pat-1"]]);
     });
 
     for (
@@ -246,6 +261,11 @@ describe("piece new --from-index", () => {
                 add: () => Promise.resolve(),
               } as never),
             loadIdentity: () => Promise.resolve(signer),
+            // An empty store, so the user's own index membership never
+            // reaches the request.
+            patternIndexStore: new PatternIndexStore(
+              `${Deno.makeTempDirSync()}/pattern-index`,
+            ),
             patternIndexFetch: (input, init) => {
               requests.push({
                 url: String(input),

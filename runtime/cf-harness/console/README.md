@@ -1454,22 +1454,21 @@ It needs `--pattern-index-url`; without one, the route it reads through answers
 The page holds no key and addresses no host but this server. It posts a function
 name to `/api/index/call`, and the server signs the request with the fabric
 identity and sends it — so the index sees the operator's own identity, the same
-principal a run writes with. Four functions are reachable, all of them reads:
-`listPatterns`, `listEvents`, `getPattern` and `searchPatterns`. Anything else —
-a publication, a recorded event — is refused by name before the index is
-touched, and the request the server sends is composed field by field rather than
-forwarded, so nothing extra survives the crossing. `searchPatterns` answers with
-the index's own
+principal a run writes with. Three functions are reachable, all of them reads:
+`listPatterns`, `getPattern` and `searchPatterns`. Anything else — a
+publication, a recorded event, a read of an event stream such as `listEvents` —
+is refused by name before the index is touched, and the request the server sends
+is composed field by field rather than forwarded, so nothing extra survives the
+crossing. `searchPatterns` answers with the index's own
 [successor resolution](../README.md#pattern-generations-in-search); the listing
 and exact-ID reads retain their individual generation records. Event badges
-count only that generation's own events, split by author DID when the index
-supplies `eventAuthors`. Each DID can be copied in full. Counts with no known
-author show **author unavailable**; the caller's bounded event stream cannot
-attribute the whole index's totals. When the index supplies inherited evidence,
-the score separately identifies its inherited portion, predecessor, and
-publication cutoff. `getPattern` is called without `includeSource`: this surface
-shows metadata, schemas, dependencies and events, and a pattern's source is read
-through the CLI.
+count only that generation's own events, one badge per event type; the index
+reports how many of each type a pattern collected, not who recorded them. When
+the index supplies inherited evidence, the score separately identifies its
+inherited portion, predecessor, and publication cutoff. Event counts come from
+the listing. Opening a pattern calls `getPattern` without `includeSource` for
+its metadata, schemas and dependencies; a pattern's source is read through the
+CLI.
 
 The route sits under `/api/`, so it is behind the same `Host` gate as the rest.
 
@@ -1477,18 +1476,19 @@ Voting and owner retraction have dedicated write routes:
 `POST /api/index/feedback` and `POST /api/index/retract`, below. Neither is
 reachable through the read allowlist.
 
-Three panes:
+Two panes:
 
-- **Patterns** — everything the index holds, by score. A row carries the pattern
-  id, its description and hashtags, badges per event type and known author, the
-  weighted score those counts produce, and when it was created; the weights
-  themselves are printed beside the heading. Opening a row reads that pattern's
-  argument and result schemas, its dependencies, and the events you recorded
-  against it. Every identifier is a button that copies the whole of itself.
-- **Your events** — your own event stream, newest first, with a box that filters
-  on any field. The index answers each signer with their own events and nobody
-  else's; the shared counts and their available author breakdowns are in the
-  table above. Individual notes stay in the author's own stream.
+- **Patterns** — every pattern the index lists to this identity, by score. A row
+  carries the pattern id, its description, its owner, its hashtags, a badge per
+  event type, its listing state, the weighted score those counts produce, and
+  when it was created; the weights themselves are printed beside the heading.
+  The owner is the `handle` the index gives the author, a pseudonym such as
+  `p-3kq9w2x7mz`, marked **you** when the index answers `mine: true`. The
+  listing column joins the pattern's `listing` state (`not_requested`,
+  `pending`, `passed`, `held` or `error`) with its `bucket` and its `hidden` and
+  `grandfathered` flags when the index sends them. Opening a row reads that
+  pattern's owner, its argument and result schemas, and its dependencies. Every
+  identifier is a button that copies the whole of itself.
 - **Search** — the query the runtime's `search_patterns` would make, run by
   hand. Tags, free text and a limit compose a request, and the request is shown
   beside the results, because what the pane is for is how the index answers
@@ -1542,23 +1542,20 @@ one.
 The cloud function implementation is outside this checkout. Its matching
 contract is:
 
-- `recordEvent` accepts `{ patternId, eventType, did, note? }`. It verifies
-  `did` against the authenticated CF1 signer and rejects a mismatch. It stores
-  that authenticated DID on the event. Older clients omitting `did` can be
-  attributed from the signer; an unverified body field is never authority.
-- `listEvents` retains its caller-scoped stream and existing `did` field.
-- `listPatterns` may return `eventAuthors` on each pattern, shaped as
-  `{ "thumbs_up": { "did:key:z…": 2 } }`: event type to author DID to count.
-  These are counts on that exact generation, excluding inherited evidence, and
-  each type's author counts sum to at most its `events` total. This makes author
-  counts public alongside the totals, without exposing event notes. Historical
-  events with a stored authenticated DID can contribute; events without one stay
-  unattributed. Neither the pattern owner nor its source is evidence of who
-  voted.
-
-Until the service supplies `eventAuthors`, the inspector shows the aggregate
-counts as author unavailable. The client contract and display support do not
-establish that a cloud deployment implements them.
+- `recordEvent` accepts `{ patternId, eventType }` signed with CF1, and drops a
+  `did` or `note` the request carries. `PatternIndexClient` still sends `did`,
+  which an older deployment checks against the signer. It attributes the event
+  to the signer's member and stores only a per-lineage actor hash and a day, so
+  no stored field names the author or links their events across patterns.
+- `listPatterns` returns each pattern's `events` as counts by event type on that
+  exact generation, excluding inherited evidence, with no breakdown by author.
+  Each pattern names its author by `handle`, a pseudonym stable on that index,
+  and carries `mine: true` when the caller is that author; its standing in
+  discovery arrives as `listing`, `listed`, `bucket`, `hidden` and
+  `grandfathered`. `getPattern` names its author the same way.
+- `listEvents` answers HTTP 410: the index keeps no per-author event stream. The
+  console's read allowlist leaves it out, so the page cannot ask for it, and
+  `PatternIndexClient.listEvents()` is deprecated for the same reason.
 
 ## Retracting an owned generation
 
