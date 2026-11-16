@@ -602,7 +602,16 @@ describe("check-cause-assignments", () => {
     });
 
     it("throws on a part outside its count, malformed, or missing", () => {
-      for (const part of ["0/3", "4/3", "two/3", "1/", undefined]) {
+      for (
+        const part of [
+          "0/3",
+          "4/3",
+          "two/3",
+          "1/",
+          "1/9007199254740993",
+          undefined,
+        ]
+      ) {
         expect(() =>
           parseArguments(part === undefined ? ["--part"] : ["--part", part])
         ).toThrow("--part takes K/N");

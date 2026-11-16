@@ -411,8 +411,9 @@ export const REACHED_BY_ABSENT_PATHS: ReadonlySet<string> = new Set([
 
 /**
  * The gates that compare the tree with the revision the change is measured
- * against: two hold a file to being appended to, and one holds the
- * compiler to numbering an unchanged pattern's cells as it did. Each reads
+ * against: two hold a file to being appended to, and the others each hold
+ * the compiler to numbering the cells of one part of the unchanged patterns
+ * as it did. Each reads
  * the merge base with that revision, which takes a checkout carrying
  * history.
  */

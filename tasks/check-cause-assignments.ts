@@ -120,7 +120,7 @@ export function parseArguments(args: readonly string[]): Arguments {
       const [k, n] = match === null
         ? [0, 0]
         : [Number(match[1]), Number(match[2])];
-      if (k < 1 || k > n) {
+      if (!Number.isSafeInteger(n) || k < 1 || k > n) {
         throw new Error(
           `--part takes K/N with 1 <= K <= N, not ${args[at] ?? "nothing"}`,
         );

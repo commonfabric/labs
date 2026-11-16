@@ -79,7 +79,7 @@ describe("unjustifiedDeletions", () => {
 });
 
 describe("deletedSince", () => {
-  it("counts a baseline moved out of the store as deleted, and one kept as not", async () => {
+  it("counts a moved file as deleted or kept as asked, and a removed one as deleted either way", async () => {
     const repo = await Deno.makeTempDir({ prefix: "baselines-moved-" });
     const git = async (...args: string[]) => {
       const { success } = await new Deno.Command("git", {
@@ -99,18 +99,25 @@ describe("deletedSince", () => {
     try {
       const moved = `${BASE}/system/home/home.tsx/1-a.json`;
       const kept = `${BASE}/system/home/home.tsx/2-b.json`;
+      const removed = `${BASE}/system/home/home.tsx/3-c.json`;
       await Deno.mkdir(`${repo}/${BASE}/system/home/home.tsx`, {
         recursive: true,
       });
       await Deno.writeTextFile(`${repo}/${moved}`, '{"contract":1}\n');
       await Deno.writeTextFile(`${repo}/${kept}`, '{"contract":2}\n');
+      await Deno.writeTextFile(`${repo}/${removed}`, '{"contract":3}\n');
       await git("init", "-q");
       await git("add", ".");
       await git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "base");
       await git("branch", "base");
       await git("mv", moved, "elsewhere.json");
+      await git("rm", "-q", removed);
       await git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "move");
-      expect(await deletedSince(repo, "base")).toEqual([moved]);
+      expect(await deletedSince(repo, "base", "deleted")).toEqual([
+        moved,
+        removed,
+      ]);
+      expect(await deletedSince(repo, "base", "kept")).toEqual([removed]);
     } finally {
       await Deno.remove(repo, { recursive: true });
     }
