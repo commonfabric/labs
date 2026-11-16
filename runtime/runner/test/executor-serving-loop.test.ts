@@ -20,6 +20,8 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
+import { toFileUrl } from "@std/path";
+import { Database } from "@db/sqlite";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
@@ -59,6 +61,9 @@ const space = spaceSigner.did() as MemorySpace;
 const serviceSigner = await Identity.fromPassphrase("serving loop service");
 const aliceSigner = await Identity.fromPassphrase("serving loop alice");
 const bobSigner = await Identity.fromPassphrase("serving loop bob");
+/** A space nothing in this file opens, so no store for it exists. */
+const foreignSpace = (await Identity.fromPassphrase("serving loop foreign"))
+  .did() as MemorySpace;
 
 /**
  * The `{ total }` result schema of the patterns served below. A client that
@@ -170,6 +175,9 @@ describe("stage F serving loop", () => {
   const parked = (): Promise<unknown> =>
     parks.matching((entry) => entry.space === space);
 
+  /** File stores a test made, removed once its server has closed. */
+  const storeDirectories: string[] = [];
+
   beforeEach(() => {
     server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     servingRuntime = undefined;
@@ -197,6 +205,9 @@ describe("stage F serving loop", () => {
     await clientRuntime?.dispose();
     await clientManager?.close();
     await server.close();
+    for (const directory of storeDirectories.splice(0)) {
+      await Deno.remove(directory, { recursive: true });
+    }
   });
 
   /**
@@ -457,6 +468,175 @@ describe("stage F serving loop", () => {
     } finally {
       cancel();
     }
+  });
+
+  /**
+   * Serves the row pattern over a file store, closes the memory server,
+   * leaves the store's `scheduler_basis` table holding what `seedBasis`
+   * writes, commits an input while nothing serves the space, and checks
+   * that a fresh host serving a viewer recovers it. The rows play no part
+   * in that recovery: a fresh serving runtime starts every computation it
+   * materializes as not yet run (serving-loop.md §6).
+   */
+  const recoverAfterRestart = async (
+    seedBasis: (raw: Database, inputId: string) => void,
+  ): Promise<void> => {
+    const rowSchema = {
+      type: "object",
+      properties: {
+        rows: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              key: { type: "string" },
+              value: { type: "number" },
+            },
+            required: ["key", "value"],
+          },
+        },
+      },
+      required: ["rows"],
+    } as const satisfies JSONSchema;
+    const directory = await Deno.makeTempDir({ prefix: "serving-restart-" });
+    storeDirectories.push(directory);
+    const store = toFileUrl(`${directory}/`);
+    await server.close();
+    server = newSharedServer({ subscriptionRefreshDelayMs: 0, store });
+    const { ready, cancel } = serveRowPattern();
+    try {
+      host = newHost({ idleParkMs: 600_000, parkedRuntimeRetentionMs: 0 });
+      openClient();
+      const clientResult = clientRuntime.getCell<{ rows: Row[] }>(
+        space,
+        "row-result",
+        rowSchema,
+      );
+      await clientResult.sync();
+      await ready;
+      let engine = await server.engineForSpace(space);
+      const storeFile = engine.url;
+      const first = host.spaceServer(space)!;
+      await awaitEach(cycles, () => first.suspendedOnInput);
+      await settleServing(engine, clientRuntime, space);
+      expect(clientResult.get().rows).toEqual([
+        { key: "0", value: 2 },
+        { key: "1", value: 4 },
+      ]);
+      const input = clientRuntime.getCell<Row>(space, "row-input-0");
+      await input.sync();
+      const live = clientRuntime.edit();
+      input.withTx(live).key("value").set(5);
+      expect((await live.commit().settled).error).toBeUndefined();
+      await settleServing(engine, clientRuntime, space);
+      expect(clientResult.get().rows).toEqual([
+        { key: "0", value: 10 },
+        { key: "1", value: 4 },
+      ]);
+      const inputId = input.getAsNormalizedFullLink().id;
+
+      // Everything that held the store open goes, the memory server
+      // included, so the next open of the store is a real one.
+      await host.close();
+      host = undefined;
+      await clientRuntime.dispose();
+      await clientManager.close();
+      await server.close();
+      const raw = new Database(storeFile);
+      try {
+        seedBasis(raw, inputId);
+      } finally {
+        raw.close();
+      }
+
+      // The input lands while no host serves the space, so no wave has
+      // run over it when the next tenure activates.
+      server = newSharedServer({ subscriptionRefreshDelayMs: 0, store });
+      openClient();
+      engine = await server.engineForSpace(space);
+      const reopened = clientRuntime.getCell<Row>(space, "row-input-0");
+      await reopened.sync();
+      const offline = clientRuntime.edit();
+      reopened.withTx(offline).key("value").set(10);
+      expect((await offline.commit().settled).error).toBeUndefined();
+      await clientRuntime.storageManager.synced();
+      const inputSeq = Engine.serverSeq(engine);
+      const derivedAfterInput = () =>
+        (engine.database.prepare(
+          `SELECT count(*) AS n FROM "commit"
+           WHERE class = 'derived' AND seq > :seq`,
+        ).get({ seq: inputSeq }) as { n: number }).n;
+      expect(derivedAfterInput()).toBe(0);
+
+      const settledBefore = activations.entries.length;
+      host = newHost({ idleParkMs: 600_000, parkedRuntimeRetentionMs: 0 });
+      const viewerManager = EmulatedStorageManager.connectTo(server, {
+        as: bobSigner,
+      });
+      const viewer = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: viewerManager,
+      });
+      try {
+        const viewerResult = viewer.getCell<{ rows: Row[] }>(
+          space,
+          "row-result",
+          rowSchema,
+        );
+        await viewerResult.sync();
+        await activations.reached(settledBefore + 1);
+        expect(activations.entries[settledBefore]).toEqual({
+          space,
+          outcome: "active",
+        });
+        const second = host.spaceServer(space)!;
+        await awaitEach(cycles, () => second.suspendedOnInput);
+        await settleServing(engine, viewer, space);
+        expect(viewerResult.get().rows).toEqual([
+          { key: "0", value: 20 },
+          { key: "1", value: 4 },
+        ]);
+        expect(derivedAfterInput()).toBeGreaterThan(0);
+      } finally {
+        await viewer.dispose();
+        await viewerManager.close();
+      }
+    } finally {
+      cancel();
+    }
+  };
+
+  it("recovers an input committed while nothing served the space after the memory server restarts, over a store holding the scheduler_basis rows an older build wrote", async () => {
+    // Whatever rows the serving above wrote stay, and two are added in the
+    // shape an older build writes: one names the edited input at a seq
+    // behind its head, and one names a document in a space that has no
+    // store, as a handler writing into another space left.
+    await recoverAfterRestart((raw, inputId) => {
+      const insert = raw.prepare(
+        `INSERT INTO scheduler_basis
+           (branch, action, action_scope_key, entity_space, entity,
+            entity_scope_key, seq)
+         VALUES ('', :action, 'space', :entitySpace, :entity, 'space', :seq)`,
+      );
+      insert.run({
+        action: "older-build/row-value",
+        entitySpace: space,
+        entity: inputId,
+        seq: 1,
+      });
+      insert.run({
+        action: "handler:cf:module/older-build/main.tsx:1:1",
+        entitySpace: foreignSpace,
+        entity: "of:older-build-foreign-read",
+        seq: 0,
+      });
+    });
+  });
+
+  it("recovers an input committed while nothing served the space after the memory server restarts, over a store holding no scheduler_basis rows", async () => {
+    await recoverAfterRestart((raw) => {
+      raw.exec("DELETE FROM scheduler_basis");
+    });
   });
 
   it("serves a demanded derivation: authored commit → wave → ONE derived commit with watermark; the client settles via waitForSettled", async () => {
