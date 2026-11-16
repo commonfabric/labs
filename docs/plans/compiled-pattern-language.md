@@ -1274,6 +1274,18 @@ is relitigated.
   no document until something writes it. The owner named both forms and
   delegated the choice to the one of lower complexity; this is that
   choice.
+- A write below the root of a state cell that holds nothing creates
+  the document from the default with the write applied, so the members
+  the write did not name stay readable. The members taken from the
+  default keep the label of a default, which has the empty integrity.
+  The same for a state cell of an element body over an array of
+  references, over an array of plain values in place, and over the
+  result of another per-element construct.
+- A first value that is not a constant is always stored as a value and
+  never as a reference, so a write to the cell never lands in the
+  input the value came from. The same in all three cases of a
+  per-element source, also where the first value is the element
+  itself.
 - A `map` element is keyed by its cell identity where the collection
   holds a reference, and by its value otherwise. In both cases the key
   also holds the count of earlier occurrences of the same identity or
@@ -2108,25 +2120,20 @@ unless the entry says otherwise.
      same in all three cases. Question 158 has what the two rulings
      leave open. The entry keeps its number.
 154. **A write below the root of a state cell that holds nothing** (ES
-     question 86, PL question 109). The default stands for the whole
-     value of a cell with no document. *Assumed:* the write makes the
-     document from the default with the write applied, so the members
-     it did not name are stored from then on; and those members carry
-     the label of the write, with the integrity of its run. The second
-     half is not the prototype's, which has no labels. The alternatives
-     store the written path alone, or store the members with the label
-     of a default. The same for a state cell of an element body in all
-     three cases.
+     question 86, PL question 109). Settled by ruling: the document is
+     created from the default with the write applied, and the members
+     taken from the default keep the label of a default, the empty
+     integrity. The same for a state cell of an element body in all
+     three cases. The entry keeps its number.
 155. **Whether a first value is stored as a value** (ES question 87).
-     *Assumed:* a first value that is not a constant is stored as the
-     value its cone computed and never as a reference, also where the
-     declaration gives the cell an input whole, so a write of the cell
-     does not land in the input. The alternative stores a link, by the
-     rule for a value passed on unchanged. Today's runtime refuses a
-     reactive value in a cell constructor, so no run of it shows
-     either. The same in all three cases; where the first value is the
-     element itself it meets question 145 over an array of plain
-     values in place.
+     Settled by ruling: always a value, so a write to the cell never
+     lands in the input. The same in all three cases, also where the
+     first value is the element itself: over an array of plain values
+     in place the cell holds the value and no reference to the
+     element. *Assumed* beside it: a member of the value that is of
+     data type and carries the address it was read from is stored as
+     a value as well, and a member of handle type is stored as the
+     link its type declares. The entry keeps its number.
 156. **An output that passes a derived collection on unchanged** (PL
      question 107). The case is the result of another per-element
      construct that a cone returns as it is, with a per-element

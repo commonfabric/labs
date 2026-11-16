@@ -1934,13 +1934,19 @@ this.
   the root of such a cell reads the default at that path. A write of
   the whole value makes the document, also where the value equals the
   default. A write below the root of a cell that holds nothing has to
-  start from something, and the ruling does not say from what.
-  *Assumed* (`execution-and-storage.md` §4.1 and its question 86;
-  section 8, question 109): the document is made from the default with
-  the write applied, so the members the write did not name are stored
-  from then on. They are stored by that write and carry the label of
-  its edge, with the integrity of that run, and no longer the empty
-  integrity of a default.
+  start from something. By ruling the document is created from the
+  default with the write applied, so the members the write did not
+  name are stored from then on and stay readable
+  (`execution-and-storage.md` §4.1). The members taken from the
+  default keep the label of a default: each carries what a read of the
+  default at its path carries, the confidentiality the cell's
+  declaration gives the path and the empty integrity. They take
+  nothing from the label of the write's edge, and each holds the value
+  a read of it had before the write. The written path carries the
+  label of the edge, as any write does. The rule is the same for a
+  state cell of an element body over an array of references, over an
+  array of plain values in place, and over the result of another
+  per-element construct.
 - **A first value that is not a constant** is computed by a cone and
   written once, when the cell is first created, through a `WriteEdge`
   with target `state` among the `writes` of that cone, which
@@ -1954,11 +1960,17 @@ this.
   instance is that of the element's key, over an array of references,
   over an array of plain values in place, and over the result of
   another per-element construct alike, so `cell(index)` holds the index
-  its element has at the evaluation that performs the edge. *Assumed*
-  (`execution-and-storage.md` §4.1 and its question 87): the edge
-  stores the computed value and never a reference, also where the
-  declaration gives the cell an input whole, as `Writable.of(start)`
-  does.
+  its element has at the evaluation that performs the edge. By ruling
+  the edge always stores a value and never a reference, so a write to
+  the cell never lands in the input: where the declaration gives the
+  cell an input whole, as `Writable.of(start)` does, the cell holds
+  the value of `start` at that evaluation, and no link to it. The
+  edge is the exception to the rule that a value passed on unchanged
+  is stored as a reference (`execution-and-storage.md` §2.4 and §4.1).
+  Where the first value is the element itself, the cell holds the
+  element's value in each of the three cases, and over an array of
+  plain values in place it holds no reference to the element ("A
+  plain value in place has an identity", below).
 - **Writing a constant first value at creation as well is legal** and
   is not required. A value written that way has the integrity of the
   run that wrote it. This design does not write it, and no record of
@@ -11222,16 +11234,12 @@ this document made.
      reference to the result, and a read of it that follows the
      reference differs between the two runs.
 109. **The label of what a write below the root of an empty state cell
-     takes from the default** (for the project owner). By ruling a
-     state cell whose first value is a constant has no document until
-     something writes it. `execution-and-storage.md` §4.1 assumes
-     that a write below the root makes the document from the default
-     with the write applied (its question 86). *Assumed:* the members
-     taken from the default are stored by that write and carry the
-     label of its edge, with the integrity of that run (section 1.3).
-     The alternative stores them with the label of a default, the
-     empty integrity. The question is the same for a state cell of an
-     element body in each of the three cases.
+     takes from the default.** Not open. By ruling the write creates
+     the document from the default with the write applied, and the
+     members taken from the default keep the label of a default, which
+     has the empty integrity (section 1.3). The same for a state cell
+     of an element body in each of the three cases. The entry keeps
+     its number.
 110. **Where the callee's default is held beside `Body.reads`** (for
      the project owner). By ruling the entry of `Body.reads` of a
      sandboxed body of a pattern compiled in holds the callee's default

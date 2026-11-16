@@ -1055,7 +1055,13 @@ Thirteen notes on the table.
   value. A first value that is not a constant, such as `cell(index)` in
   the body of a collection callback or a value read from an input, is
   computed once and written when the cell is first created, and a later
-  change of what it was computed from does not write it again
+  change of what it was computed from does not write it again. It is
+  always stored as a value and never as a reference: after
+  `Writable.of(start)` a write to the cell does not reach `start`. A
+  write below the root of a cell that holds nothing, such as
+  `draft.key("text").set("x")` on a cell with a constant first value,
+  creates the cell's document from that value with the write applied,
+  so the other members stay readable
   (`plan-and-label-templates.md` §1.3).
 - **`for` on an instantiation.** The form is legal in every kind of
   function body. Its argument is the explicit cause of the instance, which

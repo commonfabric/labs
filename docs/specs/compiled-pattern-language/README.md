@@ -579,7 +579,11 @@ the cell is first written. A first value that is a constant is the
 default of the cell's schema: nothing is written when the cell is
 created, and a read of a cell that holds nothing reads the default. A
 first value that is not a constant is computed by a cone and written
-once, when the cell is first created
+once, when the cell is first created, always as a value and never as
+a reference, so a write to the cell does not land in the input the
+value came from. A write below the root of a cell that holds nothing
+creates the document from the default with the write applied, and the
+members taken from the default keep the label of a default
 ([plan format and label templates](plan-and-label-templates.md), §1.3).
 A state cell document carries no pattern reference and no manifest, and it
 keeps the back-link to its result, which `resultOwnerOf` reads

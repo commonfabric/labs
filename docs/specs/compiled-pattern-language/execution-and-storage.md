@@ -2391,11 +2391,14 @@ also where the value equals the default. A write below the root has to
 start from something: `draft.key("text").set("x")` on a cell whose
 default is `{ text: "", tags: ["new"] }`, or a `push` onto a cell
 whose default is an array that is not empty. A document made from the
-written path alone would have `tags` read as nothing afterwards.
-*Assumed* (question 86): the runtime makes the document from the
-default and applies the write to it, so the members the write did not
-name are stored from then on. Their label is assumed in
-`plan-and-label-templates.md` §1.3 (its §8, question 109).
+written path alone would have `tags` read as nothing afterwards. By
+ruling the runtime creates the document from the default and applies
+the write to it, so the members the write did not name are stored from
+then on, and `tags` stays readable. The members taken from the default
+keep the label of a default, with the empty integrity, and the written
+path has the label of the write (`plan-and-label-templates.md` §1.3).
+The rule is the same for a state cell of an element body, in each of
+the three cases of a per-element source.
 
 A first value that is not a constant is computed by a cone and written
 once, through the write edge that `StateCell.first` names, and the
@@ -2412,11 +2415,23 @@ does the alternative of question 83: it computes the value when it
 creates the cell, which for a cell of an element body is when the key
 enters the element table.
 
-*Assumed* (question 87): the edge stores the value the cone computed,
-and never a reference. Where the declaration gives the cell an input
-whole, as `Writable.of(start)` does, the rule that a value passed on
-unchanged is stored as a reference (section 2.4) would store a link to
-the input, and a write of the cell would land in the input.
+By ruling the edge always stores the value the cone computed, and
+never a reference, so that a write to the cell never lands in the
+input. Where the declaration gives the cell an input whole, as
+`Writable.of(start)` does, the rule that a value passed on unchanged is
+stored as a reference (section 2.4) would store a link to the input.
+The edge of a first value is the exception to that rule: the runtime
+stores the value the reference resolves to when the edge is performed.
+*Assumed* (question 87): a member of the value that is of data type
+and carries the address it was read from is stored as a value as
+well, because a write below the root of the cell would otherwise land
+in the input, and a member of handle type is stored as the link its
+type declares. The rule is the same for a cell of an element body in
+each of the three cases of a per-element source. Where the first value
+is the element itself, the cell holds the element's value: over an
+array of references the value behind the link, and over an array of
+plain values in place the value, and no reference to the element
+(section 2.6).
 
 The compiled path therefore stores fewer state cell documents than a
 runtime that writes every first value. The prototype's executor keeps
@@ -5164,31 +5179,25 @@ Added by the ruling that the scheduler is switched per space (section 9):
     Where a handler's binding holds the default is assumed in
     `plan-and-label-templates.md` (its §8, question 110).
 86. **What a write below the root of a state cell that holds nothing
-    stores** (section 4.1). By ruling a state cell whose first value
-    is a constant has no document until something writes it, and the
-    default stands for the whole value. *Assumed:* a write at a path
-    below the root, a `push` included, makes the document from the
-    default with the write applied, as the prototype's executor does,
-    so the members the write did not name are stored from then on. The
-    alternative stores the written path alone, and a read fills the
-    other members from the default, which needs a rule for filling
-    the members of an object from a default declared for the whole
-    value. The label of the members taken from the default is question
-    109 of `plan-and-label-templates.md`. The question is the same for
-    a state cell of an element body in each of the three cases.
-87. **Whether a first value is stored as a value** (section 4.1). A
-    first value that is not a constant is computed by a cone and
-    written once. Where the declaration gives the cell an input whole,
-    as `Writable.of(start)` does, the cone passes the input on
-    unchanged. *Assumed:* the edge stores the value, and never a
-    reference, so a write of the cell does not land in the input. The
-    alternative follows the rule for a value passed on unchanged
-    (section 2.4) and stores a link. The runtime of today refuses a
-    reactive value in a cell constructor (`validateStaticData` in
-    `runtime/runner/src/cell.ts`), so no run of it shows either. For a
-    cell of an element body the question is the same in the three
-    cases; where the first value is the element itself, it meets
-    question 79 over an array of plain values in place.
+    stores** (section 4.1). Not open: by ruling a write at a path
+    below the root, a `push` included, creates the document from the
+    default with the write applied, and the members taken from the
+    default keep the label of a default, the empty integrity
+    (`plan-and-label-templates.md` §1.3). The same for a state cell of
+    an element body in each of the three cases.
+87. **Whether a first value is stored as a value** (section 4.1). Not
+    open for the cell as a whole: by ruling a first value that is not a
+    constant is always stored as a value and never as a reference, so
+    a write to the cell never lands in the input. Open beside it: the
+    members of such a value. *Assumed:* a member of data type that
+    carries the address it was read from is stored as a value as well,
+    and a member of handle type as the link its type declares. The
+    alternative stores a member passed on unchanged as a reference, by
+    the rule of section 2.4, and a write below the root of the cell at
+    that member then lands in the input. The same for a cell of an
+    element body in each of the three cases; where the first value is
+    the element itself the cell holds the element's value, and over an
+    array of plain values in place no reference to the element.
 
 ### 11.2 For another document or the prototype
 

@@ -2043,7 +2043,12 @@ export it and the pattern corpus does not call it.
   integrity of a default, and the cell has no document until something
   writes it. A first value that is not a constant is computed by a cone
   and written once, when the cell is first created, through a write
-  edge with target `state`, under that edge's template
+  edge with target `state`, under that edge's template. It is always
+  stored as a value and never as a reference, so a write to the cell
+  does not land in an input the value came from. A write below the
+  root of a cell that holds nothing creates the document from the
+  default with the write applied, and the members taken from the
+  default keep the label of a default, with the empty integrity
   (`plan-and-label-templates.md` §1.3). Creating a
   cell in a function body is one of the calls that remain legal, and the two
   regimes stay:
