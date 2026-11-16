@@ -1114,6 +1114,14 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   the causes of what an element body holds are computed as they were
   in the runtime of today: assumed the same inputs and structure of
   derivation, not equal identifiers.
+- **Which default is read.** The default declared nearest the end of
+  the chain of places a read resolves through is read, by ruling. Two
+  cases are assumed
+  ([plan format and label templates](plan-and-label-templates.md), §8,
+  questions 103 and 104): an absent property reads the same default in
+  a read of an object whole as in a selection of it, and a stored
+  `undefined` reads as an absent value does, with no default written
+  into an argument document when an instance is set up.
 - **An explicit cause in a handler.** A later event that instantiates
   under a cause an earlier event gave creates nothing. Whether it writes
   the argument it passes is open. *Assumed:* it does not
