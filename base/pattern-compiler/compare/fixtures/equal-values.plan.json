@@ -56,7 +56,13 @@
               "name": "open",
               "outputs": [],
               "reads": [
-                1
+                {
+                  "at": [
+                    "binding",
+                    "opened"
+                  ],
+                  "slot": 1
+                }
               ],
               "widenings": [],
               "within": [],

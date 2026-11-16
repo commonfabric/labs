@@ -14,28 +14,6 @@
               "named": true
             }
           },
-          "layouts": {
-            "0": [
-              {
-                "at": [
-                  "label"
-                ],
-                "slot": 0
-              },
-              {
-                "at": [
-                  "last"
-                ],
-                "slot": 1
-              },
-              {
-                "at": [
-                  "last"
-                ],
-                "slot": 2
-              }
-            ]
-          },
           "main": 0,
           "modules": [
             {
@@ -111,9 +89,27 @@
               "name": "record",
               "outputs": [],
               "reads": [
-                0,
-                1,
-                2
+                {
+                  "at": [
+                    "binding",
+                    "label"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "last"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "binding",
+                    "last"
+                  ],
+                  "slot": 2
+                }
               ],
               "widenings": [],
               "within": [],

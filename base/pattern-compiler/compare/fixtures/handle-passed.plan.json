@@ -217,8 +217,20 @@
               "name": "join",
               "outputs": [],
               "reads": [
-                0,
-                1
+                {
+                  "at": [
+                    "binding",
+                    "mine"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "other"
+                  ],
+                  "slot": 1
+                }
               ],
               "widenings": [],
               "within": [],

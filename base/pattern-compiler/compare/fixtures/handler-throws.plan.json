@@ -61,9 +61,27 @@
               "name": "record",
               "outputs": [],
               "reads": [
-                0,
-                1,
-                2
+                {
+                  "at": [
+                    "binding",
+                    "label"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "last"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "binding",
+                    "last"
+                  ],
+                  "slot": 2
+                }
               ],
               "widenings": [],
               "within": [],

@@ -102,8 +102,20 @@
               "name": "keep",
               "outputs": [],
               "reads": [
-                0,
-                1
+                {
+                  "at": [
+                    "binding",
+                    "area"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "center"
+                  ],
+                  "slot": 1
+                }
               ],
               "widenings": [],
               "within": [],
@@ -172,8 +184,21 @@
               "name": "go",
               "outputs": [],
               "reads": [
-                4,
-                5
+                {
+                  "at": [
+                    "binding",
+                    "area",
+                    "center"
+                  ],
+                  "slot": 4
+                },
+                {
+                  "at": [
+                    "binding",
+                    "center"
+                  ],
+                  "slot": 5
+                }
               ],
               "widenings": [],
               "within": [],

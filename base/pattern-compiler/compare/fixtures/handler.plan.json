@@ -74,10 +74,34 @@
               "name": "record",
               "outputs": [],
               "reads": [
-                0,
-                1,
-                2,
-                3
+                {
+                  "at": [
+                    "event",
+                    "text"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "last"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "binding",
+                    "log"
+                  ],
+                  "slot": 2
+                },
+                {
+                  "at": [
+                    "binding",
+                    "secret"
+                  ],
+                  "slot": 3
+                }
               ],
               "widenings": [],
               "within": [],

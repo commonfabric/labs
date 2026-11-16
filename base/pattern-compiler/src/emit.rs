@@ -112,7 +112,6 @@ pub(crate) struct Facts {
     /// For each cone, in the order the cones were made: the collections
     /// of the element bodies it is written in, outermost first.
     pub cone_within: Vec<Vec<usize>>,
-    layouts: BTreeMap<usize, Vec<(usize, Vec<String>)>>,
 }
 
 impl Facts {
@@ -176,15 +175,6 @@ impl Facts {
 
     pub fn inline_binding(&mut self, start: u32, binding: usize) {
         self.inline_bindings.insert((self.current, start), binding);
-    }
-
-    /// A slot of `Body.reads` of body `body` sits at `at` in the body's
-    /// argument.
-    pub fn layout(&mut self, body: usize, slot: usize, at: Vec<String>) {
-        let entries = self.layouts.entry(body).or_default();
-        if !entries.contains(&(slot, at.clone())) {
-            entries.push((slot, at));
-        }
     }
 }
 
@@ -2246,20 +2236,7 @@ pub(crate) fn generate(
             cone_within[*index] = json!(within);
         }
     }
-    let layouts: BTreeMap<String, Vec<Value>> = finished
-        .facts
-        .layouts
-        .iter()
-        .map(|(body, entries)| {
-            (
-                body.to_string(),
-                entries
-                    .iter()
-                    .map(|(slot, at)| json!({ "slot": slot, "at": at }))
-                    .collect(),
-            )
-        })
-        .collect();
+
     let handlers: BTreeMap<String, Value> = finished
         .facts
         .handlers
@@ -2295,7 +2272,7 @@ pub(crate) fn generate(
         "values": values,
         "outputsBelow": below,
         "coneWithin": cone_within,
-        "layouts": layouts,
+
         "handlers": handlers,
         "elements": generator.registered_elements,
         "states": generator.registered_states,

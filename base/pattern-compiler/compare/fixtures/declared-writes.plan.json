@@ -76,7 +76,13 @@
               "name": "overwrite",
               "outputs": [],
               "reads": [
-                0
+                {
+                  "at": [
+                    "binding",
+                    "mine"
+                  ],
+                  "slot": 0
+                }
               ],
               "widenings": [],
               "within": [],
@@ -112,7 +118,13 @@
               "name": "seal",
               "outputs": [],
               "reads": [
-                2
+                {
+                  "at": [
+                    "binding",
+                    "sealed"
+                  ],
+                  "slot": 2
+                }
               ],
               "widenings": [],
               "within": [],

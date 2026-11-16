@@ -12,22 +12,6 @@
               "named": true
             }
           },
-          "layouts": {
-            "0": [
-              {
-                "at": [
-                  "first"
-                ],
-                "slot": 0
-              },
-              {
-                "at": [
-                  "selected"
-                ],
-                "slot": 1
-              }
-            ]
-          },
           "main": 0,
           "modules": [
             {
@@ -101,8 +85,20 @@
               "name": "select",
               "outputs": [],
               "reads": [
-                0,
-                1
+                {
+                  "at": [
+                    "binding",
+                    "first"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "selected"
+                  ],
+                  "slot": 1
+                }
               ],
               "widenings": [],
               "within": [],

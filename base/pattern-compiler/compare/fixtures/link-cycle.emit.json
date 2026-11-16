@@ -19,37 +19,6 @@
               "named": true
             }
           },
-          "layouts": {
-            "0": [
-              {
-                "at": [
-                  "area"
-                ],
-                "slot": 0
-              },
-              {
-                "at": [
-                  "center"
-                ],
-                "slot": 1
-              }
-            ],
-            "1": [
-              {
-                "at": [
-                  "area",
-                  "center"
-                ],
-                "slot": 4
-              },
-              {
-                "at": [
-                  "center"
-                ],
-                "slot": 5
-              }
-            ]
-          },
           "main": 0,
           "modules": [
             {
@@ -164,8 +133,20 @@
               "name": "keep",
               "outputs": [],
               "reads": [
-                0,
-                1
+                {
+                  "at": [
+                    "binding",
+                    "area"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "center"
+                  ],
+                  "slot": 1
+                }
               ],
               "widenings": [],
               "within": [],
@@ -234,8 +215,21 @@
               "name": "go",
               "outputs": [],
               "reads": [
-                4,
-                5
+                {
+                  "at": [
+                    "binding",
+                    "area",
+                    "center"
+                  ],
+                  "slot": 4
+                },
+                {
+                  "at": [
+                    "binding",
+                    "center"
+                  ],
+                  "slot": 5
+                }
               ],
               "widenings": [],
               "within": [],

@@ -20,22 +20,6 @@
               "named": true
             }
           },
-          "layouts": {
-            "0": [
-              {
-                "at": [
-                  "item"
-                ],
-                "slot": 1
-              },
-              {
-                "at": [
-                  "where"
-                ],
-                "slot": 2
-              }
-            ]
-          },
           "main": 0,
           "modules": [
             {
@@ -136,8 +120,20 @@
               "name": "locate",
               "outputs": [],
               "reads": [
-                1,
-                2
+                {
+                  "at": [
+                    "binding",
+                    "item"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "binding",
+                    "where"
+                  ],
+                  "slot": 2
+                }
               ],
               "widenings": [],
               "within": [],

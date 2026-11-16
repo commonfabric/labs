@@ -61,8 +61,20 @@
               "name": "select",
               "outputs": [],
               "reads": [
-                0,
-                1
+                {
+                  "at": [
+                    "binding",
+                    "first"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "selected"
+                  ],
+                  "slot": 1
+                }
               ],
               "widenings": [],
               "within": [],

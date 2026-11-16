@@ -29,30 +29,6 @@
               "named": true
             }
           },
-          "layouts": {
-            "0": [
-              {
-                "at": [
-                  "at"
-                ],
-                "slot": 1
-              },
-              {
-                "at": [
-                  "chosen"
-                ],
-                "slot": 2
-              }
-            ],
-            "1": [
-              {
-                "at": [
-                  "cleared"
-                ],
-                "slot": 5
-              }
-            ]
-          },
           "main": 0,
           "modules": [
             {
@@ -200,8 +176,20 @@
               "name": "pickAt",
               "outputs": [],
               "reads": [
-                1,
-                2
+                {
+                  "at": [
+                    "binding",
+                    "at"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "binding",
+                    "chosen"
+                  ],
+                  "slot": 2
+                }
               ],
               "widenings": [],
               "within": [],
@@ -241,7 +229,13 @@
               "name": "clear",
               "outputs": [],
               "reads": [
-                5
+                {
+                  "at": [
+                    "binding",
+                    "cleared"
+                  ],
+                  "slot": 5
+                }
               ],
               "widenings": [],
               "within": [],

@@ -264,17 +264,63 @@ export const P = pattern<{ title: string; items: string[] }>(({ title, items }) 
     let text = source(&code);
     assert!(text.contains("$h.invoke(0, "), "{text}");
     let title = slot(&plan, "argument", &["title"], "value");
-    let layout = code["layouts"]["0"].as_array().expect("a layout");
+    // Each entry of `Body.reads` holds the slot and its place in the
+    // body's argument (PL §1.1, `ReadInput`): a `lift` has one
+    // parameter, and the path starts below it.
+    let reads = plan["bodies"][0]["reads"].as_array().expect("reads");
     assert!(
-        layout.contains(&json!({ "slot": title, "at": ["title"] })),
-        "{layout:?}"
+        reads.contains(&json!({ "slot": title, "at": ["title"] })),
+        "{reads:?}"
     );
-    // `Body.reads` holds the slot, and no member of the plan says where
-    // it sits in the argument.
-    assert!(plan["bodies"][0]["reads"]
-        .as_array()
-        .expect("reads")
-        .contains(&json!(title)));
+    // The artifact holds no layout beside the plan.
+    assert!(code.get("layouts").is_none());
+}
+
+#[test]
+fn a_slot_of_a_computed_sits_below_the_name_the_body_captures() {
+    let (plan, _) = emitted(
+        r#"import { computed, pattern } from "commonfabric";
+export const P = pattern<{ profile: { name: string } }>(({ profile }) => {
+  const shown = computed(() => {
+    let out = "";
+    for (const letter of profile.name) out += letter;
+    return out;
+  });
+  return { shown };
+});
+"#,
+        "P",
+    );
+    let name = slot(&plan, "argument", &["profile", "name"], "value");
+    assert_eq!(
+        plan["bodies"][0]["reads"],
+        json!([{ "slot": name, "at": ["profile", "name"] }])
+    );
+}
+
+#[test]
+fn a_slot_of_a_handler_sits_below_event_or_binding() {
+    let (plan, _) = emitted(
+        r#"import { handler, pattern, Writable } from "commonfabric";
+const add = handler<{ text: string }, { log: Writable<string[]> }>((event, { log }) => {
+  log.push(event.text);
+});
+export const P = pattern<{ tag: string }>(({ tag }) => {
+  const log = Writable.of<string[]>([]);
+  return { tag, log, add: add({ log }) };
+});
+"#,
+        "P",
+    );
+    let text = slot(&plan, "event", &["text"], "value");
+    let log = slot(&plan, "binding", &["log"], "identity");
+    assert_eq!(
+        plan["bodies"][0]["reads"],
+        json!([
+            { "slot": text, "at": ["event", "text"] },
+            { "slot": log, "at": ["binding", "log"] },
+        ])
+    );
 }
 
 #[test]

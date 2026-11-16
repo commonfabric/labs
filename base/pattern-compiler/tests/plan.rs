@@ -95,7 +95,7 @@ fn a_handler_is_one_body_whose_slots_have_the_roots_event_and_binding() {
         .as_array()
         .expect("reads")
         .iter()
-        .map(|slot| slot_line(&plan, slot))
+        .map(|read| slot_line(&plan, &read["slot"]))
         .collect();
     assert_eq!(reads, ["event title : value", "binding items : identity"]);
     assert_eq!(
@@ -107,12 +107,12 @@ fn a_handler_is_one_body_whose_slots_have_the_roots_event_and_binding() {
     assert_eq!(
         body["writes"],
         json!([{
-            "target": { "kind": "handle", "slot": body["reads"][1], "path": ["*"] },
+            "target": { "kind": "handle", "slot": body["reads"][1]["slot"], "path": ["*"] },
             "template": {
                 "op": "derive",
                 "inputs": [
-                    { "op": "slot", "slot": body["reads"][0] },
-                    { "op": "slot", "slot": body["reads"][1] },
+                    { "op": "slot", "slot": body["reads"][0]["slot"] },
+                    { "op": "slot", "slot": body["reads"][1]["slot"] },
                 ],
                 "by": { "body": 2 },
             },
@@ -733,7 +733,7 @@ fn the_send_handler_and_its_binding_are_the_records_of_pl_section_6_2() {
         .as_array()
         .expect("reads")
         .iter()
-        .map(line)
+        .map(|read| line(&read["slot"]))
         .collect();
     reads.sort();
     // The slots e0 to e8 and b0 to b4 of the listing.
@@ -961,7 +961,7 @@ fn reads_of(plan: &Value, body: &Value) -> Vec<String> {
         .as_array()
         .expect("reads")
         .iter()
-        .map(|slot| slot_line(plan, slot))
+        .map(|read| slot_line(plan, &read["slot"]))
         .collect()
 }
 
@@ -3025,7 +3025,7 @@ export const P = pattern<{ out: Cell<unknown[]> }>(({ out }) => ({ make: make({ 
             // The initial value the constructor writes.
             &json!({ "kind": "created", "call": 0, "path": [] }),
             &json!({ "kind": "created", "call": 0, "path": ["a"] }),
-            &json!({ "kind": "handle", "slot": body["reads"][1], "path": ["*"] }),
+            &json!({ "kind": "handle", "slot": body["reads"][1]["slot"], "path": ["*"] }),
         ]
     );
     assert_eq!(body["envelopes"], json!([{ "kind": "created", "call": 0 }]));

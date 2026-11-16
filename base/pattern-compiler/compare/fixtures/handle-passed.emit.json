@@ -10,7 +10,6 @@
           ],
           "elements": [],
           "handlers": {},
-          "layouts": {},
           "main": 0,
           "modules": [
             {
@@ -181,22 +180,6 @@
               "named": true
             }
           },
-          "layouts": {
-            "0": [
-              {
-                "at": [
-                  "mine"
-                ],
-                "slot": 0
-              },
-              {
-                "at": [
-                  "other"
-                ],
-                "slot": 1
-              }
-            ]
-          },
           "main": 0,
           "modules": [
             {
@@ -280,8 +263,20 @@
               "name": "join",
               "outputs": [],
               "reads": [
-                0,
-                1
+                {
+                  "at": [
+                    "binding",
+                    "mine"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "other"
+                  ],
+                  "slot": 1
+                }
               ],
               "widenings": [],
               "within": [],

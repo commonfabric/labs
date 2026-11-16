@@ -14,23 +14,6 @@
               "named": true
             }
           },
-          "layouts": {
-            "0": [
-              {
-                "at": [
-                  "item",
-                  "title"
-                ],
-                "slot": 0
-              },
-              {
-                "at": [
-                  "picked"
-                ],
-                "slot": 1
-              }
-            ]
-          },
           "main": 0,
           "modules": [
             {
@@ -114,8 +97,21 @@
               "name": "mark",
               "outputs": [],
               "reads": [
-                0,
-                1
+                {
+                  "at": [
+                    "binding",
+                    "item",
+                    "title"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "picked"
+                  ],
+                  "slot": 1
+                }
               ],
               "widenings": [],
               "within": [],
@@ -364,44 +360,6 @@
               "named": true
             }
           },
-          "layouts": {
-            "0": [
-              {
-                "at": [
-                  "chosen"
-                ],
-                "slot": 2
-              },
-              {
-                "at": [
-                  "item",
-                  "title"
-                ],
-                "slot": 3
-              },
-              {
-                "at": [
-                  "note"
-                ],
-                "slot": 4
-              }
-            ],
-            "1": [
-              {
-                "at": [
-                  "item",
-                  "title"
-                ],
-                "slot": 7
-              },
-              {
-                "at": [
-                  "picked"
-                ],
-                "slot": 8
-              }
-            ]
-          },
           "main": 0,
           "modules": [
             {
@@ -589,9 +547,28 @@
               "name": "choose",
               "outputs": [],
               "reads": [
-                2,
-                3,
-                4
+                {
+                  "at": [
+                    "binding",
+                    "chosen"
+                  ],
+                  "slot": 2
+                },
+                {
+                  "at": [
+                    "binding",
+                    "item",
+                    "title"
+                  ],
+                  "slot": 3
+                },
+                {
+                  "at": [
+                    "binding",
+                    "note"
+                  ],
+                  "slot": 4
+                }
               ],
               "widenings": [],
               "within": [],
@@ -635,8 +612,21 @@
               "name": "mark",
               "outputs": [],
               "reads": [
-                7,
-                8
+                {
+                  "at": [
+                    "binding",
+                    "item",
+                    "title"
+                  ],
+                  "slot": 7
+                },
+                {
+                  "at": [
+                    "binding",
+                    "picked"
+                  ],
+                  "slot": 8
+                }
               ],
               "widenings": [],
               "within": [],

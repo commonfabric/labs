@@ -107,8 +107,20 @@
               "name": "pickAt",
               "outputs": [],
               "reads": [
-                1,
-                2
+                {
+                  "at": [
+                    "binding",
+                    "at"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "binding",
+                    "chosen"
+                  ],
+                  "slot": 2
+                }
               ],
               "widenings": [],
               "within": [],
@@ -148,7 +160,13 @@
               "name": "clear",
               "outputs": [],
               "reads": [
-                5
+                {
+                  "at": [
+                    "binding",
+                    "cleared"
+                  ],
+                  "slot": 5
+                }
               ],
               "widenings": [],
               "within": [],

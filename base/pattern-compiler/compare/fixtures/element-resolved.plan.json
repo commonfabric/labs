@@ -69,8 +69,20 @@
               "name": "locate",
               "outputs": [],
               "reads": [
-                1,
-                2
+                {
+                  "at": [
+                    "binding",
+                    "item"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "binding",
+                    "where"
+                  ],
+                  "slot": 2
+                }
               ],
               "widenings": [],
               "within": [],

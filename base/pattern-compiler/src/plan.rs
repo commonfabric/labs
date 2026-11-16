@@ -4338,7 +4338,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         let index = self.plan_bodies.len();
         let mut dynamic: Vec<usize> = Vec::new();
         let used: UseRecord = bind_use(record, &computed);
-        let mut reads: Vec<usize> = Vec::new();
+        // `Body.reads`: each slot with its place in the body's argument
+        // (PL §1.1, `ReadInput`).
+        let mut reads: Vec<(usize, Vec<String>)> = Vec::new();
         let mut computed_inputs: Vec<Value> = Vec::new();
         let mut names: Names = HashMap::new();
         // The `value` entries, for an operand that names a space.
@@ -4374,17 +4376,32 @@ impl<'a> Emitter<'_, '_, 'a> {
                             .any(|(input, path)| *input == entry.input && *path == entry.path);
                     let slot =
                         self.slot_with(&root, &path, class_name(entry.class), resolved, in_place);
-                    if !reads.contains(&slot) {
-                        reads.push(slot);
-                    }
                     placed.push((entry.clone(), Ok(slot)));
                     {
+                        // For a handler the first segment is `event` for
+                        // the first parameter and `binding` for the
+                        // second, and the slot's path follows. Otherwise
+                        // the place is formed as `ComputedInput.at` is.
                         let mut at_path: Vec<String> = Vec::new();
-                        if prefix {
-                            at_path.push(entry.input.clone());
+                        match &root {
+                            Root::Event(_) => {
+                                at_path.push("event".to_string());
+                                at_path.extend(path.iter().cloned());
+                            }
+                            Root::Binding(_) => {
+                                at_path.push("binding".to_string());
+                                at_path.extend(path.iter().cloned());
+                            }
+                            _ => {
+                                if prefix {
+                                    at_path.push(entry.input.clone());
+                                }
+                                at_path.extend(slot_path(&[], &entry.path));
+                            }
                         }
-                        at_path.extend(slot_path(&[], &entry.path));
-                        self.facts.layout(index, slot, at_path);
+                        if !reads.contains(&(slot, at_path.clone())) {
+                            reads.push((slot, at_path));
+                        }
                     }
                     if let (Class::Value, true, Some(cone)) = (entry.class, computation, self.cone)
                     {
@@ -4763,7 +4780,10 @@ impl<'a> Emitter<'_, '_, 'a> {
             "name": name,
             "within": self.within_json(),
             "kind": kind,
-            "reads": reads,
+            "reads": reads
+                .iter()
+                .map(|(slot, at)| json!({ "slot": slot, "at": at }))
+                .collect::<Vec<Value>>(),
             "computed": computed_inputs,
             "handles": handles,
             "writes": writes,
@@ -4850,7 +4870,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         if let Some(cone) = self.cone {
             if computation {
                 self.cones[cone].bodies.push(index);
-                self.cones[cone].slots.extend(reads.iter().copied());
+                self.cones[cone]
+                    .slots
+                    .extend(reads.iter().map(|(slot, _)| *slot));
             }
         }
         index
@@ -4969,8 +4991,11 @@ impl<'a> Emitter<'_, '_, 'a> {
     fn body_template(&self, body: usize) -> Option<Value> {
         let record = &self.plan_bodies[body];
         let mut inputs: Vec<Value> = Vec::new();
-        for slot in record["reads"].as_array()? {
-            inputs.push(json!({ "op": "slot", "slot": slot }));
+        for read in record["reads"].as_array()? {
+            let node = json!({ "op": "slot", "slot": read["slot"] });
+            if !inputs.contains(&node) {
+                inputs.push(node);
+            }
         }
         for input in record["computed"].as_array()? {
             let template = input.get("template")?;

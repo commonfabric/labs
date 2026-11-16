@@ -19,16 +19,6 @@
               "named": true
             }
           },
-          "layouts": {
-            "0": [
-              {
-                "at": [
-                  "opened"
-                ],
-                "slot": 1
-              }
-            ]
-          },
           "main": 0,
           "modules": [
             {
@@ -116,7 +106,13 @@
               "name": "open",
               "outputs": [],
               "reads": [
-                1
+                {
+                  "at": [
+                    "binding",
+                    "opened"
+                  ],
+                  "slot": 1
+                }
               ],
               "widenings": [],
               "within": [],

@@ -55,7 +55,8 @@ export type Plan = {
   bodies: {
     kind: string;
     name: string;
-    reads: number[];
+    /** Each slot the body reads, with its place in the argument. */
+    reads: { slot: number; at: string[] }[];
     computed: { at: string[]; observes: string }[];
     writes: {
       target: { kind: string; slot?: number; cell?: number; path?: string[] };
@@ -101,8 +102,7 @@ export type Code = {
   outputsBelow: { output: number; value: number; path: string[] }[];
   /** For each cone: the collections it is evaluated per element of. */
   coneWithin: number[][];
-  /** For each body: where each slot of `Body.reads` sits in its argument. */
-  layouts: Record<string, { slot: number; at: string[] }[]>;
+
   handlers: Record<string, { named: boolean; captures: string[] }>;
   unlistedReads: unknown[];
   valuesWithoutOutput: number[];
@@ -566,7 +566,9 @@ export class Host {
         );
       }
     }
-    const layout = [...(instance.code.layouts[`${body}`] ?? [])].sort((a, b) =>
+    // The slot part of the argument: each entry of `Body.reads` at its
+    // place (PL §1.1, `ReadInput`).
+    const layout = [...instance.plan.bodies[body].reads].sort((a, b) =>
       a.at.length - b.at.length
     );
     for (const { slot, at } of layout) {
@@ -1591,7 +1593,7 @@ export class Instance {
     // the place the binding's state entry names (PL §1.1).
     let state: unknown = {};
     const slots = this.plan.bodies[body].reads
-      .map((slot) => ({ slot, record: this.plan.slots[slot] }))
+      .map(({ slot }) => ({ slot, record: this.plan.slots[slot] }))
       .filter(({ record }) => record.root.kind === "binding")
       .sort((a, b) => a.record.path.length - b.record.path.length);
     for (const { slot, record: read } of slots) {

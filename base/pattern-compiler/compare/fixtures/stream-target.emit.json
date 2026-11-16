@@ -21,34 +21,6 @@
               "named": false
             }
           },
-          "layouts": {
-            "0": [
-              {
-                "at": [
-                  "by"
-                ],
-                "slot": 0
-              },
-              {
-                "at": [
-                  "count"
-                ],
-                "slot": 1
-              },
-              {
-                "at": [
-                  "count"
-                ],
-                "slot": 2
-              }
-            ],
-            "1": [
-              {
-                "at": [],
-                "slot": 4
-              }
-            ]
-          },
           "main": 0,
           "modules": [
             {
@@ -140,9 +112,27 @@
               "name": "bump",
               "outputs": [],
               "reads": [
-                0,
-                1,
-                2
+                {
+                  "at": [
+                    "event",
+                    "by"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "count"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "binding",
+                    "count"
+                  ],
+                  "slot": 2
+                }
               ],
               "widenings": [],
               "within": [],
@@ -186,7 +176,13 @@
               "name": "onClick",
               "outputs": [],
               "reads": [
-                4
+                {
+                  "at": [
+                    "binding",
+                    "inc"
+                  ],
+                  "slot": 4
+                }
               ],
               "widenings": [],
               "within": [],
