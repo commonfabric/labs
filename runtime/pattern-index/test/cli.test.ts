@@ -240,6 +240,32 @@ describe("cli", () => {
     }
   });
 
+  it("exits 2 with usage on stderr when a required flag is missing", async () => {
+    const child = new Deno.Command(Deno.execPath(), {
+      cwd: directory,
+      args: [
+        "run",
+        "--no-lock",
+        "--config",
+        `${root}/deno.jsonc`,
+        entry,
+        "--identity",
+        `${directory}/identity.key`,
+      ],
+      stdin: "null",
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const output = await child.output();
+
+    expect(output.code).toBe(2);
+    expect(decoder.decode(output.stdout)).toBe("");
+    expect(decoder.decode(output.stderr)).toContain(
+      "usage: cli.ts --identity <path> --base-url <url>",
+    );
+    expect(calls).toEqual([]);
+  });
+
   it("exits nonzero with only stderr when the identity key cannot be read", async () => {
     const output = await callHelper(
       directory,

@@ -157,6 +157,26 @@ export const createHarnessAgentRunExecutor = (
     let progressSequence = 0;
     const runKey = hashStringOf([run.host, addressKey(run.link)]);
     const runRoot = join(options.workRoot, runKey);
+    // Each write the run makes opens a fabric session, which ends with the
+    // write unless the harness's seam supplied it.
+    const injectedSessions = options.harnessDeps?.fabricSessionFactory;
+    const withSession = async <T>(
+      use: (session: HarnessFabricSession) => Promise<T>,
+    ): Promise<T> => {
+      const session = await (injectedSessions ??
+        createHarnessFabricSessionFactory({
+          apiUrl: run.host,
+          identityKeyPath: options.identityKeyPath,
+          space: run.link.space,
+        }))();
+      try {
+        return await use(session);
+      } finally {
+        if (injectedSessions === undefined) {
+          await session.pieces.runtime.dispose().catch(() => {});
+        }
+      }
+    };
 
     // The record reads as live proxies; the harness and the writer take plain
     // values.
@@ -224,48 +244,43 @@ export const createHarnessAgentRunExecutor = (
             handleTable ??= createHarnessHandleTable(runKey);
             const sequence = ++progressSequence;
             let publicationLost = false;
-            let session: HarnessFabricSession | undefined;
-            const ownsSession =
-              options.harnessDeps?.fabricSessionFactory === undefined;
             try {
-              session = await (options.harnessDeps?.fabricSessionFactory ??
-                createHarnessFabricSessionFactory({
-                  apiUrl: run.host,
-                  identityKeyPath: options.identityKeyPath,
-                  space: run.link.space,
-                }))();
-              const written = await writeAgentResult({
-                session,
-                handleTable,
-                literalStrings: true,
-                structuredResult: {
-                  message,
-                  sequence,
-                  updatedAt: new Date().toISOString(),
-                },
-                resultSchema: {
-                  type: "object",
-                  properties: {
-                    message: { type: "string" },
-                    sequence: { type: "integer" },
-                    updatedAt: { type: "string" },
+              await withSession(async (session) => {
+                const written = await writeAgentResult({
+                  session,
+                  handleTable,
+                  literalStrings: true,
+                  structuredResult: {
+                    message,
+                    sequence,
+                    updatedAt: new Date().toISOString(),
                   },
-                  required: ["message", "sequence", "updatedAt"],
-                  additionalProperties: false,
-                },
-                observedHandles: agentObservedHandlesOfTable(handleTable),
-                maxConfidentiality: maxConfidentiality as never,
-                cause: {
-                  agentRunProgress: runKey,
-                  attempt,
-                  sequence,
-                },
+                  resultSchema: {
+                    type: "object",
+                    properties: {
+                      message: { type: "string" },
+                      sequence: { type: "integer" },
+                      updatedAt: { type: "string" },
+                    },
+                    required: ["message", "sequence", "updatedAt"],
+                    additionalProperties: false,
+                  },
+                  observedHandles: agentObservedHandlesOfTable(handleTable),
+                  maxConfidentiality: maxConfidentiality as never,
+                  cause: {
+                    agentRunProgress: runKey,
+                    attempt,
+                    sequence,
+                  },
+                });
+                run.signal.throwIfAborted();
+                if (!await run.publishProgress!(written.link)) {
+                  publicationLost = true;
+                  throw new Error(
+                    "Progress publication is no longer available",
+                  );
+                }
               });
-              run.signal.throwIfAborted();
-              if (!await run.publishProgress!(written.link)) {
-                publicationLost = true;
-                throw new Error("Progress publication is no longer available");
-              }
             } catch (error) {
               options.report?.(
                 `agent runner: progress publication failed: ${
@@ -277,10 +292,6 @@ export const createHarnessAgentRunExecutor = (
                 throw new Error("Progress publication is no longer available");
               }
               return false;
-            } finally {
-              if (ownsSession) {
-                await session?.pieces.runtime.dispose().catch(() => {});
-              }
             }
           },
         }
@@ -295,24 +306,18 @@ export const createHarnessAgentRunExecutor = (
 
     // Every cell the run holds a handle to, and every Loom row it was shown.
     const observedHandles = agentObservedHandlesOfTable(handleTable);
-    let session: HarnessFabricSession | undefined;
-    const ownsSession = options.harnessDeps?.fabricSessionFactory === undefined;
     try {
-      session = await (options.harnessDeps?.fabricSessionFactory ??
-        createHarnessFabricSessionFactory({
-          apiUrl: run.host,
-          identityKeyPath: options.identityKeyPath,
-          space: run.link.space,
-        }))();
-      const written = await writeAgentResult({
-        session,
-        handleTable,
-        structuredResult,
-        resultSchema,
-        observedHandles,
-        maxConfidentiality: maxConfidentiality as never,
-        cause: { agentRunResult: record.requestHash },
-      });
+      const written = await withSession((session) =>
+        writeAgentResult({
+          session,
+          handleTable,
+          structuredResult,
+          resultSchema,
+          observedHandles,
+          maxConfidentiality: maxConfidentiality as never,
+          cause: { agentRunResult: record.requestHash },
+        })
+      );
       return { outcome: "completed", result: written.link, report };
     } catch (error) {
       if (
@@ -346,8 +351,6 @@ export const createHarnessAgentRunExecutor = (
           : PROVIDER_FAILURE,
         report,
       };
-    } finally {
-      if (ownsSession) await session?.pieces.runtime.dispose().catch(() => {});
     }
   };
 };

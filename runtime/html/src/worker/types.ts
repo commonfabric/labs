@@ -284,11 +284,6 @@ export interface ReconcileContext {
     handler: (event: unknown) => void,
   ) => number;
 
-  /** Get handler by ID for event dispatch */
-  getHandler: (
-    handlerId: number,
-  ) => ((event: unknown) => void) | undefined;
-
   /** Optional document for SSR or testing */
   document?: Document;
 }

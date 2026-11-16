@@ -17,8 +17,6 @@
 
 import { join } from "@std/path";
 
-import { readHarnessRunArtifacts } from "@commonfabric/cf-harness/artifacts";
-import { canContinueHarnessRun } from "@commonfabric/cf-harness/run-continuation";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
 import { debugStr } from "@commonfabric/data-model";
 import { Identity, legacySpaceDid } from "@commonfabric/identity";
@@ -29,6 +27,7 @@ import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { agentRunObservationCeiling } from "../agent-run-harness.ts";
 import {
+  canContinueRecordedRun,
   type HarnessJobOptions,
   type HarnessJobResult,
   type HarnessJobSpec,
@@ -406,13 +405,8 @@ export class LocalJobLane {
   async start(): Promise<void> {
     const continuable = new Set<string>();
     for (const { id, runRoot } of this.#options.store.runningRuns()) {
-      if (runRoot === undefined) continue;
-      try {
-        if (canContinueHarnessRun(await readHarnessRunArtifacts(runRoot))) {
-          continuable.add(id);
-        }
-      } catch (error) {
-        if (!(error instanceof Deno.errors.NotFound)) throw error;
+      if (runRoot !== undefined && await canContinueRecordedRun(runRoot)) {
+        continuable.add(id);
       }
     }
     const recovered = this.#options.store.recover(continuable);

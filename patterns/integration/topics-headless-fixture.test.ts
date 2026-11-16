@@ -85,7 +85,7 @@ function mentionCount(fixture: TopicsFixture): number {
 /**
  * Returns what `mentionedBy` returns for `topic`, by index, over the measured
  * board's distinct topics in the order of each one's first entry, which is the
- * list the pivot hands it.
+ * list the pivot joins over.
  */
 function mentionedByIndex(
   measurement: TopicsMeasurement,

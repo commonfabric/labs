@@ -227,7 +227,7 @@ no `--space`.
 | Test pattern       | `deno task cf test pattern.test.tsx`                                                                                                                              |
 | Deploy new         | `deno task cf piece new pattern.tsx --test pattern.test.tsx --root . --repository REPO -i key -a url -s space`                                                    |
 | Attach a data file | `deno task cf piece new pattern.tsx --test pattern.test.tsx --datafile data/cities.json ...`                                                                      |
-| Deploy from index  | `deno task cf piece new --from-index ID --pattern-index-url URL ...` (fetched and compiled as `run_pattern` does, imports unpinned)                               |
+| Deploy from index  | `deno task cf piece new --from-index ID --pattern-index-url URL ... --json` (`{"pieceId","name"?}`; built as `run_pattern` builds it)                             |
 | Join the index     | `pbpaste \| deno task cf index join -i key` (the invite link on stdin; once per machine)                                                                          |
 | Publish to index   | `deno task cf pattern publish pattern.tsx --json -i key -a url -s space` (privacy check, may rewrite committed files; `outcome` says what happened)               |
 | Your patterns      | `deno task cf pattern ls -i key` (listing state, findings to fix, what moves each on)                                                                             |

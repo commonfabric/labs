@@ -106,7 +106,7 @@ import {
   listPieces,
   listSpaceSlugs,
   MapFormat,
-  newPiece,
+  newPieceWithReceipt,
   partitionVerbListing,
   pathRequiredRefusal,
   PieceConfig,
@@ -2547,6 +2547,10 @@ export const piece = targetOptions(
   .option(
     "--dangerously-allow-incompatible-schema",
     "Accepted for deploy-script symmetry; a new piece has no previous schema to compare.",
+  )
+  .option(
+    "--json",
+    'Output {"pieceId", "name"} as JSON; name only for --from-index, when the index has one.',
   )
   .action(newPieceFromCommand)
   /* piece set-slug */
@@ -5063,7 +5067,10 @@ export async function restoreFromCommand(
 }
 
 export interface NewPieceCommandDependencies {
-  newPiece?: typeof newPiece;
+  newPiece?: typeof newPieceWithReceipt;
+
+  /** Where the receipt goes, stdout unless the caller says otherwise. */
+  render?: typeof render;
 
   /** Records which published pattern a piece came from; the local store by default. */
   recordIndexedPiece?: (
@@ -5182,7 +5189,7 @@ export async function newPieceFromCommand(
   ) {
     throw new Error("`--input-file` must contain a JSON object.");
   }
-  const pieceId = await (deps.newPiece ?? newPiece)(
+  const { pieceId, name } = await (deps.newPiece ?? newPieceWithReceipt)(
     spaceConfig,
     entry,
     {
@@ -5195,7 +5202,17 @@ export async function newPieceFromCommand(
         : { requestKey: options.requestKey }),
     },
   );
-  render(pieceId);
+  // `--json` is the machine surface: one object naming the piece and, for a
+  // piece from the index that has one, the pattern's display name.
+  const print = deps.render ?? render;
+  if (options.json) {
+    print(
+      { pieceId, ...(name === undefined ? {} : { name }) },
+      { json: true },
+    );
+  } else {
+    print(pieceId);
+  }
   if ("patternId" in entry) {
     await (deps.recordIndexedPiece ?? recordIndexedPiece)(
       entry.patternIndexUrl,

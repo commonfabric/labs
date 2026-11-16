@@ -50,35 +50,21 @@ describe("view-land", () => {
   });
 
   describe("the land dialog", () => {
-    /** A session whose land dialog asks whether to merge {@link LANDING}. */
+    /** A session whose task dialog, looking for the pull request, asks
+     * whether to merge {@link LANDING}. */
     function asking(): Session {
       const s = session();
-      s.beginLand("Looking.", () => {});
-      expect(s.confirmLand(LANDING)).toBe(true);
+      s.beginTask("Land", () => {});
+      s.appendTaskOutput("Looking.\n");
+      s.confirmLand(LANDING);
       return s;
     }
 
-    it("says what it looks for, with only Cancel, which stops the search, while it looks", () => {
-      const s = session();
-      let cancelled = 0;
+    /** The rows the dialog shows, without the blank rows. */
+    const shown = (s: Session) =>
+      s.view().dialog!.body.filter((row) => row !== "");
 
-      s.beginLand("Looking for the pull request.", () => cancelled++);
-      const dialog = s.view().dialog!;
-      expect(dialog.title).toBe("Land");
-      expect(dialog.body).toEqual(["Looking for the pull request."]);
-      expect(dialog.buttons.map((b) => b.label)).toEqual(["Cancel"]);
-      for (const key of [typed("l"), { name: "enter" }]) s.handleKey(key);
-      expect(s.view().dialog!.title).toBe("Land");
-      expect(cancelled).toBe(0);
-      s.handleKey({ name: "escape" });
-
-      expect(cancelled).toBe(1);
-      expect(s.view().dialog).toBeNull();
-      expect(s.confirmLand(LANDING)).toBe(false);
-      expect(s.view().dialog).toBeNull();
-    });
-
-    it("asks whether to merge the pull request, saying how and at which commit as GitHub's merge button does, with no button as its default", () => {
+    it("asks under what the task found whether to merge the pull request, saying how and at which commit as GitHub's merge button does, with no button as its default", () => {
       const bodies = [
         ["squash", "Squash and merge pull request 7 of octo/repo,"],
         ["merge", "Merge pull request 7 of octo/repo,"],
@@ -86,12 +72,18 @@ describe("view-land", () => {
       ] as const;
       for (const [method, line] of bodies) {
         const s = session();
-        s.beginLand("Looking.", () => {});
+        s.beginTask("Land", () => {});
+        s.appendTaskOutput("Looking.\n");
         s.confirmLand({ ...LANDING, method });
 
         const dialog = s.view().dialog!;
         expect(dialog.title).toBe("Land");
-        expect(dialog.body).toEqual([line, "if its head is still c0ffee?"]);
+        expect(shown(s)).toEqual([
+          "Looking.",
+          line,
+          "if its head is still c0ffee?",
+        ]);
+        expect(dialog.emphasized).toEqual([1, 2]);
         expect(dialog.buttons.map((b) => b.label)).toEqual([
           "Merge",
           "Cancel",
@@ -99,6 +91,20 @@ describe("view-land", () => {
         expect(dialog.buttons.some((b) => b.kind === "default")).toBe(false);
         expect(dialog.focus).toBe(-1);
       }
+    });
+
+    it("asks nothing unless a task is running in the task dialog", () => {
+      const s = session();
+      s.confirmLand(LANDING);
+      expect(s.view().dialog).toBeNull();
+      s.beginTask("Land", () => {});
+      s.finishTask("Done.");
+
+      s.confirmLand(LANDING);
+      expect(s.view().dialog!.buttons.map((b) => b.label)).toEqual([
+        "Close",
+        "Quit",
+      ]);
     });
 
     it("asks for no merge on the `L` that opened it, pressed again", () => {
@@ -111,7 +117,7 @@ describe("view-land", () => {
       expect(s.view().dialog!.title).toBe("Land");
     });
 
-    it("asks for the merge on Merge, and for none on Enter until a button has the focus", () => {
+    it("asks for the merge on Merge, keeping the dialog up for it, and for none on Enter until a button has the focus", () => {
       for (
         const keys of [
           [typed("m")],
@@ -127,43 +133,35 @@ describe("view-land", () => {
         }
 
         expect(s.mergeRequested).toEqual(LANDING);
-        expect(s.view().dialog).toBeNull();
+        expect(s.view().dialog!.title).toBe("Land");
       }
     });
 
-    it("asks for no merge on Cancel or Escape, and stops no search then", () => {
+    it("keeps what it found and what it asked when the merge continues the dialog, which then offers Abort", () => {
+      const s = asking();
+      s.handleKey(typed("m"));
+
+      s.continueTask(() => {});
+      s.appendTaskOutput("Merging.\n");
+
+      expect(shown(s)).toEqual([
+        "Looking.",
+        "Squash and merge pull request 7 of octo/repo,",
+        "if its head is still c0ffee?",
+        "Merging.",
+      ]);
+      expect(s.view().dialog!.buttons.map((b) => b.label)).toEqual(["Abort"]);
+    });
+
+    it("asks for no merge on Cancel or Escape, which take the dialog down", () => {
       for (const key of [typed("c"), { name: "escape" }]) {
-        const s = session();
-        let cancelled = 0;
-        s.beginLand("Looking.", () => cancelled++);
-        s.confirmLand(LANDING);
+        const s = asking();
 
         s.handleKey(key);
 
         expect(s.mergeRequested).toBeNull();
         expect(s.view().dialog).toBeNull();
-        expect(cancelled).toBe(0);
       }
-    });
-
-    it("ends the search with a message in the status line, which also shows when no dialog is up, but not over another dialog", () => {
-      const s = session();
-      s.beginLand("Looking.", () => {});
-
-      s.endLand("Pull request 7: https://github.com/octo/repo/pull/7");
-      expect(s.view().dialog).toBeNull();
-      expect(s.view().message).toBe(
-        "Pull request 7: https://github.com/octo/repo/pull/7",
-      );
-      s.endLand("Cannot land: this checkout is not on a branch");
-      expect(s.view().message).toBe(
-        "Cannot land: this checkout is not on a branch",
-      );
-      const confirming = asking();
-      confirming.endLand("No.");
-
-      expect(confirming.view().dialog!.buttons.length).toBe(2);
-      expect(confirming.view().message).not.toBe("No.");
     });
   });
 
