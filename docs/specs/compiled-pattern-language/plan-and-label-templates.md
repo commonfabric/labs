@@ -127,8 +127,8 @@ export type SlotRoot =
   /**
    * The position of the current element in the order a collection
    * iterates (`Plan.collections`). A slot with this root has the empty
-   * path and observes `value`. Its label is the membership the collection
-   * iterates (sections 2.2 and 3.6).
+   * path and observes `value`. Its label is the label of the collection's
+   * array (section 2.2).
    */
   | { readonly kind: "index"; readonly collection: Index }
   /** The stored result of a durable operation (`Plan.operations`). */
@@ -1059,7 +1059,7 @@ export interface Binding {
      * (`Plan.bindings`); or a constant written at the binding, which the
      * plan holds and nothing stores. `template` is the label of the same
      * place: the `slot` node, which for a slot of root `index` resolves to
-     * the membership that collection iterates (section 3.6), the output's
+     * the label of that collection's array (section 2.2), the output's
      * template, and `const` for a stream and for a constant. A constant
      * is held as its value, whether it is written as a literal or as the
      * name of a module-scope constant, which the compiler evaluates. A
@@ -1529,8 +1529,10 @@ so each occurrence has a child of its own, and a factory element in
 slot of root `index` that names the collection (section 1.1). The slot
 has the empty path and the class `value`. Its value is the position that
 the key stands at in the order the collection iterates, and the runtime
-binds it per key, as it binds the element slots. Its label is the
-membership the collection iterates (sections 2.2 and 3.6). A cone that
+binds it per key, as it binds the element slots. Its label is the label
+of the collection's array: its length, and which link each position
+holds, and nothing of what a link points to (sections 2.2 and 3.6). A
+cone that
 reads the index lists the slot in `Cone.slots`, a sandboxed body lists it
 in `Body.reads`, and a handler binding whose state holds the index names
 it in `place`. A node that lists no such slot is not given the index. No
@@ -1558,10 +1560,11 @@ from the index changes as what derives from any other input does:
 - **A child whose argument holds the index** is named through `within`
   and stays. The argument path that holds the index is written again by
   its write edge (section 3.15).
-- **A state cell** is per key and keeps what it holds. *Assumed*
-  (section 8, question 92): the value a declaration gives the cell is
-  written when the cell is first created, and is not written again when
-  the index changes.
+- **A state cell** is per key and keeps what it holds. By ruling, that
+  holds for a cell declared with a value from the index, such as
+  `cell(index)` in an element body: the value a declaration gives the
+  cell is written when the cell is first created, and is not written
+  again when the index changes.
 - **An identity the author derives from the index** follows the index.
   It arises in a function body written in the element body, because a
   cause written in the reactive tier is a string literal
@@ -1570,9 +1573,9 @@ from the index changes as what derives from any other input does:
   `within` and that cause, and a binding the body makes that copies the
   index is a stream named by the copied value (section 3.14). After a
   move the cause, or the copied value, names another cell, child or
-  stream. *Assumed* (section 8, question 92): the explicit cause and the
-  rule for copied values govern here, and "stays with its element" holds
-  for what is named through `within` alone.
+  stream, and no evaluation makes the one named before. By ruling, the
+  explicit cause and the rule for copied values govern here, and "stays
+  with its element" holds for what is named through `within` alone.
 
 The purpose of the rule is that an element that moves keeps its cone
 instances and its state, so reordering a collection recomputes nothing
@@ -1652,8 +1655,8 @@ Consequences, which later sections rely on:
 - **A body that reads the index has this property too.** No key holds
   the index. A move evaluates again the cones that list the index slot,
   for the keys whose position changed, and nothing else of the body. The
-  template of a node that reads the index includes the membership the
-  collection iterates (section 3.6).
+  template of a node that reads the index includes the label of the
+  collection's array (section 2.2).
 - **Keying is the runtime's observation, not the body's.** Deciding which
   cone instances an element has compares element values. The comparison
   flows into no element's computed output, since each output is a
@@ -2349,14 +2352,61 @@ read contributes to the per-transaction join today.
 **The label of a slot of root `index`.** The slot has no stored address:
 its value is the position of the current element, which the runtime
 computes from the order the collection iterates. Its label is defined by
-rule and not by a read. It is the membership that the collection
-iterates, as the table of section 3.2 gives it by `Collection.source`:
-for a collection over a slot, the label of the `enumeration` slot at the
-source's path. A `slot` node that names the slot instantiates to that
-label. The position of an element is a function of the order and the
-membership before it, and the membership the collection iterates covers
-that. *Assumed* (section 8, question 93): no narrower label is formed
-for the elements before the position alone.
+rule and not by a read. By ruling, it is the label of the collection's
+own array: the length of the array, and which link each position holds.
+It holds nothing of what the links point to. It is the label of the
+whole array, and no narrower label is formed for the positions up to
+the element's own. A `slot` node that names the slot instantiates to
+that label.
+
+The label of the array is the join of two parts.
+
+- **The membership the collection iterates,** as the table of section
+  3.2 gives it by `Collection.source`. For a collection over a slot it
+  is the label of the `enumeration` slot at the source's path, which
+  consumes the `shape` and `enumerate` entries at the array's own path.
+  No entry below the array is in it.
+- **The root of every position** of the array the collection iterates,
+  observed in place: the label of a `shape` slot with `inPlace` at the
+  position (the table above). Where the position holds a link, that is
+  the `followRef` entries at the position, which is the label of which
+  reference the position holds. Where it holds a value in place, it is
+  the `shape` and `enumerate` entries at the position, which is the
+  label of whether the position holds anything and of what kind. The
+  slot stops at the position (section 2.5), so nothing of the cell a
+  link leads to is in it, and no `value` entry is.
+
+For an array the instance computed, a position has no stored address
+until the collection is kept, and the root of a position takes the
+producing template, as section 3.6 gives the element's root slots.
+Section 3.7 gives the label of the array of a derived collection.
+
+The join is a join in the sense of section 3.2. Its confidentiality is
+the join of the parts, and it is the same label for every key of the
+collection, so one transaction forms it once per collection.
+
+The position of a key is a function of the length of the array and of
+which element part each position holds. For a position that holds a
+link, the element part is the identity of the cell linked, and the
+second part above is its label. Two cases are not settled by the
+ruling.
+
+- **A position that holds a plain value in place.** Its element part is
+  derived from the value (section 1.3), so which key stands at which
+  position is a function of the values. *Assumed* (section 8, question
+  94): the label of the array holds the root `shape` of such a position
+  and not its `value`. Deciding which key an element has is the
+  runtime's observation and not the body's (section 1.3), and a node
+  that reads the index is given a number and no value. A node that
+  reads the element as well carries the element's label by its own
+  slots.
+- **A derived collection.** Which elements the result of a `filter` or
+  a `flatMap` holds, and at which position, was computed, and section
+  3.7 gives the label of that array. It includes what the predicates
+  read, which can be values behind links of the source. That is the
+  label of which elements the array holds and not of what its links
+  point to. *Assumed* (section 8, question 95): the label is formed
+  whole, as for a stored array.
 
 **The label of an `identity` slot.** By ruling, a handle that a body passes
 on without reading through it adds nothing of the label of its cell to what
@@ -4163,9 +4213,12 @@ template and the same atom, where the runtime mints none: **tighter**.
 - **Index.** A node of the body that reads the index reads the slot of
   root `index` that names the collection (section 1.3), and has the
   `slot` node of that slot in its template. The node resolves to the
-  membership the collection iterates (section 2.2), which for a
-  collection over a slot is the collection's `enumeration`, because an
-  element's index depends on the order of the others. A node of the same
+  label of the collection's array (section 2.2), which for a collection
+  over a slot is the collection's `enumeration` joined with the label
+  of which link each position holds, because an element's index depends
+  on the order of the others. It holds nothing of what a link points
+  to: a body that reads the index and not the element carries no label
+  of an element's value. A node of the same
   body that does not read the index lists no such slot and has none of
   that label, and a callback that declares the index and does not use it
   adds it to no template. The position is in no key: an element that
@@ -4179,9 +4232,9 @@ template and the same atom, where the runtime mints none: **tighter**.
   thing the body is given has its own label. The element has the label
   of its own slot of the collection and of what that slot holds: the
   element's root slots and the slots below them, bound to position `i`.
-  The index has the label of its slot, which is the membership the
-  collection iterates, and the whole collection the label of its
-  capture, each only for a node that reads it.
+  The index has the label of its slot, which is the label of the
+  collection's array (section 2.2), and the whole collection the label
+  of its capture, each only for a node that reads it.
   Each captured value has the label of its own slot or output of the
   enclosing instance. A node of the body takes the labels of what it
   reads and closes over, and nothing of what another node of the same
@@ -4336,6 +4389,25 @@ entries.
   class of integrity survives. Its root `shape` slot is replaced by the
   derived collection's membership template, because being at index `k` of the
   result depends on all the predicates.
+
+- **The label of the array, for an index.** A body applied to the result
+  that reads the index reads a slot of root `index` that names its own
+  record, whose `source` names the record of the `filter` (section 2.2).
+  The membership that record iterates is the `filter`'s membership
+  template (section 3.2). The root of a position of the result is the
+  root of the source element passed through: its `identity` slot, and
+  its `shape`, which the membership template replaces. The label of the
+  array is therefore the `filter`'s membership template, joined with the
+  label of which reference each position of the result holds. It
+  includes what every predicate read, because which elements the array
+  holds depends on that. It includes a value behind a link only where a
+  predicate read it. The same holds for the result of a `flatMap`, with
+  its membership template and the roots of the elements the body
+  returned, and for the result of a `map`, whose membership is its
+  source's and whose positions have the roots the body's template gives
+  them (section 3.6). *Assumed* (section 8, question 95): the label is
+  formed whole, and it joins nothing for the positions of the source
+  that the predicate dropped beyond what the membership template holds.
 
 `xs.flatMap((x) => body)`:
 
@@ -7043,7 +7115,7 @@ interface TemplateInputs {
    * Label of a slot, already resolved by address, path and class, with its
    * chain. For an address this transaction or its batch wrote, the label
    * staged there (section 4.5). For a slot of root `index`, the label of
-   * the membership its collection iterates (section 2.2).
+   * the array its collection iterates (section 2.2).
    */
   slotLabel(slot: Index): Label;
   /**
@@ -10153,29 +10225,57 @@ this document made.
     equal elements the predicate dropped (section 1.3). Keys stay
     distinct, because the result holds a subset of the source's
     positions. The alternative counts again in the result.
-92. **State and identity that derive from the index.** By ruling, the
-    position is in no element key, and the state, streams and children
-    of a body stay with their element when it moves. Three cases are
-    not settled by that. *Assumed* (section 1.3), for each:
-    - A state cell declared with a value that derives from the index,
-      such as `cell(index)` in an element body, keeps what it holds
-      when its element moves. The declared value is written when the
-      cell is first created and not again. The alternative writes it
-      again on a move, which would discard what a handler wrote.
-    - A cell or a child that a function body written in an element
-      body makes under an explicit cause that holds the index is named
-      by the cause. After a move the cause names another cell or child,
-      and no evaluation makes the one named before. The alternative
-      refuses a cause that derives from the index at compile time.
-    - A binding that a function body in an element body makes, and that
-      copies the index, is a stream named by the copied value, so a
-      move names another stream. Question 90 covers what else names
-      such a stream.
+92. **State and identity that derive from the index.** Not open. A
+    state cell declared with a value that derives from the index, such
+    as `cell(index)` in an element body, keeps what it holds when its
+    element moves: the declared value is written when the cell is first
+    created and not again. A cell or a child that a function body
+    written in an element body makes under an explicit cause that holds
+    the index is named by the cause, so after a move the cause names
+    another cell or child, and no evaluation makes the one named before.
+    A binding that a function body in an element body makes, and that
+    copies the index, is a stream named by the copied value, so a move
+    names another stream (section 1.3). Question 90 covers what else
+    names such a stream. The entry keeps its number.
 93. **The label of the index, for the elements before the position.**
-    The index of an element is a function of the order and the
-    membership before the element, and of nothing after it. *Assumed:*
-    the slot of root `index` has the label of the whole membership the
-    collection iterates (section 2.2), which for a stored list is one
-    stored label and has no part per position. The alternative gives
-    the slot, where the membership is a `fold`, the `fold` through the
-    position, as the prefix rule gives a `findIndex` (section 3.13).
+    Not open. The label of the index is the label of the collection's
+    own array: its length, and which link each position holds. It holds
+    nothing of what the links point to. It is the label of the whole
+    array, and no narrower label is formed for the positions up to the
+    element's own (sections 2.2 and 3.6). The entry keeps its number.
+94. **The label of the index over plain values stored in place** (for
+    the project owner). The ruling on the label of the index speaks of
+    an array of links. Where a position holds a plain value, no link
+    stands between the array and the value, and the element part of the
+    key derives from the value, so which key stands at which position
+    is a function of the values. *Assumed:* the label of the array
+    holds, for such a position, the label of whether the position holds
+    anything and of what kind (a `shape` slot in place), and not the
+    label of the value (section 2.2). The ground is that the ruling
+    gives the index the label of the position and not of the values,
+    and that deciding which key an element has is the runtime's
+    observation (section 1.3). What a reader of the index then learns
+    without the label of the values is where the occurrences of equal
+    values stand, for a node that holds per-key state or a stream. The
+    alternative joins the `value` of every position that holds a plain
+    value, which gives every node that reads the index the label of
+    every such element.
+95. **The label of the index over a derived collection** (for the
+    project owner). The array of a `filter` or a `flatMap` result was
+    computed, and its label is the construct's membership template,
+    joined with the label of which reference each position holds
+    (section 3.7). That label includes what every predicate read, which
+    can be values behind links of the source. The ruling excludes what
+    the links point to, and does not speak to an array whose content
+    depends on such values. *Assumed:* the label of the array of a
+    derived collection is as section 3.7 gives it, because which
+    elements the array holds, and so every position in it, depends on
+    every predicate. It is formed whole, as for a stored array. It
+    joins nothing for a source position the predicate dropped beyond
+    what the membership template holds. A predicate whose result
+    differs between elements read the element, the index, or state
+    held per key. A read of the element or of the index carries the
+    label of which reference the source position holds, and a read of
+    state held per key does not. The alternative joins the label of
+    the array the source record iterates as well, which covers that
+    case.

@@ -930,7 +930,10 @@ key, the position and the binding of each element slot.
   operations and children under the key keep their identifiers. A
   handler binding whose state holds the index resolves that path to the
   slot when an event is dispatched, so the handler is given the position
-  the element has then.
+  the element has then. The label of the slot is the label of the
+  collection's own array, its length and which link each position holds,
+  and nothing of what the links point to
+  (`plan-and-label-templates.md` §2.2).
 - Before a collection is first evaluated in a process, its element slots
   have no entries. A collection that was never evaluated has cone instances
   that are stale anyway. A collection that was evaluated by an earlier

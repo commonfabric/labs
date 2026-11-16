@@ -353,7 +353,10 @@ These facts hold for every registered built-in and are not repeated per entry.
     names, on the element's own slot of the input, and on the captures the
     body reads, each capture under its own label. It depends on the length
     and the order of the input only through the index, and only at a node
-    of the body that reads the index. A callback has no array parameter
+    of the body that reads the index. The label of the index is the label
+    of the input's own array: its length and which link each position
+    holds, and nothing of what the links point to
+    (`plan-and-label-templates.md` §2.2). A callback has no array parameter
     (`language-subset.md` §4.4.1), so a body that reads the whole input
     captures it by name, and it counts among the captures.
   - A node of the body takes the labels of what it reads and closes over,
@@ -550,7 +553,12 @@ the element is keyed by the identity of that cell.
   evaluated again, and no other cone is. Its state cells, streams,
   effects, and children stay. An effect whose request holds the index is
   requested again, and a child's argument path that holds the index is
-  written again, as for any input that changed. The runtime of today does
+  written again, as for any input that changed. A state cell declared
+  with a value from the index keeps what it holds. A cell or a child
+  that a function body makes under an explicit cause that holds the
+  index is named by the cause, and a binding of a function body that
+  copies the index is a stream named by the copied value, so a move
+  names another. The runtime of today does
   the same for the run as a whole: `createMapInstance` in
   `runtime/runner/src/builtins/map.ts` sets a moved element up again on
   the result cell its key already has when the callback uses the index

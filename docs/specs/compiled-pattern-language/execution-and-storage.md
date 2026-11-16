@@ -1169,7 +1169,17 @@ position is in no key.
   streams, the operation state and the children under the key stay. An
   effect whose request holds the index is requested again, and a child's
   argument path that holds the index is written again, as for any input
-  that changed.
+  that changed. A state cell declared with a value from the index keeps
+  what it holds: the declared value is written when the cell is first
+  created and not again. A cell or a child that a function body makes
+  under an explicit cause that holds the index is named by the cause,
+  and a binding of a function body that copies the index is a stream
+  named by the copied value, so after a move the evaluation names
+  another. A child that the evaluation no longer makes is torn down
+  (section 2.8). The label of the slot is
+  the label of the collection's own array: its length and which link
+  each position holds, and nothing of what the links point to
+  (`plan-and-label-templates.md` §2.2).
 - **A child.** A child that the body instantiates is named through the
   key. Two equal elements have two children, and each factory of
   `factories.map((F) => F({ ... }))` has a child per occurrence. The
@@ -1609,7 +1619,7 @@ export interface MadeInstance {
 export interface MemoEntry {
   /**
    * The slots the evaluation read, by slot index. The entry of a slot of
-   * root `index` has the address of the membership the collection
+   * root `index` has the address of the array the collection
    * iterates, the class `value`, and a fingerprint of the position, so
    * it differs when the key stands at another position.
    */
