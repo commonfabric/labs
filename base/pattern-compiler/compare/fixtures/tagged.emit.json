@@ -215,17 +215,7 @@
           ],
           "outputsBelow": [],
           "states": [],
-          "unlistedReads": [
-            {
-              "cone": 2,
-              "path": [
-                "secret"
-              ],
-              "root": {
-                "kind": "argument"
-              }
-            }
-          ],
+          "unlistedReads": [],
           "unsupported": [],
           "values": [
             {

@@ -101,6 +101,17 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  */
 export const normalize = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(normalize);
+  // The two runs read the clock at two times: a number within a day of
+  // now, and a time written out in a string, are compared as `<time>`.
+  if (typeof value === "number" && Math.abs(value - Date.now()) < 86_400_000) {
+    return "<time>";
+  }
+  if (typeof value === "string") {
+    return value.replace(
+      /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z/g,
+      "<time>",
+    );
+  }
   if (!isRecord(value)) return value;
   const members: Record<string, unknown> = {};
   for (const [name, member] of Object.entries(value)) {

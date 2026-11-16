@@ -597,6 +597,8 @@ export class Instance {
   readonly #values = new Map<number, (host: Host) => unknown>();
   readonly #elements = new Map<number, (host: Host) => unknown>();
   readonly #states = new Map<number, (host: Host) => unknown>();
+  /** The function of a handler written in place, by its binding. */
+  readonly #handlers = new Map<number, (...given: unknown[]) => unknown>();
   readonly #setups: ((given: unknown, host: Host) => unknown)[] = [];
   readonly #modules = new Map<number, Record<string, unknown>>();
   readonly #schemas = new Map<string, Schema>();
@@ -629,7 +631,26 @@ export class Instance {
     this.store.create("argument", "argument", this.stored(argument));
     this.store.create("result", "result", undefined);
     this.#load();
+    // A state cell of the pattern's own body has its document from the
+    // start, and one of an element body from when its key enters the
+    // element table.
+    this.#declare(new Map());
     this.settle();
+  }
+
+  /** Makes the documents of the state cells declared for a context. */
+  #declare(context: Context): void {
+    const steps = [...context.keys()];
+    this.plan.stateCells.forEach((cell, index) => {
+      const within = cell.within.flatMap((step) =>
+        step.element === undefined ? [] : [step.element]
+      );
+      if (canonical(within) !== canonical(steps)) return;
+      // The function of a cell of a pattern compiled in inside a cone is
+      // registered when that cone is first evaluated.
+      if (!this.#states.has(index)) return;
+      this.stateCell(index, new Host(this, context, undefined));
+    });
   }
 
   // ----- the value code -----
@@ -671,6 +692,9 @@ export class Instance {
       },
       body: (body: number, run: (...given: unknown[]) => unknown) => {
         this.bodies.set(body, run);
+      },
+      handler: (binding: number, run: (...given: unknown[]) => unknown) => {
+        this.#handlers.set(binding, run);
       },
       thunk: (evaluate: (host: Host) => unknown) => new Thunk(evaluate),
       force,
@@ -1076,8 +1100,13 @@ export class Instance {
           throw new Unsupported("an element construct that has no function");
         }
         const results = elements.map((element) => {
-          const inner = new Map(context);
+          const inner = new Map<number, Element>();
+          for (const step of outer) {
+            const bound = context.get(step);
+            if (bound !== undefined) inner.set(step, bound);
+          }
           inner.set(collection, element);
+          this.#declare(inner);
           const entry = () =>
             this.#ensure(
               `e${collection}|${this.#contextKey(outer, context)}|${element.key}`,
@@ -1229,6 +1258,7 @@ export class Instance {
       (host) => result.evaluate(host),
     );
     this.store.write(new Ref("result", []), this.stored(entry.value));
+    this.#declare(none);
   }
 
   /**
@@ -1365,7 +1395,9 @@ export class Instance {
     const binding = stream.binding;
     const record = this.plan.bindings[binding];
     const body = record.handler.body;
-    const run = body === undefined ? undefined : this.bodies.get(body);
+    const run = body === undefined
+      ? undefined
+      : this.#handlers.get(binding) ?? this.bodies.get(body);
     if (body === undefined || run === undefined) {
       return { binding, committed: false, error: "the handler has no body" };
     }
@@ -1510,6 +1542,11 @@ const commonfabric = (instance: Instance): unknown => {
     UI: "$UI",
     NAME: "$NAME",
     TYPE: "$TYPE",
+    TILE_UI: "$TILE_UI",
+    CHIP_UI: "$CHIP_UI",
+    FS: "$FS",
+    TESTS: "$TESTS",
+    VIEWS: "$VIEWS",
     pattern: marker("pattern"),
     handler: marker("handler"),
     lift: marker("lift"),

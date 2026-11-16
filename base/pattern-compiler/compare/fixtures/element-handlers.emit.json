@@ -415,16 +415,7 @@
             0,
             1
           ],
-          "unlistedReads": [
-            {
-              "cone": 2,
-              "path": [],
-              "root": {
-                "collection": 1,
-                "kind": "element"
-              }
-            }
-          ],
+          "unlistedReads": [],
           "unsupported": [],
           "values": [
             {

@@ -4912,6 +4912,29 @@ impl<'a> Emitter<'_, '_, 'a> {
             self.cone = None;
         }
         let value = self.value(&hint, cone);
+        let mut listed: Vec<(String, Place)> = inputs
+            .iter()
+            .map(|(name, place)| (name.clone(), place.clone()))
+            .collect();
+        // A name the body captures and reads nothing of has no entry of
+        // the footprint record, and the body's code names it all the same.
+        let captured: Vec<String> = self
+            .body_at(home, start)
+            .map(|index| {
+                self.bodies[home][index]
+                    .captures
+                    .iter()
+                    .map(|capture| capture.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for name in captured {
+            if let (false, Some(place)) = (inputs.contains_key(&name), self.env.get(&name)) {
+                listed.push((name, place.clone()));
+            }
+        }
+        listed.sort_by(|a, b| a.0.cmp(&b.0));
+        listed.dedup_by(|a, b| a.0 == b.0);
         self.facts.uses.insert(
             value,
             crate::emit::UseFact {
@@ -4920,12 +4943,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 start,
                 kind: plan_kind,
                 formals: parameter_names(kind, function),
-                inputs: {
-                    let mut listed: Vec<(String, Place)> =
-                        inputs.iter().map(|(name, place)| (name.clone(), place.clone())).collect();
-                    listed.sort_by(|a, b| a.0.cmp(&b.0));
-                    listed
-                },
+                inputs: listed,
             },
         );
         self.values[value].template = self.body_template(body);

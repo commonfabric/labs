@@ -649,9 +649,23 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 self.state_cell(inner, *cell);
                 self.place_code(&fact.place, want)
             }
-            Place::Slot(..) | Place::Read(..) | Place::Stream(_) => {
+            Place::Stream(binding) => {
+                // An `action` is a handler written in place.
+                if let Expression::CallExpression(call) = inner {
+                    let action = self
+                        .generator
+                        .resolver
+                        .api_callee(self.module, call)
+                        .as_deref()
+                        == Some("action");
+                    let function = call.arguments.first().and_then(FunctionLike::of_argument);
+                    if let (true, Some(function)) = (action, function) {
+                        self.inline_handler(*binding, function);
+                    }
+                }
                 self.place_code(&fact.place, want)
             }
+            Place::Slot(..) | Place::Read(..) => self.place_code(&fact.place, want),
             Place::Value(value, path) => {
                 let value = *value;
                 let created = fact.values.0 <= value && value < fact.values.1;
@@ -1027,7 +1041,8 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                     .into_iter()
                     .map(|(name, written)| {
                         let place = self.place_of(written);
-                        (name, self.render(written, Want::Pass), place)
+                        let code = self.passed_on(written, &place);
+                        (name, code, place)
                     })
                     .collect();
                 let code = self.inline(inline, members);
@@ -1356,6 +1371,43 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
             .register(used.home, format!("$rt.body({}, {call});", used.body));
     }
 
+    /// Registers the function of a handler written in place, for one
+    /// binding of it: the function where it is written, so that a
+    /// constant it captures is the one of its scope, with the names its
+    /// state holds taken from the state.
+    fn inline_handler(&mut self, binding: usize, function: FunctionLike<'_, 'a>) {
+        let mut names: Vec<String> = Vec::new();
+        for entry in self.generator.plan["bindings"][binding]["state"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            let constant = entry["place"].get("constant").is_some();
+            if let (false, Some(name)) = (constant, entry["path"][0].as_str()) {
+                if !names.iter().any(|known| known == name) {
+                    names.push(name.to_string());
+                }
+            }
+        }
+        let module = self.module;
+        let source = self.in_module(module, None, |rewriter| {
+            rewriter.in_cone(None, |rewriter| {
+                rewriter.rewritten(function.span(), |rewriter| match function {
+                    FunctionLike::Arrow(arrow) => {
+                        walk::walk_arrow_function_expression(rewriter, arrow);
+                    }
+                    FunctionLike::Function(function) => {
+                        walk::walk_function(rewriter, function, ScopeFlags::Function);
+                    }
+                })
+            })
+        });
+        self.generator.hoist(format!(
+            "$rt.handler({binding}, ($e, $s) => {{ const {{ {} }} = $s; return ({source})($e); }});",
+            names.join(", ")
+        ));
+    }
+
     /// The source of a function of the function tier: its types removed
     /// and its JSX turned into calls.
     fn plain_function(&mut self, module: usize, function: FunctionLike<'a, 'a>) -> String {
@@ -1475,6 +1527,22 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         self.jsx_node(name, Some(props), &element.children)
     }
 
+    /// The code of a part of an argument or of an attribute. Where a
+    /// place stands for it and a pattern compiled in is given it, the
+    /// callee reads the place itself and the cone that writes the call
+    /// does not, so its reads are not counted against that cone.
+    fn passed_on(&mut self, written: &Expression<'a>, place: &Option<Place>) -> String {
+        let before = self.generator.unlisted.len();
+        let code = self.render(written, Want::Pass);
+        if matches!(
+            place,
+            Some(Place::Slot(..) | Place::Read(..) | Place::Stream(_))
+        ) {
+            self.generator.unlisted.truncate(before);
+        }
+        code
+    }
+
     fn attribute_value(&mut self, attribute: &JSXAttribute<'a>) -> (String, Option<Place>) {
         match &attribute.value {
             None => ("true".to_string(), None),
@@ -1497,6 +1565,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                                 .get(&(context, function.span().start))
                                 .copied();
                             if let Some(binding) = binding {
+                                self.inline_handler(binding, function);
                                 return (
                                     format!("$h.stream({binding})"),
                                     Some(Place::Stream(binding)),
@@ -1504,7 +1573,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                             }
                         }
                         let place = self.place_of(expression);
-                        (self.render(expression, Want::Pass), place)
+                        (self.passed_on(expression, &place), place)
                     }
                     None => ("undefined".to_string(), None),
                 }
