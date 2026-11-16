@@ -117,7 +117,8 @@ memory route.
 - Make current and point-in-time reads use `snapshot + revision replay`.
 - Store patch arrays inline on `revision.data`.
 - Deduplicate replay by `(session_id, local_seq)` plus canonical equality of the
-  stored `original` payload.
+  stored `original` payload, in whichever form it was stored: whole, or for an
+  eligible derived commit digested (`02-storage.md`).
 - Remove parent-hash resolution from JSON commit handling entirely.
 
 ## Phase 2: Server Protocol and Session Watches
@@ -215,8 +216,9 @@ Deferred:
 - current reads from `head + snapshot + revision replay`
 - point-in-time reads through patch chains
 - set / patch / delete revision replay
-- idempotent replay by `(sessionId, localSeq)` with identical `original`
-- protocol error on replay with different `original`
+- idempotent replay by `(sessionId, localSeq)` with identical `original`, whole
+  or digested
+- protocol error on replay with different `original`, whole or digested
 - branch create/delete/list and branch-aware reads
 
 ### Server / Client

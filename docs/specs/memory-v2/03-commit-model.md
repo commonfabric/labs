@@ -663,7 +663,8 @@ in the commit log.
 1. Validate all confirmed reads.
 2. Resolve all pending reads within the logical session.
 3. Assign the next global `seq`.
-4. Append a `commit` row containing the original payload and resolution data.
+4. Append a `commit` row containing the original payload, or for an eligible
+   derived commit its digested form (`02-storage.md`), and resolution data.
 5. Append one `revision` row per operation in the transaction — except an
    operation proven to change nothing (an identical re-`set` of a
    content-addressed document, or every operation of an identity commit,
@@ -701,12 +702,17 @@ type BranchLifecycleWrite =
 
 type WritePayload = ClientCommit | BranchLifecycleWrite;
 
+// A derived commit stored without its operations (02-storage.md).
+type DigestedDerivedCommit = Omit<ClientCommit, "operations"> & {
+  digest: { sha256: string; bytes: number; operations: number };
+};
+
 interface CommitLogEntry {
   seq: number;
   branch: BranchId;
   sessionId: SessionId;
   localSeq: number;
-  original: WritePayload;
+  original: WritePayload | DigestedDerivedCommit;
   resolution: {
     seq: number;
     resolvedPendingReads?: Array<{
@@ -750,7 +756,10 @@ Each committed write-class operation has identifiers with different roles:
 On replay after reconnect:
 
 1. the server deduplicates by `(sessionId, localSeq)`
-2. it compares the replayed `original` payload with the stored `original`
+2. it compares the replayed `original` payload with the stored `original`; for
+   a row stored digested it compares the digested form of the replayed
+   payload, which matches exactly when the whole encodings are equal, short of
+   a SHA-256 collision
 3. if they match, it returns the existing commit result
 4. if they differ, the replay is a protocol error
 

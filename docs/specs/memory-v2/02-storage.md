@@ -140,6 +140,34 @@ CREATE INDEX idx_commit_invocation_ref ON commit (invocation_ref);
 - normalized branch lifecycle payloads for `/memory/branch/create` and
   `/memory/branch/delete`
 
+A derived commit is stored digested instead when it is eligible: its class is
+`derived`, its `seq` is not 1, and it carries at least one operation, every one
+a `set`, `patch` or `delete`. The digested payload is the commit with its
+`operations` member removed and a `digest` member added:
+
+```json
+{
+  "localSeq": 12,
+  "reads": { "confirmed": [], "pending": [] },
+  "digest": {
+    "sha256": "<unpadded base64url SHA-256>",
+    "bytes": 48213,
+    "operations": 7
+  }
+}
+```
+
+`sha256` and `bytes` are taken over the UTF-8 bytes of the whole canonical
+encoding, operations included, and `operations` is how many the commit carried.
+Every other member the commit carries is kept as it arrived. Each operation of
+a digested commit that wrote anything is in `revision` at the commit's `seq` and
+its operation index. A digested payload is recognized by its shape: an object
+with a `digest` object and no `operations`, which no `ClientCommit` can be.
+
+A derived commit holding a `sqlite`, `apply-op` or `release-op-field` operation
+is stored whole. A `sqlite` operation's statement is stored nowhere else, and
+the operation-field tables join to the whole request.
+
 `resolution` stores server-side decisions:
 
 ```json
