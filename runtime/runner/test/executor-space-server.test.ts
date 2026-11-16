@@ -1993,20 +1993,6 @@ describe("stage G SpaceServer recovery seams", () => {
         .every((a) => a.actingSession === undefined),
     ).toBe(true);
 
-    // The same run's basis rows key under the run's TRUE instance (S4,
-    // server-execution v2 stage A): its DISCOVERED scope resolved against
-    // the demander's identity — this derivation reads the demander's
-    // per-user slot, so its rows key under the demander's user instance.
-    const expectedInstanceKey = resolveScopeKey("user", demander as never);
-    const basisKeys = new Set(
-      (engine.database.prepare(
-        `SELECT DISTINCT action_scope_key FROM scheduler_basis`,
-      ).all() as Array<{ action_scope_key: string }>).map((row) =>
-        row.action_scope_key
-      ),
-    );
-    expect(basisKeys.has(expectedInstanceKey)).toBe(true);
-
     // The argument-doc demand RESOLVED (started through the owning
     // root) — it neither terminalized nor failed.
     expect(stats.structureLoadTerminal).toBe(0);

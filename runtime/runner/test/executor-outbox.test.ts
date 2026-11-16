@@ -1396,7 +1396,6 @@ describe("stage G outbox + sqlite discharge", () => {
     preconditions: [],
     annotations: [],
     consequenceOf: [],
-    basisInstances: [],
     holder: options.holder ?? holder,
     ...(options.scopeKeys === undefined
       ? { sqliteScopeKeys: [{ op: 1, scopeKey: "space" }] }

@@ -15,12 +15,7 @@
 // - the resubscribe path is instance-aware: after both instances ran,
 //   BOB's input change wakes the node (the N-run loop resubscribes after
 //   each instance to the UNION of its logs — pre-stage-A the last instance's
-//   subscription replaced the others);
-// - S4 (basis rows keyed by the FULL instance address): a demand stamp
-//   broader or narrower than the run's discovered instance leaves no
-//   stranded rows — a session-scoped watch on a user-discovering node
-//   records `user:<p>` rows, never `session:<p>:<s>` (the ragged case's
-//   zombie), and a space-discovering node records `space`.
+//   subscription replaced the others).
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
@@ -52,8 +47,7 @@ const bobSigner = await Identity.fromPassphrase("instance-keyed replica bob");
 
 /** A piece with per-user state on both sides of the run: a PerUser
  * draft the derivations READ, a PerUser save slot the handler WRITES,
- * and one space-only derivation (`label`) whose basis rows must key
- * `space` regardless of who demanded it. */
+ * and one space-only derivation (`label`). */
 const PER_USER_PATTERN = [
   "import { computed, Default, handler, pattern, PerUser, Stream, Writable } from 'commonfabric';",
   "type Draft = Writable<string | Default<''>>;",
@@ -120,15 +114,6 @@ const instanceHolds = (
 ): boolean =>
   [...rowsUnder(engine, scopeKey).values()].some((value) =>
     JSON.stringify(value ?? null).includes(needle)
-  );
-
-const basisKeys = (engine: Engine.Engine): Set<string> =>
-  new Set(
-    (engine.database.prepare(
-      `SELECT DISTINCT action_scope_key FROM scheduler_basis`,
-    ).all() as Array<{ action_scope_key: string }>).map((row) =>
-      row.action_scope_key
-    ),
   );
 
 describe("stage A: the instance-keyed serving replica (OW17)", () => {
@@ -224,7 +209,6 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
    * writes a DIVERGENT per-user draft through the argument schema (the
    * narrowing write lands it in that principal's instance). */
   const standUpTwoUsers = async (options: {
-    bobScope: "user" | "session";
     names: { arg: string; result: string };
     hostPolicy?: ConstructorParameters<typeof ExecutorHost>[0]["policy"];
     pattern?: string;
@@ -288,7 +272,7 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
     }).sync();
     await bob.getCellFromLink<unknown>({
       ...bobResult.getAsNormalizedFullLink(),
-      scope: options.bobScope,
+      scope: "user",
     }).sync();
     await activated(space);
     await awaitAdmitted(server, () => {
@@ -368,7 +352,6 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
 
   it("two demanded runs read their OWN per-user inputs through the instance-keyed replica: divergent inputs land divergent per-instance derived rows with the right values, and the serving replica holds both instances of the doc (OW17's value half; the R7 read shape)", async () => {
     const setup = await standUpTwoUsers({
-      bobScope: "user",
       names: { arg: "ika-a-arg", result: "ika-a-result" },
     });
     const { engine, aliceKey, bobKey, argId } = setup;
@@ -413,7 +396,6 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
 
   it("R7: Alice's authored per-user draft + her save event → the served handler runs AS Alice, reads HER draft through the instance-keyed replica, and writes her per-user consequence with the typed value (pre-stage-A: consequenced with zero writes)", async () => {
     const setup = await standUpTwoUsers({
-      bobScope: "user",
       names: { arg: "ika-r7-arg", result: "ika-r7-result" },
     });
     const { engine, aliceKey, bobKey, alice, aliceResult } = setup;
@@ -668,7 +650,6 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
 
   it("the resubscribe path is instance-aware: after both instances ran, BOB's input change wakes the node and his instance re-derives (the union of instance logs; pre-stage-A the last instance's subscription won)", async () => {
     const setup = await standUpTwoUsers({
-      bobScope: "user",
       names: { arg: "ika-resub-arg", result: "ika-resub-result" },
     });
     const { engine, aliceKey, bobKey, bob, typedBobArg } = setup;
@@ -706,44 +687,6 @@ describe("stage A: the instance-keyed serving replica (OW17)", () => {
       () => instanceHolds(engine, aliceKey, '"echo:A2"'),
     );
     expect(instanceHolds(engine, bobKey, '"echo:A2"')).toBe(false);
-    setup.cancel();
-  });
-
-  it("S4: basis rows key by the run's FULL instance address — a session-scoped demand on a user-discovering node records user rows and NO session-keyed zombie; a space-discovering node records `space` under any demand stamp", async () => {
-    const setup = await standUpTwoUsers({
-      bobScope: "session",
-      names: { arg: "ika-s4-arg", result: "ika-s4-result" },
-    });
-    const { engine, aliceKey, bobKey } = setup;
-    await awaitAdmitted(
-      server,
-      () =>
-        instanceHolds(engine, aliceKey, '"echo:A"') &&
-        instanceHolds(engine, bobKey, '"echo:B"'),
-    );
-    await awaitAdmitted(server, () => {
-      const keys = basisKeys(engine);
-      return keys.has(aliceKey) && keys.has(bobKey) && keys.has("space");
-    });
-    const keys = basisKeys(engine);
-    // Bob demanded through a SESSION-scoped watch: his runs are STAMPED
-    // `session:<bob>:<s>`, but every node he ran discovered `user` (the
-    // per-user draft) or `space` (`label`) — nothing session-scoped — so
-    // no row is recorded under a session key (the ragged case's zombie:
-    // rows a departed session could never overwrite).
-    expect([...keys].some((key) => key.startsWith("session:"))).toBe(false);
-    // The user-discovering derivations recorded rows under each
-    // principal's USER instance — the address they actually served.
-    expect(keys.has(aliceKey)).toBe(true);
-    expect(keys.has(bobKey)).toBe(true);
-    // The space-only `label` derivation recorded `space` (never
-    // over-keyed under a demander's stamp).
-    expect(keys.has("space")).toBe(true);
-    // No row under the service identity's user instance: no demanded
-    // node ran as the service.
-    expect(
-      keys.has(resolveScopeKey("user", { principal: serviceSigner.did() })),
-    ).toBe(false);
     setup.cancel();
   });
 });

@@ -1,10 +1,9 @@
-// The event-dispatch stamp's action identity (serving-loop.md §3d /
-// scheduler_basis's "durable action identity/fingerprint; restart-
-// stable"; PR #5439 thread r3731191399). An event-handler run's stamp
-// must carry the HANDLER's durable identity: stamping the per-event
-// wrapper closure mints a fresh anonymous id per queued event, splitting
-// scheduler-basis rows per event (overwrite-in-place never overwrites)
-// and making recovery/identity matching unstable across restarts.
+// The event-dispatch stamp's action identity (serving-loop.md §3d). An
+// event-handler run's stamp must carry the HANDLER's durable identity,
+// which names the run wherever the wave reports it — its refusals and its
+// logs: stamping the per-event wrapper closure mints a fresh anonymous id
+// per queued event, or collapses every handler onto the wrapper's
+// inferred name.
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
@@ -87,9 +86,8 @@ describe("event-dispatch stamp identity", () => {
       expect(stamp.actionId.startsWith("anon-")).toBe(false);
     }
     // DISTINCT per handler: stamping the dispatch WRAPPER instead of the
-    // handler collapses every handler's basis rows onto one constant
-    // action identity (the wrapper closure's inferred name), so two
-    // different handlers' rows overwrite each other in scheduler_basis.
+    // handler collapses every handler onto one constant action identity
+    // (the wrapper closure's inferred name).
     expect(eventStamps[2].actionId).not.toBe(eventStamps[0].actionId);
     // The stamp's eventId half stays per-event.
     const eventIds = new Set(eventStamps.map((stamp) => stamp.eventId));

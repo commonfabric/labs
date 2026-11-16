@@ -61,7 +61,6 @@ import {
   parsePointer,
   pathsOverlap,
 } from "./path.ts";
-import { replaceSchedulerBasisRows } from "./scheduler-basis.ts";
 import { TouchedPathIndex } from "./touched-path-index.ts";
 import { ExecutionLeases } from "./execution-lease.ts";
 import { prepare, type PreparedStatement } from "./prepared-statement.ts";
@@ -431,22 +430,11 @@ CREATE TABLE IF NOT EXISTS execution_lease (
   expires_at  INTEGER NOT NULL
 );
 
--- Server-execution v2: the scheduler basis index
--- (docs/specs/server-side-execution/serving-loop.md §3b) — "output current
--- iff these inputs unchanged since these seqs". Ids + seqs ONLY, overwritten
--- in place per (action, action_scope_key); never payloads, never per-run
--- history (payloads or per-run history are the evidence log, FORBIDDEN).
--- Rows are written INSIDE a wave's derived store transaction — never own
--- commits, never pushed to subscribers, never read at admission. No code
--- reads the rows: a fresh serving runtime starts every computation it
--- materializes as not yet run (serving-loop.md §6). The table starts
--- EMPTY: nothing is backfilled from the dropped observation tables (D10).
--- The writer is scheduler-basis.ts (stage D), invoked inside a wave's
--- derived store transaction; nothing invokes it in production until the
--- serving loop lands (plan Phase 1 stages E-F).
--- One standalone table. No FOREIGN KEY clauses anywhere: v1's satellites
--- all hung off scheduler_observation; the v2 index references nothing and
--- nothing references it.
+-- Unused (docs/specs/server-side-execution/serving-loop.md §3b): nothing
+-- reads or writes this table or its index. Processes of earlier builds
+-- write one row per document each serving run read, inside the wave's
+-- derived store transaction. The statement below is the schema text stores
+-- already hold, column comments included, so it is kept as it stands.
 CREATE TABLE IF NOT EXISTS scheduler_basis (
   branch           TEXT    NOT NULL, -- engine-v3 branch, as on every table
   action           TEXT    NOT NULL, -- durable action identity/fingerprint;
@@ -470,9 +458,6 @@ CREATE TABLE IF NOT EXISTS scheduler_basis (
   PRIMARY KEY (branch, action, action_scope_key,
                entity_space, entity, entity_scope_key)
 );
--- Entity-keyed lookup mirror (implementation detail per serving-loop.md
--- §3b): resolves "who read this doc" without a full-table walk, the
--- successor of idx_scheduler_read_index_lookup.
 CREATE INDEX IF NOT EXISTS idx_scheduler_basis_entity
   ON scheduler_basis (branch, entity_space, entity, entity_scope_key);
 
@@ -4757,26 +4742,12 @@ WHERE commit_seq = :commit_seq
   }));
 };
 
-/** One basis-row overwrite unit of a wave commit (serving-loop.md §3b):
- * `seq: null` marks an in-wave read, filled with the wave's own commit
- * seq at write time. */
-export type WaveBasisInstance = {
-  action: string;
-  actionScopeKey: string;
-  rows: ReadonlyArray<{
-    entitySpace: string;
-    entity: string;
-    entityScopeKey: string;
-    seq: number | null;
-  }>;
-};
-
 /**
  * The wave commit's store transaction (server-execution v2 stage D,
  * serving-loop.md §3b–§3d): per-doc CAS re-verification against the
- * wave's basis, the commit apply (admission included — the derived-class
- * lease check, annotation keying, consequenceOf carriage), and the basis-
- * index overwrites, all in ONE engine transaction. This is what makes the
+ * wave's basis and the commit apply (admission included — the
+ * derived-class lease check, annotation keying, consequenceOf carriage),
+ * in ONE engine transaction. This is what makes the
  * accumulator's sink contract implementable: between the wave's own head
  * query and this call the engine may admit concurrent commits, and the
  * re-verification here — inside the transaction — is the load-bearing
@@ -4815,11 +4786,10 @@ export const applyWaveCommit = (
         reads: ReadonlyArray<WaveHandlerRead>;
       }>;
     };
-    basisInstances?: readonly WaveBasisInstance[];
 
     /** The wave's outbound cross-space appends (serving-loop.md §5,
-     * FP1): durable rows written INSIDE this very transaction — the
-     * basis-row carriage pattern. Deleted later, on delivery-ack, by
+     * FP1): durable rows written INSIDE this very transaction. Deleted
+     * later, on delivery-ack, by
      * the serving loop's outbox (execution-outbox.ts). */
     outboxAppends?: readonly OutboxAppendRow[];
   },
@@ -4828,7 +4798,6 @@ export const applyWaveCommit = (
     (txEngine: Engine, txOptions: typeof options) => {
       const {
         waveBasis,
-        basisInstances,
         outboxAppends,
         dependencyScopeIdentity,
         ...restOptions
@@ -4843,30 +4812,6 @@ export const applyWaveCommit = (
           throw new ProtocolError(
             "dependency scope identity cannot resolve pending reads",
           );
-        }
-      }
-      // Basis rows are ADDRESSING (a reader matches storage rows against
-      // these instance values), so their keys meet
-      // the same admission bar as annotated scope keys: a non-canonical
-      // key would store rows no canonical key ever matches — a silent
-      // liveness hole rather than a loud one. Refused up front, before
-      // any head query runs.
-      for (const instance of basisInstances ?? []) {
-        if (!isScopeKey(instance.actionScopeKey)) {
-          throw new ProtocolError(
-            `wave commit rejected: basis action instance key ` +
-              `"${instance.actionScopeKey}" is not a canonical scope_key ` +
-              "(key-vocabulary.md §3)",
-          );
-        }
-        for (const row of instance.rows) {
-          if (!isScopeKey(row.entityScopeKey)) {
-            throw new ProtocolError(
-              `wave commit rejected: basis row entity instance key ` +
-                `"${row.entityScopeKey}" is not a canonical scope_key ` +
-                "(key-vocabulary.md §3)",
-            );
-          }
         }
       }
       // An appends-only wave commits with zero operations: the durable
@@ -5022,19 +4967,6 @@ export const applyWaveCommit = (
           throw new WaveCommitConflictError([error.doc]);
         }
         throw error;
-      }
-      for (const instance of basisInstances ?? []) {
-        replaceSchedulerBasisRows(txEngine, {
-          branch,
-          action: instance.action,
-          actionScopeKey: instance.actionScopeKey,
-          rows: instance.rows.map((row) => ({
-            entitySpace: row.entitySpace,
-            entity: row.entity,
-            entityScopeKey: row.entityScopeKey,
-            seq: row.seq ?? applied.seq,
-          })),
-        });
       }
       // FP1 (serving-loop.md §5): the wave's outbound append rows land
       // inside this same transaction — atomically with the wave commit,

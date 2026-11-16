@@ -41,10 +41,6 @@ import {
 } from "../v2/engine.ts";
 import { executionLeaseHolder } from "../v2/execution-lease.ts";
 import {
-  replaceSchedulerBasisRows,
-  selectSchedulerBasisRows,
-} from "../v2/scheduler-basis.ts";
-import {
   deleteExecutionOutboxRow,
   selectPendingExecutionOutboxRows,
 } from "../v2/execution-outbox.ts";
@@ -565,86 +561,6 @@ Deno.test("wave carriage: a non-canonical annotated scope_key is refused at ADMI
   }
 });
 
-Deno.test("wave commit: basis-instance keys must be canonical scope keys — a corrupt action or entity instance is refused, and nothing is applied", async () => {
-  const { engine, path } = await createEngine();
-  setServerExecutionConfig(true);
-  try {
-    const holder = withLiveLease(engine);
-    // scheduler_basis rows are ADDRESSING: a reader matches storage
-    // rows against these instance values, so a
-    // non-canonical key stores a row no canonical key ever matches —
-    // a silent liveness hole, refused at the door instead.
-    assertThrows(
-      () =>
-        applyWaveCommit(engine, {
-          sessionId: "server:executor",
-          space: SPACE,
-          commit: setCommit(1, [{ id: "of:out" }]),
-          commitClass: "derived",
-          holder,
-          waveBasis: { basisSeq: 0, rebasedHeads: [] },
-          basisInstances: [{
-            action: "action-a",
-            actionScopeKey: "user:a/b",
-            rows: [{
-              entitySpace: SPACE,
-              entity: "of:in",
-              entityScopeKey: "space",
-              seq: 7,
-            }],
-          }],
-        }),
-      ProtocolError,
-      "not a canonical scope_key",
-    );
-    assertThrows(
-      () =>
-        applyWaveCommit(engine, {
-          sessionId: "server:executor",
-          space: SPACE,
-          commit: setCommit(1, [{ id: "of:out" }]),
-          commitClass: "derived",
-          holder,
-          waveBasis: { basisSeq: 0, rebasedHeads: [] },
-          basisInstances: [{
-            action: "action-a",
-            actionScopeKey: "space",
-            rows: [{
-              entitySpace: SPACE,
-              entity: "of:in",
-              // A truncated session key — prefix-shaped, one segment short.
-              entityScopeKey: "session:x",
-              seq: 7,
-            }],
-          }],
-        }),
-      ProtocolError,
-      "not a canonical scope_key",
-    );
-    // The refusal rolled back the whole transaction: no commit, no rows.
-    assertEquals(revisionScopeKeys(path, "of:out"), []);
-    assertEquals(
-      selectSchedulerBasisRows(engine, {
-        branch: "",
-        action: "action-a",
-        actionScopeKey: "user:a/b",
-      }),
-      [],
-    );
-    assertEquals(
-      selectSchedulerBasisRows(engine, {
-        branch: "",
-        action: "action-a",
-        actionScopeKey: "space",
-      }),
-      [],
-    );
-  } finally {
-    resetServerExecutionConfig();
-    close(engine);
-  }
-});
-
 Deno.test("wave carriage: annotations and consequenceOf are refused on non-derived classes (closed metadata list)", async () => {
   const { engine } = await createEngine();
   try {
@@ -913,91 +829,6 @@ Deno.test("wave commit: a failed value pin is named BY INDEX, and nothing is app
     );
     assertEquals(error.failedPreconditions, [1]);
     assertEquals(selectDocHead(engine, { id: "of:out", scopeKey: "space" }), 0);
-  } finally {
-    resetServerExecutionConfig();
-    close(engine);
-  }
-});
-
-Deno.test("wave commit: basis rows land in the same transaction; in-wave reads share the wave's commit seq; a later run REPLACES the instance's rows", async () => {
-  const { engine } = await createEngine();
-  setServerExecutionConfig(true);
-  try {
-    const holder = withLiveLease(engine);
-    const applied = applyWaveCommit(engine, {
-      sessionId: holder,
-      space: SPACE,
-      commit: setCommit(1, [{ id: "of:out" }]),
-      commitClass: "derived",
-      holder,
-      waveBasis: { basisSeq: 0, rebasedHeads: [] },
-      basisInstances: [{
-        action: "action-a",
-        actionScopeKey: "space",
-        rows: [
-          {
-            entitySpace: SPACE,
-            entity: "of:in",
-            entityScopeKey: "space",
-            seq: 7,
-          },
-          // An in-wave read: seq null shares the wave's own commit seq.
-          {
-            entitySpace: SPACE,
-            entity: "of:sealed",
-            entityScopeKey: "space",
-            seq: null,
-          },
-        ],
-      }],
-    });
-    assertEquals(
-      selectSchedulerBasisRows(engine, {
-        branch: "",
-        action: "action-a",
-        actionScopeKey: "space",
-      }),
-      [
-        {
-          entitySpace: SPACE,
-          entity: "of:in",
-          entityScopeKey: "space",
-          seq: 7,
-        },
-        {
-          entitySpace: SPACE,
-          entity: "of:sealed",
-          entityScopeKey: "space",
-          seq: applied.seq,
-        },
-      ],
-    );
-    // The next run of the same (action, instance) replaces the set —
-    // overwrite in place, never append beside (§3b).
-    replaceSchedulerBasisRows(engine, {
-      branch: "",
-      action: "action-a",
-      actionScopeKey: "space",
-      rows: [{
-        entitySpace: SPACE,
-        entity: "of:other",
-        entityScopeKey: "space",
-        seq: 9,
-      }],
-    });
-    assertEquals(
-      selectSchedulerBasisRows(engine, {
-        branch: "",
-        action: "action-a",
-        actionScopeKey: "space",
-      }),
-      [{
-        entitySpace: SPACE,
-        entity: "of:other",
-        entityScopeKey: "space",
-        seq: 9,
-      }],
-    );
   } finally {
     resetServerExecutionConfig();
     close(engine);

@@ -3496,19 +3496,6 @@ describe("stage F serving loop", () => {
       expect(keys).toEqual([expectedKey]);
       expect(keys.includes(waveKey)).toBe(false);
     }
-    // Basis rows keyed per (action, instance) — serving-loop.md §3b's
-    // action_scope_key from each run's demanded identity.
-    const basisKeys = new Set(
-      (engine.database.prepare(
-        `SELECT DISTINCT action_scope_key FROM scheduler_basis
-         WHERE action = :action`,
-      ).all({ action: "test/fanout-node" }) as Array<
-        { action_scope_key: string }
-      >).map((row) => row.action_scope_key),
-    );
-    for (const { identity } of identities) {
-      expect(basisKeys.has(resolveScopeKey("user", identity))).toBe(true);
-    }
   });
 
   it("carries the demanding session's identity into the SpaceServer's demand registry (M1 demand carriage at cardinality 2)", async () => {
@@ -3588,7 +3575,7 @@ describe("stage F serving loop", () => {
     }
   });
 
-  it("supplies the demanded (user, session) identity to the piece's derivation runs END TO END: the demand registry stamps the runs, and the derived commit's annotations + basis rows carry the demanding actor (stage P2-F; protocol.md §1, LT6's acting half)", async () => {
+  it("supplies the demanded (user, session) identity to the piece's derivation runs END TO END: the demand registry stamps the runs, and the derived commit's annotations carry the demanding actor (stage P2-F; protocol.md §1, LT6's acting half)", async () => {
     host = newHost({ flushDeadlineMs: 5_000, idleParkMs: 600_000 });
 
     // A real pattern served at activation (the first test's shape): the
@@ -3670,10 +3657,6 @@ describe("stage F serving loop", () => {
         (host!.spaceServer(space)?.demandedIdentitiesOf(rootDocId) ?? [])
           .some((identity) => identity.principal === aliceSigner.did()),
     );
-    const demanded = host!.spaceServer(space)!.demandedIdentitiesOf(
-      rootDocId,
-    ).find((identity) => identity.principal === aliceSigner.did())!;
-    const expectedInstanceKey = resolveScopeKey("user", demanded as never);
 
     // The authored input: wakes the loop; the piece's derivation run
     // serves alice's demand. Alice's per-user `mine` is written THROUGH
@@ -3742,25 +3725,6 @@ describe("stage F serving loop", () => {
     // demanded node ran as its demander, never as the service.
     expect(
       actingRows().some((a) => a.actingUser === serviceSigner.did()),
-    ).toBe(false);
-
-    // Basis rows key per (action, INSTANCE) — the run's TRUE instance
-    // (S4, server-execution v2 stage A): the demanded run's DISCOVERED
-    // scope resolved against its identity. This derivation reads alice's
-    // per-user input, so its rows land under alice's user instance; a
-    // demanded run that reads only space keys `space` (the stage-A pins).
-    const basisKeys = new Set(
-      (engine.database.prepare(
-        `SELECT DISTINCT action_scope_key FROM scheduler_basis`,
-      ).all() as Array<{ action_scope_key: string }>).map((row) =>
-        row.action_scope_key
-      ),
-    );
-    expect(basisKeys.has(expectedInstanceKey)).toBe(true);
-    expect(
-      basisKeys.has(
-        resolveScopeKey("user", { principal: serviceSigner.did() }),
-      ),
     ).toBe(false);
   });
 });

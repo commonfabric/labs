@@ -46,7 +46,6 @@ const batch: WaveSpaceCommit = {
   preconditions: [],
   annotations: [],
   consequenceOf: [],
-  basisInstances: [],
   holder: undefined,
 };
 

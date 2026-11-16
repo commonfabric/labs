@@ -38,7 +38,6 @@ const batchInto = (space: MemorySpace): WaveSpaceCommit => ({
   preconditions: [],
   annotations: [],
   consequenceOf: [],
-  basisInstances: [],
   holder: undefined,
 });
 

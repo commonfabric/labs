@@ -29,7 +29,6 @@ const foreignBatch = (id: string, value: number): WaveSpaceCommit => ({
   preconditions: [],
   annotations: [],
   consequenceOf: [],
-  basisInstances: [],
   holder: undefined,
   delegated: {
     actingPrincipal: acting,

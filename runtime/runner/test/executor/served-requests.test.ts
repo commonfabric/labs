@@ -190,7 +190,6 @@ describe("servedRequestHandler()", () => {
       preconditions: [],
       annotations: [],
       consequenceOf: [],
-      basisInstances: [],
     });
 
     /** The target's genesis access list, naming Alice `OWNER`. */

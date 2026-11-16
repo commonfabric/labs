@@ -2823,8 +2823,8 @@ export class SpaceServer implements TransactionSealDestination {
   /** serving-loop.md §3d's stamping duty: the scheduler hands every run
    * here. Per-run demanded identities (M1) PASS THROUGH this seam
    * (Phase 2): a run whose ServerRunInfo carries a demand-supplied
-   * identity resolves its scoped reads, result cells, seal, basis rows,
-   * and outbox carriage against THAT instance; a run without one keeps
+   * identity resolves its scoped reads, result cells, seal, and outbox
+   * carriage against THAT instance; a run without one keeps
    * the wave-level identity (the cardinality-1 fallback). The SUPPLY
    * side landed with stage P2-F: the scheduler consults
    * `#runInstancesFor` (installed beside this stamper) and runs a
@@ -3108,7 +3108,7 @@ export class SpaceServer implements TransactionSealDestination {
    * rule): a served effect's writeback — result + `requestHash`, the
    * claim/pending markers, error-shaped results — commits as ONE
    * derived-class commit of its own. It never passes §3d's sealing (no
-   * wave, no basis rows, no run stamp — the run is long over when the
+   * wave, no run stamp — the run is long over when the
    * response arrives); its identity annotations are sourced from the
    * OUTBOX CARRIAGE captured at the original run's seal (necessarily
    * stamped, so completion commits inherit stamped provenance
@@ -3273,7 +3273,6 @@ export class SpaceServer implements TransactionSealDestination {
       preconditions: [...sealed.sealed.commit.preconditions ?? []],
       annotations,
       consequenceOf: [],
-      basisInstances: [],
       holder: this.#holder,
       derivedThrough: this.#watermark,
     });
@@ -3527,7 +3526,6 @@ export class SpaceServer implements TransactionSealDestination {
       dependencyScopeIdentity: identity,
       annotations,
       consequenceOf: [],
-      basisInstances: [],
       holder: this.#holder,
       derivedThrough: this.#watermark,
     });

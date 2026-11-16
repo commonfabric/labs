@@ -2,8 +2,8 @@
 // (server-execution v2 stage D, serving-loop.md §3d): commits wave batches
 // directly against the space's engine, on the process the memory server
 // runs in. This is the store half of plane (a)'s loopback path —
-// the wave's ONE derived commit, its basis rows, and its per-doc
-// re-verification all inside one engine transaction (`applyWaveCommit`) —
+// the wave's ONE derived commit and its per-doc re-verification inside
+// one engine transaction (`applyWaveCommit`) —
 // with stage B's derived-class lease admission enforced by the engine
 // itself. Stage F's SpaceServer wires this sink under the serving loop.
 // The foreign arm is `commitForeignWaveBatch` below, which the owner's
@@ -172,8 +172,8 @@ const waveBatchCommit = (batch: WaveSpaceCommit, localSeq: number) => ({
  * DELEGATED admission row: the batch's carried acting identity and
  * capabilityRef ride the commit metadata, admission validates completeness,
  * and scoped writes key from the CARRIED identity. Idempotent by
- * deterministic destination ids, so no wave-basis re-verification and no
- * basis rows. The commit is keyed by `envelope`, the committing session and
+ * deterministic destination ids, so no wave-basis re-verification. The
+ * commit is keyed by `envelope`, the committing session and
  * its number for it. Four batches are refused before anything is applied,
  * each deterministically: one carrying sqlite operations, one into a fresh
  * store with no genesis, one writing the space's ACL document, and one with
@@ -641,16 +641,6 @@ export class EngineWaveCommitSink implements WaveCommitSink {
               })),
             }),
           },
-          basisInstances: batch.basisInstances.map((instance) => ({
-            action: instance.action,
-            actionScopeKey: instance.actionScopeKey,
-            rows: instance.rows.map((row) => ({
-              entitySpace: row.entitySpace,
-              entity: row.entity,
-              entityScopeKey: row.entityScopeKey,
-              seq: row.seq,
-            })),
-          })),
           ...(batch.outboxAppends === undefined
             ? {}
             : { outboxAppends: batch.outboxAppends }),

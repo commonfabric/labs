@@ -895,6 +895,86 @@ describe("reactive wave withdrawal", () => {
     runtime.scheduler.unsubscribe(derive);
   });
 
+  it("runs a derivation whose write the wave dropped as superseded again when an input it read changes, and commits that run's write", async () => {
+    // The dropped run's reads stay registered in memory, so the ordinary
+    // dependency path brings it back once an input it read moves; the
+    // store holds no record of what the run read.
+
+    const input = runtime.getCell<number>(space, "superseded-input", undefined);
+    const output = runtime.getCell<string>(
+      space,
+      "superseded-output",
+      undefined,
+    );
+    const inputLink = input.getAsNormalizedFullLink();
+    const outputLink = output.getAsNormalizedFullLink();
+    const seeded = runtime.edit();
+    input.withTx(seeded).set(1);
+    expect((await seeded.commit().settled).error).toBeUndefined();
+    const wave = newWave();
+    const authored = runtime.edit();
+    output.withTx(authored).set("authored");
+    expect((await authored.commit().settled).error).toBeUndefined();
+    let flushing = false;
+    let laterWave: WaveAccumulator | undefined;
+    const sink = newSink();
+    runtime.installSealDestination({
+      seal: (tx) => (flushing ? laterWave ??= newWave() : wave).seal(tx),
+    }, {
+      runStamper: (tx, info) =>
+        stampWaveRunContext(tx, { actionId: info.actionId, kind: info.kind }),
+    });
+    let runs = 0;
+    const rerun = Promise.withResolvers<void>();
+    const derive: Action = (tx) => {
+      if (++runs === 2) rerun.resolve();
+      const value = tx.readValueOrThrow(inputLink) as number;
+      tx.writeValueOrThrow(outputLink, `derived from ${value}`);
+    };
+    actions.push(derive);
+    runtime.scheduler.subscribe(derive, {
+      reads: [],
+      shallowReads: [],
+      writes: [],
+    }, { isEffect: true });
+    await runtime.scheduler.idleWithPendingCommits();
+    expect(runs).toBe(1);
+
+    flushing = true;
+    const outcome = await wave.commitWave(sink);
+    await wave.settled();
+    expect(outcome.supersededWrites).toBe(1);
+    expect(outcome.dispositions).toEqual([{ kind: "dropped" }]);
+    await runtime.scheduler.idleWithPendingCommits();
+    expect(runs).toBe(1);
+
+    const writer = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: EmulatedStorageManager.connectTo(server, {
+        as: signer,
+        id: "superseded-input-author",
+      }),
+    });
+    peers.push(writer);
+    const writerInput = writer.getCellFromLink<number>(inputLink);
+    await writerInput.sync();
+    const moved = writer.edit();
+    writerInput.withTx(moved).set(2);
+    expect((await moved.commit().settled).error).toBeUndefined();
+    await rerun.promise;
+    await runtime.scheduler.idleWithPendingCommits();
+    expect(runs).toBe(2);
+
+    expect(laterWave).toBeDefined();
+    const later = await laterWave!.commitWave(sink);
+    await laterWave!.settled();
+    expect(later.dispositions).toEqual([{ kind: "committed" }]);
+    expect(
+      Engine.readState(engine, { id: outputLink.id })?.document,
+    ).toEqual({ value: "derived from 2" });
+    runtime.scheduler.unsubscribe(derive);
+  });
+
   for (const boundary of ["retained", "removed", "replaced"] as const) {
     it(
       boundary === "retained"

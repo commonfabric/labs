@@ -592,7 +592,6 @@ describe("warmWritesOf()", () => {
     preconditions: [],
     annotations: [],
     consequenceOf: [],
-    basisInstances: [],
     holder: undefined,
     ...(delegated === undefined ? {} : { delegated }),
   });
