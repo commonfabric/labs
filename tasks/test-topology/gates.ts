@@ -445,7 +445,9 @@ export const HISTORY_GATES: readonly Gate[] = [
     reachedBy: [
       "patterns/baselines/",
       "tasks/check-baselines-append-only.ts",
+      "tasks/command-output.ts",
       "tasks/pattern-files.ts",
+      "tasks/repository-files.ts",
     ],
   },
   {
@@ -461,6 +463,7 @@ export const HISTORY_GATES: readonly Gate[] = [
     reachedBy: [
       "base/test-support/",
       "tasks/check-test-aliases.ts",
+      "tasks/repository-files.ts",
       "tasks/test-identity-aliases/",
       "tasks/test-identity-aliases.jsonl",
     ],

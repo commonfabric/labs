@@ -84,8 +84,10 @@ export const GATE_PATHS: readonly string[] = [
   "tasks/cause-assignments-dump.ts",
   "tasks/cause-assignments-lib.ts",
   "tasks/check-cause-assignments.ts",
+  "tasks/command-output.ts",
   "tasks/pattern-compat-unevaluable.ts",
   "tasks/pattern-files.ts",
+  "tasks/repository-files.ts",
 ];
 
 /** How many parts continuous integration compares the patterns in. */
