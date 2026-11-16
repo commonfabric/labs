@@ -12,7 +12,7 @@ import {
   publishPatternFromDisk,
   publishReportLines,
 } from "../lib/pattern-publish.ts";
-import { PatternIndexStore } from "../lib/pattern-index-store.ts";
+import { PatternIndexStore } from "@commonfabric/pattern-index/store";
 import { FakePatternIndex } from "./fake-pattern-index.ts";
 
 const ADDRESS = "742 Evergreen Terrace";

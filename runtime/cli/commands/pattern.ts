@@ -16,7 +16,7 @@ import {
 import {
   PatternIndexStore,
   patternIndexStoreDir,
-} from "../lib/pattern-index-store.ts";
+} from "@commonfabric/pattern-index/store";
 import { mineLines, mineRows } from "../lib/pattern-mine.ts";
 import {
   publishPatternFromDisk,

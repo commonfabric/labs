@@ -14,11 +14,21 @@
  * runtime/pattern-index/cli.ts --identity <identity path> --base-url <URL>`.
  * These read and network grants are the complete permission set; environment
  * and FFI permissions are not required.
+ *
+ * `--membership-store <dir>` names the directory `cf index join` keeps
+ * memberships under (`~/.local/state/commonfabric/pattern-index` by default
+ * for `cf`). With it, each call presents the chain the person's index root
+ * issued to `--identity`, renewing it there when the root is kept and the
+ * chain has under a week left, so the host also grants read and write on
+ * `<dir>/<index host>`. Without it the identity signs as its own root.
  */
 
 import { parseArgs } from "@std/cli/parse-args";
 import { Identity } from "@commonfabric/identity";
+import { join } from "@std/path";
 import { PatternIndexClient } from "./src/client.ts";
+import { openPatternIndexClient } from "./src/access.ts";
+import { PatternIndexStore } from "./src/store.ts";
 import { feedbackEventType, recordPatternFeedback } from "./src/feedback.ts";
 import {
   type PatternIndexFailure,
@@ -87,16 +97,30 @@ const answerRequest = async (
 
 /** Reads and answers the one request owned by this process. */
 const main = async (): Promise<void> => {
-  const { identity, "base-url": baseUrl } = parseArgs(Deno.args, {
-    string: ["identity", "base-url"],
+  const {
+    identity,
+    "base-url": baseUrl,
+    "membership-store": membershipStore,
+  } = parseArgs(Deno.args, {
+    string: ["identity", "base-url", "membership-store"],
   });
   if (!identity || !baseUrl) {
-    console.error("usage: cli.ts --identity <path> --base-url <url>");
+    console.error(
+      "usage: cli.ts --identity <path> --base-url <url> [--membership-store <dir>]",
+    );
     Deno.exitCode = 2;
     return;
   }
   const signer = await Identity.fromPkcs8(await Deno.readFile(identity));
-  const client = new PatternIndexClient({ baseUrl, signer });
+  const client = membershipStore
+    ? await openPatternIndexClient({
+      baseUrl,
+      signer,
+      store: new PatternIndexStore(
+        join(membershipStore, new URL(baseUrl).host),
+      ),
+    })
+    : new PatternIndexClient({ baseUrl, signer });
   const input = await new Response(Deno.stdin.readable).text();
   let request: unknown;
   try {

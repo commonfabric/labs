@@ -20,7 +20,7 @@ import {
 import {
   PatternIndexStore,
   patternIndexStoreDir,
-} from "./pattern-index-store.ts";
+} from "@commonfabric/pattern-index/store";
 import { chainForSigner } from "./pattern-index-access.ts";
 
 /** `member`: an `/index` chain. `root-move`: a single `/index/root` link. */

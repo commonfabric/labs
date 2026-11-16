@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { fromFileUrl } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
+import { fromBase64url } from "@commonfabric/bytes/base64url";
+import { checkIndexChain } from "../src/membership.ts";
+import { PatternIndexStore } from "../src/store.ts";
 import { Identity } from "@commonfabric/identity";
 import { verifyFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 
@@ -20,6 +23,7 @@ const callHelper = async (
   baseUrl: string,
   input: unknown,
   identity = `${directory}/identity.key`,
+  membershipStore?: string,
 ) => {
   const child = new Deno.Command(Deno.execPath(), {
     cwd: directory,
@@ -28,13 +32,21 @@ const callHelper = async (
       "--no-lock",
       "--config",
       `${root}/deno.jsonc`,
-      `--allow-read=${identity}`,
+      membershipStore === undefined
+        ? `--allow-read=${identity}`
+        : `--allow-read=${identity},${membershipStore}`,
+      ...(membershipStore === undefined
+        ? []
+        : [`--allow-write=${membershipStore}`]),
       "--allow-net=127.0.0.1",
       entry,
       "--identity",
       identity,
       "--base-url",
       baseUrl,
+      ...(membershipStore === undefined
+        ? []
+        : ["--membership-store", membershipStore]),
     ],
     stdin: "piped",
     stdout: "piped",
@@ -257,6 +269,42 @@ describe("cli", () => {
     expect(output.code).not.toBe(0);
     expect(output.stdout).toBe("");
     expect(output.stderr).toContain("failed host-side");
+  });
+
+  it("presents the chain the membership store holds for its identity", async () => {
+    const stores = `${directory}/stores`;
+    const store = new PatternIndexStore(
+      join(stores, new URL(baseUrl).host),
+    );
+    const root = await store.createRootKey();
+    await store.recordMembership({
+      handle: "p-1",
+      role: "user",
+      root: root.did(),
+    });
+
+    const output = await callHelper(
+      directory,
+      baseUrl,
+      { op: "search", text: "test" },
+      `${directory}/identity.key`,
+      stores,
+    );
+
+    expect(output.code).toBe(0);
+    const proofs = calls[0].body.proofs as string[];
+    const checked = await checkIndexChain(
+      proofs.map((link) => fromBase64url(link)),
+      did as `did:key:${string}`,
+    );
+    expect(checked.root).toBe(root.did());
+    expect(await store.chainFor(did as `did:key:${string}`)).toHaveLength(1);
+  });
+
+  it("presents no chain without a membership store", async () => {
+    await callHelper(directory, baseUrl, { op: "search", text: "test" });
+
+    expect(calls[0].body).not.toHaveProperty("proofs");
   });
 
   it("exits 2 with usage on stderr when a required flag is empty", async () => {

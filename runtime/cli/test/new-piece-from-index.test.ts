@@ -6,7 +6,7 @@ import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { FIRST_PARTY_HTTP_AUTH_HEADERS } from "@commonfabric/runner/toolshed-http-auth";
 import { newPieceFromCommand, piece } from "../commands/piece.ts";
-import { PatternIndexStore } from "../lib/pattern-index-store.ts";
+import { PatternIndexStore } from "@commonfabric/pattern-index/store";
 import { newPiece } from "../lib/piece.ts";
 import { captureStderr } from "./utils.ts";
 

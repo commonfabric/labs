@@ -31,7 +31,7 @@ import {
 import {
   PatternIndexStore,
   patternIndexStoreDir,
-} from "./pattern-index-store.ts";
+} from "@commonfabric/pattern-index/store";
 import {
   ownerReleaseByIntentRequest,
   ownerReleaseByIntentSignature,

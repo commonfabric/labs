@@ -9,7 +9,9 @@
     "./http-fetch": "./src/http-fetch.ts",
     "./membership": "./src/membership.ts",
     "./privacy": "./src/privacy.ts",
-    "./publish": "./src/publish.ts"
+    "./publish": "./src/publish.ts",
+    "./store": "./src/store.ts",
+    "./access": "./src/access.ts"
   },
   "tasks": {
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",

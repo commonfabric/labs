@@ -148,7 +148,7 @@ import { absPath } from "../lib/utils.ts";
 import {
   PatternIndexStore,
   patternIndexStoreDir,
-} from "../lib/pattern-index-store.ts";
+} from "@commonfabric/pattern-index/store";
 import { noteWroteTo } from "../lib/write-receipt.ts";
 
 // Hint system: print helpful next-step suggestions after operations. The

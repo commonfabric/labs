@@ -7,7 +7,7 @@ import {
   issueIndexChain,
 } from "@commonfabric/pattern-index/membership";
 import { issueIndexDelegation } from "../lib/index-delegation.ts";
-import { PatternIndexStore } from "../lib/pattern-index-store.ts";
+import { PatternIndexStore } from "@commonfabric/pattern-index/store";
 
 const BASE = "https://index.test";
 const cfKey = await Identity.fromPassphrase("index delegation cf");

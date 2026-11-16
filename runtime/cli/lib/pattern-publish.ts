@@ -36,7 +36,7 @@ import {
   patternDocMetadata,
   publishRequestFor,
 } from "@commonfabric/pattern-index/publish";
-import type { PatternIndexStore } from "./pattern-index-store.ts";
+import type { PatternIndexStore } from "@commonfabric/pattern-index/store";
 
 /** What the person asked for. */
 export interface PublishOptions {

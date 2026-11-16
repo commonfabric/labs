@@ -65,6 +65,7 @@ export const NO_CANDIDATES = new Map<string, string>([
     "space invite receipts:invite-id",
     "an opaque ID from invitation creation or listing",
   ],
+  ["index admit:did", "a DID being admitted; nothing here enumerates them"],
   [
     "index join:link",
     "an invite link pasted from elsewhere, and a secret: never offered",

@@ -1,5 +1,6 @@
 import { Command, ValidationError } from "@cliffy/command";
 import { decodeDelegationChains } from "@commonfabric/identity";
+import { isDIDKey } from "@commonfabric/identity/did";
 
 import { cliText } from "../lib/cli-name.ts";
 import { loadIdentity } from "../lib/identity.ts";
@@ -101,6 +102,24 @@ async function whoami(options: IndexOptions): Promise<void> {
   );
 }
 
+async function admit(options: IndexOptions, did: string): Promise<void> {
+  if (!isDIDKey(did)) {
+    throw new ValidationError(`"${did}" is not a did:key.`);
+  }
+  const signer = await loadIdentity(requireIdentityPath(options));
+  const client = await openPatternIndexClient({
+    baseUrl: resolvePatternIndexUrl(options.patternIndexUrl),
+    signer,
+  });
+  const member = await client.admitKey({ did });
+  render(
+    options.json
+      ? { ...member, did }
+      : `Admitted ${did} as ${member.handle} (${member.role}).`,
+    { json: options.json },
+  );
+}
+
 /** The options every subcommand shares. */
 // deno-lint-ignore no-explicit-any
 export const indexAccessOptions = (cmd: Command<any>) =>
@@ -153,6 +172,18 @@ export const index = new Command()
         )
         .action(join),
     ),
+  )
+  /* index admit */
+  .command(
+    "admit",
+    indexAccessOptions(
+      new Command()
+        .description(
+          "Admit a key as a new member, without an invite. Admins only; an " +
+            "invite is the usual way in.",
+        )
+        .arguments("<did:string>"),
+    ).action(admit),
   )
   /* index whoami */
   .command(

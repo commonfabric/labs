@@ -3344,7 +3344,8 @@ the same person through chains the root issues:
   single-use delegation the index's `moveRoot` takes, to move the membership to
   a new root.
 
-`cf index whoami` says which member the index sees the identity as.
+`cf index whoami` says which member the index sees the identity as. An admin
+admits a key without an invite with `cf index admit <did>`.
 
 ### Publishing
 

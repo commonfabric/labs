@@ -14,7 +14,7 @@ import {
   parseInviteLink,
   resolvePatternIndexUrl,
 } from "../lib/pattern-index-access.ts";
-import { PatternIndexStore } from "../lib/pattern-index-store.ts";
+import { PatternIndexStore } from "@commonfabric/pattern-index/store";
 import { FakePatternIndex } from "./fake-pattern-index.ts";
 
 const BASE = "https://index.test";
