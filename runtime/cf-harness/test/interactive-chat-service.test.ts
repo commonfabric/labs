@@ -3373,6 +3373,8 @@ describe("HarnessInteractiveChatService", () => {
       };
 
       it("disposes of every runtime when one fails, and throws that failure", async () => {
+        // Disposals run together, so the order they are released in is not
+        // fixed.
         const released: string[] = [];
         const { service, close } = await serviceHoldingRuntimes([
           () => {
@@ -3394,10 +3396,10 @@ describe("HarnessInteractiveChatService", () => {
           expect(failure).toMatchObject({
             message: "the first runtime failed",
           });
-          expect(released).toEqual(["first", "second"]);
+          expect(released.toSorted()).toEqual(["first", "second"]);
           // The runtimes were released once, and are no longer held.
           await service.releaseFabricRuntimes();
-          expect(released).toEqual(["first", "second"]);
+          expect(released.toSorted()).toEqual(["first", "second"]);
         } finally {
           await close();
         }
@@ -3426,12 +3428,13 @@ describe("HarnessInteractiveChatService", () => {
           const failure = await releasing;
 
           expect(failure).toBeInstanceOf(AggregateError);
+          // Disposals run together, so the failures are not ordered.
           expect(failure).toMatchObject({
             message: "2 Fabric runtimes failed to dispose",
-            errors: [
-              { message: "the first runtime failed" },
-              { message: "the second runtime failed" },
-            ],
+            errors: expect.arrayContaining([
+              expect.objectContaining({ message: "the first runtime failed" }),
+              expect.objectContaining({ message: "the second runtime failed" }),
+            ]),
           });
         } finally {
           await close();
