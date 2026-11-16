@@ -184,16 +184,19 @@ it finds, rather than skip it, is a change in that repository.
 
 ## The toolshed's heap limit
 
-The toolshed sets no `--max-old-space-size`: not the binary
-(`tasks/build-binaries.ts`), `scripts/start-local-dev.sh`, or the package's
-`dev` and `production` tasks. V8 takes that flag over the limit each serving
-worker is started with, so under it every worker's heap could grow to the
-flag's size and never reach `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`; the pool
-logs `heap-limit-overridden` when a worker's limit is well past the one it was
-given. The main thread and the compile workers have V8's default, about 4 GB.
-The compiled binary reads no V8 flags when it starts (it ignores
-`DENO_V8_FLAGS`, `NODE_OPTIONS` and `--v8-flags`), so the only V8 flags a
-deployment runs with are the ones built in. The binary is built with
+The toolshed runs with `--max-old-space-size=16384`: the binary
+(`tasks/build-binaries.ts`), `scripts/start-local-dev.sh`, and the package's
+`dev` and `production` tasks all set it. Under V8's default of about 4 GB, the
+main thread, which holds the memory server, outgrew its limit on Estuary and
+took its process down every 20 minutes or so (2026-11-16). V8 takes the flag
+over the limit each serving worker is started with, so a worker's heap could
+grow to 16 GiB without reaching `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`. The
+pool logs `heap-limit-overridden` when a worker's limit is well past the one it
+was given, and then holds the worker to its limit itself: it ends a worker
+whose heartbeats report a heap of the limit or more twice in a row. The
+compiled binary reads no V8 flags when it starts (it ignores `DENO_V8_FLAGS`,
+`NODE_OPTIONS` and `--v8-flags`), so the only V8 flags a deployment runs with
+are the ones built in. The binary is built with
 `--perf-basic-prof-only-functions` and
 `--interpreted-frames-native-stack`: V8 writes each compiled function's name to
 `/tmp/perf-<pid>.map`, so `sudo perf record -t <thread> -g` and `perf report`
@@ -256,7 +259,7 @@ Spaces that shared the worker are each moved to a worker of their own, beyond
 worker nothing else is on ([`serving-loop.md`](../specs/server-side-execution/serving-loop.md)
 §1, "Workers").
 
-The main thread and the compile workers are Deno isolates under V8's default
+The main thread and the compile workers are Deno isolates under the 16 GiB
 limit, and one of those that reaches it takes its process down. Events still
 queued survive that, and the restarted process handles them.
 

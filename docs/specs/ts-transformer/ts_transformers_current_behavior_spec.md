@@ -4399,7 +4399,8 @@ callback bodies" and "…treats compact control flow as line coverage"). Only
 `kind: "runtime"` spans participate.
 
 `writePatternCoverageLcov` / `patternCoverageReportToLcov` emit standard LCOV
-(`TN:pattern-runtime`, `SF`, per-line `DA`, `LF`/`LH`), with `DA` lines in
+(`TN:pattern-runtime`, or `pattern-runtime-` followed by the name of the path
+that collected it, then `SF`, per-line `DA`, `LF`/`LH`), with `DA` lines in
 **authored** coordinates thanks to §16.5 — from "pattern coverage records
 original runtime lines" (`runtime/runner/test/pattern-coverage.test.ts`),
 where `main.choose(1)` skips the authored `return 0;` on line 6:

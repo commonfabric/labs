@@ -491,6 +491,37 @@ describe("extended-storage-transaction", () => {
         });
       });
 
+      describe("settledOutcome()", () => {
+        it("returns `undefined` before the transaction settles", () => {
+          const tx = edit();
+          expect(tx.settledOutcome()).toBeUndefined();
+          tx.abort();
+        });
+
+        it("returns `committed` for a commit to storage", async () => {
+          const tx = edit();
+          tx.writeValueOrThrow(link("settled"), 1);
+          expect((await tx.commit().settled).error).toBeUndefined();
+          expect(tx.settledOutcome()).toBe("committed");
+        });
+
+        it("returns `committed` for a commit sealed into a destination, while the status of the transaction it wraps still reads `ready`", async () => {
+          const tx = bare();
+          tx.configureSealDestination({
+            seal: () => Promise.resolve({ ok: {} }),
+          });
+          expect((await tx.commit().settled).error).toBeUndefined();
+          expect(tx.status().status).toBe("ready");
+          expect(tx.settledOutcome()).toBe("committed");
+        });
+
+        it("returns `failed` for an aborted transaction", () => {
+          const tx = edit();
+          tx.abort();
+          expect(tx.settledOutcome()).toBe("failed");
+        });
+      });
+
       describe("getCfcState()", () => {
         it("yields read-only values from a map's entries()", () => {
           const tx = edit();
@@ -882,6 +913,14 @@ describe("extended-storage-transaction", () => {
           new TransactionWrapper(tx).abandonStagedWork(error);
           expect(log).toEqual(["abandoned: gone"]);
           tx.abort();
+        });
+
+        it("reports how the transaction it wraps settled", () => {
+          const tx = edit();
+          const wrapper = new TransactionWrapper(tx);
+          expect(wrapper.settledOutcome()).toBeUndefined();
+          tx.abort();
+          expect(wrapper.settledOutcome()).toBe("failed");
         });
 
         it("registers a verdict callback on the transaction it wraps, unless it duplicates it", () => {

@@ -4880,6 +4880,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return result;
   }
 
+  settledOutcome(): "committed" | "failed" | undefined {
+    if (!this.#commitCallbacksDispatched) return undefined;
+    return this.#committed ? "committed" : "failed";
+  }
+
   /**
    * Add a callback to be called when the transaction commit completes.
    * The callback receives the transaction as a parameter and is called
@@ -5586,6 +5591,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     options?: TransactionCommitOptions,
   ): TransactionCommitReceipt {
     return this.#wrapped.commit(options);
+  }
+
+  settledOutcome(): "committed" | "failed" | undefined {
+    return this.#wrapped.settledOutcome();
   }
 
   addCommitCallback(
