@@ -36,6 +36,36 @@ describe("SchedulerTriggerIndex", () => {
     expect(triggerIndex.nonRecursiveTriggers.size).toBe(0);
   });
 
+  it("returns each reader once when it reads several paths a write reaches", () => {
+    const triggerIndex = new SchedulerTriggerIndex(identityThunk);
+    const several: Action = () => {};
+    const whole: Action = () => {};
+    const shallowAbove: Action = () => {};
+    const at = (...path: string[]): IMemorySpaceAddress => ({
+      space: "did:key:trigger-index-test",
+      scope: "space",
+      id: "of:cell",
+      path,
+    });
+    triggerIndex.addActionReads(
+      several,
+      [at("value"), at("value", "a")],
+      [at("value", "a")],
+    );
+    triggerIndex.addActionReads(whole, [at("value")], []);
+    // A non-recursive read two components above the write is not reached.
+    triggerIndex.addActionReads(shallowAbove, [], [at("value")]);
+
+    const deep = [
+      ...triggerIndex.collectReadersForWrite(at("value", "a", "x")),
+    ];
+    expect(deep.length).toBe(2);
+    expect(new Set(deep)).toEqual(new Set([several, whole]));
+    expect(
+      new Set(triggerIndex.collectReadersForWrite(at("value", "a"))),
+    ).toEqual(new Set([several, whole, shallowAbove]));
+  });
+
   it("removes all trigger entities for an unloaded space", () => {
     const triggerIndex = new SchedulerTriggerIndex(identityThunk);
     const firstAction: Action = () => {};

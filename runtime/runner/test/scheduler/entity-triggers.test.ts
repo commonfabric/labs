@@ -2,11 +2,14 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
+  assertNoReaderDrift,
   assertNoTriggerDrift,
+  compareRowPaths,
   createTriggerReference,
   EntityTriggers,
   resetTriggerScanWork,
   triggerEquivalenceEnabled,
+  triggerListRepairs,
   triggerScanWork,
 } from "../../src/scheduler/entity-triggers.ts";
 import {
@@ -103,28 +106,63 @@ function compareWithDefinition(
     }
 
     expect(triggers.size, `seed ${seed} step ${step}: size`).toBe(model.size);
-    const probes: Path[] = [[], randomPath(), randomPath(), randomPath()];
-    probes.push(randomPath());
+    const probes = new Map<string, Path>();
+    const probe = (path: Path) => probes.set(JSON.stringify(path), path);
+    for (const path of [[], randomPath(), randomPath()]) probe(path);
+    for (const path of [randomPath(), randomPath()]) probe(path);
     for (const paths of model.values()) {
       for (const path of paths) {
-        probes.push(path, path.slice(0, -1), [...path, "absent"]);
+        probe(path);
+        probe(path.slice(0, -1));
+        probe([...path, "absent"]);
       }
     }
-    for (const writePath of probes) {
+    const keys = new Map<Path, string>();
+    for (const paths of model.values()) {
+      for (const path of paths) keys.set(path, JSON.stringify(path));
+    }
+    const keyOf = (path: Path) => keys.get(path) ?? JSON.stringify(path);
+    for (const writePath of probes.values()) {
+      // Compared as text first, since an expectation per probe would cost
+      // more than the run itself; a difference is then handed to `expect()`
+      // for its account of what differs.
       const expected: Record<string, string[]> = {};
       for (const [action, paths] of model) {
-        const reached = paths.filter((path) => arraysOverlap(path, writePath));
-        if (reached.length > 0) {
-          expected[action.name] = reached.map((path) => JSON.stringify(path));
+        const reached: string[] = [];
+        for (const path of paths) {
+          if (arraysOverlap(path, writePath)) reached.push(keys.get(path)!);
         }
+        if (reached.length > 0) expected[action.name] = reached;
       }
       const answered: Record<string, string[]> = {};
       for (const [action, paths] of triggers.matching(writePath)) {
-        answered[action.name] = paths.map((path) => JSON.stringify(path));
+        answered[action.name] = paths.map(keyOf);
       }
-      expect(answered, where(step, writePath)).toEqual(expected);
+      if (canonical(answered) !== canonical(expected)) {
+        expect(answered, where(step, writePath)).toEqual(expected);
+      }
+
+      const visited: string[] = [];
+      triggers.forEachMatching(writePath, (path, action) => {
+        visited.push(`${action.name} ${keyOf(path)}`);
+      });
+      const pairs = Object.entries(expected).flatMap(([name, paths]) =>
+        paths.map((path) => `${name} ${path}`)
+      );
+      visited.sort();
+      pairs.sort();
+      if (visited.join("\n") !== pairs.join("\n")) {
+        expect(visited, where(step, writePath)).toEqual(pairs);
+      }
     }
   }
+}
+
+/** `groups` as text that two equal groupings share whatever their key order. */
+function canonical(groups: Record<string, string[]>): string {
+  return JSON.stringify(
+    Object.entries(groups).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
+  );
 }
 
 /** What `matching()` returned, as plain data an expectation can name. */
@@ -307,6 +345,117 @@ describe("EntityTriggers", () => {
         triggers.set(action, [["value", "a"]]);
         expect(triggers.size).toBe(1);
       });
+
+      it("holds a path a list names twice once, and removes it once", () => {
+        const triggers = new EntityTriggers();
+        const action = reader("twice");
+        triggers.set(action, [["value"], ["value"]]);
+        expect(matched(triggers, ["value"])).toEqual({ twice: [["value"]] });
+
+        triggers.set(action, [["other"]]);
+        expect(matched(triggers, ["value"])).toEqual({});
+        expect(matched(triggers, ["other"])).toEqual({ twice: [["other"]] });
+      });
+
+      it("hands an action each path once when its list repeats a path out of order", () => {
+        const triggers = new EntityTriggers();
+        triggers.set(reader("unordered"), [["b"], ["a"], ["b"]]);
+        expect(matched(triggers, [])).toEqual({ unordered: [["a"], ["b"]] });
+
+        const visited: string[] = [];
+        triggers.forEachMatching([], (path, action) => {
+          visited.push(`${action.name} ${JSON.stringify(path)}`);
+        });
+        expect(visited).toEqual(['unordered ["a"]', 'unordered ["b"]']);
+      });
+
+      it("treats an empty list as a removal", () => {
+        const triggers = new EntityTriggers();
+        const action = reader("emptied");
+        triggers.set(action, [["value", "a"]]);
+        triggers.set(action, []);
+        expect(triggers.size).toBe(0);
+        expect(matched(triggers, [])).toEqual({});
+      });
+
+      it("counts a list it had to put in order", () => {
+        const triggers = new EntityTriggers();
+        const before = triggerListRepairs.count;
+        triggers.set(reader("sorted"), [["a"], ["b"]]);
+        expect(triggerListRepairs.count).toBe(before);
+        triggers.set(reader("unsorted"), [["b"], ["a"]]);
+        expect(triggerListRepairs.count).toBe(before + 1);
+      });
+
+      it("rejects a path component that is not a string while the check runs", () => {
+        expect(triggerEquivalenceEnabled((name) => Deno.env.get(name))).toBe(
+          true,
+        );
+        const triggers = new EntityTriggers();
+        expect(() =>
+          triggers.set(reader("numbered"), [
+            ["value", 9 as unknown as string],
+          ])
+        ).toThrow('Read path `["value",9]` holds a component');
+        expect(triggers.size).toBe(0);
+      });
+
+      it("finds every path of a first registration longer than one block", () => {
+        const triggers = new EntityTriggers();
+        const paths = Array.from(
+          { length: 600 },
+          (_, index) => ["value", `member-${String(index).padStart(4, "0")}`],
+        );
+        triggers.set(reader("long"), paths);
+        expect(matched(triggers, [])).toEqual({ long: paths });
+        expect(matched(triggers, ["value", "member-0300"])).toEqual({
+          long: [["value", "member-0300"]],
+        });
+
+        triggers.set(reader("beside"), [["value", "member-0300"]]);
+        expect(matched(triggers, ["value", "member-0300"])).toEqual({
+          long: [["value", "member-0300"]],
+          beside: [["value", "member-0300"]],
+        });
+        expect(Object.keys(matched(triggers, ["value", "member-0299"])))
+          .toEqual(["long"]);
+      });
+    });
+
+    describe("finding what an action read before", () => {
+      it("finds an action's earlier reads without scanning the row once it holds many paths", () => {
+        const triggers = new EntityTriggers();
+        triggers.set(
+          reader("many"),
+          Array.from(
+            { length: 1024 },
+            (_, index) => ["value", `member-${String(index).padStart(4, "0")}`],
+          ),
+        );
+        const small = Array.from({ length: 7 }, (_, k) => reader(`small-${k}`));
+        for (const action of small) triggers.set(action, [["value", "count"]]);
+
+        resetTriggerScanWork();
+        for (let k = 0; k < 2000; k++) {
+          triggers.set(
+            small[k % 7]!,
+            k % 2 === 0 ? [["value", "zcount"]] : [["value", "count"]],
+          );
+        }
+        expect(triggerScanWork.rowScanEntries).toBe(0);
+      });
+
+      it("scans the row of a document few actions read", () => {
+        const triggers = new EntityTriggers();
+        const first = reader("first");
+        triggers.set(first, [["value", "a"]]);
+        triggers.set(reader("second"), [["value", "b"]]);
+        triggers.set(reader("third"), [["value", "c"]]);
+
+        resetTriggerScanWork();
+        triggers.set(first, [["value", "d"]]);
+        expect(triggerScanWork.rowScanEntries).toBeGreaterThan(0);
+      });
     });
 
     describe("delete()", () => {
@@ -349,6 +498,18 @@ describe("EntityTriggers", () => {
         expect(triggerScanWork.pathsVisited).toBe(emptyVisits);
       });
 
+      it("leaves another action's read when a list that named a path twice is removed", () => {
+        const triggers = new EntityTriggers();
+        const gone = reader("gone");
+        const stays = reader("stays");
+        triggers.set(stays, [["value"]]);
+        triggers.set(gone, [["value"], ["value"]]);
+        triggers.set(gone, [["other"]]);
+        triggers.delete(gone);
+        expect(matched(triggers, ["value"])).toEqual({ stays: [["value"]] });
+        expect(triggers.size).toBe(1);
+      });
+
       it("leaves `size` unchanged for an action it does not hold", () => {
         const triggers = new EntityTriggers();
         triggers.set(reader("present"), [["value", "a"]]);
@@ -380,19 +541,6 @@ describe("EntityTriggers", () => {
         "same-list": [["value", "count"]],
       });
     });
-
-    it("reports a read it cannot find rather than removing another", () => {
-      // A list holding one path twice is not the compact form the type
-      // promises. Taking it out walks to that path twice, and the second walk
-      // arrives where the first pruned.
-      const triggers = new EntityTriggers();
-      const action = reader("repeated-path");
-      triggers.set(action, [["value"], ["value"]]);
-
-      expect(() => triggers.set(action, [["other"]])).toThrow(
-        "Registered read `value` is missing from the index.",
-      );
-    });
   });
 
   describe("against the overlap definition", () => {
@@ -405,9 +553,82 @@ describe("EntityTriggers", () => {
         compareWithDefinition(seed, 60, {
           create: () => new EntityTriggers(),
           actions: 12,
-          malformed: false,
+          malformed: true,
         });
       }
+    });
+
+    it("agrees with the definition at limits a handful of reads crosses, seeds 1001 to 1040", () => {
+      // Limits this small put a first registration of up to six paths past a
+      // block, and reach splits, merges, the return to one inline row, readers
+      // held in a set, and the per-action map being built and dropped.
+
+      for (let seed = 1001; seed <= 1040; seed++) {
+        compareWithDefinition(seed, 60, {
+          create: () =>
+            new EntityTriggers({
+              readersInArray: 2,
+              actionsWithoutMap: 2,
+              rowWithoutMap: 3,
+              block: 4,
+            }),
+          actions: 40,
+          malformed: true,
+        });
+      }
+    });
+
+    it("agrees with the definition at limits that merge one block into the next, seeds 2001 to 2020", () => {
+      // A block merges into its neighbor when compacting leaves it with
+      // fewer than a quarter of `block` entries, which a block of four never
+      // holds and a block of eight does.
+
+      for (let seed = 2001; seed <= 2020; seed++) {
+        compareWithDefinition(seed, 60, {
+          create: () =>
+            new EntityTriggers({
+              readersInArray: 2,
+              actionsWithoutMap: 2,
+              rowWithoutMap: 3,
+              block: 8,
+            }),
+          actions: 40,
+          malformed: true,
+        });
+      }
+    });
+  });
+
+  describe("compareRowPaths()", () => {
+    it("orders a number component apart from a string", () => {
+      // `comparePaths()` returns 1 both ways for a number against a string
+      // that does not read as a number, and for `9` against `"9"`.
+
+      const nine = [9] as unknown as Path;
+      for (const other of [["9"], ["10"], ["value"]]) {
+        const forward = compareRowPaths(nine, other);
+        expect(forward).not.toBe(0);
+        expect(Math.sign(compareRowPaths(other, nine))).toBe(
+          -Math.sign(forward),
+        );
+      }
+    });
+
+    it("agrees with comparePaths on string paths", () => {
+      const alphabet = ["value", "a", "b", "a/b", "", "10", "9"];
+      const paths: Path[] = [[]];
+      for (let length = 1; length <= 3; length++) {
+        for (const path of paths.filter((path) => path.length === length - 1)) {
+          for (const component of alphabet) paths.push([...path, component]);
+        }
+      }
+      const disagreements = paths.flatMap((a) =>
+        paths.filter((b) =>
+          Math.sign(compareRowPaths(a, b)) !== Math.sign(comparePaths(a, b))
+        ).map((b) => `${JSON.stringify(a)} ${JSON.stringify(b)}`)
+      );
+      expect(paths.length).toBe(400);
+      expect(disagreements).toEqual([]);
     });
   });
 
@@ -457,7 +678,7 @@ describe("EntityTriggers", () => {
       expect([...reference(["value"])]).toEqual([]);
     });
 
-    it("preserves drift detection for an incomplete or excessive trie result", () => {
+    it("preserves drift detection for an incomplete or excessive index result", () => {
       const registered = [["value", "a"], ["value", "b"], ["other"]];
       const reference = createTriggerReference(registered);
       expect(() =>
@@ -497,6 +718,62 @@ describe("EntityTriggers", () => {
       // reaches neither the other nor anything below it.
       expect(() => assertNoTriggerDrift([["a/b"]], [["a", "b"]], ["a/b"]))
         .toThrow('Trigger index drift for write ["a/b"]: ["a/b"]');
+    });
+  });
+
+  describe("assertNoReaderDrift()", () => {
+    const first = reader("first");
+    const second = reader("second");
+
+    it("accepts an answer holding each read the write overlaps once", () => {
+      const registered = [
+        { action: first, path: ["value", "a"] },
+        { action: second, path: ["value", "a"] },
+        { action: first, path: ["other"] },
+      ];
+      expect(() =>
+        assertNoReaderDrift(registered.slice(0, 2), registered, ["value"])
+      ).not.toThrow();
+    });
+
+    it("names a read the answer left out", () => {
+      expect(() =>
+        assertNoReaderDrift([], [{ action: first, path: ["value"] }], [
+          "value",
+        ])
+      ).toThrow(
+        'Trigger reader drift for write ["value"]: missing first at ["value"]',
+      );
+    });
+
+    it("names a read the answer invented", () => {
+      expect(() =>
+        assertNoReaderDrift([{ action: first, path: ["value"] }], [], [
+          "value",
+        ])
+      ).toThrow(
+        'Trigger reader drift for write ["value"]: extra first at ["value"]',
+      );
+    });
+
+    it("names a read the answer handed over twice", () => {
+      const read = { action: first, path: ["value"] };
+      expect(() => assertNoReaderDrift([read, read], [read], ["value"]))
+        .toThrow(
+          'Trigger reader drift for write ["value"]: first at ["value"] 2 times',
+        );
+    });
+
+    it("tells two actions reading one path apart", () => {
+      expect(() =>
+        assertNoReaderDrift(
+          [{ action: second, path: ["value"] }],
+          [{ action: first, path: ["value"] }],
+          ["value"],
+        )
+      ).toThrow(
+        'Trigger reader drift for write ["value"]: extra second at ["value"], missing first at ["value"]',
+      );
     });
   });
 

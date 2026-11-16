@@ -235,17 +235,18 @@ export class SchedulerTriggerIndex implements TriggerIndexState {
     const readers = new Set<Action>();
 
     const recursiveReaders = this.triggers.get(entity);
-    recursiveReaders?.forEachMatching(write.path, (_path, actions) => {
-      for (const action of actions) readers.add(action);
+    recursiveReaders?.forEachMatching(write.path, (_path, action) => {
+      readers.add(action);
     });
 
     // A non-recursive read is reached by a write at its own path, above it, or
     // one component below it, so the reads the index hands over are narrowed
     // again by depth.
     const nonRecursiveReaders = this.nonRecursiveTriggers.get(entity);
-    nonRecursiveReaders?.forEachMatching(write.path, (read, actions) => {
-      if (!nonRecursiveReadMayOverlapWrite(read, write.path)) return;
-      for (const action of actions) readers.add(action);
+    nonRecursiveReaders?.forEachMatching(write.path, (read, action) => {
+      if (nonRecursiveReadMayOverlapWrite(read, write.path)) {
+        readers.add(action);
+      }
     });
 
     return readers;
