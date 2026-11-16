@@ -183,6 +183,9 @@ export interface PatternIndexSearchResult {
   /** The author's stable pseudonym on this index. */
   handle?: string;
 
+  /** Whether the caller is its author. */
+  mine?: boolean;
+
   /** The first generation of this pattern's version chain. */
   lineageId?: string;
 
@@ -242,6 +245,9 @@ export interface PatternIndexPattern {
 
   /** The author's stable pseudonym on this index. */
   handle?: string;
+
+  /** Whether the caller is its author. */
+  mine?: boolean;
 
   createdAt: string;
   description: string;
@@ -307,6 +313,9 @@ export interface PatternIndexListedPattern {
 
   /** The author's stable pseudonym on this index. */
   handle?: string;
+
+  /** Whether the caller is its author. */
+  mine?: boolean;
 
   /** `null` for a pattern the index holds no creation time for. */
   createdAt: string | null;
@@ -527,6 +536,9 @@ export interface PatternIndexPublishResponse {
 
   /** `false` when the index already held this identity, which is not an error. */
   created: boolean;
+
+  /** Request fields this deployment no longer stores and dropped. */
+  ignored?: readonly string[];
 }
 
 /** An owner's request that a pattern be considered for discovery. */
@@ -574,6 +586,9 @@ export interface PatternIndexCreateInviteResponse {
   inviteId: string;
   code: string;
   expiresAt: string;
+
+  /** The invite as a link to share, with `code` in its fragment. */
+  link?: string;
 }
 
 /** Redeems an invite; the signing key becomes the new member's root. */
@@ -589,6 +604,10 @@ export interface PatternIndexMember {
 
   /** How many keys act as this member, the root included. */
   keys: number;
+
+  /** From `linkKey`: what the linked key is, and when its link lapses. */
+  kind?: "root" | "device" | "cli" | "derived";
+  expiresAt?: string;
 }
 
 /**
@@ -603,6 +622,28 @@ export interface PatternIndexLinkKeyRequest {
 /** An admin admits a key as a new member, invited by that admin. */
 export interface PatternIndexAdmitKeyRequest {
   did: string;
+}
+
+/** An admin hides a pattern from discovery, or shows it again. */
+export interface PatternIndexSetHiddenRequest {
+  patternId: string;
+  hidden: boolean;
+
+  /** Required when hiding. Showing again never lists a pattern its gates hold. */
+  reason?: string;
+}
+
+/** The pattern's listing after the change; `changed` is false when it already was so. */
+export interface PatternIndexSetHiddenResponse {
+  patternId: string;
+  changed: boolean;
+  listed?: boolean;
+  listing?: PatternIndexListing;
+  hidden?: true;
+
+  /** Why and when an admin hid it; owner and admins only. */
+  hiddenReason?: string;
+  hiddenAt?: string;
 }
 
 /** An admin features or unfeatures a listed pattern. */
@@ -975,6 +1016,13 @@ export class PatternIndexClient {
   /** Who this client's key acts as. */
   whoami(): Promise<PatternIndexMember> {
     return this.#call("whoami", {});
+  }
+
+  /** Hides a pattern from discovery, or shows it again. Admin only. */
+  setPatternHidden(
+    request: PatternIndexSetHiddenRequest,
+  ): Promise<PatternIndexSetHiddenResponse> {
+    return this.#call("setPatternHidden", { ...request });
   }
 
   /** Features or unfeatures a listed pattern. Admin only. */

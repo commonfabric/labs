@@ -556,6 +556,16 @@ describe("PatternIndexClient", () => {
       },
       { fn: "whoami", call: (c) => c.whoami(), body: {} },
       {
+        fn: "setPatternHidden",
+        call: (c) =>
+          c.setPatternHidden({
+            patternId: "pat-1",
+            hidden: true,
+            reason: "spam",
+          }),
+        body: { patternId: "pat-1", hidden: true, reason: "spam" },
+      },
+      {
         fn: "setPatternFeatured",
         call: (c) =>
           c.setPatternFeatured({ patternId: "pat-1", featured: true }),
