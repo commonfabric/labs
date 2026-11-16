@@ -2590,7 +2590,13 @@ as an assumption, which is what the prototype does.
      at every path of what a slot reads, so a property that is absent
      reads the same default in a whole read as in a selection of it,
      which differs from today for the whole read. The alternative keeps
-     today's two answers.
+     today's two answers. One value of the prototype's fixtures is of
+     this kind: a path of a compiled-in callee's result that passes on
+     a path the caller left empty reads the callee's default where the
+     read is addressed at the path, in both runs, and nothing in
+     today's read of the whole result. Not about a per-element
+     construct: the same for a callee in an element body in each of
+     the three cases.
 150. **A stored `undefined`, and a default written at setup** (PL
      question 104). Today a stored `undefined` reads as an absent value
      does, and a pattern writes its own argument defaults into its
@@ -2662,8 +2668,9 @@ unless the entry says otherwise.
      question 108). By ruling the name is a reference to the result
      cell of the instance ([Decided](#decided)). Open: what a read
      through it is, of a path of the result that a cone of the
-     instance computes; no record of the plan holds it. Not about a
-     per-element construct.
+     instance computes; no record of the plan holds it. Question 170
+     has what a handler binding that captures the name holds. Not
+     about a per-element construct.
 
 **From the rulings on questions 145 and 152 to 156.** Each is what a
 ruling leaves undetermined, written into the documents as an
@@ -2703,9 +2710,29 @@ assumption.
      after the write; a second write through it in the same run finds
      no position; and a write through a reference whose key no
      position holds is refused. The alternative carries the reference
-     to the new key. The case is an array of plain values in place,
-     and the result of another per-element construct where the
-     upstream position holds a stored value; not an array of
+     to the new key. The prototype does as assumed, and a fixture of
+     it shows the consequences for a row over an array of plain values
+     in place:
+     - One write through the reference, as
+       `stop.key("done").set(true)`, commits. The row gets a new key
+       and loses its state: its state cells are those of the new key
+       and read their first values, and the cells of the old key stay
+       stored and unread. A cell elsewhere that held the element reads
+       as nothing, and `equals` with it is false in every row.
+     - A second write through the same reference in the same run finds
+       no position that holds the key. It is refused, and the event is
+       rejected with both writes.
+     - One `update` of both members commits. *Assumed:* an `update` is
+       one write, with the key resolved once.
+     - Over an array of references none of this arises: the same two
+       writes commit, and the row keeps its state.
+
+     No event of the prototype's corpus run is refused for a missing
+     key. The owner is asked whether a row is to lose its state on
+     every write to its element, and whether a handler that writes two
+     members in turn is to be rejected. The case is an array of plain
+     values in place, and the result of another per-element construct
+     where the upstream position holds a stored value; not an array of
      references.
 161. **How a reference by key is stored, and a key that returns** (PL
      question 113). *Assumed:* a link whose target is the address of
@@ -2714,7 +2741,14 @@ assumption.
      resolve one, and a read through it is pending there until the
      server's result arrives; and a reference whose key left resolves
      again when an equal value is added. The same two cases; not an
-     array of references.
+     array of references. Open with it, over the result of another
+     per-element construct: what names a collection that is the
+     assembled result of a `map` or a `flatMap` whose body computes
+     its values, where the output is interim and nothing is stored at
+     an address. *Assumed:* the instance and the index of the output,
+     and a read through the reference reads the output as a cone reads
+     another cone's output. The prototype passes such an element on as
+     its value.
 162. **The label of a reference by key** (PL question 114). The key is
      a salted hash of the value. *Assumed:* the stored reference
      carries the label of the run that wrote it and nothing for the
@@ -2727,8 +2761,27 @@ assumption.
      *Assumed:* a function body that reads the array through a handle
      and passes a member on holds one as well, and a handle that names
      a position by its path names the position and is not equal to a
-     reference by key. The case is an array of plain values in place;
-     not an array of references.
+     reference by key. The prototype does both as assumed, and its
+     corpus run shows a consequence of each:
+     - Under the first, a handler that reads two arrays, exchanges
+       members, and sets both writes into the first array references
+       by key into the second and then replaces the second. The
+       members that changed arrays read as nothing, where today's
+       runtime stores copies (`showcase/card-piles/main.tsx`; 0, 6 or
+       9 of its 28 values differ, by what `Math.random` draws). The
+       assumption of ES question 84 covers one array and not two.
+     - Under the second, a handler of a row that finds its element
+       with `items.key(i).equals(item)` finds nothing, where today
+       both name the position
+       (`dev/gideon-tests/test-handler-capture-key-equals.tsx`, 2
+       values).
+
+     The owner is asked whether a function body that reads a plain
+     value in place and writes it elsewhere stores a reference by key
+     or a copy, and whether `items.key(i)` is equal to the reference
+     by key of the element that stands at `i`. The case is an array of
+     plain values in place. Over an array of references both resolve
+     to the cell, and neither consequence arises.
 
 **From the rulings on questions 141 and 144 as the prototype implemented
 them, and from the pieces added to its executor.** Each is what its
@@ -2792,6 +2845,85 @@ leaves undetermined.
      an array of references; not about an array of plain values in
      place or the result of another per-element construct.
 
+**From the measurement of what today's runtime stores for a record
+in a list, and from the rulings on questions 145 and 152 to 157 as the
+prototype implemented them.** Each is what its notes 344 to 363 found
+undetermined, written into the documents as an assumption.
+
+168. **The document of a record that a function body writes into a
+     list** (PL question 118). Today's runtime gives a record that
+     `set`, `push` or `addUnique` writes into a stored array a
+     document of its own and stores a link, and keeps in place a
+     record of the argument that an instance is created with, or of a
+     default. The documents have the compiled path store the first as
+     today, and the prototype does so. *Assumed:* the document is
+     named as a cell that the body creates with no explicit cause is,
+     so two writes of equal records make two documents, as today; a
+     record written through a handle that names one position gets a
+     document as well; and a record in a constant first value of a
+     state cell, or in a default that is read and not stored, is a
+     plain value in place. The alternative stores every record in
+     place. The question decides which case a stored list is of: an
+     array of references for a list that function bodies fill, and an
+     array of plain values in place for the records of an argument or
+     of a default. It does not arise for the result of another
+     per-element construct.
+169. **Which record holds the default that a stored reference to a
+     path bound by a call carries** (PL question 119). By ruling a
+     reference to a path of its argument that a compiled-in callee
+     passes on carries the callee's declared default, and no record of
+     the plan gives the runtime the schema the callee declares for the
+     path. *Assumed:* value code supplies it: value code of the callee
+     hands the runtime the reference with the default when it stores
+     it, and a read by code of the caller of such a path of the
+     callee's result is written as a read of the caller's slot with
+     the callee's default. The alternative gives `Output`, or the
+     slot, a member for it. The prototype does the first half. The
+     same in an element body in all three cases.
+170. **What `Binding.state.place` holds for a state path bound to the
+     name of `[SELF]`** (PL question 120). By ruling the name is a
+     reference to the result cell, and `place` names a slot, an
+     output, a stream, or a constant. *Assumed:* the entry holds a
+     mark that the path is the result cell, in a form no record
+     defines, and the runtime hands the handler a reference to the
+     result cell. The alternative gives the plan a slot root for the
+     result of the instance. The prototype hands the handler nothing.
+     The same for a binding in an element body in all three cases.
+171. **How value code compares two references** (ES question 90).
+     `equals` compares what its operands name once their links are
+     resolved, and a value function cannot read through a reference.
+     *Assumed:* `ConeHost` has a member `equals(a, b)` that takes the
+     two references, and the cone instance depends on the links the
+     resolution crossed. The alternative makes `equals` an operation
+     of the plan with an output of its own. The same over an array of
+     references, where an element resolves to its cell; over an array
+     of plain values in place, where an element is a reference by key
+     and no key is resolved to a position; and over the result of
+     another per-element construct.
+172. **Which record gives the type of a position of a body's argument
+     that no slot names** (ES question 91). Whether an `identity`
+     position holds a handle or a reference stand-in follows from the
+     type the body declares, which for an entry of `Body.reads` is
+     `Slot.schema`. An entry of `Body.computed` has no schema.
+     *Assumed:* the runtime takes the type from the body's declared
+     parameter type at the entry's place, which the artifact holds
+     beside the plan. The alternative gives `ComputedInput` a schema
+     member. Not about a per-element construct.
+173. **A write below a place that holds nothing and is no state cell**
+     (ES question 92). By ruling a write below the root of a state
+     cell that holds nothing creates the document from the default
+     with the write applied. The ruling does not name another place,
+     such as a path of the argument at which nothing is stored and
+     whose schema declares a default array, onto which a handler
+     pushes. *Assumed:* the write starts from the default that a read
+     of the place gives, and the members taken from the default keep
+     the label of a default. The alternative starts from nothing.
+     Today's runtime has written the default into the argument
+     document by then, which this design is assumed not to do
+     (question 150). The prototype's executor starts from the empty
+     array, by a reading of its code with no test. The same for a
+     handle in an element body in all three cases.
+
 One question above is restated by the notes 307 to 320. For the
 assumption of ES question 83, in which transaction a first value that is not a
 constant is written, the prototype does the alternative: it computes
@@ -2840,7 +2972,9 @@ is when the key enters the element table, in all three cases.
   returns for a constructed value and for the constant paths of the
   result; in which transaction the first value of a state cell is
   written where it is not a constant; and what a write stores where a
-  value passed on unchanged refers into what the write replaces.
+  value passed on unchanged refers into what the write replaces. The
+  last covers one array; a body that exchanges members between two
+  arrays of plain values in place is under question 163.
 - **Defects of the prototype that the value comparison depends on:** a
   pattern compiled in at a call inside an initializer is evaluated in
   the caller's cone; the cone of an array written in place lists no
@@ -2871,7 +3005,21 @@ is when the key enters the element table, in all three cases.
   pattern from another module, and the executor has one instance over
   one store; and it has no `linksOf` and no debug-string built-in. The
   difference of `apps/person-workbench/main.tsx` and the 15 of
-  `product/primitives/demo/atoms-demo.tsx` are not examined.
+  `product/primitives/demo/atoms-demo.tsx` are examined at commit
+  `77993077e4`: the first was a defect of the executor, since fixed,
+  and the 15 come from constants the crate holds as `null`. At that
+  commit the executor names the document of a record written into a
+  list by a counter; stores in place a record that is set at one
+  position of an array and the records of an array that a body creates
+  a cell with; writes no default of the argument into the argument
+  document; forms the key of a plain value with no salt; passes an
+  element of a `map` or `flatMap` result whose body computes a value
+  on as that value; stores a member of handle type of a computed first
+  value as a value; and starts a `push` below an empty path of the
+  argument from the empty array. The crate marks no output of a
+  `computed` with a block body or of a sandboxed body that passes a
+  derived collection on, and writes a caller's read of a path that a
+  callee passes on with no default.
 
 The open questions each document ends with stay where they are.
 
