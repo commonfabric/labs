@@ -437,6 +437,8 @@ describe("pattern-publish", () => {
       );
 
       expect(report.localCheck).toMatchObject({ status: "skipped" });
+      if (report.localCheck.status !== "skipped") return;
+      expect(report.localCheck.reason).toContain("pattern-json-2");
     });
 
     it("compiles with the tests and data files under their common directory, as cf piece new does", async () => {
