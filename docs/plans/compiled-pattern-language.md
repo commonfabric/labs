@@ -485,9 +485,13 @@ TypeScript (`exec/executor.ts`) runs the two. A comparison
 (`compare/values.ts`) runs the scenario of a module on today's runtime
 and on the executor and compares the values. These are the prototype's
 notes 281 to 306. Notes 281 to 302 say what the executor needed that the
-documents did not give, and are written into the documents (the
-questions they raised are 141 to 146 below, and questions 81 to 84 of
-`execution-and-storage.md`). Notes 303 to 306 are the results here.
+documents did not give, and are written into the documents. Of the
+questions they raised, the place of a slot of `Body.reads`, a path that
+a call leaves out, the first value of a state cell, a moved element,
+and a cone with side-writes are ruled ([Decided](#decided)). Questions
+141 and 144 to 148 below, and questions 81 to 84 of
+`execution-and-storage.md`, are open. Notes 303 to 306 are the results
+here.
 Nothing was timed.
 
 ### What is compared, and what is not
@@ -604,8 +608,9 @@ first reading of the source and the two values and are not verified.
 No difference is classed as a gap of the design by itself. The gaps this
 round found are in what the executor needed in order to compute a value
 at all. Each showed as a wrong value or a failed run before the emitter
-or the executor supplied what was missing, and each is a question:
-141 to 146 below, and questions 81 to 84 of `execution-and-storage.md`.
+or the executor supplied what was missing. Five are ruled
+([Decided](#decided)), and the rest are questions: 141 and 144 to 148
+below, and questions 81 to 84 of `execution-and-storage.md`.
 The one design difference in the table is by the documents: in
 `patterns/dev/gideon-tests/test-ifelse-both-branches.tsx` today's
 runtime evaluates both branches of an `ifElse` and the executor the
@@ -641,8 +646,10 @@ The executor counted where its run kept to the plan.
 - **What the plan lacked.** 38 of the 446 cones of an element body list
   no slot of root `element` or `index` (question 141). 355 uses of a
   body that is no handler have 1,093 slots whose place in the argument
-  the plan does not give (question 142). Of 1,399 state cells with a
-  function for their first value, 3 read a slot (question 139). 200
+  the crate's plan does not give; by ruling each entry of `Body.reads`
+  holds it. Of 1,399 state cells with a function for their first
+  value, 3 read a slot, through no cone; by ruling such a first value
+  is computed by a cone and written through a write edge. 200
   state entries of bindings hold `null` for a constant that is not a
   literal written at the binding, which is a defect of the crate.
 
@@ -676,9 +683,11 @@ the state documents of operations, the stream documents, and the
 instances document, which `execution-and-storage.md` §4.1 lists and the
 executor does not make. It is not a bound on state cells. The executor
 makes a document for every state cell when the instance is created or
-the element key enters, where `execution-and-storage.md` has none for a
-cell that is never assigned and declares no value (its §4.1, question
-83).
+the element key enters. By ruling a state cell whose first value is a
+constant, or that is declared with no value, has no document until
+something writes it (`execution-and-storage.md` §4.1), so the design
+stores fewer state cell documents than the executor counted. No figure
+is derived for the difference.
 
 The derived counts of [Storage](#storage) stay the figures to compare
 with today's, and the executor's count does not replace them. It bears
@@ -690,13 +699,14 @@ on them in two ways.
   after the events. The module sets and the points in the scenario
   differ, so this is no check of either bound.
 - **The "least" bound counts no state cell,** because the document of a
-  state cell is written when the cell is first assigned. A cell whose
-  declaration gives it a value has a document from its creation, if
-  question 83 of `execution-and-storage.md` is answered as assumed.
-  The least bound then rises by the number of such cells, which the
-  derivation did not count. The executor's 4.8 state cell documents
-  per module are the size of that term for these scenarios, element
-  bodies of two elements included.
+  state cell is written when the cell is first written. By ruling that
+  holds for a cell whose first value is a constant as well. A cell
+  whose first value is not a constant has a document once that value
+  is written, and the least bound rises by the number of such cells
+  whose first value has been written, which the derivation did not
+  count. In the prototype's corpus 3 of 1,399 first values read a
+  slot. The executor's 4.8 state cell documents per module count
+  every state cell, so they are no measure of that term.
 
 ## Rules of this work
 
@@ -757,6 +767,17 @@ is relitigated.
   transaction of its own, which runs as the demanding principal.
 - A conflict on a derived write withdraws that write alone, and the rest
   of the cause's transaction commits.
+- A cone with side-writes is of one of two kinds. Where its writes go to
+  a small, fixed set of targets that the compiler names, the cone is an
+  ordinary node, and its write targets count as its outputs for demand:
+  a demanded reader of a written cell demands the cone first, a reader
+  that passes the cell on by reference included. Where the write set is
+  dynamic or very large, the cone is a materializer: it is evaluated
+  eagerly whenever one of its inputs changes, as a rule after the rest
+  of the wave has been evaluated, and its writes make their readers
+  stale, which a further wave evaluates.
+- Each entry of `Body.reads` holds the path in the body's argument at
+  which the slot's value is placed, as an entry of `Body.computed` does.
 - A handling is identified by the receipt, which leaves the acting
   principal out.
 - An event is routed to an instance that is not loaded through a stream
@@ -833,6 +854,11 @@ is relitigated.
   a property that declares a default gets a link, not a copy, and the
   link holds the schema with the default, so the callee reads the
   default where nothing is stored, whether or not it declares one.
+- Where the call of a pattern compiled into another leaves out a path
+  for which the callee declares a default, the compiler writes the
+  callee's declared default into the plan as a constant for that path.
+  A path that the call binds to a slot of the caller at which nothing
+  is stored also reads the callee's default, as it does today.
 - A read of a default carries no integrity. Where a stored object has
   an absent property and a default fills it, the defaulted part carries
   the empty integrity, not the object's claims. The specification has no
@@ -956,6 +982,17 @@ is relitigated.
   fine, and the runtime decides it by a rule about size.
 - A state cell's identifier derives from its cause, with the name taken from
   the assigned variable as the transformer's `.for(...)` does.
+- A first value of a state cell that is a constant is the default of the
+  cell's schema. Nothing is written when the cell is created, and a read
+  of a cell that holds nothing reads the default, with the integrity of
+  a default. A first value that is not a constant is computed by a cone
+  and written once, when the cell is first created, through a write edge
+  to the state cell, so the stored value has the label and the integrity
+  of that run. Writing a constant first value at creation as well is
+  legal and not required. A state cell with a constant first value has
+  no document until something writes it. The owner named both forms and
+  delegated the choice to the one of lower complexity; this is that
+  choice.
 - A `map` element is keyed by its cell identity where the collection
   holds a reference, and by its value otherwise. In both cases the key
   also holds the count of earlier occurrences of the same identity or
@@ -991,6 +1028,18 @@ is relitigated.
   is legal, and where two equal values stand in a collection and the
   first is removed, the state that remains is that of the first
   occurrence.
+- When an element moves, the runtime moves what the element's key
+  holds, its stored results included, to the new position. It evaluates
+  nothing for the element except the nodes that read the index.
+  Evaluating again is permitted, and moving is preferred.
+- An element of a collection that is the result of a per-element
+  construct, such as a `map` or a `filter`, is keyed by the key of the
+  upstream element it came from. A change of one upstream element then
+  evaluates that element's nodes through a chain of such constructs,
+  and no other element's. Where the source is plain values that one
+  computation produces as a whole array, an implementation may evaluate
+  the whole collection again on each change in place of keeping results
+  per element, and the observable result is the same.
 - Stored per-element state is not carried over from the current runtime.
 
 **Labels**
@@ -1529,8 +1578,6 @@ as an assumption.
     per element key. *Assumed:* the first governs, so two occurrences
     that bind equal state from a `computed` or a `lift` have one
     stream.
-137. **The key of an element of a `filter` result** (PL question 91).
-    *Assumed:* it keeps the key it has in the source, count included.
 138. **A write row whose template is empty beside the coordinator's
     join** (PL question 96). Where every clause a run stores for a
     handler's write is of the `map` coordinator's join, the template
@@ -1540,20 +1587,6 @@ as an assumption.
     among the deliberate exceptions. The alternatives count it as an
     exception by ruling, or mint on every `derive` of a write edge.
     One fixture has such a row and the corpus has none.
-139. **The value a declaration of the reactive tier gives a state
-    cell** (PL question 97). No record of the plan holds it, so no
-    template labels the stored first value of a cell declared with a
-    value from the index or another input. *Assumed:* a declared
-    value that is not a constant is a write edge to the state cell,
-    performed once when the cell is first created. The alternative
-    refuses such a declaration in the reactive tier. No record holds a
-    constant first value either. *Assumed:* a first value that reads no
-    slot is in the value code, as a function per state cell, and has no
-    label. The prototype emits such a function for every state cell and
-    no write edge: of 1,399, 3 read a slot, through no cone, so that no
-    record lists the read and no template has its label. The question
-    is where the plan holds the first value, and what the label of one
-    computed from an input is.
 140. **The transaction that creates an instance outside a handler**
     (ES question 77). *Assumed:* one transaction that writes the
     argument and evaluates nothing, so that a new instance settles in
@@ -1571,36 +1604,45 @@ as an assumption, which is what the prototype does.
      and its `element` steps name the collections. Open beside the
      member itself: whether it holds the `site` steps or the
      collections alone.
-142. **Where a slot of `Body.reads` sits in the body's argument** (PL
-     question 99). For a body that is no handler, the root and the path
-     of a slot are those of what the caller passed. *Assumed:* the
-     compiler emits the place of each such slot beside the plan. The
-     alternative gives an entry of `Body.reads` an `at`, as an entry of
-     `Body.computed` has.
-143. **A path that the call of a pattern compiled in leaves out** (PL
-     question 100). *Assumed:* it reads the default of the callee's
-     declared argument type, held in the value code; and a path bound
-     to a slot of the caller at which nothing is stored reads the
-     default of the caller's schema, not the callee's.
 144. **Who places a stream in a computed value** (ES question 78).
      *Assumed:* the value function, through a fourth function of
      `ConeHost`, and `Binding.result` describes the positions. The
      alternative has the runtime fill in the paths of `Binding.result`,
      which a path with `*` and a path below a conditional do not
      determine.
-145. **A moved element that is passed on by reference** (ES question
-     79). For a plain value stored in place, the row holds a link to
-     the position, which a move gives another value. *Assumed:* a cone
-     instance that passes such an element on is evaluated again when
-     the address its element slot was bound to changed. This evaluates
-     more on a move than the ruling on the index names. The alternative
-     has the row hold the value and evaluates nothing.
-146. **What demands a cone whose only effect is a side-write** (ES
-     question 80), where the result passes the written cell on by
-     reference and no output of the cone is kept. *Assumed:* demand on
-     the kept path that passes the cell on is demand on the cones of
-     the pattern's own body that write it. The alternative leaves the
-     cone to the first read of the cell.
+145. **What a cone stores that passes on an element that is a plain
+     value** (ES question 79). By ruling a move moves the results of the
+     element's key and evaluates nothing for the element. A link to the
+     position of a plain value stored in place names another value
+     after a move. *Assumed:* such a cone stores the value in the
+     element's result, and no link to the position, so that the row
+     shows the right value once its results have moved with the key.
+     The alternative stores the link and has the move rewrite it.
+146. **Which cone with side-writes is of which kind** (ES question 80).
+     By ruling a cone with a small, fixed set of write targets is an
+     ordinary node and one whose write set is dynamic or very large is
+     evaluated eagerly. *Assumed:* the compiler decides the kind from
+     the footprint, as FA §6.3 has it: an ordinary node where every
+     write target is a statically named slot, and a materializer where
+     a target is reached through data (a `*`, a computed path, a handle
+     read from a value). No number is set for "very large": no count of
+     static targets makes a cone a materializer.
+147. **The key of an element that a `flatMap` contributes** (PL question
+     101). By ruling an element of the result of a per-element
+     construct is keyed by the key of the upstream element it came
+     from, and a `flatMap` can yield several elements for one upstream
+     element. *Assumed:* the key is the upstream key together with the
+     count of earlier elements that the same upstream element
+     contributed.
+148. **A default of the caller's place and one of the callee, for one
+     path** (PL question 102). By one ruling a default belongs to the
+     stored place, and by another a path bound to a slot of the caller
+     at which nothing is stored reads the callee's default. *Assumed:*
+     where the place the path resolves to declares a default, the read
+     gives that one, as a read through a link does, and the callee's
+     default applies where the place declares none. The alternative
+     gives the callee's default wherever the callee declares one. Not
+     verified: which of the two today's runtime gives.
 
 ## Open, and not needing the owner
 
@@ -1640,9 +1682,9 @@ as an assumption, which is what the prototype does.
   value-code module, with one function per source module so that a
   name of module scope resolves as in the source; what a value function
   returns for a constructed value and for the constant paths of the
-  result; when the document of a state cell with a declared value is
-  written; and what a write stores where a value passed on unchanged
-  refers into what the write replaces.
+  result; in which transaction the first value of a state cell is
+  written where it is not a constant; and what a write stores where a
+  value passed on unchanged refers into what the write replaces.
 - **Defects of the prototype that the value comparison depends on:** a
   pattern compiled in at a call inside an initializer is evaluated in
   the caller's cone; the cone of an array written in place lists no
