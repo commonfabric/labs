@@ -267,11 +267,17 @@ observation class, does not instantiate a pattern or bind a handler in a
 function body, and does not evaluate the debug strings. The record of a key of a
 list (`elementById`) is a place of its own, named by the list and the key, which
 has a document once something writes it, and `addUnique` and `removeByValue`
-change the list's membership by reference. A record that a function body puts
-into an array through a handle, with `push`, `addUnique` or a `set` of the list,
-gets a document of its own, and the list stores a link to it, as today's runtime
-does (`anchorValueAsEntity` in `runtime/runner/src/data-updating.ts`): the list
-is then an array of references. A record of the argument the instance is created
+change the list's membership by reference. The record is a cell of its own and
+no member of the list until a reference to it is added (ruling Z23): a write
+through the handle is a write to the record, at no position of the list, and
+makes no reader of the list stale. The plan has no record that names it: the
+body's write edge and envelope are at `*` below the list, as
+`footprint-analysis.md` §7 records the handle, and the executor reads them for
+its count of covered writes alone. A record that a function body puts into an
+array through a handle, with `push`, `addUnique` or a `set` of the list, gets a
+document of its own, and the list stores a link to it, as today's runtime does
+(`anchorValueAsEntity` in `runtime/runner/src/data-updating.ts`): the list is
+then an array of references. A record of the argument the instance is created
 with, and a plain value that is no record, stay in the list's document, which is
 the case of an array of plain values in place. From the repository root:
 

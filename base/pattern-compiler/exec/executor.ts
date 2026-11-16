@@ -677,11 +677,16 @@ export class Handle {
   }
 
   /**
-   * The record of a key of this list (`elementById` of a cell): a place
-   * named by the list and the key, which is no position of the list. A
-   * body makes the record a member with `addUnique`. A write through the
-   * handle counts as a write at `*` below the list, which is how
-   * `footprint-analysis.md` §7 records it.
+   * The record of a key of this list (`elementById` of a cell): a cell of
+   * its own, named by the address of the list and the key, which is no
+   * member of the list until a body adds a reference to it, as
+   * `addUnique` does (ES §2.4, "The record of a key of a list"; ruling
+   * Z23). A write through the handle is a write to the record: it is at
+   * no position of the list and makes no reader of the list stale. The
+   * plan has no record for it. `footprint-analysis.md` §7 records the
+   * handle at `*` below the list, so the handle has that path for the
+   * count of the writes that a write edge or an envelope of the body
+   * covers (`Instance.written`), and for nothing else.
    */
   elementById(key: unknown): Handle {
     if (this.target instanceof StreamRef) return this;

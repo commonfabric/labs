@@ -1,7 +1,13 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { type Artifact, coversPosition, Host, Instance } from "../executor.ts";
+import {
+  type Artifact,
+  coversPosition,
+  Handle,
+  Host,
+  Instance,
+} from "../executor.ts";
 import { keySegment, Ref, Store } from "../store.ts";
 
 // The executor of `execution-and-storage.md` (ES) on the artifacts of the
@@ -941,6 +947,82 @@ describe("the record of a key", () => {
     expect((instance.result() as Pins).pins).toEqual([
       { id: "b", title: "second" },
       { id: "a", title: "later" },
+    ]);
+  });
+
+  // Ruling Z23: the record is a cell of its own, named by the address of
+  // the list and the key, and it is no member of the list until a
+  // reference to it is added. The list holds references to the records,
+  // which is the case of an array of references.
+  it("is a cell of its own, named by the address of the list and the key", async () => {
+    const instance = new Instance(await artifactOf("keyed"), { note: "n" });
+    const list = instance.stateCell(
+      0,
+      new Host(instance, new Map(), undefined),
+    );
+    const pins = new Handle(instance, list, undefined, undefined, []);
+
+    const record = pins.elementById("z");
+
+    // It has no document until something writes it.
+    expect(instance.documents()["keyed element"]).toBe(undefined);
+    expect(record.get()).toBe(undefined);
+    record.set({ id: "z", title: "t" });
+    expect([...instance.store.docs.keys()]).toContain(
+      `keyed:${list.doc}:[]:z`,
+    );
+    // The same key of the same list is the same cell.
+    expect(pins.elementById("z").equals(record)).toBe(true);
+    expect(pins.elementById("y").equals(record)).toBe(false);
+  });
+
+  it("is no member of the list, and a write to it makes no reader of the list stale, until it is added", async () => {
+    const instance = new Instance(await artifactOf("keyed"), { note: "n" });
+    const list = instance.stateCell(
+      0,
+      new Host(instance, new Map(), undefined),
+    );
+    const pins = new Handle(instance, list, undefined, undefined, []);
+    const record = pins.elementById("z");
+    const before = instance.counts.evaluations;
+
+    record.set({ id: "z", title: "t" });
+    instance.settle();
+
+    // The write is a write to the record and not at a position of the
+    // list: the list holds nothing, its document was not made, and the
+    // result, which read the list, is not evaluated again.
+    expect((instance.result() as Pins).pins).toEqual([]);
+    expect(instance.store.docs.has(list.doc)).toBe(false);
+    expect(instance.counts.evaluations).toBe(before);
+
+    // Once a reference to the record is a member, a reader that follows
+    // the reference reads the record, and a write to the record makes
+    // that reader stale.
+    pins.addUnique(record);
+    instance.settle();
+    expect((instance.result() as Pins).pins).toEqual([{ id: "z", title: "t" }]);
+    expect(instance.store.docs.get(list.doc)?.value).toEqual([
+      { $link: { doc: `keyed:${list.doc}:[]:z`, path: [] } },
+    ]);
+    record.key("title").set("u");
+    instance.settle();
+    expect((instance.result() as Pins).pins).toEqual([{ id: "z", title: "u" }]);
+  });
+
+  it("has, in the plan, a write edge and an envelope at `*` below the list", async () => {
+    const { plan } = await artifactOf("keyed");
+    const pin = plan.bodies.find((body) => body.name === "pin")!;
+
+    // `footprint-analysis.md` §7 records the handle at `*` below the
+    // list, and the plan has no record that names the record of a key:
+    // the executor counts a write through the handle as covered by that
+    // edge, and stores it in the record's own cell.
+    expect(pin.writes.map(({ target }) => [target.kind, target.path])).toEqual(
+      [["handle", ["*"]]],
+    );
+    expect(pin.envelopes.map(({ kind, path }) => [kind, path])).toEqual([
+      ["handle", ["*"]],
     ]);
   });
 
