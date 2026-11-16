@@ -952,6 +952,19 @@ as an assumption.
 137. **The key of an element of a `filter` result** (PL question 91).
     *Assumed:* it keeps the key it has in the source, count included.
 
+138. **The label of the index over plain values stored in place** (PL
+    question 94). The ruling on the label of the index speaks of
+    links. A position that holds a plain value in place has no link,
+    and the element key derives from the value, so which key stands
+    at which position depends on the values. *Assumed:* the label has
+    that each position holds something and of what kind, and not the
+    value. The alternative joins the value of every such position.
+139. **The label of the index over a derived collection** (PL question
+    95). *Assumed:* the label of the array of a `filter` or `flatMap`
+    result is the membership of the result, which holds what every
+    predicate read, joined with which reference each result position
+    holds. The alternative also joins the label of the source's array.
+
 ## Open, and not needing the owner
 
 - **The pattern closure's remaining gaps** (K12): which output or argument
