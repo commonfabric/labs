@@ -984,6 +984,23 @@ of section 11).
 - **A listed path that holds no stream under any selection** is not
   reported at run time.
 
+**The callee's default for a sandboxed body.** By ruling a path of the
+argument of a pattern compiled in that the call binds to a slot at
+which nothing is stored reads the callee's default
+(`plan-and-label-templates.md` §1.1). Expression code reads the slot
+with `host.slot` and takes the default, a constant of the value code,
+where the slot yields nothing. A sandboxed body of the callee finds the
+slot in the argument that the runtime builds from `Body.reads`, and an
+entry there holds no default. *Assumed* (question 85): the value code
+passes the defaults to `host.invoke`, as a list of places of the body's
+argument, each with the callee's default for it. The runtime puts the
+default at a listed place where the entry of the slot reads nothing and
+the place the slot resolves to declares no default of its own. The
+interface above does not show the list, and stays as it is until the
+question is decided. The alternative gives `ReadInput` a member for
+the default. "Nothing" is an absent value: a stored `null` is a value,
+and no default takes its place.
+
 **An output with entries below it.** A constructed value, such as a
 rendered tree, has an entry of `Plan.outputs` for its container and one
 for each member that is not constant (`plan-and-label-templates.md`
@@ -1139,6 +1156,33 @@ materializer where a target is reached through data: a `*`, a computed
 path, or a handle read from a value. No number is set for "very large",
 so no count of static targets makes a body a materializer.
 
+The kind is no member of the cone's record. A cone of the first kind
+has the edges in its `writes`, and a body of the second kind is the
+implementation of an `Operation` of kind `materializer` and is in no
+cone (`plan-and-label-templates.md` §3.11).
+
+Three things follow for the first kind.
+
+- **The writer stays demanded.** A reader that passes the cell on reads
+  nothing of it, so no change of what the writing cone reads makes the
+  reader stale. The demand the reader places on the write edges stands
+  for as long as its own path is demanded. When an input of the writing
+  cone changes, that cone instance is stale and demanded, and the
+  derivation transaction evaluates it, although no reader is evaluated.
+- **A cone with side-writes that nothing demands is not evaluated.**
+  Where none of its kept outputs is demanded, and nothing demanded
+  reads or passes on a target of its edges, its writes are not made.
+  The owner's words with the ruling are that the scheduler of today
+  often evaluates such nodes eagerly. Where it does, this is a
+  difference from today that the ruling makes. The prototype has a
+  fixture for the case and does not compare it with today's runtime.
+- **A cone of an element body that writes a cell outside the body** has
+  an instance per element key, and each instance has the write edge. A
+  demanded reader of the cell demands the edge of every key's
+  instance, because each of them can write the cell. This is the same
+  over an array of references, over an array of plain values in place,
+  and over the result of another per-element construct.
+
 Because the value code is the same on the server and on a client, and the
 order depends only on the plan, the demanded outputs and the values, two
 runtimes that start from the same state evaluate the same cone instances in
@@ -1178,6 +1222,16 @@ builds the slot part from the entries. For a handler, a slot of root
 below the second, at the slot's path. For another body the root and the
 path of a slot are those of what the caller passed, and the place is the
 entry's `at` alone.
+
+Two entries of `reads` can hold one slot at two places, where two
+inputs of the use are bound to one place, and the runtime puts the
+slot's value at both. An entry whose `at` holds `*` is placed at each
+child the path reaches, with what the table below gives its class. The
+container that holds the children is in the argument by the
+`enumeration` entry at the container's own place, which a footprint
+with an entry below `*` always has (`plan-and-label-templates.md`
+§2.5). By the row for `enumeration`, a member of that container is
+`undefined` unless such an entry materializes it.
 
 **What the argument holds at a path.** The runtime builds the argument entry
 by entry. What it puts at an entry's path depends on the entry's class, so
@@ -1379,6 +1433,21 @@ key:
   hold equal plain values at two addresses have two keys and can carry
   different labels, and the instantiation key of each is formed from the
   labels at its own addresses (`plan-and-label-templates.md` §1.3).
+
+**What an element slot reads, by case.** Over an array of references
+the element slots are bound to the cell the position links to, and a
+move changes no binding. Over an array of plain values in place the
+address of an element is its position, which a move changes. The value
+of such an element is the value its key is formed from, so the runtime
+can hold it in the element table with the key, and an evaluation for
+the key then reads no position. A move changes no value that an element
+slot yields, which is why nothing is evaluated for a moved element
+(section 2.6). The position stays in the table beside the key for what
+needs an address: a handler bound in the body is handed the element at
+its position and writes through it, and the label identifiers are read
+there. Over the result of another per-element construct the element
+slots read the results of the upstream body for the same key ("A chain
+of per-element constructs", section 2.6).
 
 **Which cones are the body's.** The cones of a collection's body are the
 cones of the plan whose `Cone.within` has the `element` step that names
@@ -1633,6 +1702,44 @@ after a move is then right, because the results move with the key. For
 a position that holds a link the address is the cell's, a move does not
 change it, and the result holds the link.
 
+The assumption decides what an element that is a plain value stored in
+place is to its readers: a reader holds a copy. The prototype's
+executor implements it, and four consequences show there. Each is about
+an array of plain values in place. None arises over an array of
+references, where the element is a cell, and over the result of another
+per-element construct each arises where the upstream position holds a
+value and not a link.
+
+- **Identity.** A cone that compares the element with a reference, as
+  `equals(selected, item)` does, holds a value with no address. A value
+  with an address and one without compare as two. The runtime of today
+  stores an element that is a record as a cell of its own and finds
+  the two equal. One value of the prototype's corpus run differs for
+  it (`patterns/dev/gideon-tests/test-cell-equals.tsx`).
+- **A handler bound in the body** is handed the element at its position
+  and writes through it, as section 2.5 has it. The position is kept
+  beside the key for this, so the handler and the cones of one row hold
+  two different things for one element.
+- **A member bound both ways.** A row that binds a member of the
+  element both ways, as `$checked={item.done}` does, holds a value at
+  the attribute, and a write from the rendered tree has no target.
+- **A stored reference to a member.** A handler that writes a member of
+  the element to a cell, as `center.set(stop.position)` does, stores a
+  reference to a position below the array (section 2.4). After the
+  element is removed the reference leads nowhere and the cell reads as
+  nothing, where today's run keeps the value. Four values of the
+  prototype's corpus run differ for it
+  (`patterns/examples/map-demo/map-demo.tsx`).
+
+The two alternatives of question 79 follow from these. In one, a plain
+value stored in place has an identity that `equals` and a stored
+reference can name, formed from the collection and the element's key,
+so a reference to the element stays right across a move and names
+nothing once the key has left. In the other, a reader of such an
+element always holds a copy, the handler and the stored reference of
+the last two items included, and the four consequences are the
+behavior of the language.
+
 **A chain of per-element constructs.** By ruling an element of a
 collection that is the result of a per-element construct is keyed by
 the key of the upstream element it came from
@@ -1643,6 +1750,19 @@ change of one upstream element makes stale the cone instances of that
 key in each body of the chain, by the first row of the table, and no
 cone instance of another key. For a `flatMap` the key is assumed there
 (its §8, question 101).
+
+The dependency is by key, and it is no edge of `Plan.edges`: a cone
+instance of the downstream body depends on the results of the upstream
+body for its key, at the paths its element slots read, through the
+`source` of kind `collection` of the downstream record
+(`plan-and-label-templates.md` §1.3). It makes the downstream cone
+instance stale as an edge does. When the source of the chain is
+reordered, each collection of the chain is assembled again, and no
+cone instance of an element body is evaluated unless it reads the
+index. This holds whether the source of the chain is an array of
+references or an array of plain values in place. An output that passes
+the result of a per-element construct on unchanged is assumed to carry
+the keys of its elements (its §8, question 107).
 
 **A whole array of plain values from one computation.** Where the
 source of a collection is plain values that one `lift` or `computed`
@@ -2260,6 +2380,18 @@ when the cell is created, and a read of the cell reads the default
 cell. Writing the constant at creation as well is legal and is not
 what this design does.
 
+While such a cell has no document, a read at any path of it reads the
+default at that path. A write of the whole value makes the document,
+also where the value equals the default. A write below the root has to
+start from something: `draft.key("text").set("x")` on a cell whose
+default is `{ text: "", tags: ["new"] }`, or a `push` onto a cell
+whose default is an array that is not empty. A document made from the
+written path alone would have `tags` read as nothing afterwards.
+*Assumed* (question 86): the runtime makes the document from the
+default and applies the write to it, so the members the write did not
+name are stored from then on. Their label is assumed in
+`plan-and-label-templates.md` §1.3 (its §8, question 109).
+
 A first value that is not a constant is computed by a cone and written
 once, through the write edge that `StateCell.first` names, and the
 document exists from that write on. *Assumed* (question 83): the edge
@@ -2269,15 +2401,26 @@ value that a handler wrote before that evaluation stays. The cone is of
 the first kind of section 2.3, so it is demanded when something
 demanded reads the cell or passes it on, and a handler that reads the
 cell has it evaluated before the body runs (section 1.4). For a cell of
-an element body the cone instance is that of the element key.
+an element body the cone instance is that of the element key, in each
+of the three cases of a per-element source. The prototype's executor
+does the alternative of question 83: it computes the value when it
+creates the cell, which for a cell of an element body is when the key
+enters the element table.
+
+*Assumed* (question 87): the edge stores the value the cone computed,
+and never a reference. Where the declaration gives the cell an input
+whole, as `Writable.of(start)` does, the rule that a value passed on
+unchanged is stored as a reference (section 2.4) would store a link to
+the input, and a write of the cell would land in the input.
 
 The compiled path therefore stores fewer state cell documents than a
-runtime that writes every first value. The prototype's executor makes
-the document of every state cell when the instance is created or the
-element key enters the element table, with or without a declared value,
-and the run of today's runtime it was compared with has the document of
-every state cell of the pattern's body once the instance has settled.
-Its document counts are of that behavior and not of this rule.
+runtime that writes every first value. The prototype's executor keeps
+the rule for a constant first value: it writes nothing when it creates
+such a cell, and the first write makes the document. Over its corpus
+run 98 state cells have a document after the scenario, where an
+executor that wrote every first value stored 898. The run of today's
+runtime it is compared with has the document of every state cell of
+the pattern's body once the instance has settled.
 
 A cell or a child instance that a handler of the instance created is not
 one of the instance's documents. It is reached through whatever link the
@@ -4977,6 +5120,26 @@ Added by the ruling that the scheduler is switched per space (section 9):
     the case. *Assumed* there too: the element's result holds what the
     upstream position holds, the value or the link to a cell, and no
     link to the upstream position.
+
+    The prototype's executor implements the assumption, and the values
+    of its corpus run agree with it but for five. Four consequences
+    show (section 2.6), each over an array of plain values in place.
+    A cone that compares the element with a reference holds a value
+    with no address, so `equals` finds two where today's runtime, for
+    which the element is a cell, finds one (one value differs). A
+    handler bound in the body is handed the element at its position
+    and writes through it, so the position is kept beside the key for
+    the handler alone. A row that binds a member of the element both
+    ways holds a value, and a write from the tree has no target. And a
+    handler that writes a member of the element to a cell stores a
+    reference to a position below the array, which leads nowhere once
+    the element is removed, where today's run keeps the value (four
+    values differ). The question for the owner is therefore wider than
+    what a row stores, and has two alternatives. Either a plain value
+    stored in place has an identity that `equals` and a stored
+    reference can name, formed from the collection and the element's
+    key; or a reader of such an element always holds a copy, and the
+    four consequences are the behavior of the language.
 80. **Which cone with side-writes is of which kind** (section 2.3;
     `scheduler-and-serving-loop.md` §7.1). By ruling a cone with a
     small, fixed set of write targets is an ordinary node whose targets
@@ -4987,6 +5150,45 @@ Added by the ruling that the scheduler is switched per space (section 9):
     materializer where a target is reached through data. The ruling's
     "very large" has no number, and no bound is set: a body with any
     number of static targets is of the first kind.
+85. **How a sandboxed body of a compiled-in callee is handed the
+    callee's default** (section 2.2; `plan-and-label-templates.md`
+    §1.1). By ruling a path of the callee's argument bound to a slot
+    of the caller at which nothing is stored reads the callee's
+    default. `ConeHost.invoke` takes a body and its computed inputs,
+    and the runtime builds the slot part of the argument from
+    `Body.reads`, whose entries hold no default. *Assumed:* the value
+    code passes `host.invoke` a list of places with the callee's
+    default for each, as the prototype does. The alternative gives
+    `ReadInput` a member for the default, so the plan holds it and the
+    value code passes nothing. The question is the same for a body
+    used in an element body, in each of the three cases of a
+    per-element source.
+86. **What a write below the root of a state cell that holds nothing
+    stores** (section 4.1). By ruling a state cell whose first value
+    is a constant has no document until something writes it, and the
+    default stands for the whole value. *Assumed:* a write at a path
+    below the root, a `push` included, makes the document from the
+    default with the write applied, as the prototype's executor does,
+    so the members the write did not name are stored from then on. The
+    alternative stores the written path alone, and a read fills the
+    other members from the default, which needs a rule for filling
+    the members of an object from a default declared for the whole
+    value. The label of the members taken from the default is question
+    109 of `plan-and-label-templates.md`. The question is the same for
+    a state cell of an element body in each of the three cases.
+87. **Whether a first value is stored as a value** (section 4.1). A
+    first value that is not a constant is computed by a cone and
+    written once. Where the declaration gives the cell an input whole,
+    as `Writable.of(start)` does, the cone passes the input on
+    unchanged. *Assumed:* the edge stores the value, and never a
+    reference, so a write of the cell does not land in the input. The
+    alternative follows the rule for a value passed on unchanged
+    (section 2.4) and stores a link. The runtime of today refuses a
+    reactive value in a cell constructor (`validateStaticData` in
+    `runtime/runner/src/cell.ts`), so no run of it shows either. For a
+    cell of an element body the question is the same in the three
+    cases; where the first value is the element itself, it meets
+    question 79 over an array of plain values in place.
 
 ### 11.2 For another document or the prototype
 
@@ -5369,7 +5571,11 @@ From the prototype's executor, for this document to decide:
     that computes the value, and only where the cell has no document.
     The alternative performs it when the instance is created or the
     element key enters the element table, which evaluates the cone
-    without demand.
+    without demand. The prototype's executor does the alternative, so
+    `cell(index)` in an element body holds there the index the element
+    had when its key entered. The two are the same choice over an
+    array of references, over an array of plain values in place, and
+    over the result of another per-element construct.
 84. **A written value that holds a reference into what the write
     replaces** (section 2.4). *Assumed:* a member that carries the
     address of a position inside the replaced path, and that the

@@ -1281,6 +1281,51 @@ argument at which nothing is stored, or a cell the caller bound, that
 declares a default wins over the callee's default, as it does in the
 runtime of today (section 2.5).
 
+Four things follow from the ruling and the rules above.
+
+- **The one record that shows the default.** The constant of a path the
+  call leaves out is in the value code. A handler binding of the callee
+  whose state captures the path holds it too, as it holds a constant
+  the call writes: for a callee that declares
+  `step: Default<number, 5>` and binds a handler over `step`, the
+  entry of `Binding.state` has the `place` `{ constant: 5 }`.
+- **How the callee names the path does not matter.** The default is
+  that of the path of the callee's declared argument type. It is read
+  where the callee destructures its parameter and where it reads a
+  member of a parameter it does not destructure, as `props.symbol`.
+- **A call that passes one value for the whole argument** writes no
+  path of it. Each path of the callee's argument then resolves to a
+  path below what the caller passed. Below a slot the second half of
+  the ruling applies. Below an output of the caller that holds nothing
+  at the path, the callee's default is read by the ruling on the order
+  of defaults: the callee is the reader, and no place along the chain
+  declares a default.
+- **Nothing stored means absent.** A stored `null` is a value, and no
+  default is read in its place. A stored `undefined` is assumed to
+  read as absent does (section 2.5; section 8, question 104).
+
+Two things the ruling does not determine.
+
+- **How a sandboxed body of the callee is handed the default.** A body
+  of the callee that reads a path bound to a slot at which nothing is
+  stored has to find the callee's default in its argument, and an
+  entry of `Body.reads` holds a slot and a place and no default.
+  `execution-and-storage.md` §2.2 assumes that the value code passes
+  the default to `host.invoke` (its §11, question 85). The alternative
+  gives `ReadInput` a member for it.
+- **A callee that passes the path on by reference** reads nothing of
+  it. Where a path of the callee's result passes on such a path of its
+  argument, and the path is bound to a slot of the caller at which
+  nothing is stored, the result holds a link to the caller's slot. A
+  reader of that path of the result resolves the link and reads the
+  default the place declares, or nothing. The prototype observed the
+  runtime of today, for which the callee is an instance with an
+  argument schema, to show the callee's default there. *Assumed*
+  (section 8, question 106): the callee's default is applied to a read
+  that a cone or a body of the callee makes and to nothing else, so a
+  path passed on by reference holds the link alone, and its reader
+  does not read the callee's default.
+
 **Where a slot of `Body.reads` sits in the body's argument.** By ruling
 each entry of `Body.reads` holds the path in the body's argument at
 which the slot's value is placed, as an entry of `Body.computed` does.
@@ -1299,6 +1344,33 @@ slot part of the argument from the entries
 (`execution-and-storage.md` §2.4). The place is part of the plan, and so
 of its hash. Where this document says "a slot of `Body.reads`", it means
 the slot that an entry names.
+
+Two entries can name one slot. Where two inputs of one use of a body
+are bound to one place, the list has an entry for each, with the same
+slot and two places, and the runtime puts the slot's value at both. The
+body's template names the slot once (section 3.2, "The inputs of a
+`derive`").
+
+An entry whose `at` holds `*` stands for each child the path reaches,
+as its slot does (section 2.5). The runtime puts what the entry's class
+gives at the place of each child. The container that holds the children
+is in the argument by the `enumeration` entry at the container's own
+place, which a footprint with a slot below `*` always has (section 2.5,
+"A path that holds `*`"; `execution-and-storage.md` §2.4).
+
+**The name a pattern binds to `[SELF]`.** A pattern can bind a name to
+the well-known key `[SELF]` of its input parameter
+(`language-subset.md` §4.1 and §4.6). In the runtime of today the name
+is a reference to the pattern's own result (`factoryFromPattern` in
+`runtime/runner/src/builder/pattern.ts`). No slot root names the result
+of the instance, and no record holds the name. *Assumed* (section 8,
+question 108): in value code the name is a reference to the result cell
+of the instance, which the runtime supplies. A cone can place it in a
+value, where the runtime stores a link to the result, and can pass it
+to a body as a reference. Passed on, it adds no label, as a handle
+passed on without a read adds none. What a read through it is, of a
+path of the result that a cone of the instance computes, has no record
+and is open with the question.
 
 **The order of `Binding.result`.** The paths are in source order: the
 order in which the positions that hold the stream are written in the
@@ -1823,7 +1895,17 @@ this.
   for any slot whose schema declares a default (sections 2.5 and 5.2).
   The read has the confidentiality of the slot and the empty integrity,
   as every read of a default has. A constant is a static initializer, as
-  `language-subset.md` defines it for a default.
+  `language-subset.md` defines it for a default. A read at a path below
+  the root of such a cell reads the default at that path. A write of
+  the whole value makes the document, also where the value equals the
+  default. A write below the root of a cell that holds nothing has to
+  start from something, and the ruling does not say from what.
+  *Assumed* (`execution-and-storage.md` §4.1 and its question 86;
+  section 8, question 109): the document is made from the default with
+  the write applied, so the members the write did not name are stored
+  from then on. They are stored by that write and carry the label of
+  its edge, with the integrity of that run, and no longer the empty
+  integrity of a default.
 - **A first value that is not a constant** is computed by a cone and
   written once, when the cell is first created, through a `WriteEdge`
   with target `state` among the `writes` of that cone, which
@@ -1831,7 +1913,17 @@ this.
   index slot among them for `cell(index)`. The label of the stored first
   value is the edge's template, so the value has the integrity of the
   run that computed it. A change of what the cone read after the cell
-  exists makes no write.
+  exists makes no write. The cone needs no entry of `Plan.outputs`: the
+  edge can be all it produces, and its target counts as its output for
+  demand (section 3.11). For a cell of an element body the cone
+  instance is that of the element's key, over an array of references,
+  over an array of plain values in place, and over the result of
+  another per-element construct alike, so `cell(index)` holds the index
+  its element has at the evaluation that performs the edge. *Assumed*
+  (`execution-and-storage.md` §4.1 and its question 87): the edge
+  stores the computed value and never a reference, also where the
+  declaration gives the cell an input whole, as `Writable.of(start)`
+  does.
 - **Writing a constant first value at creation as well is legal** and
   is not required. A value written that way has the integrity of the
   run that wrote it. This design does not write it, and no record of
@@ -1840,7 +1932,12 @@ this.
 The runtime of today holds the first value in the first form: the cell
 constructor merges the value into the schema it creates the cell with,
 as the schema's default (`createWithDefault` in `cellConstructorFactory`,
-`runtime/runner/src/cell.ts`, through `schemaWithDefaultAndScope`).
+`runtime/runner/src/cell.ts`, through `schemaWithDefaultAndScope`). It
+has no second form: the constructor refuses a value that holds a cell
+or a reactive value (`validateStaticData` in the same file). A first
+value computed from an input or from the index is therefore new with
+this design, and no run of the runtime of today exists to compare it
+with.
 
 `execution-and-storage.md` §4.1 says in which transaction the edge of a
 first value that is not a constant is performed.
@@ -1966,6 +2063,37 @@ Consequences, which later sections rely on:
   collection indexes hold one contribution per key (sections 3.8 and
   3.17). `reduce` is the exception: its steps are ordered and are not
   keyed (section 3.13).
+- **A source that is a collection is a dependency per key.** This is
+  the case of the result of another per-element construct, over an
+  upstream source of any of the three cases. `Plan.edges` lists no
+  edge between the cones of two bodies of a chain. The `source` of
+  kind `collection` of the downstream record is the dependency: a cone
+  instance of the downstream body for a key depends on the results of
+  the upstream body's cone instances for the same key, at the paths
+  its element slots read. A change of such a result makes it stale as
+  a change over a `ConeEdge` does, and the upstream cone instances of
+  the key are evaluated first when they are stale. No cone instance of
+  another key is made stale by it.
+- **An output that passes a derived collection on unchanged.** A cone
+  can return the assembled result of a per-element construct as it is,
+  as a promoted `computed` does whose value is the result of a
+  `filter`, and a `map` can be applied to that output. The record of
+  that `map` has a `source` of kind `output`, an array the instance
+  computed, which the start of this section keys by what its positions
+  hold. Over an upstream array of references the positions hold the
+  links, and the keys are those of the upstream elements either way.
+  Over an upstream array of plain values in place the positions hold
+  values (`execution-and-storage.md` §2.6), so the elements would have
+  the right key and no place: a handler of the body that passes its
+  element to `remove` on the source finds nothing to remove.
+  *Assumed* (section 8, question 107): an output whose value is the
+  assembled result of a collection of the plan, unchanged, carries the
+  keys of its elements and the places they came from, and a construct
+  applied to the output has the element table of that collection. No
+  record of the plan says so: the runtime recognizes the array that a
+  cone returns as the one it assembled. The alternative records it, as
+  a `source` of kind `collection` on the downstream record or as a
+  member of the `Output`.
 
 **Identifiers of things a function body creates.** A site in a body
 (`BodyCall`) can run any number of times. Each occurrence is identified as
@@ -5567,6 +5695,26 @@ no static target", below). *Assumed*
 (`execution-and-storage.md` §11, question 80): which kind a cone is
 follows from the footprint alone, by `footprint-analysis.md` §6.3, and
 no number of static targets makes a cone a materializer.
+
+**No member of `Cone` holds the kind.** The kind is read from records
+the plan has. A cone of the first kind is a cone whose `writes` hold an
+edge that a body of the cone makes. A body of the second kind is in no
+cone: it is the `implementation` of an `Operation` of kind
+`materializer`, and a cone that uses its value reads a slot of root
+`operation` ("What a materializer returns", below). A member of the
+cone that says which kind it is, as `Cone.sideWrites` of the
+prototype's plan does, would repeat what `Cone.writes` and
+`Plan.operations` say, and the record has none. The edges of
+`Cone.writes` that expression code makes, such as the first value of a
+state cell, name their target and are of the first kind. The
+prototype's corpus plans have 14 cones of the first kind and 33
+materializers among 3,717 cones. Every one of the 33 is a `lift` that
+creates a cell under a cause computed from data and gives it a value,
+and no computation of the corpus writes through a `*`, a computed path,
+or a handle read from a value. The two kinds, and how the kind is read,
+are the same for a cone of an element body over an array of references,
+over an array of plain values in place, and over the result of another
+per-element construct.
 
 **What the report of a cycle names.** `side-write:cycle`
 (`language-subset.md` §10.3) is computed from `Plan.edges`. It is
@@ -11003,3 +11151,53 @@ this document made.
      is the array of references alone, so that per-element state
      stored there is found again; that would conflict with the ruling
      that stored per-element state is not carried over.
+106. **A path of a compiled-in callee's result that passes on a path
+     the caller left empty** (for the project owner). By ruling a path
+     of the callee's argument that the call binds to a slot of the
+     caller at which nothing is stored reads the callee's default.
+     Where the callee passes the path on by reference and reads
+     nothing of it, the result holds a link to the caller's slot, and
+     the prototype observed the runtime of today to show the callee's
+     default to a reader of that path. *Assumed:* the callee's default
+     is applied to a read that a cone or a body of the callee makes
+     and to nothing else, so the reader of the result reads the
+     default the place declares, or nothing (section 1.1). The
+     alternative has the result hold what today's shows, which needs
+     the link to carry the callee's schema or the callee's default to
+     be written. The question does not concern a per-element construct
+     and is the same inside an element body in each of the three
+     cases.
+107. **An output that passes a derived collection on unchanged** (for
+     the project owner). The case is the result of another per-element
+     construct that a cone returns as it is, and a per-element
+     construct applied to that output; it matters where the upstream
+     source is an array of plain values in place, because the result
+     then holds values and no links, and nothing is open where the
+     upstream source is an array of references. *Assumed:* such an
+     output carries the keys of its elements and the places they came
+     from, and the construct applied to it has the element table of
+     the collection the cone returned; no record says so, and the
+     runtime recognizes the array it assembled (section 1.3). The
+     alternative records it: a `source` of kind `collection` on the
+     downstream record, or a member of the `Output`. In the
+     prototype's corpus run, `patterns/examples/todo-list/todo-list.tsx`
+     differed in 6 values without it.
+108. **The name a pattern binds to `[SELF]`.** No record of the plan
+     holds it. *Assumed:* a reference to the result cell of the
+     instance, which the runtime supplies to value code and which adds
+     no label where it is passed on (section 1.1). Open: what a read
+     through it is. One module of the prototype's corpus run,
+     `patterns/dev/test/input-self/subjects.tsx`, holds in its result a
+     reference to the result, and a read of it that follows the
+     reference differs between the two runs.
+109. **The label of what a write below the root of an empty state cell
+     takes from the default** (for the project owner). By ruling a
+     state cell whose first value is a constant has no document until
+     something writes it. `execution-and-storage.md` §4.1 assumes
+     that a write below the root makes the document from the default
+     with the write applied (its question 86). *Assumed:* the members
+     taken from the default are stored by that write and carry the
+     label of its edge, with the integrity of that run (section 1.3).
+     The alternative stores them with the label of a default, the
+     empty integrity. The question is the same for a state cell of an
+     element body in each of the three cases.

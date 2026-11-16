@@ -1424,7 +1424,10 @@ second and third rows of the table are those two kinds. *Assumed*
 (`execution-and-storage.md` §11, question 80): the table decides the
 kind, so "too broad" means a write whose narrowest static path is a
 proper prefix of what is written (§6.2), and no number of static
-targets makes a body a materializer.
+targets makes a body a materializer. The plan needs no member that
+says which kind a cone is: the second row shows as edges in
+`Cone.writes`, and the third as an `Operation` whose body is in no cone
+(`plan-and-label-templates.md` §3.11).
 
 The classification is per body. A body with one write that is not static is
 a materializer for all of its writes, as a node with a declared envelope is
