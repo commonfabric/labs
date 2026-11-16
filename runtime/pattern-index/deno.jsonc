@@ -6,7 +6,8 @@
     "./deploy": "./src/deploy.ts",
     "./feedback": "./src/feedback.ts",
     "./front": "./src/front.ts",
-    "./http-fetch": "./src/http-fetch.ts"
+    "./http-fetch": "./src/http-fetch.ts",
+    "./membership": "./src/membership.ts"
   },
   "tasks": {
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
