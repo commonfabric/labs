@@ -378,6 +378,21 @@ describe("V2StorageTransaction", () => {
         expect(first.writes[0]).toBe(first.reads[0]);
       });
 
+      it("logs the same read entries when a later write rebuilds the log", async () => {
+        await seed("of:logged", { title: "seeded" });
+        const tx = edit();
+        expect(tx.read(at("of:logged", ["value", "title"])).ok?.value).toBe(
+          "seeded",
+        );
+        const before = tx.getReactivityLog();
+        expect(tx.write(at("of:other", ["value"]), 1).error).toBeUndefined();
+        const after = tx.getReactivityLog();
+
+        expect(after).not.toBe(before);
+        expect(after.reads).toEqual([logged]);
+        expect(after.reads[0]).toBe(before.reads[0]);
+      });
+
       it("logs frozen entries equal to the fields read and written on a manager with no interner", async () => {
         await seed("of:logged", { title: "seeded" });
         const withoutInterner = {

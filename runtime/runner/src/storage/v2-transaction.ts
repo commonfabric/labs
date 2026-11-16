@@ -1088,6 +1088,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       );
     }
     this.#scopeKeyIdentity = identity;
+    this.#readAddresses.length = 0;
   }
   #scopeKeyIdentity: ScopeKeyIdentity | undefined;
   #loadedUnderIdentity = false;
@@ -1105,6 +1106,15 @@ export class V2StorageTransaction implements IStorageTransaction {
 
   #branches = new Map<MemorySpace, SpaceBranch>();
   #readActivities: IReadActivity[] = [];
+
+  /**
+   * The log address of each read in `#readActivities`, at the same index, so
+   * that a log rebuilt after a later write takes each read's address from
+   * here rather than from the interner again. Cleared with the reads, and
+   * when the scope-key identity `#instanceOf()` resolves against is set.
+   */
+  #readAddresses: (IMemorySpaceAddress | undefined)[] = [];
+
   #potentiallyExternalReadActivities: IReadActivity[] = [];
 
   /**
@@ -1240,6 +1250,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     this.#state = { status: "done", result };
     this.#branches.clear();
     this.#readActivities.length = 0;
+    this.#readAddresses.length = 0;
     this.#potentiallyExternalReadActivities.length = 0;
     this.#writeAttemptLog.length = 0;
     this.#reactivityLogCache = undefined;
@@ -3673,19 +3684,21 @@ export class V2StorageTransaction implements IStorageTransaction {
     const shallowReads: IMemorySpaceAddress[] = [];
     let attemptedWrites: IMemorySpaceAddress[] | undefined;
 
-    for (const read of this.#readActivities) {
+    for (let index = 0; index < this.#readActivities.length; index++) {
+      const read = this.#readActivities[index];
       const meta = read.meta ?? EMPTY_META;
       const ignored = isReadIgnoredForScheduling(meta);
       const attempted = isReadMarkedAsAttemptedWrite(meta);
       if (ignored && !attempted) continue;
 
-      const address = this.#addressInterner.address(
-        read.space,
-        read.scope,
-        read.id,
-        this.#instanceOf(read.scope),
-        read.path,
-      );
+      const address = this.#readAddresses[index] ??= this.#addressInterner
+        .address(
+          read.space,
+          read.scope,
+          read.id,
+          this.#instanceOf(read.scope),
+          read.path,
+        );
 
       if (attempted) {
         attemptedWrites ??= [];
