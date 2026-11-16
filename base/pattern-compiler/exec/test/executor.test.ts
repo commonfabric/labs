@@ -75,10 +75,12 @@ describe("an instance", () => {
 
     instance.send(0, { text: "hello", extra: "x" });
 
+    // The record the handler pushed onto `log` has a document of its own.
     expect(instance.documents()).toEqual({
       "argument": 1,
       "result": 1,
       "state cell": 2,
+      "element record": 1,
     });
   });
 
@@ -1127,6 +1129,116 @@ describe("a cone with side-writes", () => {
       { name: "unseen", keys: [], value: "" },
     ]);
     expect(instance.documents()).toEqual({ "argument": 1, "result": 1 });
+  });
+});
+
+describe("a record a handler writes into a list", () => {
+  // `fixtures/list-records.tsx`: `stops` is a list of records and `names`
+  // a list of strings, both state cells, and the handler of a row stores
+  // `stop.position` in the cell `center`. Today's runtime gives a plain
+  // object that `Cell.set` or `Cell.push` puts into an array a document of
+  // its own (`anchorValueAsEntity` in `runtime/runner/src/data-updating.ts`).
+  const start = async () =>
+    new Instance(await artifactOf("list-records"), { note: "n" });
+  const held = (instance: Instance, cell: string) => {
+    const index = instance.plan.stateCells.findIndex(({ name }) =>
+      name === cell
+    );
+    return instance.store.docs.get(`state:${index}:[]`)?.value as unknown[];
+  };
+  const bindingOf = (instance: Instance, name: string) =>
+    instance.plan.bindings.findIndex((binding) => binding.name === name);
+
+  it("gets a document of its own where it is pushed, and the list stores a link", async () => {
+    const instance = await start();
+    instance.send(bindingOf(instance, "add"), { title: "a" });
+
+    const [slot] = held(instance, "stops") as { $link: { doc: string } }[];
+    expect(slot.$link.doc).toMatch(/^record:/);
+    expect(instance.store.docs.get(slot.$link.doc)).toEqual({
+      kind: "element record",
+      value: { title: "a", position: { lat: 1, lng: 7 } },
+    });
+    expect(instance.documents()["element record"]).toBe(1);
+  });
+
+  it("gets a document of its own where it is a member of a list that is set, and a record the list held keeps its document", async () => {
+    const instance = await start();
+    instance.send(bindingOf(instance, "add"), { title: "a" });
+    const [first] = held(instance, "stops") as { $link: { doc: string } }[];
+    instance.send(bindingOf(instance, "append"), { title: "bb" });
+
+    const slots = held(instance, "stops") as { $link: { doc: string } }[];
+    expect(slots.length).toBe(2);
+    expect(slots[0].$link.doc).toBe(first.$link.doc);
+    expect(slots[1].$link.doc).toMatch(/^record:/);
+    expect(slots[1].$link.doc).not.toBe(first.$link.doc);
+    expect(instance.documents()["element record"]).toBe(2);
+  });
+
+  it("gives two equal records two documents", async () => {
+    const instance = await start();
+    instance.send(bindingOf(instance, "add"), { title: "a" });
+    instance.send(bindingOf(instance, "add"), { title: "a" });
+
+    const slots = held(instance, "stops") as { $link: { doc: string } }[];
+    expect(slots[0].$link.doc).not.toBe(slots[1].$link.doc);
+  });
+
+  it("stores a pushed string in the list", async () => {
+    const instance = await start();
+    instance.send(bindingOf(instance, "name"), { name: "x" });
+
+    expect(held(instance, "names")).toEqual(["x"]);
+    expect(instance.documents()["element record"]).toBe(undefined);
+  });
+
+  it("keeps a reference to a member of the record readable after the record left the list", async () => {
+    const instance = await start();
+    instance.send(bindingOf(instance, "add"), { title: "a" });
+    instance.send(bindingOf(instance, "append"), { title: "bb" });
+    // The row of `bb` stores `stop.position` in `center`.
+    instance.send(bindingOf(instance, "go"), {});
+    const center = () => (instance.result() as { center: unknown }).center;
+    expect(center()).toEqual({ lat: 2, lng: 7 });
+
+    instance.send(bindingOf(instance, "removeLast"), {});
+
+    expect((instance.result() as { rows: unknown[] }).rows.length).toBe(1);
+    expect(center()).toEqual({ lat: 2, lng: 7 });
+  });
+
+  it("keeps the link to a record's document where a body writes the list back from handles to its positions", async () => {
+    const instance = await start();
+    instance.send(bindingOf(instance, "add"), { title: "a" });
+    instance.send(bindingOf(instance, "add"), { title: "bb" });
+    const before = held(instance, "stops");
+    const index = instance.plan.stateCells.findIndex(({ name }) =>
+      name === "stops"
+    );
+    const list = new Ref(`state:${index}:[]`, []);
+
+    // What `stops.set(stops.get().toReversed())` writes where `get` gives
+    // a handle for each position: a link to each position of the list.
+    const written = instance.detached(list, [
+      { $link: { doc: list.doc, path: ["1"] } },
+      { $link: { doc: list.doc, path: ["0"] } },
+    ]);
+
+    expect(written).toEqual([before[1], before[0]]);
+  });
+
+  it("leaves a record of the argument in the argument document", async () => {
+    const instance = new Instance(await artifactOf("small"), {
+      secret: "s",
+      note: "n",
+      flag: false,
+      items: [{ title: "a", done: false }],
+    });
+
+    expect(instance.store.docs.get("argument")?.value).toMatchObject({
+      items: [{ title: "a", done: false }],
+    });
   });
 });
 

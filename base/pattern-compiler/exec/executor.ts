@@ -385,7 +385,9 @@ export class Handle {
       this.target,
       this.instance.detached(
         this.target,
-        this.instance.stored(this.instance.returned(value)),
+        this.instance.anchored(
+          this.instance.stored(this.instance.returned(value)),
+        ),
       ),
     );
     return this;
@@ -413,12 +415,14 @@ export class Handle {
     const located = this.instance.store.locate(this.target, true);
     const held = Array.isArray(located.value) ? located.value : [];
     this.instance.written(this.key("*"));
-    this.instance.store.write(this.target, [
-      ...held,
-      ...members.map((member) =>
+    // A record that is pushed gets a document of its own, as a record in
+    // a list that is set does (`Instance.anchored`).
+    const pushed = this.instance.anchored(
+      members.map((member) =>
         this.instance.stored(this.instance.returned(member))
       ),
-    ]);
+    ) as unknown[];
+    this.instance.store.write(this.target, [...held, ...pushed]);
   }
 
   remove(member: unknown): void {
@@ -1330,6 +1334,36 @@ export class Instance {
   }
 
   /**
+   * A value in stored form that a body writes through a handle, with each
+   * record that sits in an array of it put into a document of its own and
+   * a link to that document in its place. Today's runtime does this for a
+   * plain object that `Cell.set`, `Cell.push` or `Cell.addUnique` puts
+   * into an array (`anchorValueAsEntity` in
+   * `runtime/runner/src/data-updating.ts`), so an element that a handler
+   * wrote is a cell, and the list is an array of references. A member the
+   * body read from the list and writes back is a link already and is not
+   * touched, and neither is a plain value that is no record. What the
+   * creator of the instance wrote into the argument stays in place.
+   */
+  anchored(value: unknown, inArray = false): unknown {
+    if (isLink(value) || isStream(value)) return value;
+    if (Array.isArray(value)) {
+      return value.map((member) => this.anchored(member, true));
+    }
+    if (!isRecord(value)) return value;
+    const members = Object.fromEntries(
+      Object.entries(value).map((
+        [name, member],
+      ) => [name, this.anchored(member)]),
+    );
+    if (!inArray) return members;
+    this.#created += 1;
+    const id = `record:${this.#created}`;
+    this.store.create(id, "element record", members);
+    return { $link: { doc: id, path: [] } };
+  }
+
+  /**
    * What a body returned or wrote: a handle in it as the reference it
    * holds, and a container that carries the address it was read from as
    * a reference to that address (ES §2.4, "A value passed on unchanged is
@@ -1421,17 +1455,25 @@ export class Instance {
     const inside = (link: { doc: string; path: string[] }) =>
       link.doc === at.doc &&
       at.path.every((segment, index) => segment === link.path[index]);
-    const copy = (member: unknown): unknown => {
+    const copy = (member: unknown, depth = 0): unknown => {
       if (isLink(member)) {
-        const located = this.store.locate(
-          new Ref(member.$link.doc, member.$link.path),
-          true,
-        );
+        const named = new Ref(member.$link.doc, member.$link.path);
+        // A link to a position of what the write replaces that holds a
+        // link itself, as the position of a record with a document of
+        // its own does, is put as the link that position holds.
+        const position = this.store.locate(named, false);
+        if (
+          depth < 64 && isLink(position.value) &&
+          inside({ doc: position.ref.doc, path: [...position.ref.path] })
+        ) {
+          return copy(position.value, depth + 1);
+        }
+        const located = this.store.locate(named, true);
         return inside({ doc: located.ref.doc, path: [...located.ref.path] })
           ? structuredClone(located.value)
           : member;
       }
-      if (Array.isArray(member)) return member.map(copy);
+      if (Array.isArray(member)) return member.map((inner) => copy(inner));
       if (isRecord(member)) {
         return Object.fromEntries(
           Object.entries(member).map(([name, inner]) => [name, copy(inner)]),
@@ -1724,8 +1766,10 @@ export class Instance {
       // assembly of an element construct is, and belongs to no cone.
       return this.#ensure(key, context, undefined, "assembly", (host) => {
         const used = (other: Host) => {
-          host.reads.push(...other.reads);
-          host.dependencies.push(...other.dependencies);
+          for (const read of other.reads) host.reads.push(read);
+          for (const dependency of other.dependencies) {
+            host.dependencies.push(dependency);
+          }
           for (const writer of other.writers) {
             if (!host.writers.includes(writer)) host.writers.push(writer);
           }

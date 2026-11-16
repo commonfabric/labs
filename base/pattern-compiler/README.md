@@ -240,7 +240,13 @@ observation class, does not instantiate a pattern or bind a handler in a
 function body, and does not evaluate the debug strings. The record of a key of a
 list (`elementById`) is a place of its own, named by the list and the key, which
 has a document once something writes it, and `addUnique` and `removeByValue`
-change the list's membership by reference. From the repository root:
+change the list's membership by reference. A record that a function body puts
+into an array through a handle, with `push`, `addUnique` or a `set` of the list,
+gets a document of its own, and the list stores a link to it, as today's runtime
+does (`anchorValueAsEntity` in `runtime/runner/src/data-updating.ts`): the list
+is then an array of references. A record of the argument the instance is created
+with, and a plain value that is no record, stay in the list's document, which is
+the case of an array of plain values in place. From the repository root:
 
 ```sh
 base/pattern-compiler/target/release/pattern-compiler emit path/to/module.tsx > artifact.json

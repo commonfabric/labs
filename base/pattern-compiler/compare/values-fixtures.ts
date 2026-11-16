@@ -88,6 +88,19 @@ const WRITTEN: Record<string, Written[]> = {
       { binding: 1, event: { id: "a" } },
     ],
   }],
+  "list-records": [{
+    argument: { note: "n" },
+    events: [
+      { binding: 1, event: { title: "a" } },
+      { binding: 2, event: { title: "bb" } },
+      { binding: 4, event: { name: "x" } },
+      // The row of `bb` stores its position in `center`.
+      { binding: 0, event: {} },
+      // `bb` leaves the list, and `center` still reads its position.
+      { binding: 3, event: {} },
+      { binding: 1, event: { title: "ccc" } },
+    ],
+  }],
   "reduce": [{
     argument: {
       items: [{ title: "a", amount: 3 }, { title: "b", amount: 4 }],
