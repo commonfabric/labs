@@ -536,6 +536,40 @@ describe("cfc-write-policy-any-of", () => {
         });
       });
 
+      it("adopts a stamp for an unstamped alternative that another writer's write restates stamped, in another order, outside a release", async () => {
+        // TODO(danfuzz): This pins an adoption the proposal refuses: outside
+        // a release, only the writer a stamp names may bring that stamp over
+        // an unstamped claim naming it, and here `send`'s write stamps
+        // `edit`'s alternative, which `edit` then writes through. Flip it
+        // when the merge adopts only as the proposal allows (see the `TODO`
+        // in `reconcileWriterClaimStamp()`).
+
+        await withFixture(async (f) => {
+          expect(await f.write("send", "Send", { schema: unstamped }))
+            .toBeUndefined();
+
+          expect(
+            await f.write("send", "Send", {
+              schema: {
+                type: "string",
+                ifc: {
+                  writePolicyAnyOf: [
+                    policy("edit", "Edit"),
+                    policy("send", "Send"),
+                  ],
+                },
+              },
+              value: "again",
+            }),
+          ).toBeUndefined();
+          expect(
+            storedAlternatives(f.runtime, "protected-value", [], true),
+          ).toEqual(["send/Send@test-module", "edit/Edit@test-module"]);
+          expect(await f.write("edit", "Edit", { value: "edited" }))
+            .toBeUndefined();
+        });
+      });
+
       it("stamps no member for a writer none of them names", async () => {
         await withFixture(async (f) => {
           expect(await f.write("rogue", "Send", { schema: unstamped }))
