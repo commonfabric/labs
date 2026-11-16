@@ -480,7 +480,7 @@ export const publishReportLines = (report: PublishReport): string[] => {
         lines.push(
           `Found personal details and a rewrite that removes them, not applied: ${check.notApplied}. Published as it is on disk.`,
         );
-        lines.push(...findingLines(check.findings));
+        for (const line of findingLines(check.findings)) lines.push(line);
       }
       break;
     }
@@ -488,7 +488,7 @@ export const publishReportLines = (report: PublishReport): string[] => {
       lines.push(
         "Found personal details the rewrites could not remove; publishing it unlisted. Fix these and publish again:",
       );
-      lines.push(...findingLines(check.findings));
+      for (const line of findingLines(check.findings)) lines.push(line);
       break;
   }
   lines.push(

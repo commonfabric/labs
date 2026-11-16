@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { Identity } from "@commonfabric/identity";
-import { decodeDelegation, issueDelegation } from "@commonfabric/identity";
+import {
+  decodeDelegation,
+  Identity,
+  issueDelegation,
+} from "@commonfabric/identity";
 import {
   checkIndexChain,
   issueIndexChain,

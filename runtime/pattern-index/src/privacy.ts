@@ -385,7 +385,7 @@ export const runPrivacyCheck = async <C>(options: {
       reasons.push(`rewrite ${attempt}: did not compile`);
       continue;
     }
-    changes.push(...rewrite.changes);
+    for (const change of rewrite.changes) changes.push(change);
     const checked = await checkPrivacy(gardener, next.input, generate);
     if (checked.passed) {
       return {
