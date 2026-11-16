@@ -31,6 +31,7 @@ import Topics, {
   activityOrderOf,
   distinctByIdentity,
   mentionedBy,
+  mentionedByEach,
   mentionListsOf,
   submitProfileTopic,
   type TopicCrossrefRow,
@@ -207,6 +208,22 @@ const ADA_PICTURE = [0x89, 0x50, 0x4e, 0x47];
 
 const isAdaPicture = (picture: FabricBytes | undefined) =>
   picture?.slice().join() === ADA_PICTURE.join();
+
+/**
+ * Returns whether `mentionedByEach()` returns, at each entry's place, the
+ * sources `mentionedBy()` returns for that entry, in the same order.
+ */
+function eachAgreesWithOne<T extends object>(
+  list: readonly T[],
+  mentions: readonly (readonly (object | undefined)[] | undefined)[],
+): boolean {
+  const each = mentionedByEach(list, mentions);
+  return each.length === list.length && list.every((topic, at) => {
+    const one = mentionedBy(topic, list, mentions);
+    return each[at].length === one.length &&
+      one.every((source, index) => equals(source, each[at][index]));
+  });
+}
 
 export default pattern(() => {
   const adaPicture = new FabricBytes(new Uint8Array(ADA_PICTURE));
@@ -657,7 +674,7 @@ export default pattern(() => {
   // `mentionedBy()` lists a source once for each entry of the list it is
   // handed whose mentions name the topic and which is not the topic itself,
   // so `twinA` at two entries is listed twice. The board's backlinks count a
-  // duplicated source once because the pivot hands `mentionedBy()` the list
+  // duplicated source once because the pivot joins over the list
   // `distinctByIdentity()` returns.
   const assert_mentioned_by_counts_each_matching_entry = assert(() => {
     const inbound = mentionedBy(
@@ -679,6 +696,26 @@ export default pattern(() => {
       return inbound.length === 1 && equals(inbound[0], twinA);
     },
   );
+
+  const assert_mentioned_by_each_agrees_with_mentioned_by = assert(() => {
+    // The pivot runs `mentionedByEach()`, and `mentionedBy()` states its rules
+    // pair by pair. The three lists are the ones above that separate those
+    // rules from their look-alikes: a topic at two entries that mentions
+    // itself, a source at two entries, and a source that mentions one topic
+    // twice beside an entry whose mentions have not arrived.
+    return eachAgreesWithOne(
+      [twinA, twinA, twinB],
+      [[twinA], [twinA], [twinA]],
+    ) &&
+      eachAgreesWithOne([twinA, twinA, twinB], [[twinB], [twinB], []]) &&
+      eachAgreesWithOne(
+        [twinA, twinB, twinA],
+        [[undefined, twinB, twinB], [twinB], undefined],
+      ) &&
+      // And it finds what there is to find, so the agreement is not two empty
+      // results: `twinB` is the one source of `twinA` here.
+      mentionedByEach([twinA, twinB], [[], [twinA]])[0].length === 1;
+  });
 
   // A topic that has never run publishes no `lastActivityAt`, and the row
   // coalesces that absence to 0. Ordering on the 0 would file the newest topic
@@ -735,6 +772,32 @@ export default pattern(() => {
       distinct.length === 2 &&
       Writable.equalLinks(distinct[0], identityOther) &&
       Writable.equalLinks(distinct[1], identityTarget);
+  });
+
+  const assert_mentioned_by_each_follows_an_alias = assert(() => {
+    // The lists above hold the same two handles throughout, which a join by
+    // object identity would also get right. An alias is a different handle on
+    // the same topic: here it stands as a board entry and as a mention, and
+    // the join has to treat it as `identityTarget` in both places.
+    const identityAlias = identityHolder.key(0);
+    const list = [identityTarget, identityOther, identityAlias];
+    const mentions = [
+      [identityOther],
+      [identityAlias],
+      [identityTarget, identityOther],
+    ];
+    const each = mentionedByEach(list, mentions);
+    return !Writable.equalLinks(identityAlias, identityTarget) &&
+      eachAgreesWithOne(list, mentions) &&
+      // `identityOther` mentions the alias, so it is the one source of the
+      // target at both of the target's entries: the target's mention of itself
+      // through the alias counts at neither.
+      each[0].length === 1 && equals(each[0][0], identityOther) &&
+      each[2].length === 1 && equals(each[2][0], identityOther) &&
+      // And the target is a source of `identityOther` once for each of its
+      // entries, the alias among them.
+      each[1].length === 2 && equals(each[1][0], identityTarget) &&
+      equals(each[1][1], identityTarget);
   });
 
   // A source mid-sync reads back as undefined, and taking `.mentions` of that
@@ -1342,8 +1405,10 @@ export default pattern(() => {
         assertion:
           assert_repeated_mentions_contribute_one_edge_per_source_entry,
       },
+      { assertion: assert_mentioned_by_each_agrees_with_mentioned_by },
       { action: action_alias_identity_target },
       { assertion: assert_distinct_by_identity_keeps_each_first_occurrence },
+      { assertion: assert_mentioned_by_each_follows_an_alias },
       { assertion: assert_mention_lists_tolerate_a_mid_sync_source },
       { action: action_mention_subject_gets_a_link },
       { assertion: assert_plain_link_is_no_mention },
