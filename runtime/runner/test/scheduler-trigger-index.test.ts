@@ -36,7 +36,7 @@ describe("SchedulerTriggerIndex", () => {
     expect(triggerIndex.nonRecursiveTriggers.size).toBe(0);
   });
 
-  it("returns each reader once when it reads several paths a write reaches", () => {
+  it("returns every recursive reader a write reaches, and a non-recursive reader only when the write is at most one component below its read", () => {
     const triggerIndex = new SchedulerTriggerIndex(identityThunk);
     const several: Action = () => {};
     const whole: Action = () => {};
@@ -56,11 +56,9 @@ describe("SchedulerTriggerIndex", () => {
     // A non-recursive read two components above the write is not reached.
     triggerIndex.addActionReads(shallowAbove, [], [at("value")]);
 
-    const deep = [
-      ...triggerIndex.collectReadersForWrite(at("value", "a", "x")),
-    ];
-    expect(deep.length).toBe(2);
-    expect(new Set(deep)).toEqual(new Set([several, whole]));
+    expect(
+      triggerIndex.collectReadersForWrite(at("value", "a", "x")),
+    ).toEqual(new Set([several, whole]));
     expect(
       new Set(triggerIndex.collectReadersForWrite(at("value", "a"))),
     ).toEqual(new Set([several, whole, shallowAbove]));

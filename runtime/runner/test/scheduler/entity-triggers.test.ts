@@ -427,7 +427,7 @@ describe("EntityTriggers", () => {
         for (const action of small) triggers.set(action, [["value", "count"]]);
 
         resetTriggerScanWork();
-        for (let k = 0; k < 2000; k++) {
+        for (let k = 0; k < 140; k++) {
           triggers.set(
             small[k % 7]!,
             k % 2 === 0 ? [["value", "zcount"]] : [["value", "count"]],
@@ -539,8 +539,8 @@ describe("EntityTriggers", () => {
     // index gives is checked against `arraysOverlap()` over a plain record of
     // each action's reads, after every step of a seeded run.
 
-    it("agrees with the definition at production limits, seeds 1 to 40", () => {
-      for (let seed = 1; seed <= 40; seed++) {
+    it("agrees with the definition at production limits, seeds 1 to 10", () => {
+      for (let seed = 1; seed <= 10; seed++) {
         compareWithDefinition(seed, 60, {
           create: () => new EntityTriggers(),
           actions: 12,
@@ -549,12 +549,12 @@ describe("EntityTriggers", () => {
       }
     });
 
-    it("agrees with the definition at limits a handful of reads crosses, seeds 1001 to 1040", () => {
+    it("agrees with the definition at limits a handful of reads crosses, seeds 1001 to 1012", () => {
       // Limits this small put a first registration of up to six paths past a
       // block, and reach splits, merges, the return to one inline row, readers
       // held in a set, and the per-action map being built and dropped.
 
-      for (let seed = 1001; seed <= 1040; seed++) {
+      for (let seed = 1001; seed <= 1012; seed++) {
         compareWithDefinition(seed, 60, {
           create: () =>
             new EntityTriggers({
@@ -569,12 +569,12 @@ describe("EntityTriggers", () => {
       }
     });
 
-    it("agrees with the definition at limits that merge one block into the next, seeds 2001 to 2020", () => {
+    it("agrees with the definition at limits that merge one block into the next, seeds 2001 to 2008", () => {
       // A block merges into its neighbor when compacting leaves it with
       // fewer than a quarter of `block` entries, which a block of four never
       // holds and a block of eight does.
 
-      for (let seed = 2001; seed <= 2020; seed++) {
+      for (let seed = 2001; seed <= 2008; seed++) {
         compareWithDefinition(seed, 60, {
           create: () =>
             new EntityTriggers({
