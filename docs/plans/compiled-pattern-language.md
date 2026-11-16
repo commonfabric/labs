@@ -130,22 +130,25 @@ next.
   conditional rendered nothing.
   The crate accepts 333 modules and reports 389 errors. It does not
   yet emit `$defs` for a recursive type. The crate's `SPEC-NOTES.md`
-  lists the places where it found the documents ambiguous. Its notes
-  through 272, notes 281 to 302, and notes 307 to 320 are written into
-  the documents.
+  lists the places where it found the documents ambiguous. Its notes through
+  272, notes 281 to 302, notes 307 to 320, and notes 325 to 341 are written
+  into the documents.
   Notes 273 to 280, which measure cost, are written into
   [What compiling, running, and storing cost](#what-compiling-running-and-storing-cost)
-  below, and notes 303 to 306 and 321 to 324, the results of the value
-  comparison, into
+  below, and notes 303 to 306, 321 to 324, and 342 and 343, the results of the
+  value comparison, into
   [What the prototype's executor computes](#what-the-prototypes-executor-computes).
-  The latest prototype commit read is `96f3b83a73`. From commit
+  The latest prototype commit read is `59055fd0c5`. From commit
   `3e518147df` on the crate also emits value code and an executor runs
   a plan with it. At `3e518147df`, in the fixtures 122 of 122 compared
   values equal those of today's runtime, and in the corpus 4,472 of
   4,537, over the 186 modules the executor runs. At `96f3b83a73`, with
   the rulings on what the executor needed implemented, the figures are
-  152 of 152 in the fixtures and 4,485 of 4,539 in the corpus, over
-  187 modules. No compared row of the corpus evaluates the label of an
+  152 of 152 in the fixtures and 4,485 of 4,539 in the corpus, over 187
+  modules. At `59055fd0c5`, with the rulings on the collections a cone lists
+  and on who places a stream implemented, they are 280 of 280 in the fixtures
+  and 4,642 of 4,735 in the corpus, over 194 modules. No compared row of the
+  corpus evaluates the label of an
   index: the 54 index slots of the corpus plans are read by outputs
   below the elements of a collection and by handlers with no
   compared write edge. Two fixtures of the prototype test the label of
@@ -494,8 +497,13 @@ implement five of the rulings that followed: the place of a slot of
 cell, a moved element with the keys of a derived collection, and the
 two kinds of cone with side-writes. Those are notes 307 to 320, which
 are written into the documents, and notes 321 to 324, which run the
-comparison again. Each part below gives the figures of both commits,
-the earlier first.
+comparison again. At commit `59055fd0c5` the crate and the executor
+implement the rulings on the collections a cone's record lists and on
+who places a stream, and the executor has a `reduce` in the reactive
+tier, the record of a key of a list, and a cell made with `new`. Those
+are notes 325 to 341, which are written into the documents, and notes
+342 and 343, which run the comparison again. Each part below gives the
+figures of each commit, the earliest first.
 
 Notes 281 to 302 say what the executor needed that the
 documents did not give, and are written into the documents. Of the
@@ -509,13 +517,14 @@ leave undetermined. Of them 152 to 156 are ruled, and so is question
 145: the identity of a plain value in place, where the callee's
 default is held, a write below the root of an empty state cell, a
 first value stored as a value, and the keys of a derived collection
-passed on unchanged. Questions 141, 144, 146, 147, 149 to 151, and
-157 to 163 below, and questions 81 to 84 of
-`execution-and-storage.md`, are open; 158 to 163 are what those
-rulings leave undetermined. Of
+passed on unchanged. Questions 141, 144, 146, 147, 149 to 151, and 157 to 166
+below, and questions 81 to 84 of `execution-and-storage.md`, are open; 158 to
+163 are what those rulings leave undetermined, and 164 to 166 are what notes
+325 to 341 found the rulings on questions 141 and 144, and the pieces added to
+the executor, to leave undetermined. Of
 question 141 the member is ruled, and what it holds beside the collections is open. Of
 question 144 the placing and the check are ruled, and what the check
-covers outside the result is open. Notes 303 to 306 and 321 to 323 are
+covers outside the result is open. Notes 303 to 306, 321 to 323, and 342 are
 the results here.
 Nothing was timed.
 
@@ -533,6 +542,21 @@ cells, and constants that notes 308 to 310 give are over all 382
 corpus patterns, the ones with an unsupported construct included. The
 rows of the tables below that say "not verified" are a reading of the
 source and of the two values.
+
+Note 343 says the same of the round of commit `59055fd0c5`. The tests of
+the two rulings, of the paths the crate lists, of the record of a key,
+and of `reduce` were written before the code. The three tests of where a
+marker of an element body is stored passed before the change, since the
+executor stored such a stream already. The fixture of the keys of a
+`flatMap` result describes what the executor did and changed no code.
+The classes of the 12 listed paths that hold no stream rest on a reading
+of the source for 7 of them and of one branch for the other 5. The
+difference of `apps/person-workbench/main.tsx` and the differences of
+`product/primitives/demo/atoms-demo.tsx` are not examined. No fresh run
+of today's runtime over the corpus was made: the executor was run again
+against the values of the earlier run, and the change to the
+comparison's harness, which resolves a result path with no `*` first, is
+exercised by the fixtures alone.
 
 ### What is compared, and what is not
 
@@ -568,8 +592,16 @@ fixture uses the scenario its label test writes, where it writes one.
   document and no stream document, and has one scope instance. It does
   not instantiate a pattern or bind a handler in a function body, does
   not evaluate a `reduce`, and has no `elementById`, `linksOf`, or
-  debug-string built-in. It reads `spaceOf` as the space it is given
-  and has no acting principal. It does not use `Cone.writes`,
+  debug-string built-in. At commit `59055fd0c5` it evaluates a `reduce`
+  in the reactive tier, as one unit that is evaluated again as a whole,
+  has the record of a key of a list (`elementById`, with `addUnique`
+  and `removeByValue`), and constructs a cell with `new` in a function
+  body as with `of`. It still instantiates no pattern and binds no
+  handler in a function body: the artifact names a compiled pattern by
+  hash and holds no plan of a pattern from another module, and the
+  executor has one instance over one store. It reads `spaceOf` as the
+  space it is given and has no acting principal. It does not use
+  `Cone.writes`,
   `ConeResult.selections`, or `ConeResult.picks`: a body's side-write
   goes through the handle the body holds. At commit `96f3b83a73` it
   reads the write edges of a cone for one thing, to find the cone that
@@ -588,9 +620,13 @@ fixture uses the scenario its label test writes, where it writes one.
   read of a write target demands nothing; a write edge that names its
   handle by a computed value, or whose target is a created cell or a
   child's argument, has no root and path, and no reader is found for
-  it; and a cone of an element body whose reader is outside the body
-  is evaluated for every key of the table, in each of the three cases
-  of a per-element source.
+  it; and a cone of an element body whose reader is outside the body is
+  evaluated for every key of the table, in each of the three cases of a
+  per-element source, at commit `59055fd0c5` as well. At that commit
+  the executor drops the cone instances of a key that left its
+  collection, in each of the three cases, and a key that comes back has
+  new instances, which are evaluated; it keeps the state cells declared
+  under the key (question 42).
 - **The emitter departs from the documents in three ways** that the
   results depend on. It writes one function per value a cone computes,
   where `execution-and-storage.md` §2.1 has one per cone. A pattern
@@ -647,7 +683,43 @@ the function that reads the index for the two moved keys: 2
 evaluations, where the executor of the earlier commit made 4. Where a
 body is permitted to evaluate a whole collection again, the executor
 keeps results per key all the same. The key of an element that a
-`flatMap` contributes (question 147) is exercised by no fixture.
+`flatMap` contributes (question 147) is exercised by no fixture of that
+commit.
+
+At commit `59055fd0c5`, 27 of the 30 fixtures are run, in 33 runs, and
+280 of 280 compared values are equal. The added runs are one of
+`fixtures/within.tsx` with 3 values, two of `fixtures/stream-marker.tsx`
+with 70, one of `fixtures/flat-keys.tsx` with 4, one of
+`fixtures/keyed.tsx` with 48, and one of `fixtures/reduce.tsx` with 3.
+Each of the five covers the three cases of a per-element source or says
+which it covers.
+
+- **`within`.** Each of three callbacks has a declaration that reads
+  neither the element nor the index: over an array of references, over
+  an array of plain values in place, and over the result of a `filter`.
+  Its cone has one instance per key in each, and a change of the input
+  it reads evaluates every instance.
+- **`stream-marker`.** A handler is bound per element in three bodies,
+  over the same three cases. The stored link has the key of the element
+  in each, an event for it reads that element, and without its listed
+  path each fails the check at the first element.
+- **`flat-keys`.** A `flatMap` over an array of references, whose
+  segment is an array the element holds, and one over an array of plain
+  values in place, whose segment the callback writes, each with a `map`
+  over its result, which is the case of the result of another
+  per-element construct. The cone instances of the `map` have the key of
+  the source element with the position in the segment, in both. A
+  segment behind a reference that grows evaluates the new position
+  alone, a move of the source elements evaluates nothing in either case,
+  and a plain value that enters evaluates its own segment. Two members
+  of one segment that change places are both evaluated again (question
+  147).
+- **`keyed`.** The record of a key of a list, which is a list of
+  references (question 166).
+- **`reduce`.** A fold over an array of references, one over an array of
+  plain values in place with the index, and one over the result of a
+  `map`. A step that reads an outer input is not compared, because the
+  compiler of today's runtime refuses it.
 
 ### The corpus
 
@@ -794,6 +866,66 @@ of its own. The ruling of question 145 covers both. Under it the
 second is equal where the executor stores a reference by key, and the
 first is a deliberate difference from today.
 
+### The corpus at commit `59055fd0c5`
+
+The figures are of the executor alone, run again on the crate's output
+of this commit against the values that today's runtime computed in the
+run of commit `96f3b83a73` over the 272 modules. No fresh run of today's
+runtime was made.
+
+| | `96f3b83a73`, 272 modules | `59055fd0c5` |
+| --- | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 |
+| Executed | 189 | 194 |
+| Every value equal and every event handled | 161 | 167 |
+| Values compared | 4,607 | 4,735 |
+| Values equal | 4,527 | 4,642 |
+| Values that differ | 80 | 93 |
+| Modules with a difference | 23 | 24 |
+| Committed events the executor does not handle | 20 of 278 | 15 of 293 |
+| Evaluations that fail the check of a stream's position | not made | 0 |
+| Stored stream positions at a listed path | 440 | 683 |
+| Stored stream positions at no listed path | 18 | 3 |
+| Documents the executor stored | 509 | 535 |
+
+Over the 189 modules that were executed before, 4,529 of 4,607 values
+are equal, 2 more, and 11 events are not handled, 9 fewer. The tables
+"Why a module is not executed" and of causes are not made again for this
+commit. What the notes give of the changes:
+
+- **Five modules more are executed,** the ones with a `reduce` in the
+  reactive tier. `apps/budget-tracker/data-view.tsx`, and
+  `amount-ledger.tsx`, `budget-vs-actual.tsx` and
+  `spend-by-category.tsx` of `product/primitives/`, have every value
+  equal, 80 values. `product/primitives/demo/atoms-demo.tsx` has 33 of
+  48 equal, with 4 events not handled, each a handler of a pattern
+  compiled in whose state holds a constant where the handler expects a
+  handle. Its 15 differences were not examined. Two modules with a
+  `reduce` stop at `toIndentedDebugString`.
+- **Values that differed and are equal:** 7 of
+  `apps/topic-workbench/main.tsx`, whose events are handled with the
+  record of a key of a list.
+- **Five values that were equal differ,** all in
+  `apps/person-workbench/main.tsx`. Its handler `attachToPicked` ran to
+  its end for the first time, and it attaches a session where today's
+  run returns early because the picked card is nothing. The executor
+  holds something that is not nothing for the card. That was so before
+  and did not show, because the event failed at `elementById`. It is not
+  examined further, and counts as a defect of the prototype until shown
+  otherwise. No other value that was equal differs.
+- **Events.** Both events that failed at a cell made with `new` fail at
+  the next step, a pattern instantiated in the handler. A pattern
+  instantiated in a function body stops 6 events and a handler bound in
+  one stops 2 modules; the debug strings and `linksOf` stop 6 modules.
+- **Streams.** No evaluation fails the check of a stream's position. The
+  3 stored positions at no listed path hold the stream of a binding that
+  a `computed` makes and returns (question 165). The 683 at a listed
+  path include the 208 positions of a stream inside a member of an
+  element, at which the earlier executor stored a record.
+- **Documents.** The 26 documents more are 5 argument and 5 result
+  documents of the added modules, 5 state cells, and 11 records of a
+  key.
+
 ### What the run conformed to
 
 The executor counted where its run kept to the plan.
@@ -811,14 +943,23 @@ The executor counted where its run kept to the plan.
 - **Streams.** Of the positions at which a stored result holds a
   stream, 431 are named by a path of `Binding.result` and 18 by none.
   Of the listed paths without `*`, 315 hold the stream and 12 do not.
-  14 of the 18 are of a binding for which the crate found no path, and
-  4 hold a stream that is an input of the pattern. The 12 were not
-  examined. By ruling the value code places a stream and the runtime
+  13 of the 18 are of a binding for which the crate listed no path: 6
+  of a member written after a spread among the children of a view
+  node, and 7 of a stream inside a value that the elements of a
+  collection hold. 2 hold a stream that is an input of the pattern,
+  and 3 the stream of a binding that a function body makes and
+  returns. A further 208 positions, of a stream inside a member of an
+  element read as `example[UI]`, were in no count, because that run
+  stored a record in the place of the stream. Each of the 12 is below
+  a conditional whose other branch is selected when the run ends: 4
+  held the stream at an earlier point of the run and 8 at no point, by
+  a reading of the source that covers one branch alone for 5 of them.
+  By ruling the value code places a stream and the runtime
   checks the position against `Binding.result`, so the listed paths
-  have to be complete: the 14 are positions the compiler owes a path
-  for, and an evaluation that stored one of them would fail. The 4
-  are no binding's stream, are passed on as any input is, and are not
-  checked.
+  have to be complete: the 13 and the 208 are positions the compiler
+  owes a path for, and an evaluation that stored one of them fails.
+  The 2 are no binding's stream, are passed on as any input is, and
+  are not checked. Whether the 3 are allowed is question 165.
 - **A cone that writes a cell it reads.** 6 evaluations wrote a
   position they had read. The executor evaluates such a cone instance
   once, as the prototype observed today's runtime to do. By
@@ -881,7 +1022,45 @@ unsupported construct included.
   (`plan-and-label-templates.md` §3.11).
 - **Streams.** The result holds a stream at 425 positions that a listed
   path names, where the earlier commit had 431, and at 18 that none
-  names. The difference is not examined.
+  names. The 6 fewer are in three modules,
+  `apps/contacts/contact-book.tsx`, `examples/map-demo/map-demo.tsx`
+  and `examples/todo-list/todo-list.tsx`, 2 each: the fix of the
+  container copy made a handler's `remove` find its element, the list
+  has one row fewer when the run ends, and a row holds the stream of
+  its binding at two positions. The listed paths that hold the stream
+  were 315 before and after.
+
+At commit `59055fd0c5` the plan and the run have the following. The
+counts of plans are over all 382 corpus patterns.
+
+- **The collections a cone lists.** `Cone.within` is a member of the
+  crate's record, with the `element` step of each element body around
+  the cone's code, outermost first, and the `site` step of each pattern
+  compiled in. Of the 3,717 cones, 576 have an `element` step, 60 of
+  those list no slot of root `element` or `index`, and 1,336 have a
+  `site` step. The record is the same over an array of references, over
+  an array of plain values in place, and over the result of another
+  per-element construct, where the cone names its own collection and not
+  the upstream one. The executor takes from the `element` steps which
+  instances of a cone exist.
+- **Streams.** The executor gives value code an inert marker, writes the
+  link in its place, and checks the positions of the result against
+  `Binding.result`. With the crate as it was, 12 evaluations in 8
+  modules failed the check. The crate lists a path for a member written
+  after a spread, in the children of a view node and in an array
+  literal, and for a stream inside a member of an element, over an array
+  of plain values in place and over the result of another per-element
+  construct; over an array of references the plan knows no stream inside
+  an element. 1,142 of the 1,355 bindings of a handler have a `result`
+  member, where 823 had one, and they list 1,420 paths, where they
+  listed 1,012. Of the 202 bindings of an element body, 181 have a path,
+  where 127 had one. No evaluation of the corpus run fails the check.
+  The crate still evaluates `x[UI]` as a chosen child, which is a defect
+  of the prototype: the key is static.
+- **`reduce`.** The 9 `reduce` operations of the corpus are all
+  registered with a function for the initial value and one for the step.
+  The fold is not kept per key, so one changed element evaluates every
+  step.
 
 ### Documents
 
@@ -905,7 +1084,11 @@ At commit `96f3b83a73` the executor writes nothing when it creates a
 state cell whose first value is a constant, by the ruling, and the
 first write makes the document. Over the 187 modules it then stores 504
 documents, 2.7 per module, of which 98 are state cells, 0.5 per module;
-over the 189 modules of the wider set, 509 and 99. The notes give no
+over the 189 modules of the wider set, 509 and 99. At commit
+`59055fd0c5`, over 194 modules, it stores 535 documents, 2.8 per
+module; the 26 more include 5 state cells and 11 records of a key of a
+list, which the executor stores as documents of their own (question
+166). The notes give no
 other row of the table for that commit. The prototype's cost model
 still counts one document per state cell, which is an upper bound under
 the ruling, and the derived figures of [Storage](#storage) are not
@@ -1555,7 +1738,13 @@ assumption.
     an array of plain values in place, and the result of another
     per-element construct alike: the key returns when the same resolved
     address, the same value, or the same upstream key stands in the
-    collection again.
+    collection again. The same is assumed for a state cell and for
+    operation state declared in an element body, in each of the three
+    cases: the removal of a key drops its cone instances and deletes
+    nothing stored under it, so a key that returns reads what its state
+    cell held. The prototype's executor does this. The alternative
+    deletes what is stored under a key in the transaction in which the
+    key leaves its collection.
 43. **A failed evaluation of a computation that makes instances** (PL
     §3.14). *Assumed:* the instances of the last evaluation stay, and
     their arguments take the error state.
@@ -1874,7 +2063,18 @@ as an assumption.
 125. **How a result path of a binding names a position inside an
     element** (PL question 78). *Assumed:* a `*` at the position of
     each enclosing collection. Two collections spread into one array
-    of children are not told apart by the path. The path names a
+    of children are not told apart by the path. A `*` that no
+    `element` step of the binding names stands for one of three
+    things: every position of a collection whose callback writes the
+    stream of an outer binding, the one position of a member written
+    after a spread, or the one element that holds the stream inside a
+    value (question 130). The path does not say which, so the check of
+    a stream's position accepts a marker at any position from the
+    spread on, and a reader with the plan alone can resolve the path
+    to a wrong position, as the harness of the prototype's comparison
+    did. Open with the resolution: whether `Binding.result` says which
+    of the three such a `*` stands for. *Assumed:* it does not. The
+    path names a
     position of the stored result, so the question is the same over an
     array of references, an array of plain values in place, and the
     result of another per-element construct.
@@ -1913,8 +2113,15 @@ as an assumption.
     tries each position. The alternative names the position of the
     member in the place of `*`. The source here is an array
     written in place in the pattern body, whose members the instance
-    computes: not a stored array of references, and not the result of
-    a per-element construct.
+    computes: not a stored array of references. A further 5 bindings
+    of the corpus have a stream that is read through a member of the
+    element by name, as `entry.node`. The assumption is the same for a
+    second source, the result of another per-element construct whose
+    elements hold the stream of a binding of that construct's body,
+    where the position that holds the stream of a key is the one that
+    holds the key. Over an array of references the plan lists no path,
+    because a stream behind a reference is no binding's marker. The
+    prototype lists the path with `*` for both sources.
 131. **The declared label of an element's handle in the compiled
     path** (PL question 85). Settled by ruling: the handle of an
     element is read at the element's position in the source
@@ -1997,8 +2204,10 @@ as an assumption, which is what the prototype does.
      cone's code is written, as the `within` of a declaration does, so
      it has a `site` step for each pattern compiled in that the code is
      written in, and its `element` steps are the list the ruling
-     names. The alternative holds the collections alone, as the
-     prototype's artifact does. Open with it: whether `Cone.entry` is
+     names. The alternative holds the collections alone. The
+     prototype's plans hold the `site` steps as well, as assumed: of
+     3,717 cones, 576 have an `element` step and 1,336 a `site` step.
+     Open with it: whether `Cone.entry` is
      unique in a plan without the `site` steps. The question is the
      same for a collection over an array of references, over an array
      of plain values in place, and over the result of another
@@ -2025,12 +2234,17 @@ as an assumption, which is what the prototype does.
        found by the check, which is of stored markers alone. The
        compiler owes that it lists no such path, and nothing verifies
        it. The 12 listed paths of the prototype's run that hold no
-       stream were not examined, so it is not known whether they are
-       below a conditional or are such paths.
+       stream when the run ends are each below a conditional whose
+       other branch is selected then, by a reading of the source that
+       covers one branch alone for 5 of them; a run cannot show a path
+       that no selection fills.
 
-     The three are the same in an element body over an array of
-     references, over an array of plain values in place, and over the
-     result of another per-element construct.
+     The prototype's executor does the first two as assumed, and no
+     test of it stores a marker outside the result. The three are the
+     same in an element body over an array of references, over an
+     array of plain values in place, and over the result of another
+     per-element construct. Questions 164 and 165 have two more things
+     the ruling leaves open.
 145. **What a cone stores that passes on an element that is a plain
      value** (ES question 79). Settled by ruling: an element that is a
      plain value in place is named by its collection and its key, a
@@ -2066,7 +2280,13 @@ as an assumption, which is what the prototype does.
      construct. The assumption is the same whether a segment holds
      references or plain values in place; the alternative keys a
      reference by the address it resolves to and a plain value by its
-     value, under the upstream key.
+     value, under the upstream key. The prototype keys as assumed, and
+     its fixture has both kinds of segment. One consequence differs from
+     the ruling on a moved element: two members of one segment that
+     change places are two keys whose values changed, and both are
+     evaluated again; and a state cell declared in a body over the
+     result stays with the position in the segment and not with the
+     member.
 <!-- The list restarts so that the numbers below stay as cited. -->
 
 149. **A property default of a place, in a read of an object whole** (PL
@@ -2218,6 +2438,51 @@ assumption.
      reference by key. The case is an array of plain values in place;
      not an array of references.
 
+**From the rulings on questions 141 and 144 as the prototype implemented
+them, and from the pieces added to its executor.** Each is what its
+notes 325 to 341 found undetermined, written into the documents as an
+assumption, which is the prototype's choice.
+
+164. **Which cone instance fails the check of a stream's position** (ES
+     question 88). A marker can be placed by one cone instance, passed
+     through an interim output, and stored by another. *Assumed:* the
+     cone instance whose output holds the position when the value is
+     stored fails, and its outputs take the error state, also at the
+     positions the failure does not concern. The alternative fails the
+     cone instance that called `host.stream`. Open with it: whether
+     those other positions hold the error state or what was stored
+     before. The same in an element body over an array of references,
+     over an array of plain values in place, and over the result of
+     another per-element construct.
+
+165. **A stream that a function body returns into the result** (PL
+     question 116). A `lift` or a `computed` can return a value that
+     holds the stream of a binding its body made, or of one it was
+     handed. A body is not value code, what it returns holds a reference
+     and no marker, and the compiler does not know the path. *Assumed:*
+     it is allowed, the link is stored, no path of `Binding.result`
+     names the position, and nothing checks it. The alternatives refuse
+     it at a kept path of the result, or have the body's record state
+     the paths that can hold a stream. The corpus has 3 such positions,
+     in rows that one `computed` returns as a whole array of plain
+     values; the question is the same for a body used in an element body
+     in all three cases.
+
+166. **Where the record of a key of a list is stored** (`elementById`;
+     ES question 89). `footprint-analysis.md` §7 has the handle at `*`
+     below the list, and no document says where the record is.
+     *Assumed,* as today's runtime does: an entity of its own, named by
+     the address of the list and the key, with no document until
+     something writes it, and no member of the list until a reference to
+     it is added; and a record that is no member is below the list for
+     the footprint and for a reader of the list's label. The
+     alternatives store it at a position of the list, or give it a label
+     of its own until it is a member. The list holds references to the
+     records, so for a per-element construct over it this is the case of
+     an array of references; it does not arise over an array of plain
+     values in place or over the result of another per-element
+     construct.
+
 One question above is restated by the notes 307 to 320. For the
 assumption of ES question 83, in which transaction a first value that is not a
 constant is written, the prototype does the alternative: it computes
@@ -2272,8 +2537,9 @@ is when the key enters the element table, in all three cases.
   the caller's cone; the cone of an array written in place lists no
   slot of what its members hold; a constant captured by a handler that
   is not a literal at the binding is held as `null`; no code is emitted
-  for a `reduce` in the reactive tier or a spread in the argument of a
-  pattern; and 8 modules whose value code fails are not examined. Of
+  for a spread in the argument of a pattern (a `reduce` in the reactive
+  tier is emitted at commit `59055fd0c5`); and 8 modules whose value
+  code fails are not examined. Of
   the 23 differing values that had no cause, 8 are equal at commit
   `96f3b83a73` and 15 are classed, 7 of them by a reading that is not
   verified. At that commit the crate also holds the kind of a cone
@@ -2284,9 +2550,19 @@ is when the key enters the element table, in all three cases.
   the default alone; and counts one document per state cell in its
   cost model. Its executor finds no reader for a write edge without a
   root and a path, lets a handler's read of a write target demand
-  nothing, constructs no cell with `new` in a function body, and has
-  no test for the keys of a derived collection passed on unchanged and
-  no fixture for a `flatMap` in a chain.
+  nothing, and has no test for the keys of a derived collection passed
+  on unchanged. At commit `59055fd0c5` the crate evaluates a member
+  read with the key `UI` or `NAME` as a chosen child, where the key is
+  static; its executor keeps a `reduce` as one unit and not per key,
+  has no function for a `reduce` without an initial value, which the
+  language refuses, and does not compare a step that reads an outer
+  input, which the compiler of today's runtime refuses; it instantiates
+  no pattern and binds no handler in a function body, because the
+  artifact names a compiled pattern by hash and holds no plan of a
+  pattern from another module, and the executor has one instance over
+  one store; and it has no `linksOf` and no debug-string built-in. The
+  difference of `apps/person-workbench/main.tsx` and the 15 of
+  `product/primitives/demo/atoms-demo.tsx` are not examined.
 
 The open questions each document ends with stay where they are.
 
