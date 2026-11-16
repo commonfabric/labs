@@ -2740,6 +2740,7 @@ export class PatternManager {
     identities: Iterable<string>,
   ): Promise<void> {
     const tx = this.#runtime.edit();
+    const stamped: string[] = [];
     try {
       let parserNeeded = false;
       for (const identity of new Set(identities)) {
@@ -2747,14 +2748,54 @@ export class PatternManager {
         if (!await this.#closureVerifiesWithoutParser(space, identity, tx)) {
           parserNeeded = true;
         }
+        // The closure is already loaded here, so asking whether a record of
+        // it is stamped reads its labels and nothing more.
+        if (await this.#closureHoldsStamp(space, identity, tx)) {
+          stamped.push(identity);
+        }
       }
       if (parserNeeded) await ensureCompilerStack();
     } finally {
       tx.abort("source closure verification prepared");
     }
-    for (const identity of new Set(identities)) {
-      if (PatternManager.isKeylessPatternIdentity(identity)) continue;
+    for (const identity of stamped) {
       await this.#repairCompileCacheStamps(space, identity);
+    }
+  }
+
+  /**
+   * Helper for `prepareSourceClosureVerification()`, which returns whether a
+   * record of `identity`'s closure in `space` holds a flow stamp, read in
+   * `tx` (`compileCacheClosureHoldsStamp()`), and is not one this session's
+   * repair already gave up on.
+   */
+  async #closureHoldsStamp(
+    space: MemorySpace,
+    identity: string,
+    tx: IExtendedStorageTransaction,
+  ): Promise<boolean> {
+    if (
+      this.#unrepairedStampedClosures.has(stringTupleKey([space, identity]))
+    ) {
+      return false;
+    }
+    try {
+      return await compileCacheClosureHoldsStamp(
+        this.#runtime,
+        space,
+        identity,
+        await this.compileCacheRuntimeVersion({
+          patternCoverage: this.#patternCoverageFor() !== undefined,
+        }),
+        tx,
+      );
+    } catch (error) {
+      logger.warn("compile-cache-stamp-check-failed", () => [
+        `entry=${identity}`,
+        `space=${space}`,
+        error,
+      ]);
+      return false;
     }
   }
 
@@ -2775,20 +2816,6 @@ export class PatternManager {
       const runtimeVersion = await this.compileCacheRuntimeVersion({
         patternCoverage: this.#patternCoverageFor() !== undefined,
       });
-      const check = this.#runtime.edit();
-      let stamped: boolean;
-      try {
-        stamped = await compileCacheClosureHoldsStamp(
-          this.#runtime,
-          space,
-          identity,
-          runtimeVersion,
-          check,
-        );
-      } finally {
-        check.abort("compile-cache stamp check complete");
-      }
-      if (!stamped) return;
       const outcome = await repairCompileCacheStamps(
         this.#runtime,
         space,
