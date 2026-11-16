@@ -166,12 +166,12 @@ crosses as "Defaults inherit from the last declaration" below says. So
 through a link whose stored schema requires a field the target lacks, a
 keyed `get()` under a shaped reader's schema reads the target, and a
 `get()` of the handle the same slot's `resolveAsCell()` returns reads
-`undefined`. A reader typed `unknown` is the exception, since it adopts
-the stored schema at the entry too. A `false` reader, whose keyed `get()`
-selects nothing, still gets a handle typed by the stored schema, and a
-read of that handle returns whatever the stored schema accepts. A caller
-that wants its own projection of the target reads the slot by key, or
-re-types the handle with `asSchema()`.
+`undefined`. A reader typed `unknown` is the exception to that contrast,
+since it adopts the stored schema at the entry too. A `false` reader,
+whose keyed `get()` selects nothing, still gets a handle typed by the
+stored schema, and a read of that handle returns whatever the stored
+schema accepts. A caller that wants its own projection of the target reads
+the slot by key, or re-types the handle with `asSchema()`.
 
 The strict pseudo-intersection (`combineSchema`) remains in use for one
 job: merging a compound schema's base keywords with its own
