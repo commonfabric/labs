@@ -1,3 +1,8 @@
+import { type FabricValue, valueEqual } from "@commonfabric/data-model";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
+
+import { cfcMetadataPresent } from "./cfc/metadata.ts";
+
 /**
  * The reserved siblings: the document-root siblings of `value` that hold
  * runtime state rather than user data, and that no meta field covers.
@@ -12,6 +17,14 @@
  * write reaching one of these from outside the privileged persistence scope
  * is recorded, and the commit boundary turns each record into a fail-closed
  * reason. A name added to this list joins both the exclusion and the guard.
+ *
+ * The chokepoint is the extended transaction's write surface. The storage
+ * transaction beneath it, which anything holding an extended transaction
+ * reaches as its `.tx`, refuses outright a write that changes a reserved
+ * sibling and does not carry the mark the chokepoint puts on every write it
+ * forwards (`write-chokepoint.ts`). That refusal holds
+ * whatever the CFC enforcement mode, since a write that skipped the
+ * chokepoint left nothing for the commit boundary to judge.
  *
  * The meta fields are a separate seam with a separate guard: a write there
  * names the program a piece runs, and is refused outright rather than
@@ -28,3 +41,95 @@ export function isReservedSibling(field: string): field is ReservedSibling {
 }
 
 const RESERVED_SIBLING_SET: ReadonlySet<string> = new Set(RESERVED_SIBLINGS);
+
+/**
+ * How a write changes a reserved sibling: `addressed` names the sibling, or
+ * a path inside it; `forgery` replaces the document envelope with one that
+ * carries a sibling other than the stored one; `erasure` replaces it with one
+ * that leaves a stored sibling out.
+ */
+export type ReservedSiblingChange = "addressed" | "forgery" | "erasure";
+
+/**
+ * The reserved siblings a write at `path` carrying `value` changes, and how.
+ *
+ * A write under `value` changes none, whatever a user key is named. A write
+ * addressed at a sibling changes it whatever it carries. A write at the
+ * document root replaces the whole envelope, so it reaches every sibling at
+ * once, by omission as much as by overwrite, and changes each one it does not
+ * carry forward from `stored`, which reads the sibling the document holds.
+ * `stored` is called only for a root write.
+ */
+export function reservedSiblingChanges(
+  path: readonly string[],
+  value: unknown,
+  stored: (sibling: ReservedSibling) => unknown,
+): readonly (readonly [ReservedSibling, ReservedSiblingChange])[] {
+  if (path.length > 0) {
+    return isReservedSibling(path[0])
+      ? [[path[0], "addressed"]]
+      : NO_RESERVED_SIBLING_CHANGES;
+  }
+  const envelope = isObjectNotArray(value) ? value : undefined;
+  let changes:
+    | (readonly [ReservedSibling, ReservedSiblingChange])[]
+    | undefined;
+  for (const sibling of RESERVED_SIBLINGS) {
+    const carried = envelope?.[sibling];
+    const held = stored(sibling);
+    if (reservedSiblingPresent(sibling, carried)) {
+      if (reservedSiblingCarriedForward(carried, held)) continue;
+      (changes ??= []).push([sibling, "forgery"]);
+    } else if (reservedSiblingPresent(sibling, held)) {
+      (changes ??= []).push([sibling, "erasure"]);
+    }
+  }
+  return changes ?? NO_RESERVED_SIBLING_CHANGES;
+}
+
+/**
+ * Whether a value at a reserved sibling leaves the document carrying that
+ * sibling, as the sibling's own reader accounts for it.
+ *
+ * `cfc` has such a reader, and `cfcMetadataPresent` is its account: `null` and
+ * the scalars are values a document reads as carrying no label map, and any
+ * record is a map. Nothing interprets `source`, so definedness is the whole
+ * account there,
+ * which is how the meta seam reads its own fields.
+ */
+function reservedSiblingPresent(
+  sibling: ReservedSibling,
+  value: unknown,
+): boolean {
+  return sibling === "cfc" ? cfcMetadataPresent(value) : value !== undefined;
+}
+
+/**
+ * Whether a written reserved sibling is the stored one carried forward.
+ *
+ * What a whole-document write owes a reserved sibling is the value the
+ * document already holds, which is what reading the stored envelope and
+ * spreading it produces. An envelope assembled some other way is one the
+ * writer composed rather than carried, and it changes the sibling whether or
+ * not the labels it names work out the same. Holding the rule at the value
+ * keeps one answer across every spelling a stored envelope takes: a version-1
+ * envelope carrying its labels, a version-2 one naming the large ones by
+ * content hash and holding the small ones inline, and a version the build
+ * does not read at all.
+ */
+function reservedSiblingCarriedForward(
+  carried: unknown,
+  stored: unknown,
+): boolean {
+  // `valueEqual` refuses a function, which is not a `FabricValue`. Such a
+  // value is not what the document holds, so it changes the sibling, and the
+  // storage layer reports it as the error it is.
+  return typeof carried !== "function" &&
+    valueEqual(carried as FabricValue, stored as FabricValue);
+}
+
+/** No reserved sibling changes, which is what nearly every write makes. */
+const NO_RESERVED_SIBLING_CHANGES: readonly (readonly [
+  ReservedSibling,
+  ReservedSiblingChange,
+])[] = Object.freeze([]);

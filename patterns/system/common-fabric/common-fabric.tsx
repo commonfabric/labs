@@ -153,11 +153,6 @@ type AddListItemRequest = {
   result: Writable<string>;
 };
 
-/** Read all items from the list. */
-type ReadListItemsRequest = {
-  result: Writable<string>;
-};
-
 export type ListItem = {
   title: string;
 };
@@ -170,27 +165,6 @@ export const addListItem = handler<
     try {
       state.list.push({ title: args.item });
       args.result.set(`${state.list.get().length} items`);
-    } catch (error) {
-      args.result.set(`Error: ${(error as any)?.message || "<error>"}`);
-    }
-  },
-);
-
-export const readListItems = handler<
-  ReadListItemsRequest,
-  { list: ListItem[] }
->(
-  (args, state) => {
-    try {
-      const items = state.list;
-      if (items.length === 0) {
-        args.result.set("The list is empty");
-      } else {
-        const itemList = items.map((item, index) =>
-          `${index + 1}. ${item.title}`
-        ).join("\n");
-        args.result.set(`List items (${items.length} total):\n${itemList}`);
-      }
     } catch (error) {
       args.result.set(`Error: ${(error as any)?.message || "<error>"}`);
     }
@@ -302,18 +276,21 @@ type BashResult = {
 
 export const bash = pattern<BashRequest, BashResult | { error: string }>(
   ({ command, workingDirectory, timeout, environment, sandboxId }) => {
-    // Since some of our input fields should not be included if they are
-    // undefined, we use computed to conditionally construct the body object.
-    const body = computed(() => {
-      return {
+    // The body goes out as a string so that `JSON.stringify` leaves out the
+    // optional fields the caller did not provide. An object body would be
+    // stored with its keys sorted, and the fetch builtin keys a request by the
+    // body's key order, so the response to the request it sent would be
+    // dropped as belonging to some other request and the call would never
+    // finish.
+    const body = computed(() =>
+      JSON.stringify({
         sandboxId,
         command,
-        // optional parameters - only include if provided
-        ...(workingDirectory !== undefined && { workingDirectory }),
-        ...(timeout !== undefined && { timeout }),
-        ...(environment !== undefined && { environment }),
-      };
-    });
+        workingDirectory,
+        timeout,
+        environment,
+      })
+    );
     const { result, error } = fetchJson<BashResult>({
       url: "/api/sandbox/exec",
       options: {
@@ -418,20 +395,11 @@ type ListPatternIndexInput = Record<string, never>;
 
 export const listPatternIndex = pattern<ListPatternIndexInput>(
   ({ _ }) => {
-    const patternIndexUrl = wish<{ url: Writable<string> }>({
-      query: "#patternIndex",
-    });
+    const patternIndexUrl = wish<{ url?: string }>({ query: "#patternIndex" });
 
-    const resolvedUrl = new Writable<string>("/api/patterns/index.md");
-    computed(() => {
-      const urlRef = patternIndexUrl?.result?.url;
-      const urlValue = typeof urlRef?.get === "function"
-        ? urlRef.get()
-        : (typeof urlRef === "string" ? urlRef : undefined);
-      if (typeof urlValue === "string" && urlValue.length > 0) {
-        resolvedUrl.set(urlValue);
-      }
-    });
+    const resolvedUrl = computed(() =>
+      patternIndexUrl.result?.url || "/api/patterns/index.md"
+    );
 
     const { pending, result } = fetchText({
       url: resolvedUrl,

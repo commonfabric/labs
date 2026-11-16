@@ -148,7 +148,7 @@ function formatSize(bytes: number): string {
 
 export default pattern<FileShareInput, FileShareOutput>(
   ({ files, viewer }) => {
-    const profileWish = wish<{ name?: string; avatar?: string }>({
+    const profileWish = wish<{ name?: string }>({
       query: "#profile",
     });
 

@@ -315,7 +315,7 @@ describe("main command", () => {
     const cell = childOf("cell");
     expect(cell).toBeDefined();
     expect(named(cell, false).sort()).toEqual(
-      ["get", "get-label", "help", "set", "set-label"],
+      ["get", "get-label", "help", "release-by-intent", "set", "set-label"],
     );
 
     const piece = childOf("piece");

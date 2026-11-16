@@ -21,7 +21,7 @@ import {
   dataUriFromValueWithResolvedLinks,
   findAndInlineDataUriLinks,
 } from "../src/data-uri.ts";
-import { parseLink } from "../src/link-utils.ts";
+import { isSigilLink, parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { externalRefTo, resolvedSchema } from "./schema-ref-helpers.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
@@ -351,6 +351,33 @@ describe("data URI inlining", () => {
 
       const result = findAndInlineDataUriLinks(link);
       expect(result).toBe(42);
+    });
+
+    it("returns a cell whose schema holds an immutable default as a link with the default expanded", () => {
+      const snapshot = runtime.getImmutableCell(space, { answer: 42 });
+      const schema = { default: snapshot.getAsLink() } as JSONSchema;
+      const cell = runtime.getCell(
+        space,
+        "cell-with-immutable-default",
+        schema,
+        tx,
+      );
+
+      const result = findAndInlineDataUriLinks(cell);
+
+      expect(isSigilLink(result)).toBe(true);
+      expect(parseLink(result)!.id).toBe(cell.getAsNormalizedFullLink().id);
+      expect(resolvedSchema(parseLink(result)!.schema!)).toEqual({
+        default: { answer: 42 },
+      });
+    });
+
+    it("returns a cell whose schema holds no immutable link as the cell itself", () => {
+      const cell = runtime.getCell(space, "cell-with-plain-default", {
+        default: { answer: 42 },
+      }, tx);
+
+      expect(findAndInlineDataUriLinks(cell)).toBe(cell);
     });
 
     it("should preserve schema when following links in data URIs", () => {

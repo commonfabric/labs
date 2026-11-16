@@ -1,5 +1,7 @@
 // tree-builder.test.ts — Unit tests for JSON-to-tree conversion and symlink parsing
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import { isPatternToolValue } from "@commonfabric/piece/verb-listing";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { FsTree } from "./tree.ts";
@@ -1193,9 +1195,8 @@ Deno.test("callable scripts begin with a cf exec shebang and shell fallback", ()
   assertEquals(node?.kind, "callable");
   if (node?.kind === "callable") {
     const [firstLine, secondLine] = decoder.decode(node.script).split("\n");
-    assertEquals(firstLine.startsWith("#!"), true);
-    assertEquals(firstLine.includes(" exec"), true);
-    assertEquals(secondLine.includes(' exec "$0" "$@"'), true);
+    assertEquals(firstLine, "#!/bin/sh");
+    assertEquals(secondLine, `exec '/tmp/cf-exec' exec "$0" "$@"`);
   }
 });
 
@@ -1828,4 +1829,31 @@ Deno.test("a failure under the [FS] staging container names the piece entry", ()
     Error,
     "/pieces/todo-app/index.json",
   );
+});
+
+describe("tree-builder", () => {
+  describe("buildJsonTree()", () => {
+    it("projects a value outside JSON's scalar types as a string file of its text", () => {
+      const tree = new FsTree();
+      const bigIno = buildJsonTree(
+        tree,
+        tree.rootIno,
+        "big",
+        12345678901234567890n,
+      );
+      const numberIno = buildJsonTree(tree, tree.rootIno, "number", 42);
+
+      expect(getFileContent(tree, tree.rootIno, "big")).toBe(
+        "12345678901234567890",
+      );
+      expect(tree.getNode(bigIno)).toMatchObject({
+        kind: "file",
+        jsonType: "string",
+      });
+      expect(tree.getNode(numberIno)).toMatchObject({
+        kind: "file",
+        jsonType: "number",
+      });
+    });
+  });
 });

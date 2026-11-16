@@ -9,6 +9,7 @@
 
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { fromFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
@@ -88,9 +89,13 @@ describe("home-profile-lists", () => {
     program = await resolveLocalProgram(
       (resolver) => rt.harness.resolve(resolver),
       {
-        main: new URL("../../../patterns/system/home/home.tsx", import.meta.url)
-          .pathname,
-        root: new URL("../../..", import.meta.url).pathname.replace(/\/$/, ""),
+        main: fromFileUrl(
+          new URL("../../../patterns/system/home/home.tsx", import.meta.url),
+        ),
+        root: fromFileUrl(new URL("../../..", import.meta.url)).replace(
+          /\/$/,
+          "",
+        ),
       },
     );
     host = rt.getCell<Record<string, unknown>>(home, "home");

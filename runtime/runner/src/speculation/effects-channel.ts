@@ -95,9 +95,6 @@ export class EffectsChannel {
   /** The ONE storage-notification listener (design (e) item 13). */
   #listener: CoalescedDocListener | undefined;
 
-  /** DIAGNOSTIC (tests): reconciles run from notifications / re-reads. */
-  #reconciles = 0;
-
   /** In-flight ack writes (`${space}\0${nonce}`) — one authored ack per
    * nonce at a time; a failed ack retries on the next sink delivery
    * (the entry is still unacked there). */
@@ -123,12 +120,6 @@ export class EffectsChannel {
    * records two. */
   get enactedNonceCount(): number {
     return this.#enacted.size;
-  }
-
-  /** DIAGNOSTIC (tests): reconciles run (notification-driven + the
-   * resubscribe re-read). */
-  get reconcileCount(): number {
-    return this.#reconciles;
   }
 
   /** DIAGNOSTIC (tests): whether the notification listener is live. */
@@ -300,7 +291,6 @@ export class EffectsChannel {
       ]);
       return;
     }
-    this.#reconciles += 1;
     logger.debug("effects-reconcile", () => [
       `effects reconcile for ${space}`,
     ]);
@@ -314,7 +304,6 @@ export class EffectsChannel {
     space: MemorySpace,
     value: SessionEffectsDocValue | undefined,
   ): void {
-    if (this.#closed) return;
     if (!isObjectOrArray(value)) return;
     const entries = Array.isArray(value.entries) ? value.entries : [];
     const acks = isObjectNotArray(value.acks) ? value.acks : {};
@@ -456,7 +445,6 @@ export class EffectsChannel {
   /** Dispose: release the listener. The enacted-nonce record dies with
    * the process (LT8's accepted wipe). */
   close(): void {
-    if (this.#closed) return;
     this.#closed = true;
     const listener = this.#listener;
     this.#listener = undefined;

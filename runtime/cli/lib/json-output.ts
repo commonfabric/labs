@@ -118,6 +118,7 @@ export function reservesStdoutForCommandOutput(
   return path === "cell get" || path === "piece call" ||
     path === "cell get-label" ||
     path === "cell set-label" ||
+    path === "cell release-by-intent" ||
     subcommand === "survey" || subcommand === "repair" ||
     subcommand === "retarget" || subcommand === "rollback" ||
     subcommand === "restore";

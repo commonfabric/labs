@@ -17,6 +17,15 @@ export {
   withLinkCfcLabelView,
 } from "./link-label-view.ts";
 export {
+  type CfcConfClause,
+  type CfcFieldCommitment,
+  type CfcOrClause,
+  clauseAlternatives,
+  commitmentAwareEquals,
+  isCfcFieldCommitment,
+  isOrClause,
+} from "@commonfabric/memory/v2/cfc-release-authority";
+export {
   CLASSIFIED_KIND_FAMILIES,
   classifyAtomField,
   classifyLabelField,
@@ -24,14 +33,11 @@ export {
   type LabelAtomFamily,
   type LabelFieldClassificationEntry,
   type LabelFieldRepresentationClass,
-} from "./label-field-classification.ts";
+} from "@commonfabric/memory/v2/cfc-label-fields";
 export { InvalidIfcLabelError, parseIfcLabel } from "./label-parser.ts";
 export {
-  type CfcFieldCommitment,
   commitCfcFieldValue,
-  commitmentAwareEquals,
   containsCfcFieldCommitment,
-  isCfcFieldCommitment,
   transformCfcLabelForCrossSpacePersist,
 } from "./label-representation.ts";
 export {
@@ -158,7 +164,6 @@ export {
   logicalPathToPointer,
   preparedDigestFor,
 } from "./canonical.ts";
-export type { CfcConfClause, CfcOrClause } from "./clause.ts";
 export {
   type CfcModulePolicyLoader,
   type CfcModulePolicySource,
@@ -166,13 +171,7 @@ export {
   createTxCfcModulePolicyResolver,
   type RenderModulePolicyResolver,
 } from "./policy-resolver.ts";
-export {
-  clauseAlternatives,
-  clausesEqual,
-  clauseSubsumes,
-  isOrClause,
-  normalizeClause,
-} from "./clause.ts";
+export { clausesEqual, clauseSubsumes, normalizeClause } from "./clause.ts";
 export type { AtomPattern, AtomPatternBindings } from "./atom-pattern.ts";
 export {
   atomEntails,

@@ -773,3 +773,139 @@ Deno.test("jumplist: a plain diff with no commit lists only files", () => {
     "no commit entry without a commit header",
   );
 });
+
+/** A diff of `path` removing `dels` lines and adding `adds` lines. */
+function fileDiff(path: string, adds: number, dels: number): string[] {
+  return [
+    `diff --git a/${path} b/${path}`,
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    `@@ -1,${dels} +1,${adds} @@`,
+    ...Array.from({ length: dels }, (_, i) => `-old ${i}`),
+    ...Array.from({ length: adds }, (_, i) => `+new ${i}`),
+  ];
+}
+
+/** A `git log -p` commit header whose hash repeats `digit`. */
+function commitHeader(digit: string, subject: string): string[] {
+  return [
+    `commit ${digit.repeat(40)}`,
+    "Author: A <a@example.com>",
+    "Date:   Mon Jul 21 13:00:00 2026 +0000",
+    "",
+    `    ${subject}`,
+    "",
+  ];
+}
+
+// Two commits whose files are, in diff order, neither by net change nor by
+// total change.
+const MIXED_CHANGES = [
+  ...commitHeader("1", "Second change"),
+  ...fileDiff("shrinks.ts", 1, 5),
+  ...fileDiff("small-even.ts", 1, 1),
+  ...fileDiff("grows.ts", 5, 1),
+  ...fileDiff("big-even.ts", 3, 3),
+  ...fileDiff("grows-more-churn.ts", 6, 2),
+  ...commitHeader("2", "First change"),
+  ...fileDiff("removes.ts", 1, 2),
+  ...fileDiff("adds.ts", 2, 1),
+  "",
+].join("\n");
+
+Deno.test("jumplist: S orders commit files by net, then total change", () => {
+  const s = diffSession(MIXED_CHANGES, 30);
+  press(s, "i");
+  const diffOrder = entryText(s);
+  assertEquals(diffOrder, [
+    "● commit 111111111  +16 −12  Second change",
+    "   ▸ shrinks.ts  +1 −5",
+    "   ▸ small-even.ts  +1 −1",
+    "   ▸ grows.ts  +5 −1",
+    "   ▸ big-even.ts  +3 −3",
+    "   ▸ grows-more-churn.ts  +6 −2",
+    "● commit 222222222  +3 −3  First change",
+    "   ▸ removes.ts  +1 −2",
+    "   ▸ adds.ts  +2 −1",
+  ]);
+
+  press(s, "S");
+  assertEquals(entryText(s), [
+    "● commit 111111111  +16 −12  Second change",
+    "   ▸ grows-more-churn.ts  +6 −2",
+    "   ▸ grows.ts  +5 −1",
+    "   ▸ big-even.ts  +3 −3",
+    "   ▸ small-even.ts  +1 −1",
+    "   ▸ shrinks.ts  +1 −5",
+    "● commit 222222222  +3 −3  First change",
+    "   ▸ adds.ts  +2 −1",
+    "   ▸ removes.ts  +1 −2",
+  ]);
+  assertEquals(
+    summaryText(s)[0],
+    "Counts: normal · Files sorted by net line change",
+  );
+
+  press(s, "S");
+  assertEquals(entryText(s), diffOrder);
+  assertEquals(summaryText(s)[0], "Counts: normal");
+});
+
+Deno.test("jumplist: S orders the files of a diff with no commit", () => {
+  const s = diffSession(
+    [...fileDiff("a.ts", 1, 3), ...fileDiff("b.ts", 3, 1), ""].join("\n"),
+  );
+  press(s, "i", "S");
+  assertEquals(entryText(s), ["   ▸ b.ts  +3 −1", "   ▸ a.ts  +1 −3"]);
+});
+
+Deno.test("jumplist: S orders files by the selected count policy", () => {
+  // Normally both files are +3 −1 and keep their diff order. Ignoring the
+  // whitespace-only pair leaves spaced.ts at +2 −0, fewer changed lines in
+  // total than real.ts, so it moves below it.
+  const s = diffSession(
+    [
+      "diff --git a/spaced.ts b/spaced.ts",
+      "--- a/spaced.ts",
+      "+++ b/spaced.ts",
+      "@@ -1,1 +1,3 @@",
+      "-run();",
+      "+ run ( ) ;",
+      "+a",
+      "+b",
+      ...fileDiff("real.ts", 3, 1),
+      "",
+    ].join("\n"),
+  );
+  press(s, "i", "S");
+  assertEquals(entryText(s), [
+    "   ▸ spaced.ts  +3 −1",
+    "   ▸ real.ts  +3 −1",
+  ]);
+  press(s, "D");
+  assertEquals(entryText(s), [
+    "   ▸ real.ts  +3 −1",
+    "   ▸ spaced.ts  +2 −0",
+  ]);
+  assertEquals(s.view().overlay?.selectedLine, 1, "spaced.ts stays selected");
+});
+
+Deno.test("jumplist: reordering keeps the highlighted file selected", () => {
+  const s = diffSession(MIXED_CHANGES, 30);
+  press(s, "i", "down"); // the commit row -> shrinks.ts
+  press(s, "S");
+  const overlay = s.view().overlay!;
+  assertEquals(overlay.selectedLine, 5);
+  assertEquals(entryText(s)[5], "   ▸ shrinks.ts  +1 −5");
+  press(s, "<", "enter");
+  assertEquals(s.view().message, "Jumped to commit 111111111");
+});
+
+Deno.test("jumplist: a sorted list opens on the viewport's file", () => {
+  const s = diffSession(MIXED_CHANGES, 8);
+  press(s, "i", "S", "down", "down", "enter"); // commit -> grows-more -> grows
+  assertEquals(s.view().message, "Jumped to grows.ts");
+  press(s, "i");
+  assertEquals(s.view().overlay?.selectedLine, 2);
+  assertEquals(entryText(s)[2], "   ▸ grows.ts  +5 −1");
+});

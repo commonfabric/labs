@@ -841,4 +841,30 @@ describe("pattern", () => {
       });
     });
   });
+
+  it("throws for a nested pattern whose result holds a cell of the enclosing pattern", () => {
+    const build = (captured: boolean) =>
+      pattern<{ x: number }>(({ x }) => {
+        const Inner = pattern<{ y: number }>(({ y }) => ({
+          out: captured ? x : y,
+        }));
+        return { inner: Inner({ y: x }) };
+      });
+
+    expect(() => build(false)).not.toThrow();
+    expect(() => build(true)).toThrow(
+      "Cell with parent cell not found in current frame",
+    );
+  });
+
+  it("names an internal cell by position, not by the key a node's inputs bind it under", () => {
+    const increment = lift((x: number) => x + 1);
+    const total = lift(({ foo }: { foo: number }) => foo);
+    const built = pattern<{ x: number }>(({ x }) => ({
+      total: total({ foo: increment(x) }),
+    }));
+
+    expect(built.derivedInternalCells?.map((cell) => cell.partialCause))
+      .toEqual([{ $generated: 0 }, "total"]);
+  });
 });

@@ -26,7 +26,6 @@ import { FabricEpochDay } from "./FabricEpochDay.ts";
 import { FabricEpochNsec } from "./FabricEpochNsec.ts";
 import { FabricHash } from "./FabricHash.ts";
 import { FabricKeyPair } from "./FabricKeyPair.ts";
-import { FabricRegExp } from "./FabricRegExp.ts";
 import { FabricUnavailable } from "./FabricUnavailable.ts";
 
 /**
@@ -96,7 +95,6 @@ const CLASSES_BY_NAME = Object.freeze({
   FabricEpochNsec,
   FabricHash,
   FabricKeyPair,
-  FabricRegExp,
   FabricUnavailable,
 });
 

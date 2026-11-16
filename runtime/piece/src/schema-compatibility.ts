@@ -32,6 +32,7 @@ import {
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
   fabricAwareEqual,
+  hashStringOf,
   isKeyableObjectOrArray,
 } from "@commonfabric/data-model";
 import {
@@ -86,6 +87,28 @@ interface CompatibilityContext {
    * must not read as a contract break.
    */
   verbEvent?: boolean;
+
+  /**
+   * The result property names that lead to the object being proved, from the
+   * result's root, each one the name a named-property comparison descended
+   * by. A path through anything else (a list's items, a record's values, a
+   * union's branch) leaves the names behind, and `verbRemovable` sees the
+   * readable path disagree with them.
+   */
+  resultPropertyNames?: readonly string[];
+
+  /**
+   * Whether the verbs the result field `names` reaches may go with it,
+   * judged from what the previous pattern binds there (`verbRemovalJudge`).
+   * `path` is the proof's readable path to the field, `schema` the field's
+   * previous contract under `root`. Unset, no verb may be removed.
+   */
+  verbRemovable?: (
+    names: readonly string[],
+    path: string,
+    schema: JSONSchema,
+    root: JSONSchema,
+  ) => boolean;
 
   /**
    * Whether the proof goes on past the first issue it finds, to report every
@@ -594,6 +617,8 @@ const comparableIfc = (ifc: unknown): unknown => {
       continue;
     }
     if (role === "writerAlternatives" && Array.isArray(value)) {
+      // The alternatives are a set, whose order carries no meaning, so they
+      // are compared in an order their contents decide.
       const normalized = value.map((policy) => {
         if (!isObjectNotArray(policy)) return policy;
         const writer = writerClaimWithoutVolatileIdentity(
@@ -602,7 +627,9 @@ const comparableIfc = (ifc: unknown): unknown => {
         return writer === policy.writeAuthorizedBy
           ? policy
           : { ...policy, writeAuthorizedBy: writer };
-      });
+      }).map((policy) => ({ policy, order: hashStringOf(policy) }))
+        .sort((a, b) => a.order < b.order ? -1 : a.order > b.order ? 1 : 0)
+        .map(({ policy }) => policy);
       if (normalized.some((policy, index) => policy !== value[index])) {
         changed = true;
       }
@@ -675,9 +702,13 @@ const comparableIfc = (ifc: unknown): unknown => {
  * than left to be rediscovered.
  *
  * The semantic-extension keys (`asCell`, `ifc`, `readOnly`, `scope`,
- * `writeOnly`) are compared for exact equality, with one exception: a writer
- * claim's volatile identity, in a `writeAuthorizedBy` or in each member of a
- * `writePolicyAnyOf`, is normalized out before the `ifc` comparison. That
+ * `writeOnly`) are compared for exact equality, with two exceptions, both
+ * made in the reduction `comparableIfc()` applies before the `ifc`
+ * comparison. The members of a `writePolicyAnyOf` are a set, compared in an
+ * order their contents decide, so a candidate listing them in another order
+ * declares the same contract. And a writer claim's volatile identity, in a
+ * `writeAuthorizedBy` or in each member of a `writePolicyAnyOf`, is
+ * normalized out. That
  * identity is the content-addressed module hash (`moduleIdentity`, and the
  * legacy `bundleId`), which rehashes on any edit to the authoring module,
  * together with the source-file spelling (`file`), which changes with the
@@ -792,6 +823,8 @@ export function patternSchemaIncompatibilities(
       sourceRoot: candidate.resultSchema,
       targetRoot: previousResultSchema,
       role: "result",
+      resultPropertyNames: [],
+      verbRemovable: verbRemovalJudge(previous),
       activePairs: new WeakMap(),
       sourceUnionSplitDepth: 0,
       allowEvolutionPolicy: true,
@@ -1323,12 +1356,15 @@ function objectSubsetIssues(
   // whole-object constraint such as `dependentRequired` can name it too.
   // A candidate that still constrains the name, through a matching pattern
   // or a typed index signature, still publishes a value there, which must
-  // hold to every contract the previous object gave the name. A verb is
-  // refused even when optional, and so is a field holding one at any depth,
-  // because a verb's absence is not something a holder can read: a stream
-  // handle reads as itself when nothing is stored, so a holder still bound to
-  // it keeps sending, and each event is dropped for want of a handler. And a
-  // verb's event refuses it outright: a caller still sends a field the event
+  // hold to every contract the previous object gave the name. An optional
+  // verb, and a field holding one at any depth, may go where the previous
+  // pattern bound each verb to a handler's stream: a holder's object read then
+  // reads the verb as absent (`runtime/runner/src/withdrawn-verb.ts`). One the
+  // previous pattern bound any other way is refused, a builtin's key or a verb
+  // forwarded through another node, since what it stands for may record no
+  // owner a read could consult (`verbRemovalJudge`), and so is any verb
+  // removal where the previous pattern carries no binding to judge by, as a
+  // recorded baseline does not. And a verb's event refuses it outright: a caller still sends a field the event
   // stops declaring, and an event strips undeclared fields before any handler
   // runs, so the caller's value would be dropped without a refusal.
   //
@@ -1352,7 +1388,14 @@ function objectSubsetIssues(
       if (
         allowEvolutionPolicy && !context.verbEvent &&
         !previousRequired.has(property) &&
-        !publishesVerb(targetProperties[property], context.targetRoot)
+        (!publishesVerb(targetProperties[property], context.targetRoot) ||
+          (context.resultPropertyNames !== undefined &&
+            context.verbRemovable?.(
+                [...context.resultPropertyNames, property],
+                `${path}.${property}`,
+                targetProperties[property],
+                context.targetRoot,
+              ) === true))
       ) {
         removed.add(property);
         const candidatePatterns = matchingPatternPropertySchemas(
@@ -1611,7 +1654,10 @@ function objectSubsetIssues(
         sourceDirect,
         targetProperties[property],
         propertyPath,
-        context,
+        context.resultPropertyNames === undefined ? context : {
+          ...context,
+          resultPropertyNames: [...context.resultPropertyNames, property],
+        },
       );
       if (
         directIssues.length > 0 &&
@@ -1819,6 +1865,124 @@ function publishesVerb(schema: JSONSchema, root: JSONSchema): boolean {
     );
   };
   return visit(schema, root);
+}
+
+/**
+ * Judges, from the bindings in `previous`'s graph, whether the verbs a result
+ * field holds may be removed with it. A holder reads a removed verb as absent
+ * when the verb listened at the root of its own stream's document, which is
+ * where a pattern's handler listens. So each place the field's previous
+ * contract declares a verb has to be bound straight to one of the pattern's
+ * own handler streams: an alias, at no path, to the cell a handler node of the
+ * graph takes as its `$event`, and that no node produces as an output. A
+ * stream marker on a cell says what its value is, not that a handler listens
+ * there: a computation returning a builtin's verb is minted a stream-marked
+ * cell of its own. A verb forwarded through anything else, a builtin, a
+ * computation, a sub-pattern or an input, may stand for a builtin's key, which
+ * records no owner a read could consult, and keeps the field. So
+ * does a verb below a binding the walk cannot see into, and a field whose
+ * names disagree with the readable path, as they do past a list or a record.
+ * Data the field holds beside its verbs is not judged.
+ */
+function verbRemovalJudge(previous: Pattern): (
+  names: readonly string[],
+  path: string,
+  schema: JSONSchema,
+  root: JSONSchema,
+) => boolean {
+  const handlerEvents: unknown[] = [];
+  const produced: unknown[] = [];
+  for (const node of previous.nodes ?? []) {
+    for (const alias of aliasesIn(node.outputs)) {
+      produced.push(alias.partialCause);
+    }
+    if (node.module?.wrapper !== "handler") continue;
+    const event = aliasOf(
+      isObjectNotArray(node.inputs)
+        ? (node.inputs as Record<string, unknown>).$event
+        : undefined,
+    );
+    if (
+      event !== undefined && event.cell === undefined && event.path.length === 0
+    ) handlerEvents.push(event.partialCause);
+  }
+  const names = (causes: unknown[], cause: unknown): boolean =>
+    causes.some((each) => fabricAwareEqual(each as never, cause as never));
+  const isHandlerStream = (binding: unknown): boolean => {
+    const alias = aliasOf(binding);
+    return alias !== undefined && alias.cell === undefined &&
+      alias.path.length === 0 &&
+      names(handlerEvents, alias.partialCause) &&
+      !names(produced, alias.partialCause);
+  };
+  const verbsBound = (
+    schema: JSONSchema,
+    root: JSONSchema,
+    binding: unknown,
+  ): boolean => {
+    if (!publishesVerb(schema, root)) return true;
+    const { schema: node, root: nodeRoot } = resolveSchema(schema, root);
+    if (!isObjectNotArray(node)) return false;
+    if (declaresVerbStream(node)) return isHandlerStream(binding);
+    if (aliasOf(binding) !== undefined || !isObjectNotArray(binding)) {
+      return false;
+    }
+    const properties = isObjectNotArray((node as SchemaObject).properties)
+      ? (node as SchemaObject).properties as Record<string, JSONSchema>
+      : {};
+    const named = new Set<unknown>(Object.values(properties));
+    const elsewhere = subschemaChildren(node, REFERENCE_TABLE_KEYS).some(
+      (child) =>
+        !named.has(child) && publishesVerb(child as JSONSchema, nodeRoot),
+    );
+    if (elsewhere) return false;
+    return Object.entries(properties).every(([name, property]) =>
+      verbsBound(
+        property,
+        nodeRoot,
+        Object.hasOwn(binding, name)
+          ? (binding as Record<string, unknown>)[name]
+          : undefined,
+      )
+    );
+  };
+  return (names, path, schema, root) => {
+    if (["result", ...names].join(".") !== path) return false;
+    let binding: unknown = previous.result;
+    for (const name of names) {
+      if (aliasOf(binding) !== undefined || !isObjectNotArray(binding)) {
+        return false;
+      }
+      if (!Object.hasOwn(binding, name)) return false;
+      binding = (binding as Record<string, unknown>)[name];
+    }
+    return verbsBound(schema, root, binding);
+  };
+}
+
+/** The target of a graph's `$alias` binding, which names a cell. */
+interface AliasTarget {
+  readonly path: readonly unknown[];
+  readonly partialCause?: unknown;
+  readonly cell?: unknown;
+}
+
+/** Every alias in a graph binding, not looking past one into its target. */
+function aliasesIn(value: unknown): AliasTarget[] {
+  const alias = aliasOf(value);
+  if (alias !== undefined) return [alias];
+  if (Array.isArray(value)) return value.flatMap(aliasesIn);
+  if (isObjectNotArray(value)) return Object.values(value).flatMap(aliasesIn);
+  return [];
+}
+
+function aliasOf(value: unknown): AliasTarget | undefined {
+  if (!isObjectNotArray(value)) return undefined;
+  const target = (value as { $alias?: unknown }).$alias;
+  return isObjectNotArray(target) &&
+      Array.isArray((target as { path?: unknown }).path)
+    ? target as unknown as AliasTarget
+    : undefined;
 }
 
 function declaresVerbStream(schema: JSONSchema): boolean {
@@ -2369,11 +2533,11 @@ function sourceAlternativeAcceptedBy(
  * update rather than risk accepting an incompatible one.
  *
  * A conjunct carrying only inert annotations ({@link isInertAnnotationKey})
- * constrains nothing, so a conjunction whose other conjuncts are all of that
- * kind accepts exactly what its one remaining conjunct accepts. When both
- * sides reduce that way, typically a union branch beside a base holding
- * nothing but the union's description, the two remaining conjuncts are
- * compared as whole contracts, under the evolution policy the caller allows.
+ * or definitions constrains no value. A conjunction with one remaining
+ * conjunct accepts exactly what that conjunct accepts. When both sides reduce
+ * that way, typically a union branch beside its description and definitions,
+ * the two remaining conjuncts are compared as whole contracts, under the
+ * evolution policy the caller allows.
  * Any other conjunction is proved conjunct by conjunct without that policy:
  * a field one conjunct leaves unnamed may be contracted by another.
  */
@@ -2411,7 +2575,8 @@ function schemaConjunctionSubsetIssue(
 /**
  * The one conjunct of `conjunction` that constrains values, or its only
  * conjunct, or `undefined` when neither exists. A conjunct constrains nothing
- * when it is `true` or every key it carries is an inert annotation.
+ * when it is `true` or every key it carries is an inert annotation or a
+ * definitions key. Definitions resolve through the context's owning roots.
  */
 function soleConstrainingConjunct(
   conjunction: readonly JSONSchema[],
@@ -2420,7 +2585,10 @@ function soleConstrainingConjunct(
   const constraining = conjunction.filter((conjunct) =>
     conjunct !== true &&
     (conjunct === false ||
-      !Object.keys(conjunct).every(isInertAnnotationKey))
+      !Object.keys(conjunct).every((key) =>
+        isInertAnnotationKey(key) ||
+        DEFS_KEYS.some((defsKey) => defsKey === key)
+      ))
   );
   return constraining.length === 1 ? constraining[0] : undefined;
 }

@@ -55,6 +55,12 @@ Working references:
 
 ## Component Reference
 
+The attribute names below are the components' HTML attributes. In pattern JSX a
+prop sets the property, so write the camel-case property name: `default-size` is
+`defaultSize`, `button-text` is `buttonText`. Only `data-*`, `aria-*` and event
+props (`oncf-change`) keep a hyphen; any other hyphenated prop sets nothing, and
+the compiler warns of it.
+
 ### 1. cf-button
 
 **Purpose**: Interactive button element **Tag**: `<cf-button>` **Attributes**:
@@ -485,20 +491,23 @@ await input.pressSequentially("user@example.com");
 
 **Purpose**: Tabbed interface container **Tag**: `<cf-tabs>` **Attributes**:
 
-- `default-value` - string (initially active tab)
+- `value` - string, the active tab; a property only, with no attribute (bind a
+  cell with `$value`)
 - `orientation` - "horizontal" | "vertical" **Events**:
 - `cf-change` - Fired on tab change with detail: `{ value }` **Slots**: Default
   slot for cf-tab-list and cf-tab-panel elements **Example**:
 
-```html
-<cf-tabs default-value="tab1">
+In a pattern, where `value` sets the property:
+
+```tsx
+<cf-tabs value="tab1">
   <cf-tab-list>
     <cf-tab value="tab1">Tab 1</cf-tab>
     <cf-tab value="tab2">Tab 2</cf-tab>
   </cf-tab-list>
   <cf-tab-panel value="tab1">Content 1</cf-tab-panel>
   <cf-tab-panel value="tab2">Content 2</cf-tab-panel>
-</cf-tabs>
+</cf-tabs>;
 ```
 
 ### 22. cf-tab-list
@@ -553,16 +562,19 @@ Default slot for cf-tab elements
 **Purpose**: Form wrapper with validation **Tag**: `<cf-form>` **Attributes**:
 
 - `action` - string
-- `method` - string
-- `novalidate` - boolean **Events**:
-- `cf-submit` - Fired on valid submission with detail: `{ formData }`
+- `method` - string **Events**:
+- `cf-submit` - Fired on valid submission, once fields have written their
+  buffered values to their bound cells, with no detail; read the cells.
+  Cancelable: `preventDefault()` keeps a form with an `action` from submitting
+  natively
 - `cf-form-invalid` - Fired on validation failure with detail: `{ errors }`
+- `cf-submit-error` - Fired instead of `cf-submit` when a field fails to write
+  its value, with detail: `{ error, message }`
 
 **Slots**: Default slot for form elements **Methods**:
 
 - `submit()` - Programmatically submit
 - `reset()` - Reset form
-- `validate()` - Validate and return boolean
 
 ### 28. cf-input-otp
 
@@ -599,8 +611,9 @@ Default slot for cf-tab elements
   where there is not:
   `<cf-resizable-panel-group direction="horizontal" stackBelow={768}>`
   **Events**:
-- `cf-resize` - Fired on resize with detail: `{ panels }` **Slots**: Default
-  slot for panels and handles
+- `cf-resize` - Fired on the group itself (it does not bubble) when a person
+  resizes its panels, with detail `{ sizes }`: each panel's percentage, in
+  document order **Slots**: Default slot for panels and handles
 
 ### 30. cf-resizable-panel
 
@@ -718,11 +731,12 @@ main area **Tag**: `<cf-screen>`
 - `height` - string (CSS height)
 - `fade-edges` - boolean
 - `show-scrollbar` - boolean
-- `snap` - boolean **Events**:
+- `snap-to-bottom` - boolean (open at the bottom, and follow new content while
+  scrolled to the end) **Events**:
 - `cf-scroll` - Fired on scroll with detail:
   `{ scrollTop, scrollHeight, clientHeight }` **Methods**:
 - `scrollToY(y, smooth)` - Scroll to position
-- `scrollByY(y, smooth)` - Scroll by amount
+- `scrollToBottom(smooth)` - Scroll to the end of the content
 
 **Note**: `cf-vscroll` is only needed inside `cf-screen` when you need
 snap-to-bottom, fade-edges, or styled scrollbar. `cf-screen` scrolls
@@ -758,9 +772,10 @@ automatically on its own.
 - `striped` - boolean (zebra stripes)
 - `bordered` - boolean
 - `hover` - boolean (row hover effect)
-- `compact` - boolean (reduced padding)
-- `fixed` - boolean (fixed layout) **Slots**: Default slot for thead, tbody,
-  tfoot **Example**:
+- `size` - "sm" | "md" | "lg" (cell padding and text size; default "md")
+- `sticky-header` - boolean (header row stays visible while scrolling)
+- `full-width` - boolean **Slots**: Default slot for thead, tbody, tfoot
+  **Example**:
 
 ```html
 <cf-table striped hover>
@@ -827,7 +842,8 @@ automatically on its own.
     </cf-grid>
   </cf-card>
 
-  <cf-tabs default-value="overview">
+  <!-- The active tab is the value property, which has no attribute. -->
+  <cf-tabs>
     <cf-tab-list>
       <cf-tab value="overview">Overview</cf-tab>
       <cf-tab value="analytics">Analytics</cf-tab>
@@ -855,8 +871,8 @@ document.querySelector("cf-input").addEventListener("cf-change", (e) => {
 });
 
 document.querySelector("cf-form").addEventListener("cf-submit", (e) => {
-  e.preventDefault();
-  console.log("Form data:", e.detail.formData);
+  e.preventDefault(); // stays on the page rather than posting to `action`
+  console.log("Form submitted; its fields' cells hold the values");
 });
 ```
 
@@ -933,9 +949,9 @@ label):
 
 **cf-toast Attributes**:
 
-- `variant` - "default" | "success" | "error" | "warning"
+- `status` - "info" | "success" | "error" | "warning"
 - `duration` - number, auto-dismiss ms (default: 5000, 0 = persistent)
-- `dismissable` - boolean, show X button
+- `dismissible` - boolean, show X button (`dismissable` is a deprecated alias)
 - `open` - boolean, visibility
 
 **cf-toast Slots**: Default (message), `action`, `icon`
@@ -943,13 +959,14 @@ label):
 **Events**:
 
 - `cf-toast-dismiss` - detail: `{ reason: "timeout" | "user" }`
+- `cf-dismiss` - the same, under the name other dismissible components use
 - `cf-toast-action` - detail: `{}`
 
 **Example**:
 
 ```html
 <cf-toast-provider position="bottom">
-  <cf-toast open variant="success" duration="4000">
+  <cf-toast open status="success" duration="4000">
     Changes saved.
     <button slot="action">View</button>
   </cf-toast>

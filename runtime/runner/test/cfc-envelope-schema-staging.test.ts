@@ -2,12 +2,12 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
-import type { CfcConfClause } from "../src/cfc/clause.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { lookupSchemaDocument } from "../src/schema-registry.ts";

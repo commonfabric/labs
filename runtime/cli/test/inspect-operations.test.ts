@@ -160,110 +160,82 @@ describe("cf inspect operations", () => {
     }
   });
 
-  it("reports a field's anchors, their checkpoint, and the anchors document check", async () => {
+  it("reports a field's anchors and the anchors document check", async () => {
     const directory = await Deno.makeTempDir({ prefix: "inspect-anchors-" });
     try {
       const path = `${directory}/anchors.sqlite`;
-      const engine = await open({
-        url: toFileUrl(path),
-        operationCheckpointInterval: 1,
+      const documentId = operationAnchorsDocId({
+        id: "of:anchored",
+        scope: "space",
+        path: ["body"],
       });
+      const engine = await open({ url: toFileUrl(path) });
       try {
         applyCommit(engine, {
           sessionId: "session:setup",
           commit: {
             localSeq: 1,
             reads: { confirmed: [], pending: [] },
-            operations: [{
-              op: "set",
-              id: "of:anchored",
+            operations: ["of:anchored", "of:bare"].map((id) => ({
+              op: "set" as const,
+              id,
               value: { value: { body: "hello world" } },
-            }],
+            })),
           },
         });
+        // The anchors bound `world`, and the edit in the same commit moves
+        // both.
         applyCommit(engine, {
           sessionId: "session:writer",
           commit: {
             localSeq: 1,
             reads: { confirmed: [], pending: [] },
-            operations: [{
-              op: "apply-op",
-              id: "of:anchored",
-              path: toValuePath(["body"]),
-              codec: CODEMIRROR_CHANGESET_CODEC,
-              submissionId: "writer:1",
-              base: null,
-              baselineHash: operationBaselineHash("hello world"),
-              payload: {
-                updates: [{ clientId: "writer", changes: [11, [0, "!"]] }],
+            operations: [
+              {
+                op: "set" as const,
+                id: documentId,
+                value: { value: { from: 6, to: 11 } },
               },
-              anchors: {
-                add: [{ id: "w", from: 6, to: 11 }, {
-                  id: "h",
-                  from: 0,
-                  to: 5,
-                }],
-              },
-            }],
+              ...["of:anchored", "of:bare"].map((id) => ({
+                op: "apply-op" as const,
+                id,
+                path: toValuePath(["body"]),
+                codec: CODEMIRROR_CHANGESET_CODEC,
+                submissionId: "writer:1",
+                base: null,
+                baselineHash: operationBaselineHash("hello world"),
+                payload: {
+                  updates: [{ clientId: "writer", changes: [[0, ">"], 11] }],
+                },
+              })),
+            ],
           },
         });
       } finally {
         close(engine);
       }
 
-      const documentId = operationAnchorsDocId({
-        id: "of:anchored",
-        scope: "space",
-        path: ["body"],
-      });
-      const anchors = [{ id: "h", from: 0, to: 5 }, {
-        id: "w",
-        from: 6,
-        to: 11,
-      }];
       const json = JSON.parse(
         await output(["operations", path, "of:anchored", "--json"]),
       );
       expect(json.fields[0]).toMatchObject({
         active: true,
         cursor: { epoch: 1, version: 1 },
-        anchors,
-        anchorsCommitSeq: 2,
         anchorsDocumentId: documentId,
-        checkpoints: [{ version: 0, anchors: [] }, { version: 1, anchors }],
-        consistency: { anchorsDocumentMatches: true, healthy: true },
+        consistency: { anchorsDocumentValid: true, healthy: true },
       });
+      expect(json.fields[0].anchors).toEqual({ from: 7, to: 12 });
 
       const human = await output(["operations", path, "of:anchored"]);
       expect(human).toContain("healthy");
       expect(human).toContain(
-        `anchors=2 anchors-document=${documentId} anchors-document-matches=true`,
+        `anchors=2 anchors-document=${documentId} anchors-document-valid=true`,
       );
 
-      const legacy = new Database(path);
-      try {
-        legacy.exec("ALTER TABLE op_field_epoch DROP COLUMN anchors");
-        legacy.exec("ALTER TABLE op_field_epoch DROP COLUMN anchors_seq");
-        legacy.exec("ALTER TABLE op_checkpoint DROP COLUMN anchors");
-      } finally {
-        legacy.close();
-      }
-      const withoutColumns = JSON.parse(
-        await output(["operations", path, "of:anchored", "--json"]),
-      );
-      expect(withoutColumns.fields[0]).toMatchObject({
-        anchors: [],
-        anchorsCommitSeq: null,
-        anchorsDocumentId: documentId,
-        checkpoints: [{ version: 0, anchors: [] }, { version: 1, anchors: [] }],
-        consistency: { anchorsDocumentMatches: null, healthy: true },
-      });
-      expect(await output(["operations", path, "of:anchored"])).toContain(
-        "anchors=0 anchors-document=",
-      );
-      expect(await output(["operations", path, "of:anchored"])).toContain(
-        "anchors-document-matches=n/a",
-      );
+      const bare = await output(["operations", path, "of:bare"]);
+      expect(bare).toContain("healthy");
+      expect(bare).toContain("anchors=0 anchors-document=");
+      expect(bare).toContain("anchors-document-valid=n/a");
     } finally {
       await Deno.remove(directory, { recursive: true });
     }

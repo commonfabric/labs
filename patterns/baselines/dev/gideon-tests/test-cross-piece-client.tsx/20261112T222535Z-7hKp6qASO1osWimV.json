@@ -1,0 +1,52 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "invocationCount": {
+        "default": 0,
+        "type": "number"
+      },
+      "lastInvocationStatus": {
+        "default": "Not invoked yet",
+        "type": "string"
+      },
+      "useCfRender": {
+        "default": false,
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "useCfRender",
+      "lastInvocationStatus",
+      "invocationCount"
+    ],
+    "type": "object"
+  },
+  "pattern": "dev/gideon-tests/test-cross-piece-client.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "invocationCount": {
+        "type": "number"
+      },
+      "lastInvocationStatus": {
+        "type": "string"
+      },
+      "useCfRender": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "useCfRender",
+      "lastInvocationStatus",
+      "invocationCount",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

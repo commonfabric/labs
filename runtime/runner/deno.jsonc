@@ -15,10 +15,10 @@
     // PATH) to run a fixture under this preload.
     // --allow-net=127.0.0.1: serving-memory-server.test.ts listens on a
     // localhost websocket and connects a client to it.
-    "deno-test": "ENV=test deno test --shuffle=$(deno task -q test-seed) --no-check --preload=test/clock-preload.ts --allow-ffi --allow-env --allow-net=127.0.0.1 --allow-read --allow-write=/tmp,/var/folders --allow-run=git,deno,\"$(deno eval \"console.log(Deno.execPath())\")\" test/**/*.test.ts test/**/*.test.tsx",
+    "deno-test": "ENV=test deno test --shuffle=$(deno task -q test-seed) --no-check --preload=test/clock-preload.ts --allow-ffi --allow-env --allow-net=127.0.0.1 --allow-read --allow-sys=inspector --allow-write=/tmp,/var/folders --allow-run=git,deno,\"$(deno eval \"console.log(Deno.execPath())\")\" test/**/*.test.ts test/**/*.test.tsx",
     "bench": {
       "description": "Run Cell benchmarks for performance analysis",
-      "command": "deno bench --allow-read --allow-write --allow-net --allow-ffi --allow-env --no-check test/*.bench.ts"
+      "command": "deno bench --allow-read --allow-write --allow-net --allow-ffi --allow-env --v8-flags=--expose-gc --no-check test/*.bench.ts"
     },
     "integration": "LOG_LEVEL=warn deno test --shuffle=$(deno task -q test-seed) --no-check -A $INTEGRATION_TEST_FLAGS \"./integration/*.test.ts\""
   },
@@ -28,7 +28,9 @@
     // on-disk SQLite files, and the integration test that seeds one for an
     // injected (03.3) source reads what the server attaches.
     "@db/sqlite": "jsr:@db/sqlite@0.13.0",
+    "@node/inspector": "node:inspector",
     "@node/v8": "node:v8",
+    "@node/worker_threads": "node:worker_threads",
     "@node/vm": "node:vm",
     "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.1",
     "@types/ws": "npm:@types/ws@^8.18.1",
@@ -37,8 +39,10 @@
     "ws": "npm:ws@^8.21.3"
   },
   "exports": {
+    "./cell-reference": "./src/cell-reference.ts",
     "./native-ui": "./src/native-ui.ts",
     "./hashtags": "./src/hashtags.ts",
+    "./profile-suggestion": "./src/profile-suggestion.ts",
     "./space-invites": "./src/space-invites.ts",
     ".": "./src/index.ts",
     "./jsx-runtime": "./src/jsx-runtime.ts",
@@ -50,9 +54,11 @@
     "./for-testing-only": "./src/for-testing-only.ts",
     "./experimental-posture": "./src/experimental-posture.ts",
     "./deployment-meta": "./src/deployment-meta.ts",
+    "./instance-naming": "./src/builder/instance-naming.ts",
     "./space-host": "./src/space-host.ts",
     "./blob-record": "./src/blob-record.ts",
     "./collected-memory": "./src/collected-memory.ts",
+    "./heap-profile": "./src/heap-profile.ts",
     "./pattern-release-time": "./src/pattern-release-time.ts",
     "./fabric-url": "./src/fabric-url.ts",
     "./meta-seam": "./src/meta-seam.ts",
@@ -70,6 +76,9 @@
     "./storage/v2-remote-session": "./src/storage/v2-remote-session.ts",
     "./storage/cache.deno": "./src/storage/cache.deno.ts",
     "./local-program.deno": "./src/harness/local-program.deno.ts",
+    "./module-compile-worker": "./src/harness/module-compile-worker.ts",
+    "./module-compiler-pool": "./src/harness/module-compiler-pool.ts",
+    "./compilation-cache/shared-compile-cache.deno": "./src/compilation-cache/shared-compile-cache.deno.ts",
     "./patterns-route.deno": "./src/harness/patterns-route.deno.ts",
     "./toolshed-http-auth": "./src/toolshed-http-auth.ts",
     "./cfc": "./src/cfc/mod.ts",
@@ -85,7 +94,6 @@
     "./cfc/kernel/manifest": "./src/cfc/kernel/manifest.ts",
     "./cfc/kernel/spec-header": "./src/cfc/kernel/spec-header.ts",
     "./cfc/trust": "./src/cfc/trust.ts",
-    "./cfc/atoms": "./src/cfc/atoms.ts",
     "./cfc/consumed-label": "./src/cfc/consumed-label.ts",
     "./cfc/label-view-core": "./src/cfc/label-view-core.ts",
     "./cfc/label-view-state": "./src/cfc/label-view-state.ts",
@@ -99,10 +107,12 @@
     "./executor/routed-plane": "./src/executor/routed-plane.ts",
     "./executor/served-requests": "./src/executor/served-requests.ts",
     "./executor/serving-memory-server.deno": "./src/executor/serving-memory-server.deno.ts",
+    "./executor/serving-loop-diagnostics": "./src/executor/serving-loop-diagnostics.ts",
     "./executor/serving-runtime": "./src/executor/serving-runtime.ts",
     "./executor/space-server": "./src/executor/space-server.ts",
     "./executor/serving-worker-host": "./src/executor/serving-worker-host.ts",
     "./executor/serving-worker-main": "./src/executor/serving-worker-main.ts",
+    "./executor/serving-thread": "./src/executor/serving-thread.ts",
     "./executor/stats": "./src/executor/stats.ts",
     "./executor/watermark": "./src/executor/watermark.ts",
     "./cfc/migration-reason": "./src/cfc/migration-reason.ts",

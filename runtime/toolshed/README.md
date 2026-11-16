@@ -191,16 +191,61 @@ by the service; neither the join link nor the redemption request carries it.
 Redemption only raises access: an identity that already holds the invited access
 or more keeps what it has.
 
+An invitation made for one person may carry a `suggestedProfile`: the name, and
+optionally the picture, its issuer knows that person by, for the person to keep,
+edit, or drop when they make their first profile. `suggestedProfile` in the
+capability response bounds it: `maxNameLength` (128) UTF-16 code units of
+well-formed name, which has no leading or trailing whitespace and no control
+character, and `maxPictureBytes` (65,536) bytes of picture, carried as unpadded
+base64url text, which the service holds without inspecting. An invitation that
+carries one admits one identity, so its `maxUses` is 1. A response without the
+field comes from a host that predates suggestions and refuses a create carrying
+one with `invalid-request`, as it refuses every unknown field. The suggestion is
+returned to the identity that redeemed the invitation, on its `redeemed` receipt
+and on each `already-redeemed` receipt after it, until the invitation expires or
+is revoked, or its issuer is found to own the space no longer, when the service
+forgets it. Exhausting the invitation keeps it, so a redeemer that lost its
+first receipt reads it again on retry, on either transport. No administration
+operation (`create`, `list`, `revoke`, `receipts`) returns it, and anyone
+holding the link before the person it is for can redeem it and read the
+suggestion, as they can redeem the invitation.
+
+Any invitation may also carry a `spaceName` and an `issuerName`: the names its
+issuer gives the space and themself, for the person opening the invitation to
+read before they decide to redeem it. `preview` in the capability response
+bounds them: `maxNameLength` (128) UTF-16 code units each, judged as a suggested
+name is. Like the suggestion, they are the issuer's claims, checked only for
+their form. A response without the field comes from a host that predates them,
+which refuses a create carrying either with `invalid-request` and has no
+`preview` route.
+
+`preview` takes `inviteId` and `code`, as `redeem` does, signed by any identity,
+and returns what the invitation shows before it is redeemed: `access`, the
+access it grants, and its `spaceName`, `issuerName` and `suggestedProfile` while
+the service holds them. A preview consumes no use, grants nothing, and records
+no receipt, so it may be repeated. For an identity without a receipt for the
+invitation, every reason it cannot be read — unknown, wrong code, expired,
+revoked, exhausted, or an issuer who no longer owns the space — is the one
+refusal `invite-unavailable`, so only the code tells such a caller whether the
+invitation exists. The receipt comes first, as on redemption: an identity
+holding one for the invitation is not checked against the code and needs no
+active row, so it previews with any well-formed code, including once the
+invitation is used up. Its preview reads the access, the names and the
+suggestion the service keeps beside the invitation, with the suggestion's
+lifetime; revocation, expiry and an issuer who no longer owns the space still
+refuse it.
+
 Over HTTP, every invitation operation is a signed JSON POST under
-`/api/spaces/:space/invites/`: `create`, `redeem`, `list`, `revoke`, and
-`receipts`; the memory-session forms are below. They use the existing CF1 proof,
-binding method, authority, path, body hash, and signer DID, with a maximum
-300-second lifetime and 60 seconds of future clock skew. Bodies are limited to 4
-KiB and unknown fields are refused. Redemption does not require an existing
-target-space session. Its recipient is always the proof signer. Creation,
-listing, revocation, and receipt listing require a current explicit OWNER entry
-in the space ACL. First redemption also requires the issuer to remain an
-explicit OWNER.
+`/api/spaces/:space/invites/`: `create`, `redeem`, `preview`, `list`, `revoke`,
+and `receipts`; the memory-session forms are below. They use the existing CF1
+proof, binding method, authority, path, body hash, and signer DID, with a
+maximum 300-second lifetime and 60 seconds of future clock skew. Bodies are
+limited to 4 KiB, beyond which a `create` may add the base64url text of the
+largest suggested picture, and unknown fields are refused. Redemption and
+preview do not require an existing target-space session. A redemption's
+recipient is always the proof signer. Creation, listing, revocation, and receipt
+listing require a current explicit OWNER entry in the space ACL. First
+redemption also requires the issuer to remain an explicit OWNER.
 
 The memory server runs the same service for `create`, `list`, `revoke`, and
 `receipts` sent as a `space.invite` request on a memory session on the space
@@ -213,11 +258,13 @@ the session's other requests are. A refusal is an error named
 cannot open a session on it; instead a `session.open` carries the invitation in
 its descriptor, bound to the open's principal as the rest of the descriptor is,
 and the server redeems it as the open's principal before checking the open's
-grant (§4.1.2). The toolshed gives its memory server
-`inviteHost: normalizeInviteHost(API_URL)`, so codes are checked against the
-same host on both transports, and the server advertises the `spaceInvites` hello
-flag. A memory server given no invitation host refuses every `space.invite` with
-`invite-service-unsupported`.
+grant (§4.1.2). A preview has no memory-session form: it always goes over signed
+HTTP, whoever sends it, even a principal that holds a session or has already
+redeemed, so a client deciding whether to redeem needs no session. The toolshed
+gives its memory server `inviteHost: normalizeInviteHost(API_URL)`, so codes are
+checked against the same host on both transports, and the server advertises the
+`spaceInvites` hello flag. A memory server given no invitation host refuses
+every `space.invite` with `invite-service-unsupported`.
 
 Configure `API_URL` as the canonical public HTTPS origin, or loopback HTTP in
 local development. It is the audience authority and verifier origin for this
@@ -235,28 +282,42 @@ signature, or any code.
 The reusable client is `SpaceInviteClient` from
 `@commonfabric/runner/space-invites`. The same export provides
 `createInviteCredentials`, `inviteCodeVerifier`, `buildInviteLink`, and
-`parseInviteLink`. A join link is `/join?host&space&invite#code`, with an
-optional `inviter` DID key in the query; the parser refuses any other query key.
-`inviter` is a display hint that anyone holding the link can change; it is
-checked only syntactically and is not part of the code verifier. A recipient
-cannot read the space ACL before redeeming, and afterwards an ACL check can show
-at most that the DID is an owner, not that it issued the link. Like the space
-DID, it travels in the query, so it reaches the shell host's access logs.
-`issue` accepts a prepared request containing `inviteId`, `codeVerifier`,
-`access`, `ttlSeconds`, and optional `maxUses`. Retain the credentials before
+`parseInviteLink`, and `INVITE_LINK_SCHEME`. A join link is
+`/join?host&space&invite#code`, with an optional `inviter` DID key in the query;
+the parser refuses any other query key, and any fragment but the code.
+`parseInviteLink` accepts the same invitation in three more forms and returns
+the same result for each: `/open?…#code=…` on any HTTPS origin, or loopback HTTP
+as for `/join`, which a person reaches by asking to open the invitation in
+Weaver; `fbrc://join?…#code=…`, on the custom scheme every Weaver answers, where
+`join` is the URL's host and its path is empty; and that scheme form without a
+fragment, with the code passed separately as `parseInviteLink(url, { code })`,
+which is how Android delivers it (the code arrives as the intent's `S.code`
+extra). The result's `host` is always the service named in the query, never the
+link's own origin. Other paths, a `/join` or `/open` URL whose query names none
+of `host`, `space`, and `invite`, and `fbrc://setup?n=<nonce>` return
+`undefined`; the last is the reply a Weaver receives while making itself the
+browser's default for the scheme, and is never an invitation. Any other URL on
+the scheme throws `invalid-link`. `inviter` is a display hint that anyone
+holding the link can change; it is checked only syntactically and is not part of
+the code verifier. A recipient cannot read the space ACL before redeeming, and
+afterwards an ACL check can show at most that the DID is an owner, not that it
+issued the link. Like the space DID, it travels in the query, so it reaches the
+shell host's access logs. `issue` accepts a prepared request containing
+`inviteId`, `codeVerifier`, `access`, `ttlSeconds`, and optional `maxUses`,
+`suggestedProfile`, `spaceName` and `issuerName`. Retain the credentials before
 calling it so an uncertain response can be retried with the same ID. The
-convenience `create` accepts the same access/lifetime/limit options and optional
-paired `inviteId` and `code`, and returns flat active metadata plus `code`. If
-the create request fails, `SpaceInviteCreateError` retains its credentials and
-original options in the frozen `retry` getter. Retry with
-`client.create(error.retry)` on the same client. The getter contains the bearer
-code: keep it private, and use it only to recover or retry this invitation.
-Ordinary error inspection and JSON serialization omit these credentials. The
-error preserves a structured refusal code; uncertain transport or response
-parsing failures use `create-outcome-unknown`. Validation failures before
-sending remain `SpaceInviteError` refusals. `redeem` accepts only `inviteId` and
-`code`; `list` and `receipts` return arrays; `revoke` returns
-`{ "revoked": true }`.
+convenience `create` accepts the same access/lifetime/limit/suggestion/name
+options and optional paired `inviteId` and `code`, and returns flat active
+metadata plus `code`. If the create request fails, `SpaceInviteCreateError`
+retains its credentials and original options in the frozen `retry` getter. Retry
+with `client.create(error.retry)` on the same client. The getter contains the
+bearer code: keep it private, and use it only to recover or retry this
+invitation. Ordinary error inspection and JSON serialization omit these
+credentials. The error preserves a structured refusal code; uncertain transport
+or response parsing failures use `create-outcome-unknown`. Validation failures
+before sending remain `SpaceInviteError` refusals. `redeem` and `preview` accept
+only `inviteId` and `code`, and `preview` always sends the signed HTTP request;
+`list` and `receipts` return arrays; `revoke` returns `{ "revoked": true }`.
 
 Given a `session`, a function that sends an operation on the space's memory
 session as `IStorageManager.administerInvites()` does, `SpaceInviteClient` sends
@@ -268,12 +329,13 @@ that open is refused its grant (an `AuthorizationError`), which a repeat
 redemption of an invitation whose access was since removed is.
 
 Successful redemption returns `outcome` (`redeemed` or `already-redeemed`),
-`redemption` (`inviteId` and `did`), and `currentAccess` (`READ`, `WRITE`,
-`OWNER`, or null). Current access is an observation, and the ordinary session
-checks it again. A receipt-first retry never regrants removed access. New
-identities see `invite-unavailable` for unknown, wrong-code, expired, revoked,
-exhausted, or issuer-invalid invitations. Proof failures use `invalid-proof`;
-owner failures use `not-owner`. Every operation, `create`, `redeem`, `list`,
+`redemption` (`inviteId` and `did`), `currentAccess` (`READ`, `WRITE`, `OWNER`,
+or null), and the invitation's `suggestedProfile` while the service holds one.
+Current access is an observation, and the ordinary session checks it again. A
+receipt-first retry never regrants removed access. New identities see
+`invite-unavailable` for unknown, wrong-code, expired, revoked, exhausted, or
+issuer-invalid invitations. Proof failures use `invalid-proof`; owner failures
+use `not-owner`. Every operation, `create`, `redeem`, `preview`, `list`,
 `revoke` and `receipts` alike, on a
 [deleted space](../../docs/specs/random-space-identities.md#deleting-a-space) is
 refused with `space-deleted` and HTTP status 410 (Gone), since no grant can
@@ -292,13 +354,16 @@ itself. Outside the convenience `create` operation, transport failures remain
 transport failures. Malformed error responses use `service-error`.
 
 Admission uses private tables in the target space's SQLite engine, inside the
-same serialized transaction as its ACL-only public commit. A unique receipt pair
-consumes one use, including when the recipient already has sufficient access.
-Stronger explicit or wildcard access remains intact. Exhaustion, revocation, and
-expiration remove the active verifier; successful receipt pairs remain.
-Expiration is checked on each operation, with lazy physical cleanup. Unredeemed
-retired IDs have secret-free rejection markers for 361 seconds, covering replay
-of every still-fresh accepted create proof.
+same serialized transaction as its ACL-only public commit. A suggested profile
+is a private row of its own, beside the invitation's, and so is what its preview
+reads: the access and any names it returns, and the issuing DID, kept only to
+check that its issuer still owns the space and never returned. A unique receipt
+pair consumes one use, including when the recipient already has sufficient
+access. Stronger explicit or wildcard access remains intact. Exhaustion,
+revocation, and expiration remove the active verifier; successful receipt pairs
+remain. Expiration is checked on each operation, with lazy physical cleanup.
+Unredeemed retired IDs have secret-free rejection markers for 361 seconds,
+covering replay of every still-fresh accepted create proof.
 
 A full SQLite backup includes private invite tables and receipts atomically.
 Restore the complete store; restoring only the graph must not be used to

@@ -1,0 +1,45 @@
+{
+  "argumentSchema": {
+    "description": "The note's title and body.",
+    "properties": {
+      "content": {
+        "default": "",
+        "description": "The note's body: Markdown, where `$…$` and `$$…$$` are TeX.",
+        "type": "string"
+      },
+      "title": {
+        "default": "Math note",
+        "description": "The note's title.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "examples/math-note/main.tsx",
+  "resultSchema": {
+    "description": "The note, and the title and body it shows.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "content": {
+        "description": "The note's body.",
+        "type": "string"
+      },
+      "title": {
+        "description": "The note's title.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "content",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

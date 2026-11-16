@@ -184,6 +184,13 @@ export interface MultiRuntimeSessionSpec {
    * the session's `#profile` wish fail rather than answer as another profile.
    */
   preferredProfileSpace?: DID;
+
+  /**
+   * A profile this session's runtime suggests for its user's first profile,
+   * stored once the runtime starts (`offerProfileSuggestion`), as a host does
+   * with the profile an invitation suggests. `picture` is the picture's bytes.
+   */
+  profileSuggestion?: { name: string; picture?: number[] };
 }
 
 export interface MultiRuntimeHarnessOptions {
@@ -305,7 +312,7 @@ export function claimPatternEnvironment(apiUrl: URL): () => void {
  * and holds it, and every harness in a run wants the same answers.
  */
 let patternsRoute: PatternsRoute | undefined;
-function systemPatternsRoute(): PatternsRoute {
+export function systemPatternsRoute(): PatternsRoute {
   return patternsRoute ??= new PatternsRoute(
     fromFileUrl(new URL("..", import.meta.url)),
   );
@@ -633,6 +640,18 @@ export class MultiRuntimeSession {
    */
   async createOwnProfile(name: string): Promise<FabricValue> {
     return await this.#client.call("createOwnProfile", { name });
+  }
+
+  /**
+   * The profile stored as suggested for this session's user, with its
+   * picture's bytes as numbers, or `undefined` when none is stored.
+   */
+  async profileSuggestion(): Promise<
+    { name?: string; picture?: number[] } | undefined
+  > {
+    return await this.#client.call("profileSuggestion", {}) as
+      | { name?: string; picture?: number[] }
+      | undefined;
   }
 
   /**
@@ -1056,6 +1075,9 @@ export class MultiRuntimeHarness {
           ...(cfcWriteFloor !== undefined ? { cfcWriteFloor } : {}),
           ...(started.preferredProfileSpace !== undefined
             ? { preferredProfileSpace: started.preferredProfileSpace }
+            : {}),
+          ...(started.profileSuggestion !== undefined
+            ? { profileSuggestion: started.profileSuggestion }
             : {}),
         }).catch(async (error) => {
           await client.terminate();

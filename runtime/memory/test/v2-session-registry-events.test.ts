@@ -73,5 +73,31 @@ describe("session-registry", () => {
         ["detached", "waiting"],
       ]);
     });
+
+    it("snapshots one space's sessions alone when given the space", () => {
+      const registry = new SessionRegistry({ ttlMs: 60_000 });
+      const elsewhere = "did:key:z6MkSessionRegistryEventsElsewhere";
+      openSession(registry, "here");
+      registry.open(
+        elsewhere,
+        { sessionId: "there", sessionToken: "token-there" },
+        0,
+        "connection-there",
+        "did:key:z6Mkthere",
+      );
+      registry.detach(elsewhere, "there", "connection-there");
+
+      expect(
+        registry.snapshot(space).map((event) => [event.kind, event.sessionId]),
+      ).toEqual([["opened", "here"]]);
+      expect(
+        registry.snapshot(elsewhere).map((
+          event,
+        ) => [event.kind, event.space, event.sessionId]),
+      ).toEqual([
+        ["opened", elsewhere, "there"],
+        ["detached", elsewhere, "there"],
+      ]);
+    });
   });
 });

@@ -197,6 +197,41 @@ describe("Pattern Runner - findIndex", () => {
     expect((value as any)?.idx).toBeUndefined();
   });
 
+  it("reports a `TypeError` where the input holds `null` rather than an array", async () => {
+    const errors: Error[] = [];
+    runtime.scheduler.onError((error) => errors.push(error));
+    const findPattern = pattern<{ items: number[] }>(
+      ({ items }) => {
+        const idx = items.findIndex((x: number) => x > 0);
+        return { idx };
+      },
+    );
+
+    const resultCell = runtime.getCell(
+      space,
+      "findindex-absent",
+      {
+        type: "object",
+        properties: { idx: { type: "number" } },
+      } as const satisfies JSONSchema,
+      tx,
+    );
+
+    const result = runtime.run(
+      tx,
+      findPattern,
+      { items: null } as unknown as { items: number[] },
+      resultCell,
+    );
+    tx.commit();
+    await result.pull();
+
+    expect(errors.map((error) => error.message)).toContain(
+      "findIndex called on non-array value",
+    );
+    expect(errors.every((error) => error instanceof TypeError)).toBe(true);
+  });
+
   it("should find first match in objects", async () => {
     interface Item {
       name: string;

@@ -11,6 +11,7 @@ import {
   applyDocs,
   boardFile,
   fetchedFrom,
+  identityDid,
   loadMirror,
   openDocSource,
   refreshMirror,
@@ -629,6 +630,47 @@ describe("sync", () => {
       }
     });
 
+    describe("on a deployment whose naming mode it is told", () => {
+      // The memory server admits a session by the naming mode it declares
+      // (INV-16): a space a naming runtime wrote refuses a session that
+      // declares none, and a server whose posture names no instances refuses
+      // one that declares it. A session opened in this build's default mode
+      // is therefore refused one of these two boards, whichever the default
+      // is.
+
+      for (const namesInstances of [true, false]) {
+        it(`reads a board whose deployment runs \`instanceNames: ${namesInstances}\``, async () => {
+          const deployed = await boardServer({ namesInstances });
+          try {
+            const identity = join(dir, "identity.key");
+            await Deno.writeFile(identity, await Identity.generatePkcs8());
+            const source = await openDocSource(
+              { apiUrl: "http://localhost:1", space: SPACE, identity },
+              {
+                settings: () =>
+                  Promise.resolve({
+                    experimental: { instanceNames: namesInstances },
+                    memoryHost: new URL("https://memory.example"),
+                  }),
+                Sessions: deployed.Sessions,
+              },
+            );
+            try {
+              expect(
+                (await source.fetch(["of:fid1:topic-piece-2"], [])).map((
+                  doc,
+                ) => doc.id),
+              ).toEqual(["of:fid1:topic-piece-2"]);
+            } finally {
+              await source.close();
+            }
+          } finally {
+            await deployed.close();
+          }
+        });
+      }
+    });
+
     it("throws, naming the keyfile, when it cannot be read", async () => {
       const identity = join(dir, "missing.key");
 
@@ -730,6 +772,24 @@ describe("sync", () => {
     });
   });
 
+  describe("identityDid()", () => {
+    it("returns the DID of the identity the keyfile holds", async () => {
+      const path = join(dir, "identity.key");
+      const pkcs8 = await Identity.generatePkcs8();
+      await Deno.writeFile(path, pkcs8);
+
+      expect(await identityDid(path)).toBe(
+        (await Identity.fromPkcs8(pkcs8)).did(),
+      );
+    });
+
+    it("throws naming a keyfile it cannot read", async () => {
+      await expect(identityDid(join(dir, "absent.key"))).rejects.toThrow(
+        "absent.key",
+      );
+    });
+  });
+
   describe("loadMirror()", () => {
     it("returns what `saveMirror()` wrote, to a file only its owner reads", async () => {
       const path = join(dir, "nested", "copy.json");
@@ -770,6 +830,26 @@ describe("sync", () => {
 
       expect(Object.keys((await loadMirror(path)).docs).sort()).toEqual([
         "cid:x",
+        "of:fid1:new",
+      ]);
+    });
+
+    it("lets go of an entry followed before the copy kept what it went through, so that it is followed again", async () => {
+      const path = join(dir, "unrouted.json");
+      const followed = { piece: "of:fid1:p", input: "of:fid1:i" };
+      await Deno.writeTextFile(
+        path,
+        JSON.stringify({
+          pieces: {
+            "of:fid1:old": followed,
+            "of:fid1:odd": { ...followed, via: ["of:fid1:odd", 2] },
+            "of:fid1:new": { ...followed, via: ["of:fid1:new"] },
+          },
+          docs: {},
+        }),
+      );
+
+      expect(Object.keys((await loadMirror(path)).pieces)).toEqual([
         "of:fid1:new",
       ]);
     });

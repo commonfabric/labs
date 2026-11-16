@@ -23,8 +23,9 @@ describe("Ingest channels route (authenticated)", () => {
   // is tested against a real ACL-enforcing memory server in
   // ingest-channels.utils.test.ts.
 
-  // A distinct client per request: the limiters are module-level, so sharing a
-  // key across tests turns a later 502 expectation into a 429.
+  // A distinct client per request: the limiters belong to the one router
+  // .index.ts builds, so sharing a key across tests turns a later 502
+  // expectation into a 429.
   let clientCounter = 0;
 
   const BASE = SPACE_BASE.replace(

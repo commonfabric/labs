@@ -166,6 +166,13 @@ export interface HarnessJobSpec extends HarnessModelLimits {
   /** The provider reasoning effort; the provider's default when absent. */
   reasoningEffort?: string;
 
+  /**
+   * The provider prompt-cache key the job's model calls carry, shared with
+   * every other run that names it; the run's own id when absent, so a run
+   * then reuses the cache only within itself.
+   */
+  cacheAffinityKey?: string;
+
   /** The host-owned file backing the read-only Loom tools. */
   loomRetrievalConfigPath?: string;
 
@@ -576,6 +583,9 @@ export const runHarnessJob = async (
           : {}),
         ...(spec.maxOutputTokens !== undefined
           ? { maxOutputTokens: spec.maxOutputTokens }
+          : {}),
+        ...(spec.cacheAffinityKey !== undefined
+          ? { cacheAffinityKey: spec.cacheAffinityKey }
           : {}),
       });
       const run = async <

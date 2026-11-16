@@ -373,14 +373,18 @@ siblings for those directories:
 - only top-level callable children are rewritten this way; nested ordinary data
   is serialized as-is
 
-Mounted callable files are readable. Their content starts with a stable
-shebang whose first line is `#!... exec`, so `cf exec <mounted-callable-file>`
-can resolve the backing callable schema and execute it.
+Mounted callable files are readable and executable. Each is a shell script
+whose first line is `#!/bin/sh` and whose last line runs
+`cf exec <mounted-callable-file> "$@"`, so running the file directly and running
+`cf exec` on it both resolve the backing callable schema and execute it. The
+shell runs the launcher rather than the shebang naming it, because a shebang
+line ends its interpreter at the first space and the launcher's path may hold
+one.
 
 Callable files also embed the handler's input schema as readable comments:
 
 ```sh
-#!/path/to/cf-exec exec
+#!/bin/sh
 # schema: {"type":"string"}
 # input: string
 exec '/path/to/cf-exec' exec "$0" "$@"

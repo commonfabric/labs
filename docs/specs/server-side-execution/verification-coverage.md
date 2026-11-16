@@ -12,10 +12,10 @@ mapping pass is due.
 
 ## Current status
 
-The first-party default is OFF and the ON soak is paused. The
+The first-party default is ON (re-flipped 2026-11-11) and the ON soak runs
+on main. The
 [`serverExecution` registry](../../development/EXPERIMENTAL_OPTIONS.md#serverexecution)
-owns the current default and flip records. A renewed ON rollout must satisfy
-the plan's ordered gates. OW28 tracks served compilation and its scoped child
+owns the current default and flip records. OW28 tracks served compilation and its scoped child
 execution coverage; implementing that path does not discharge the other gates.
 
 The status corrections in this register are bounded to the rows below:
@@ -1890,11 +1890,9 @@ blockquote; this PR):
   the sandbox globalThis is isolated); pre-fix the backoff loop
   re-ran the handler throughout the observation window (17 runs / 5s
   observed; production shape ~43 attempts / 30.5s to
-  CommitConvergenceError). The push-boundary belt (a ConflictError
-  naming a known-speculative layer upgrades to the terminal refusal)
-  is unreachable-by-construction behind the build-time refusal and
-  carries no separate pin — `speculative-basis-exported` in the log
-  names any future reach.
+  CommitConvergenceError). The build-time refusal is the only check:
+  a layer is speculative from its seal on, so a commit that passes it
+  names no speculative layer when its verdict comes back.
 - The origin-ack retirement wake (speculation.md §6's closing
   paragraph; the verdict-lifetime sub-defect): → COVERED, impl-gate,
   red-first. The same file's "an entry whose origin's accept verdict
@@ -3679,9 +3677,9 @@ findings; the OWNER RULING — the flip lands DARK):
 
 The current rollout posture is the
 [`serverExecution` registry](../../development/EXPERIMENTAL_OPTIONS.md#serverexecution):
-first-party default OFF, ON soak paused. The following flip record describes
-#6535's changes, not a current gate verdict. OW28's direct acceptance coverage
-is recorded above; the plan's gate dispositions govern a renewed ON rollout.
+first-party default ON since the 2026-11-11 re-flip, with the ON soak running
+on main. The following flip record describes #6535's changes, not a current
+gate verdict. OW28's direct acceptance coverage is recorded above.
 
 **Flip record — PR #6535.** Its ON-skip registry and topology checks do not
 exercise fresh served `compileAndRun` completion. Its merge therefore does not
@@ -4123,13 +4121,32 @@ Delta 2026-11-01 — stage L (the lease in memory,
   `executor-cooperative-yield.test.ts` (ii) runs the same property on a real
   1.8-s settle.
 - §2's watchdog: `executor/serving-worker-recovery.test.ts` ("the watchdog", over
-  a stand-in worker and the fake clock): the six-interval limit, any message
+  stand-in workers and the fake clock): the six-interval limit, any message
   restarting the count, no count before the first message, the leases released and counted
-  in `lease.lost` across a successor, a commit left in flight refused at admission,
+  in `lease.lost` across a successor, another space's worker left alone, a commit
+  left in flight refused at admission,
   and a close under a stalled host. `executor/serving-worker-watchdog.test.ts`
-  stops a real worker's thread holding a lease and serves the space from its
-  successor; a stand-in cannot show that nothing waits for a stalled thread's
+  stops a real worker's thread holding a lease and serves the space from a
+  fresh worker; a stand-in cannot show that nothing waits for a stalled thread's
   teardown, which Deno does not finish.
+- §1's Workers: `executor/ServingWorkerPool.test.ts` (stand-in workers and a
+  stand-in memory server): a space placed on a worker of its own by the
+  admission-side criteria and by nothing less, its events routed to that
+  worker alone, an access-list commit announced to the others, a vacant host
+  closed unless it holds something again by the time it is asked, a commit
+  sent meanwhile handed to the space's next worker, a session live at the
+  close placing nothing where one opened meanwhile does, a space leased to
+  another holder left unplaced, spares, the cap on
+  workers and on parked workers, the heap budget, and the counters of
+  several workers taken together. `executor/serving-worker-recovery.test.ts`
+  holds a failed worker's spaces alone to the per-space backoff.
+  `serving-worker.test.ts` serves two spaces from a real worker each, under a
+  holder each, closes a parked space's worker and serves its next visit from
+  a fresh one, and serves both spaces from one worker under `maxWorkers: 1`.
+  `executor/parked-runtime.test.ts` ("the host's occupancy") pins what a
+  host reports it holds. The memory server's half, a serving session told
+  from another worker's by the holder component its connection names, is
+  `runtime/memory/test/v2-explicit-read.test.ts`.
 
 Delta 2026-08-16 — fan-out stage A (OW17 leg 1: the instance-keyed
 serving replica + wire; the client arrival gate):
@@ -5132,16 +5149,33 @@ supply; OW29/OW32/OW34 closed):
     coarse over-demand's compute cost is shown to matter (W0's drift was
     not tens of thousands: note union 0 → 1 721 over 20 notes, one
     session, dropping to 3 when the sessions leave).
+  - **flag 4 — the structure load for demanded NON-root docs with
+    pattern meta: BUILT.** The closure surfaces a piece reachable only
+    through a DATA link whose writer is not registered on the server; W0
+    counted the rows: chat 2 / note 19 / lunch 0. Its trigger, a workload
+    where a data-linked piece's value must land server-side, is a FabriChat
+    room's file store: the room's `ensureFileStore` handler creates the
+    store and the room reaches it only through its record's link, so with
+    server execution on the store's `entries` were never computed. The
+    pattern-meta test needs no engine read: the memory server marks a
+    demand row `piece` when the document the session was sent for it is
+    one of a piece's values, a document whose `result` link names a piece
+    (`carriesPieceMeta`), other than the piece's argument, which the
+    `argument` link of a result document the session holds names
+    (`trackedAndPieceKeysFromEntries` in `server-sync.ts`, read in
+    `#buildSessionDemand`). The demand pass structure-loads a marked row
+    as it does a root (`SpaceServer`'s demand pass). A piece's result
+    document is not marked, since it is what a link to the piece names: a
+    read of a list of links is sent it and starts no listed piece. Nor is
+    a document whose `result` names a handling's `receipt:`. Pinned by
+    `patterns/integration/fabrichat-file-store-multi-runtime.test.ts` and
+    `patterns/system/fabrichat/file-store.test.tsx` with server execution
+    on, by `runtime/piece/test/served-handler-child.test.ts` for the list
+    reads that start nothing and the derived value that does, and by
+    `runtime/memory/test/v2-server-demand-set.test.ts` for the marking.
+    A list read whose items are `asCell` is sent each listed piece's
+    stream and derived documents as well, so it still starts each piece.
   - **FUTURE / owed rows the build surfaced (none binding):**
-    - **flag 4 — the structure load for demanded NON-root docs with
-      pattern meta.** The closure surfaces a piece reachable only through
-      a DATA link whose writer is not registered on the server (parity
-      with the walk, which never started pieces either); W0 counted the
-      rows: chat 2 / note 19 / lunch 0. The id-class-filtered
-      `#attemptStructureLoad` per such row is the OPTION; not built (the
-      count is small and the pattern-meta test needs a per-row engine read
-      the pass must not do). Trigger: a workload where a data-linked
-      piece's value must land server-side.
     - **flag 5 — the output-doc-demanders union.** `#demandersFor`
       matches keys by ROOT id; a session whose closure reaches piece P2's
       computed doc but not P2's root supplies no demander to P2's writer →
@@ -5377,10 +5411,8 @@ supply; OW29/OW32/OW34 closed):
     non-zero count coexists with every fire resolved by its mark — the chat
     witness below reads 2 beside 25/25), `intent-listener-installed` /
     `-released`, `intent-watch-failed` / `intent-listener-failed` /
-    `intent-check-read-failed` / `intent-apply-failed` (the loud
-    fail-soft arms; the last is the fix pass's per-entry guard, N-2 —
-    nothing in the arms throws today); the effects channel's
-    `effects-reconcile`; the overlay's diagnostic getters
+    `intent-check-read-failed` (the loud fail-soft arms); the effects
+    channel's `effects-reconcile`; the overlay's diagnostic getters
     `pendingIntentCount`, `intentListenerInstalled`, `intentCheckCount`,
     `intentCheckVisits` (the `sidecarEntriesRead` witness),
     `intentCheckMaxVisits`; the browser churn line

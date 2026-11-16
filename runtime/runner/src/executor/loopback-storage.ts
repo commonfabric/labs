@@ -130,6 +130,12 @@ class LoopbackSessionFactory implements SessionFactory {
    */
   #instanceNames = namesInstancesByDefault();
 
+  /**
+   * Whether this factory's connections take `cid:` schema documents by
+   * reference: what `setSyncCidReferences()` last chose, and until then not.
+   */
+  #syncCidReferences = false;
+
   constructor(
     plane: LoopbackPlane,
     route: Pick<RouteOptions, "createTransport"> | undefined,
@@ -190,27 +196,41 @@ class LoopbackSessionFactory implements SessionFactory {
     this.#instanceNames = enabled;
   }
 
+  /** @inheritDoc */
+  setSyncCidReferences(enabled: boolean): void {
+    this.#syncCidReferences = enabled;
+  }
+
   async create(
     space: MemorySpace,
-    signer?: Signer,
+    signer: Signer,
     mountOptions: MemoryClient.MountOptions = {},
+    signal?: AbortSignal,
   ) {
-    if (signer === undefined) {
-      throw new Error(
-        "loopback serving sessions require the service identity signer",
-      );
-    }
     // A routed session dials the owner over the network, with the handshake
-    // attempts the routed plane gives its own sessions.
+    // attempts the routed plane gives its own sessions. `signal` aborts once
+    // the provider has no more use for the session, which ends the dial.
     const client = await MemoryClient.connect({
       transport: this.#transport(space, signer),
+      signal,
       client: this.#clientInfo,
       instanceNames: this.#instanceNames,
+      syncCidReferences: this.#syncCidReferences,
       ...(this.#routeFor(space, signer) === undefined
         ? {}
         : { firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS }),
     });
+    // Until this returns, nothing else holds the client, so an abort closes
+    // it here. That ends whatever the mount is waiting on while its owner
+    // cannot be reached: its turn to be sent, or, once the owner answered it
+    // on a connection that then dropped, the restore of its session.
+    const closeForAbort = (): void => {
+      void client.close().catch(() => {});
+    };
+    signal?.addEventListener("abort", closeForAbort, { once: true });
     try {
+      // A signal that has aborted by now is refused by the mount as it
+      // starts, and the failure below closes the client.
       const session = await client.mount(
         space,
         mountOptions,
@@ -225,6 +245,7 @@ class LoopbackSessionFactory implements SessionFactory {
             descriptor,
             context,
           ),
+        signal,
       );
       return { client, session };
     } catch (error) {
@@ -233,6 +254,8 @@ class LoopbackSessionFactory implements SessionFactory {
       // the same close-before-rethrow RemoteSessionFactory.create does.
       await client.close().catch(() => {});
       throw error;
+    } finally {
+      signal?.removeEventListener("abort", closeForAbort);
     }
   }
 }

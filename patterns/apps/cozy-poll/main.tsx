@@ -387,7 +387,7 @@ export default pattern<CozyPollInput, CozyPollOutput>(
     // covers the whole lifecycle: a create surface when the viewer has no
     // profile, a link when they have one, and a picker (with inline create)
     // when they have several. `#profileName` gives the snapshot name.
-    const profileWish = wish<{ name?: string; avatar?: string }>({
+    const profileWish = wish<{ name?: string }>({
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
@@ -1123,7 +1123,7 @@ export default pattern<CozyPollInput, CozyPollOutput>(
                           $value={optionDraft}
                           placeholder="Add an option…"
                           aria-label="Option title"
-                          timing-strategy="immediate"
+                          timingStrategy="immediate"
                           style="flex:1"
                         />
                         <cf-button onClick={boundAddOption}>Add</cf-button>

@@ -809,7 +809,10 @@ which the ACL document is stored
 ([`04-protocol.md`](04-protocol.md#451-current-pass) §4.5.1), here the deletion
 commit's. The server checks for deletion once it has routed the command to a
 space it serves and, for a command that names a session, found that session
-open. Every other check comes after it: the access check, INV-12's shape clauses
+open. Every command on a session that the deletion revoked, on the connection
+that held it, is refused this way too, whether it was in flight at the
+revocation or arrived after it. Every other check comes after it: the access
+check, INV-12's shape clauses
 and these clauses, INV-13's genesis rules, and the checks of the facts a genesis
 commit declares. So a second deletion tombstone, a malformed ACL write and an
 ordinary write to a deleted space are all refused as a deleted space's, and none

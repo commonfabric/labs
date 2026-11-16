@@ -1,20 +1,23 @@
 import type { NonDocumentPath } from "@commonfabric/memory/v2";
 
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { ConsumedLabelIndex } from "./consumed-label-index.ts";
 import {
   readStoredCfcMetadata,
   type StoredCfcLabels,
   StoredCfcMetadataError,
 } from "./metadata.ts";
 import { entryObservationClass } from "./observation-classes.ts";
-import { PathPrefixIndex } from "./path-prefix-index.ts";
-import type { CfcAddress, CfcDereferenceTrace, CfcMetadata } from "./types.ts";
+import type {
+  CfcAddress,
+  CfcDereferenceTrace,
+  CfcMetadata,
+  LabelMapEntry,
+} from "./types.ts";
 import {
-  canonicalizeCfcLogicalPath,
   type CfcLabelView,
   type CfcLabelViewEntry,
   cfcLabelViewOriginSpaces,
-  cfcLabelViewPathKey,
   confidentialityOnly,
   mergeCfcLabelViews,
   rebaseCfcLabelView,
@@ -40,30 +43,36 @@ export {
 } from "./label-view-core.ts";
 
 /**
+ * A stored label map entry as a label view entry, carrying its effective
+ * observation class, or `undefined` for one no view carries.
+ */
+const viewEntryOf = (entry: LabelMapEntry): CfcLabelViewEntry | undefined => {
+  // The view carries the EFFECTIVE class: the persisted
+  // `origin:"link"` ⇒ implicit `followRef` carve-out (C0 §3) is
+  // resolved here, so view consumers classify without knowing about
+  // origins.
+  const observes = entryObservationClass(entry);
+  // Only a label-metadata template carries this class, and a decoded
+  // envelope keeps templates out of its entries; a view entry cannot
+  // carry the class either.
+  if (observes === "labelMetadata") {
+    return undefined;
+  }
+  return {
+    path: entry.path,
+    label: entry.label,
+    ...(observes !== undefined ? { observes } : {}),
+  };
+};
+
+/**
  * The entries of a stored label map as label view entries, in stored order,
  * each carrying its effective observation class.
  */
 const cfcLabelViewEntriesFromMetadata = (
   metadata: StoredCfcLabels,
 ): CfcLabelViewEntry[] =>
-  metadata.labelMap.entries.flatMap((entry) => {
-    // The view carries the EFFECTIVE class: the persisted
-    // `origin:"link"` ⇒ implicit `followRef` carve-out (C0 §3) is
-    // resolved here, so view consumers classify without knowing about
-    // origins.
-    const observes = entryObservationClass(entry);
-    // Only a label-metadata template carries this class, and a decoded
-    // envelope keeps templates out of its entries; a view entry cannot
-    // carry the class either.
-    if (observes === "labelMetadata") {
-      return [];
-    }
-    return [{
-      path: entry.path,
-      label: entry.label,
-      ...(observes !== undefined ? { observes } : {}),
-    }];
-  });
+  metadata.labelMap.entries.flatMap((entry) => viewEntryOf(entry) ?? []);
 
 export const cfcLabelViewFromMetadata = (
   // A stored envelope, or a reader's labels without the envelope around them.
@@ -86,14 +95,11 @@ export const cfcLabelViewFromMetadata = (
  * entry the document holds.
  */
 export type CfcDocumentLabels = {
-  /** The entries, in stored order. */
-  readonly entries: readonly CfcLabelViewEntry[];
+  /** The stored entries, indexed by path. */
+  readonly index: ConsumedLabelIndex;
 
-  /** The positions in `entries` of the entries at each logical path. */
-  readonly positionsByPath: ReadonlyMap<string, readonly number[]>;
-
-  /** Every logical path an entry is at. */
-  readonly paths: PathPrefixIndex;
+  /** Each stored entry as a view entry, by its position in the label map. */
+  readonly entries: readonly (CfcLabelViewEntry | undefined)[];
 };
 
 /**
@@ -110,21 +116,10 @@ const documentLabelIndex = (metadata: CfcMetadata): CfcDocumentLabels => {
   const stored = metadata.labelMap.entries;
   const cached = labelIndexByEntries.get(stored);
   if (cached !== undefined) return cached;
-  const entries = cfcLabelViewEntriesFromMetadata(metadata);
-  const positionsByPath = new Map<string, number[]>();
-  const paths = new PathPrefixIndex();
-  entries.forEach((entry, position) => {
-    const path = canonicalizeCfcLogicalPath(entry.path);
-    const key = cfcLabelViewPathKey(path);
-    const positions = positionsByPath.get(key);
-    if (positions === undefined) {
-      positionsByPath.set(key, [position]);
-      paths.add(path);
-    } else {
-      positions.push(position);
-    }
-  });
-  const index = { entries, positionsByPath, paths };
+  const index = {
+    index: new ConsumedLabelIndex(stored),
+    entries: stored.map(viewEntryOf),
+  };
   labelIndexByEntries.set(stored, index);
   return index;
 };
@@ -163,24 +158,19 @@ export const cfcLabelViewInDocument = (
   labels: CfcDocumentLabels,
   space: string,
   path: readonly string[],
-): CfcLabelView | undefined => {
-  const logicalPath = canonicalizeCfcLogicalPath(path);
-  const positions = labels.paths.overlapping(logicalPath)
-    .flatMap((entryPath) =>
-      labels.positionsByPath.get(cfcLabelViewPathKey(entryPath)) ?? []
-    )
-    .sort((left, right) => left - right);
-  return withCfcLabelViewOrigins(
+): CfcLabelView | undefined =>
+  withCfcLabelViewOrigins(
     rebaseCfcLabelView(
       {
         version: 1,
-        entries: positions.map((position) => labels.entries[position]),
+        entries: labels.index.overlapping(path).flatMap(({ ordinal }) =>
+          labels.entries[ordinal] ?? []
+        ),
       },
-      logicalPath,
+      path,
     ),
     [space],
   );
-};
 
 /** Helper for `cfcLabelViewForAddress()`, which derives it unmemoized. */
 const deriveCfcLabelViewForAddress = (
@@ -194,33 +184,59 @@ const deriveCfcLabelViewForAddress = (
 };
 
 /**
- * The stored labels that apply at an address, as a view rebased onto it.
- *
- * Memoized on the transaction's snapshot: the derivation reads the target
- * document's `["cfc"]` metadata and nothing else, so it answers the same until
- * something is written, and every dereference on a scanned collection asks for
- * the same handful of addresses once per element. The memoized view is shared
- * rather than copied — every consumer merges, clones or rebases it into
- * something new, none writes to it.
+ * What a transaction's snapshot memo holds for one address: its view, and the
+ * views derived from it as a link slot, each made the first time it is asked
+ * for.
  */
+type AddressLabels = {
+  /** The stored labels that apply at the address. */
+  view: CfcLabelView | undefined;
+
+  /**
+   * The slot's reference restrictions, and the spaces they were read from.
+   * Wrapped, so that a slot restricting nothing is still a hit.
+   */
+  restrictions?: { view: CfcLabelView | undefined };
+
+  /**
+   * The view of a dereference from the slot, and the entry of its target. A
+   * slot holds one link, so it has one target at a time.
+   */
+  dereference?: { target: AddressLabels; view: CfcLabelView | undefined };
+};
+
+/**
+ * What the transaction's snapshot memo `memo` holds for `address`, made the
+ * first time it is asked for. The derivations it holds read documents'
+ * `["cfc"]` metadata and nothing else, so they answer the same until
+ * something is written, and every dereference on a scanned collection asks
+ * for the same handful of addresses once per element. The memoized views are
+ * shared rather than copied — every consumer merges, clones or rebases them
+ * into something new, none writes to them.
+ */
+const addressLabels = (
+  tx: IExtendedStorageTransaction,
+  memo: Map<string, unknown> | undefined,
+  address: CfcAddress,
+): AddressLabels => {
+  if (memo === undefined) {
+    return { view: deriveCfcLabelViewForAddress(tx, address) };
+  }
+  const key = `cfcLabels:${address.space}|${address.scope ?? ""}|` +
+    `${address.id}|${JSON.stringify(address.path)}`;
+  const cached = memo.get(key) as AddressLabels | undefined;
+  if (cached !== undefined) return cached;
+  const labels = { view: deriveCfcLabelViewForAddress(tx, address) };
+  memo.set(key, labels);
+  return labels;
+};
+
+/** The stored labels that apply at an address, as a view rebased onto it. */
 export const cfcLabelViewForAddress = (
   tx: IExtendedStorageTransaction,
   address: CfcAddress,
-): CfcLabelView | undefined => {
-  const memo = tx.getSnapshotMemo?.();
-  if (memo === undefined) return deriveCfcLabelViewForAddress(tx, address);
-  const key = `cfcLabels:${address.space}|${address.scope ?? ""}|` +
-    `${address.id}|${JSON.stringify(address.path)}`;
-  // Two-level, so a memoized `undefined` is a hit rather than a miss — an
-  // address with no stored labels is the common case and the one worth having.
-  const cached = memo.get(key) as
-    | { view: CfcLabelView | undefined }
-    | undefined;
-  if (cached !== undefined) return cached.view;
-  const view = deriveCfcLabelViewForAddress(tx, address);
-  memo.set(key, { view });
-  return view;
-};
+): CfcLabelView | undefined =>
+  addressLabels(tx, tx.getSnapshotMemo?.(), address).view;
 
 /**
  * The reference restrictions `view`, rooted at a link's slot, holds for what
@@ -236,37 +252,63 @@ export const cfcLabelViewForAddress = (
 export const referenceRestrictionsOf = (
   view: CfcLabelView | undefined,
 ): CfcLabelView | undefined =>
-  view === undefined ? undefined : withCfcLabelViewOrigins(
-    mergeCfcLabelViews([{
-      version: 1,
-      entries: view.entries.flatMap(({ path, label }) => {
-        const restriction = path.length === 0
-          ? confidentialityOnly(label)
-          : undefined;
-        return restriction === undefined
-          ? []
-          : [{ path: [], label: restriction }];
-      }),
-    }]),
+  withCfcLabelViewOrigins(
+    mergeCfcLabelViews([restrictionEntriesOf(view, () => true)]),
     cfcLabelViewOriginSpaces(view),
   );
+
+/**
+ * The reference restriction of each root entry of `view` that `from` takes,
+ * each as a class-less root entry, unmerged and without the spaces `view` was
+ * derived from.
+ */
+const restrictionEntriesOf = (
+  view: CfcLabelView | undefined,
+  from: (entry: CfcLabelViewEntry) => boolean,
+): CfcLabelView | undefined => {
+  let entries: CfcLabelViewEntry[] | undefined;
+  for (const entry of view?.entries ?? []) {
+    const restriction = entry.path.length === 0 && from(entry)
+      ? confidentialityOnly(entry.label)
+      : undefined;
+    if (restriction !== undefined) {
+      (entries ??= []).push({ path: [], label: restriction });
+    }
+  }
+  return entries === undefined ? undefined : { version: 1, entries };
+};
 
 /**
  * The labels a dereference from the link slot at `source` to `target`
  * consumes: the labels stored at the slot and at the target, and the slot's
  * reference restrictions, which reach everything the dereference does.
+ * Repeated calls within one snapshot return the same view.
  */
 export const cfcLabelViewForDereference = (
   tx: IExtendedStorageTransaction,
   source: CfcAddress,
   target: CfcAddress,
 ): CfcLabelView | undefined => {
-  const slot = cfcLabelViewForAddress(tx, source);
-  return mergeCfcLabelViews([
-    slot,
-    referenceRestrictionsOf(slot),
-    cfcLabelViewForAddress(tx, target),
-  ]);
+  const memo = tx.getSnapshotMemo?.();
+  const slot = addressLabels(tx, memo, source);
+  const reached = addressLabels(tx, memo, target);
+  if (slot.dereference?.target !== reached) {
+    slot.dereference = {
+      target: reached,
+      // The restrictions go in a class-less root entry, where the slot's own
+      // class-less root entry already holds its confidentiality, so only the
+      // root entries of an observation class add to it.
+      view: mergeCfcLabelViews([
+        slot.view,
+        restrictionEntriesOf(
+          slot.view,
+          ({ observes }) => observes !== undefined,
+        ),
+        reached.view,
+      ]),
+    };
+  }
+  return slot.dereference.view;
 };
 
 export const cfcLabelViewForDereferenceTraces = (
@@ -290,15 +332,19 @@ export const cfcLabelViewForDereferenceTraces = (
 export const cfcAcquisitionViewForDereferenceTraces = (
   tx: IExtendedStorageTransaction,
   traces: readonly CfcDereferenceTrace[],
-): CfcLabelView | undefined =>
-  mergeCfcLabelViews(
-    traces.map((trace) => {
+): CfcLabelView | undefined => {
+  const memo = tx.getSnapshotMemo?.();
+  return mergeCfcLabelViews(
+    traces.map(({ source, target }) => {
       // The target's labels are read and left out of the view. The read is
       // what a subscription depends on: a label-only write to a document the
       // resolution followed into re-fires a sink that followed it, and the
       // labels themselves are read again, where they are, by whatever
       // consumes them.
-      cfcLabelViewForAddress(tx, trace.target);
-      return referenceRestrictionsOf(cfcLabelViewForAddress(tx, trace.source));
+      addressLabels(tx, memo, target);
+      const slot = addressLabels(tx, memo, source);
+      slot.restrictions ??= { view: referenceRestrictionsOf(slot.view) };
+      return slot.restrictions.view;
     }),
   );
+};

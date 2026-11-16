@@ -31,6 +31,7 @@ import {
   orderProfileCandidates,
   profileOwnership,
   sendEvent,
+  writtenPrincipalAt,
 } from "@commonfabric/runner";
 import {
   type CfcLabelView,
@@ -354,7 +355,8 @@ export interface ListedProfile {
   /**
    * Whether the picture is attested to its owner: the label its value carries
    * names the person whose profiles these are, and no one else, as the
-   * principal it represents (`ownerAttests()`). `false` when there is no
+   * principal it represents, and the picture is the whole of the cell a write
+   * to the field lands in (`writtenPrincipalAt()`). `false` when there is no
    * picture, for one another principal set, which anyone can, since a
    * profile's space lets anyone write, and for one stored without a label. A
    * host showing the picture as the person's face shows it only where this is
@@ -498,8 +500,9 @@ export async function listProfiles(
 
 /**
  * The row `listProfiles()` reports for `profile`, one of the identity
- * `owner`'s own profiles, `current` saying whether `#profile` answers with
- * it.
+ * `owner`'s own profiles, `current` saying whether `#profile` answers with it.
+ * Its picture and avatar are each reported with whether it is `owner`'s own
+ * word (`writtenPrincipalAt()`).
  *
  * @throws Error when a label on the picture or the avatar cannot be read.
  */
@@ -511,17 +514,26 @@ async function listedRow(
   const fields = profile.asSchema(profileFieldsSchema);
   await fields.sync();
   const value = fields.get();
+  const runtime = cellRuntime(profile);
+  const tx = runtime.edit();
+  let pictureBy: string | undefined;
+  let avatarBy: string | undefined;
+  try {
+    pictureBy = writtenPrincipalAt(tx, profile.key("picture"));
+    avatarBy = writtenPrincipalAt(tx, profile.key("avatar"));
+  } finally {
+    tx.abort();
+  }
   const link = profile.getAsNormalizedFullLink();
   const scope = link.scope ?? "space";
   const picture = pictureBytes(value?.picture);
+  const avatar = value?.avatar ?? "";
   return {
     name: value?.name ?? "",
     picture,
-    pictureByOwner: picture !== undefined &&
-      ownerAttests(profile.key("picture"), owner),
-    avatar: value?.avatar ?? "",
-    avatarByOwner: (value?.avatar ?? "") !== "" &&
-      ownerAttests(profile.key("avatar"), owner),
+    pictureByOwner: picture !== undefined && pictureBy === owner,
+    avatar,
+    avatarByOwner: avatar !== "" && avatarBy === owner,
     space: link.space,
     id: link.id,
     address: canonicalAddress({ space: link.space, id: link.id, scope }),

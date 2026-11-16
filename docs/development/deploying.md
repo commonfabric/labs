@@ -2,8 +2,12 @@
 
 Server deployments run through the bastion using binaries that CI has built
 and published. Rapids releases coordinate Labs, Loom, Weaver, gVisor, and infra
-at verified green `main` revisions. Estuary takes a manually selected Labs
-revision from `main`.
+at verified green revisions, and take Labs at the commit Loom's `main` pins
+rather than at Labs' own `main`, so a Labs change reaches Rapids only once a
+Loom pull request moves that pin. Estuary deploys the Labs revision named when
+its deployment is dispatched. Loom dispatches it with the pin each time the pin
+changes, and a person can dispatch any Labs commit on `main` by hand, which
+reaches Estuary without moving the pin.
 
 Two browser shells reach users, and they are configured in different places.
 The toolshed binary carries one and serves it from its own origin, so it is
@@ -16,7 +20,7 @@ The server deployment entrypoints are:
 | Job | Workflow | Bastion command | Trigger |
 | --- | --- | --- | --- |
 | `deploy` | `.github/workflows/rapids-release.yml` | `/opt/cf/deploy-rapids.sh "$INFRA_SHA"` | infra dispatch on Labs `main`, naming the candidate's infra commit |
-| `deploy-estuary` | `.github/workflows/deploy-production.yml` | `/opt/cf/deploy.sh <environment> <Labs SHA>` | manual dispatch on `main`, naming a full SHA |
+| `deploy-estuary` | `.github/workflows/deploy-production.yml` | `/opt/cf/deploy.sh <environment> <Labs SHA>` | dispatch on `main` naming a full SHA, by Loom when its Labs pin changes or by hand |
 
 The production job reads the environment name from a repository variable rather
 than naming it, because the variable is defined on the GitHub environment the
@@ -29,8 +33,11 @@ a message naming that commit if they are absent.
 
 ## Estuary deployment and verification
 
-**Manual Production Deployment** (`deploy-production.yml`) runs from `main`
-and takes these inputs:
+**Manual Production Deployment** (`deploy-production.yml`) runs from `main`.
+Loom's `deploy-labs-from-vendor-bump.yml` dispatches it with Loom's Labs pin
+whenever a push to Loom's `main` changes `vendor/config/`. It can also be
+dispatched by hand with any Labs commit on `main`, which Loom's pin does not
+constrain. It takes these inputs:
 
 - `ref`: the full lowercase Labs commit SHA to deploy or verify. The SHA must
   be an ancestor of `main`, verified through GitHub before the protected job
@@ -71,9 +78,17 @@ Each notification uses a separate repository-scoped Actions-write token from
 `RAPIDS_APP_ID` and `RAPIDS_APP_PRIVATE_KEY`. Notifications follow successful
 main-push CI runs in this repository. They execute no checked-out code.
 
-The infra coordinator selects the latest green main revisions and verifies
-their immutable artifacts. It lands `releases/rapids-candidate.json` on infra
-`main` and keeps that candidate frozen through deployment and publication. See
+The infra coordinator selects Loom's latest green `main` revision and takes
+Labs and gVisor from what that revision pins: Labs from the `labs` ref in
+Loom's `vendor/config/vendors.json`, never from Labs `main` directly. It refuses
+a candidate whose Labs commit differs from that pin. A Labs commit therefore
+reaches Rapids once a Loom pull request moves the pin, which Loom's
+`docs/development/reference/policies/vendoring.md` describes, and Loom's
+`main` is green with it; the commit needs its own successful main-push
+`deno.yml` build first. Weaver comes from its latest valid main-push
+publication. The coordinator verifies every selected artifact, lands
+`releases/rapids-candidate.json` on infra `main`, and keeps that candidate
+frozen through deployment and publication. See
 [infra's Rapids release documentation](https://github.com/commonfabric/infra/blob/main/releases/rapids.md)
 for selection and reconciliation rules.
 
@@ -169,15 +184,81 @@ it finds, rather than skip it, is a change in that repository.
 
 ## The toolshed's heap limit
 
-The toolshed binary is built with `--v8-flags=--max-old-space-size=8192`
-(`tasks/build-binaries.ts`), and `scripts/start-local-dev.sh` and the package's
-`dev` and `production` tasks run with the same flag. V8 applies the limit to each
-isolate rather than to the process, so the main thread and the serving worker
-can each reach 8 GiB, and a host's memory has to cover both for every instance
-it runs.
+The toolshed sets no `--max-old-space-size`: not the binary
+(`tasks/build-binaries.ts`), `scripts/start-local-dev.sh`, or the package's
+`dev` and `production` tasks. V8 takes that flag over the limit each serving
+worker is started with, so under it every worker's heap could grow to the
+flag's size and never reach `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`; the pool
+logs `heap-limit-overridden` when a worker's limit is well past the one it was
+given. The main thread and the compile workers have V8's default, about 4 GB.
+The compiled binary reads no V8 flags when it starts (it ignores
+`DENO_V8_FLAGS`, `NODE_OPTIONS` and `--v8-flags`), so the only V8 flags a
+deployment runs with are the ones built in. The binary is built with
+`--perf-basic-prof-only-functions` and
+`--interpreted-frames-native-stack`: V8 writes each compiled function's name to
+`/tmp/perf-<pid>.map`, so `sudo perf record -t <thread> -g` and `perf report`
+on the host name the JavaScript a thread runs, a stalled serving worker's
+included. The map grows for as long as the process runs. A toolshed runs a serving worker per served space, up to
+`SERVER_EXECUTION_MAX_WORKERS` of them (default 4; more only while spaces
+separated at a heap limit each hold a worker of their own, until one of those
+closes) and
+`SERVER_EXECUTION_SPARE_WORKERS` more kept started (default 1), and each holds
+about 110 MB before it serves anything
+([`serving-loop.md`](../specs/server-side-execution/serving-loop.md) §1,
+"Workers"). `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB` bounds what the workers'
+heaps come to together by closing the workers kept only for a parked space's
+runtime; it closes no worker that serves a space, so it does not bound a space
+that grows. `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB` (default 2048, at least
+256) does: each serving worker runs as a `node:worker_threads` thread whose
+old generation that limit bounds, and the pool ends a worker whose heap
+reaches it, alone. V8 collects a worker's garbage as its heap nears the limit,
+as it does any isolate's, so a worker reaches it only when what it still holds
+does. The limit bounds each worker, not their sum, so a host that
+runs many toolsheds sizes it, with `SERVER_EXECUTION_MAX_WORKERS`, against its
+memory. It is not exact. A worker that reaches it while evaluating its modules
+or in a timer reports an out-of-memory error and is ended at once. One that
+reaches it in a message handler or a promise continuation reports nothing:
+Deno ends what was running and raises the limit, and the pool ends the worker
+at its next heartbeat, up to ten seconds later, during which the worker can
+go on allocating. V8 bounds no memory outside the heap, array buffers among
+it, so the pool also ends a worker whose heartbeat reports as many megabytes
+of external memory as the limit, which the same ten seconds can exceed.
+`SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB=0` sets no limit and starts the
+workers as Deno `Worker`s, as before the limit existed.
 
-A worker that reaches the limit takes its process down. Events still queued
-survive that, and the restarted process handles them.
+The serving workers compile in compile workers the toolshed holds,
+`SERVER_EXECUTION_COMPILE_WORKERS` of them (default 1), each holding the
+TypeScript compiler's heap once it has compiled, and every toolshed on the
+host reads and puts compiled modules in one directory,
+`SERVER_EXECUTION_COMPILE_CACHE_DIR` (default `compiled-modules` under
+`CACHE_DIR`), so a program compiles once on the host for each release the
+host runs: the cache is keyed by the runtime version, and a new release
+compiles each program again, once. Toolsheds share the directory only where
+they are given the same one, so the toolsheds of a host take the same
+`CACHE_DIR`, an absolute path, since the default `./cache` is each one's
+working directory. That directory holds code the serving runtimes run, so it
+belongs to the user the toolsheds run as and to no one else. A compiled
+module that cannot be written there is logged
+(`shared-compile-cache-write-failed`) and compiled again by the next runtime
+that needs it; it fails no compile.
+
+A space whose worker was ended at its heap limit is not served again by itself,
+since its program would grow the next worker's heap the same way. If it was
+the only space on the worker it stays unserved until a commit that would
+start a tenure is admitted for it or a pattern-lifecycle verb names it, which
+is when its program or its input may have changed. The toolshed logs
+`worker-failed` with the spaces the worker held, and `/api/health/stats`
+counts such workers in
+`servingLoop.workers.heapLimited` and the spaces left unserved in
+`servingLoop.workers.heapStopped`.
+Spaces that shared the worker are each moved to a worker of their own, beyond
+`SERVER_EXECUTION_MAX_WORKERS` if need be, so that the one that grows ends a
+worker nothing else is on ([`serving-loop.md`](../specs/server-side-execution/serving-loop.md)
+§1, "Workers").
+
+The main thread and the compile workers are Deno isolates under V8's default
+limit, and one of those that reaches it takes its process down. Events still
+queued survive that, and the restarted process handles them.
 
 ## A deploy states when it happened
 

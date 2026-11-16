@@ -15,6 +15,11 @@
  * test builds from a `MessageChannel` are the same thing here.
  */
 
+import {
+  bundledBuild,
+  comparePeerBuilds,
+  normalizeBuildMarker,
+} from "@commonfabric/platform/peer-build";
 import { debugStr } from "@commonfabric/data-model";
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
@@ -69,6 +74,24 @@ const ipcLogger = getLogger("runtime-worker.ipc", { enabled: false });
 // A slow client round-trip decomposes as delivery (worker starved) vs handle
 // (handler awaited something slow) vs the residue (response return path).
 const ipcTimingLogger = getLogger("runner.ipc", { enabled: false });
+
+/**
+ * `thrown` as text for the console: an error's stack where it has one, and
+ * otherwise what `describeFailure()` makes of it. A console keeps what it is
+ * given for as long as it keeps the message, and an error keeps the frames of
+ * its stack, and through them whatever those frames' closures captured: for a
+ * failed request, the cells it was working on and the documents they hold.
+ */
+function failureText(thrown: unknown): string {
+  try {
+    if (Error.isError(thrown) && typeof thrown.stack === "string") {
+      return thrown.stack;
+    }
+  } catch {
+    // Reading the stack threw.
+  }
+  return describeFailure(thrown);
+}
 
 export interface RuntimeClientsOptions {
   /**
@@ -290,7 +313,10 @@ export class RuntimeClients {
           this.#runtime.handleNotification(message, client);
         }
       } catch (error) {
-        console.error("[RuntimeWorker] Notification error:", error);
+        console.error(
+          "[RuntimeWorker] Notification error:",
+          failureText(error),
+        );
       }
       return;
     }
@@ -307,6 +333,16 @@ export class RuntimeClients {
       }
       const { msgId, data: request } = message;
       ipcLogger.debug(`received/${request.type}`, () => []);
+      if (
+        request.type === RequestType.Initialize ||
+        request.type === RequestType.Attach
+      ) {
+        const peerBuild = normalizeBuildMarker(message.runtimeBuild);
+        ipcLogger.debug(
+          "peer-build",
+          () => [client.id, comparePeerBuilds(bundledBuild, peerBuild)],
+        );
+      }
       const receivedAt = performance.now();
       const sentEpochMs = (message as { sentEpochMs?: number }).sentEpochMs;
       if (typeof sentEpochMs === "number") {
@@ -467,7 +503,7 @@ export class RuntimeClients {
         : { msgId };
       this.#reply(payload, request.type, client);
     } catch (error) {
-      console.error("[RuntimeWorker] Error:", error);
+      console.error("[RuntimeWorker] Error:", failureText(error));
       const type = isIPCClientMessage(message) ? message.data.type : "invalid";
       ipcLogger.debug(`responded-error/${type}`, () => []);
       const code = runtimeErrorCode(error);
@@ -497,6 +533,10 @@ export class RuntimeClients {
         msgId,
         error: describeFailure(error),
         ...(code ? { code } : {}),
+        ...((type === RequestType.Initialize || type === RequestType.Attach) &&
+            bundledBuild
+          ? { runtimeBuild: bundledBuild }
+          : {}),
       });
 
       // A refused attach is terminal for this client: the reply has gone, and
@@ -558,6 +598,12 @@ export class RuntimeClients {
     type: RequestType,
     client: WorkerClient,
   ): void {
+    if (
+      (type === RequestType.Initialize || type === RequestType.Attach) &&
+      bundledBuild
+    ) {
+      payload = { ...payload, runtimeBuild: bundledBuild };
+    }
     const delivered = client.post(payload as IPCRemotePost);
     ipcLogger.debug(
       `${delivered ? "responded" : "responded-error"}/${type}`,

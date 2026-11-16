@@ -221,8 +221,9 @@ needs, and a count far short of the run's needs can show a smaller total
 than one close to it, so no total measured at one count says what another
 count would achieve.
 
-The search is a bisection between one lane and `LANES_MAX`, so it packs a
-handful of counts and none past the cap. Each count it tries is packed
+The search is a bisection between one lane and the run's cap, `LANES_MAX`, or
+`FULL_LANES_MAX` for the run on the default branch and a pull request labelled
+`ci: full`, so it packs a handful of counts and none past the cap. Each count it tries is packed
 through the mandatory pass only, since that settles whether the count holds
 the run. It relies on an added lane not making anything overflow that did
 not before, nor leaving less room. Where the packing breaks that, the count
@@ -236,15 +237,17 @@ anything to run and what packing the stand-ins asks for — and says on the
 error stream that it did so, since a projection from costs nobody has
 measured would be arithmetic over an invented figure.
 
-Whichever way it gets its answer, it answers no more than `LANES_MAX`, so
-that one run leaves runners for the runs waiting behind it. A run that needs
+Whichever way it gets its answer, it answers no more than `LANES_MAX`, or
+`FULL_LANES_MAX` for the run on the default branch and a pull request
+labelled `ci: full`, so that one run leaves runners for the runs waiting
+behind it. A run that needs
 more takes that many and says on the error stream that it needs more. A
 change's tests chosen by score then get what room is left, which it also
 says. In the run on the default branch every test still runs. A test whose
 repeated runs fit in no lane runs fewer times, down to once, and a test
 that fits nowhere even once goes into the lane it leaves shortest, so the
 lanes run past their budget instead. A full run that needs more is the sign
-to raise `LANES_MAX`.
+to raise `FULL_LANES_MAX`.
 
 ## How continuous integration runs the lanes
 
@@ -267,6 +270,13 @@ workflow. A run's lanes come from two jobs.
   Each runs `deno run -A tasks/ci-lane.ts --lane N --of M` with `plan`'s
   `args`. A lane packs the same plan from the manifest and the tree as every
   other lane of its run, and runs its own share of it.
+- Each job of `tests` mounts its checkout a second time, at
+  `$HOME/checkout 🦆`, and runs the lane from there. A test that turns a file
+  URL into a path without decoding it, which works in the workspace's plain
+  ASCII path, fails in one holding a space and an emoji. The lane's coverage
+  reports name each file of the repository by its path relative to the
+  checkout, so `Status` and the release job, which read them from the
+  workspace, resolve them to the same files.
 - Each job of `tests` plans before it runs. Its `🗺️ Plan the lane` step runs
   the lane with `--dry-run`, which prints the lane's share, what it is
   projected to take, and what was withheld, in a step of their own. The
@@ -306,7 +316,7 @@ workflow. A run's lanes come from two jobs.
   failed. A test `deno test` reports as cancelled in a run the lane did not
   signal is one an error it did not catch stopped, and is recorded as failed.
   The lane then prints the end of each server's log, keeps its working
-  directory for the upload of what a failing lane left behind, and exits
+  directory for the job to upload, and exits
   without converting its coverage, which takes longer than GitHub waits. Its
   closing summary says which pass it was running and which batches it did not
   start, and does not report anything it stopped as having run no test.
@@ -385,9 +395,13 @@ compile byte cache is under `.ci-cache/compile`, keyed
 from the prefix `cc-lane-<fingerprint>-`, so a lane can start from the cache
 another lane or an earlier commit left and saves a fresher one.
 
-A lane uploads three artifacts. `lane-failure-tests-<lane>-a<attempt>`, where
-the lane failed, holds the working directory it kept and the core of any process
-in the lane that crashed natively: the lane step runs with `ulimit -c unlimited`
+A lane uploads three artifacts. `lane-kept-tests-<lane>-a<attempt>`, where
+the lane failed or excused a failure too flaky to fail the run for, holds the
+working directory it kept, with each Toolshed server's log, and the core of any
+process in the lane that crashed natively. A lane that passed after excusing a
+failure says it kept its directory through the lane step's `kept` output, which
+the upload step reads.
+The cores come from the lane step: the lane step runs with `ulimit -c unlimited`
 and puts cores under `$RUNNER_TEMP/ci-lane-cores`. `lane-coverage-tests-<lane>`
 holds `coverage/`: each report at
 `lcov/sets/<suite>/<member>/coverage.lcov`, where a `/` in the member's path is
@@ -523,8 +537,9 @@ in a directory of its own in the lane's work directory, beside its log. The
 suites are told a store as `MEMORY_DIR`: the server run from source tells them
 its own, since the shell suites read it through `cf inspect`, and a baked
 server gives them one of their own beside it, since the integration tests
-beside it start servers of their own that read that name. A failing lane in
-continuous integration uploads each server's log and not its store. A suite
+beside it start servers of their own that read that name. A lane in
+continuous integration that failed, or that excused a failure, uploads each
+server's log and not its store. A suite
 whose capability shares the checkout with its owner's own servers, as the
 local development stack does, is not run here, and the run lists its units
 apart.
@@ -771,7 +786,8 @@ measurement to look at rather than a setting to fix.
 | `FULL_LANE_BOUND_SECONDS` | 1800 | seconds | chosen | Up when the run on `main` uses more jobs than it needs; down when `main` takes too long to say something broke. |
 | `FULL_LANE_BUDGET_SECONDS` | 1730 | seconds | derived | Nothing edits this. It is the full run's bound less the same prologue and safety margin a pull request's lane pays, since a lane of either run is the same job doing the same setup on the same runner. |
 | `DISCRETIONARY_SECONDS` | 575 | seconds | chosen | Up when regressions reach the default branch past pull requests that did not run the test chosen by score that would have caught them; down when pull requests take more lanes than runner minutes allow. A pull request whose mandatory work fits in five lanes with room to spare most often takes five at this figure. The label `ci: <n>x` multiplies it by n for one pull request. |
-| `LANES_MAX` | 30 | lanes | chosen | Up when the lane-count job says a run needs more lanes than this, and the organization's runner limit has room; down when one run crowds out the runs behind it. A run needing more lanes than this takes this many: a pull request then runs fewer tests chosen by score, and any run's mandatory work may put its lanes past their budget. |
+| `LANES_MAX` | 30 | lanes | chosen | The most lanes a run other than the full run takes. Up when the lane-count job says such a run needs more lanes than this, and the organization's runner limit has room; down when one run crowds out the runs behind it. A pull request needing more lanes than this takes this many, and then runs fewer tests chosen by score, and its mandatory work may put its lanes past their budget. |
+| `FULL_LANES_MAX` | 40 | lanes | chosen | `LANES_MAX` for the full run. Up when the lane-count job says the full run needs more lanes than this and its lanes near the lane step's bound, and the organization's runner limit has room; down when one full run crowds out the runs behind it. |
 | `FULL_RUN_LABEL` | ci: full | a label | chosen | Not a quantity. Change it only if the label collides with one the repository already uses for something else. |
 | `UNMEASURED_COST_SECONDS` | 1 | seconds | chosen | Up when a lane holding new tests runs long; down when it finishes early. It is reached for only by a suite with no measured unit at all, since a suite that has any charges an unmeasured one the larger of its units' mean and their ninetieth percentile. |
 | `VALUE_FLOOR` | 0.05 | score | chosen | Up when the cheap tail is not being swept up; down when it crowds out tests with a record of new real test failures. |
@@ -1332,10 +1348,10 @@ read them, and creates nothing in the store.
 
 ## What a run leaves out
 
-A run's log names four kinds of identity that did not reach the manifest.
-The first is the design working. The second is a test the tree no longer
-holds. The third is a surface whose records do not say which unit they
-belong to. The fourth is a topology defect.
+A run's log names five kinds of identity that did not reach the manifest.
+The first is the design working. The second and the third are tests the
+tree no longer holds. The fourth is a surface whose records do not say
+which unit they belong to. The fifth is a topology defect.
 
 The first is the identities that measure a whole invocation:
 
@@ -1355,19 +1371,20 @@ record, and there is nothing to do about it either way.
 The second is the identities that have left the tree:
 
 ```
-test selection: 6 identities have left the tree: no suite claims them and
-no run of them has been recorded inside the window a state keeps counters
-for. Their states are dropped from the aggregate.
+test selection: 6 identities have left the tree: no suite claims them, or
+main has stopped recording them in a unit it still runs, and no run of them
+has been recorded inside the window a state keeps counters for. Their
+states are dropped from the aggregate.
 test selection: those 6 were recorded by 2 surface(s): unit:utils 4,
 unit:memory 2
 ```
 
-A test deleted from the repository keeps its records in the store, and
-the store is what the publisher reads, so without this the aggregate
-would carry its state for as long as the store lives. Two things have to
-hold before one is dropped. No suite claims it, so nothing in the tree
-can be asked to run it. And no run of it has been recorded inside the
-window a state keeps counters for, which is the longer of
+A test deleted from the repository keeps its records in the store, and the
+store is what the publisher reads, so without this the aggregate would carry
+its state for as long as the store lives. Two things have to hold before one
+is dropped. No suite claims it, so nothing in the tree can be asked to run
+it, or it is one of the third kind below. And no run of it has been recorded
+inside the window a state keeps counters for, which is the longer of
 `CHURN_WINDOW_DAYS` and `FLAKE_WINDOW_DAYS` and so is sixty days today.
 
 The second condition is what the first cannot say on its own. A suite whose
@@ -1375,7 +1392,7 @@ records name a scope the topology no longer holds claims none of its
 identities, and every one of those is still running on the default branch,
 so the runs hold them where the claim does not. What the second condition
 does not reach is a test the tree holds that nothing runs at all: a skip is
-the one outcome a state records nothing for, so such a test meets both
+the one outcome no counter counts, so such a test meets both
 conditions and is dropped like a deleted one. What that costs is new real
 test failures from before the window, because every counter inside it is
 empty either way.
@@ -1387,14 +1404,55 @@ read a unit at a time, so a declaration naming one leaf inside a unit does
 not reach it — such a unit is still enumerated and still running, and its
 identities are placed by their file rather than reaching this at all.
 
-That window is how long a deletion takes to settle. Until then the
-deleted test is in the count below rather than this one, because it did
-run inside the window. So this count is a one-off when a change deletes tests
-and nothing at all in between, and a count that stays large run after run
-is a suite that has stopped recording rather than a set of tests somebody
-deleted. The surfaces named beside it say which suite.
+That window is how long a deletion takes to settle. Until then the deleted
+test is in the third or the fourth count below rather than this one, because
+it did run inside the window. So this count is a one-off when a change
+deletes tests and nothing at all in between, and a count that stays large
+run after run is a suite that has stopped recording rather than a set of
+tests somebody deleted. The surfaces named beside it say which suite.
 
-The third is the identities no suite claims that the aggregate still
+The third is the tests renamed or deleted in a file the tree still holds:
+
+```
+test selection: main has stopped recording 3 identities in units it still
+runs, so the tree no longer holds them under those names. They are left out
+of the manifest, and their states stay in the aggregate until no run of them
+is left inside the window a state keeps counters for.
+test selection: those 3 were recorded by 1 surface(s): unit:memory 3
+```
+
+A suite whose units are files claims every name recorded in a file the tree
+still holds, so the claim cannot tell a test that is there from one renamed
+or deleted beside the tests that are. What tells them apart is the run on
+the default branch, which runs every unit whole and records every test it
+reaches, skipped or not. A push to the default branch shuffles its tests in
+the order its seed names, which is the Pacific date of the commit under
+test. The publisher keeps the last two orders such a push recorded each
+identity in. The run of the next day's order is left out, because it runs an
+earlier tree in a later order. An identity is a test the unit no longer
+holds under that name once the default branch has recorded other identities
+of the same unit and configuration in two orders later than the last order
+it recorded this one in, or in two orders while never recording this one.
+This holds whether an alias line renamed it or nothing did, and records a
+branch makes under the old name after the change lands do not bring it back.
+A name is held while anything inside it is, so a `describe` that records for
+itself only when it fails on its own account is not read as gone while the
+tests inside it run. It takes two orders rather than one because a run that
+stops part way through a unit records only the tests it reached, and every
+run in one order can stop at the same place. A stop that does not depend on
+the order, such as a hook that fails in every run, leaves the tests after it
+out of the manifest once it has lasted two orders, until a push records them
+again. A run that did not shuffle names no order and counts toward none.
+
+Leaving these out of the manifest is what keeps a renamed test off the
+dashboard's list of tests held back as flaky. Nothing runs a test the tree
+no longer holds, so it would never record the passes that lower its flake
+share, and it would stay on the list until its failures aged out of the
+window. Its state stays in the aggregate. A push to the default branch that
+records the name again puts it back in the manifest with its history. Once
+no run of the name is left inside the window, it is the second kind above.
+
+The fourth is the identities no suite claims that the aggregate still
 carries:
 
 ```
@@ -1504,7 +1562,7 @@ test in a unit a configuration declares unavailable, which is here for
 as long as the declaration stands and is not something to act on: the
 declaration is why it stopped recording.
 
-The fourth is the identities two suites both claim:
+The fifth is the identities two suites both claim:
 
 ```
 test selection: 2 identities are claimed by more than one suite, which is
@@ -1755,7 +1813,16 @@ for a change. Where it may be run without its neighbours, the run on the
 default branch runs it as many times as its share asks for and does not
 fail for it, so it goes on being measured while it is out of changes, and
 a green run of the default branch can carry a failure of one of these
-tests and still deploy. `explain <identity>` says of any test whether the
+tests and still deploy.
+
+That count is the most a lane runs it. A lane stops repeating a unit once
+each test that asked for its repeats has either passed and failed at the
+commit, which is the disagreement the publisher reads a flake from, or
+failed twice running, which is a test failing at that commit, whose further
+runs would each take as long as its failure does. Every run the lane makes
+is recorded and measured as before, and its closing summary says, under
+"Left out, which is not a failure", how many runs of each unit it did not
+need and why. `explain <identity>` says of any test whether the
 manifest this commit resolves withholds it and how many runs it is given.
 The reasoning behind each part is in [the archived
 plan](../history/plans/pull-request-test-selection.md#an-excluded-test-still-runs-on-main).

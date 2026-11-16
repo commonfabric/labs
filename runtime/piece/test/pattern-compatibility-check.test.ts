@@ -27,6 +27,7 @@ import {
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { readStoredCfcMetadata } from "@commonfabric/runner/cfc";
+import { bindNativeUiControl } from "@commonfabric/runner/native-ui";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 
 const signer = await Identity.fromPassphrase("pattern compatibility check");
@@ -171,6 +172,153 @@ function noteConsumerProgram(): RuntimeProgram {
         "    seen: note ?? 'absent',",
         "  }),",
         ");",
+        "",
+      ].join("\n"),
+    }],
+  };
+}
+
+/**
+ * A producer that publishes `tick`, an optional verb its handler backs, or,
+ * with `withTick` false, the next revision, which runs no such handler.
+ */
+function tickProducerProgram(withTick: boolean): RuntimeProgram {
+  return {
+    main: "/main.tsx",
+    files: [{
+      name: "/main.tsx",
+      contents: [
+        "import { Default, NAME, handler, pattern, type Stream, type Writable } from 'commonfabric';",
+        "const bump = handler<{ n: number }, { count: Writable<number> }>(",
+        "  ({ n }, { count }) => { count.set((count.get() ?? 0) + n); },",
+        ");",
+        "export default pattern<",
+        "  { count?: Writable<number | Default<0>> },",
+        withTick
+          ? "  { label: string; tick?: Stream<{ n: number }> }"
+          : "  { label: string }",
+        ">(({ count }) => ({",
+        "  [NAME]: 'Tick producer',",
+        "  label: 'producer',",
+        ...(withTick ? ["  tick: bump({ count }),"] : []),
+        "}));",
+        "",
+      ].join("\n"),
+    }],
+  };
+}
+
+/** A consumer taking an optional verb as its input. */
+function tickConsumerProgram(): RuntimeProgram {
+  return {
+    main: "/main.tsx",
+    files: [{
+      name: "/main.tsx",
+      contents: [
+        "import { NAME, pattern, type Stream } from 'commonfabric';",
+        "export default pattern<{ tick?: Stream<{ n: number }> }, { label: string }>(",
+        "  () => ({ [NAME]: 'Tick consumer', label: 'consumer' }),",
+        ");",
+        "",
+      ].join("\n"),
+    }],
+  };
+}
+
+/**
+ * A producer that publishes llm-dialog's `cancelGeneration` as an optional
+ * verb, or, with `withCancel` false, the next revision, which does not.
+ */
+function dialogProducerProgram(withCancel: boolean): RuntimeProgram {
+  return {
+    main: "/main.tsx",
+    files: [{
+      name: "/main.tsx",
+      contents: [
+        "import { NAME, Writable, llmDialog, pattern, type Stream } from 'commonfabric';",
+        "export default pattern<",
+        "  Record<string, never>,",
+        withCancel
+          ? "  { label: string; cancel?: Stream<void> }"
+          : "  { label: string }",
+        ">(() => {",
+        "  const messages = new Writable<any[]>([]).for('messages');",
+        "  const dialog = llmDialog({ messages });",
+        "  return {",
+        "    [NAME]: 'Dialog producer',",
+        "    label: 'producer',",
+        ...(withCancel ? ["    cancel: dialog.cancelGeneration,"] : []),
+        "  };",
+        "});",
+        "",
+      ].join("\n"),
+    }],
+  };
+}
+
+/**
+ * A producer that publishes `ui.cancel`, llm-dialog's verb forwarded through
+ * `ifElse`, or, with `withUi` false, the next revision, which does not.
+ */
+function forwardingProducerProgram(withUi: boolean): RuntimeProgram {
+  return {
+    main: "/main.tsx",
+    files: [{
+      name: "/main.tsx",
+      contents: [
+        "import { NAME, Writable, ifElse, llmDialog, pattern, type Stream } from 'commonfabric';",
+        "export default pattern<",
+        "  Record<string, never>,",
+        withUi
+          ? "  { label: string; ui?: { cancel: Stream<void> } }"
+          : "  { label: string }",
+        ">(() => {",
+        "  const on = new Writable<boolean>(true).for('on');",
+        "  const messages = new Writable<any[]>([]).for('messages');",
+        "  const dialog = llmDialog({ messages });",
+        "  return {",
+        "    [NAME]: 'Forwarding producer',",
+        "    label: 'producer',",
+        ...(withUi
+          ? [
+            "    ui: ifElse(on, { cancel: dialog.cancelGeneration }, undefined),",
+          ]
+          : []),
+        "  };",
+        "});",
+        "",
+      ].join("\n"),
+    }],
+  };
+}
+
+/**
+ * A producer that publishes `cancel`, a computation returning llm-dialog's
+ * verb, or, with `withCancel` false, the next revision, which does not.
+ */
+function returnedVerbProducerProgram(withCancel: boolean): RuntimeProgram {
+  return {
+    main: "/main.tsx",
+    files: [{
+      name: "/main.tsx",
+      contents: [
+        "import { NAME, Writable, computed, llmDialog, pattern, type Stream } from 'commonfabric';",
+        "export default pattern<",
+        "  Record<string, never>,",
+        withCancel
+          ? "  { label: string; cancel?: Stream<void> }"
+          : "  { label: string }",
+        ">(() => {",
+        "  const messages = new Writable<any[]>([]).for('messages');",
+        "  const dialog = llmDialog({ messages });",
+        "  return {",
+        "    [NAME]: 'Returning producer',",
+        "    label: 'producer',",
+        ...(withCancel
+          ? ["    cancel: computed(() => dialog.cancelGeneration),"]
+          : []),
+        "  };",
+        "});",
         "",
       ].join("\n"),
     }],
@@ -559,6 +707,98 @@ describe("setsrc compatibility preflight", () => {
     expect(await seen()).toBe("absent");
   });
 
+  it("applies a source that stops publishing an optional verb a linked piece holds", async () => {
+    // The consumer's link to `tick` was admitted against an optional producer
+    // slot. Once the producer gives the verb up, the consumer's read of its
+    // input leaves the verb out instead of handing it a handle that would
+    // drop every event.
+
+    const producer = await pieces.create(tickProducerProgram(true));
+    const consumer = await pieces.create(tickConsumerProgram());
+    await pieces.link(
+      producer.getCell().getAsNormalizedFullLink().id,
+      ["tick"],
+      consumer.getCell().getAsNormalizedFullLink().id,
+      ["tick"],
+    );
+    await runtime.idle();
+    const holderView = () =>
+      pieces.getArgument(consumer.getCell()).asSchema({
+        type: "object",
+        properties: { tick: { asCell: ["stream"] } },
+      }).get() as Record<string, unknown>;
+    expect(Object.hasOwn(holderView(), "tick")).toBe(true);
+    // A holder that stored the stream itself, as a list of verbs does,
+    // reaches the stream's own document rather than the producer's field.
+    const tickSchema = {
+      type: "object",
+      properties: { tick: { asCell: ["stream"] } },
+    } as const;
+    const stream = (producer.getCell().asSchema(tickSchema).get() as {
+      tick?: unknown;
+    }).tick;
+    const tx = runtime.edit();
+    const storedHolder = runtime.getCell<Record<string, unknown>>(
+      pieces.getSpace(),
+      "stored-tick-holder",
+      undefined,
+      tx,
+    );
+    storedHolder.set({ tick: stream });
+    await tx.commit().settled;
+    const storedView = () =>
+      storedHolder.asSchema(tickSchema).get() as Record<string, unknown>;
+    expect(Object.hasOwn(storedView(), "tick")).toBe(true);
+
+    const report = await producer.checkPattern(tickProducerProgram(false));
+    expect(report.issues).toEqual({});
+    await producer.setPattern(tickProducerProgram(false));
+    await runtime.idle();
+
+    expect(Object.hasOwn(holderView(), "tick")).toBe(false);
+    expect(Object.hasOwn(storedView(), "tick")).toBe(false);
+  });
+
+  it("refuses a source that stops publishing an optional verb a builtin backs", async () => {
+    // llm-dialog listens at a key of its own document, which records no
+    // owner, so a holder could not read the verb's absence.
+
+    const producer = await pieces.create(dialogProducerProgram(true));
+    const report = await producer.checkPattern(dialogProducerProgram(false));
+
+    expect(report.issues.schema).toContain(
+      "result.cancel: existing result field was removed",
+    );
+  });
+
+  it("refuses a source that stops publishing a builtin's verb another node forwards", async () => {
+    // The field is bound to the whole of `ifElse`'s output, so nothing in the
+    // binding names the builtin's key the verb stands for.
+
+    const producer = await pieces.create(forwardingProducerProgram(true));
+    const report = await producer.checkPattern(
+      forwardingProducerProgram(false),
+    );
+
+    expect(report.issues.schema).toContain(
+      "result.ui: existing result field was removed",
+    );
+  });
+
+  it("refuses a source that stops publishing a builtin's verb a computation returns", async () => {
+    // The computation's output cell is marked a stream, but no handler takes
+    // it as its event.
+
+    const producer = await pieces.create(returnedVerbProducerProgram(true));
+    const report = await producer.checkPattern(
+      returnedVerbProducerProgram(false),
+    );
+
+    expect(report.issues.schema).toContain(
+      "result.cancel: existing result field was removed",
+    );
+  });
+
   it("agrees with the apply path on the verdict and the cause", async () => {
     // The contract that keeps the preflight honest: a source the check refuses
     // is refused by `setPattern`, for the same underlying reason.
@@ -934,6 +1174,177 @@ describe("setsrc compatibility preflight", () => {
       await runtime.idle();
       expect(getPatternIdentityRef(piece.getCell())?.identity).toBe(
         report.candidate.identity,
+      );
+    });
+  });
+
+  describe("the argument's stored write policy", () => {
+    // The notes' stored policy names `post`, of `records.tsx`, and `amend`,
+    // of `main.tsx`, each from its own reviewed action. An update may add a
+    // writer of an artifact the policy already pairs with the gesture it
+    // names; the commit decides that by the delegations the update proposes,
+    // and the check has to decide it by the same ones. Each candidate adds a
+    // field with a default as well, so setup writes the argument document and
+    // the commit merges the envelope it stores.
+
+    /** The two modules, with `extra` in `records.tsx` and `members` listed. */
+    const policyProgram = (
+      extra = "",
+      members = "",
+      imports = "",
+      fields = "",
+    ): RuntimeProgram => ({
+      main: "/main.tsx",
+      files: [{
+        name: "/records.tsx",
+        contents: [
+          "import { handler, Writable } from 'commonfabric';",
+          "export interface Note { text: string }",
+          "export const post = handler<{ text: string }, { notes: Writable<Note[]> }>(",
+          "  ({ text }, { notes }) => { notes.push({ text }); },",
+          ");",
+          extra,
+          "",
+        ].join("\n"),
+      }, {
+        name: "/main.tsx",
+        contents: [
+          "import { Default, handler, pattern, Stream, type TrustedActionWrite, Writable, type WritePolicyAnyOf } from 'commonfabric';",
+          `import { type Note, post${imports} } from './records.tsx';`,
+          "const amend = handler<{ text: string }, { notes: Writable<Note[]> }>(",
+          "  ({ text }, { notes }) => { notes.key(0).set({ text }); },",
+          ");",
+          "type SentNote = WritePolicyAnyOf<Note, [",
+          "  TrustedActionWrite<unknown, typeof post, 'Post', 'Notes'>,",
+          "  TrustedActionWrite<unknown, typeof amend, 'Amend', 'Notes'>,",
+          members,
+          "]>;",
+          `interface Input { notes?: Writable<SentNote[] | Default<[]>>;${fields} }`,
+          "interface Output { notes: Note[]; post: Stream<{ text: string }>; amend: Stream<{ text: string }> }",
+          "export default pattern<Input, Output>(({ notes }) => ({",
+          "  notes,",
+          "  post: post({ notes }),",
+          "  amend: amend({ notes }),",
+          "}));",
+          "",
+        ].join("\n"),
+      }],
+    });
+
+    /** The candidate, adding `rewrite` to `records.tsx` through `action`. */
+    const rewriteProgram = (action: string) =>
+      policyProgram(
+        [
+          "export const rewrite = handler<{ text: string }, { notes: Writable<Note[]> }>(",
+          "  ({ text }, { notes }) => { notes.key(0).set({ text }); },",
+          ");",
+        ].join("\n"),
+        `  TrustedActionWrite<unknown, typeof rewrite, '${action}', 'Notes'>,`,
+        ", rewrite",
+        " title?: Default<string, ''>;",
+      );
+
+    const postedPiece = async () => {
+      const piece = await pieces.create(policyProgram(), { input: {} });
+      await runtime.idle();
+      const result = await piece.result.getCell();
+      bindNativeUiControl(result.key("post"), {
+        surface: "Notes",
+        action: "Post",
+      })({ text: "hi" });
+      await runtime.idle();
+      await result.pull();
+      expect(await piece.result.get(["notes"])).toEqual([{ text: "hi" }]);
+      return piece;
+    };
+
+    /**
+     * What applying `candidate` to `piece` comes to: `undefined` where it
+     * commits, and the refusal's message otherwise. The override bypasses
+     * the contract proof, which objects to any change to a write policy on
+     * its own, and so reaches the commit's merge.
+     */
+    const applied = (
+      piece: Awaited<ReturnType<typeof postedPiece>>,
+      candidate: RuntimeProgram,
+    ) =>
+      piece.setPattern(candidate, {
+        dangerouslyAllowIncompatibleSchema: true,
+      }).then(
+        () => undefined,
+        (error: unknown) => (error as { message?: string })?.message,
+      );
+
+    describe("the contract check", () => {
+      // An update `setsrc` makes without the override is held to the
+      // contract it replaces: a policy listing the same writers in another
+      // order is the same contract, and one adding a writer is not.
+
+      it("reports no contract issue for a candidate listing the policy's writers in another order", async () => {
+        const piece = await postedPiece();
+        const program = policyProgram();
+        const reordered: RuntimeProgram = {
+          ...program,
+          files: program.files.map((file) =>
+            file.name !== "/main.tsx" ? file : {
+              ...file,
+              contents: file.contents.replace(
+                [
+                  "  TrustedActionWrite<unknown, typeof post, 'Post', 'Notes'>,",
+                  "  TrustedActionWrite<unknown, typeof amend, 'Amend', 'Notes'>,",
+                ].join("\n"),
+                [
+                  "  TrustedActionWrite<unknown, typeof amend, 'Amend', 'Notes'>,",
+                  "  TrustedActionWrite<unknown, typeof post, 'Post', 'Notes'>,",
+                ].join("\n"),
+              ),
+            }
+          ),
+        };
+        expect(reordered).not.toEqual(program);
+
+        const report = await piece.checkPattern(reordered);
+
+        expect(report.issues.schema).toBe(undefined);
+        expect(report.issues.cfc).toBe(undefined);
+      });
+
+      it("reports a contract issue for a candidate adding a writer", async () => {
+        const piece = await postedPiece();
+
+        const report = await piece.checkPattern(rewriteProgram("Post"));
+
+        expect(report.issues.schema).toContain("argument.notes[]: ifc changed");
+      });
+    });
+
+    it("clears a candidate adding a writer of an artifact the policy pairs with its gesture, which the apply commits", async () => {
+      const piece = await postedPiece();
+      const candidate = rewriteProgram("Post");
+
+      const report = await piece.checkPattern(candidate);
+      expect(report.issues.cfc).toBe(undefined);
+
+      expect(await applied(piece, candidate)).toBe(undefined);
+      await runtime.idle();
+      expect(getPatternIdentityRef(piece.getCell())?.identity).toBe(
+        report.candidate.identity,
+      );
+    });
+
+    it("reports a candidate adding a writer of an artifact the policy pairs only with another gesture, which the apply refuses", async () => {
+      const piece = await postedPiece();
+      const candidate = rewriteProgram("Amend");
+
+      const report = await piece.checkPattern(candidate);
+      expect(report.issues.cfc).toContain(
+        "writePolicyAnyOf must remain stable at /notes/*",
+      );
+
+      const refused = await applied(piece, candidate);
+      expect(refused).toContain("CFC enforcement rejected commit");
+      expect(refused).toContain(
+        "writePolicyAnyOf must remain stable at /notes/*",
       );
     });
   });

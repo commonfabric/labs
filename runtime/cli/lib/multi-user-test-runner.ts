@@ -67,6 +67,7 @@ import { type ACL, isCapability } from "@commonfabric/memory/acl";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import { listenServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
+import type { ExperimentalOptions } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
@@ -200,7 +201,65 @@ export function participantAccess(
   return levels;
 }
 
-class ParticipantWorker {
+/** The storage server a run's participants share. */
+export interface ParticipantServer {
+  readonly url: URL;
+  close(): Promise<void>;
+
+  /**
+   * What answers a participant's request to wait for the serving loop, on the
+   * server-execution arm; on the other arm there is no loop and no request.
+   */
+  readonly servedQuiescence: ServedQuiescence | undefined;
+}
+
+/**
+ * Starts the storage server for the arm `experimental` resolves to. On the
+ * server-execution arm it has a serving loop beside it, as a toolshed running
+ * that arm has, so the events the participants commit are served, and
+ * {@link ParticipantServer.servedQuiescence} waits for that loop. Either way it
+ * is given no access list.
+ *
+ * A participant worker resolves its arm from the same environment, so it is
+ * paired with a server this starts: a worker on the server-execution arm asks
+ * its parent to wait for a serving loop, and a server without one has nothing
+ * that could answer.
+ */
+export async function startParticipantServer(
+  experimental: ExperimentalOptions,
+): Promise<ParticipantServer> {
+  if (experimental.serverExecution) {
+    const serving = await listenServingMemoryServer({
+      apiUrl: new URL(import.meta.url),
+      experimental,
+      // On this thread whatever the environment selects for a toolshed, as
+      // the single-runtime runner's loop is.
+      worker: false,
+    });
+    return {
+      url: serving.url,
+      close: () => serving.close(),
+      servedQuiescence: () => serving.host.host!.whenQuiescent(),
+    };
+  }
+  const server = StandaloneMemoryServer.start({
+    // The posture of a toolshed whose runtimes run the participants' flags
+    // (INV-16).
+    namesInstances: () => namesInstancesByDefault(experimental),
+  });
+  return {
+    url: server.url,
+    close: () => server.close(),
+    servedQuiescence: undefined,
+  };
+}
+
+/**
+ * One participant's worker, and the request/response protocol the
+ * orchestrator drives it over. On the server-execution arm it also answers
+ * the worker's requests to wait for the serving loop.
+ */
+export class ParticipantWorker {
   readonly name: string;
   #worker: Worker;
   #lifetimeLock?: string;
@@ -240,9 +299,17 @@ class ParticipantWorker {
           this.#worker.postMessage(
             { quiescenceAnswer, ...body } satisfies WorkerQuiescenceAnswer,
           );
-        // Only a worker on the server-execution arm asks, and its orchestrator
-        // is on that arm too.
-        servedQuiescence!().then(
+        // Only a worker on the server-execution arm asks. One paired with a
+        // server that has no serving loop is told so, rather than left to
+        // wait for an answer nothing would send.
+        if (servedQuiescence === undefined) {
+          answer({
+            error: `participant "${name}" runs on the server-execution arm, ` +
+              "but its storage server has no serving loop to wait for",
+          });
+          return;
+        }
+        servedQuiescence().then(
           (reached) => answer({ reached }),
           (error: unknown) => answer({ error: String(error) }),
         );
@@ -355,34 +422,14 @@ export async function runMultiUserTestPattern(
   const nonIdempotent: string[] = [];
   let runResult: TestRunResult | undefined;
 
-  const experimental = patternTestExperimentalOptions(Deno.env.get);
-  let server: { readonly url: URL; close(): Promise<void> } | undefined;
-  let servedQuiescence: ServedQuiescence | undefined;
+  let server: ParticipantServer | undefined;
   const participants: ParticipantState[] = [];
   const workers: ParticipantWorker[] = [];
 
   try {
-    // On the server-execution arm the storage server has a serving loop
-    // beside it, as a toolshed running that arm has, so the events the
-    // participants commit are served. Like the plain server, it is given no
-    // access list.
-    if (experimental.serverExecution) {
-      const serving = await listenServingMemoryServer({
-        apiUrl: new URL(import.meta.url),
-        experimental,
-        // On this thread whatever the environment selects for a toolshed,
-        // as the single-runtime runner's loop is.
-        worker: false,
-      });
-      server = serving;
-      servedQuiescence = () => serving.host.host!.whenQuiescent();
-    } else {
-      server = StandaloneMemoryServer.start({
-        // The posture of a toolshed whose runtimes run the participants'
-        // flags (INV-16).
-        namesInstances: () => namesInstancesByDefault(experimental),
-      });
-    }
+    server = await startParticipantServer(
+      patternTestExperimentalOptions(Deno.env.get),
+    );
     const identities = new Map<string, Identity>();
     for (const spec of meta.participants) {
       if (!identities.has(spec.user)) {
@@ -419,7 +466,7 @@ export async function runMultiUserTestPattern(
         // await, including during initialization, and cleanup can proceed.
         // Every worker is terminated again, and waited for, on the way out.
         for (const worker of workers) void worker.terminate(error);
-      }, servedQuiescence);
+      }, server.servedQuiescence);
       workers.push(worker);
       try {
         const init = await worker.call("init", {

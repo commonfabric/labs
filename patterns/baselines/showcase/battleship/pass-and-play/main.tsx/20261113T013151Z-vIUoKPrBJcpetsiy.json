@@ -1,0 +1,195 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "showcase/battleship/pass-and-play/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Coordinate": {
+        "properties": {
+          "col": {
+            "type": "number"
+          },
+          "row": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "row",
+          "col"
+        ],
+        "type": "object"
+      },
+      "GameState": {
+        "properties": {
+          "awaitingPass": {
+            "type": "boolean"
+          },
+          "currentTurn": {
+            "enum": [
+              1,
+              2
+            ]
+          },
+          "lastMessage": {
+            "type": "string"
+          },
+          "phase": {
+            "enum": [
+              "playing",
+              "finished"
+            ]
+          },
+          "player1": {
+            "$ref": "#/$defs/PlayerBoard"
+          },
+          "player2": {
+            "$ref": "#/$defs/PlayerBoard"
+          },
+          "viewingAs": {
+            "enum": [
+              1,
+              2,
+              null
+            ]
+          },
+          "winner": {
+            "enum": [
+              1,
+              2,
+              null
+            ]
+          }
+        },
+        "required": [
+          "phase",
+          "currentTurn",
+          "player1",
+          "player2",
+          "winner",
+          "lastMessage",
+          "viewingAs",
+          "awaitingPass"
+        ],
+        "type": "object"
+      },
+      "PlayerBoard": {
+        "properties": {
+          "ships": {
+            "items": {
+              "$ref": "#/$defs/Ship"
+            },
+            "type": "array"
+          },
+          "shots": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/SquareState"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ships",
+          "shots"
+        ],
+        "type": "object"
+      },
+      "Ship": {
+        "properties": {
+          "orientation": {
+            "enum": [
+              "horizontal",
+              "vertical"
+            ]
+          },
+          "start": {
+            "$ref": "#/$defs/Coordinate"
+          },
+          "type": {
+            "$ref": "#/$defs/ShipType"
+          }
+        },
+        "required": [
+          "type",
+          "start",
+          "orientation"
+        ],
+        "type": "object"
+      },
+      "ShipType": {
+        "enum": [
+          "carrier",
+          "battleship",
+          "cruiser",
+          "submarine",
+          "destroyer"
+        ]
+      },
+      "SquareState": {
+        "enum": [
+          "empty",
+          "miss",
+          "hit"
+        ]
+      }
+    },
+    "properties": {
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "fireShot": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "col": {
+            "type": "number"
+          },
+          "row": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "row",
+          "col"
+        ],
+        "type": "object"
+      },
+      "game": {
+        "$ref": "#/$defs/GameState"
+      },
+      "passDevice": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "playerReady": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "resetGame": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      }
+    },
+    "required": [
+      "game",
+      "fireShot",
+      "passDevice",
+      "playerReady",
+      "resetGame",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

@@ -3,8 +3,8 @@
  * the entry and label arrays; shared atoms must be immutable to reuse a slice.
  */
 import { isDeepFrozen } from "@commonfabric/data-model";
+import { isOrClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
-import { isOrClause } from "./clause.ts";
 import {
   type CfcLabelView,
   cfcLabelViewOriginSpaces,

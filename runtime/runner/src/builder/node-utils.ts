@@ -1,9 +1,9 @@
 import { FabricInstance, refuseFabricInstance } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import { exportCell, isCell } from "../cell.ts";
 import { ContextualFlowControl } from "../cfc.ts";
-import type { CfcConfClause } from "../cfc/clause.ts";
 import {
   getCellOrThrow,
   isCellResultForDereferencing,

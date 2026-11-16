@@ -7,11 +7,15 @@ import {
   type CompiledOutput,
   compiledOutputOf,
   type CompiledVariant,
+  computeCompilerOutputVersion,
   CORPUS_ENTRIES,
   outputFingerprintOf,
 } from "../src/compilation-cache/compile-cache-output-version.deno.ts";
 import { CORPUS_DIR } from "../src/compilation-cache/compile-cache-output-memo.deno.ts";
-import { FINGERPRINT_LENGTH } from "../src/compilation-cache/compiler-fingerprint.deno.ts";
+import {
+  FINGERPRINT_LENGTH,
+  VERSION_NAMESPACE,
+} from "../src/compilation-cache/compiler-fingerprint.deno.ts";
 import {
   cacheVariantName,
   PERSISTED_CACHE_VARIANTS,
@@ -259,6 +263,37 @@ describe("compile-cache-output-version", () => {
       } finally {
         await Deno.remove(edited, { recursive: true });
       }
+    });
+  });
+
+  describe("computeCompilerOutputVersion()", () => {
+    let repoRoot: string;
+
+    beforeAll(async () => {
+      repoRoot = await Deno.makeTempDir({ prefix: "compile-cache-repo-" });
+      const corpus = join(repoRoot, CORPUS_DIR);
+      await Deno.mkdir(corpus, { recursive: true });
+      for (const [name, contents] of Object.entries(TINY_CORPUS)) {
+        await Deno.writeTextFile(join(corpus, name), contents);
+      }
+    });
+
+    afterAll(async () => {
+      await Deno.remove(repoRoot, { recursive: true });
+    });
+
+    it("returns the namespaced output fingerprint, under the epoch given, of the corpus under the repository", async () => {
+      const version = await computeCompilerOutputVersion(repoRoot, 7, [
+        "main.tsx",
+      ]);
+      const variants = await compileCorpusVariants(
+        join(repoRoot, CORPUS_DIR),
+        ["main.tsx"],
+      );
+
+      expect(version).toBe(
+        `${VERSION_NAMESPACE}/${outputFingerprintOf(variants, 7)}`,
+      );
     });
   });
 

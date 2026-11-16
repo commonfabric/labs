@@ -173,6 +173,17 @@ describe("fabrichat spaces across runtimes", () => {
       title: "Counted next",
       members: [member.identity.did()],
     });
+    // And raw, through the room the member has read nothing of.
+    expect(
+      await member.readRaw([
+        "requests",
+        "g-count-next",
+        "entry",
+        "room",
+        "messages",
+        "count",
+      ]),
+    ).toBe(0);
   });
 
   it("lets anyone read a group room made joinable by its link", async () => {

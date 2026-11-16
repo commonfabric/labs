@@ -62,21 +62,21 @@ All special types in JSON use a single convention: single-key objects where the
 key follows the pattern `/<Type>@<Version>`.
 
 - `/` — sigil prefix (nodding to IPLD heritage)
-- `<Type>` — type name, after any namespace prefixes
+- `<Type>` — type name, after any namespace prefixes, in any case
 - `@<Version>` — version number
 
 The key is a type tag with the sigil in front of it, and the tag is the key
-without its sigil. The tag syntax is not particular to JSON: it is the one
+without its sigil. The type-tag syntax is not particular to JSON: it is the one
 every interchange format shares, defined in `1-fabric-values.md` Section 2.5.
-So `Bytes@1` and `sys.beep.Boop@1` are tags, written as the keys `/Bytes@1` and
-`/sys.beep.Boop@1`, while `bytes@1` and `sys.Boop` are not.
+So `Bytes@1`, `bytes@1` and `sys.beep.Boop@1` are type tags, written as the keys
+`/Bytes@1`, `/bytes@1` and `/sys.beep.Boop@1`, while `Bytes` and `sys.Boop` are
+not.
 
-A key whose remainder after the sigil is not a tag is a structural violation
-under Section 9 rather than an `UnknownValue` under Section 8. The escapes
-`/quote` and `/object` (Section 6), and the sparse-array marker `/hole`
-(Section 3), fall outside the tag syntax deliberately — none of them has an
-uppercase name or an `@<Version>` — each being a structural marker the format
-handles itself rather than a type anything encodes.
+A key whose remainder after the sigil is not a type tag is a structural
+violation under Section 9 rather than an `UnknownValue` under Section 8. The
+escapes `/quote` and `/object` (Section 6), and the sparse-array marker `/hole`
+(Section 3), are the format's own forms rather than types anything encodes, and
+their names are not type tags, having no `@<Version>`.
 
 This convention does **not** prohibit storing plain objects that happen to have
 `/`-prefixed keys. The escaping mechanism in Section 6 (`/object` and
@@ -106,9 +106,8 @@ round-trip correctly.
 > one character cannot carry a whole byte.
 >
 > This convention applies to `Bytes@1`, `BigInt@1`, `EpochNsec@1`,
-> `EpochDay@1`, `DurationNsec@1`, and `DurationDay@1` state values, to the
-> `hash` field of `Hash@1` state, and to the `publicKey` and `privateKey` fields
-> of `KeyPair@1` state.
+> `EpochDay@1`, `DurationNsec@1`, and `DurationDay@1` state values, and to the
+> `hash` field of `Hash@1` state.
 
 The JSON key for a tagged value is the tag with `/` prepended, per Section 2:
 a value under `Link@1` is written `{ "/Link@1": <state> }`. What follows
@@ -147,19 +146,34 @@ a string nor `null`, produces a `ProblematicValue`.
 ### `Hash@1` — content hashes
 
 State is `{ tag: string, hash: string }`. `tag` is the algorithm tag (for
-example `fid1`), and `hash` is the hash bytes as an unpadded base64url string,
-per the convention above. On decoding, a state that is not an object, or whose
-fields are not strings, produces a `ProblematicValue`. See `1-fabric-values.md`
+example `fid1`), in the general tag syntax of `1-fabric-values.md` Section 2.5,
+and `hash` is the hash bytes as an unpadded base64url string, per the
+convention above. An encoder does not write a hash whose algorithm tag is
+outside that syntax. On decoding, a state that is not an object, whose fields
+are not strings, whose `tag` is outside that syntax, or that holds any field
+besides those two, produces a `ProblematicValue`. See `1-fabric-values.md`
 Section 1.4.9.
 
 ### `KeyPair@1` — asymmetric key pairs
 
-State is `{ algorithm: string, publicKey: string, privateKey: string }`.
+State is `{ algorithm: string, publicKey: <Bytes@1>, privateKey: <Bytes@1> }`.
 `algorithm` names the algorithm in Web Crypto's normalized spelling (for
-example `Ed25519`), and the two keys are their raw bytes as unpadded base64url
-strings, per the convention above. On decoding, a state that is not an object,
-or whose fields are not strings, produces a `ProblematicValue`, as does a key
-that is not valid base64url.
+example `Ed25519`), and each key is its raw bytes as a `Bytes@1` value of its
+own:
+
+```json
+{
+  "/KeyPair@1": {
+    "algorithm": "Ed25519",
+    "privateKey": { "/Bytes@1": "vu8B" },
+    "publicKey": { "/Bytes@1": "3q0" }
+  }
+}
+```
+
+On decoding, a state that is not an object, whose `algorithm` is not a
+non-empty string, whose keys do not decode as `Bytes@1` values, or that holds
+any field besides those three produces a `ProblematicValue`.
 
 **Only a pair that holds key material has a state here.** A `FabricKeyPair`
 that holds `CryptoKey` handles instead is refused: encoding one throws rather
@@ -170,47 +184,26 @@ carry a key it did not. Such a pair crosses under the realm encoding
 (Section 3.4 of [4-realm-encoding.md](./4-realm-encoding.md)) and nowhere else.
 See `1-fabric-values.md` Section 1.4.11.
 
-### `RegExp@1` — regular expressions
-
-State is `{ source: string, flags: string, flavor: string }`, and all three
-fields are required. `source` is the pattern string and `flags` the flag string
-(for example `gi`). `flavor` names the regular-expression dialect the pattern
-and flags are written in, for example `es2025`, that of ECMAScript 2025. The
-format has no default flavor, and requires no implementation to support any
-particular one.
-
-On decoding, a state that is not an object, that lacks any of the three
-fields, or that has one that is not a string produces a `ProblematicValue`. An
-implementation constructs each pattern whose flavor it supports, which
-validates it, and may refuse one that fails to construct, producing a
-`ProblematicValue`. A pattern under a flavor the implementation does not
-construct is stored faithfully and **not** validated. See `1-fabric-values.md`
-Section 1.4.5.
-
-> **JS implementation note.** This implementation constructs `es2025` patterns,
-> as JavaScript `RegExp`s, and refuses one that fails to construct. It
-> constructs no other flavor.
-
 ### `Unavailable@1` — unavailable data
 
 State is `{ reason: string }` for a transient reason, and for reason `error`
 `{ reason: string, errorKind: string }` or
-`{ reason: string, errorKind: string, errorMessage: string }`. `reason` is one
-of `pending`, `syncing`, and `error`; `errorKind` is one of `general`,
+`{ reason: string, errorKind: string, message: string }`. `reason` is one of
+`pending`, `syncing`, and `error`; `errorKind` is one of `general`,
 `schemaMismatch`, `invalidInput`, `network`, `decode`, `compile`, `provider`,
-and `sync`, present exactly when the reason is `error`; and `errorMessage` is
+and `sync`, present exactly when the reason is `error`; and `message` is
 present exactly when a message is stored. A field with nothing to say is
-absent rather than present as `null`. An `error` whose message is its kind's
-default encodes without one, the default being presentation rather than
-state.
+absent rather than present as `null`. Any string is a message, whatever its
+text, and a decoded state holding one keeps it.
 
 On decoding, a state that is not an object, whose `reason` is not one of the
-three, whose `errorKind` is present and not one of the kinds, or whose
-`errorMessage` is present and not a string produces a `ProblematicValue`. So
-does a state pairing a kind or a message with a transient reason, or omitting
-the kind from `error`: the class never writes either, and the constructor
-refuses both. A well-formed state that is a transient reason alone decodes to
-that reason's prefab instance. See `1-fabric-values.md` Section 1.4.12.
+three, whose `errorKind` is present and not one of the kinds, whose `message`
+is present and not a string, or that holds any field besides those three
+produces a `ProblematicValue`. So does a state pairing a kind or a message with
+a transient reason, or omitting the kind from `error`: the class never writes
+either, and the constructor refuses both. A well-formed state that is a
+transient reason alone decodes to that reason's prefab instance. See
+`1-fabric-values.md` Section 1.4.12.
 
 ### `BigInt@1` — arbitrary-precision integers
 
@@ -291,9 +284,11 @@ things this type is for, and such a value could not go back out under it.
 which it can because that tag is known to be a real one.
 
 On decoding, a state that is not an object, a `tag` or `error` that is not a
-string, or an absent `state` property is refused, and settles against `lenient`
-like any other malformation: a lenient decode yields a `ProblematicValue`
-describing that decode, and a strict one raises. A well-formed record is a
+string, an absent `state` property, or any field besides those three is
+refused, and settles against `lenient` like any other malformation: a lenient
+decode yields a `ProblematicValue` describing that decode, recording
+`Problematic@1` as its tag and the record as it arrived as its state, and a
+strict one raises. A well-formed record is a
 record of a *past* failure and reads back as one under either setting, this
 decode having succeeded. `state` is checked for presence rather than for type,
 because every `FabricValue` is a valid state, `undefined` among them; filling in
@@ -303,12 +298,17 @@ See `1-fabric-values.md` Section 3.5.
 
 > **Decoding validation.** Decoding cannot assume type safety from the wire.
 > Each codec must reject a state it did not write, rather than silently
-> producing garbage from one — wrong type, invalid format, or missing fields
-> alike. The rejection has two homes, and which one a check belongs in is
-> settled by what asking costs. `canDecode()` holds what is cheap to ask and not
-> already asked by the decoding: that the state is a `string`, that a record
-> carries the fields the decoding reads and that they are strings, that a
-> literal is one of a fixed set. `decode()` holds a check whose only
+> producing garbage from one — wrong type, invalid format, missing fields, or
+> a field the codec does not read alike. Decoding a record without a field it
+> arrived with would build a value that re-encodes and hashes differently from
+> what was sent. A codec whose state is open-ended by design reads every field
+> it is handed, so this refuses nothing there: `Error@1` reads each field
+> beyond its fixed ones as one of the error's own properties, and `Link@1`'s
+> state is its payload whole. The rejection has two homes, and which one a
+> check belongs in is settled by what asking costs. `canDecode()` holds what
+> is cheap to ask and not already asked by the decoding: that the state is a
+> `string`, that a record carries the fields the decoding reads, no others, and
+> that they are strings, that a literal is one of a fixed set. `decode()` holds a check whose only
 > implementation is the decoding itself — that a base64url string (such as
 > `BigInt@1`, `EpochNsec@1`, `EpochDay@1`, `DurationNsec@1`, `DurationDay@1`,
 > or `Bytes@1`) is valid base64url is answered by decoding it, so asking first
@@ -749,7 +749,8 @@ Each measure has a floor, the smallest guarantee an implementation may state:
 | Length of a string | 2^24 (16,777,216) code points |
 | Length of a byte sequence | 2^24 (16,777,216) bytes |
 | Length of a registered symbol's key | 2^10 (1,024) code points |
-| Depth | 2^10 (1,024) containers |
+| Depth | 2^9 (512) containers |
+| Size of a bigint, in bytes of its two's-complement representation | 2^21 (2,097,152) bytes (2^24 bits) |
 
 A guarantee covers one measure taken alone. The format sets no floor on a
 value's size as a whole, and an implementation may fail a value that is within
@@ -771,7 +772,7 @@ pair is one code point, and so is a lone surrogate, which the format treats as
 a code point of its own value (`1-fabric-values.md` Section 6.7, and the WTF-8
 encoding of `2-hash-byte-format.md` Section 4.4). The guarantee covers every
 string the value holds: string values, record keys, and the strings in a
-type's state, such as an `Error@1` message or a `RegExp@1` source. It is about
+type's state, such as an `Error@1` message. It is about
 the value, not the text: a string's JSON text can be several times as long as
 its count of code points, an escaped code unit taking six characters.
 
@@ -791,8 +792,21 @@ where the state is an array or a plain object. A value that is not a container
 has depth 0, `[]` has depth 1, `[[]]` has depth 2, and an `Error` whose state
 holds no container has depth 2. Depth is the value's, not the text's: an escape
 wrapper, `/object` or `/quote`, adds nothing, and nor does a `hole` entry; the
-single-key object wrapping an instance is the instance; and a primitive adds
-nothing, whatever the shape of its state in the text.
+single-key object wrapping an instance is the instance. A value of one of the
+format's leaf types adds nothing, whatever the shape of its state in the text:
+these are `Bytes@1`, `Hash@1`, the four temporal quantities, and the types
+that carry a JavaScript primitive (`BigInt@1`, `SpecialNumber@1`, `Symbol@1`
+and `Undefined@1`). Every other tagged value is an instance, `KeyPair@1` and
+`Unavailable@1` among them, so a key pair or an unavailable value has depth 2.
+
+**Bigints.** A bigint's size is the length of its minimal two's-complement
+representation in bytes, the bytes `BigInt@1` writes (Section 3): at least one
+byte, and no leading `0x00` or `0xFF` byte that only repeats the sign the next
+byte carries. `0n`, `-1n`, `127n` and `-128n` are 1 byte each, and `128n` and
+`-129n` are 2. The size is the value's, not the text's: it counts the bytes, not
+the base64url characters of the state that writes them. The guarantee covers
+every bigint the value holds: a `BigInt@1` value, and the bigint each temporal
+quantity carries.
 
 **What the floors do not bind.** The floors bind only the guarantees an
 implementation states. A caller reading untrusted text may set a lower bound

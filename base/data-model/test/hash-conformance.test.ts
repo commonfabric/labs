@@ -18,7 +18,6 @@ import { fabricInstanceClassesByName, FabricLink } from "@/fabric-instances";
 import {
   FabricKeyPair,
   fabricPrimitiveClassesByName,
-  FabricRegExp,
 } from "@/fabric-primitives";
 import {
   FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
@@ -223,7 +222,7 @@ describe("hash-conformance", () => {
     }
   });
 
-  it("has a case whose value is an instance of each concrete class but those with stub codecs", () => {
+  it("has a case whose value is an instance of each concrete class but those with stub codecs or none", () => {
     const values = HASH_CONFORMANCE_CASES_FOR_TESTING_ONLY.map((c) => c.make());
     const classes = {
       ...fabricPrimitiveClassesByName(),
@@ -442,19 +441,6 @@ describe("hash-conformance", () => {
           },
         ])
       ).toThrow("a and b: their hashes are equal, but neither names the other");
-    });
-
-    it("returns an entry requiring the flavors a case marks", () => {
-      const entry = soleEntryOf([
-        {
-          name: "flavored",
-          section: "s",
-          make: () => new FabricRegExp("es2025", "a", ""),
-          requires: { flavors: ["es2025"] },
-        },
-      ]);
-
-      expect(entry.requires).toEqual({ flavors: ["es2025"] });
     });
 
     it("returns an entry requiring the member count of a record past the floor", () => {

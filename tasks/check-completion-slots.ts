@@ -132,7 +132,15 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
     "piece follow:expect-revision",
     "the revision head the caller inspected, or none",
   ],
+  [
+    "piece setsrc:origin",
+    "a `system:` ref or fabric URL the caller names for the piece to follow",
+  ],
   ["piece new:request-key", "an opaque caller retry key"],
+  [
+    "piece new:from-index",
+    "a published pattern's id, which a pattern-index search answers",
+  ],
   [
     "ingest mint:gmail-access-token",
     "a secret; a candidate list is the wrong place",
@@ -157,6 +165,11 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ],
   // Numbers, durations and bounds. Nothing enumerates a count.
   ["space compact:verify-sample", "an every-nth stride over the documents"],
+  [
+    "cell release-by-intent:clause",
+    "a clause digest the owner reads from the command's own listing and " +
+    "names on purpose",
+  ],
   [
     "space delete:confirm",
     "the space's DID, typed out on purpose: offering one would undo the check",
@@ -240,6 +253,7 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ["url", "a browser URL; its parts complete as --api-url, --space, --piece"],
   ["app-url", "a shell origin, which is not the api-url --api-url names"],
   ["repository", "a source repository URL"],
+  ["pattern-index-url", "the base URL of a pattern index service"],
   ["model", "a model name the harness's configured provider defines"],
   [
     "main-export",

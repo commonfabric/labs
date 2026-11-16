@@ -4,23 +4,23 @@ import {
   isFabricPlainObject,
 } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  type CfcConfClause,
+  clauseAlternatives,
+  commitmentAwareEquals,
+  isCfcFieldCommitment,
+} from "@commonfabric/memory/v2/cfc-release-authority";
 
 import { encodePointer, parsePointer } from "../../../memory/v2/path.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { canonicalizeLogicalPath } from "./canonical.ts";
-import type { CfcConfClause } from "./clause.ts";
-import { clauseAlternatives } from "./clause.ts";
 import {
   cfcEntryHasDerivedContainment,
   labelMetadataFieldIsProtected,
   resolveLabelMetadataTemplateConfidentiality,
 } from "./label-metadata-population.ts";
-import {
-  commitmentAwareEquals,
-  isCfcFieldCommitment,
-} from "./label-representation.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import { uniqueCfcAtoms } from "./observation.ts";
 import type { CfcMetadata, LabelMapEntry } from "./types.ts";

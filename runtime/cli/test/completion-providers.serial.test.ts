@@ -8,7 +8,8 @@ import { DEFAULT_SCAN_LIMIT } from "@commonfabric/state-inspector";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { entityIdFrom, Runtime } from "@commonfabric/runner";
 import { StorageManager as WorkerStorageManager } from "@commonfabric/runner/storage/cache";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { startServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
+import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { resetProcessDeployment } from "../lib/process-deployment.ts";
 import {
   type CompletionLine,
@@ -1446,7 +1447,15 @@ Deno.test("live candidates preserve qualified space, user scope, and nested path
     { implementation: "noble" },
   );
   const foreign = await Identity.fromPassphrase("completion foreign space");
-  const storage = StorageManager.emulate({ as: identity });
+  // `cf` reads ON at the server-execution default, and an ON read waits for
+  // the serving loop to settle through the server's head, so the store the
+  // CLI reaches has a loop beside it.
+  const serving = await startServingMemoryServer({
+    apiUrl: new URL(import.meta.url),
+  });
+  const storage = EmulatedStorageManager.connectTo(serving.server, {
+    as: identity,
+  });
   const keyPath = await Deno.makeTempFile();
   await Deno.writeFile(keyPath, identity.toPkcs8());
   const piece = entityIdFrom(taggedHashStringOf("completion-qualified-piece"));
@@ -1511,12 +1520,14 @@ Deno.test("live candidates preserve qualified space, user scope, and nested path
         const result = await liveCandidates(
           lineFor(`cf piece link ${reference}ti`),
         );
-        expect(result).toEqual({
-          candidates: [{ value: `${reference}title` }, {
-            value: `${reference}detail`,
-          }],
-          directives: [{ kind: "nospace" }],
-        });
+        // The order of the keys is not what this checks: an ON read takes
+        // the value back from the server, which need not keep the order the
+        // write gave them.
+        expect(result.candidates.map(({ value }) => value).sort()).toEqual([
+          `${reference}detail`,
+          `${reference}title`,
+        ]);
+        expect(result.directives).toEqual([{ kind: "nospace" }]);
         expect(openedSpaces).toEqual([foreign.did()]);
       },
     );
@@ -1527,6 +1538,7 @@ Deno.test("live candidates preserve qualified space, user scope, and nested path
     open.restore();
     for (const runtime of runtimes) await runtime.dispose();
     await storage.close();
+    await serving.close();
     await Deno.remove(keyPath);
     resetProcessDeployment();
   }

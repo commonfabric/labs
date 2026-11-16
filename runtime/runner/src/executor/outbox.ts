@@ -39,6 +39,7 @@ import {
 } from "@commonfabric/memory/v2/execution-outbox";
 import type { PendingOutboxRow } from "@commonfabric/memory/v2/execution-outbox";
 import { ProtocolError } from "@commonfabric/memory/v2";
+import { isDeletedSpaceError } from "@commonfabric/memory/v2/client";
 import { getLogger } from "@commonfabric/logger";
 import {
   POST_COMMIT_RELEASE_REJECTED,
@@ -78,6 +79,10 @@ interface InflightEffect {
   retirement: Promise<void>;
   candidates: EffectCandidate[] | undefined;
   countsAsRequest: boolean;
+
+  /** Whether a candidate's flush has passed its release check and started
+   * the request's work. */
+  dispatched: boolean;
 }
 
 /** Per-space egress budgets (Phase 6 — serving-loop.md §5's
@@ -244,10 +249,9 @@ export class SpaceOutbox {
     return Math.max(1, Math.floor(rate));
   }
 
-  /** Continuous refill up to the burst capacity. */
-  #refillEgressTokens(): void {
-    const rate = this.#budget?.egressRatePerSecond;
-    if (rate === undefined || rate <= 0) return;
+  /** Continuous refill at `rate` tokens per second, up to the burst
+   * capacity. */
+  #refillEgressTokens(rate: number): void {
     const now = this.#now();
     const elapsed = Math.max(0, now - this.#egressRefilledAt);
     if (elapsed <= 0) return;
@@ -262,7 +266,7 @@ export class SpaceOutbox {
   #msUntilEgressToken(): number {
     const rate = this.#budget?.egressRatePerSecond;
     if (rate === undefined || rate <= 0) return 0;
-    this.#refillEgressTokens();
+    this.#refillEgressTokens(rate);
     if (this.#egressTokens >= 1) return 0;
     return Math.ceil(((1 - this.#egressTokens) / rate) * 1000);
   }
@@ -334,7 +338,6 @@ export class SpaceOutbox {
    * No gate binds that identity; the drop is the sanctioned
    * crash-equivalent posture (memo re-miss re-fires on re-activation). */
   close(): void {
-    if (this.#closed) return;
     this.#closed = true;
     while (this.#dispatchWaiters.length > 0) {
       this.#dispatchWaiters.shift()?.();
@@ -353,6 +356,19 @@ export class SpaceOutbox {
    * selected dispatch attachment's seal. */
   carriageFor(effectKey: string): WaveRunContext | undefined {
     return this.#carriage.get(effectKey);
+  }
+
+  /**
+   * Whether `effectKey`'s request has gone out and its carriage is still
+   * held: true from the moment a candidate's flush passes its release check
+   * until the effect retires. A completion committed meanwhile commits under
+   * that carriage. During a flush whose release check refuses the request,
+   * and once every candidate's has, this is false, since that carriage
+   * retires as soon as the flush returns.
+   */
+  hasDispatchedCarriage(effectKey: string): boolean {
+    return this.#inflight.get(effectKey)?.dispatched === true &&
+      this.#carriage.has(effectKey);
   }
 
   /**
@@ -416,6 +432,7 @@ export class SpaceOutbox {
           retirement: retired.promise,
           candidates: [candidate],
           countsAsRequest,
+          dispatched: false,
         };
         this.#inflight.set(key, entry);
         if (countsAsRequest) this.#stats.memo.inflight += 1;
@@ -512,6 +529,7 @@ export class SpaceOutbox {
       this.#capturing = undefined;
       if (flushResult === POST_COMMIT_RELEASE_REJECTED) continue;
       dispatched = true;
+      entry.dispatched = true;
       break;
     }
     entry.candidates = undefined;
@@ -644,12 +662,18 @@ export class SpaceOutbox {
       } catch (error) {
         // The owner's `refused` is the engine's `ProtocolError`, answered
         // over the route, and an append too large to send is refused before
-        // it is sent and never fits later; every other refusal of the
-        // owner's is transient.
+        // it is sent and never fits later. A deleted target admits nothing
+        // again (INV-15), whether the owner refuses the routed session's open
+        // for it or revoked the open session with it. Every other refusal of
+        // the owner's is transient: a denial under the target's access list,
+        // which a later grant can lift, and the close of a session the owner
+        // revoked, after which the route opens a new one for the next
+        // attempt.
         if (
           error instanceof ProtocolError ||
           isServedRefusal(error, "refused") ||
-          isServedRefusal(error, "payload-too-large")
+          isServedRefusal(error, "payload-too-large") ||
+          isDeletedSpaceError(error)
         ) {
           // LT4: a deterministic admission rejection does not retry. The
           // source-side failure notice writes BEFORE the row retires

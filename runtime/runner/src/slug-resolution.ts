@@ -5,7 +5,6 @@ import { parseLink } from "./link-utils.ts";
 import { cellEntityIdString } from "./piece-helpers.ts";
 import { getPatternIdentityRef } from "./runner.ts";
 import type { Runtime } from "./runtime.ts";
-import type { URI } from "./sigil-types.ts";
 import { slugIdForSpace, validateSlug } from "./slugs.ts";
 import type { MemorySpace } from "./storage/interface.ts";
 
@@ -226,12 +225,7 @@ export async function resolveSlugTargetCell(
     );
   }
 
-  const target = runtime.getCellFromLink({
-    ...targetLink,
-    id: targetLink.id as URI,
-    space: targetLink.space ?? space,
-    scope: targetLink.scope ?? "space",
-  });
+  const target = runtime.getCellFromLink(targetLink);
   await target.sync();
   return target;
 }

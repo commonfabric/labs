@@ -418,6 +418,14 @@ past that anchor until `MAX_EXECUTIONS` stops it. So a test that has been
 seen to disagree at all is run at least twice, because one execution
 cannot tell a pass from a lucky pass.
 
+That count is the most a lane runs it. A lane stops repeating a unit once
+each test that asked for the unit's repeats has settled: it has passed and
+failed at this commit, which is the disagreement a flake is read from, or it
+has failed twice running, which is a test failing at this commit, whose
+further runs would each measure how long its failure takes. Every run the
+lane makes is recorded as it would be otherwise, and the lane's summary says
+how many runs of each unit it did not need and why, which is not a failure.
+
 Zero is the one point the count steps at, between running a test once and
 running it at least twice, which is why the manifest records a share as
 it was measured rather than to a few places. A share written to four
@@ -524,10 +532,11 @@ And a unit that recorded nothing recorded nothing under any name, which
 fails the run whether or not anything was there to excuse.
 
 What the tree holds is what the unit's own test processes registered. A
-manifest holds every identity the default branch recorded in a file the tree
-still holds, so it names tests renamed since it was published, and no run of
-this tree can record one of those. Where a unit's processes registered no
-test by an identity's name and none inside it, that identity is absent, so
+manifest holds every identity the default branch was still recording in a
+file the tree held when the manifest was published, so it names tests
+renamed since, and no run of this tree can record one of those. Where a
+unit's processes registered no test by an identity's name and none inside
+it, that identity is absent, so
 long as everything they registered that encloses it is a group they
 registered a test inside. A registered test can record steps it names only
 as it runs, so a registration says nothing about what lies beneath a test,
@@ -750,9 +759,7 @@ minute where another's take nothing, and they are counted once per run of
 the unit. A unit the fit names no hooks for takes nothing for them.
 
 A suite with no fit is charged no overhead, nothing per unit, no hooks,
-and a correction of one. A runner that runs units side by side starts the
-costliest first, by the cost the lane hands it with each unit, since the
-second figure assumes nothing long starts last.
+and a correction of one.
 
 A capability's setup is charged at the ninetieth percentile of its
 openings over the cost window. A unit's hooks are charged at the ninetieth
@@ -802,8 +809,8 @@ same answer.
 A pull request's plan has a discretionary target: `DISCRETIONARY_SECONDS`
 times the run's scale, which is the seconds the value, density and
 exploration passes are to fill between them. The full run's target is zero,
-since it chooses nothing. A run takes the fewest lanes, up to `LANES_MAX`,
-whose plan holds it. A plan holds a run where:
+since it chooses nothing. A run takes the fewest lanes, up to `LANES_MAX`, or
+`FULL_LANES_MAX` for the full run, whose plan holds it. A plan holds a run where:
 
 - no mandatory identity overflows, which is to say each one either fits
   inside a lane's budget or runs alone in a lane of its own; and
@@ -812,11 +819,12 @@ whose plan holds it. A plan holds a run where:
   holding every identity the passes could choose would be charged where
   that is less.
 
-The count is found by bisection between one lane and `LANES_MAX`. It
-takes an added lane to leave nothing overflowing that did not before, and
-no less room. Where that fails the count may be more lanes than the run
-needs, never fewer. A run whose plan holds it at no count up to
-`LANES_MAX` takes `LANES_MAX` lanes: its passes fill what room is left,
+The count is found by bisection between one lane and the run's cap,
+`LANES_MAX`, or `FULL_LANES_MAX` for the full run. It takes an added lane
+to leave nothing overflowing that did not before, and no less room. Where
+that fails the count may be more lanes than the run needs, never fewer. A
+run whose plan holds it at no count up to its cap takes that many lanes:
+its passes fill what room is left,
 and its mandatory work may put a lane past its budget. Where nothing in the
 tree has a measured cost, the count is the larger of the number of suites
 with anything to run and what the packing of the stand-ins asks for.
@@ -1249,6 +1257,22 @@ published before the deletion still names it, and a consumer reconciles
 the manifest against the tree before packing, so the entry drops out
 there too.
 
+A test renamed or deleted in a unit the tree still holds is different,
+because the topology places it by that unit. What says it is gone is the
+default branch's records, which are also what say which tests there are.
+The default branch runs every unit whole, so a test it has not recorded in
+two test orders in which it recorded others of the same unit, both later
+than the last order it recorded the test in, is a test the unit no longer
+holds under that name, and so is one it has never recorded while recording
+others of the unit in two orders. An order is the one a push shuffles by,
+which the date of the commit under test names. Two orders rather than one,
+because every run in one order can stop at the same place before reaching
+the test. Such an identity is left out of the manifest. A name is held
+while anything inside it is recorded, since a group of tests is not always
+recorded for itself, and each configuration of a unit is read apart from
+the others. A record a branch makes under the old name does not bring the
+name back, and a push to the default branch that records it does.
+
 A deletion is never bridged. The alias file joins a test's history to the
 name it now has, and a deleted test has no such name; an alias to one
 would credit another test with its record. Nothing declares a removal
@@ -1256,8 +1280,10 @@ either. What says a test is gone is the tree not holding it, which is the
 same thing that says where every other test runs.
 
 A consumer that keeps a rolling aggregate drops an identity on two
-conditions together. No suite claims it, and no run of it has been
-recorded inside the longest window the aggregate keeps counters for.
+conditions together. The tree has lost it, because no suite claims it or
+because the default branch has stopped recording it in a unit it still
+runs. And no run of it has been recorded inside the longest window the
+aggregate keeps counters for.
 Either alone is not enough: an identity whose records never say which
 unit they came from is claimed by nobody and is running, and a topology
 that reads the tree wrongly stops claiming tests that are running. An

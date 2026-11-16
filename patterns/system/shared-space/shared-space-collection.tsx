@@ -15,6 +15,7 @@ import {
 import {
   changeSharedSpaceMembershipIn,
   type SharedSpaceCatalogStorage,
+  type SharedSpaceMembership,
   type SharedSpaceMembershipResult,
 } from "./shared-space-catalog.ts";
 import type { SharedSpaceCollectionView } from "./shared-space-interface.ts";
@@ -22,7 +23,7 @@ import type { SharedSpaceCollectionView } from "./shared-space-interface.ts";
 /** The rendered control's snapshot of the choice the person saw. */
 export interface CollectionChoiceEvent {
   target: {
-    dataset: { space: string; revision: string; state: string };
+    dataset: { space: string; revision: string; state: SharedSpaceMembership };
   };
 }
 
@@ -32,16 +33,17 @@ interface ChoiceState {
   conflict: Writable<string>;
 }
 
-/** Applies the control's observed revision, reporting a refusal in its view. */
+/**
+ * Applies the control's observed revision, reporting a refusal in its view.
+ * `changeSharedSpaceMembershipIn` refuses a dataset naming a state other than
+ * a membership.
+ */
 export const chooseCollectionMembership = handler<
   CollectionChoiceEvent,
   ChoiceState,
   SharedSpaceMembershipResult
 >((event, { catalog, conflict }) => {
   const { space, revision, state } = event.target.dataset;
-  if (state !== "saved" && state !== "archived") {
-    throw new TypeError("Collection choice requires a known membership state.");
-  }
   const result = changeSharedSpaceMembershipIn(catalog, {
     space,
     expectedRevision: revision,

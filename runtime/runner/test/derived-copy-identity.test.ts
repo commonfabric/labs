@@ -82,6 +82,11 @@ describe("noteDerivedCopy trust carry", () => {
     expect(isTrustedPattern(copy)).toBe(false);
   });
 
+  it("resolves a value that cannot be a key to itself", () => {
+    expect(resolveOriginal("not-an-object")).toBe("not-an-object");
+    expect(resolveOriginal(null)).toBe(null);
+  });
+
   it("records nothing for a value derived from itself", () => {
     // A walk returns an unchanged subtree by identity, so a caller can reach
     // here with one object for both sides. Recording that would make the
@@ -126,6 +131,11 @@ describe("entry-ref resolution through copies", () => {
       identity: "first",
       symbol: "a",
     });
+  });
+
+  it("returns `undefined` for a value that cannot carry a ref", () => {
+    expect(getArtifactEntryRef("default")).toBeUndefined();
+    expect(getArtifactEntryRef(null)).toBeUndefined();
   });
 });
 

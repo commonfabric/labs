@@ -867,13 +867,13 @@ changes here:
   analysis (`capability-analysis.ts`) is the natural place to detect the
   calls, including through module-scope helpers via its interprocedural
   summaries.
-- Deferred tooling gap: `XSchedulerGraph.#extractEntityId` (shell) groups
-  graph nodes by scheme-stripped entity id, so an `of:` doc and a
-  `computed:` doc minted from the same cause would be conflated into one
-  group in the debug graph. This is more than cosmetic debt: the scheduler
-  treats computed cells differently (ack-and-drop instead of conflict
-  retry, recompute-on-sync convergence), so the kind is a scheduling-
-  relevant property the graph view should surface as a first-class visual
-  dimension — distinct grouping keys at minimum, and eventually a distinct
-  color/badge for computed nodes so drop-and-recompute behavior is legible
-  when debugging settle waves.
+- Deferred tooling gap: `extractEntityId()` in the shell's
+  `src/lib/scheduler-graph-layout.ts` groups debug graph nodes by their full
+  schemed entity URI, so an `of:` doc and a `computed:` doc minted from the
+  same cause fall into separate groups, but nothing in the graph view marks a
+  group or a node as computed. The scheduler treats computed cells
+  differently (ack-and-drop instead of conflict retry, recompute-on-sync
+  convergence), so the kind is a scheduling-relevant property the graph view
+  should surface as a first-class visual dimension, such as a distinct
+  color or badge for computed nodes, so that drop-and-recompute behavior is
+  legible when debugging settle waves.

@@ -396,7 +396,6 @@ function App() {
   >({});
   const [connectSource, setConnectSource] = React.useState("");
   const [connectTarget, setConnectTarget] = React.useState("");
-  const bootstrapStarted = React.useRef(false);
   const actionRunner = React.useRef(model.createActionRunner({
     setGlobalPending: setPending,
     setActionError,
@@ -407,8 +406,6 @@ function App() {
   );
 
   React.useEffect(() => {
-    if (bootstrapStarted.current) return;
-    bootstrapStarted.current = true;
     let active = true;
     void (async () => {
       try {

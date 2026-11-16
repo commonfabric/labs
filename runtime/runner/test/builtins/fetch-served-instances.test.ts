@@ -515,6 +515,32 @@ describe("fetch-served-instances", () => {
     expect(fixture.parent.get().publishedScope).toBe("space");
   });
 
+  it("writes no ending for a refused request whose binding stages again before the ending's transaction runs", async () => {
+    // A refusal checks that its binding still holds the request it staged,
+    // and the ending's transaction checks again, since a retry runs that
+    // transaction afresh. Here the binding stages a new request between the
+    // two checks, so only the second one sees it.
+
+    const fixture = publicationFixture();
+    const old = fixture.stage(false);
+    const editWithRetry = runtime.editWithRetry.bind(runtime);
+    let edits = 0;
+    runtime.editWithRetry = (callback, maxRetries, options) => {
+      if (edits++ === 0) fixture.stage(false, "https://example.test/restaged");
+      return editWithRetry(callback, maxRetries, options);
+    };
+    try {
+      old.getCfcState().outbox[0].abandon?.(new Error("superseded refusal"));
+      await runtime.settled();
+    } finally {
+      runtime.editWithRetry = editWithRetry;
+    }
+    expect(edits).toBeGreaterThan(0);
+    // One publication for each staging, and none from the ending.
+    expect(fixture.publications).toHaveLength(2);
+    expect(fixture.resultCells.error.get()).not.toBe("superseded refusal");
+  });
+
   it("does not let a failed user publication invalidate an earlier refusal", async () => {
     const fixture = publicationFixture();
     const old = fixture.stage(false);

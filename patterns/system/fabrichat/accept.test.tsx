@@ -566,24 +566,22 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
             rosterBefore.get()
         ),
       },
-      // A room listed only by the catalog names its labeled creator as its
-      // counterpart.
+      // A room the catalog lists with no membership isn't listed: the list
+      // reads the manager's memberships alone.
       { action: action_register_offered },
-      {
-        assertion: assert(() =>
-          offered.rooms.length === 1 &&
-          offered.rooms[0]?.kind === "direct" &&
-          offered.rooms[0]?.counterpart === setup.aliceDid.get()
-        ),
-      },
-      // The host accepts the room on Bob's behalf, which records it in
-      // `direct`, and a start with Alice finds it there, creating none.
+      { assertion: assert(() => offered.rooms.length === 0) },
+      // The host accepts the room on Bob's behalf, which lists it, naming its
+      // labeled creator as its counterpart, and records it in `direct`, and a
+      // start with Alice finds it there, creating none.
       { action: action_accept_offered },
       {
         assertion: assert(() =>
           offeredRequests.get()["intake-1"]?.status === "done" &&
           spaceOf(offeredDirect.get()[setup.aliceDid.get()]?.room) ===
-            spaceOf(setup.held.key("room"))
+            spaceOf(setup.held.key("room")) &&
+          offered.rooms.length === 1 &&
+          offered.rooms[0]?.kind === "direct" &&
+          offered.rooms[0]?.counterpart === setup.aliceDid.get()
         ),
       },
       {

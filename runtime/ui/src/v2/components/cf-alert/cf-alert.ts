@@ -248,8 +248,7 @@ export class CFAlert extends BaseElement {
     }
 
     /* Adjust padding when dismissible */
-    :host([dismissible]) .alert,
-    :host([dismissable]) .alert {
+    :host([dismissible]) .alert {
       padding-right: 2.5rem;
     }
   `;
@@ -257,33 +256,25 @@ export class CFAlert extends BaseElement {
   static override properties = {
     status: { type: String },
     dismissible: { type: Boolean, reflect: true },
-    dismissable: { type: Boolean, reflect: true },
+    dismissable: { type: Boolean, noAccessor: true },
   };
 
   declare status: StatusIntent;
   declare dismissible: boolean;
-  declare dismissable: boolean;
 
   constructor() {
     super();
     this.status = "info";
     this.dismissible = false;
-    this.dismissable = false;
   }
 
-  override updated(changedProperties: Map<string, unknown>): void {
-    super.updated(changedProperties);
-    if (
-      changedProperties.has("dismissible") &&
-      this.dismissable !== this.dismissible
-    ) {
-      this.dismissable = this.dismissible;
-    } else if (
-      changedProperties.has("dismissable") &&
-      this.dismissible !== this.dismissable
-    ) {
-      this.dismissible = this.dismissable;
-    }
+  /** `dismissible` under its alternate spelling. */
+  get dismissable(): boolean {
+    return this.dismissible;
+  }
+
+  set dismissable(value: boolean) {
+    this.dismissible = value;
   }
 
   override render() {
@@ -310,7 +301,7 @@ export class CFAlert extends BaseElement {
           </div>
           <slot></slot>
         </div>
-        ${this.dismissible || this.dismissable
+        ${this.dismissible
           ? html`
             <button
               type="button"

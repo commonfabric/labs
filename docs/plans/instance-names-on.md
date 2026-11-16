@@ -248,6 +248,11 @@ runtime has declared a mode to runs the mode this build's runtimes run by
 default (`namesInstancesByDefault()`). A serving host's routed plane, whose
 sessions commit the serving runtimes' writes to the spaces they reach through
 their owners, declares that default too, since no environment sets the flag.
+A client that opens sessions with no runtime declares the mode a runtime given
+the deployment's settings would, so it is admitted wherever the deployment's
+runtimes are: the Topics client tells its session factory
+(`patterns/apps/topics/tools/sync.ts`), and `cf space invite` its storage
+manager.
 The client ends a
 session revoked with `instance-names` with the `clientUpdateRequired` refusal
 D5 gives, and the client and storage manager keep it.
@@ -289,7 +294,10 @@ that does not adopt the server's flags set its own value, and D8 is what makes
 that safe: a naming client is refused every unmarked space of a deployment
 whose posture is off, and a positional client is refused every marked space. A
 serving host's routed plane then declares the mode of the host's serving
-runtimes rather than this build's default. A deployment turns the posture on
+runtimes rather than this build's default, and so does the storage manager a
+toolshed creates a meeting room's space on
+(`runtime/toolshed/routes/meeting-rooms/meeting-rooms.index.ts`), which no
+runtime declares a mode to. A deployment turns the posture on
 only once every toolshed it runs carries stage 1, since one without it admits
 any runtime and records no mark, and once each router has restarted after
 that: a router's public offer is fixed for its

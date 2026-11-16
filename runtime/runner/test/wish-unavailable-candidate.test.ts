@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import type { WishParams } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -90,18 +91,19 @@ async function makeFixture(
     runtime,
     manager,
     unavailable,
-    async launch() {
+    async launch(scopeOverride?: WishParams["scope"]) {
       const { commonfabric } = createTrustedBuilder(runtime);
       const pattern = commonfabric.pattern(() => ({
         found: commonfabric.wish({
           query: mode === "legacy" ? "#favorites/res" : "#resources",
-          scope: mode === "profile"
-            ? ["profile"]
-            : mode === "current-mentionables"
-            ? ["."]
-            : mode === "did-mentionables"
-            ? [discoverySpace]
-            : ["~"],
+          scope: scopeOverride ??
+            (mode === "profile"
+              ? ["profile"]
+              : mode === "current-mentionables"
+              ? ["."]
+              : mode === "did-mentionables"
+              ? [discoverySpace]
+              : ["~"]),
           headless: true,
         }),
       }));
@@ -263,4 +265,32 @@ describe("wish-unavailable-candidate", () => {
       }
     });
   }
+
+  it("reports a mentionable load failure, not the missing identity, when favorites could not be searched", async () => {
+    const fixture = await makeFixture("current-mentionables", false);
+    // A serving runtime whose run names no requesting user: favorites, which
+    // live in that user's home space, cannot be searched.
+    fixture.runtime.homeSpacePrincipalFor = () => undefined;
+    const provider = fixture.manager.open(fixture.unavailable.space);
+    const originalSync = provider.sync.bind(provider);
+    const unavailableId = fixture.unavailable.getAsNormalizedFullLink().id;
+    provider.sync = (id, ...options) =>
+      id === unavailableId
+        ? Promise.resolve({ error: new Error("Candidate load failed") })
+        : originalSync(id, ...options);
+    try {
+      const { found, pulling } = await fixture.launch(["~", "."]);
+      await pulling;
+      await fixture.manager.crossSpaceSettled();
+      await fixture.runtime.idle();
+      const error = found.key("error").asSchema({ type: "string" }).get();
+      expect(error).toContain("Could not load document");
+      expect(error).not.toContain("User identity DID not available");
+      expect(found.key("errorCode").get()).toBe("failed");
+      expect(found.key("candidates").get()).toHaveLength(0);
+    } finally {
+      provider.sync = originalSync;
+      await fixture.dispose();
+    }
+  });
 });

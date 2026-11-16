@@ -13,7 +13,7 @@ import { dirname, fromFileUrl, join } from "@std/path";
 import {
   ingestJUnit,
   parseJUnit,
-  preloadModulePath,
+  preloadArgument,
   readNameMaps,
   readRegistrations,
   recordedCases,
@@ -170,7 +170,7 @@ async function runFixture(
   const permissions = flags ??
     ["--allow-read", ...(write ? ["--allow-write"] : []), "--allow-env"];
   const recording = flags === undefined
-    ? [`--preload=${preloadModulePath()}`]
+    ? [preloadArgument()]
     : recordingArguments(flags, {
       spool: fixture.spool,
       root: fixture.dir,

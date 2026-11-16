@@ -19,8 +19,8 @@ describe("isCodecTypeTag", () => {
   });
 
   it("returns `false` for every tag in `CODEC_META_TAGS`", () => {
-    // A meta-tag is a structural marker its format handles itself, and is
-    // outside this syntax by design.
+    // A meta-tag has no version, so names a form its format handles itself
+    // rather than a type.
 
     for (const tag of Object.values(CODEC_META_TAGS)) {
       expect(isCodecTypeTag(tag)).toBe(false);
@@ -41,30 +41,85 @@ describe("isCodecTypeTag", () => {
     expect(isCodecTypeTag("aB3.x9.Abc123@1234")).toBe(true);
   });
 
+  it("returns `true` for prefixes and names in any case", () => {
+    // An initial capital on a type's name is a convention, and not syntax.
+
+    expect(isCodecTypeTag("bytes@1")).toBe(true);
+    expect(isCodecTypeTag("Sys.Boop@1")).toBe(true);
+    expect(isCodecTypeTag("sys.boop@1")).toBe(true);
+    expect(isCodecTypeTag("sys.Beep.Boop@1")).toBe(true);
+    expect(isCodecTypeTag("SYS.BOOP@1")).toBe(true);
+    expect(isCodecTypeTag("quote@1")).toBe(true);
+  });
+
+  describe("limits", () => {
+    // Each component, prefix or name, is at most 100 characters; a tag has at
+    // most ten components; and a version is at most ten digits.
+
+    const longest = "N".repeat(100);
+    const tooLong = "N".repeat(101);
+
+    it("returns `true` for a tag at each limit", () => {
+      expect(isCodecTypeTag("a.b.c.d.e.f.g.h.i.j@1")).toBe(true);
+      expect(isCodecTypeTag(`${longest}.Boop@1`)).toBe(true);
+      expect(isCodecTypeTag(`${longest}@1`)).toBe(true);
+      expect(isCodecTypeTag(`sys.${longest}@1`)).toBe(true);
+      expect(isCodecTypeTag("Abc@1234567890")).toBe(true);
+      expect(isCodecTypeTag("sys.Abc@9999999999")).toBe(true);
+    });
+
+    it("returns `true` for a tag at every limit at once", () => {
+      const components = Array.from({ length: 10 }, () => longest);
+
+      expect(isCodecTypeTag(`${components.join(".")}@9999999999`)).toBe(true);
+    });
+
+    it("returns `false` for a tag with eleven components", () => {
+      expect(isCodecTypeTag("a.b.c.d.e.f.g.h.i.j.k@1")).toBe(false);
+    });
+
+    it("returns `false` for a tag with a prefix of 101 characters", () => {
+      expect(isCodecTypeTag(`${tooLong}.Boop@1`)).toBe(false);
+      expect(isCodecTypeTag(`sys.${tooLong}.Boop@1`)).toBe(false);
+    });
+
+    it("returns `false` for a tag with a name of 101 characters", () => {
+      expect(isCodecTypeTag(`${tooLong}@1`)).toBe(false);
+      expect(isCodecTypeTag(`sys.${tooLong}@1`)).toBe(false);
+    });
+
+    it("returns `false` for a tag with a version of eleven digits", () => {
+      expect(isCodecTypeTag("Abc@12345678901")).toBe(false);
+      expect(isCodecTypeTag("sys.Abc@10000000000")).toBe(false);
+    });
+  });
+
   it("returns `false` for a malformed namespace prefix", () => {
-    expect(isCodecTypeTag("Sys.Boop@1")).toBe(false);
     expect(isCodecTypeTag("sys..Boop@1")).toBe(false);
     expect(isCodecTypeTag(".Boop@1")).toBe(false);
     expect(isCodecTypeTag("sys.Boop.@1")).toBe(false);
     expect(isCodecTypeTag("sys_x.Boop@1")).toBe(false);
     expect(isCodecTypeTag("sys-x.Boop@1")).toBe(false);
     expect(isCodecTypeTag("1sys.Boop@1")).toBe(false);
-    expect(isCodecTypeTag("sys.Beep.Boop@1")).toBe(false);
     expect(isCodecTypeTag("s\u00fcs.Boop@1")).toBe(false);
   });
 
-  it("returns `false` for a prefixed tag whose name or version is malformed", () => {
-    expect(isCodecTypeTag("sys.boop@1")).toBe(false);
-    expect(isCodecTypeTag("sys.beep@1")).toBe(false);
+  it("returns `false` for a prefixed tag whose version is malformed", () => {
     expect(isCodecTypeTag("sys.Boop")).toBe(false);
     expect(isCodecTypeTag("sys.Boop@01")).toBe(false);
     expect(isCodecTypeTag("sys.Boop@0")).toBe(false);
   });
 
   it("returns `false` for a string with no version", () => {
+    // A tag with no prefix and no version is an interchange tag, a hash
+    // algorithm's name among them, but not a type tag.
+
     expect(isCodecTypeTag("")).toBe(false);
     expect(isCodecTypeTag("Bytes")).toBe(false);
     expect(isCodecTypeTag("Bytes@")).toBe(false);
+    expect(isCodecTypeTag("widget")).toBe(false);
+    expect(isCodecTypeTag("fid1")).toBe(false);
+    expect(isCodecTypeTag("core.Globals")).toBe(false);
   });
 
   it("returns `false` for a malformed version", () => {
@@ -81,17 +136,6 @@ describe("isCodecTypeTag", () => {
     expect(isCodecTypeTag("By tes@1")).toBe(false);
     expect(isCodecTypeTag("By-tes@1")).toBe(false);
     expect(isCodecTypeTag("/Bytes@1")).toBe(false);
-  });
-
-  it("returns `false` for a name that does not start uppercase", () => {
-    // `UpperCamelCase` is the convention Section 2.5 of `1-fabric-values.md`
-    // states, and this is what holds every format to it. The case decides
-    // whether an unclaimed tag round-trips as an `UnknownValue` or is refused
-    // as a malformation, so a reader cannot be left to infer it.
-
-    expect(isCodecTypeTag("bytes@1")).toBe(false);
-    expect(isCodecTypeTag("lowerCamel@1")).toBe(false);
-    expect(isCodecTypeTag("link@1")).toBe(false);
   });
 
   it("returns `false` for a name holding a non-ASCII letter", () => {

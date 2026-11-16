@@ -6,6 +6,7 @@ import {
   DEFAULT_STATE,
   type PlacedNote,
   type RingLoopsSetup,
+  type RingSpec,
 } from "./contract.ts";
 import {
   authorNameOf,
@@ -89,6 +90,12 @@ function setupWith(overrides: Partial<RingLoopsSetup>): RingLoopsSetup {
   return { ...DEFAULT_SETUP, ...overrides };
 }
 
+/** The default setup with its bells ring changed by `overrides`. */
+function setupWithBells(overrides: Partial<RingSpec>): RingLoopsSetup {
+  const [drums, bells, ...rest] = DEFAULT_SETUP.rings;
+  return setupWith({ rings: [drums, { ...bells, ...overrides }, ...rest] });
+}
+
 describe("model", () => {
   describe("ringLayoutOf()", () => {
     it("counts each ring's loop in steps of a sixteenth note", () => {
@@ -101,6 +108,33 @@ describe("model", () => {
 
     it("throws a `RangeError` for a setup with no rings", () => {
       expect(() => ringLayoutOf(setupWith({ rings: [] }))).toThrow(RangeError);
+    });
+
+    it("throws a `TypeError` for a setup without a list of rings", () => {
+      expect(() => ringLayoutOf(setupWith({ rings: undefined }))).toThrow(
+        "The setup needs a list of rings and a scale.",
+      );
+    });
+
+    it("throws a `TypeError` for a root or a scale step that is not a finite number", () => {
+      expect(() => ringLayoutOf(setupWith({ rootMidi: NaN }))).toThrow(
+        TypeError,
+      );
+      expect(() => ringLayoutOf(setupWith({ scale: [0, Infinity] }))).toThrow(
+        "The root and every scale step must be numbers.",
+      );
+    });
+
+    it("throws a `TypeError` for a ring with no voice it knows", () => {
+      expect(() => ringLayoutOf(setupWithBells({ voice: undefined }))).toThrow(
+        "Ring 2 names an unknown voice.",
+      );
+    });
+
+    it("throws a `TypeError` for a ring whose transposition is not a finite number", () => {
+      expect(() => ringLayoutOf(setupWithBells({ transpose: NaN }))).toThrow(
+        "Ring 2 needs a numeric transposition.",
+      );
     });
 
     it("throws a `TypeError` when two rings share an id", () => {
@@ -148,6 +182,19 @@ describe("model", () => {
 
     it("returns `undefined` for a setup with no rings", () => {
       expect(validLayoutOf(setupWith({ rings: [] }))).toBeUndefined();
+    });
+
+    it("throws what reading the setup throws, where that is not a refusal", () => {
+      const unreadable = {
+        ...DEFAULT_SETUP,
+        get rings(): RingSpec[] {
+          throw new Error("The setup is unreadable.");
+        },
+      };
+
+      expect(() => validLayoutOf(unreadable)).toThrow(
+        "The setup is unreadable.",
+      );
     });
   });
 
@@ -763,6 +810,14 @@ describe("model", () => {
       expect([far.pointer, text.pointer]).toEqual([undefined, undefined]);
     });
 
+    it("returns no pointer for one at an infinite distance", () => {
+      const peer = readPeer({
+        ...base,
+        facets: { [POINTER_FACET]: { x: Infinity, y: 0 } },
+      });
+      expect(peer.pointer).toBeUndefined();
+    });
+
     it("returns a hand, with its tempo inside the offered range", () => {
       const peer = readPeer({
         ...base,
@@ -786,6 +841,7 @@ describe("model", () => {
           [PRESSES_FACET]: {
             list: [
               { id: 1, ring: "bass", lane: 2 },
+              "press",
               { id: 1.5, ring: "bass", lane: 2 },
               { id: 2, ring: 7, lane: 2 },
               { id: 3, ring: "drums", lane: 0 },

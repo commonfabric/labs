@@ -23,6 +23,9 @@ import { prepareAndCommit } from "./refused-commit.ts";
 const signer = await Identity.fromPassphrase(
   "runner-cfc-privileged-system-write",
 );
+const otherPerson = (await Identity.fromPassphrase(
+  "runner-cfc-privileged-system-write other person",
+)).did();
 
 // Audit S18: a write addressed directly at a document's ["cfc"] label-map path
 // forges the CFC metadata that drives label derivation for OTHER writes,
@@ -1148,5 +1151,327 @@ describe("CFC privileged system write (S18)", () => {
     } finally {
       await server.close?.();
     }
+  });
+
+  describe("a write to the storage transaction beneath the chokepoint", () => {
+    // Anything holding an extended transaction reaches the storage
+    // transaction beneath it as `.tx`, and a write made there skips the
+    // chokepoint, so nothing records it and the commit boundary has nothing
+    // to refuse over. The storage transaction refuses such a write itself
+    // when it changes a reserved sibling. The fixtures are the two a client
+    // was found making: one dropped a stored label map holding another
+    // person's `PersonalSpace` clauses and committed through the prepared
+    // extended transaction, and one added another person's atom to a stored
+    // map and committed the storage transaction directly.
+
+    const personalSpaceMetadata = (owner: string) => ({
+      version: 1,
+      schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+      labelMap: {
+        version: 1,
+        entries: [
+          { path: [], observes: "enumerate" },
+          { path: ["*"], observes: "value" },
+        ].map((entry) => ({
+          ...entry,
+          origin: "structure",
+          label: {
+            confidentiality: [{
+              type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+              owner,
+            }],
+          },
+        })),
+      },
+    });
+
+    const withRuntime = async (
+      body: (runtime: Runtime) => Promise<void>,
+    ): Promise<void> => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://example.com"),
+        storageManager,
+      });
+      try {
+        await body(runtime);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+
+    const seed = async (
+      runtime: Runtime,
+      name: string,
+      envelope: Record<string, unknown>,
+    ) => {
+      const tx = runtime.edit();
+      const target = runtime.getCell(signer.did(), name, undefined, tx);
+      const address = {
+        space: signer.did(),
+        id: target.getAsNormalizedFullLink().id as URI,
+        type: "application/json" as const,
+        path: [] as string[],
+      };
+      writeSeedEnvelopeDoc(tx, signer.did());
+      seedStoredEnvelope(tx, address, envelope as never);
+      expect((await tx.commit().settled).ok).toBeDefined();
+      return address;
+    };
+
+    const storedEnvelope = async (
+      runtime: Runtime,
+      address: { space: ReturnType<typeof signer.did>; id: URI },
+    ): Promise<unknown> => {
+      const tx = runtime.edit();
+      const stored = tx.readOrThrow({
+        ...address,
+        type: "application/json",
+        path: [],
+      });
+      await tx.commit().settled;
+      return stored;
+    };
+
+    const refusal = /refusing a write that changes reserved members/;
+
+    it("throws on a root write dropping a stored label map, and the map survives the prepared commit", async () => {
+      await withRuntime(async (runtime) => {
+        const original = {
+          value: { note: "one" },
+          cfc: personalSpaceMetadata(otherPerson),
+        };
+        const address = await seed(runtime, "inner-drop", original);
+
+        const tx = runtime.edit();
+        const stored = tx.readOrThrow(address) as Record<string, unknown>;
+        expect(() => tx.tx.write(address, { ...stored, cfc: undefined }))
+          .toThrow(refusal);
+        runtime.prepareTxForCommit(tx);
+        await tx.commit().settled;
+
+        expect(await storedEnvelope(runtime, address)).toEqual(original);
+      });
+    });
+
+    it("throws on a root write adding another person's atom to a stored label map, and the map survives the direct commit", async () => {
+      await withRuntime(async (runtime) => {
+        const original = {
+          value: { note: "one" },
+          cfc: personalSpaceMetadata(signer.did()),
+        };
+        const address = await seed(runtime, "inner-raise", original);
+
+        const inner = runtime.edit().tx;
+        const stored = inner.read(address).ok?.value as Record<
+          string,
+          unknown
+        >;
+        const raised = personalSpaceMetadata(otherPerson);
+        expect(() =>
+          inner.write(address, {
+            ...stored,
+            cfc: {
+              ...raised,
+              labelMap: {
+                ...raised.labelMap,
+                entries: [
+                  ...original.cfc.labelMap.entries,
+                  ...raised.labelMap.entries,
+                ],
+              },
+            },
+          })
+        ).toThrow(refusal);
+        expect((await inner.commit().settled).ok).toBeDefined();
+
+        expect(await storedEnvelope(runtime, address)).toEqual(original);
+      });
+    });
+
+    it("throws on a write addressed at the `cfc` member", async () => {
+      await withRuntime(async (runtime) => {
+        const original = {
+          value: { note: "one" },
+          cfc: personalSpaceMetadata(otherPerson),
+        };
+        const address = await seed(runtime, "inner-addressed", original);
+
+        const inner = runtime.edit().tx;
+        expect(() =>
+          inner.write(
+            { ...address, path: ["cfc", "labelMap", "entries"] },
+            [],
+          )
+        ).toThrow(refusal);
+        await inner.commit().settled;
+
+        expect(await storedEnvelope(runtime, address)).toEqual(original);
+      });
+    });
+
+    it("throws on a batch write dropping a stored label map", async () => {
+      await withRuntime(async (runtime) => {
+        const original = {
+          value: { note: "one" },
+          cfc: personalSpaceMetadata(otherPerson),
+        };
+        const address = await seed(runtime, "inner-batch", original);
+
+        const inner = runtime.edit().tx;
+        expect(() =>
+          inner.writeBatch!([{ address, value: { value: { note: "two" } } }])
+        ).toThrow(refusal);
+        await inner.commit().settled;
+
+        expect(await storedEnvelope(runtime, address)).toEqual(original);
+      });
+    });
+
+    it("throws on a mergeable op at the `cfc` member", async () => {
+      await withRuntime(async (runtime) => {
+        const address = await seed(runtime, "inner-mergeable", {
+          value: { note: "one" },
+          cfc: personalSpaceMetadata(otherPerson),
+        });
+
+        // A value write makes the document writable, which an op needs.
+        const inner = runtime.edit().tx;
+        expect(
+          inner.write({ ...address, path: ["value", "note"] }, "two").ok,
+        ).toBeDefined();
+        expect(() =>
+          inner.recordMergeableOp!(
+            { ...address, path: ["cfc", "labelMap", "entries"] },
+            { op: "append", count: 1 },
+          )
+        ).toThrow(/refusing a mergeable op/);
+        inner.abort();
+      });
+    });
+
+    it("throws on a root write dropping a stored `source`", async () => {
+      await withRuntime(async (runtime) => {
+        const original = {
+          value: { note: "one" },
+          source: { note: "derived from elsewhere" },
+        };
+        const address = await seed(runtime, "inner-source", original);
+
+        const inner = runtime.edit().tx;
+        expect(() => inner.write(address, { value: { note: "two" } }))
+          .toThrow(refusal);
+        await inner.commit().settled;
+
+        expect(await storedEnvelope(runtime, address)).toEqual(original);
+      });
+    });
+
+    it("throws on a root delete naming the stored envelope, and on the re-creation after it", async () => {
+      // A delete stores nothing, whatever value it names, so a delete that
+      // names the stored envelope erases it as surely as one naming nothing.
+
+      await withRuntime(async (runtime) => {
+        const original = {
+          value: { note: "one" },
+          cfc: personalSpaceMetadata(otherPerson),
+        };
+        const address = await seed(runtime, "inner-delete", original);
+
+        const inner = runtime.edit().tx;
+        const stored = inner.read(address).ok?.value;
+        expect(() => inner.write(address, stored, { delete: true }))
+          .toThrow(refusal);
+        expect(() => inner.write(address, { value: { note: "unlabeled" } }))
+          .toThrow(refusal);
+        await inner.commit().settled;
+
+        expect(await storedEnvelope(runtime, address)).toEqual(original);
+      });
+    });
+
+    it("throws on a batch delete naming the stored envelope, and on the re-creation after it", async () => {
+      await withRuntime(async (runtime) => {
+        const original = {
+          value: { note: "one" },
+          cfc: personalSpaceMetadata(otherPerson),
+        };
+        const address = await seed(runtime, "inner-batch-delete", original);
+
+        const inner = runtime.edit().tx;
+        const stored = inner.read(address).ok?.value as never;
+        expect(() =>
+          inner.writeBatch!([{ address, value: stored, delete: true }])
+        ).toThrow(refusal);
+        expect(() => inner.write(address, { value: { note: "unlabeled" } }))
+          .toThrow(refusal);
+        await inner.commit().settled;
+
+        expect(await storedEnvelope(runtime, address)).toEqual(original);
+      });
+    });
+
+    it("records a root delete naming the stored envelope at the chokepoint, and refuses its commit", async () => {
+      await withRuntime(async (runtime) => {
+        const original = {
+          value: { note: "one" },
+          cfc: personalSpaceMetadata(otherPerson),
+        };
+        const address = await seed(runtime, "outer-delete", original);
+
+        const tx = runtime.edit();
+        const stored = tx.readOrThrow(address);
+        tx.writeOrThrow(address, stored, { delete: true });
+        expect(tx.getCfcState().unprivilegedSystemWrites).toEqual([
+          `${address.id}/cfc`,
+        ]);
+        expect((await tx.commit().settled).error).toBeDefined();
+
+        expect(await storedEnvelope(runtime, address)).toEqual(original);
+      });
+    });
+
+    it("commits a root write that carries the stored label map forward", async () => {
+      await withRuntime(async (runtime) => {
+        const cfc = personalSpaceMetadata(otherPerson);
+        const address = await seed(runtime, "inner-carried", {
+          value: { note: "one" },
+          cfc,
+        });
+
+        const inner = runtime.edit().tx;
+        const stored = inner.read(address).ok?.value as Record<
+          string,
+          unknown
+        >;
+        expect(
+          inner.write(address, { ...stored, value: { note: "two" } }).ok,
+        ).toBeDefined();
+        expect((await inner.commit().settled).ok).toBeDefined();
+
+        expect(await storedEnvelope(runtime, address)).toEqual({
+          value: { note: "two" },
+          cfc,
+        });
+      });
+    });
+
+    it("commits a root write to a document holding no reserved member", async () => {
+      await withRuntime(async (runtime) => {
+        const address = await seed(runtime, "inner-plain", {
+          value: { note: "one" },
+        });
+
+        const inner = runtime.edit().tx;
+        expect(inner.write(address, { value: { note: "two" } }).ok)
+          .toBeDefined();
+        expect((await inner.commit().settled).ok).toBeDefined();
+
+        expect(await storedEnvelope(runtime, address)).toEqual({
+          value: { note: "two" },
+        });
+      });
+    });
   });
 });

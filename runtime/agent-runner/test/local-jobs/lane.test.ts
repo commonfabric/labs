@@ -464,6 +464,22 @@ describe("local-jobs/lane", () => {
       expect("reasoningEffort" in plain).toBe(false);
     });
 
+    it("hands the harness the profile's shared cache affinity key, and none where it names none", async () => {
+      const spec = await localJobSpecOf(
+        { request: REQUEST } as LocalJob,
+        { ...ASK, cacheAffinityKey: "loom-brief" },
+        {},
+      );
+      const plain = await localJobSpecOf(
+        { request: REQUEST } as LocalJob,
+        ASK,
+        {},
+      );
+
+      expect(spec.cacheAffinityKey).toBe("loom-brief");
+      expect("cacheAffinityKey" in plain).toBe(false);
+    });
+
     it("takes the runner's retrieval file and model where the profile names none, and the profile's over the runner's", async () => {
       const runner = {
         loomRetrievalConfigPath: "/runner/retrieval.json",

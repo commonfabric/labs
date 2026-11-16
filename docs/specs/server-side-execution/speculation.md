@@ -530,11 +530,35 @@ renders the STORED value whatever the layer holds: the store wins,
 the disposition every divergence gets (a divergent speculative cid
 layer is inadmissible content that can never arrive; holding the
 entry for it would strand the entry, and its sibling layers,
-forever). A cid doc with NO confirmed cover still holds the entry:
-nothing has served the schema document yet. Pinned in
-`speculation-arrival-gate.test.ts` — scripted with its mutation, and
-on a real replica for identical, divergent, and unstored cid
-writes.** Carriage: the covering commit's class rides session-frame
+forever). A cid doc with NO confirmed cover holds the entry while an
+arrived document the entry wrote names it — the confirmed version's
+envelope, as the store has it, names it as its schema document or a
+version-2 label document, which a frame delivers apart from the
+envelope, so the cid doc can arrive after the document naming it —
+and while the entry wrote no other document: nothing has served the
+cid doc, and the layer may be all that holds it. Once every other
+document the entry wrote has arrived and none of them names it, it no
+longer holds the entry: the speculative run minted it for an envelope
+the served derivation did not write (a labeled write the serving
+runtime refused, a schema the serving side stamps differently), so
+the store never comes to hold it, and holding the entry for it would
+strand the entry and mask the served values of every document beside
+it. Only the documents the entry wrote are consulted: another
+confirmed document naming the same cid does not hold the entry.
+Retirement drops the cid layer from the replica, so a read of the cid
+doc there finds nothing; CFC schema resolution falls back to the
+realm's schema registry, which holds what the speculative run
+registered as it staged the document (`loadSchemaDocument` in
+`runtime/runner/src/cfc/prepare.ts`). A replica double that reports no
+names (`envelopeDocuments` absent from `speculationRetirementView`)
+holds the entry, as a name would. Pinned in
+`speculation-arrival-gate.test.ts` — scripted with its mutation, on a
+real replica for identical, divergent, and unstored cid writes, and
+scripted for an unstored cid beside arrived documents that do and do
+not name it — and in `served-effect-watching-client.test.ts`, where a
+client watching a served `fetchText` or `generateText` whose first
+request was refused shows the served results.** Carriage: the covering
+commit's class rides session-frame
 upserts as `coverClass` (populated only under the flag — the OFF wire
 is byte-identical), is recorded on the replica's confirmed record
 (frames on integrate; `authored`/`derived` at own-commit promotions),

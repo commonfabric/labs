@@ -40,14 +40,21 @@ describe("test-runner read budgets", {
     const run = Runtime.prototype.run;
     const presyncReads: { proxyAccesses: number; linkResolutions: number }[] =
       [];
+    // One listener per runtime: the runner runs the space's default pattern
+    // on the test's runtime as well as the test's own, so listening at every
+    // `run` would record each event once per pattern.
+    const observed = new WeakSet<Runtime>();
     using _run = stub(Runtime.prototype, "run", function (...args) {
-      this.telemetry.addEventListener("telemetry", (event) => {
-        if (
-          event instanceof RuntimeTelemetryEvent &&
-          event.marker.type === "scheduler.read-attempt" &&
-          event.marker.kind === "presync"
-        ) presyncReads.push(event.marker.reads);
-      });
+      if (!observed.has(this)) {
+        observed.add(this);
+        this.telemetry.addEventListener("telemetry", (event) => {
+          if (
+            event instanceof RuntimeTelemetryEvent &&
+            event.marker.type === "scheduler.read-attempt" &&
+            event.marker.kind === "presync"
+          ) presyncReads.push(event.marker.reads);
+        });
+      }
       return run.apply(this, args);
     });
     const result = await runTests(resolve(root, "presync.test.tsx"), { root });

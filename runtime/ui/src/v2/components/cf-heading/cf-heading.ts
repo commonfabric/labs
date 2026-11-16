@@ -99,16 +99,11 @@ export class CFHeading extends BaseElement {
     }
   }
 
-  private _cls(): string {
-    const lvl = Math.min(6, Math.max(1, Number(this.level) || 3));
-    return `h${lvl}`;
-  }
-
   override render() {
     const level = Math.min(6, Math.max(1, Number(this.level) || 3));
     return html`
       <div
-        class="heading ${this._cls()}"
+        class="heading h${level}"
         role="heading"
         aria-level="${level}"
         part="heading"

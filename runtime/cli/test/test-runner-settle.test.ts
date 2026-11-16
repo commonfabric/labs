@@ -72,8 +72,8 @@ describe(
         { root: FIXTURES },
       );
       expect(results[0].error ?? "").toContain(
-        "must have an 'action', 'assertion', 'render', 'settle', 'label', " +
-          "or 'await'",
+        "must have an 'action', 'press', 'assertion', 'render', 'settle', " +
+          "'label', or 'await'",
       );
       // The step's own key, not the empty list the peek schema leaves behind.
       expect(results[0].error ?? "").toContain('Got: `["notAValidStep"]`');

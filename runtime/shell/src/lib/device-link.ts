@@ -43,27 +43,17 @@ const DEVICE_LINK_PREFIX = "#k=";
 /** 32 bytes of BIP39 entropy is exactly 43 unpadded base64url characters. */
 const ENCODED_LENGTH = 43;
 
-const ENTROPY_BYTES = 32;
-
 const ENCODED_PATTERN = new RegExp(`^[A-Za-z0-9_-]{${ENCODED_LENGTH}}$`);
 
 /**
- * Decode unpadded base64url to bytes, or null if it isn't valid.
+ * Decode unpadded base64url to bytes, or null if it isn't valid. What the
+ * pattern admits always decodes, to exactly 32 bytes: `atob()` takes unpadded
+ * input, and discards the two bits left over past the last whole byte.
  */
 function decodeBase64Url(encoded: string): Uint8Array | null {
   if (!ENCODED_PATTERN.test(encoded)) return null;
-  const base64 = encoded.replaceAll("-", "+").replaceAll("_", "/");
-  const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
-  let binary: string;
-  try {
-    binary = atob(padded);
-  } catch {
-    return null;
-  }
-  if (binary.length !== ENTROPY_BYTES) return null;
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
+  const binary = atob(encoded.replaceAll("-", "+").replaceAll("_", "/"));
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
 
 /**

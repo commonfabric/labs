@@ -5,7 +5,6 @@ import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import {
   FabricBytes,
   FabricEpochNsec,
-  FabricRegExp,
 } from "@commonfabric/data-model/fabric-primitives";
 import { validateAndCheckReactives } from "../src/runner.ts";
 import { isReactiveMarker } from "../src/builder/types.ts";
@@ -16,7 +15,6 @@ describe("normalizeSandboxResult", () => {
     const input = {
       bytes: new Uint8Array([1, 2, 3]),
       date: new Date(1_234),
-      regexp: /fabric/gi,
       error: new TypeError("fabric"),
     };
 
@@ -29,9 +27,6 @@ describe("normalizeSandboxResult", () => {
     expect(Array.from((value.bytes as FabricBytes).slice())).toEqual([1, 2, 3]);
     expect(value.date).toBeInstanceOf(FabricEpochNsec);
     expect((value.date as FabricEpochNsec).value).toBe(1_234_000_000n);
-    expect(value.regexp).toBeInstanceOf(FabricRegExp);
-    expect((value.regexp as FabricRegExp).source).toBe("fabric");
-    expect((value.regexp as FabricRegExp).flags).toBe("gi");
     expect(value.error).toBeInstanceOf(FabricError);
     expect((value.error as FabricError).type).toBe("TypeError");
   });
@@ -87,6 +82,25 @@ describe("normalizeSandboxResult", () => {
     expect(child.v).toBe(42);
   });
 
+  it("reports a record carrying an encodable form as one value, not by its members", () => {
+    const record = { toEncodableForm: () => ({}), value: 1 };
+
+    expect(() => normalizeSandboxResult({ record }, "act")).toThrow(
+      'Action returned a Object at path "record".\n  in action: act\n',
+    );
+  });
+
+  it("reports an array with an extra property at the array, not at its elements", () => {
+    const array: number[] & { extra?: number } = [1, 2];
+    array.extra = 3;
+
+    expect(() => normalizeSandboxResult({ array })).toThrow(
+      'Action returned a Array at path "array".\nActions must return ' +
+        "FabricValues, Reactives, or Cells.\nNot representable as a " +
+        "`FabricValue`: array that is not an inert array",
+    );
+  });
+
   it("rejects custom instances with null-rooted prototypes", () => {
     class NullRooted {
       value = 1;
@@ -104,12 +118,6 @@ describe("normalizeSandboxResult", () => {
     expect(() => normalizeSandboxResult({ nested: date })).toThrow(
       /Action returned a Date at path "nested"[\s\S]*extra enumerable properties/,
     );
-
-    const regexp = /fabric/ as RegExp & { extra?: boolean };
-    regexp.extra = true;
-    expect(() => normalizeSandboxResult({ nested: regexp })).toThrow(
-      /Action returned a RegExp at path "nested"[\s\S]*extra enumerable properties/,
-    );
   });
 
   it("does not trust spoofed intrinsic brands", () => {
@@ -120,15 +128,6 @@ describe("normalizeSandboxResult", () => {
     }
     expect(() => normalizeSandboxResult(new FakeDate())).toThrow(
       /Action returned a FakeDate/,
-    );
-
-    class FakeRegExp {
-      get [Symbol.toStringTag](): string {
-        return "RegExp";
-      }
-    }
-    expect(() => normalizeSandboxResult(new FakeRegExp())).toThrow(
-      /Action returned a FakeRegExp/,
     );
   });
 
@@ -180,7 +179,6 @@ describe("validateAndCheckReactives", () => {
       ).toBe(false);
       expect(validateAndCheckReactives(new Uint8Array([4, 5, 6]))).toBe(false);
       expect(validateAndCheckReactives(new Date(0))).toBe(false);
-      expect(validateAndCheckReactives(/fabric/gi)).toBe(false);
       expect(validateAndCheckReactives(new Error("fabric"))).toBe(false);
     });
 
@@ -219,6 +217,12 @@ describe("validateAndCheckReactives", () => {
     it("rejects Set", () => {
       expect(() => validateAndCheckReactives(new Set())).toThrow(
         /Action returned a Set[\s\S]*Consider using an array/,
+      );
+    });
+
+    it("rejects RegExp", () => {
+      expect(() => validateAndCheckReactives(/fabric/gi)).toThrow(
+        /Action returned a RegExp/,
       );
     });
 

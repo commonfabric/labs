@@ -2,17 +2,19 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { hashStringOf } from "@commonfabric/data-model";
+import {
+  type CfcConfClause,
+  clauseAlternatives,
+  isOrClause,
+} from "@commonfabric/memory/v2/cfc-release-authority";
 
 import {
   canonicalizeCfcMetadata,
   canonicalizeWritePolicyInput,
 } from "../src/cfc/canonical.ts";
-import type { CfcConfClause } from "../src/cfc/clause.ts";
 import {
-  clauseAlternatives,
   clausesEqual,
   clauseSubsumes,
-  isOrClause,
   normalizeClause,
 } from "../src/cfc/clause.ts";
 import type {

@@ -42,7 +42,6 @@ import {
   loadStoredCfcEnvelope,
   markRendererTrustedEvent,
 } from "@commonfabric/runner/cfc";
-import { clauseAlternatives } from "@commonfabric/runner/cfc/clause";
 import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import {
@@ -58,6 +57,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { clauseAlternatives } from "@commonfabric/memory/v2/cfc-release-authority";
 
 /** The demo-grade room, whose rule names its projector alone. */
 const PROJECTOR = "custody-projector.tsx";

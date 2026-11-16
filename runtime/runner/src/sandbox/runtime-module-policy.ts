@@ -15,10 +15,6 @@ export const RuntimeModuleIdentifiers = [
 
 const RuntimeModuleIdentifierSet = new Set<string>(RuntimeModuleIdentifiers);
 const ALLOWED_LOCAL_IMPORT_PREFIXES = ["./", "../", "/"] as const;
-const ALLOWED_COMPILED_FACTORY_DEPENDENCIES = new Set<string>([
-  "require",
-  "exports",
-]);
 
 export function isRuntimeModuleIdentifier(
   value: unknown,
@@ -38,11 +34,4 @@ export function isAllowedAuthoredImportSpecifier(specifier: string): boolean {
     ALLOWED_LOCAL_IMPORT_PREFIXES.some((prefix) =>
       specifier.startsWith(prefix)
     );
-}
-
-export function isAllowedCompiledDependencySpecifier(
-  specifier: string,
-): boolean {
-  return ALLOWED_COMPILED_FACTORY_DEPENDENCIES.has(specifier) ||
-    isAllowedAuthoredImportSpecifier(specifier);
 }

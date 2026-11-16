@@ -19,12 +19,12 @@ import type { Schema } from "@commonfabric/api/schema";
 import { hashOf } from "@commonfabric/data-model";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import { INVALID_INPUT, REFUSED } from "../agent-error-codes.ts";
 import type { JSONSchema } from "../builder/types.ts";
 import { type Cell, isCell } from "../cell.ts";
 import { renderCellReference } from "../cell-reference.ts";
-import type { CfcConfClause } from "../cfc/clause.ts";
 import { atomsOutsideCeiling } from "../cfc/observation.ts";
 import { collectConsumedLabel } from "../cfc/prepare.ts";
 import { createFrozenRequestSnapshot } from "../cfc/request-snapshot.ts";
@@ -49,6 +49,7 @@ import {
 } from "../runtime.ts";
 import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { settleAbandonedRequest } from "./abandoned-request.ts";
 import {
   AGENT_INPUT_NAME_PATTERN,
   AGENT_RUN_TERMINAL_STATES,
@@ -842,23 +843,30 @@ export function agent(
      */
     const settleAbandoned = async (error: Error): Promise<void> => {
       await runtime.idle();
-      const { error: writeError } = await runtime.editWithRetry((tx) => {
-        markEffectCompletion(tx, effectKey);
-        tx.tx.scopeKeyIdentity = identity;
-        // Read at write time: a newer request can stage while this one
-        // waits for the scheduler, and from then on the cell is its.
-        if (state.currentHash !== hash) return;
-        sendResult(tx, resultCell);
-        settleWithoutRun(resultFields(resultCell, tx), error.message, hash);
-      });
+      await settleAbandonedRequest(
+        runtime,
+        {
+          builtinId: AGENT_SINK,
+          effectKey,
+          identity,
+          scope: outputScope,
+          attributeToBuiltin: false,
+          reportRejection: (rejection) =>
+            reportRejection(
+              "Writing the request's refusal was rejected.",
+              hash,
+              rejection,
+            ),
+        },
+        (tx) => {
+          // Read at write time: a newer request can stage while this one
+          // waits for the scheduler, and from then on the cell is its.
+          if (state.currentHash !== hash) return;
+          sendResult(tx, resultCell);
+          settleWithoutRun(resultFields(resultCell, tx), error.message, hash);
+        },
+      );
       if (state.previousCallHash === hash) state.previousCallHash = undefined;
-      if (writeError) {
-        reportRejection(
-          "Writing the request's refusal was rejected.",
-          hash,
-          writeError,
-        );
-      }
     };
 
     enqueueSinkRequestPostCommitEffect(

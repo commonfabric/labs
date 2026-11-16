@@ -5,7 +5,6 @@ import {
   type AddIntegrity,
   computed,
   Default,
-  type FabricBytes,
   generateObject,
   handler,
   ImageData,
@@ -20,6 +19,10 @@ import {
   Writable,
   type WriteAuthorizedBy,
 } from "commonfabric";
+import {
+  profileFace,
+  type ProfileFaceFields,
+} from "../../../system/profile-face/profile-face.ts";
 import {
   adminRegistryEntries,
   type EmptyAdminRegistryValue,
@@ -527,31 +530,23 @@ export default pattern<LotWatchInput, LotWatchOutput>(
     // headless callers set it via the `setReporterName` stream.
     const reporterName = new Writable.perUser("");
 
-    const profileWish = wish<{ name?: string; avatar?: string }>({
+    const profileWish = wish<Writable<{ name?: string } & ProfileFaceFields>>({
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
-    const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
-    const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
     const profileName = computed(() => (profileNameWish.result ?? "").trim());
-    const profilePicture = computed(() => profilePictureWish.result);
-    const profileAvatar = computed(() => profileAvatarWish.result ?? "");
     const hasProfile = computed(() =>
       (profileNameWish.result ?? "").trim() !== ""
     );
     const reporterLabel = computed(() => (reporterName.get() || "").trim());
     const hasReporter = computed(() => reporterLabel !== "");
-    // Show the profile picture, or else its avatar text, only while the
-    // reporter IS the profile (an explicit setReporterName override keeps
-    // initials-only rendering).
-    const reporterIsProfile = computed(() =>
+    // Show the profile's face, its picture or else its avatar text as its
+    // owner set them, only while the reporter IS the profile (an explicit
+    // setReporterName override keeps initials-only rendering).
+    const reporterFace = computed(() =>
       reporterLabel !== "" && reporterLabel === profileName
-    );
-    const reporterPicture = computed(() =>
-      reporterIsProfile ? profilePicture : undefined
-    );
-    const reporterAvatar = computed(() =>
-      reporterIsProfile ? profileAvatar : ""
+        ? profileFace(profileWish.result)
+        : {}
     );
 
     // PerSession: tab navigation
@@ -1558,8 +1553,8 @@ export default pattern<LotWatchInput, LotWatchOutput>(
                           ? (
                             <cf-hstack gap="2" align="center">
                               <cf-avatar
-                                bytes={reporterPicture}
-                                src={reporterAvatar}
+                                bytes={reporterFace.picture}
+                                src={reporterFace.avatar ?? ""}
                                 name={reporterLabel}
                                 size="xs"
                               />

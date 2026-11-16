@@ -67,14 +67,15 @@ describe("storage-session-requests", () => {
     return manager;
   };
 
-  it("runs a pattern-lifecycle verb as the manager's principal and returns its receipt", async () => {
+  it("runs a pattern-lifecycle verb as the manager's principal, in the session its scoped addresses are keyed by, and returns its receipt", async () => {
     const calls: PatternLifecycleCall[] = [];
     server.server.setPatternLifecycleHandler((call) => {
       calls.push(call);
       return Promise.resolve({ ok: { pattern: "receipt" } });
     });
 
-    const receipt = await managerAs(owner).runPatternLifecycle(
+    const manager = managerAs(owner);
+    const receipt = await manager.runPatternLifecycle(
       space,
       "upload",
       { program: { main: "/main.tsx" } },
@@ -84,6 +85,7 @@ describe("storage-session-requests", () => {
     expect(calls).toEqual([{
       space,
       principal: owner.did(),
+      sessionId: manager.scopeKeyIdentity().sessionId,
       verb: "upload",
       body: { program: { main: "/main.tsx" } },
     }]);

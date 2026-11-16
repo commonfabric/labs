@@ -60,6 +60,7 @@ import {
 } from "./cfc/label-view-state.ts";
 
 import { declareStreamSchema, type NormalizedFullLink } from "./link-utils.ts";
+import { isWithdrawnVerb } from "./withdrawn-verb.ts";
 import type { Runtime } from "./runtime.ts";
 import {
   createOpaqueReference,
@@ -275,14 +276,6 @@ const childSchema = (
   return false;
 };
 
-const declaredDefault = (schema: JSONSchema): FabricValue | undefined => {
-  if (!isObjectOrArray(schema)) return undefined;
-  const resolved = ContextualFlowControl.resolveSchemaRefs(schema);
-  return isObjectOrArray(resolved)
-    ? resolved.default as FabricValue | undefined
-    : undefined;
-};
-
 /**
  * Returns the schema's own default after resolving its root reference.
  * Defaults inside combinator branches are decided by traversal of those
@@ -290,8 +283,13 @@ const declaredDefault = (schema: JSONSchema): FabricValue | undefined => {
  */
 export const defaultForAbsentValue = (
   schema: JSONSchema | undefined,
-): FabricValue | undefined =>
-  isObjectOrArray(schema) ? declaredDefault(schema) : undefined;
+): FabricValue | undefined => {
+  if (!isObjectOrArray(schema)) return undefined;
+  const resolved = ContextualFlowControl.resolveSchemaRefs(schema);
+  return isObjectOrArray(resolved)
+    ? resolved.default as FabricValue | undefined
+    : undefined;
+};
 
 /**
  * Build a view over `value` at `link`, or report that the data does not match.
@@ -594,6 +592,18 @@ function createObjectView(
         );
       }
       return undefined;
+    }
+    // An optional verb its producer no longer publishes reads as absent, the
+    // way the eager read leaves it out.
+    if (
+      !required.has(key) && ContextualFlowControl.declaresStream(narrowed) &&
+      isWithdrawnVerb(runtime, tx, {
+        ...link,
+        path: [...link.path, key],
+        schema: undefined,
+      })
+    ) {
+      return ABSENT;
     }
     const defaultSchema = getPropertyDefaultSchema(schema, key);
     const applyDefault = () =>

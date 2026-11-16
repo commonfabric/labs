@@ -136,6 +136,38 @@ describe("LRUCache", () => {
       expect(evicted).toEqual([["a", 1], ["b", 2], ["c", 3]]);
     });
 
+    it("evicts in order from what a partial weight eviction left behind", () => {
+      const evicted: string[] = [];
+      const cache = new LRUCache<string, number>({
+        capacity: 3,
+        weigh: (_, value) => value,
+        maxWeight: 10,
+        onEvict: (key) => evicted.push(key),
+      });
+      cache.put("a", 4);
+      cache.put("b", 4);
+      cache.put("c", 1);
+      cache.put("d", 6);
+      expect(evicted).toEqual(["a", "b"]);
+      expect(["a", "b", "c", "d"].map((key) => cache.has(key))).toEqual([
+        false,
+        false,
+        true,
+        true,
+      ]);
+
+      expect(cache.get("c")).toBe(1);
+      cache.put("e", 5);
+      expect(evicted).toEqual(["a", "b", "d"]);
+      expect(cache.size).toBe(2);
+      expect(cache.weight).toBe(6);
+
+      cache.put("f", 5);
+      expect(evicted).toEqual(["a", "b", "d", "c"]);
+      expect(cache.size).toBe(2);
+      expect(cache.weight).toBe(10);
+    });
+
     it("stays within its capacity when `onEvict` puts into the cache", () => {
       const sizes: number[] = [];
       const cache: LRUCache<string, number> = new LRUCache({

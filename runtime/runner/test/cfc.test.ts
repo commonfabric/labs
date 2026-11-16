@@ -699,6 +699,93 @@ describe("ContextualFlowControl atom joins", () => {
       },
     });
   });
+
+  describe("joinSchema()", () => {
+    const secretAtom = cfcAtom.resource("Secret", "did:example:secret");
+    const document: JSONSchema = {
+      $defs: {
+        Secret: { type: "string", ifc: { confidentiality: [secretAtom] } },
+        Plain: { type: "string" },
+      },
+    };
+
+    it("resolves a subschema's `$ref` against the document it is given", () => {
+      const joined = ContextualFlowControl.joinSchema(
+        new Set(),
+        { $ref: "#/$defs/Secret" },
+        document,
+      );
+      expect([...joined]).toEqual([secretAtom]);
+
+      const plain = ContextualFlowControl.joinSchema(
+        new Set(),
+        { $ref: "#/$defs/Plain" },
+        document,
+      );
+      expect([...plain]).toEqual([]);
+    });
+
+    it("adds nothing for a schema the caller's `visited` already holds for its document", () => {
+      const schema: JSONSchema = {
+        type: "string",
+        ifc: { confidentiality: [secretAtom] },
+      };
+      const visited = new Map<object, Set<object>>();
+
+      const first = ContextualFlowControl.joinSchema(
+        new Set(),
+        schema,
+        schema,
+        visited,
+      );
+      expect([...first]).toEqual([secretAtom]);
+
+      const second = ContextualFlowControl.joinSchema(
+        new Set(),
+        schema,
+        schema,
+        visited,
+      );
+      expect([...second]).toEqual([]);
+    });
+
+    it("collects nothing through a `$ref` naming a `true` definition", () => {
+      const schema: JSONSchema = {
+        $defs: {
+          Open: true,
+          Secret: { type: "string", ifc: { confidentiality: [secretAtom] } },
+        },
+        properties: {
+          open: { $ref: "#/$defs/Open" },
+        },
+      };
+      expect([...ContextualFlowControl.joinSchema(new Set(), schema)])
+        .toEqual([]);
+
+      const secret: JSONSchema = {
+        ...schema,
+        properties: { secret: { $ref: "#/$defs/Secret" } },
+      };
+      expect([...ContextualFlowControl.joinSchema(new Set(), secret)])
+        .toEqual([secretAtom]);
+    });
+  });
+
+  describe("schemaWithLub()", () => {
+    it("returns the schema itself when neither it nor the caller carries confidentiality", () => {
+      const schema: JSONSchema = { type: "string" };
+      expect(ContextualFlowControl.schemaWithLub(schema, [])).toBe(schema);
+    });
+
+    it("returns a copy carrying the caller's confidentiality", () => {
+      const atom = cfcAtom.resource("Secret", "did:example:secret");
+      const schema: JSONSchema = { type: "string" };
+      expect(ContextualFlowControl.schemaWithLub(schema, [atom])).toEqual({
+        type: "string",
+        ifc: { confidentiality: [atom] },
+      });
+    });
+  });
 });
 
 describe("CFC schema reference discovery", () => {
@@ -1464,6 +1551,41 @@ describe("ContextualFlowControl.isFalseSchema", () => {
   it("does not treat {not: {type: 'string'}} as a false schema", () => {
     expect(ContextualFlowControl.isFalseSchema({ not: { type: "string" } }))
       .toBe(false);
+  });
+});
+
+describe("ContextualFlowControl.isInternalSchemaKey", () => {
+  it("returns `true` for each keyword the runtime reads for itself", () => {
+    for (const key of ["ifc", "asCell", "asStream", "scope"]) {
+      expect(ContextualFlowControl.isInternalSchemaKey(key)).toBe(true);
+    }
+  });
+
+  it("returns `false` for keywords that constrain a value", () => {
+    for (const key of ["type", "properties", "default", "$defs", "$ref"]) {
+      expect(ContextualFlowControl.isInternalSchemaKey(key)).toBe(false);
+    }
+  });
+});
+
+describe("ContextualFlowControl.resolveSchemaRef", () => {
+  const document: JSONSchema = {
+    $defs: {
+      Alias: { $ref: "#/$defs/Target" },
+      Target: { type: "number" },
+    },
+  };
+
+  it("returns a definition's body without following a `$ref` it holds", () => {
+    expect(ContextualFlowControl.resolveSchemaRef(document, "#/$defs/Target"))
+      .toEqual({ type: "number" });
+    expect(ContextualFlowControl.resolveSchemaRef(document, "#/$defs/Alias"))
+      .toMatchObject({ $ref: "#/$defs/Target" });
+  });
+
+  it("returns `undefined` for a ref naming no definition", () => {
+    expect(ContextualFlowControl.resolveSchemaRef(document, "#/$defs/Missing"))
+      .toBeUndefined();
   });
 });
 

@@ -325,6 +325,39 @@ const setDataKeysAsAttributes: SetPropHandler = (target, key, value) => {
 describe("DomApplicator", () => {
   describe("instance members", () => {
     describe("applyBatch()", () => {
+      it("warns once of a set or bound prop whose name names no property, naming the property", () => {
+        const warnings: string[] = [];
+        const warn = console.warn;
+        console.warn = (message: unknown) => warnings.push(String(message));
+        try {
+          for (const batchId of [1, 2]) {
+            const applicator = new DomApplicator({
+              document: createMockDocument(),
+              onEvent: () => {},
+            });
+            applicator.applyBatch({
+              batchId,
+              ops: [
+                { op: "create-element", nodeId: 1, tagName: "x-misnamed" },
+                { op: "set-prop", nodeId: 1, key: "default-size", value: 28 },
+                {
+                  op: "set-binding",
+                  nodeId: 1,
+                  propName: "max-size",
+                  cellRef: {} as CellRef,
+                },
+                { op: "set-prop", nodeId: 1, key: "data-id", value: "a" },
+              ],
+            });
+          }
+        } finally {
+          console.warn = warn;
+        }
+        expect(warnings.length).toBe(2);
+        expect(warnings[0]).toContain("`defaultSize`");
+        expect(warnings[1]).toContain("`maxSize`");
+      });
+
       it("removes an ARIA attribute when its property is dropped", () => {
         const doc = createMockDocument();
         const applicator = new DomApplicator({

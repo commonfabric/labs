@@ -24,8 +24,14 @@ describe("test-cfc-posture", () => {
         [argv`--cfc-shell-posture`, "enforce-explicit flowLabels=persist"],
       ]
     ) {
+      // CFC disabled runs only on the OFF arm: on the ON arm `cf test`
+      // refuses it (below), since a disabled runtime writes no closure for
+      // the serving loop and served handlers do not take the test's CFC
+      // posture. The shell posture runs at the first-party default.
+      const disabled = flags.includes("disabled");
       const { code, stdout, stderr } = await cf(
         argv`test ${fixture} ${flags} --verbose --stats-threshold 0 --no-idempotency-check`,
+        disabled ? { env: { EXPERIMENTAL_SERVER_EXECUTION: "false" } } : {},
       );
       expect({ code, stdout, stderr }).toMatchObject({ code: 0 });
       const report = stdout.join("\n");
@@ -69,6 +75,20 @@ describe("test-cfc-posture", () => {
         expect(report).not.toMatch(/cfc\/deriveFlowJoin\s+Δn=\s*[1-9]/);
       }
     }
+  });
+
+  it("refuses CFC disabled on the server-execution arm, saying how to run it", async () => {
+    const { code, stdout } = await cf(
+      argv`test ${small} --cfc-enforcement-mode disabled`,
+      { env: { EXPERIMENTAL_SERVER_EXECUTION: "true" } },
+    );
+    expect(code).not.toBe(0);
+    const report = stdout.join("\n");
+    expect(report).toContain(
+      "refuses `--cfc-enforcement-mode disabled` on the server-execution arm",
+    );
+    expect(report).toContain("EXPERIMENTAL_SERVER_EXECUTION=false");
+    expect(report).not.toContain("CFC posture:");
   });
 
   it("resolves the derive alias to the runtime observe mode", async () => {

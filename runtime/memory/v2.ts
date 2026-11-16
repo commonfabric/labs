@@ -1,6 +1,7 @@
 import type {
   FabricPlainObject,
   FabricValue,
+  FieldAnchors,
   JSONSchema,
   SchemaPathSelector,
 } from "@commonfabric/api";
@@ -427,13 +428,13 @@ export const streamEntriesDocId = (stream: StreamLinkRef): EntityId =>
   }`;
 
 /**
- * Prefix of the anchors document of a collaborative field: the derived,
- * Memory-owned entity holding the field's anchors
- * (`07-op-views-and-annotations.md` §7.15). The engine writes it in the
- * transaction that changes the set, and a client's write to an id under this
- * prefix is refused. The id is content-derived from the field's address
- * ({@link operationAnchorsDocId}), so every party addresses it with no
- * coordination, and the document is written in the field's own scope: a
+ * Prefix of the anchors document of a collaborative field: the entity holding
+ * the field's anchors (`07-op-views-and-annotations.md` §7.15), whose value is
+ * a {@link FieldAnchors}. A client changes the anchors by writing it as it
+ * writes any entity, and the engine rewrites it in the transaction that
+ * integrates an edit moving one. The id is content-derived from the field's
+ * address ({@link operationAnchorsDocId}), so every party addresses it with
+ * no coordination, and the document lives in the field's own scope: a
  * per-user field's anchors are per-user.
  */
 export const OP_ANCHORS_DOC_PREFIX = "of:op-anchors:";
@@ -582,6 +583,12 @@ export type StreamEventEntry = {
   /** Processing-side: the handler threw — the error IS the consequence
    * (events.md §5). */
   error?: string;
+
+  /** Processing-side: the handling read data this space doesn't admit, so
+   * the entry records the outcome withheld, the same whether it committed,
+   * errored or was refused, and records none of `error`, `status` or `reason`
+   * (events.md §5). */
+  withheld?: true;
 
   /** Processing-side: how the entry ended, where it did not simply run.
    * `"dropped"` is the dropped-event notice (events.md §5 T7);
@@ -925,49 +932,74 @@ export type DeleteOperation = {
   scope?: CellScope;
 };
 
+/**
+ * A version of a collaborative field: the field epoch, which a release of the
+ * field ends, and the count of operations integrated within it.
+ */
 export type OpCursor = {
+  /** The field epoch. */
   epoch: number;
+
+  /** Operations integrated in the epoch. */
   version: number;
+};
+
+/**
+ * The value of a field's anchors document ({@link operationAnchorsDocId}),
+ * which `@commonfabric/api` declares because a pattern reads and writes it.
+ */
+export type { FieldAnchors };
+
+/** The most anchors a field's anchors document may hold. */
+const MAX_FIELD_ANCHORS = 1024;
+
+/** The most characters an anchor's id may run to. */
+const MAX_ANCHOR_ID_LENGTH = 256;
+
+/**
+ * Reads `value` as a field's anchors
+ * (`07-op-views-and-annotations.md` §7.8): a plain map from anchor id to
+ * offset, of at most {@link MAX_FIELD_ANCHORS} anchors, each under a
+ * non-empty id of at most {@link MAX_ANCHOR_ID_LENGTH} characters, at a
+ * non-negative integer. Returns the anchors, or what is wrong with `value`
+ * as `fault`, worded to follow the name of whatever holds it. The engine's
+ * check of a written document and the state inspector's report of a stored
+ * one both rest on this, so the two cannot disagree about a document.
+ */
+export const parseFieldAnchors = (
+  value: unknown,
+): { anchors: FieldAnchors } | { fault: string } => {
+  if (!isPlainObject(value)) {
+    return { fault: "is not a map from anchor id to offset" };
+  }
+  const entries = Object.entries(value);
+  if (entries.length > MAX_FIELD_ANCHORS) {
+    return { fault: `holds more than ${MAX_FIELD_ANCHORS} anchors` };
+  }
+  const anchors: [string, number][] = [];
+  for (const [id, offset] of entries) {
+    if (id.length === 0 || id.length > MAX_ANCHOR_ID_LENGTH) {
+      return {
+        fault:
+          `holds an anchor id that is empty or longer than ${MAX_ANCHOR_ID_LENGTH} characters`,
+      };
+    }
+    if (
+      typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0
+    ) {
+      return {
+        fault:
+          `holds anchor ${id} at something other than a non-negative integer offset`,
+      };
+    }
+    anchors.push([id, offset]);
+  }
+  // `Object.fromEntries()` defines each id as an own property, whatever the
+  // id is; an assignment would lose an anchor whose id is `__proto__`.
+  return { anchors: Object.fromEntries(anchors) };
 };
 
 export const CODEMIRROR_CHANGESET_CODEC = "codemirror-changeset@1";
-
-/**
- * A range of a collaborative field, keyed by a client-chosen id, that Memory
- * carries through every integrated operation. `from` and `to` are the codec's
- * positions: for the CodeMirror codec, UTF-16 code unit offsets with `to`
- * exclusive. An edit that deletes the covered text with nothing in its place
- * empties the range to a point (`from === to`); a replacement of the covered
- * text keeps the range over the replacement.
- */
-export type FieldAnchor = {
-  id: string;
-  from: number;
-  to: number;
-};
-
-/**
- * The anchors of a collaborative field as its anchors document holds them
- * ({@link operationAnchorsDocId}): the field cursor the set was last restated
- * at, and the set, sorted by id. A set carried unchanged through later
- * operations holds at every later version, so `version` lags the field head
- * whenever no anchor has moved since.
- */
-export type FieldAnchorsDocument = {
-  epoch: number;
-  version: number;
-  anchors: FieldAnchor[];
-};
-
-/**
- * Anchors an `apply-op` adds, replaces or removes. An `add` of an id the
- * field holds replaces its range; a `remove` of an id it does not hold is a
- * no-op. A member that is present adds or removes at least one.
- */
-export type FieldAnchorChanges = {
-  add?: FieldAnchor[];
-  remove?: string[];
-};
 
 export type OperationFieldAddress = {
   id: EntityId;
@@ -997,17 +1029,6 @@ export type ApplyOpOperation = OperationFieldAddress & {
   baselineHash?: string;
 
   payload: FabricValue;
-
-  /**
-   * Anchors to add, replace or remove with this operation. The ranges in
-   * `add` are stated against the value the payload yields at the base: the
-   * document the client holds, text the payload inserts included. Memory maps
-   * them to the field head, across the operations integrated since the base,
-   * before storing them. A payload that integrates nothing is allowed, for an
-   * operation that changes anchors alone; anchors are not operations and
-   * advance no version.
-   */
-  anchors?: FieldAnchorChanges;
 };
 
 export type ReleaseOpFieldOperation = OperationFieldAddress & {
@@ -1035,15 +1056,6 @@ export type ApplyOpResolution = {
   to: OpCursor;
   operations: IntegratedOperation[];
   duplicate: boolean;
-
-  /**
-   * What the operation's `anchors` landed as, when it carried any: the added
-   * anchors as stored, stated at `to`, and the removed ids the field held.
-   */
-  anchors?: {
-    added: FieldAnchor[];
-    removed: string[];
-  };
 };
 
 export type OperationFieldQuery = OperationFieldAddress & {
@@ -1064,12 +1076,12 @@ export type OperationFieldSnapshot = OperationFieldAddress & {
   operations: IntegratedOperation[];
 
   /**
-   * The field's anchors at `cursor`, sorted by id; empty for an inactive
-   * field. An operation that changes anchors and integrates nothing changes
-   * this set without advancing the cursor, so a snapshot can carry new anchors
-   * at a cursor the client has already applied.
+   * The field's anchors as its anchors document holds them, which are stated
+   * against `materialized`. A write to the document changes them without
+   * advancing the cursor, so a snapshot can carry different anchors at a
+   * cursor the client has already applied.
    */
-  anchors: FieldAnchor[];
+  anchors: FieldAnchors;
 
   /** Lowest cursor from which the retained integrated suffix is contiguous. */
   retainedFrom?: OpCursor;
@@ -1252,6 +1264,8 @@ export type ClientCommit = {
 };
 
 export type SessionOpenResult = {
+  /** Serving Toolshed process commit, not the router or a compatibility gate. */
+  serverBuild?: string;
   sessionId: SessionId;
   sessionToken: SessionToken;
   serverSeq: number;
@@ -1346,6 +1360,17 @@ export type MemoryProtocolFlags = {
    * connection whose transport bounds its messages. Inherent to the build.
    */
   syncPartsV1: boolean;
+
+  /**
+   * A session sync may name a `cid:` schema document by id, without its
+   * body (04-protocol.md section 4.2.3), enabled only when both peers
+   * advertise it: the server references a schema its realm registry holds,
+   * and the client takes the body from its own registry or fetches it.
+   * Experimental: a server advertises it unless its `syncCidReferences`
+   * option turns it off, and a client only when its
+   * `ConnectOptions.syncCidReferences` turns it on.
+   */
+  syncCidReferencesV1: boolean;
 
   /**
    * Server capability: a `session.watch.set` may come as staged parts that
@@ -1523,6 +1548,26 @@ export type MemoryProtocolFlags = {
   patternLifecycle?: boolean;
 
   /**
+   * Server capability: the `pattern.lifecycle` verbs this server runs, while
+   * it advertises `patternLifecycle`, take an origin — the `follow` verb, and
+   * `origin` on `setsrc` (04-protocol.md §4.3.10). Build-inherent, so a
+   * server of this version always advertises it. Absent (an older server)
+   * parses to false: such a server refuses `follow` unread and drops a
+   * `setsrc` origin, detaching the piece, so a client sends neither.
+   */
+  patternLifecycleOrigins?: boolean;
+
+  /**
+   * Server capability: the `setsrc` and `follow` verbs this server runs take
+   * `scope`, the scope a piece is addressed at, and change the requester's
+   * instance of a piece held at a user or session scope (04-protocol.md
+   * §4.3.10). Build-inherent. Absent (an older server) parses to false: such
+   * a server ignores `scope` and changes the piece's space instance, so a
+   * client sends no scoped request.
+   */
+  patternLifecycleScopes?: boolean;
+
+  /**
    * Server capability: the server runs `served` requests (04-protocol.md
    * §4.3.12), the crossings one serving process sends the process that owns
    * the target space. Advertised exactly while the deployment has a served
@@ -1590,6 +1635,7 @@ export type WireMemoryProtocolFlags = {
   syncCrossingsV1?: boolean;
   watchRemoveV1?: boolean;
   syncPartsV1?: boolean;
+  syncCidReferencesV1?: boolean;
   watchSetPartsV1?: boolean;
   messageCompressionV1?: boolean;
   sqliteCommitRowLabelEval?: boolean;
@@ -1610,6 +1656,8 @@ export type WireMemoryProtocolFlags = {
   elidedVerdicts?: boolean;
   sessionReportV1?: boolean;
   patternLifecycle?: boolean;
+  patternLifecycleOrigins?: boolean;
+  patternLifecycleScopes?: boolean;
   servedRequests?: boolean;
   spaceInvites?: boolean;
   instanceNameMark?: boolean;
@@ -1662,6 +1710,18 @@ export type SessionDescriptor = {
    * one.
    */
   instanceNames?: true;
+
+  /**
+   * Declares that no one waits on this session's results: a server-side
+   * component that reads and writes a space as an ordinary client, such as a
+   * toolshed's webhook runtime, and keeps its sessions open for as long as it
+   * runs. The server counts the session as it counts its serving loop's own,
+   * so the session neither activates its space for serving, nor keeps it from
+   * parking, nor adds to its demand. Only the literal `false`; absent, the
+   * session is demand. Declared afresh on every open, and signed into the
+   * session.open invocation with the rest of this descriptor.
+   */
+  demand?: false;
 
   sessionId?: SessionId;
   seenSeq?: number;
@@ -1921,6 +1981,15 @@ export type SessionSyncUpsert = {
   seq: number;
   doc?: EntityDocument;
   deleted?: true;
+
+  /**
+   * Marks a `cid:` schema document named without its `doc`, on a
+   * connection that negotiated `syncCidReferencesV1`: the space's store
+   * holds it at `seq`, and the client takes its content from its own
+   * registry, fetching any it lacks. The client resolves every reference
+   * before the sync reaches a session, so nothing past it sees one.
+   */
+  byReference?: true;
 
   /**
    * The commit CLASS of the covering commit — the commit whose write
@@ -2304,6 +2373,9 @@ export type SessionViewHandle = {
 export type SessionViewInterest = {
   handle: SessionViewHandle;
   principal?: string;
+  /** Whether the session is a serving loop's own, not a client's (the
+   * server's `SessionState.servingOwn`). */
+  servingOwn?: true;
   /** Whether a connection currently owns the retained session. */
   attached: boolean;
   view: ViewInterest;
@@ -2469,7 +2541,11 @@ export type EventAttentionResolveResult = {
 export const PATTERN_LIFECYCLE_MAX_BYTES = 8 * 1024 * 1024;
 
 /** A pattern-lifecycle verb that a serving deployment runs on request. */
-export type PatternLifecycleVerb = "upload" | "instantiate" | "setsrc";
+export type PatternLifecycleVerb =
+  | "upload"
+  | "instantiate"
+  | "setsrc"
+  | "follow";
 
 /**
  * A request to run a pattern-lifecycle verb in the session's space, as the
@@ -2528,6 +2604,9 @@ export type ServedRequest = {
  * A request to administer the session space's invitations, as the session's
  * principal (04-protocol.md §4.3.11). Redemption is not among them: the one
  * redeeming holds no grant on the space yet, so it has no session to send on.
+ * Nor is preview: whoever sends it, including a principal that has a session
+ * or has already redeemed, a preview always goes as the signed HTTP request,
+ * so a client that is deciding whether to redeem needs no session to ask.
  */
 export type SpaceInviteRequest = {
   type: "space.invite";
@@ -2536,7 +2615,7 @@ export type SpaceInviteRequest = {
   sessionId: SessionId;
 
   /** The operation and its arguments. */
-  invite: Exclude<InviteOperation, { operation: "redeem" }>;
+  invite: Exclude<InviteOperation, { operation: "redeem" | "preview" }>;
 };
 
 /**
@@ -3067,6 +3146,10 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records a space's instance-naming
   // mark and admits sessions and commits by it (INV-16).
   instanceNameMark: true,
+  // Build-inherent: this build's lifecycle verbs take an origin.
+  patternLifecycleOrigins: true,
+  // Build-inherent: this build's `setsrc` and `follow` take a scope.
+  patternLifecycleScopes: true,
   // Configuration rather than build-inherent: a `Server` advertises each
   // from what it was given (`Server.memoryProtocolFlags()`).
   patternLifecycle: false,
@@ -3085,6 +3168,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's client handles a sync split across
   // messages, and its routed host splits one for a client that does.
   syncPartsV1: true,
+  // Experimental, and each peer advertises its own choice: a `Server` by its
+  // `syncCidReferences` option, a client by `ConnectOptions.syncCidReferences`.
+  syncCidReferencesV1: false,
   // Build-inherent: this build's server applies a watch set staged in parts.
   watchSetPartsV1: true,
 });
@@ -3324,6 +3410,22 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const patternLifecycleOrigins = value.patternLifecycleOrigins;
+  if (
+    patternLifecycleOrigins !== undefined &&
+    typeof patternLifecycleOrigins !== "boolean"
+  ) {
+    return null;
+  }
+
+  const patternLifecycleScopes = value.patternLifecycleScopes;
+  if (
+    patternLifecycleScopes !== undefined &&
+    typeof patternLifecycleScopes !== "boolean"
+  ) {
+    return null;
+  }
+
   const servedRequests = value.servedRequests;
   if (servedRequests !== undefined && typeof servedRequests !== "boolean") {
     return null;
@@ -3353,6 +3455,14 @@ export const parseMemoryProtocolFlags = (
 
   const syncPartsV1 = value.syncPartsV1;
   if (syncPartsV1 !== undefined && typeof syncPartsV1 !== "boolean") {
+    return null;
+  }
+
+  const syncCidReferencesV1 = value.syncCidReferencesV1;
+  if (
+    syncCidReferencesV1 !== undefined &&
+    typeof syncCidReferencesV1 !== "boolean"
+  ) {
     return null;
   }
 
@@ -3428,6 +3538,12 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: the server records no mark
     // and admits a declaring session's commits without one.
     instanceNameMark: instanceNameMark === true,
+    // Absent (an older server) parses to false: a client then sends neither
+    // `follow` nor a `setsrc` origin.
+    patternLifecycleOrigins: patternLifecycleOrigins === true,
+    // Absent (an older server) parses to false: a client then sends no
+    // scoped `setsrc` or `follow`.
+    patternLifecycleScopes: patternLifecycleScopes === true,
     // Absent (an older server) parses to false: a client then finds the
     // links out of a space by reading what it synced.
     syncCrossingsV1: syncCrossingsV1 === true,
@@ -3437,6 +3553,9 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older peer) parses to false: a server then sends that
     // client every sync whole.
     syncPartsV1: syncPartsV1 === true,
+    // Absent (an older peer) parses to false: a server then sends that
+    // client every schema document with its body.
+    syncCidReferencesV1: syncCidReferencesV1 === true,
     // Absent (an older server) parses to false: a client then sends every
     // watch set whole.
     watchSetPartsV1: watchSetPartsV1 === true,
@@ -3485,6 +3604,8 @@ export const wireMemoryProtocolFlags = (
   elidedVerdicts: flags.elidedVerdicts,
   sessionReportV1: flags.sessionReportV1,
   patternLifecycle: flags.patternLifecycle,
+  patternLifecycleOrigins: flags.patternLifecycleOrigins,
+  patternLifecycleScopes: flags.patternLifecycleScopes,
   servedRequests: flags.servedRequests,
   spaceInvites: flags.spaceInvites,
   instanceNameMark: flags.instanceNameMark,
@@ -3493,6 +3614,7 @@ export const wireMemoryProtocolFlags = (
   syncCrossingsV1: flags.syncCrossingsV1,
   watchRemoveV1: flags.watchRemoveV1,
   syncPartsV1: flags.syncPartsV1,
+  syncCidReferencesV1: flags.syncCidReferencesV1,
   watchSetPartsV1: flags.watchSetPartsV1,
 });
 

@@ -1490,6 +1490,38 @@ describe("setup/start", () => {
     expect(cellValue).toEqual({ output: 1 });
   });
 
+  it("says whether a piece runs in a space while it runs, and not once it stops", async () => {
+    const pattern: Pattern = {
+      argumentSchema: {
+        type: "object",
+        properties: { input: { type: "number" }, output: { type: "number" } },
+      },
+      resultSchema: {},
+      result: { output: { $alias: { partialCause: "output", path: [] } } },
+      nodes: [
+        {
+          module: { type: "passthrough" },
+          inputs: { value: { $alias: { cell: "argument", path: ["input"] } } },
+          outputs: {
+            value: { $alias: { partialCause: "output", path: [] } },
+          },
+        },
+      ],
+    };
+    const other = (await Identity.fromPassphrase("runs-piece-in other")).did();
+    const resultCell = runtime.getCell(space, "runs piece in");
+    setupTrusted(runtime, undefined, pattern, { input: 1 }, resultCell);
+    expect(runtime.runner.runsPieceIn(space)).toBe(false);
+
+    runtime.start(resultCell);
+    expect(await resultCell.pull()).toEqual({ output: 1 });
+
+    expect(runtime.runner.runsPieceIn(space)).toBe(true);
+    expect(runtime.runner.runsPieceIn(other)).toBe(false);
+    runtime.runner.stop(resultCell);
+    expect(runtime.runner.runsPieceIn(space)).toBe(false);
+  });
+
   it("reports the start failure, not a failure of the cleanup it triggers", () => {
     // A start that fails cancels what it already registered, and a cancel can
     // itself throw -- a builtin winding down state it had not finished

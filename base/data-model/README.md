@@ -47,7 +47,7 @@ Two things follow for a class written here:
 ## Size guarantees
 
 The format has an implementation state how large a value it guarantees to
-handle, by six measures, each guarantee at least a floor the format sets
+handle, by seven measures, each guarantee at least a floor the format sets
 ([`3-json-encoding.md`](../../docs/specs/space-model-formal-spec/3-json-encoding.md)
 Section 12). This package encodes, decodes, hashes and compares any value within
 the figures below. Past one, it may refuse a value or may handle it. Most of the
@@ -73,9 +73,14 @@ each says where its bound comes from.
   buffer.
 - **Registered symbol keys:** 2^26 code points, as for any other string.
   `Symbol.for()` and this package's codec set no smaller bound.
-- **Depth:** 2^11 (2,048). The bound is the host's stack, which the codec, the
-  hasher and `valueEqual()` each use up recursing through a value. On Deno's
-  default stack the first of them to fail does so past about 3,000 levels.
+- **Depth:** 2^9 (512), the format's floor. The bound is the host's stack, which
+  the codec, the hasher and `valueEqual()` each use up recursing through a
+  value. On Deno's default stack the first of them to fail does so past about
+  3,000 levels. The figure sits well below that because a caller may already
+  have used part of the stack by the time it hands this package a value.
+- **Bigints:** 2^26 (67,108,864) bytes (2^29 bits). The bound is the host's: V8
+  holds no bigint of 2^30 bits. A bigint of 2^26 bytes encodes, decodes, hashes
+  and compares in about a second each.
 
 ## Conformance fixtures
 
@@ -129,8 +134,7 @@ is declared:
   `UnknownValue` and `ProblematicValue` under `codec-common/`; the
   `FabricPrimitive` subclasses (`FabricEpochNsec`, `FabricEpochDay`,
   `FabricDurationNsec`, `FabricDurationDay`, `FabricHash`, `FabricBytes`,
-  `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`) under
-  `fabric-primitives/`.
+  `FabricKeyPair`, `FabricUnavailable`) under `fabric-primitives/`.
 
 **Where a thing is declared is not where it is imported from**, and the modules
 named here divide on that point. The whole `FabricValue` vocabulary comes from
@@ -203,11 +207,11 @@ The files and directories, in more detail:
 - `fabric-primitives/`: Concrete `FabricPrimitive` subclasses, each in its own
   file: `FabricBytes.ts`, `FabricHash.ts`, `FabricEpochNsec.ts`,
   `FabricEpochDay.ts`, `FabricDurationNsec.ts`, `FabricDurationDay.ts`,
-  `FabricKeyPair.ts`, `FabricRegExp.ts`, `FabricUnavailable.ts`. `interface.ts`
-  holds the tag vocabularies that range over those classes and imports nothing,
-  the classes being its importers; `impl.ts` holds the set of classes and what
-  derives from it, `codecClasses()` and the schema `type` names among them; and
-  `index.ts` is the barrel.
+  `FabricKeyPair.ts`, `FabricUnavailable.ts`. `interface.ts` holds the tag
+  vocabularies that range over those classes and imports nothing, the classes
+  being its importers; `impl.ts` holds the set of classes and what derives from
+  it, `codecClasses()` and the schema `type` names among them; and `index.ts` is
+  the barrel.
 - `for-testing-only.ts`: What the package offers to tests alone, under an
   export-map entry of its own and in no barrel: makers of examples of every
   concrete `FabricPrimitive` and `FabricInstance` class, each table typed so

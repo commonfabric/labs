@@ -10,6 +10,7 @@
  */
 
 import type { Cancel, Cell } from "@commonfabric/runner";
+import { stripSigilCfcLabelViews } from "@commonfabric/runner/cfc";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { DomApplicator } from "./main/applicator.ts";
 import type { SetPropHandler } from "./render-utils.ts";
@@ -32,6 +33,14 @@ export interface InProcessRenderOptions {
    * tree waits for the runtime to go idle before reading.
    */
   onApplied?: () => void;
+
+  /**
+   * Whether an event dispatched on a rendered node reaches the handler the
+   * reconciler bound there, as an event in a browser reaches it from the main
+   * thread. Off by default: a host that only reads the result has no events to
+   * deliver.
+   */
+  dispatchEvents?: boolean;
 }
 
 /** A mounted in-process render. */
@@ -52,8 +61,9 @@ export interface InProcessRender {
  *
  * The cell is read through the renderer's own schema, so cell-valued props and
  * children arrive as cells the reconciler subscribes to, exactly as they do
- * for a mounted browser render. Handlers registered by the reconciler are
- * never invoked here: no events reach a host that only reads the result.
+ * for a mounted browser render. Handlers registered by the reconciler run
+ * only with `dispatchEvents`, which hands each event the applicator reports to
+ * the reconciler, as a browser's worker does.
  */
 export function renderInProcess(
   container: HTMLElement,
@@ -64,7 +74,16 @@ export function renderInProcess(
     document: options.document,
     setProp: options.setProp,
     onError: options.onError,
-    onEvent: () => {},
+    onEvent: options.dispatchEvents === true
+      ? (message) => {
+        // As a browser's worker does, the event's links lose their label
+        // views before a handler can write one.
+        reconciler.dispatchEvent(
+          message.handlerId,
+          stripSigilCfcLabelViews(message.event) as typeof message.event,
+        );
+      }
+      : () => {},
   });
   applicator.setContainer(container);
 

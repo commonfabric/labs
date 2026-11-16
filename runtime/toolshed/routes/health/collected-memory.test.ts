@@ -40,8 +40,9 @@ describe("GET /api/health/collected-memory", () => {
   });
 
   /**
-   * Starts a serving loop in a worker or on this thread, over a file store
-   * the memory server owns.
+   * Starts a serving loop in workers or on this thread, over a file store
+   * the memory server owns. In workers it keeps one spare, the toolshed's
+   * default, so there is a worker to collect before any space is served.
    */
   async function startLoop(worker: boolean) {
     directory = await Deno.makeTempDir({ prefix: "collected-memory-" });
@@ -78,12 +79,16 @@ describe("GET /api/health/collected-memory", () => {
     expect(held.length).toBe(size);
   });
 
-  it("reports the serving loop's worker beside this thread where the loop runs in one, leaving out what this thread holds", async () => {
+  it("reports the serving loop's workers beside this thread where the loop runs in them, one by one and added up, leaving out what this thread holds", async () => {
     await startLoop(true);
     const size = 64 * 1024 * 1024;
     const before = await collected();
     expect(before.status).toBe(200);
     expect(before.body.servingLoopWorker.heapUsed).toBeGreaterThan(0);
+    expect(before.body.servingLoopWorkers).toEqual([{
+      ...before.body.servingLoopWorker,
+      spaces: [],
+    }]);
     const held = new Uint8Array(size);
     const during = await collected();
     expect(during.body.mainThread.external - before.body.mainThread.external)
@@ -100,13 +105,14 @@ describe("GET /api/health/collected-memory", () => {
     const { status, body } = await collected();
     expect(status).toBe(200);
     expect(body.servingLoopWorker).toBeUndefined();
+    expect(body.servingLoopWorkers).toBeUndefined();
   });
 
-  it("answers 503 while the serving loop's worker is not serving", async () => {
+  it("answers 503 once the serving loop's workers are closed", async () => {
     const loop = await startLoop(true);
     await loop.close();
     const { status, body } = await collected();
     expect(status).toBe(503);
-    expect(body.error).toContain("the serving worker is closed");
+    expect(body.error).toContain("the serving workers are closed");
   });
 });

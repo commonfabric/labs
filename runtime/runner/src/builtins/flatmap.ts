@@ -29,6 +29,7 @@ import {
   type SetupRecord,
   trackListSetupRollback,
 } from "./list-element-rollback.ts";
+import { listChildSetupBatch } from "./list-child-setup-batch.ts";
 import { listInstanceCoordinator } from "./list-instance-coordinator.ts";
 import {
   LIST_OP_CAPTURED_ARGUMENT_FIELDS,
@@ -41,6 +42,7 @@ import {
   createResumeRepublisher,
   type ElementContribution,
   resumeSettleRunKind,
+  settleOnceInputSyncs,
 } from "./resume-republish.ts";
 
 // Presence probe for the result container: slots resolve as cells, so the
@@ -233,46 +235,36 @@ function createFlatMapInstance(
   // only if the input is genuinely empty — a non-empty input re-triggers the
   // normal reconcile via its journaled read, so it converges either way.
   const awaitInputThenSettle = (inputListCell: Cell<any>): void => {
-    runtime.storageManager.trackUntilSettled(
-      syncCellForIdentity(inputListCell, identity)
-        .then(() =>
-          !active ? undefined : runtime.editWithRetry((settleTx) => {
-            if (!active || !result) return;
-            if (identity !== undefined) settleTx.tx.scopeKeyIdentity = identity;
-            // Out-of-band recovery write; the kind decision (bookkeeping
-            // on the serving posture, derivation on clients — the settle
-            // writes DERIVED content) is shared across map/filter/flatMap
-            // in resumeSettleRunKind (r3756175819).
-            runtime.stampServerRun(settleTx, {
-              actionId: `flatMap/resume-settle/${parentCell.sourceURI}`,
-              kind: resumeSettleRunKind(runtime),
-              scopeKeyIdentity: identity,
-            });
-            const { list } = inputsCell.asSchema(FLATMAP_INPUT_SCHEMA)
-              .withTx(settleTx).get();
-            if (
-              list === undefined || (Array.isArray(list) && list.length === 0)
-            ) {
-              settleTx.runWithAmbientReadMeta(
-                { ...linkResolutionProbe, ...machineryRead },
-                () =>
-                  result!.asSchema(RESULT_PRESENCE_SCHEMA).withTx(settleTx)
-                    .set([]),
-              );
-            }
-          }).then(({ error }) => {
-            if (error) {
-              logger.warn("resume-input", "settling the resumed input failed", {
-                error,
-              });
-            }
-          })
-        )
-        .catch((error) =>
-          logger.warn("resume-input", "the resumed input list sync rejected", {
-            error,
-          })
-        ),
+    settleOnceInputSyncs(
+      runtime,
+      logger,
+      syncCellForIdentity(inputListCell, identity),
+      () => active,
+      (settleTx) => {
+        if (!active || !result) return;
+        if (identity !== undefined) settleTx.tx.scopeKeyIdentity = identity;
+        // Out-of-band recovery write; the kind decision (bookkeeping
+        // on the serving posture, derivation on clients — the settle
+        // writes DERIVED content) is shared across map/filter/flatMap
+        // in resumeSettleRunKind (r3756175819).
+        runtime.stampServerRun(settleTx, {
+          actionId: `flatMap/resume-settle/${parentCell.sourceURI}`,
+          kind: resumeSettleRunKind(runtime),
+          scopeKeyIdentity: identity,
+        });
+        const { list } = inputsCell.asSchema(FLATMAP_INPUT_SCHEMA)
+          .withTx(settleTx).get();
+        if (
+          list === undefined || (Array.isArray(list) && list.length === 0)
+        ) {
+          settleTx.runWithAmbientReadMeta(
+            { ...linkResolutionProbe, ...machineryRead },
+            () =>
+              result!.asSchema(RESULT_PRESENCE_SCHEMA).withTx(settleTx)
+                .set([]),
+          );
+        }
+      },
     );
   };
 
@@ -434,8 +426,6 @@ function createFlatMapInstance(
       outputScope,
     );
 
-    if (list.length > 0) resumeBatchAwaitSync = false;
-
     const newArrayValue: any[] = [];
     // Every result the resume pass attaches, whatever it currently reads. The
     // values read here are local: a child that ran in this session has written
@@ -448,6 +438,7 @@ function createFlatMapInstance(
     // list can be republished once they confirm — distinct from an op that has
     // settled undefined (a real skip), which converges immediately.
     const pendingCells: Cell<any>[] = [];
+    const childSetup = listChildSetupBatch();
     for (let i = 0; i < list.length; i++) {
       // Skip sparse holes — don't create pattern runs for them
       if (!(i in list)) continue;
@@ -468,13 +459,14 @@ function createFlatMapInstance(
             // ends.
             existing.needsSetup = true;
           } else {
-            runtime.runner.run(
+            const started = runtime.runner.runInTransaction(
               tx,
               opPattern,
               createRunInput(list[i], i),
               existing.resultCell,
               {
                 doNotUpdateOnPatternChange: true,
+                prepareScopedDefaults: true,
                 awaitSyncBeforeInitialRun: elementAwaitSync,
                 parentPieceRootId,
                 referencedArgumentFields: LIST_OP_REFERENCED_ARGUMENT_FIELDS,
@@ -482,6 +474,10 @@ function createFlatMapInstance(
                 droppedArgumentFields,
               },
             );
+            if (started instanceof Promise) {
+              childSetup.add(started);
+              continue;
+            }
             // The whole setup, every time, because issuing it takes the debt
             // for it: an overlapping reconcile that wrote the link and has not
             // settled hands it to this one, and a partial issuance would leave
@@ -507,13 +503,14 @@ function createFlatMapInstance(
         // long as the coordinator. A cell bound to the transaction would pin
         // the settled transaction, its journal, and everything it read.
         const resultCell = boundResultCell.withTx();
-        runtime.runner.run(
+        const started = runtime.runner.runInTransaction(
           tx,
           opPattern,
           createRunInput(list[i], i),
           resultCell,
           {
             doNotUpdateOnPatternChange: true,
+            prepareScopedDefaults: true,
             awaitSyncBeforeInitialRun: elementAwaitSync,
             parentPieceRootId,
             referencedArgumentFields: LIST_OP_REFERENCED_ARGUMENT_FIELDS,
@@ -521,6 +518,10 @@ function createFlatMapInstance(
             droppedArgumentFields,
           },
         );
+        if (started instanceof Promise) {
+          childSetup.add(started);
+          continue;
+        }
         linkElementCell(boundResultCell);
         const entry = { resultCell, lastIndex: i, needsSetup: false };
         elementRuns.set(elementKey, entry);
@@ -545,6 +546,12 @@ function createFlatMapInstance(
         pendingCells.push(childCell);
       }
     }
+
+    const pendingSetup = childSetup.retry();
+    if (pendingSetup !== undefined) return pendingSetup;
+    // The batch is processed only once no child is left to load: the fresh
+    // pass a load asks for is still the resume pass, and its children wait.
+    if (list.length > 0) resumeBatchAwaitSync = false;
 
     // Wait for the whole resume batch before the aggregate moves. Its
     // documents are the ones still catching up, and republishing from them once

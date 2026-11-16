@@ -87,16 +87,7 @@ export interface DeclaredTopicsBrowserPosture {
   /** Which statement of the shell's posture `client` was read from. */
   readonly clientFrom: ClientPostureSource;
 
-  /**
-   * Whether the deployment serves its pages' views: view-scoped replication
-   * for the web client, under which a page shows what the serving runtime
-   * delivers and runs none of the derivations' modules itself. Resolved as
-   * the web client resolves it from the posture the toolshed runs at, which
-   * the shell it serves adopts: the web override where the deployment states
-   * one, else the global setting, else on, under server execution. A shell
-   * built with a define pinning either otherwise is one this field does not
-   * describe.
-   */
+  /** As {@link UndeclaredTopicsBrowserPosture.servedViews}. */
   readonly servedViews: boolean;
 }
 
@@ -112,6 +103,25 @@ export interface UndeclaredTopicsBrowserPosture {
 
   /** Whether the toolshed reports serving with server execution on. */
   readonly served: boolean;
+
+  /**
+   * Whether the deployment serves its pages' views: view-scoped replication
+   * for the web client, under which a page shows what the serving runtime
+   * delivers and runs none of the derivations' modules itself. Resolved as
+   * the web client resolves it from the posture the toolshed runs at, which
+   * the shell it serves adopts: the web override where the deployment states
+   * one, else the global setting, else on, under server execution. A shell
+   * built with a define pinning either otherwise is one this field does not
+   * describe.
+   *
+   * This is a statement about the deployment, so an undeclared posture
+   * carries it too. A shell built without posture defines adopts the flags
+   * its deployment publishes, so a page on such a shell from this toolshed
+   * shows the views this field describes although nothing states the
+   * shell's posture. Where the shell came from another host or could not be
+   * read, the field still describes the toolshed and not the page.
+   */
+  readonly servedViews: boolean;
 
   /** What was read, and why neither statement settled the shell's half. */
   readonly reason: string;
@@ -218,9 +228,12 @@ export function topicsBrowserPostureOf(
         `nothing about the posture it serves at: ${JSON.stringify(served)}`,
     );
   }
+  const servedViews = served &&
+    (meta.experimental?.webViewScopedReplication ??
+        meta.experimental?.viewScopedReplication ?? true) === true;
   const stated = clientPosture(meta, bundle);
   if (stated.kind === "unstated") {
-    return { declared: false, served, reason: stated.reason };
+    return { declared: false, served, servedViews, reason: stated.reason };
   }
   const { client, clientFrom } = stated;
   if (client !== served) {
@@ -237,9 +250,7 @@ export function topicsBrowserPostureOf(
     served,
     client,
     clientFrom,
-    servedViews: served &&
-      (meta.experimental?.webViewScopedReplication ??
-          meta.experimental?.viewScopedReplication ?? true) === true,
+    servedViews,
   };
 }
 

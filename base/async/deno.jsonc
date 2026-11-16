@@ -12,6 +12,7 @@
   "exports": {
     "./async-local-store": "./src/async-local-store.ts",
     "./defer": "./src/defer.ts",
-    "./sleep": "./src/sleep.ts"
+    "./sleep": "./src/sleep.ts",
+    "./turn": "./src/turn.ts"
   }
 }

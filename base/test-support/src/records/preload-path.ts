@@ -3,23 +3,20 @@
  * where the registration preload lives on disk, and the permissions that
  * preload needs to read the skip list and leave its name map behind.
  *
- * `deno test --preload` takes a path rather than an import-map
- * specifier, and a test task runs with its own package as the working
- * directory, so every caller needs an absolute path rather than a
- * relative one.
+ * `deno test --preload` resolves its module against the working directory
+ * rather than through the import map, and a test task runs with its own
+ * package as the working directory, so the argument names the module by
+ * its absolute `file:` URL. A URL is percent-encoded and holds no
+ * whitespace, so the argument stays one word in a flag list joined with
+ * spaces, as `INTEGRATION_TEST_FLAGS` is.
  */
 
-import { fromFileUrl, isAbsolute } from "@std/path";
+import { isAbsolute } from "@std/path";
 import { repositoryMarker } from "./paths.ts";
 
-/** Absolute path of the module `--preload` is pointed at. */
-export function preloadModulePath(): string {
-  return fromFileUrl(new URL("./preload.ts", import.meta.url));
-}
-
-/** The `--preload=<path>` argument naming that module. */
+/** The `--preload=<url>` argument naming the registration preload. */
 export function preloadArgument(): string {
-  return `--preload=${preloadModulePath()}`;
+  return `--preload=${new URL("./preload.ts", import.meta.url).href}`;
 }
 
 /**

@@ -3,7 +3,9 @@
   "name": "@commonfabric/runtime-client",
   "imports": {
     // Dependency guide: ../../docs/development/DEPENDENCIES.md
-    "@/": "./src/"
+    "@/": "./src/",
+    "core-js/proposals/explicit-resource-management": "npm:core-js@^3.46.0/proposals/explicit-resource-management.js",
+    "core-js/proposals/async-explicit-resource-management": "npm:core-js@^3.46.0/proposals/async-explicit-resource-management.js"
   },
   "tasks": {
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",

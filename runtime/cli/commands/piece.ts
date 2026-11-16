@@ -110,10 +110,12 @@ import {
   partitionVerbListing,
   pathRequiredRefusal,
   PieceConfig,
+  type PieceEntry,
   pieceIdOnlyPathRefusal,
   PieceResultProjectionError,
   PieceVerbReadError,
   recreateSpaceRootPattern,
+  releaseCellConfidentialityByIntent,
   removePiece,
   savePiecePattern,
   searchPieces,
@@ -222,7 +224,9 @@ export function setsrcSuccessLine(
 ): string {
   return `Committed source update for piece ${config.piece} (Pattern Ref: ${
     formatPatternIdentity(update.ref)
-  }, Revision: ${update.revisionId}, Seq: ${update.seq})`;
+  }, Revision: ${update.revisionId}, Seq: ${update.seq})${
+    update.origin === undefined ? "" : `; it follows ${update.origin}`
+  }`;
 }
 
 /** A warning for work which failed after storage accepted the source update. */
@@ -1179,6 +1183,13 @@ export function renderPieceCallOutcome(
     // Invocation JSON — settled, or stopped at "committed" under --no-wait —
     // prose stays on stderr via hint().
     renderOut(JSON.stringify(invocationJson(result.invocation), null, 2));
+    if (result.invocation.withheld) {
+      hintOut(cliText(
+        "Handled; outcome withheld: the handler read data this space does " +
+          "not admit, so whether it committed, and what it returned, is not " +
+          "told.",
+      ));
+    }
     // The address the envelope published, when the runtime wrote a receipt.
     // It leads the detached next steps because it collects the outcome
     // without running the verb again, and it composes into the command named
@@ -1232,7 +1243,8 @@ export function renderPieceCallOutcome(
  * the receipt carried one — a value-less verb omits it rather than reporting
  * `null`, which would be indistinguishable from a verb that returned null.
  * `links` appears only under --show-links: provenance beside the value,
- * never inline in it.
+ * never inline in it. `withheld` appears only for a handling whose outcome is
+ * withheld, which carries no `result`.
  *
  * `receipt` is the one key that does not depend on a readback or a flag: it
  * is the address of the cell holding this outcome, known at commit, so it
@@ -1246,6 +1258,7 @@ export function invocationJson(
     invocation: outcome.id,
     status: outcome.status,
     ...(outcome.deduplicated ? { deduplicated: true } : {}),
+    ...(outcome.withheld ? { withheld: true } : {}),
     ...(outcome.receipt !== undefined ? { receipt: outcome.receipt } : {}),
     ...("result" in outcome && outcome.result !== undefined
       ? { result: outcome.result }
@@ -2307,6 +2320,83 @@ where it leads.`,
   });
 }
 
+/**
+ * `release-by-intent`, which releases named confidentiality clauses stored at
+ * a cell path on the signed request of the space's owner (spec §8.12.7 route
+ * 2d).
+ *
+ * `spelling` carries the meaning it has in {@link buildRecreateRootCommand}.
+ */
+// deno-lint-ignore no-explicit-any
+export function buildReleaseByIntentCommand(spelling: string): Command<any> {
+  // deno-lint-ignore no-explicit-any
+  const command: Command<any> = new Command()
+    .description(
+      cliText(
+        `Release CFC clauses stored at a piece data path, as its space's owner.
+
+Without --clause, the command lists every confidentiality clause stored at the
+path, each with its canonical clause digest and the labels holding it, and the
+document's other stored positions holding any of them, and changes nothing.
+
+With --clause, it releases the clauses named, whoever they stand for: each
+comes off every label stored at the path, the declared label, the labels
+derived from what was written there (existence and membership included), and
+a link's own label. Labels at other paths, an ancestor's included, the value,
+and integrity labels are not changed. The path names one stored position: the
+links it crosses are followed to the document it lands in, a link stored at
+the path is not, and a "*" segment names the wildcard position stored there,
+such as a list's per-element templates, and none of the elements it covers.
+Each other position holding a clause is a release of its own, and the command
+names them.
+
+The command shows the document, the path, and each clause that comes off and
+stays, and asks you to type "release". Only then does it sign the request
+with the identity, which must be the space's owner, and commit the release
+together with a record of it, holding the signed request. The space's owner is
+the owner its access list names; with no access list stored, it is the space's
+own DID, as in a home space; and a stored list naming no valid owner has none,
+so no release is possible there. With --clause it runs only with standard
+input and standard error at a terminal, and only for the space's owner, and
+nothing skips the confirmation. The store checks the signature, the owner,
+and that the labels are still the ones you were shown; a request is used
+once.`,
+      ),
+    )
+    .usage(`${pieceUsage} [path]`)
+    .example(
+      cliText(`cf ${spelling} ${EX_ID} ${EX_COMP_PIECE}`),
+      "List the clauses stored at a result's root, with their digests.",
+    )
+    .example(
+      cliText(
+        `cf ${spelling} ${EX_ID} ${EX_COMP_PIECE} --clause 3gYWzS --clause oYjOtO`,
+      ),
+      "Release two clauses at the root, named by digest prefixes.",
+    )
+    .option("-c,--cell, --piece <cell:string>", PIECE_OPTION_PATH_HELP)
+    .option(
+      "--input",
+      "Release at the piece's input cell instead of result cell (the " +
+        '"#argument" reference suffix spells the same selection)',
+    )
+    .option(
+      "--clause <digest:string>",
+      "The canonical clause digest of a clause to release, or a prefix of " +
+        "it that names one stored clause alone. Repeat for each clause.",
+      { collect: true },
+    )
+    .option(
+      "--json",
+      "Select JSON output explicitly. This command always outputs JSON.",
+    )
+    .arguments("[path:string]");
+  return targetOptions(
+    command.action(releaseCellConfidentialityByIntentFromCommand),
+    { global: false },
+  );
+}
+
 export const piece = targetOptions(
   new Command()
     .name("piece")
@@ -2363,7 +2453,7 @@ export const piece = targetOptions(
   .action(searchPiecesFromCommand)
   /* piece new */
   .command("new", "Create a new piece with a pattern.")
-  .usage(`${spaceUsage} <main>`)
+  .usage(`${spaceUsage} [main]`)
   .example(
     cliText(`cf piece new ${EX_ID} ${EX_COMP} ./main.tsx`),
     `Create a new piece, using ./main.tsx as source.`,
@@ -2384,7 +2474,35 @@ export const piece = targetOptions(
     ),
     `Create a piece and take "project-notes" from whatever it names now.`,
   )
-  .arguments("<main:string>")
+  .example(
+    cliText(
+      `cf piece new ${EX_ID} ${EX_COMP} --from-index <patternId> --pattern-index-url https://index.example`,
+    ),
+    `Create a piece from a published pattern, deployed the way run_pattern deploys one.`,
+  )
+  .arguments("[main:string]")
+  .option(
+    "--from-index <patternId:string>",
+    "Create the piece from this published pattern instead of local source.",
+    {
+      conflicts: [
+        "main-export",
+        "root",
+        "repository",
+        "test",
+        "datafile",
+      ],
+    },
+  )
+  .env(
+    "CF_PATTERN_INDEX_URL=<url:string>",
+    "Base URL of the pattern index --from-index reads.",
+    { prefix: "CF_" },
+  )
+  .option(
+    "--pattern-index-url <url:string>",
+    "Base URL of the pattern index --from-index reads.",
+  )
   .option(
     "--request-key <key:string>",
     "Reuse a creation request after an uncertain result without creating another piece.",
@@ -2567,6 +2685,10 @@ export const piece = targetOptions(
     "Replace the source even when pattern or retained-link schema compatibility cannot be proven, or when the current pattern cannot be loaded at all.",
   )
   .option(
+    "--origin <origin:string>",
+    "Record this origin (a system: ref or fabric URL) with the revision, so the piece follows it from then on. Without it, setsrc detaches the piece.",
+  )
+  .option(
     "--check",
     "Report whether the source could replace the piece's current one, without issuing storage writes. Exits non-zero when it could not.",
   )
@@ -2601,9 +2723,12 @@ the children of system pieces, say:
 
   cf piece follow --cell <profile> system:system/profile-home/profile-home.tsx
 
-Unlike 'setsrc', which detaches, the origin is recorded with the revision.
-Not served yet: against a deployment that serves piece lifecycle verbs the
-command refuses, since the served update takes no origin.
+The origin is recorded with the revision, and the source adopted is what it
+serves now. A plain 'setsrc' detaches instead; 'setsrc --origin' records an
+origin over source you supply. Against a deployment that serves piece
+lifecycle verbs, its serving runtime resolves the origin, reviews what it
+serves, and commits the follow; there, a piece addressed at a scope
+(<id>@user, <id>@session) is followed on your instance of it.
 
 --expect and --expect-revision make the follow conditional on the source state
 a caller inspected ('cf piece inspect --pattern-identity --json' reports both):
@@ -3276,6 +3401,9 @@ export interface PieceCLIOptions {
   test?: string[];
   datafile?: string[];
   dangerouslyAllowIncompatibleSchema?: boolean;
+
+  /** `setsrc`: the origin the piece follows from then on. */
+  origin?: string;
   json?: boolean;
 }
 
@@ -3774,6 +3902,43 @@ export async function setCellCfcLabelFromCommand(
     },
   );
   (deps.render ?? render)(label, { json: true });
+}
+
+/** The options `release-by-intent` takes beyond those `get-label` takes. */
+export interface PieceReleaseByIntentCLIOptions extends PieceLabelCLIOptions {
+  /** The digests, or digest prefixes, of the clauses to release. */
+  clause?: string[];
+}
+
+/** The collaborators the `release-by-intent` action goes through. */
+export interface PieceReleaseByIntentCommandDependencies {
+  releaseCellConfidentialityByIntent?:
+    typeof releaseCellConfidentialityByIntent;
+  render?: typeof render;
+}
+
+export async function releaseCellConfidentialityByIntentFromCommand(
+  options: PieceReleaseByIntentCLIOptions,
+  pathString?: string,
+  deps: PieceReleaseByIntentCommandDependencies = {},
+): Promise<void> {
+  setQuietMode(!!options.quiet);
+  const initialConfig = {
+    ...parsePieceOptions(options, { acceptsPath: true, acceptsArgument: true }),
+    jsonOutput: true,
+  };
+  const { pieceConfig, pathSegments } = resolvePiecePath(
+    options.input ? { ...initialConfig, pieceInput: true } : initialConfig,
+    pathString,
+  );
+  const outcome = await (deps.releaseCellConfidentialityByIntent ??
+    releaseCellConfidentialityByIntent)(
+      pieceConfig,
+      pathSegments,
+      options.clause ?? [],
+      { input: pieceConfig.pieceInput },
+    );
+  (deps.render ?? render)(outcome, { json: true });
 }
 
 export interface PieceListCommandDependencies {
@@ -4905,13 +5070,74 @@ export interface NewPieceCommandDependencies {
  * which options become the naming request `newPiece` receives, and that the
  * address it points a reader at is the slug when there is one.
  */
+/**
+ * Where `cf piece new`'s program comes from: the `main` file, or the
+ * published pattern `--from-index` names, never both and never neither. A
+ * published pattern needs the index to read it from, and a missing one is
+ * refused here rather than when the deploy reaches the network.
+ */
+function newPieceEntry(
+  options: {
+    fromIndex?: string;
+    patternIndexUrl?: string;
+    mainExport?: string;
+    repository?: string;
+    root?: string;
+    test?: string[];
+    datafile?: string[];
+  },
+  main: string | undefined,
+): PieceEntry {
+  if (options.fromIndex === undefined) {
+    if (main === undefined) {
+      throw new ValidationError(
+        "Missing a pattern: pass a source file, or --from-index <patternId>.",
+      );
+    }
+    return localPatternEntry(main, options);
+  }
+  if (main !== undefined) {
+    throw new ValidationError(
+      `--from-index creates the piece from a published pattern; drop the source file "${main}", or drop --from-index.`,
+    );
+  }
+  const patternId = options.fromIndex.trim();
+  if (patternId === "") {
+    throw new ValidationError("--from-index requires a non-blank pattern id.");
+  }
+  const patternIndexUrl = options.patternIndexUrl?.trim();
+  if (patternIndexUrl === undefined || patternIndexUrl === "") {
+    throw new ValidationError(
+      "--from-index needs the pattern index to read from: pass --pattern-index-url <url>, or set CF_PATTERN_INDEX_URL.",
+    );
+  }
+  // The index client appends a function name to the base's path, so it
+  // refuses a base with a query or fragment; refused here too, before the
+  // space root is touched.
+  const base = URL.parse(patternIndexUrl);
+  if (
+    base === null || (base.protocol !== "https:" && base.protocol !== "http:")
+  ) {
+    throw new ValidationError(
+      `--pattern-index-url must be an http(s) URL: ${patternIndexUrl}`,
+    );
+  }
+  if (base.search !== "" || base.hash !== "") {
+    throw new ValidationError(
+      `--pattern-index-url must not carry a query or fragment: ${patternIndexUrl}`,
+    );
+  }
+  return { patternId, patternIndexUrl };
+}
+
 export async function newPieceFromCommand(
   // deno-lint-ignore no-explicit-any
   options: any,
-  main: string,
+  main: string | undefined,
   deps: NewPieceCommandDependencies = {},
 ): Promise<void> {
   setQuietMode(!!options.quiet);
+  const entry = newPieceEntry(options, main);
   const spaceConfig = parseSpaceOptions(options);
   const input = options.inputFile === undefined
     ? undefined
@@ -4924,7 +5150,7 @@ export async function newPieceFromCommand(
   }
   const pieceId = await (deps.newPiece ?? newPiece)(
     spaceConfig,
-    localPatternEntry(main, options),
+    entry,
     {
       start: options.start,
       slug: options.slug,
@@ -4937,9 +5163,12 @@ export async function newPieceFromCommand(
   );
   render(pieceId);
   const browserPieceRef = options.slug ?? pieceId;
+  // A piece from the index has no local source to update from.
+  const updateCode = main === undefined
+    ? ""
+    : `\n  → Update code:     cf piece setsrc --cell ${pieceId} ${main} ...`;
   hint(cliText(`NEXT STEPS:
-  → Open in browser: ${spaceConfig.apiUrl}/${spaceConfig.space}/${browserPieceRef}
-  → Update code:     cf piece setsrc --cell ${pieceId} ${main} ...
+  → Open in browser: ${spaceConfig.apiUrl}/${spaceConfig.space}/${browserPieceRef}${updateCode}
   → Test a callable: cf piece call --cell ${pieceId} <callableName> ...
   → Inspect state:   cf piece inspect --cell ${pieceId} ...`));
 }
@@ -5102,6 +5331,7 @@ export async function setPieceSourceFromCommand(
     {
       dangerouslyAllowIncompatibleSchema:
         options.dangerouslyAllowIncompatibleSchema,
+      ...(options.origin === undefined ? {} : { origin: options.origin }),
     },
   );
   return { config, update };

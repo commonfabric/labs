@@ -16,6 +16,7 @@ import {
   type SpaceInviteSession,
 } from "@commonfabric/runner/space-invites";
 import { settingsForDeployedClient } from "@commonfabric/runner/deployment-meta";
+import { namesInstancesByDefault } from "@commonfabric/runner/instance-naming";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { loadIdentity } from "../lib/identity.ts";
 import { parseSpaceOptions } from "./piece.ts";
@@ -216,37 +217,62 @@ export type InviteStorageOpener = (
   close(): Promise<void>;
 }>;
 
-/**
- * The default `InviteStorageOpener`, over a storage manager of its own at the
- * memory host the deployment's metadata names, as `loadPieces()` opens one.
- */
-const openInviteStorage: InviteStorageOpener = async (
-  { as, apiUrl, space },
-) => {
-  const { memoryHost } = await settingsForDeployedClient({
-    apiUrl,
-    env: Deno.env.get,
-  });
-  const manager = StorageManager.open({ as, memoryHost });
-  const administer = manager.administerInvites?.bind(manager);
-  const redeem = manager.redeemInvite?.bind(manager);
-  return {
-    ...(administer === undefined
-      ? {}
-      : { session: (invite) => administer(space, invite) }),
-    ...(redeem === undefined
-      ? {}
-      : { redeemer: (invite) => redeem(space, invite) }),
-    close: () => manager.close(),
-  };
+/** The storage manager the invitation commands open their sessions on. */
+type InviteStorageManager = ReturnType<typeof StorageManager.open>;
+
+/** How {@link inviteStorageOpener} reaches a deployment, injectable for a test. */
+export interface InviteStorageDeps {
+  settings: typeof settingsForDeployedClient;
+
+  /** Opens the storage manager the sessions are opened on. */
+  open(options: { as: Identity; memoryHost: URL }):
+    & Pick<InviteStorageManager, "setInstanceNames" | "close">
+    & Partial<Pick<InviteStorageManager, "administerInvites" | "redeemInvite">>;
+}
+
+const defaultInviteStorageDeps: InviteStorageDeps = {
+  settings: settingsForDeployedClient,
+  open: (options) => StorageManager.open(options),
 };
+
+/**
+ * Returns the default `InviteStorageOpener`, over a storage manager of its
+ * own at the memory host the deployment's metadata names, as `loadPieces()`
+ * opens one. Its sessions declare the naming mode a runtime given the
+ * deployment's settings would.
+ */
+export function inviteStorageOpener(
+  deps: InviteStorageDeps = defaultInviteStorageDeps,
+): InviteStorageOpener {
+  return async ({ as, apiUrl, space }) => {
+    const { experimental, memoryHost } = await deps.settings({
+      apiUrl,
+      env: Deno.env.get,
+    });
+    const manager = deps.open({ as, memoryHost });
+    // The server admits a session by the naming mode it declares (INV-16),
+    // and no runtime is here to declare one.
+    manager.setInstanceNames(namesInstancesByDefault(experimental));
+    const administer = manager.administerInvites?.bind(manager);
+    const redeem = manager.redeemInvite?.bind(manager);
+    return {
+      ...(administer === undefined
+        ? {}
+        : { session: (invite) => administer(space, invite) }),
+      ...(redeem === undefined
+        ? {}
+        : { redeemer: (invite) => redeem(space, invite) }),
+      close: () => manager.close(),
+    };
+  };
+}
 
 /**
  * Builds the `cf space invite` command group, which sends on the storage
  * `openStorage` opens.
  */
 export function buildSpaceInviteCommand(
-  openStorage: InviteStorageOpener = openInviteStorage,
+  openStorage: InviteStorageOpener = inviteStorageOpener(),
 ) {
   // A client sends on memory sessions on the space as the identity, which
   // reach the process serving the space; they close when the returned value

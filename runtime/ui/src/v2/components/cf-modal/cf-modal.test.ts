@@ -86,12 +86,14 @@ function fixture() {
   const dialog = new HtmlNode();
   const modal = new CFModal();
   modal.preventScroll = false;
+  const shadowRoot = {
+    rendered: true,
+    querySelector: (selector: string) =>
+      shadowRoot.rendered && selector === ".dialog" ? dialog : null,
+  };
   Object.defineProperty(modal, "shadowRoot", {
     configurable: true,
-    value: {
-      querySelector: (selector: string) =>
-        selector === ".dialog" ? dialog : null,
-    },
+    value: shadowRoot,
   });
   const focusCalls: FocusNode[] = [];
   const control = <T extends FocusNode>(node: T): T => {
@@ -102,6 +104,11 @@ function fixture() {
   return {
     document,
     dialog,
+    shadowRoot,
+    /** Runs the animation frames requested so far. */
+    runFrames() {
+      for (const frame of frames.splice(0)) frame(0);
+    },
     modal,
     control,
     focusCalls,
@@ -109,7 +116,7 @@ function fixture() {
       const changes = new Map([["open", modal.open]]);
       modal.open = open;
       modal.willUpdate(changes);
-      modal.updated(changes);
+      modal.updated();
     },
     key(path: FocusNode[], shiftKey = false) {
       const template = modal.render();
@@ -249,6 +256,28 @@ describe("CFModal", () => {
         },
       );
     }
+
+    it("focuses the dialog's first control on the frame after it opens", () => {
+      const first = view.control(new HtmlNode());
+      view.dialog.children = [first, view.control(new HtmlNode())];
+      view.setOpen(true);
+      expectFocus();
+
+      view.runFrames();
+
+      expectFocus(first);
+    });
+
+    it("leaves Tab alone before the dialog has rendered", () => {
+      const first = view.control(new HtmlNode());
+      const last = view.control(new HtmlNode());
+      view.dialog.children = [first, last];
+      view.setOpen(true);
+      view.shadowRoot.rendered = false;
+
+      expect(view.key([last]).defaultPrevented).toBe(false);
+      expectFocus();
+    });
 
     it("leaves empty or closed dialogs out of the keyboard focus cycle", () => {
       view.setOpen(true);

@@ -325,25 +325,27 @@ export class CFIframe extends BaseElement {
         context,
         this.resourceKinds ?? {},
         setup.signal,
-      ).then((bridge) => {
+      ).then(
+        (bridge) => ({ bridge }),
+        (error: unknown) => ({ error }),
+      ).then((outcome) => {
         if (setup.signal.aborted) return;
         this.#contextSetup = undefined;
-        this._contextBridge = bridge;
-        this._contextReady = true;
-        this.requestUpdate();
-      }).catch((error) => {
-        if (setup.signal.aborted) return;
-        this.#contextSetup = undefined;
-        const description = describeFailure(error);
-        this._errorDetails = {
-          description,
-          source: "cf-iframe context",
-          lineno: 0,
-          colno: 0,
-          stacktrace: error instanceof Error
-            ? error.stack ?? description
-            : description,
-        };
+        if ("bridge" in outcome) {
+          this._contextBridge = outcome.bridge;
+          this._contextReady = true;
+        } else {
+          const description = describeFailure(outcome.error);
+          this._errorDetails = {
+            description,
+            source: "cf-iframe context",
+            lineno: 0,
+            colno: 0,
+            stacktrace: outcome.error instanceof Error
+              ? outcome.error.stack ?? description
+              : description,
+          };
+        }
         this.requestUpdate();
       });
     }

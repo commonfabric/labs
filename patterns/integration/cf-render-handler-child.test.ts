@@ -8,6 +8,7 @@
 
 import { createTestSpace, env } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
@@ -60,12 +61,31 @@ describe("cf-render-handler-child", () => {
       result.key("addChild").send({});
       await creator.runtime.idle();
       await creator.synced();
+      // Under server execution the handler and the child's derivation run on
+      // the server, which neither wait above covers, so the waits below are
+      // on the values themselves. Sinking on `doubled` is also what demands
+      // it of the server.
+      const children = result.key("children");
+      await waitForCellValue<unknown[]>(
+        creator.runtime,
+        children,
+        (value) => (value?.length ?? 0) > 0,
+        { stuckLabel: "the parent's first child" },
+      );
       const child = new PieceController(
         creator,
-        result.key("children").key(0).resolveAsCell(),
+        children.key(0).resolveAsCell(),
       );
       childId = child.id;
-      expect(await child.result.get(["doubled"])).toBe(2);
+      const doubled = creator.getResult(child.getCell()).key("doubled");
+      expect(
+        await waitForCellValue<number>(
+          creator.runtime,
+          doubled,
+          (value) => value !== undefined,
+          { stuckLabel: "the child's derived value" },
+        ),
+      ).toBe(2);
     } finally {
       await creator.dispose();
     }

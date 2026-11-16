@@ -278,6 +278,18 @@ describe("create-json-schema", () => {
       expect(isInternedSchema(schema)).toBe(true);
     });
 
+    it("returns an empty schema for a cell given no runtime to resolve it with", () => {
+      const cellWithSchema = runtime.getImmutableCell(
+        space,
+        "cell@value.com",
+        { type: "string", format: "email" },
+      );
+
+      const schema = createJsonSchema(cellWithSchema);
+      expect(schema).toEqual({});
+      expect(isInternedSchema(schema)).toBe(true);
+    });
+
     it("should analyze cell value when no schema is provided", () => {
       const cellWithoutSchema = runtime.getImmutableCell(
         space,

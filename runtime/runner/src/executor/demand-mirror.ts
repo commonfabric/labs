@@ -105,8 +105,9 @@ export class DemandMirror {
   }
 
   #deleteRow(key: string, sessionId: string): void {
-    const rows = this.#rowsByKey.get(key);
-    if (rows === undefined || !rows.delete(sessionId)) return;
+    // Every key of a held session's rows holds a row of that session.
+    const rows = this.#rowsByKey.get(key)!;
+    rows.delete(sessionId);
     this.#rowCount -= 1;
     if (rows.size === 0) this.#rowsByKey.delete(key);
   }
@@ -122,5 +123,6 @@ const sameDemandRow = (
     left.scope === right.scope &&
     left.scopeKey === right.scopeKey &&
     left.root === right.root &&
+    left.piece === right.piece &&
     left.identity?.principal === right.identity?.principal &&
     left.identity?.sessionId === right.identity?.sessionId);

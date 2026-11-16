@@ -9,9 +9,10 @@ describe("preload-path", () => {
   const paths = { spool: "/s", root: "/r" };
   const preload = preloadArgument();
 
-  it("names the preload by an absolute path", () => {
-    expect(preload.startsWith("--preload=/")).toBe(true);
+  it("names the preload by an absolute URL holding no whitespace", () => {
+    expect(preload.startsWith("--preload=file:///")).toBe(true);
     expect(preload.endsWith("/preload.ts")).toBe(true);
+    expect(preload).not.toMatch(/\s/);
   });
 
   it("grants the marker and the spool where the flags name neither permission", () => {

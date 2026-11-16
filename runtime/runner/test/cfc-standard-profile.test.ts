@@ -7,14 +7,13 @@ import {
   cfcAtom,
 } from "@commonfabric/api/cfc";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
-
 import {
   type CfcConfClause,
   type CfcOrClause,
   clauseAlternatives,
-  clausesEqual,
-  normalizeClause,
-} from "../src/cfc/clause.ts";
+} from "@commonfabric/memory/v2/cfc-release-authority";
+
+import { clausesEqual, normalizeClause } from "../src/cfc/clause.ts";
 import { evaluateExchangeRules } from "../src/cfc/exchange-eval.ts";
 import { uniqueCfcAtoms } from "../src/cfc/observation.ts";
 import { buildCfcPolicySnapshot } from "../src/cfc/policy.ts";

@@ -13,6 +13,18 @@ import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { mapsEqual } from "../src/scheduler/topology.ts";
 
 describe("mapsEqual", () => {
+  it("returns false for maps of different sizes", () => {
+    const a = new Map<string, FabricValue>([["k", 1]]);
+    const b = new Map<string, FabricValue>([["k", 1], ["j", 2]]);
+    expect(mapsEqual(a, b)).toBe(false);
+  });
+
+  it("returns false for maps of one size under different keys", () => {
+    const a = new Map<string, FabricValue>([["k", 1]]);
+    const b = new Map<string, FabricValue>([["j", 1]]);
+    expect(mapsEqual(a, b)).toBe(false);
+  });
+
   it("treats maps equal when values are structurally equal", () => {
     const a = new Map<string, FabricValue>([["k", 1]]);
     const b = new Map<string, FabricValue>([["k", 1]]);

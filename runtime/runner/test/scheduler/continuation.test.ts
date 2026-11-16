@@ -32,7 +32,7 @@ describe("continuation", () => {
       setScheduled: (value) => scheduled.push(value),
       resetSettlingTracker: () => {},
       resetConvergenceHoldPasses: () => {},
-      setPendingQueueTaskTimer: () => {},
+      setQueuedPass: () => {},
       execute: () => executes++,
     } satisfies ExecuteContinuationState;
 

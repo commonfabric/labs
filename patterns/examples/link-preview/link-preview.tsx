@@ -1,10 +1,23 @@
-import { computed, type Default, NAME, pattern, UI } from "commonfabric";
+import {
+  computed,
+  type Default,
+  NAME,
+  pattern,
+  UI,
+  type VNode,
+} from "commonfabric";
 
 export interface LinkPreviewInput {
-  url: string | Default<"https://github.com">;
+  url?: string | Default<"https://github.com">;
 }
 
-export const LinkPreview = pattern<LinkPreviewInput, LinkPreviewInput>(
+export interface LinkPreviewOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  url: string;
+}
+
+export const LinkPreview = pattern<LinkPreviewInput, LinkPreviewOutput>(
   ({ url }) => {
     return {
       [NAME]: computed(() => `Link Preview: ${url}`),

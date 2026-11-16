@@ -234,6 +234,15 @@ Deno.test("BuildConfig resolves workspace paths against the root", async () => {
       config.toolshedServingWorkerPath(),
       join(root, "runtime", "toolshed", "lib", "serving-worker.ts"),
     );
+    assertEquals(
+      config.compileWorkerPath(),
+      join(root, "runtime", "runner", "src", "harness", "compile-worker.ts"),
+    );
+    // `deno compile` follows no worker's module, so each worker entry the
+    // toolshed starts is embedded by name.
+    assert(
+      config.includePaths("toolshed").includes(config.compileWorkerPath()),
+    );
     assertEquals(config.fusePackagePath(), join(root, "runtime", "fuse"));
     assertEquals(config.distDir(), join(root, "dist"));
     assertEquals(config.distPath("cf"), join(root, "dist", "cf"));
@@ -279,6 +288,7 @@ Deno.test("the toolshed leaves out the pattern files it never serves", async () 
       join(patterns, "iframe-game", "interaction.browser.test.ts"),
       join(patterns, "integration", "helpers.ts"),
       join(patterns, "apps", "topics", "tools", "topics.ts"),
+      join(patterns, "tools", "test-support", "iframe-guest.ts"),
       join(patterns, "baselines", "counter", "counter.tsx", "a.json"),
       join(connector, "logic.test.ts"),
     ];
@@ -688,7 +698,7 @@ Deno.test("runBuildBinaries preserves the legacy CLI-only entry point", async ()
       "--allow-net",
       "--allow-write",
       "--allow-run",
-      "--v8-flags=--max-old-space-size=8192",
+      "--v8-flags=--perf-basic-prof-only-functions,--interpreted-frames-native-stack",
     ]);
   } finally {
     await Deno.remove(root, { recursive: true });

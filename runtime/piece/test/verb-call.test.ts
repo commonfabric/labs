@@ -5,10 +5,12 @@ import {
   type Cell,
   type NormalizedFullLink,
   Runtime,
+  type sendEvent,
 } from "@commonfabric/runner";
+import { withheldStatusTxViewForTestingOnly } from "@commonfabric/runner/for-testing-only";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
-import { callVerb } from "../src/verb-call.ts";
+import { callVerb, sendVerbEvent } from "../src/verb-call.ts";
 
 const signer = await Identity.fromPassphrase("piece verb-call");
 
@@ -145,6 +147,86 @@ describe("verb-call", () => {
       expect(call).not.toHaveProperty("receipt");
       expect(call).not.toHaveProperty("result");
       expect(await total()).toBe(3);
+    });
+  });
+
+  describe("sendVerbEvent()", () => {
+    /**
+     * A `sendEvent` that settles as a client under server execution does:
+     * it reports the append delivered with the local echo's transaction,
+     * which failed, and then settles the commit callback with the served
+     * handling's outcome, which failed when `served` is `"failed"`, and is
+     * the echo's own, as a runtime with no speculation overlay reports it,
+     * when `served` is `"echo"`.
+     */
+    const servedAfterFailedEcho =
+      (served: "handled" | "failed" | "echo" | "withheld"): typeof sendEvent =>
+      (_stream, _event, onCommit, options) => {
+        const echo = runtime.edit();
+        echo.abort(new Error("the local echo found no handler"));
+        const outcome = served === "echo" ? echo : runtime.edit();
+        if (served === "failed") {
+          outcome.abort(new Error("the served handling threw"));
+        }
+        void outcome.commit().settled.then(() => {
+          options?.onAppended?.({ delivered: true }, echo);
+          onCommit?.(
+            served === "withheld"
+              ? withheldStatusTxViewForTestingOnly(outcome)
+              : outcome,
+          );
+        });
+      };
+
+    it("leaves a delivered append's outcome to the served handling when only the local echo failed", async () => {
+      const sent = await sendVerbEvent(cell.key("add" as never), {
+        amount: 1,
+      }, { sendEvent: servedAfterFailedEcho("handled") });
+
+      expect(sent.status).toBe("committed");
+      if (sent.status !== "committed") return;
+      expect(sent.deduplicated).toBe(false);
+      expect(await sent.handled()).toEqual({ status: "handled" });
+    });
+
+    it("reports the served handling's failure after a delivered append", async () => {
+      const sent = await sendVerbEvent(cell.key("add" as never), {
+        amount: 1,
+      }, { sendEvent: servedAfterFailedEcho("failed") });
+
+      expect(sent.status).toBe("committed");
+      if (sent.status !== "committed") return;
+      expect((await sent.handled()).status).toBe("failed");
+    });
+
+    it("reports a served handling whose outcome is withheld as `withheld`", async () => {
+      const sent = await sendVerbEvent(cell.key("add" as never), {
+        amount: 1,
+      }, { sendEvent: servedAfterFailedEcho("withheld") });
+
+      expect(sent.status).toBe("committed");
+      if (sent.status !== "committed") return;
+      expect(await sent.handled()).toEqual({ status: "withheld" });
+    });
+
+    it("returns `withheld` from `callVerb()` for such a handling, and reads no receipt", async () => {
+      const call = await callVerb(runtime, piece, "add", { amount: 1 }, {
+        sendEvent: servedAfterFailedEcho("withheld"),
+      });
+
+      expect(call.status).toBe("withheld");
+      expect(call).not.toHaveProperty("result");
+      expect(call).not.toHaveProperty("receipt");
+    });
+
+    it("reports a failed echo as the handling's outcome when the commit callback settles with it", async () => {
+      const sent = await sendVerbEvent(cell.key("add" as never), {
+        amount: 1,
+      }, { sendEvent: servedAfterFailedEcho("echo") });
+
+      expect(sent.status).toBe("committed");
+      if (sent.status !== "committed") return;
+      expect((await sent.handled()).status).toBe("failed");
     });
   });
 });

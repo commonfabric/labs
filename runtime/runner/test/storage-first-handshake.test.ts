@@ -22,6 +22,7 @@ import {
 } from "../src/storage/v2-remote-session.ts";
 import { type SessionFactory, StorageManager } from "../src/storage/v2.ts";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
+import { Runtime } from "../src/runtime.ts";
 
 const user = await Identity.fromPassphrase("first-handshake user");
 const SPACE = "did:key:z6Mk-first-handshake-space" as MemorySpace;
@@ -150,6 +151,173 @@ describe("storage-first-handshake", () => {
       const again = await manager.open(SPACE).sync(`of:${SPACE}`);
       expect(again.error).toMatchObject(failure);
       expect(dialed).toHaveLength(MEMORY_FIRST_HANDSHAKE_ATTEMPTS);
+    });
+
+    it("dials a space that never connected again on a retry, and its loads then succeed", async () => {
+      const server = StandaloneMemoryServer.start({
+        namesInstances: namesInstancesByDefault,
+        connectionAuth: true,
+      });
+      cleanups.push(() => server.close());
+      // Every dial of the first open is refused; the host answers after that.
+      const { factory, dialed } = refusingFactory(
+        server.url,
+        MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
+        false,
+      );
+      const manager = new TestStorageManager(factory);
+      cleanups.push(() => manager.close());
+      const first = await manager.open(SPACE).sync(`of:${SPACE}`);
+      expect(isFirstHandshakeFailure(manager.spaceSessionError(SPACE)))
+        .toBe(true);
+      expect(first.error).toBeDefined();
+
+      // The host answers now, but a load alone does not dial it.
+      const latched = await manager.open(SPACE).sync(`of:${SPACE}`);
+      expect(latched.error).toBeDefined();
+      expect(dialed).toHaveLength(MEMORY_FIRST_HANDSHAKE_ATTEMPTS);
+
+      expect(manager.unreachableSpaces()).toEqual([SPACE]);
+      const changed: MemorySpace[] = [];
+      manager.subscribeSpaceAccessChange((space) => changed.push(space));
+      await manager.retrySpaceAccess(SPACE);
+      expect(changed).toEqual([SPACE]);
+      expect(dialed).toHaveLength(MEMORY_FIRST_HANDSHAKE_ATTEMPTS + 1);
+      expect(manager.spaceSessionError(SPACE)).toBeUndefined();
+      expect(manager.unreachableSpaces()).toEqual([]);
+      const after = await manager.open(SPACE).sync(`of:${SPACE}`);
+      expect(after.error).toBeUndefined();
+    });
+
+    it("rejects a retry whose dials are all refused again, and leaves the space failing without dialing", async () => {
+      const host = new URL(`http://127.0.0.1:${refuser.addr.port}`);
+      const { factory, dialed } = refusingFactory(host, Infinity, false);
+      const manager = new TestStorageManager(factory);
+      cleanups.push(() => manager.close());
+      await manager.open(SPACE).sync(`of:${SPACE}`);
+      const changed: MemorySpace[] = [];
+      manager.subscribeSpaceAccessChange((space) => changed.push(space));
+
+      const error = await manager.retrySpaceAccess(SPACE).then(
+        () => undefined,
+        (error: Error) => error,
+      );
+      expect(isFirstHandshakeFailure(error)).toBe(true);
+      expect(changed).toEqual([]);
+      expect(dialed).toHaveLength(2 * MEMORY_FIRST_HANDSHAKE_ATTEMPTS);
+      expect(isFirstHandshakeFailure(manager.spaceSessionError(SPACE)))
+        .toBe(true);
+
+      const again = await manager.open(SPACE).sync(`of:${SPACE}`);
+      expect(again.error).toBeDefined();
+      expect(dialed).toHaveLength(2 * MEMORY_FIRST_HANDSHAKE_ATTEMPTS);
+    });
+
+    for (const asked of ["by the load that failed", "after it failed"]) {
+      it(`loads again, on a retry that connects, a document asked for ${asked}`, async () => {
+        const server = StandaloneMemoryServer.start({
+          namesInstances: namesInstancesByDefault,
+          connectionAuth: true,
+        });
+        cleanups.push(() => server.close());
+        // The user's own space, whose access-list document its first open
+        // writes: a document there for the retry to load.
+        const own = user.did() as MemorySpace;
+        const seeder = new TestStorageManager(
+          refusingFactory(server.url, 0, false).factory,
+        );
+        cleanups.push(() => seeder.close());
+        expect((await seeder.open(own).sync(`of:${own}`)).error)
+          .toBeUndefined();
+        const seeded = seeder.open(own).replica.getDocument(`of:${own}`);
+        expect(seeded).toBeDefined();
+
+        const { factory } = refusingFactory(
+          server.url,
+          MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
+          false,
+        );
+        const manager = new TestStorageManager(factory);
+        cleanups.push(() => manager.close());
+        const replica = manager.open(own).replica;
+        // The load whose open fails the handshake, and then, for the second
+        // case, a load the failed space refuses without dialing.
+        const first: `of:${string}` = asked === "by the load that failed"
+          ? `of:${own}`
+          : "of:first-handshake-other";
+        expect((await manager.open(own).sync(first)).error).toBeDefined();
+        if (first !== `of:${own}`) {
+          expect((await manager.open(own).sync(`of:${own}`)).error)
+            .toBeDefined();
+        }
+        expect(replica.getDocument(`of:${own}`)).toBeUndefined();
+
+        // No load after the retry: the retry itself loads it.
+        await manager.retrySpaceAccess(own);
+        expect(replica.getDocument(`of:${own}`)?.value).toEqual(
+          seeded?.value,
+        );
+      });
+    }
+
+    it("leaves a space that never connected alone on an ACL notice", async () => {
+      const server = StandaloneMemoryServer.start({
+        namesInstances: namesInstancesByDefault,
+        connectionAuth: true,
+      });
+      cleanups.push(() => server.close());
+      const { factory, dialed } = refusingFactory(
+        server.url,
+        MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
+        false,
+      );
+      const manager = new TestStorageManager(factory);
+      cleanups.push(() => manager.close());
+      await manager.open(SPACE).sync(`of:${SPACE}`);
+      manager.noteSpaceAclChanged(SPACE);
+      const after = await manager.open(SPACE).sync(`of:${SPACE}`);
+      expect(after.error).toBeDefined();
+      expect(dialed).toHaveLength(MEMORY_FIRST_HANDSHAKE_ATTEMPTS);
+      expect(isFirstHandshakeFailure(manager.spaceSessionError(SPACE)))
+        .toBe(true);
+    });
+
+    it("leaves a space that connected alone on a retry", async () => {
+      const server = StandaloneMemoryServer.start({
+        namesInstances: namesInstancesByDefault,
+        connectionAuth: true,
+      });
+      cleanups.push(() => server.close());
+      const { factory, dialed } = refusingFactory(server.url, 0, false);
+      const manager = new TestStorageManager(factory);
+      cleanups.push(() => manager.close());
+      const load = await manager.open(SPACE).sync(`of:${SPACE}`);
+      expect(load.error).toBeUndefined();
+      const changed: MemorySpace[] = [];
+      manager.subscribeSpaceAccessChange((space) => changed.push(space));
+      await manager.retrySpaceAccess(SPACE);
+      expect(dialed).toHaveLength(1);
+      expect(changed).toEqual([]);
+    });
+  });
+
+  describe("Runner", () => {
+    it("fails a start in a space that never connected with that failure, not as an empty cell", async () => {
+      const host = new URL(`http://127.0.0.1:${refuser.addr.port}`);
+      const { factory } = refusingFactory(host, Infinity, false);
+      const manager = new TestStorageManager(factory);
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: manager,
+      });
+      cleanups.push(() => manager.close());
+      cleanups.push(() => runtime.dispose());
+      const cell = runtime.getCell<unknown>(SPACE, "first handshake start");
+      const error = await runtime.runner.start(cell).then(
+        () => undefined,
+        (error: Error) => error,
+      );
+      expect(isFirstHandshakeFailure(error)).toBe(true);
     });
   });
 });

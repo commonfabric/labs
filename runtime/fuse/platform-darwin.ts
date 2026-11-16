@@ -9,11 +9,10 @@ import {
   COMMON_SYMBOLS,
   createFuseArgs,
   type FileInfo,
-  type FuseLib,
   type FusePlatform,
-  type FuseProvider,
+  type LoadedFuse,
+  loadFirstLibrary,
   makeWriteEntryParam,
-  type MountHandle,
   msToTimespec,
   type StatOpts,
 } from "./platform.ts";
@@ -46,7 +45,7 @@ const DARWIN_SYMBOLS = {
   },
 } as const;
 
-type DarwinLib = Deno.DynamicLibrary<typeof DARWIN_SYMBOLS>;
+export type DarwinLib = Deno.DynamicLibrary<typeof DARWIN_SYMBOLS>;
 
 // struct stat (macOS, 144 bytes):
 //   dev_t st_dev      @ 0   (i32)
@@ -90,12 +89,8 @@ function writeStat(buf: ArrayBuffer, opts: StatOpts): void {
 // fuse_entry_param (176 bytes)
 //
 
-const ENTRY_PARAM_SIZE = 176;
-const writeEntryParam = makeWriteEntryParam(
-  writeStat,
-  STAT_SIZE,
-  ENTRY_PARAM_SIZE,
-);
+const ENTRY_PARAM_SIZE = 16 + STAT_SIZE + 16;
+const writeEntryParam = makeWriteEntryParam(writeStat, STAT_SIZE);
 
 // fuse_file_info (macOS 64-bit, 40 bytes):
 //   int flags            @  0  (i32)
@@ -184,43 +179,71 @@ const OPS_OFFSETS = {
 const FUSE_ARGS_STRUCT_SIZE = 24;
 
 //
-// Module state
+// Loading libfuse
 //
 
-let fullLib: DarwinLib | null = null;
-let loadedProvider: FuseProvider = "unknown";
+/**
+ * Loads FUSE-T, or macFUSE where FUSE-T is not installed, from the first of
+ * `paths` that `load` opens. FUSE v2 mounts a channel first, creates the
+ * session over it, and notifies the kernel through the channel.
+ */
+export function openDarwinFuse(
+  load: (path: string) => DarwinLib = (path) =>
+    Deno.dlopen(path, DARWIN_SYMBOLS),
+  paths: readonly string[] = darwinLibfusePaths(),
+): LoadedFuse {
+  return loadFirstLibrary(
+    paths,
+    load,
+    (lib, path) => ({
+      symbols: lib.symbols,
+      provider: path.includes("libfuse-t") ? "fuse-t" : "macfuse",
+      mount(mountpoint, argsBuf, opsBuf, opsSize) {
+        const chan = lib.symbols.fuse_mount(
+          mountpoint,
+          Deno.UnsafePointer.of(new Uint8Array(argsBuf)),
+        );
+        if (!chan) {
+          throw new Error(
+            "fuse_mount failed. Is the mountpoint valid? Is macFUSE installed?",
+          );
+        }
+        const session = lib.symbols.fuse_lowlevel_new(
+          Deno.UnsafePointer.of(new Uint8Array(argsBuf)),
+          Deno.UnsafePointer.of(new Uint8Array(opsBuf)),
+          opsSize,
+          null,
+        );
+        if (!session) {
+          lib.symbols.fuse_unmount(mountpoint, chan);
+          throw new Error("fuse_lowlevel_new failed");
+        }
+        lib.symbols.fuse_session_add_chan(session, chan);
+        return { session, notifyTarget: chan };
+      },
+      unmount(handle, mountpoint) {
+        lib.symbols.fuse_unmount(mountpoint, handle.notifyTarget);
+      },
+      cleanup(handle, mountpoint, alreadyUnmounted) {
+        lib.symbols.fuse_session_remove_chan(handle.notifyTarget);
+        lib.symbols.fuse_session_destroy(handle.session);
+        if (!alreadyUnmounted) {
+          lib.symbols.fuse_unmount(mountpoint, handle.notifyTarget);
+        }
+      },
+    }),
+    `Could not open libfuse. Install FUSE-T (recommended) or macFUSE:\n` +
+      `  brew install fuse-t\n` +
+      `  brew install --cask macfuse\n`,
+  );
+}
 
 //
 // Platform implementation
 //
 
 const darwinPlatform: FusePlatform = {
-  provider() {
-    return loadedProvider;
-  },
-
-  openFuse(): FuseLib {
-    if (fullLib) return fullLib as unknown as FuseLib;
-
-    const errors: string[] = [];
-    for (const path of darwinLibfusePaths()) {
-      try {
-        fullLib = Deno.dlopen(path, DARWIN_SYMBOLS);
-        loadedProvider = path.includes("libfuse-t") ? "fuse-t" : "macfuse";
-        console.log(`Loaded ${path}`);
-        return fullLib as unknown as FuseLib;
-      } catch (e) {
-        errors.push(`  ${path}: ${e}`);
-      }
-    }
-
-    throw new Error(
-      `Could not open libfuse. Install FUSE-T (recommended) or macFUSE:\n` +
-        `  brew install fuse-t\n` +
-        `  brew install --cask macfuse\n` +
-        `Tried:\n${errors.join("\n")}`,
-    );
-  },
+  openFuse: () => openDarwinFuse(),
 
   STAT_SIZE,
   ENTRY_PARAM_SIZE,
@@ -345,67 +368,6 @@ const darwinPlatform: FusePlatform = {
           newNamePtr,
         ),
     );
-  },
-
-  mount(
-    _lib: FuseLib,
-    mountpoint: Uint8Array,
-    argsBuf: ArrayBuffer,
-    opsBuf: ArrayBuffer,
-    opsSize: bigint,
-  ): MountHandle {
-    const lib = fullLib!;
-
-    // Cast Uint8Array to BufferSource for Deno FFI "buffer" params
-    const mp = mountpoint as unknown as BufferSource;
-
-    const chan = lib.symbols.fuse_mount(
-      mp,
-      Deno.UnsafePointer.of(new Uint8Array(argsBuf)),
-    );
-    if (!chan) {
-      throw new Error(
-        "fuse_mount failed. Is the mountpoint valid? Is macFUSE installed?",
-      );
-    }
-
-    const session = lib.symbols.fuse_lowlevel_new(
-      Deno.UnsafePointer.of(new Uint8Array(argsBuf)),
-      Deno.UnsafePointer.of(new Uint8Array(opsBuf)),
-      opsSize,
-      null,
-    );
-    if (!session) {
-      lib.symbols.fuse_unmount(mp, chan);
-      throw new Error("fuse_lowlevel_new failed");
-    }
-
-    lib.symbols.fuse_session_add_chan(session, chan);
-
-    return { session, notifyTarget: chan };
-  },
-
-  unmount(
-    _lib: FuseLib,
-    handle: MountHandle,
-    mountpoint: Uint8Array,
-  ): void {
-    const mp = mountpoint as unknown as BufferSource;
-    fullLib!.symbols.fuse_unmount(mp, handle.notifyTarget);
-  },
-
-  cleanup(
-    lib: FuseLib,
-    handle: MountHandle,
-    mountpoint: Uint8Array,
-    alreadyUnmounted: boolean,
-  ): void {
-    const mp = mountpoint as unknown as BufferSource;
-    fullLib!.symbols.fuse_session_remove_chan(handle.notifyTarget);
-    lib.symbols.fuse_session_destroy(handle.session);
-    if (!alreadyUnmounted) {
-      fullLib!.symbols.fuse_unmount(mp, handle.notifyTarget);
-    }
   },
 };
 

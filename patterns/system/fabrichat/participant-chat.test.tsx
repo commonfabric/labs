@@ -2,8 +2,8 @@
  * Starting a direct chat from a FabriChat room's participants. A participant
  * other than the viewer, whose profile attests a principal, offers a chat, and
  * starting one asks the viewer's manager for a direct room with that
- * principal. A participant whose profile points at no inbox is offered
- * nothing, so a notice is queued for them. Each person writes their own
+ * principal. A participant whose profile points at no inbox is sent nothing,
+ * and, named by their profile, gets no notice. Each person writes their own
  * profile here, so its label names them, as a Fabric profile's does.
  */
 import {
@@ -272,12 +272,11 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           setup.aliceDid.get() !== ""
         ),
       },
-      // Her profile points at no inbox, so the room isn't offered to her,
-      // and a notice is queued for her instead.
+      // Her profile points at no inbox, so the room is sent nowhere, and,
+      // since the start named her profile, no notice is queued for her.
       {
         assertion: assert(() =>
-          notices.get().length === 1 &&
-          notices.get()[0]?.recipient === setup.aliceDid.get()
+          manager.rooms.length === 1 && notices.get().length === 0
         ),
       },
       // A chip an older room rendered names her by principal instead, and

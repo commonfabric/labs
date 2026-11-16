@@ -142,11 +142,14 @@ describe("served-handler-child", () => {
     expect(await sent.handled()).toEqual({ status: "handled" });
   };
 
-  /** Makes a parent, has it add a child, and returns a client's cell for it. */
-  const addChildOnServer = async (
+  /**
+   * Makes a parent and has it add a child, and returns a client's cell for the
+   * parent's list of children, which the client has not read.
+   */
+  const addChildUnread = async (
     pieces: PiecesController,
     title: string,
-  ): Promise<Cell<any>> => {
+  ): Promise<Cell<unknown>> => {
     const { pieceId } = await host.runLifecycleVerb(space, {
       name: "instantiate",
       run: (runtime) =>
@@ -163,7 +166,15 @@ describe("served-handler-child", () => {
     addChildVerb = parent.key("addChild" as never)
       .asSchemaFromLinks() as Cell<unknown>;
     await send(addChildVerb, { title });
-    const children = parent.key("children" as never) as Cell<unknown>;
+    return parent.key("children" as never) as Cell<unknown>;
+  };
+
+  /** Makes a parent, has it add a child, and returns a client's cell for it. */
+  const addChildOnServer = async (
+    pieces: PiecesController,
+    title: string,
+  ): Promise<Cell<any>> => {
+    const children = await addChildUnread(pieces, title);
     expect(await pullFromServer(pieces.runtime, children)).toBe(true);
     return (children as Cell<any>).key(0).resolveAsCell().asSchema(
       CHILD_SCHEMA,
@@ -184,10 +195,84 @@ describe("served-handler-child", () => {
     });
 
   it("stops running once the handler's transaction commits", async () => {
+    // A client's read of the list can demand the child, so the serving runtime
+    // reads the link to it here, before any client reads the list.
+    const pieces = await clientPieces();
+    const children = await addChildUnread(pieces, "first");
+
+    const onServer = await host.runLifecycleVerb(space, {
+      name: "inspect",
+      run: async (runtime) => {
+        const list = runtime.getCellFromLink(
+          children.getAsNormalizedFullLink(),
+        ) as Cell<any>;
+        await list.sync();
+        const child = list.key(0).resolveAsCell();
+        return {
+          id: child.getAsNormalizedFullLink().id,
+          running: runtime.runner.isRunning(child),
+        };
+      },
+    });
+    expect(onServer.running).toBe(false);
+
+    // What the serving runtime inspected is the child a client reads.
+    expect(await pullFromServer(pieces.runtime, children)).toBe(true);
+    const child = (children as Cell<any>).key(0).resolveAsCell();
+    expect(onServer.id).toBe(child.getAsNormalizedFullLink().id);
+  });
+
+  describe("after a client reads the list that links to it", () => {
+    // A link to the child names its result document, which a read of the list
+    // is sent whatever its schema. A read of each child's title is sent the
+    // child's argument too, which holds an input rather than a value the child
+    // derives, and the title, which the handler wrote.
+
+    /**
+     * Reads `children` under `schema`, and returns what the read found of the
+     * child and whether the child then runs.
+     */
+    const runsAfterReading = async (
+      schema: Record<string, unknown> | undefined,
+    ): Promise<{ running: boolean; read: unknown }> => {
+      const pieces = await clientPieces();
+      const children = await addChildUnread(pieces, "first");
+      const list =
+        (schema === undefined
+          ? children
+          : children.asSchema(schema as never)) as Cell<any>;
+      expect(await pullFromServer(pieces.runtime, list)).toBe(true);
+      const read = list.get()?.[0];
+      const child = (children as Cell<any>).key(0).resolveAsCell();
+      const running = await runningOnServer(child.getAsNormalizedFullLink());
+      return { running, read };
+    };
+
+    it("leaves the child stopped for a read with no schema of its own", async () => {
+      const { running } = await runsAfterReading(undefined);
+      expect(running).toBe(false);
+    });
+
+    it("leaves the child stopped for a read of each child's title", async () => {
+      const { running, read } = await runsAfterReading({
+        type: "array",
+        items: { type: "object", properties: { title: { type: "string" } } },
+      });
+      expect(read).toEqual({ title: "first" });
+      expect(running).toBe(false);
+    });
+  });
+
+  it("runs again once a client tracks a value it derives", async () => {
     const pieces = await clientPieces();
     const child = await addChildOnServer(pieces, "first");
+    const upper = child.key("upper") as Cell<unknown>;
+    const cancel = upper.sink(() => {});
+    expect(await pullFromServer(pieces.runtime, upper)).toBe(true);
+    expect(upper.get()).toBe("FIRST");
 
-    expect(await runningOnServer(child.getAsNormalizedFullLink())).toBe(false);
+    expect(await runningOnServer(child.getAsNormalizedFullLink())).toBe(true);
+    cancel();
   });
 
   it("keeps running when a client demands its document at the commit", async () => {

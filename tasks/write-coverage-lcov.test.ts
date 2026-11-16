@@ -7,6 +7,7 @@ import {
   normalizeLcovInstancePaths,
   parseFilesMissingTranspiledSource,
   parseFilesWithNoSource,
+  relativeLcovSourcePaths,
 } from "./write-coverage-lcov.ts";
 import { isTrackedSourcePath } from "./coverage-metrics.ts";
 
@@ -25,6 +26,28 @@ Deno.test("normalizeLcovInstancePaths strips a per-instance query from SF lines"
 Deno.test("normalizeLcovInstancePaths leaves a plain path and non-SF lines unchanged", () => {
   const input = "SF:/a/b/foo.ts\nDA:1,1\nFN:2,x\nend_of_record";
   assertEquals(normalizeLcovInstancePaths(input), input);
+});
+
+Deno.test("relativeLcovSourcePaths makes a path inside the root relative to it", () => {
+  assertEquals(
+    relativeLcovSourcePaths(
+      [
+        "SF:/home/me/checkout 🦆/runtime/a/mod.ts",
+        "DA:1,1",
+        "end_of_record",
+        "SF:/home/me/checkout 🦆 other/b.ts",
+        "SF:/elsewhere/c.ts",
+      ].join("\n"),
+      "/home/me/checkout 🦆",
+    ),
+    [
+      "SF:runtime/a/mod.ts",
+      "DA:1,1",
+      "end_of_record",
+      "SF:/home/me/checkout 🦆 other/b.ts",
+      "SF:/elsewhere/c.ts",
+    ].join("\n"),
+  );
 });
 
 //

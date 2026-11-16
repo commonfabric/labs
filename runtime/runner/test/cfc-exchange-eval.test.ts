@@ -3,15 +3,14 @@ import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
-
-import type { AtomPattern } from "../src/cfc/atom-pattern.ts";
 import {
   type CfcConfClause,
   type CfcOrClause,
   clauseAlternatives,
-  clausesEqual,
-  normalizeClause,
-} from "../src/cfc/clause.ts";
+} from "@commonfabric/memory/v2/cfc-release-authority";
+
+import type { AtomPattern } from "../src/cfc/atom-pattern.ts";
+import { clausesEqual, normalizeClause } from "../src/cfc/clause.ts";
 import {
   DEFAULT_EXCHANGE_FUEL,
   evaluateExchangeRules,

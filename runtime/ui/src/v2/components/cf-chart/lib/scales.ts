@@ -36,6 +36,17 @@ export type YScale =
   | ScaleLogarithmic<number, number>;
 
 /**
+ * The pixel position of `value` along `xScale`, which on a band scale is the
+ * center of the value's band.
+ */
+export function xPosition(xScale: XScale, value: unknown): number {
+  if ("bandwidth" in xScale) {
+    return (xScale(String(value)) ?? 0) + xScale.bandwidth() / 2;
+  }
+  return xScale(value instanceof Date ? value : Number(value));
+}
+
+/**
  * Extract data points from a mark config or element.
  * Handles both number[] (auto-indexed) and object[] (keyed) data.
  */
@@ -44,7 +55,7 @@ export function extractDataPoints(
   xKey?: string,
   yKey?: string,
 ): DataPoint[] {
-  if (!data || !Array.isArray(data) || data.length === 0) return [];
+  if (!Array.isArray(data) || data.length === 0) return [];
 
   // number[] - auto-indexed
   if (typeof data[0] === "number") {
@@ -226,9 +237,7 @@ function createXScale(
         );
       } else {
         // Fallback: use override as explicit domain list
-        domain = Array.isArray(domainOverride)
-          ? domainOverride.map(String)
-          : categories;
+        domain = domainOverride.map(String);
       }
     } else {
       domain = categories;

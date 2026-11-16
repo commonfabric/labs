@@ -774,12 +774,6 @@ function createViewProxy<T>(
                   path: [...link.path, "length"],
                 }) as number;
 
-                if (typeof length !== "number") {
-                  throw new Error(
-                    `Array length is not a number for ${prop} operation`,
-                  );
-                }
-
                 const elements = currentValue(true) as unknown[];
                 const copy = new Array(length);
                 for (let i = 0; i < length; i++) {

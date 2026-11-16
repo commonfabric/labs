@@ -589,7 +589,9 @@ describe("cf space", () => {
         lines.find((line) => line.startsWith(prefix))!.slice(prefix.length);
       expect(await shellWords(after("cf space verify "))).toEqual([real]);
       expect(await shellWords(after("cf space reset  "))).toEqual([real]);
-      const memoryDir = after("HOST=127.0.0.1 MEMORY_DIR=").split(" ./")[0];
+      const memoryDir = after("HOST=127.0.0.1 MEMORY_DIR=").split(
+        " TOOLSHED_RELEASED_AT=",
+      )[0];
       expect(await shellWords(memoryDir)).toEqual([
         toFileUrl(`${real}/`).href,
       ]);

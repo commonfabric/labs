@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/api";
 
-import type { WatchSpec } from "../v2.ts";
+import type { EntityDocument, WatchSpec } from "../v2.ts";
 import {
   type Client,
   connect,
@@ -49,11 +49,29 @@ describe("Server", () => {
   let writer: SpaceSession;
   let localSeq: number;
 
-  /** Mounts a session of the space as `principal`. */
-  async function mount(principal?: string): Promise<SpaceSession> {
-    const client = await connect({ transport: loopback(server) });
+  /**
+   * Mounts a session of the space as `principal`, over a connection the
+   * server takes as one from this process unless `inProcess` is `false`,
+   * declaring the serving binding when `actingAs` names it.
+   */
+  async function mount(
+    principal?: string,
+    { inProcess = true, actingAs, demand }: {
+      inProcess?: boolean;
+      actingAs?: "space-owner";
+      demand?: boolean;
+    } = {},
+  ): Promise<SpaceSession> {
+    const client = await connect({
+      transport: loopback(server, { inProcess }),
+      ...(demand === undefined ? {} : { demand }),
+    });
     clients.push(client);
-    return await client.mount(space, {}, openAs(principal));
+    return await client.mount(
+      space,
+      actingAs === undefined ? {} : { actingAs },
+      openAs(principal),
+    );
   }
 
   /** Commits `value` to `id` and resolves once `view` has the push. */
@@ -80,6 +98,33 @@ describe("Server", () => {
     );
     expect(share).toBeDefined();
     return share!;
+  }
+
+  /**
+   * Writes `docs`, links each from `of:root`, and returns the rows of a session
+   * watching `of:root`, once its kept share is checked against a fresh build.
+   */
+  async function rowsWatchedThrough(
+    docs: Array<{ id: string; value: EntityDocument }>,
+  ): Promise<SessionDemand["rows"]> {
+    localSeq += 1;
+    await writer.transact({
+      localSeq,
+      reads: { confirmed: [], pending: [] },
+      operations: [
+        ...docs.map(({ id, value }) => ({ op: "set" as const, id, value })),
+        {
+          op: "set",
+          id: "of:root",
+          value: { value: { items: docs.map(({ id }) => link(id)) } },
+        },
+      ],
+    });
+    const watcher = await mount(alice);
+    await watcher.watchSet([follow("of:root")]);
+    const rows = shareOf(watcher).rows;
+    expectKeptSharesCurrent();
+    return rows;
   }
 
   /** Expects every kept share of the space to equal an uncached build. */
@@ -184,6 +229,230 @@ describe("Server", () => {
         expectKeptSharesCurrent();
       });
 
+      it("marks the rows whose documents are a piece's values", async () => {
+        // A piece's result document is what a link to the piece names, and its
+        // argument holds its inputs, so neither is one of its values. A
+        // document a handler wrote names the handling's receipt, not a piece.
+
+        localSeq += 1;
+        await writer.transact({
+          localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [
+            {
+              op: "set",
+              id: "of:piece",
+              value: {
+                value: { v: 1 },
+                patternIdentity: { identity: "a-pattern", symbol: "default" },
+                argument: link("of:piece-argument"),
+              },
+            },
+            {
+              op: "set",
+              id: "of:piece-argument",
+              value: { value: { v: 1 }, result: link("of:piece") },
+            },
+            {
+              op: "set",
+              id: "of:piece-input",
+              value: { value: { v: 1 }, result: link("of:piece") },
+            },
+            {
+              op: "set",
+              id: "of:handled",
+              value: { value: { v: 1 }, result: link("receipt:a-handling") },
+            },
+            {
+              op: "set",
+              id: "of:root",
+              value: {
+                value: {
+                  items: [
+                    link("of:leaf-a"),
+                    link("of:piece"),
+                    link("of:piece-input"),
+                    link("of:piece-argument"),
+                    link("of:handled"),
+                  ],
+                },
+              },
+            },
+          ],
+        });
+        const watcher = await mount(alice);
+        await watcher.watchSet([follow("of:root")]);
+
+        const rows = shareOf(watcher).rows;
+        expect(rows.get("space\0of:piece-input")?.piece).toBe(true);
+        expect(rows.has("space\0of:piece")).toBe(true);
+        expect(rows.get("space\0of:piece")?.piece).toBeUndefined();
+        expect(rows.has("space\0of:piece-argument")).toBe(true);
+        expect(rows.get("space\0of:piece-argument")?.piece).toBeUndefined();
+        expect(rows.has("space\0of:handled")).toBe(true);
+        expect(rows.get("space\0of:handled")?.piece).toBeUndefined();
+        expect(rows.get("space\0of:leaf-a")?.piece).toBeUndefined();
+        expect(rows.get("space\0of:root")?.piece).toBeUndefined();
+        expectKeptSharesCurrent();
+      });
+
+      it("marks a row that a document without a pattern pointer names as its argument", async () => {
+        const rows = await rowsWatchedThrough([
+          {
+            id: "of:piece-input",
+            value: { value: { v: 1 }, result: link("of:piece") },
+          },
+          {
+            id: "of:not-a-piece",
+            value: { value: { v: 1 }, argument: link("of:piece-input") },
+          },
+        ]);
+
+        expect(rows.get("space\0of:piece-input")?.piece).toBe(true);
+      });
+
+      it("marks a row whose id a piece names as an argument in another scope", async () => {
+        const rows = await rowsWatchedThrough([
+          {
+            id: "of:piece",
+            value: {
+              value: { v: 1 },
+              patternIdentity: { identity: "a-pattern", symbol: "default" },
+              argument: {
+                "/": {
+                  "link@1": { id: "of:piece-input", path: [], scope: "user" },
+                },
+              },
+            },
+          },
+          {
+            id: "of:piece-input",
+            value: { value: { v: 1 }, result: link("of:piece") },
+          },
+        ]);
+
+        expect(rows.get("space\0of:piece-input")?.piece).toBe(true);
+      });
+
+      it("leaves unmarked a piece's result, and a row whose `result` names no document", async () => {
+        const rows = await rowsWatchedThrough([
+          {
+            id: "of:bare-piece",
+            value: {
+              value: { v: 1 },
+              patternIdentity: { identity: "a-pattern", symbol: "default" },
+            },
+          },
+          { id: "of:plain-result", value: { value: { v: 1 }, result: 1 } },
+          {
+            id: "of:relative-result",
+            value: {
+              value: { v: 1 },
+              result: { "/": { "link@1": { path: [] } } },
+            },
+          },
+        ]);
+
+        expect(rows.has("space\0of:bare-piece")).toBe(true);
+        expect(rows.get("space\0of:bare-piece")?.piece).toBeUndefined();
+        expect(rows.has("space\0of:plain-result")).toBe(true);
+        expect(rows.get("space\0of:plain-result")?.piece).toBeUndefined();
+        expect(rows.has("space\0of:relative-result")).toBe(true);
+        expect(rows.get("space\0of:relative-result")?.piece).toBeUndefined();
+      });
+
+      it("rebuilds a share when a push makes a held document a piece's value", async () => {
+        const watcher = await mount(alice);
+        const view = await watcher.watchSet([follow("of:root")]);
+        const before = shareOf(watcher);
+        expect(before.rows.get("space\0of:leaf-a")?.piece).toBeUndefined();
+
+        const updates = view.subscribe();
+        const pushed = updates.next();
+        localSeq += 1;
+        await writer.transact({
+          localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: "of:leaf-a",
+            value: { value: { v: 1 }, result: link("of:piece") },
+          }],
+        });
+        await pushed;
+
+        const after = shareOf(watcher);
+        expect(after).not.toBe(before);
+        expect(after.rows.get("space\0of:leaf-a")?.piece).toBe(true);
+        expectKeptSharesCurrent();
+      });
+
+      it("rebuilds a share when a push gives a held piece's result another argument", async () => {
+        const piece = (argument: string) => ({
+          value: { v: 1 },
+          patternIdentity: { identity: "a-pattern", symbol: "default" },
+          argument: link(argument),
+        });
+        localSeq += 1;
+        await writer.transact({
+          localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [
+            { op: "set", id: "of:piece", value: piece("of:first-input") },
+            {
+              op: "set",
+              id: "of:first-input",
+              value: { value: { v: 1 }, result: link("of:piece") },
+            },
+            {
+              op: "set",
+              id: "of:second-input",
+              value: { value: { v: 1 }, result: link("of:piece") },
+            },
+            {
+              op: "set",
+              id: "of:root",
+              value: {
+                value: {
+                  items: [
+                    link("of:piece"),
+                    link("of:first-input"),
+                    link("of:second-input"),
+                  ],
+                },
+              },
+            },
+          ],
+        });
+        const watcher = await mount(alice);
+        const view = await watcher.watchSet([follow("of:root")]);
+        const before = shareOf(watcher);
+        expect(before.rows.get("space\0of:first-input")?.piece)
+          .toBeUndefined();
+        expect(before.rows.get("space\0of:second-input")?.piece).toBe(true);
+
+        const updates = view.subscribe();
+        const pushed = updates.next();
+        localSeq += 1;
+        await writer.transact({
+          localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: "of:piece",
+            value: piece("of:second-input"),
+          }],
+        });
+        await pushed;
+
+        const after = shareOf(watcher);
+        expect(after).not.toBe(before);
+        expect(after.rows.get("space\0of:first-input")?.piece).toBe(true);
+        expect(after.rows.get("space\0of:second-input")?.piece)
+          .toBeUndefined();
+        expectKeptSharesCurrent();
+      });
+
       it("rebuilds a share when its watches are replaced by fewer", async () => {
         const watcher = await mount(alice);
         await watcher.watchSet([follow("of:root")]);
@@ -255,6 +524,58 @@ describe("Server", () => {
         expect(shares.map((share) => share.sessionId)).toEqual([
           watcher.sessionId,
         ]);
+      });
+
+      it("keeps the share of the excluded principal's session from another process", async () => {
+        // A client signed with the serving loop's own key is still a client:
+        // only that principal's sessions from this process are the loop's.
+
+        const local = await mount(bob);
+        await local.watchSet([follow("of:root")]);
+        const remote = await mount(bob, { inProcess: false });
+        await remote.watchSet([follow("of:root")]);
+
+        const shares = server.demandForSpace(space, { excludePrincipal: bob });
+
+        expect(shares.map((share) => share.sessionId)).toContain(
+          remote.sessionId,
+        );
+        expect(shares.map((share) => share.sessionId)).not.toContain(
+          local.sessionId,
+        );
+      });
+
+      it("omits the share of the excluded principal's session from another process that declares the serving binding", async () => {
+        // A serving runtime of another process reaches the space's owner
+        // over the network, and is no more a client than the local one.
+
+        const routed = await mount(bob, {
+          inProcess: false,
+          actingAs: "space-owner",
+        });
+        await routed.watchSet([follow("of:root")]);
+
+        const shares = server.demandForSpace(space, { excludePrincipal: bob });
+
+        expect(shares.map((share) => share.sessionId)).not.toContain(
+          routed.sessionId,
+        );
+      });
+
+      it("omits the share of the excluded principal's session from another process that declares it is not demand", async () => {
+        // A toolshed's webhook runtime keeps its sessions open for as long as
+        // it runs, with no one waiting on them.
+
+        const relay = await mount(bob, { inProcess: false, demand: false });
+        await relay.watchSet([follow("of:root")]);
+
+        const shares = server.demandForSpace(space, { excludePrincipal: bob });
+
+        expect(shares.map((share) => share.sessionId)).not.toContain(
+          relay.sessionId,
+        );
+        expect(server.hasLiveSessionsForSpace(space, { excludePrincipal: bob }))
+          .toBe(false);
       });
 
       it("returns an anonymous session's rows with no principal in their identity", async () => {

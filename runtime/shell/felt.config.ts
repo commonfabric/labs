@@ -40,6 +40,25 @@ const SHELL_PORT = parseInt(
 const config: Config = {
   entries: [
     { in: "src/index.ts", out: "scripts/index" },
+    // KaTeX and its layout rules, which cf-code-editor imports as
+    // `cf-katex-render` the first time an editor draws math. The name is left
+    // external below and `public/index.html` maps it to this script, so the
+    // page loads KaTeX only then. integration/katex-script.test.ts holds
+    // the three together.
+    {
+      in: "../ui/src/v2/components/cf-code-editor/features/katex-render.ts",
+      out: "scripts/katex-render",
+    },
+    { in: "src/library.ts", out: "scripts/shell-library", splitting: true },
+    {
+      in: "src/library-components.ts",
+      out: "scripts/shell-components",
+      splitting: true,
+    },
+    {
+      in: "../../base/iframe-sandbox/src/outer-frame-script.js",
+      out: "scripts/outer-frame-script",
+    },
     {
       in: "../runtime-client/src/backends/web-worker/index.ts",
       // Changing this path requires a matching update in
@@ -75,6 +94,8 @@ const config: Config = {
       "source-map-support",
       "canvas",
       "inspector",
+      // Resolved by the page's import map; see the `katex-render` entry.
+      "cf-katex-render",
     ],
     define: {
       "$ENVIRONMENT": ENVIRONMENT,
@@ -111,6 +132,9 @@ const config: Config = {
         "EXPERIMENTAL_READER_SCHEMA_PRECEDENCE",
       ),
       "$EXPERIMENTAL_LOCAL_FOLD": Deno.env.get("EXPERIMENTAL_LOCAL_FOLD"),
+      "$EXPERIMENTAL_SYNC_CID_REFERENCES": Deno.env.get(
+        "EXPERIMENTAL_SYNC_CID_REFERENCES",
+      ),
       "globalThis.__cfCompileCacheRuntimeVersion":
         COMPILE_CACHE_RUNTIME_VERSION,
     },

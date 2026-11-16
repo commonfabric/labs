@@ -126,6 +126,26 @@ export interface CacheableModule extends CompiledModuleArtifact {
   imports: { specifier: string; targetIdentity: string }[];
 
   /**
+   * Every module specifier `source` names, as the identity scan reads them
+   * (`scanModuleDeclarations()`'s `imports`): the list `identity` was computed
+   * over. A compile sets it on each code module; a data entry has none. The
+   * compiled set stores it under the compiler's stamp, so that verifying the
+   * source set recomputes identities from it instead of parsing `source`.
+   */
+  sourceImports?: readonly string[];
+
+  /**
+   * The record surface of `js` (`deriveModuleRecordFields()`), together with
+   * `importSpecs`, when the module was read from a compiled document that
+   * already carries it. A write stores the surface rather than parsing `js`
+   * again only when all three of `exportNames`, `starTargetSpecs` and
+   * `importSpecs` are given.
+   */
+  exportNames?: readonly string[];
+
+  starTargetSpecs?: readonly string[];
+
+  /**
    * This entry carries data rather than code. A data entry's compiled form is
    * its own bytes, so `js` repeats `source` and the compiled set carries what a
    * warm load needs without reading the source set. It is never parsed,

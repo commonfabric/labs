@@ -25,7 +25,8 @@ import { FabricError } from "@commonfabric/data-model/fabric-instances";
 
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
-import { popFrame, pushFrame } from "../src/builder/pattern.ts";
+import { pattern, popFrame, pushFrame } from "../src/builder/pattern.ts";
+import { byRef, lift } from "../src/builder/module.ts";
 import { applyInputIfcToOutput } from "../src/builder/node-utils.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
@@ -73,6 +74,59 @@ describe("node-utils", () => {
       popFrame(pushed);
     }
   }
+
+  describe("connectInputAndOutputs()", () => {
+    // A node factory wires its inputs through `connectInputAndOutputs()` as
+    // it is called, so a pattern body nested in another reaches it by handing
+    // a node a cell of the enclosing pattern.
+
+    function withinPatternFrame<T>(fn: () => T): T {
+      const pushed = pushFrame({
+        space,
+        generatedIdCounter: 0,
+        reactives: new Set(),
+        runtime,
+      });
+      try {
+        return fn();
+      } finally {
+        popFrame(pushed);
+      }
+    }
+
+    it("throws naming the captured cell and the capturing callback for a cell of an enclosing pattern", () => {
+      withinPatternFrame(() => {
+        const double = lift((value: number) => value * 2);
+        const build = (captured: boolean) =>
+          pattern<{ x: number }>(({ x }) => {
+            const Inner = pattern<{ y: number }>(({ y }) => ({
+              doubled: double(captured ? x : y),
+            }));
+            return { inner: Inner({ y: x }) };
+          });
+
+        expect(() => build(false)).not.toThrow();
+        expect(() => build(true)).toThrow(
+          /Reactive cell \(at path \[x\], space-scoped\) from an outer scope was captured by a closure[^\n]*\n {2}in \(value\)=>value \* 2\n/,
+        );
+      });
+    });
+
+    it("throws without a callback line for a module whose implementation is not a function", () => {
+      withinPatternFrame(() => {
+        const builtin = byRef<number, number>("ifElse");
+
+        expect(() =>
+          pattern<{ x: number }>(({ x }) => {
+            const Inner = pattern(() => ({ out: builtin(x) }));
+            return { inner: Inner({}) };
+          })
+        ).toThrow(
+          /from an outer scope was captured by a closure and cannot be connected across reactive frames\.\nhelp:/,
+        );
+      });
+    });
+  });
 
   describe("applyInputIfcToOutput", () => {
     it("labels an output cell sitting beside a `FabricBytes`", () => {

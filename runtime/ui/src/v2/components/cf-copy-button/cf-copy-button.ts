@@ -97,8 +97,8 @@ export class CFCopyButton extends BaseElement {
   declare feedbackDuration: number;
   declare iconOnly: boolean;
 
-  private _copied = false;
-  private _resetTimeout?: ReturnType<typeof setTimeout>;
+  #copied = false;
+  #resetTimeout?: ReturnType<typeof setTimeout>;
 
   constructor() {
     super();
@@ -110,67 +110,18 @@ export class CFCopyButton extends BaseElement {
     this.iconOnly = false;
   }
 
-  private async _handleClick(e: Event) {
-    e.preventDefault();
-    e.stopPropagation();
-
-    if (this.disabled || !this.text) return;
-
-    try {
-      // Determine the plain text content for events
-      const plainText = typeof this.text === "string"
-        ? this.text
-        : this.text["text/plain"] || Object.values(this.text)[0] || "";
-
-      if (typeof this.text === "string") {
-        // Simple case: plain text (backwards compatible)
-        await navigator.clipboard.writeText(this.text);
-      } else {
-        // Rich content: create ClipboardItem with multiple MIME types
-        const clipboardData: Record<string, Blob> = {};
-        for (const [mimeType, content] of Object.entries(this.text)) {
-          clipboardData[mimeType] = new Blob([content], { type: mimeType });
-        }
-        await navigator.clipboard.write([new ClipboardItem(clipboardData)]);
-      }
-
-      this._copied = true;
-      this.requestUpdate();
-
-      this.emit("cf-copy-success", {
-        text: plainText,
-        length: plainText.length,
-      });
-
-      // Reset copied state after duration
-      if (this._resetTimeout) {
-        clearTimeout(this._resetTimeout);
-      }
-      this._resetTimeout = setTimeout(() => {
-        this._copied = false;
-        this.requestUpdate();
-      }, this.feedbackDuration);
-    } catch (error) {
-      const plainText = typeof this.text === "string"
-        ? this.text
-        : this.text["text/plain"] || Object.values(this.text)[0] || "";
-      this.emit("cf-copy-error", {
-        error: error as Error,
-        text: plainText,
-      });
-    }
-  }
-
   override disconnectedCallback() {
     super.disconnectedCallback();
-    if (this._resetTimeout) {
-      clearTimeout(this._resetTimeout);
-    }
+    // The feedback ends here rather than when its timer would have fired, so
+    // a button moved elsewhere in the document comes back idle.
+    clearTimeout(this.#resetTimeout);
+    this.#copied = false;
+    this.requestUpdate();
   }
 
   override render() {
-    const title = this._copied ? "Copied!" : "Copy to clipboard";
-    const ariaLabel = this._copied
+    const title = this.#copied ? "Copied!" : "Copy to clipboard";
+    const ariaLabel = this.#copied
       ? "Copied to clipboard"
       : "Copy to clipboard";
 
@@ -179,20 +130,65 @@ export class CFCopyButton extends BaseElement {
         variant="${this.variant || "secondary"}"
         size="${this.size || "md"}"
         ?disabled="${this.disabled}"
-        @click="${this._handleClick}"
+        @click="${this.#handleClick}"
         title="${title}"
         aria-label="${ariaLabel}"
       >
         ${this.iconOnly
           ? html`
-            ${this._copied ? "✓" : "📋"}
+            ${this.#copied ? "✓" : "📋"}
           `
           : html`
             <slot>
-              ${this._copied ? "✓ Copied!" : "📋 Copy"}
+              ${this.#copied ? "✓ Copied!" : "📋 Copy"}
             </slot>
           `}
       </cf-button>
     `;
+  }
+
+  async #handleClick(e: Event) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (this.disabled || !this.text) return;
+
+    // The plain text the events report.
+    const plainText = typeof this.text === "string"
+      ? this.text
+      : this.text["text/plain"] || Object.values(this.text)[0] || "";
+
+    try {
+      if (typeof this.text === "string") {
+        await navigator.clipboard.writeText(this.text);
+      } else {
+        // Rich content: one `ClipboardItem` carrying every MIME type.
+        const clipboardData: Record<string, Blob> = {};
+        for (const [mimeType, content] of Object.entries(this.text)) {
+          clipboardData[mimeType] = new Blob([content], { type: mimeType });
+        }
+        await navigator.clipboard.write([new ClipboardItem(clipboardData)]);
+      }
+
+      this.#copied = true;
+      this.requestUpdate();
+
+      this.emit("cf-copy-success", {
+        text: plainText,
+        length: plainText.length,
+      });
+
+      // Reset copied state after duration
+      clearTimeout(this.#resetTimeout);
+      this.#resetTimeout = setTimeout(() => {
+        this.#copied = false;
+        this.requestUpdate();
+      }, this.feedbackDuration);
+    } catch (error) {
+      this.emit("cf-copy-error", {
+        error: error as Error,
+        text: plainText,
+      });
+    }
   }
 }

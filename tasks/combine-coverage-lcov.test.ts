@@ -5,68 +5,17 @@ import {
   combineCoverageLcov,
   main,
   mergeLcovReports,
-  normalizeSourcePath,
   parseArgs,
 } from "./combine-coverage-lcov.ts";
 
 const ROOT = path.join(import.meta.dirname!, "..");
 
-Deno.test("normalizeSourcePath strips a GitHub-hosted workspace root", () => {
-  assertEquals(
-    normalizeSourcePath(
-      "/home/runner/work/labs/labs/runtime/runner/src/mod.ts",
-      "labs",
-    ),
-    "runtime/runner/src/mod.ts",
-  );
-});
-
-Deno.test("normalizeSourcePath handles a dotted repository name", () => {
-  assertEquals(
-    normalizeSourcePath(
-      "/home/runner/work/commonfabric.labs/commonfabric.labs/tasks/x.ts",
-      "commonfabric.labs",
-    ),
-    "tasks/x.ts",
-  );
-});
-
-Deno.test("normalizeSourcePath anchors on the checkout, not an earlier repeat", () => {
-  // A self-hosted runner whose work directory itself repeats the repo name must
-  // still anchor on the deepest doubled segment (the checkout root).
-
-  assertEquals(
-    normalizeSourcePath(
-      "/srv/labs/labs/_work/labs/labs/scripts/build.ts",
-      "labs",
-    ),
-    "scripts/build.ts",
-  );
-});
-
-Deno.test("normalizeSourcePath converts Windows separators to POSIX", () => {
-  assertEquals(
-    normalizeSourcePath(
-      "C:\\actions\\_work\\labs\\labs\\scripts\\build.ts",
-      "labs",
-    ),
-    "scripts/build.ts",
-  );
-});
-
-Deno.test("normalizeSourcePath leaves synthetic pattern paths unchanged", () => {
-  assertEquals(
-    normalizeSourcePath("cf-mount/fid1abc/main.tsx", "labs"),
-    "cf-mount/fid1abc/main.tsx",
-  );
-});
-
 Deno.test("mergeLcovReports sums line coverage for a file seen in two jobs", () => {
-  // The two jobs reach the file under different runner checkout roots and
-  // include the function/branch records deno emits, which the merge drops.
+  // Both jobs include the function and branch records deno emits, which
+  // the merge drops.
 
   const jobA = [
-    "SF:/home/runner/work/labs/labs/runtime/a/mod.ts",
+    "SF:runtime/a/mod.ts",
     "FN:1,add",
     "FNDA:1,add",
     "FNF:1",
@@ -81,7 +30,7 @@ Deno.test("mergeLcovReports sums line coverage for a file seen in two jobs", () 
     "end_of_record",
   ].join("\n");
   const jobB = [
-    "SF:/data/_work/labs/labs/runtime/a/mod.ts",
+    "SF:runtime/a/mod.ts",
     "DA:1,0",
     "DA:2,5",
     "LH:1",
@@ -89,14 +38,9 @@ Deno.test("mergeLcovReports sums line coverage for a file seen in two jobs", () 
     "end_of_record",
   ].join("\n");
 
-  const { lcov, fileCount, rewritten, unchanged } = mergeLcovReports(
-    [jobA, jobB],
-    "labs",
-  );
+  const { lcov, fileCount } = mergeLcovReports([jobA, jobB]);
 
   assertEquals(fileCount, 1);
-  assertEquals(rewritten, 1);
-  assertEquals(unchanged, 0);
   assertEquals(
     lcov,
     [
@@ -114,14 +58,14 @@ Deno.test("mergeLcovReports sums line coverage for a file seen in two jobs", () 
 
 Deno.test("mergeLcovReports keeps a line uncovered in every job", () => {
   const report = [
-    "SF:/home/runner/work/labs/labs/runtime/a/mod.ts",
+    "SF:runtime/a/mod.ts",
     "DA:5,0",
     "LH:0",
     "LF:1",
     "end_of_record",
   ].join("\n");
 
-  const { lcov } = mergeLcovReports([report, report], "labs");
+  const { lcov } = mergeLcovReports([report, report]);
 
   assertEquals(
     lcov,
@@ -139,7 +83,6 @@ Deno.test("mergeLcovReports keeps a line uncovered in every job", () => {
 Deno.test("combineCoverageLcov tolerates a missing input directory", async () => {
   const { lcov, fileCount } = await combineCoverageLcov(
     "/tmp/combine-lcov-does-not-exist-abc123",
-    "labs",
   );
   assertEquals(lcov, "");
   assertEquals(fileCount, 0);
@@ -151,7 +94,7 @@ Deno.test("combineCoverageLcov merges reports from a directory tree", async () =
     await Deno.writeTextFile(
       path.join(dir, "workspace.lcov"),
       [
-        "SF:/home/runner/work/labs/labs/runtime/a/mod.ts",
+        "SF:runtime/a/mod.ts",
         "DA:1,1",
         "LF:1",
         "LH:1",
@@ -178,14 +121,9 @@ Deno.test("combineCoverageLcov merges reports from a directory tree", async () =
     // An empty report (no coverage produced) is skipped, not concatenated.
     await Deno.writeTextFile(path.join(dir, "empty.lcov"), "");
 
-    const { lcov, fileCount, rewritten, unchanged } = await combineCoverageLcov(
-      dir,
-      "labs",
-    );
+    const { lcov, fileCount } = await combineCoverageLcov(dir);
 
     assertEquals(fileCount, 2);
-    assertEquals(rewritten, 1);
-    assertEquals(unchanged, 1);
     // Output is sorted by source path; the synthetic pattern path keeps its TN.
     assertEquals(
       lcov.split("\n").filter((line) =>
@@ -210,17 +148,17 @@ Deno.test("combineCoverageLcov surfaces a non-NotFound read error", async () => 
   try {
     // Walking a path that is a regular file is not a "no coverage" case; the
     // error must propagate rather than be swallowed.
-    await assertRejects(() => combineCoverageLcov(file, "labs"));
+    await assertRejects(() => combineCoverageLcov(file));
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
 });
 
 Deno.test("parseArgs reads --key=value flags and ignores other tokens", () => {
-  const parsed = parseArgs(["--input-dir=a", "--repo-name=x=y", "stray", "-z"]);
+  const parsed = parseArgs(["--input-dir=a", "--output=x=y", "stray", "-z"]);
   assertEquals(parsed.get("input-dir"), "a");
   // Everything after the first "=" is the value, so embedded "=" is preserved.
-  assertEquals(parsed.get("repo-name"), "x=y");
+  assertEquals(parsed.get("output"), "x=y");
   assertEquals(parsed.has("stray"), false);
   assertEquals(parsed.size, 2);
 });
@@ -233,7 +171,7 @@ Deno.test("main combines reports and writes the output file", async () => {
     await Deno.writeTextFile(
       path.join(inputDir, "workspace.lcov"),
       [
-        "SF:/home/runner/work/labs/labs/runtime/a/mod.ts",
+        "SF:runtime/a/mod.ts",
         "DA:1,1",
         "LF:1",
         "LH:1",
@@ -246,7 +184,6 @@ Deno.test("main combines reports and writes the output file", async () => {
     const code = await main([
       `--input-dir=${inputDir}`,
       `--output=${outputPath}`,
-      "--repo-name=labs",
     ]);
 
     assertEquals(code, 0);
@@ -267,7 +204,7 @@ Deno.test("main combines reports and writes the output file", async () => {
 });
 
 Deno.test("main returns exit code 2 when a required flag is missing", async () => {
-  assertEquals(await main(["--input-dir=a", "--output=b"]), 2);
+  assertEquals(await main(["--input-dir=a"]), 2);
 });
 
 Deno.test("the CLI entry point runs the task as a process", async () => {
@@ -282,7 +219,7 @@ Deno.test("the CLI entry point runs the task as a process", async () => {
     await Deno.writeTextFile(
       path.join(inputDir, "workspace.lcov"),
       [
-        "SF:/home/runner/work/labs/labs/runtime/a/mod.ts",
+        "SF:runtime/a/mod.ts",
         "DA:1,1",
         "LF:1",
         "LH:1",
@@ -305,7 +242,6 @@ Deno.test("the CLI entry point runs the task as a process", async () => {
         path.join(ROOT, "tasks/combine-coverage-lcov.ts"),
         `--input-dir=${inputDir}`,
         `--output=${outputPath}`,
-        "--repo-name=labs",
       ],
     });
 

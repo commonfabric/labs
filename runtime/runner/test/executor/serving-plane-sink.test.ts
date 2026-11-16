@@ -87,6 +87,40 @@ describe("serving-plane-sink", () => {
     ).toEqual([]);
   });
 
+  it("reads the paths written to a document and whether anything intruded on it since a seq, from the worker's own engine", async () => {
+    const seeded = commit(
+      [{ op: "set", id, value: { value: { name: "", bio: "" } } }],
+      { principal: "did:key:seeder", sessionId: "seeder-session" },
+    );
+    const sink = plane.createWaveCommitSink({
+      space,
+      engine,
+      foreignEngineFor: () => engine,
+      sessionId: "holder",
+      localSeqRef: { value: 0 },
+    });
+    const doc = { id, scopeKey: "space" };
+    expect(await sink.concurrentWritePaths(space, doc, seeded)).toEqual([]);
+    expect(await sink.intrusionSince?.(space, doc, seeded, "holder"))
+      .toBe(false);
+
+    commit(
+      [{
+        op: "patch",
+        id,
+        patches: [{ op: "replace", path: "/value/bio", value: "Hopper" }],
+      }],
+      firing,
+    );
+    expect(await sink.concurrentWritePaths(space, doc, seeded)).toEqual([
+      ["value", "bio"],
+    ]);
+    expect(await sink.intrusionSince?.(space, doc, seeded, "holder"))
+      .toBe(true);
+    expect(await sink.intrusionSince?.(space, doc, seeded + 1, "holder"))
+      .toBe(false);
+  });
+
   it("carries a failure notice to the memory server, which patches the source entry only while its map names the holder", async () => {
     const server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     const bridge = new ServingPortBridge({ server, port: channel.port2 });

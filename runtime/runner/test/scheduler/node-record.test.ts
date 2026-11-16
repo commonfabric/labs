@@ -88,6 +88,75 @@ describe("NodeRegistry", () => {
 
         expect(nodes.getRegistrationOrdinal(first)).toBe(ordinal);
       });
+
+      it("promotes a computation registered again as an effect", () => {
+        const nodes = new NodeRegistry();
+        const action: Action = function promoted() {};
+        nodes.register(action, "computation");
+
+        expect(nodes.register(action, "effect").kind).toBe("effect");
+        expect(nodes.isEffect(action)).toBe(true);
+        expect(nodes.isComputation(action)).toBe(false);
+      });
+
+      it("throws for an effect registered again as a computation", () => {
+        const nodes = new NodeRegistry();
+        const action: Action = function demoted() {};
+        nodes.register(action, "effect");
+
+        expect(() => nodes.register(action, "computation")).toThrow(
+          "Scheduler action re-registered as computation; was effect",
+        );
+        expect(nodes.isEffect(action)).toBe(true);
+      });
+    });
+
+    describe("setStatus()", () => {
+      it("indexes a registered node that becomes invalid", () => {
+        const nodes = new NodeRegistry();
+        const action: Action = function known() {};
+        nodes.register(action, "computation");
+        nodes.setStatus(action, "clean");
+
+        nodes.setStatus(action, "invalid");
+
+        expect(nodes.get(action)?.status).toBe("invalid");
+        expect(nodes.getInvalidNodes().has(action)).toBe(true);
+      });
+
+      it("records nothing for an action that was never registered", () => {
+        const nodes = new NodeRegistry();
+        const action: Action = function unknown() {};
+
+        nodes.setStatus(action, "invalid");
+
+        expect(nodes.get(action)).toBeUndefined();
+        expect(nodes.getInvalidNodes().has(action)).toBe(false);
+      });
+    });
+
+    describe("linkParent()", () => {
+      it("returns the parent's record and indexes the child under it", () => {
+        const nodes = new NodeRegistry();
+        const parent: Action = function parent() {};
+        const child: Action = function child() {};
+        const parentRecord = nodes.register(parent, "computation");
+        const childRecord = nodes.register(child, "computation");
+
+        expect(nodes.linkParent(child, parent)).toBe(parentRecord);
+        expect(nodes.childrenOf(parent)).toEqual(new Set([childRecord]));
+      });
+
+      it("returns `undefined` and links nothing for a child that was never registered", () => {
+        const nodes = new NodeRegistry();
+        const parent: Action = function parent() {};
+        const child: Action = function child() {};
+        nodes.register(parent, "computation");
+
+        expect(nodes.linkParent(child, parent)).toBeUndefined();
+        expect(nodes.parentActionOf(child)).toBeUndefined();
+        expect(nodes.childrenOf(parent)).toBeUndefined();
+      });
     });
 
     describe("membership", () => {

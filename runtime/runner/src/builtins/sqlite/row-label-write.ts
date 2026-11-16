@@ -39,8 +39,8 @@ import {
   type SqliteDbRef,
   tableDeclaresRowLabel,
 } from "@commonfabric/memory/v2";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
-import type { CfcConfClause } from "../../cfc/clause.ts";
 import { cfcObservationFitsCeiling } from "../../cfc/observation.ts";
 
 // Whether a numeric-affinity column would store this bound string as a

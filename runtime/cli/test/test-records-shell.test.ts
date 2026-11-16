@@ -28,7 +28,7 @@ async function recorded(
     const env: Record<string, string> = {};
     if (options.recording !== false) env.CF_TEST_RECORDS_DIR = spool;
     const run = await new Deno.Command("bash", {
-      args: ["-c", `set -euo pipefail\nsource ${HELPERS}\n${script}`],
+      args: ["-c", `set -euo pipefail\nsource "$0"\n${script}`, HELPERS],
       env,
       clearEnv: true,
       stdout: "piped",
@@ -90,9 +90,10 @@ describe("test-records-shell", () => {
       await new Deno.Command("bash", {
         args: [
           "-c",
-          `set -euo pipefail\nsource ${HELPERS}\n` +
+          `set -euo pipefail\nsource "$0"\n` +
           `cf_test_record_script "integration.sh"\n` +
           `cf_test_step_begin piece-values\nfalse\n`,
+          HELPERS,
         ],
         env: { CF_TEST_RECORDS_DIR: spool },
         clearEnv: true,

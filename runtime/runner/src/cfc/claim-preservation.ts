@@ -13,9 +13,14 @@
 
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
 import { ContextualFlowControl } from "../cfc.ts";
-import { type CfcConfClause, normalizeClause } from "./clause.ts";
+import { normalizeClause } from "./clause.ts";
+import {
+  writePolicyAlternativeAdmissible,
+  type WritePolicyRelease,
+} from "./schema-merge.ts";
 import {
   cfcSchemaResolvedRoot,
   resolveCfcSchemaRefRoot,
@@ -34,16 +39,15 @@ const CLAIMS: Readonly<
   projection: (stored, merged) => deepEqual(stored, merged),
   ownerPrincipal: (stored, merged) => deepEqual(stored, merged),
   writeAuthorizedBy: (stored, merged) => keepsWriterClaim(stored, merged),
-  // The same alternatives, each keeping its writer claim and its contract.
+  // Every stored alternative, each kept by a merged one wherever it is in the
+  // list, since order carries no meaning (§8.15.6.1). A merged alternative
+  // keeping none of them is held to `appendedWritePolicyRefusal()`.
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/96
   writePolicyAnyOf: (stored, merged) =>
     Array.isArray(stored) && Array.isArray(merged) &&
-    stored.length === merged.length &&
-    stored.every((policy, index) => {
-      const other = merged[index];
-      return isObjectNotArray(policy) && isObjectNotArray(other) &&
-        deepEqual(policy.uiContract, other.uiContract) &&
-        keepsWriterClaim(policy.writeAuthorizedBy, other.writeAuthorizedBy);
-    }),
+    stored.every((policy) =>
+      merged.some((other) => mergedAlternativeKeepsStored(policy, other))
+    ),
   // A floor may rise, never fall.
   requiredIntegrity: (stored, merged) => containsAll(merged, stored),
   // A ceiling may narrow, never widen.
@@ -95,26 +99,61 @@ const keepsWriterClaim = (stored: unknown, merged: unknown): boolean => {
     );
 };
 
+// Whether the merged write-policy alternative `merged` keeps the stored
+// alternative `stored`: the same contract, and the writer claim kept.
+const mergedAlternativeKeepsStored = (
+  stored: unknown,
+  merged: unknown,
+): boolean =>
+  isObjectNotArray(stored) && isObjectNotArray(merged) &&
+  deepEqual(stored.uiContract, merged.uiContract) &&
+  keepsWriterClaim(stored.writeAuthorizedBy, merged.writeAuthorizedBy);
+
+/**
+ * The refusal of a merged write policy holding an alternative that keeps no
+ * stored one, or `undefined` where each such alternative is one `release` may
+ * append (`writePolicyAlternativeAdmissible()`, §8.15.13 carve-out (c)).
+ * Outside a release, none may.
+ */
+const appendedWritePolicyRefusal = (
+  stored: unknown,
+  merged: unknown,
+  release: WritePolicyRelease | undefined,
+  where: string,
+): string | undefined => {
+  if (!Array.isArray(stored) || !Array.isArray(merged)) return undefined;
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/96
+  const appended = merged.filter((other) =>
+    !stored.some((policy) => mergedAlternativeKeepsStored(policy, other))
+  );
+  return appended.every((other) =>
+      release !== undefined &&
+      writePolicyAlternativeAdmissible(other, stored, release)
+    )
+    ? undefined
+    : `the merged schema adds a writePolicyAnyOf alternative no stored ` +
+      `alternative admits at ${where}`;
+};
+
 /** A schema node and the document root its local references resolve in. */
 type Located = { readonly schema: JSONSchema; readonly root: JSONSchema };
 
 // The node a schema position stands for, with every reference on the way
 // followed, or `undefined` when a reference does not resolve.
+// `resolveSchemaRefs()` follows a chain of references to its end, so what it
+// returns holds no `$ref` of its own.
 const resolveLocated = (at: Located): Located | undefined => {
-  let { schema, root } = at;
-  const seen = new Set<unknown>();
-  while (isObjectNotArray(schema) && typeof schema.$ref === "string") {
-    if (seen.has(schema)) return undefined;
-    seen.add(schema);
-    const resolved = ContextualFlowControl.resolveSchemaRefs(schema, root);
-    if (resolved === undefined) return undefined;
-    root = cfcSchemaResolvedRoot(
+  const { schema, root } = at;
+  if (!isObjectNotArray(schema) || typeof schema.$ref !== "string") return at;
+  const resolved = ContextualFlowControl.resolveSchemaRefs(schema, root);
+  if (resolved === undefined) return undefined;
+  return {
+    schema: resolved,
+    root: cfcSchemaResolvedRoot(
       resolved,
       resolveCfcSchemaRefRoot(schema, root),
-    );
-    schema = resolved;
-  }
-  return { schema, root };
+    ),
+  };
 };
 
 const EMPTY: Located = { schema: {}, root: {} };
@@ -167,7 +206,9 @@ const NO_FOREIGN_POSITIONS: ForeignPositions = {
  * still reaching the depth where the merge could have replaced it. Each arm of a stored `anyOf` or `oneOf` must be kept by
  * the merged position itself or by one of its arms, and a position the merged
  * schema no longer describes loses every claim beneath it. A stored reference
- * that does not resolve cannot be shown kept, so it counts as dropped.
+ * that does not resolve cannot be shown kept, so it counts as dropped. A
+ * merged write policy may hold alternatives beyond the stored ones only as
+ * `release` may append them.
  */
 export const droppedStoredClaim = (
   stored: JSONSchema,
@@ -175,6 +216,8 @@ export const droppedStoredClaim = (
   // Positions whose own claims are kept but whose claims beneath belong to
   // another document, so the walk does not descend there.
   foreign: ForeignPositions = NO_FOREIGN_POSITIONS,
+  // The release the write is part of, if it is one.
+  release?: WritePolicyRelease,
 ): string | undefined => {
   // Each pair of positions compared, and what comparing it found. A pair
   // still being compared further up the walk is a recursive definition
@@ -259,6 +302,13 @@ export const droppedStoredClaim = (
           return `the merged schema drops the stored ${claim} at ${where}`;
         }
       }
+      const appended = appendedWritePolicyRefusal(
+        storedIfc.writePolicyAnyOf,
+        mergedIfc.writePolicyAnyOf,
+        release,
+        where,
+      );
+      if (appended !== undefined) return appended;
     }
 
     if (foreign.holdsForeign(path)) return undefined;

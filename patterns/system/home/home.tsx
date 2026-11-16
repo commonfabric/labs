@@ -541,6 +541,7 @@ const Home = pattern(
       profiles,
       pointProfiles: pointProfilesAtPrivateInbox({
         privateInbox,
+        retainedPrivateInboxes,
         profiles,
       }),
     });

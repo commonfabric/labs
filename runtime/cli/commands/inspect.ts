@@ -819,11 +819,11 @@ export const inspect = new Command()
               `${field.pagination.integratedTruncated ? "+" : ""}` +
               ` checkpoints=${field.checkpoints.length}`,
           );
-          const anchorsDocument = field.consistency.anchorsDocumentMatches;
+          const anchorsDocument = field.consistency.anchorsDocumentValid;
           console.log(
-            `  anchors=${field.anchors.length}` +
+            `  anchors=${Object.keys(field.anchors).length}` +
               ` anchors-document=${field.anchorsDocumentId}` +
-              ` anchors-document-matches=${
+              ` anchors-document-valid=${
                 anchorsDocument === null ? "n/a" : anchorsDocument
               }`,
           );

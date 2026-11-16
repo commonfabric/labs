@@ -888,8 +888,6 @@ export function wishTargetCandidates(): ProviderResult {
   return values([
     { value: "#profile", description: "the viewer's active profile object" },
     { value: "#profileName", description: "its live display name" },
-    { value: "#profileAvatar", description: "its avatar text" },
-    { value: "#profilePicture", description: "its picture, as image bytes" },
     { value: "#profileBio", description: "its owner-authored bio" },
     { value: "#profileSpace", description: "its own space cell" },
     { value: "#favorites", description: "space-relative" },
@@ -1195,6 +1193,7 @@ const ARGUMENT_PROVIDERS: Readonly<
   "agent remove:run": agentRunCandidates,
   "cell get-label:path": cellPathCandidates,
   "cell set-label:path": cellPathCandidates,
+  "cell release-by-intent:path": cellPathCandidates,
   "piece call:callable": callableCandidates,
   // The first positional of `cf cell get`/`cf cell set` is a cell path unless the caller
   // writes a canonical address there, and an address is pasted rather than

@@ -59,7 +59,7 @@ const realPerformanceNow = performance.now.bind(performance);
 // classification keeps working if the file is renamed. Frames inside the
 // harness (and inside a package's thin `clock-preload.ts` wrapper, which shares
 // the basename) are skipped when deciding who scheduled a timer.
-const HARNESS_FILE = new URL(import.meta.url).pathname.split("/").pop() ??
+const HARNESS_FILE = import.meta.url.split("/").pop() ??
   "clock-preload.ts";
 
 // What `Date.now` and `performance.now` read at logical time zero. Neither is

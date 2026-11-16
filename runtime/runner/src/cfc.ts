@@ -14,6 +14,7 @@ import {
   isObjectNotArray,
   isObjectOrArray,
 } from "@commonfabric/js-values/types";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import type {
   AsCellEntry,
@@ -22,7 +23,6 @@ import type {
   SchemaScope,
 } from "./builder/types.ts";
 import { BranchListWalk, REACHED_AGAIN } from "./cfc/branch-list-walk.ts";
-import type { CfcConfClause } from "./cfc/clause.ts";
 import { uniqueCfcAtoms } from "./cfc/observation.ts";
 import {
   cfcSchemaDocumentOf,

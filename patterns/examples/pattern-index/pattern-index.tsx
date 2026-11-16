@@ -1,9 +1,16 @@
-import { computed, type Default, NAME, pattern, UI } from "commonfabric";
+import {
+  computed,
+  type Default,
+  NAME,
+  pattern,
+  UI,
+  type VNode,
+} from "commonfabric";
 
 type Input = { url: string | Default<"/api/patterns/index.md"> };
 
 /** A URL to a #patternIndex */
-export type Output = { url: string };
+export type Output = { [NAME]: string; [UI]: VNode; url: string };
 
 const PatternIndexUrl = pattern<Input, Output>(
   ({ url }) => {

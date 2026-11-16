@@ -71,7 +71,7 @@ export type SendEvent = void;
 // link. `name` arrives as a plain string (named `computed` values auto-unwrap
 // as handler state) and is snapshotted as a durable fallback label;
 // `draft` is a live PerUser cell.
-const sendMessage = handler<SendEvent, {
+export const sendMessage = handler<SendEvent, {
   messages: MessagesCell;
   draft: DraftCell;
   // May be undefined until the viewer's `#profile` wish resolves; guarded below.
@@ -115,7 +115,7 @@ export default pattern<ProfileGroupChatInput, ProfileGroupChatOutput>(
     // result under PR #3830). `#profile` is the live cell — the identity key
     // stored on each message and rendered via cf-profile-badge; the field
     // target gives the snapshot name (fallback label + participant dedup).
-    const profileWish = wish<{ name?: string; avatar?: string }>({
+    const profileWish = wish<{ name?: string }>({
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });

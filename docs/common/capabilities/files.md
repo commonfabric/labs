@@ -110,5 +110,8 @@ can still be too large to rename.
   stay.
 - The upload and download routes are not authenticated: anyone who holds a
   blob's URL can fetch it, and anyone can upload into a space.
+- Both routes answer a page on any origin, with
+  `Access-Control-Allow-Origin: *`, so such a page can read an upload's reply
+  and a blob's bytes.
 
 The store is `runtime/toolshed/routes/blobs/blobs.index.ts`.

@@ -10,7 +10,7 @@ import { describe, it } from "@std/testing/bdd";
 import { injectCfHelpers } from "@commonfabric/ts-transformers";
 
 import { ensureCompilerStack } from "../src/harness/deferred-compiler-stack.ts";
-import { helperInjectionLineOffset } from "../src/harness/engine.ts";
+import { helperInjectionLineOffset } from "../src/harness/module-compile.ts";
 import {
   preserveLineCount,
   transformInjectHelperModule,

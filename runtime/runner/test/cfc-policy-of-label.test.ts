@@ -4,9 +4,9 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import type { JSONSchema } from "../src/builder/types.ts";
-import type { CfcConfClause } from "../src/cfc/clause.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import {
   createTxCfcModulePolicyResolver,
@@ -20,6 +20,7 @@ import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";
 import type { Engine } from "../src/harness/engine.ts";
 import { labelsReached } from "./support/reached-labels.ts";
+import { writeChokepointMark } from "../src/storage/write-chokepoint.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
@@ -685,6 +686,9 @@ describe("PolicyOf label-time binding", () => {
       policyDigest: artifact.policyDigest,
       subject: space,
     } as const;
+    // The stored envelope is written beneath any extended transaction, so
+    // the write carries the mark the write chokepoint puts on what it
+    // forwards.
     const seed = storageManager.edit();
     expect(
       seed.write({
@@ -709,7 +713,7 @@ describe("PolicyOf label-time binding", () => {
             }],
           },
         },
-      }).ok,
+      }, writeChokepointMark()).ok,
     ).toBeDefined();
     expect(
       seed.write({

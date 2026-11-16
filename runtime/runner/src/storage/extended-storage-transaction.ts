@@ -1,14 +1,10 @@
 import type { TextChange } from "@commonfabric/api";
 import {
   deepFreeze,
-  type FabricPlainObject,
   type FabricValue,
   hashOf,
   hashStringOf,
-  type MutableFabricPlainObjectLayer,
-  shallowMutableClone,
   taggedHashStringOf,
-  valueEqual,
 } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
@@ -24,19 +20,31 @@ import {
   type SqliteOperation,
   toDocumentPath,
 } from "@commonfabric/memory/v2";
-import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import {
+  type OwnerReleaseByIntentAcl,
+  ownerReleaseByIntentEnvelopeDigest,
+  ownerReleaseByIntentRecordId,
+  ownerReleaseByIntentRequestDigest,
+  ownerReleaseByIntentSpaceOwner,
+  parseSignedOwnerReleaseByIntentRequest,
+  verifyOwnerReleaseByIntentSignature,
+} from "@commonfabric/memory/v2/cfc-owner-release-by-intent";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray, isPlainObject } from "@commonfabric/js-values/types";
 
-import type { CellScope } from "../builder/types.ts";
+import type { CellScope, JSONSchema } from "../builder/types.ts";
 import {
   type CfcConfidentialityRelease,
+  type CfcConfidentialityReleaseByIntent,
+  type CfcConfidentialityReleaseByIntentInput,
   type CfcConfidentialityReleaseInput,
   CONFIDENTIALITY_RELEASE_WRITER,
+  OWNER_RELEASE_BY_INTENT_WRITER,
   planConfidentialityRelease,
+  planConfidentialityReleaseByIntent,
 } from "../cfc/confidentiality-release-plan.ts";
 import {
   canonicalizeCfcMetadata,
@@ -64,7 +72,6 @@ import {
   type CfcLabelMetadataObservation,
   type CfcLabelMetadataProtectionMode,
   type CfcMetadata,
-  cfcMetadataPresent,
   type CfcPolicyEvaluationMode,
   type CfcPrefixProvenanceSummary,
   type CfcRecordAddress,
@@ -106,6 +113,7 @@ import {
 import { withoutEnvelopeStabilityToken } from "../cfc/envelope-stability-reason.ts";
 import {
   ensureSchemaDocument,
+  labelMetadataTemplatesFor,
   loadStoredCfcEnvelope,
   prepareBoundaryCommitSteps,
   writeStoredCfcEnvelope,
@@ -120,6 +128,7 @@ import {
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
   type CfcPreparationWork,
+  type LabelMapEntry,
   POST_COMMIT_RELEASE_REJECTED,
   runtimeWritePolicyAuthorized,
 } from "../cfc/types.ts";
@@ -146,11 +155,8 @@ import {
   storedMetaFields,
 } from "../meta-seam.ts";
 import type { ModuleDelegationSnapshot } from "../module-delegations.ts";
-import {
-  isReservedSibling,
-  RESERVED_SIBLINGS,
-  type ReservedSibling,
-} from "../reserved-sibling-seam.ts";
+import { reservedSiblingChanges } from "../reserved-sibling-seam.ts";
+import { writeChokepointMark } from "./write-chokepoint.ts";
 import { isRuntimeSecretId } from "../runtime-secret-id.ts";
 import {
   isRuntimeSecretOwnRead,
@@ -169,7 +175,7 @@ import {
   deliverSchemaDocumentClosure,
   linkSchemaRefHashes,
 } from "../schema-doc-delivery.ts";
-import { normalizeCellScope, scopeRank } from "../scope.ts";
+import { DEFAULT_CELL_SCOPE, normalizeCellScope, scopeRank } from "../scope.ts";
 import type { URI } from "../sigil-types.ts";
 import { spaceCellId, SpaceRootMissingError } from "../space-root-slot.ts";
 import { createTransactionCommitReceipt } from "./commit-receipt.ts";
@@ -180,7 +186,6 @@ import {
   type IExtendedStorageTransaction,
   type IMemorySpaceAddress,
   type InactiveTransactionError,
-  type INotFoundError,
   type IReadActivity,
   type IReadOptions,
   type IStorageTransaction,
@@ -263,44 +268,6 @@ const createOnlyMarkKey = (
   link: { id: string; scope?: unknown },
 ): string =>
   `${normalizeCellScope(link.scope as CellScope | undefined)}\0${link.id}`;
-
-/**
- * Whether a value at a reserved sibling leaves the document carrying that
- * sibling, as the sibling's own reader accounts for it.
- *
- * `cfc` has such a reader, and `cfcMetadataPresent` is its account: `null` and
- * a record with no `version` are values a document reads as carrying no label
- * map. Nothing interprets `source`, so definedness is the whole account there,
- * which is how the meta seam reads its own fields.
- */
-const reservedSiblingPresent = (
-  sibling: ReservedSibling,
-  value: unknown,
-): boolean =>
-  sibling === "cfc" ? cfcMetadataPresent(value) : value !== undefined;
-
-/**
- * Whether a written reserved sibling is the stored one carried forward.
- *
- * What a whole-document write owes a reserved sibling is the value the
- * document already holds, which is what reading the stored envelope and
- * spreading it produces. An envelope assembled some other way is one this
- * transaction composed rather than carried, and the guard records it whether
- * or not the labels it names work out the same. Holding the rule at the value
- * keeps one answer across every spelling a stored envelope takes: a version-1
- * envelope carrying its labels, a version-2 one naming the large ones by
- * content hash and holding the small ones inline, and a version the build
- * does not read at all.
- */
-const reservedSiblingCarriedForward = (
-  carried: unknown,
-  stored: unknown,
-): boolean =>
-  // `valueEqual` refuses a function, which is not a `FabricValue`. Such a
-  // value is not what the document holds, so it records, and the storage
-  // layer reports it as the error it is.
-  typeof carried !== "function" &&
-  valueEqual(carried as FabricValue, stored as FabricValue);
 
 /**
  * What a transaction reports its CFC work through, and the runtime services it
@@ -451,6 +418,43 @@ function sealJournalMembers(members: object): void {
 function isEmptyPlainRecord(value: unknown): boolean {
   return isPlainObject(value, false) &&
     Object.getOwnPropertyNames(value).length === 0;
+}
+
+/**
+ * Freezes `trace` where it stands, as `deepFreeze()` would. A trace and two
+ * addresses holding only the members their types declare are five objects,
+ * frozen by hand without the cache entry `deepFreeze()` adds for each object,
+ * which is most of what recording a trace costs. The types require every
+ * member they declare, so a trace and addresses with as many members as that
+ * hold no other. A trace holding any other member goes through `deepFreeze()`.
+ */
+function freezeDereferenceTrace(
+  trace: CfcDereferenceTrace,
+): CfcDereferenceTrace {
+  const { source, target } = trace;
+  if (
+    ownMemberCount(trace) !== 3 || ownMemberCount(source) !== 4 ||
+    ownMemberCount(target) !== 4
+  ) {
+    return deepFreeze(trace);
+  }
+  Object.freeze(source.path);
+  Object.freeze(source);
+  Object.freeze(target.path);
+  Object.freeze(target);
+  return Object.freeze(trace);
+}
+
+/**
+ * Helper for `freezeDereferenceTrace()`, which counts the own enumerable
+ * members of `record`, the ones `deepFreeze()` freezes.
+ */
+function ownMemberCount(record: object): number {
+  let count = 0;
+  for (const key in record) {
+    if (Object.hasOwn(record, key)) count++;
+  }
+  return count;
 }
 
 // Read-only view of the transaction's CFC state, returned by getCfcState().
@@ -641,6 +645,7 @@ let assignCfcImplementationIdentity: (
 let unwrapTransaction: (
   tx: object,
 ) => IExtendedStorageTransaction | undefined;
+let assignBeforeAbort: (tx: object, callback: () => void) => boolean;
 let isExtendedStorageTransaction: (value: object) => boolean;
 
 export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
@@ -712,6 +717,12 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   #outboxIdempotencyKeys = new Set<string>();
   #readOnlySource?: string;
   #narrowestReadScope: CellScope = "space";
+
+  /**
+   * The callback `runBeforeAbort()` registered, which the next `abort()` runs
+   * once, first. See that function.
+   */
+  #beforeAbort: (() => void) | undefined;
 
   /**
    * The CFC state. ECMAScript-private (`#`), like `#privilegedSystemWriteDepth`
@@ -1550,6 +1561,53 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   /**
+   * Helper for {@link releaseCfcConfidentiality} and
+   * {@link releaseCfcConfidentialityByIntent}, which writes, in the privileged
+   * scope, the envelope `existing` becomes once a release leaves the payload
+   * entries `entries` and the stored schema `lowered`, and returns it. A
+   * schema other than `storedSchema` is installed and named, and the
+   * label-metadata templates are derived from `entries`, as every persist
+   * derives them.
+   */
+  #writeReleasedEnvelope(
+    target: {
+      space: MemorySpace;
+      id: URI;
+      scope: ReturnType<typeof normalizeCellScope>;
+    },
+    existing: CfcMetadata,
+    storedSchema: JSONSchema | undefined,
+    entries: readonly LabelMapEntry[],
+    lowered: JSONSchema,
+  ): CfcMetadata {
+    return this.#runPrivilegedSystemWrite((): CfcMetadata => {
+      let schemaHash = existing.schemaHash;
+      if (lowered !== storedSchema) {
+        const interned = internSchema(lowered, true);
+        ensureSchemaDocument(
+          this,
+          target.space,
+          interned.taggedHashString,
+          interned.schema,
+        );
+        schemaHash = interned.taggedHashString;
+      }
+      const templates = labelMetadataTemplatesFor(entries);
+      const metadata: CfcMetadata = {
+        ...existing,
+        schemaHash,
+        labelMap: {
+          version: existing.labelMap.version,
+          entries: [...entries],
+          ...(templates.length > 0 ? { documentEntries: templates } : {}),
+        },
+      };
+      writeStoredCfcEnvelope(this, target, metadata);
+      return metadata;
+    });
+  }
+
+  /**
    * Records a write that reaches a document's `["cfc"]` label map from outside
    * the privileged scope, whether by naming that path or by replacing the whole
    * document envelope. Such a write forges or erases the metadata that drives
@@ -1756,26 +1814,21 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         }
       }
     }
-    // A path-[] write replaces the whole document envelope, so it reaches
-    // every reserved sibling without naming one.
-    if (address.path.length === 0) {
-      this.#noteRootEnvelopeWrite(address, value);
-      return;
-    }
-    // An address that names a reserved sibling, or a path inside one. The
-    // ["cfc"] sibling holds the persisted label map and ["source"] names the
-    // entity a document was derived from; a value-path write (path[0] is
-    // "value") is neither.
-    const sibling = address.path[0];
-    if (!isReservedSibling(sibling)) return;
-    this.markCfcRelevant(`unprivileged-${sibling}-write`);
-    this.#cfcState.unprivilegedSystemWrites.push(
-      `${address.id}/${address.path.join("/")}`,
+    // A delete stores nothing, whatever value it names, so a root delete
+    // erases every stored sibling.
+    this.#noteReservedSiblingWrite(
+      address,
+      options?.delete === true ? undefined : value,
     );
   }
 
   /**
-   * Records a path-`[]` whole-document write that changes a reserved sibling.
+   * Records a write that changes a reserved sibling: one addressed at the
+   * sibling, or at a path inside it, and a path-`[]` whole-document write. The
+   * `cfc` sibling holds the persisted label map and `source` names the entity
+   * a document was derived from; a value-path write (`path[0]` is `value`)
+   * reaches neither.
+   *
    * A root write replaces every sibling of `value`, so it reaches each of them
    * at once, by omission as much as by overwrite. An envelope that leaves the
    * document without a label map erases the one it held, and a labeled
@@ -1783,9 +1836,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * map behind that is not the stored one installs a map the derivation pass
    * never derived, and a document's map is what decides the label it claims —
    * the runtime-evidence atoms a prompt-injection screen trusts included. Both
-   * are the downgrade the addressed arm of `#noteSystemWrite()` catches,
-   * reached by replacing the envelope rather than by naming the sibling, so
-   * both land in the same record and yield the same fail-closed reason.
+   * are the downgrade an addressed write makes, reached by replacing the
+   * envelope rather than by naming the sibling, so all three land in the same
+   * record and yield the same fail-closed reason.
    *
    * A sibling is compared on what a reader would see, so the arm fires on a
    * change rather than on the presence of a key. For `cfc` that account is
@@ -1809,7 +1862,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * `cfc-privileged-system-write.test.ts` pins the bypass, so it fails when
    * either lands.
    */
-  #noteRootEnvelopeWrite(
+  #noteReservedSiblingWrite(
     address: IMemorySpaceAddress,
     value: FabricValue | undefined,
   ): void {
@@ -1834,26 +1887,27 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // whatever a user field called `cfc` holds. `internalVerifierRead` says
     // what the read is: the runtime resolving a label, the same mark
     // `readStoredCfcMetadata()` carries.
-    const envelope = isObjectOrArray(value)
-      ? value as { readonly [key in ReservedSibling]?: FabricValue }
-      : undefined;
-    for (const sibling of RESERVED_SIBLINGS) {
-      const carried = envelope?.[sibling];
-      const stored = this.tx.read({ ...address, path: [sibling] }, {
-        meta: {
-          ...ignoreReadForScheduling,
-          ...ignoreReadForCommit,
-          ...internalVerifierRead,
-        },
-      }).ok?.value;
-      if (reservedSiblingPresent(sibling, carried)) {
-        if (reservedSiblingCarriedForward(carried, stored)) continue;
-        this.markCfcRelevant(`unprivileged-${sibling}-forgery`);
-      } else {
-        if (!reservedSiblingPresent(sibling, stored)) continue;
-        this.markCfcRelevant(`unprivileged-${sibling}-erasure`);
-      }
-      this.#cfcState.unprivilegedSystemWrites.push(`${address.id}/${sibling}`);
+    const changes = reservedSiblingChanges(
+      address.path,
+      value,
+      (sibling) =>
+        this.tx.read({ ...address, path: [sibling] }, {
+          meta: {
+            ...ignoreReadForScheduling,
+            ...ignoreReadForCommit,
+            ...internalVerifierRead,
+          },
+        }).ok?.value,
+    );
+    for (const [sibling, change] of changes) {
+      this.markCfcRelevant(
+        `unprivileged-${sibling}-${change === "addressed" ? "write" : change}`,
+      );
+      this.#cfcState.unprivilegedSystemWrites.push(
+        change === "addressed"
+          ? `${address.id}/${address.path.join("/")}`
+          : `${address.id}/${sibling}`,
+      );
     }
   }
 
@@ -2053,19 +2107,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     key: string,
     variant: string,
   ): { value: unknown } | undefined {
-    // Both caches key on path and schema, not on which instant is being read,
-    // and they are dropped on write to stay level with current state. A read
-    // resolving against an earlier epoch is describing a different instant, so
-    // it neither takes from them nor adds to them — serving one across that
-    // boundary would hand a materialized read's value to a current one, or the
-    // reverse.
-    if (this.#readEpoch !== undefined) return undefined;
-    // Cell traversals, like link-resolution memos, must stay within their
-    // ambient read classification; a scheduler probe cannot authorize a get.
-    variant = `${
-      this.#snapshotMemoKey(undefined, this.#ambientReadMeta)
-    }|${variant}`;
-    const cached = this.#readResultCache.get(key)?.get(variant);
+    const cacheVariant = this.#readResultCacheVariant(variant);
+    if (cacheVariant === undefined) return undefined;
+    const cached = this.#readResultCache.get(key)?.get(cacheVariant);
     if (cached === undefined) {
       this.#readResultCacheMisses++;
     } else {
@@ -2079,17 +2123,60 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     variant: string,
     value: unknown,
   ): void {
-    if (this.#readEpoch !== undefined) return;
-    variant = `${
-      this.#snapshotMemoKey(undefined, this.#ambientReadMeta)
-    }|${variant}`;
+    const cacheVariant = this.#readResultCacheVariant(variant);
+    if (cacheVariant === undefined) return;
     let byVariant = this.#readResultCache.get(key);
     if (byVariant === undefined) {
       byVariant = new Map();
       this.#readResultCache.set(key, byVariant);
     }
-    byVariant.set(variant, { value });
+    byVariant.set(cacheVariant, { value });
     this.#readResultCacheSets++;
+  }
+
+  /**
+   * Helper for `getCachedReadResult()` and `setCachedReadResult()`, which
+   * returns the key a read of `variant` files under in a view's entry of the
+   * read result cache, or `undefined` when this transaction may neither serve
+   * nor store a cached read.
+   */
+  #readResultCacheVariant(variant: string): string | undefined {
+    // This cache keys on path and schema, not on which instant is being read,
+    // and is dropped on write to stay level with current state. A read
+    // resolving against an earlier epoch is describing a different instant, so
+    // it neither takes from it nor adds to it — serving one across that
+    // boundary would hand a materialized read's value to a current one, or the
+    // reverse.
+    if (this.#readEpoch !== undefined || !this.#memoizesReads()) {
+      return undefined;
+    }
+    // Cell traversals, like link-resolution memos, must stay within their
+    // ambient read classification; a scheduler probe cannot authorize a get.
+    return `${
+      this.#snapshotMemoKey(undefined, this.#ambientReadMeta)
+    }|${variant}`;
+  }
+
+  /**
+   * Helper for `getSnapshotMemo()` and `#readResultCacheVariant()`, which
+   * returns whether this transaction may serve or store a memoized read.
+   */
+  #memoizesReads(): boolean {
+    return (
+      // A finished transaction answers no reads, so nothing it memoized
+      // earlier may be handed out as if it had.
+      this.status().status === "ready" &&
+      // Once CFC is prepared, the read path's `read-after-prepare`
+      // invalidation is load-bearing: a memoized read issues no reads and
+      // would leave a prepared digest standing over a read it never made.
+      this.#cfcState.prepare.status !== "prepared" &&
+      // The UI-input blind-write mode tags every read it sees
+      // `ignoreReadForCommit`. An entry made under it, served after it is
+      // cleared, would stand in for reads that are supposed to carry a
+      // value-equality commit precondition — and the precondition would
+      // simply not be there.
+      !isUiInputBlindWriteTx(this)
+    );
   }
 
   resetCurrentReadMemoization(): void {
@@ -2097,19 +2184,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   getSnapshotMemo(): Map<string, unknown> | undefined {
-    // A finished transaction answers no reads, so nothing it memoized earlier
-    // may be handed out as if it had.
-    if (this.status().status !== "ready") return undefined;
-    // Once CFC is prepared, the read path's `read-after-prepare` invalidation
-    // is load-bearing: a memoized resolution issues no reads and would leave a
-    // prepared digest standing over a read it never made.
-    if (this.#cfcState.prepare.status === "prepared") return undefined;
-    // The UI-input blind-write mode tags every read it sees
-    // `ignoreReadForCommit`. An entry made under it, served after it is
-    // cleared, would stand in for reads that are supposed to carry a
-    // value-equality commit precondition — and the precondition would simply
-    // not be there.
-    if (isUiInputBlindWriteTx(this)) return undefined;
+    if (!this.#memoizesReads()) return undefined;
     const epoch = this.#readEpoch;
     const meta = this.#ambientReadMeta;
     if (epoch === undefined && meta === undefined) return this.#snapshotMemo;
@@ -2255,7 +2330,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // identity-stable. Mirrors the chokepoint pattern on
     // `recordCfcWritePolicyInput()`; together they ensure every CfcAddress
     // that flows into the digest input lives behind a deep-frozen wrapper.
-    traces.push(deepFreeze(trace));
+    traces.push(freezeDereferenceTrace(trace));
     this.#cfcInstrumentation.onDereferenceTrace?.(traces.length);
     if (changesDigest) {
       this.invalidateCfc("dereference-trace-added");
@@ -2297,6 +2372,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   static {
     isExtendedStorageTransaction = (value) => #cfcState in value;
+    assignBeforeAbort = (tx, callback) => {
+      if (!(#cfcState in tx)) return false;
+      tx.#beforeAbort = callback;
+      return true;
+    };
     assignCfcTrustSnapshot = (tx, snapshot) => {
       if (!(#cfcState in tx)) return false;
       tx.#noteCfcActivity();
@@ -2794,26 +2874,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     const lowered = plan.schema;
     // Deliberately NOT marked CFC-relevant, like a grant write: the plan above
     // is the whole of the verification, and a throw leaves nothing written.
-    const metadata = this.#runPrivilegedSystemWrite((): CfcMetadata => {
-      let schemaHash = existing.schemaHash;
-      if (lowered !== storedSchema) {
-        const interned = internSchema(lowered, true);
-        ensureSchemaDocument(
-          this,
-          target.space,
-          interned.taggedHashString,
-          interned.schema,
-        );
-        schemaHash = interned.taggedHashString;
-      }
-      const metadata: CfcMetadata = {
-        ...existing,
-        schemaHash,
-        labelMap: { ...existing.labelMap, entries: [...plan.entries] },
-      };
-      writeStoredCfcEnvelope(this, target, metadata);
-      return metadata;
-    });
+    const metadata = this.#writeReleasedEnvelope(
+      target,
+      existing,
+      storedSchema,
+      plan.entries,
+      lowered,
+    );
     return {
       actor,
       released: plan.released,
@@ -2821,6 +2888,125 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       releasedDigests: plan.released.map(cfcCanonicalClauseDigest),
       priorEnvelopeDigest,
       envelopeDigest: hashStringOf(canonicalizeCfcMetadata(metadata)),
+    };
+  }
+
+  releaseCfcConfidentialityByIntent(
+    input: CfcConfidentialityReleaseByIntentInput,
+  ): CfcConfidentialityReleaseByIntent {
+    this.#assertWritable("releaseCfcConfidentialityByIntent()");
+    // Like an owner release, a release by intent lowers a stored label in
+    // place, so authoring one takes its writer's own builtin identity.
+    const identity = this.#cfcState.implementationIdentity;
+    if (
+      identity?.kind !== "builtin" ||
+      identity.builtinId !== OWNER_RELEASE_BY_INTENT_WRITER
+    ) {
+      throw new Error(
+        "cfc-owner-release-by-intent: `releaseCfcConfidentialityByIntent()` " +
+          `requires the \`${OWNER_RELEASE_BY_INTENT_WRITER}\` builtin ` +
+          "implementation identity",
+      );
+    }
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/90 Route 2d,
+    // which the pin does not have: a verified request lowers clauses that are
+    // not the owner's alone.
+    const signed = parseSignedOwnerReleaseByIntentRequest(input.signed);
+    if (signed === undefined) {
+      throw new Error(
+        "Cannot release by intent: the request is not a well-formed signed " +
+          "release request.",
+      );
+    }
+    const { request } = signed;
+    const location = request.path.length === 0
+      ? "<root>"
+      : request.path.join("/");
+    const refuse: (reason: string) => never = (reason) => {
+      throw new Error(
+        `Cannot release by intent at ${location} of ${request.document}: ` +
+          `${reason}.`,
+      );
+    };
+    if (!verifyOwnerReleaseByIntentSignature(signed)) {
+      refuse("the request's signature does not verify");
+    }
+    const space = request.space as MemorySpace;
+    const readMember = (id: string, path: readonly string[]) =>
+      this.read({
+        space,
+        id: id as URI,
+        scope: DEFAULT_CELL_SCOPE,
+        type: "application/json",
+        path: [...path],
+      }, { meta: internalVerifierRead }).ok?.value;
+    // The caller loaded the access list from the store, so reading it here
+    // reads what the store holds; the check reads it on this transaction,
+    // and depends on nothing the caller says about it.
+    const owner = ownerReleaseByIntentSpaceOwner(
+      space,
+      releaseAccessListOf(this, space),
+    );
+    if (owner === undefined || owner !== request.signer || !isDID(owner)) {
+      refuse(
+        `${request.signer} is not the owner the space's access list names`,
+      );
+    }
+    const storedCfc = readMember(request.document, ["cfc"]);
+    if (
+      ownerReleaseByIntentEnvelopeDigest(storedCfc) !== request.envelopeDigest
+    ) {
+      refuse("the document's envelope has changed since the request was made");
+    }
+    const recordId = ownerReleaseByIntentRecordId(
+      request.document,
+      ownerReleaseByIntentRequestDigest(request),
+    );
+    if (readMember(recordId, []) !== undefined) {
+      refuse("the request has already been used");
+    }
+    const target = {
+      space,
+      id: request.document as URI,
+      scope: DEFAULT_CELL_SCOPE,
+    };
+    const stored = loadStoredCfcEnvelope(this, target);
+    if (stored.status !== "loaded") {
+      refuse(
+        stored.status === "unreadable"
+          ? stored.reason
+          : "the document stores no labels",
+      );
+    }
+    const { metadata: existing, schema: storedSchema } = stored;
+    const plan = planConfidentialityReleaseByIntent({
+      path: request.path,
+      entries: existing.labelMap.entries,
+      schema: storedSchema,
+      releasedClauseDigests: request.releasedClauseDigests,
+    });
+    // A plan over a stored schema always returns one.
+    const lowered = plan.schema ?? storedSchema;
+    // Deliberately NOT marked CFC-relevant, like an owner release: the checks
+    // above are the whole of the verification, and a throw leaves nothing
+    // written.
+    this.#writeReleasedEnvelope(
+      target,
+      existing,
+      storedSchema,
+      plan.entries,
+      lowered,
+    );
+    return {
+      owner,
+      released: plan.released,
+      paths: plan.paths,
+      releasedDigests: plan.released.map(cfcCanonicalClauseDigest),
+      priorEnvelopeDigest: request.envelopeDigest,
+      envelopeDigest: ownerReleaseByIntentEnvelopeDigest(
+        readMember(request.document, ["cfc"]),
+      ),
+      recordId,
     };
   }
 
@@ -2948,15 +3134,15 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    */
   #preparedActivityStands(): boolean {
     const prepared = this.#preparedSnapshot;
-    // A prepared state always has its snapshot; without one there is nothing
-    // the commit could be shown to match.
-    if (prepared === undefined) return false;
     const current = this.#activitySnapshot();
     if (current === prepared) {
       this.#cfcInstrumentation.onPreparedDigest?.("memo");
       return true;
     }
-    return this.#digestOf(current) === this.#digestOf(prepared);
+    // A prepared state always has its snapshot; without one there is nothing
+    // the commit could be shown to match.
+    return prepared !== undefined &&
+      this.#digestOf(current) === this.#digestOf(prepared);
   }
 
   #buildPreparedDigestInput(): PreparedDigestInput {
@@ -3055,17 +3241,17 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       }));
     }
 
-    // The four arrays above hold records frozen where they were made. Every
-    // other member is small, and holds records the transaction deep-froze
-    // when it recorded them or containers built here, which `deepFreeze()`
-    // finishes.
+    // The four arrays above hold records frozen where they were made, and so
+    // do the dereference traces (`freezeDereferenceTrace()`). Every other
+    // member is small, and holds records the transaction deep-froze when it
+    // recorded them or containers built here, which `deepFreeze()` finishes.
     return Object.freeze({
       consumedReads: Object.freeze(consumedReads),
       attemptedWrites: Object.freeze(attemptedWrites),
       writes: Object.freeze(writes),
       writeAttemptLog: Object.freeze(writeAttemptLog),
+      dereferenceTraces: Object.freeze([...this.#cfcState.dereferenceTraces]),
       ...deepFreeze({
-        dereferenceTraces: [...this.#cfcState.dereferenceTraces],
         triggerReads: [...this.#cfcState.triggerReads],
         writePolicyInputs: [...this.#cfcState.writePolicyInputs],
         ...(this.#cfcState.assertedValueRoots.length > 0
@@ -3977,8 +4163,12 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   ): Result<Unit, ReadError> {
     if (paths.length === 0) return { ok: {} };
     const readOptions = this.#withAmbientReadMeta(options);
+    // One address, re-aimed at each path, so a batch allocates no address per
+    // path it checks.
+    const probe = { id: address.id, path: paths[0] };
     for (const path of paths) {
-      this.#assertRuntimeSecretUnread({ id: address.id, path }, readOptions);
+      probe.path = path;
+      this.#assertRuntimeSecretUnread(probe, readOptions);
     }
     this.#prepareRead(address);
     if (this.tx.trackReadPaths) {
@@ -4042,7 +4232,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     if (options?.delete !== true) {
       this.#refuseMalformedSchemaMeta(address, value);
     }
-    const result = this.tx.write(address, value, options);
+    const result = this.tx.write(
+      address,
+      value,
+      writeChokepointMark(options),
+    );
     if (result.ok) {
       this.#noteWrite();
       this.#stageSchemaDocsForValue(address.space, address, value);
@@ -4067,75 +4261,14 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     if (options?.delete !== true) {
       this.#refuseMalformedSchemaMeta(address, value);
     }
-    const writeResult = this.tx.write(address, value, options);
-    if (
-      writeResult.error &&
-      (writeResult.error.name === "NotFoundError")
-    ) {
-      if (options?.delete) {
-        // Deleting a slot whose path doesn't exist is a no-op; don't
-        // materialize intermediates just to remove nothing.
-        return;
-      }
-      // Create parent entries if needed.
-      // errorPath includes the missing key (consistent with read errors).
-      // lastExistingPath is one level up - the actual last existing parent.
-      const errorPath = (writeResult.error as INotFoundError).path;
-      const lastExistingPath = errorPath.slice(0, -1);
-      // When document doesn't exist (errorPath is []), we don't need to read -
-      // just start with {}. But if errorPath has content (e.g., ["foo"]), the
-      // document exists and we need to read from lastExistingPath to preserve
-      // existing fields.
-      let valueObj: MutableFabricPlainObjectLayer;
-      if (errorPath.length === 0) {
-        valueObj = {};
-      } else {
-        const currentValue = this.readOrThrow({
-          ...address,
-          path: lastExistingPath,
-        }, { meta: ignoreReadForScheduling });
-        if (!isObjectOrArray(currentValue)) {
-          // This should have already been caught as type mismatch error
-          throw new Error(
-            `Value at path ${address.path.join("/")} is not an object`,
-          );
-        }
-        // Stored objects are deep-frozen by `fabricFromConvertibleJsValue()`.
-        // Clone before mutation to avoid `TypeError` on frozen objects: this
-        // always copies (the value may be the transaction's working copy, which
-        // must not be mutated in place), and it deep-freezes the bound children
-        // as inexpensive defense-in-depth against accidental deeper mutation of
-        // the shared input.
-        valueObj = shallowMutableClone(
-          currentValue,
-        ) as MutableFabricPlainObjectLayer;
-      }
-      const remainingPath = address.path.slice(lastExistingPath.length);
-      if (remainingPath.length === 0) {
-        throw new Error(
-          `Invalid error path: ${errorPath.join("/")}`,
-        );
-      }
-      const lastKey = remainingPath.pop()!;
-      let nextValue: MutableFabricPlainObjectLayer = valueObj;
-      // Create intermediate containers. The container type depends on whether
-      // the NEXT key (the one that will access this container) is a valid array
-      // index.
-      for (let i = 0; i < remainingPath.length; i++) {
-        const key = remainingPath[i];
-        const nextKey = remainingPath[i + 1] ?? lastKey;
-        const isNextKeyArrayIndex = isArrayIndexPropertyName(nextKey);
-        nextValue =
-          nextValue[key] =
-            (isNextKeyArrayIndex ? [] : {}) as FabricPlainObject;
-      }
-      nextValue[lastKey] = value;
-      const parentAddress = { ...address, path: lastExistingPath };
-      const writeResultRetry = this.tx.write(parentAddress, valueObj);
-      if (writeResultRetry.error) {
-        throw toThrowable(writeResultRetry.error);
-      }
-    } else if (writeResult.error) {
+    const writeResult = this.tx.write(
+      address,
+      value,
+      writeChokepointMark(options),
+    );
+    // The storage transaction creates whatever containers the path needs,
+    // so an error here is a refusal of the write itself.
+    if (writeResult.error) {
       throw toThrowable(writeResult.error);
     }
     this.#noteWrite();
@@ -4283,6 +4416,17 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   abort(reason?: any): Result<any, InactiveTransactionError> {
     this.#assertWritable("abort()");
+    // Ahead of everything below, since the preparation inputs it releases are
+    // what the callback reads.
+    const beforeAbort = this.#beforeAbort;
+    this.#beforeAbort = undefined;
+    if (beforeAbort !== undefined) {
+      try {
+        beforeAbort();
+      } catch (error) {
+        logger.error("before-abort", "A before-abort callback threw", error);
+      }
+    }
     this.#statusOverride = undefined;
     this.#clearPostCommitOutbox();
     this.#preparationRefused = false;
@@ -4416,6 +4560,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   /** Starts this commit attempt and exposes its verdict and settlement. */
   commit(options?: TransactionCommitOptions): TransactionCommitReceipt {
+    // A commit is this transaction's verdict as much as an abort is, so a
+    // callback registered for an abort is dropped here rather than kept for
+    // as long as the transaction is.
+    this.#beforeAbort = undefined;
     const ready = this.status().status === "ready";
     const settled = this.#commit(options);
     return createTransactionCommitReceipt(
@@ -5200,6 +5348,12 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     return this.#wrapped.releaseCfcConfidentiality(input);
   }
 
+  releaseCfcConfidentialityByIntent(
+    input: CfcConfidentialityReleaseByIntentInput,
+  ): CfcConfidentialityReleaseByIntent {
+    return this.#wrapped.releaseCfcConfidentialityByIntent(input);
+  }
+
   noteCfcSinkReleaseReject(
     info: { sink: string; effectId: string; detail: string },
   ): void {
@@ -5583,6 +5737,31 @@ const assignTrustState = (
 };
 
 /**
+ * Registers `callback` to run once, at the start of the next `abort()` of
+ * `tx`, before the abort releases what the transaction recorded for
+ * preparation: the observations its flow join is derived from among them. It
+ * exists for the serving loop's decision whether a served event handling's
+ * outcome is withheld (`runOutcomeIsWithheld()` in
+ * `executor/processed-claim.ts`), which a handler that aborts its own
+ * transaction would otherwise leave to be made with those observations gone.
+ *
+ * A second registration replaces the first. A callback that throws is logged,
+ * and the abort goes ahead. Like `setCfcImplementationIdentity()`, this is no
+ * method of the transaction: only host code, which can import this module,
+ * registers one, and only `abort()` runs it.
+ */
+export function runBeforeAbort(
+  tx: IExtendedStorageTransaction,
+  callback: () => void,
+): void {
+  assignTrustState(
+    tx,
+    (target) => assignBeforeAbort(target, callback),
+    "runBeforeAbort()",
+  );
+}
+
+/**
  * Returns whether `value` is a transaction the runtime created: an
  * `ExtendedStorageTransaction`, or a `TransactionWrapper` around such a
  * transaction. The check is a private brand, which no object pattern code
@@ -5636,4 +5815,29 @@ export function setCfcImplementationIdentity(
     (target) => assignCfcImplementationIdentity(target, identity),
     "setCfcImplementationIdentity()",
   );
+}
+
+/**
+ * The access list of `space` as `tx` reads it, which a caller has loaded from
+ * the store first: not stored where the store holds no list document, and
+ * stored, with the document's `value`, which may be absent, where it holds
+ * one. Read loaded, an absent document is one the store does not hold; read
+ * unloaded, it may only be one the replica has not fetched, and this would
+ * call it not stored.
+ */
+export function releaseAccessListOf(
+  tx: IExtendedStorageTransaction,
+  space: MemorySpace,
+): OwnerReleaseByIntentAcl {
+  const document = tx.read({
+    space,
+    id: aclDocId(space) as URI,
+    scope: DEFAULT_CELL_SCOPE,
+    type: "application/json",
+    path: [],
+  }, { meta: internalVerifierRead }).ok?.value;
+  return document === undefined ? { stored: false } : {
+    stored: true,
+    value: isPlainObject(document) ? document.value : undefined,
+  };
 }

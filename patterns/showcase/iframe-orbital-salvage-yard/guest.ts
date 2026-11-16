@@ -1,5 +1,7 @@
 // deno-lint-ignore-file no-external-import -- pinned Babylon subpaths are bundled into the iframe
 import { ArcRotateCamera } from "npm:@babylonjs/core@9.23.0/Cameras/arcRotateCamera.js";
+// Registers the picking that selecting and dragging modules in the scene use.
+import "npm:@babylonjs/core@9.23.0/Culling/ray.js";
 import { Engine } from "npm:@babylonjs/core@9.23.0/Engines/engine.js";
 import { PointerEventTypes } from "npm:@babylonjs/core@9.23.0/Events/pointerEvents.js";
 import { HemisphericLight } from "npm:@babylonjs/core@9.23.0/Lights/hemisphericLight.js";
@@ -117,6 +119,9 @@ const { engine, scene } = initializeGraphics(
   },
 );
 scene.clearColor = new Color4(0.012, 0.025, 0.04, 1);
+// The guest shows its own grab cursors, which Babylon would otherwise reset
+// on every pointer move.
+scene.doNotHandleCursors = true;
 const camera = new ArcRotateCamera(
   "salvage-orbit-camera",
   -Math.PI / 3,
@@ -132,6 +137,7 @@ camera.upperBetaLimit = Math.PI / 2.02;
 camera.wheelPrecision = 35;
 camera.panningSensibility = 0;
 camera.attachControl(canvas, true);
+camera.storeState();
 
 const keyLight = new HemisphericLight(
   "yard-key-light",
@@ -267,11 +273,9 @@ function updateControlState(): void {
   }
 }
 
+/** Puts the camera back where it started, stopping any glide it is in. */
 function resetCamera(): void {
-  camera.alpha = -Math.PI / 3;
-  camera.beta = Math.PI / 3;
-  camera.radius = 23;
-  camera.target.copyFromFloats(0, 1.2, 0);
+  camera.restoreState();
 }
 
 function cameraDescription(): string {
@@ -587,7 +591,6 @@ function selectModule(moduleId: string | null): void {
 
 function runAction(label: string, action: () => Promise<void>): Promise<void> {
   const next = actionTail.then(async () => {
-    if (!hydrated) return;
     pendingAction = label;
     clearError();
     updateControlState();
@@ -765,10 +768,9 @@ function updateDrag(pointerId: number): void {
 }
 
 function endDrag(pointerId: number, cancelled: boolean): void {
-  const disposition = dragDisposition(drag, pointerId, cancelled);
-  if (disposition === "ignore") return;
   const completed = drag;
-  if (!completed) return;
+  if (!ownsDrag(completed, pointerId)) return;
+  const disposition = dragDisposition(completed, cancelled);
   drag = undefined;
   if (canvas.hasPointerCapture(completed.pointerId)) {
     canvas.releasePointerCapture(completed.pointerId);
@@ -826,11 +828,8 @@ for (
   )
 ) {
   button.addEventListener("click", () => {
-    const delta = button.dataset.move?.split(",").map(Number) as
-      | Vector3Tuple
-      | undefined;
-    if (!delta || delta.some((value) => !Number.isFinite(value))) return;
-    void runAction("module position", () => moveSelected(delta));
+    const [x, y, z] = String(button.dataset.move).split(",").map(Number);
+    void runAction("module position", () => moveSelected([x, y, z]));
   }, { signal });
 }
 

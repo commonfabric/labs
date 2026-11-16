@@ -2687,11 +2687,14 @@ const appendStructuredResultInstructions = (
     lines.push(
       "- Finish by calling submit_result with the whole result as `result`. It validates the value against the configured schema and tells you what to correct; an accepted result ends the run, so make it your last call. Where the result refers to something you hold a handle for, write the handle token, not an address.",
     );
+  } else {
+    lines.push(
+      `- Write a JSON file at ${structuredResult.sandboxPath} when an available tool can write it; the run then still ends on your final response.`,
+      "- The harness validates that file against the configured structured-result schema after the run.",
+      "- If the file is missing, invalid JSON, or schema-invalid, the CLI exits nonzero and records the validation failure in the batch result sidecar when configured.",
+    );
   }
   lines.push(
-    `- Writing a JSON file at ${structuredResult.sandboxPath} yourself is the other way to the same place when an available tool can write it; the run then still ends on your final response.`,
-    "- The harness validates that file against the configured structured-result schema after the run.",
-    "- If the file is missing, invalid JSON, or schema-invalid, the CLI exits nonzero and records the validation failure in the batch result sidecar when configured.",
     "- Object schemas are closed by default: include only properties the schema declares unless it explicitly allows additional properties.",
     "",
     "Result schema (JSON):",
@@ -2762,12 +2765,15 @@ export const buildCfHarnessOperatorSystemPrompt = (
     "- Stop once you have enough evidence to answer.",
   ];
   appendHostMountInstructions(lines, config);
+  // The caller's instructions come before the result contract: a caller's
+  // standing instructions are commonly the same in every run while its result
+  // schema is per call, and the provider caches only the prefix runs share.
+  appendAdditionalInstructions(lines, config.systemPrompt);
   appendStructuredResultInstructions(
     lines,
     config.structuredResult,
     config.allowedToolIds,
   );
-  appendAdditionalInstructions(lines, config.systemPrompt);
   return lines.join("\n");
 };
 
@@ -2808,12 +2814,15 @@ export const buildCfHarnessBatchSystemPrompt = (
     lines.push("");
     appendHostMountInstructions(lines, config);
   }
+  // The caller's instructions come before the result contract: a caller's
+  // standing instructions are commonly the same in every run while its result
+  // schema is per call, and the provider caches only the prefix runs share.
+  appendAdditionalInstructions(lines, config.systemPrompt);
   appendStructuredResultInstructions(
     lines,
     config.structuredResult,
     config.allowedToolIds,
   );
-  appendAdditionalInstructions(lines, config.systemPrompt);
   return lines.join("\n");
 };
 

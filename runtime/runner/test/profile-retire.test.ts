@@ -11,6 +11,7 @@
 
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { fromFileUrl } from "@std/path";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
@@ -104,9 +105,13 @@ describe("profile-retire", () => {
     return resolveLocalProgram(
       (resolver) => rt.harness.resolve(resolver),
       {
-        main: new URL(`../../../patterns/system/${name}`, import.meta.url)
-          .pathname,
-        root: new URL("../../..", import.meta.url).pathname.replace(/\/$/, ""),
+        main: fromFileUrl(
+          new URL(`../../../patterns/system/${name}`, import.meta.url),
+        ),
+        root: fromFileUrl(new URL("../../..", import.meta.url)).replace(
+          /\/$/,
+          "",
+        ),
       },
     );
   }

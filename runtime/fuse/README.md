@@ -112,7 +112,7 @@ xattr -p user.json.type home/pieces/todo-app/result/count
 cat home/pieces/todo-app/meta.json
 # => {"id":"of:ba4j...","entityId":"ba4j...","name":"todo-app","patternRef":{"identity":"<hash>","symbol":"default","source":{"ref":"cf:pattern:<hash>","repository":"https://github.com/commonfabric/labs","entry":"/patterns/todo-app.tsx"}}}
 
-# Mounted callables are executable and start with a cf exec shebang
+# Mounted callables are executable shell scripts that run cf exec on themselves
 head -n1 home/pieces/todo-app/result/addItem.handler
 head -n1 home/pieces/todo-app/result/search.tool
 
@@ -374,8 +374,13 @@ can reconcile them without exposing lower labels. Use
 `--cfc-writeback-state=<path>` to choose the recovery file; otherwise CFC modes
 use a mountpoint-derived file under `$CF_CFC_WRITEBACK_STATE_DIR`,
 `$XDG_STATE_HOME/commonfabric-fuse`, or `~/.cache/commonfabric-fuse`, in that
-order. The mount `.status` file includes a `cfc` section with writeback phase
-counts and recent diagnostics.
+order. A missing or empty recovery file starts the mount with no records. One
+that is not JSON, or is from another format version, stops the mount from
+starting, and the error names the file; move it aside to start without its
+records. A record in it that the mount does not recognize is kept as it is and
+written back with the rest. The file is replaced whole on each change, and only
+its owner can read it. The mount `.status` file includes a `cfc` section with
+writeback phase counts and recent diagnostics.
 
 Arbitrary symlink targets and callable-send writeback are still out of scope for
 CFC enforcing modes and are rejected there. gVisor remains responsible for

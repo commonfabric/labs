@@ -258,7 +258,6 @@ export class CFPicker extends BaseElement {
   override connectedCallback() {
     super.connectedCallback();
     this.setAttribute("role", "listbox");
-    this.tabIndex = this.disabled ? -1 : 0;
     this.addEventListener("keydown", this._handleKeyDown);
     this.addEventListener("focus", this._handleFocus);
     this.addEventListener("blur", this._handleBlur);
@@ -480,13 +479,12 @@ export class CFPicker extends BaseElement {
   //
 
   private _handleTouchStart = (event: TouchEvent): void => {
-    if (this.disabled) return;
     this._touchStartX = event.touches[0].clientX;
     this._isTouching = true;
   };
 
   private _handleTouchEnd = (event: TouchEvent): void => {
-    if (this.disabled || !this._isTouching) return;
+    if (!this._isTouching) return;
     const deltaX = event.changedTouches[0].clientX - this._touchStartX;
     if (Math.abs(deltaX) > 50) {
       deltaX > 0 ? this._selectPrevious() : this._selectNext();

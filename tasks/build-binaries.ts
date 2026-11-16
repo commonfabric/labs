@@ -228,6 +228,16 @@ export class BuildConfig {
     return this.#path("runtime", "toolshed", "lib", "serving-worker.ts");
   }
 
+  compileWorkerPath() {
+    return this.#path(
+      "runtime",
+      "runner",
+      "src",
+      "harness",
+      "compile-worker.ts",
+    );
+  }
+
   toolshedEnvPath() {
     return this.#path("runtime", "toolshed", "COMPILED");
   }
@@ -286,6 +296,7 @@ export class BuildConfig {
       this.toolshedProjectPath(),
       this.toolshedEntryPath(),
       this.toolshedServingWorkerPath(),
+      this.compileWorkerPath(),
       this.staticAssetsPath(),
       ...this.patternPaths(),
       this.staticTypesPath(),
@@ -314,6 +325,9 @@ export class BuildConfig {
           // The serving loop's worker entry. The compile does not follow a
           // worker's module, so it is named here.
           this.toolshedServingWorkerPath(),
+          // The compile worker the serving runtimes compile in, which the
+          // compile does not follow either.
+          this.compileWorkerPath(),
           this.toolshedEnvPath(),
           this.staticAssetsPath(),
           ...this.patternPaths(),
@@ -338,8 +352,8 @@ export class BuildConfig {
    * embedded when an embedded module imports it. The toolshed leaves out the
    * files in the pattern trees that it never serves to a runtime: the
    * integration tests with their helpers and fixtures, the recorded
-   * compatibility baselines, the Topics board's command-line client, Deno unit
-   * tests, and iframe guest sources.
+   * compatibility baselines, the Topics board's command-line client, the
+   * test support modules, Deno unit tests, and iframe guest sources.
    * Authored `.test.tsx` pattern tests are served because a program can attach
    * them as source roots. Excluding development-only files also keeps their npm
    * dependencies out of the binary.
@@ -349,6 +363,7 @@ export class BuildConfig {
     const directories = [
       this.#path("patterns", "integration"),
       this.#path("patterns", "apps", "topics", "tools"),
+      this.#path("patterns", "tools", "test-support"),
       this.#path(...BASELINES_DIR.split("/")),
     ];
     const files = this.patternPaths().flatMap((tree) =>
@@ -767,10 +782,21 @@ export async function runBuildBinaries(
       // --background re-runs this binary as a detached server child, so the
       // compiled binary needs permission to spawn itself.
       "--allow-run",
-      // V8's default limit of about 4 GB is less than a serving worker can need
-      // on a busy board. The limit applies to each isolate, so a worker gets
-      // its own.
-      "--v8-flags=--max-old-space-size=8192",
+      // No `--max-old-space-size`: V8 takes that flag over the heap limit each
+      // serving worker is started with (`SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`),
+      // so every worker could grow to the flag's size, and a compiled binary
+      // reads no V8 flags from its environment to take it back. The main
+      // thread has V8's default, about 4 GB.
+      //
+      // These two let `perf` on the host name the JavaScript a thread
+      // runs, serving workers' threads included: V8 writes the name and
+      // address of each compiled function to `/tmp/perf-<pid>.map`, and
+      // gives interpreted frames a native frame of their own. A stalled
+      // worker answers nothing, so sampling it from outside is the only way
+      // to see what it runs (2026-11-14, toolshed 8020 on Estuary). The map
+      // grows with each function compiled and is never trimmed; these come
+      // off once that investigation is done.
+      "--v8-flags=--perf-basic-prof-only-functions,--interpreted-frames-native-stack",
     ],
     binaries: requestedBinaries(args),
     cachedOnly: Deno.env.get("CF_DENO_DEPENDENCIES_INSTALLED") === "1",

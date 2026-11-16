@@ -164,7 +164,7 @@ const PROFILE_CREATE = {
   surface: "ProfileCreateSurface",
   action: "CreateProfile",
 };
-const CHAT_START = { surface: "ChatStartSurface", action: "ChatStart" };
+export const CHAT_START = { surface: "ChatStartSurface", action: "ChatStart" };
 const CHAT_SEND = { surface: "ChatSendSurface", action: "ChatSend" };
 const CHAT_REACT = { surface: "ChatReactSurface", action: "ChatReact" };
 
@@ -341,7 +341,7 @@ export class MemberWaits {
  * Sends `event` on `stream` as a click on a control of the reviewed `surface`
  * and `action`, the way a renderer delivers one, and waits for it to commit.
  */
-async function sendTrusted(
+export async function sendTrusted(
   controller: PiecesController,
   stream: Cell<unknown>,
   event: Record<string, unknown>,
@@ -364,7 +364,7 @@ async function sendTrusted(
 }
 
 /** One member while the room is seeded: their runtime, Home, and room. */
-interface MemberSession {
+export interface MemberSession {
   index: number;
   identity: Identity;
   controller: PiecesController;
@@ -382,7 +382,7 @@ interface MemberSession {
  * Opens the member at `index`: their Home, started, with a profile. A Home
  * that already holds a profile is given no second one.
  */
-async function openMember(
+export async function openMember(
   apiUrl: URL,
   identity: Identity,
   index: number,
@@ -424,7 +424,7 @@ async function openMember(
  * Waits for `member`'s writes to reach the server, and releases their
  * runtime.
  */
-async function closeMember(member: MemberSession): Promise<void> {
+export async function closeMember(member: MemberSession): Promise<void> {
   try {
     await member.controller.runtime.idle();
     await member.controller.synced();

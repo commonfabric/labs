@@ -1,11 +1,14 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
+  assertLivenessEquivalence,
   type DependencyGraphState,
   isLive,
+  livenessWork,
   notifyNodeLivenessChange,
   recomputeLiveRefs,
   registerDependentEdge,
+  resetLivenessWork,
   setNodeProvisionalDemand,
   unregisterDependentEdge,
 } from "../../src/scheduler/dependency-graph.ts";
@@ -239,6 +242,68 @@ describe("dependency-graph", () => {
 
       expect(nodes.get(middle)?.liveRefs).toBe(1);
       expect(nodes.get(source)?.liveRefs).toBe(1);
+    });
+  });
+
+  describe("assertLivenessEquivalence()", () => {
+    it("returns without checking when not enabled", () => {
+      const { nodes, state } = createGraph();
+      const writer = named("writer");
+      nodes.register(writer, "computation");
+      nodes.get(writer)!.liveRefs = 3;
+
+      expect(() => assertLivenessEquivalence(state, "a site", false)).not
+        .toThrow();
+      expect(nodes.get(writer)?.liveRefs).toBe(3);
+    });
+
+    it("returns without throwing when the refcounts match a full rebuild", () => {
+      const { nodes, state } = createGraph();
+      const writer = named("writer");
+      const reader = named("reader");
+      nodes.register(writer, "computation");
+      nodes.register(reader, "effect");
+      registerDependentEdge(state, writer, reader);
+
+      expect(() => assertLivenessEquivalence(state, "a site", true)).not
+        .toThrow();
+      expect(nodes.get(writer)?.liveRefs).toBe(1);
+    });
+
+    it("throws naming the site and each drifted node, and leaves the rebuilt counts", () => {
+      const { nodes, state } = createGraph();
+      const writer = named("writer");
+      const reader = named("reader");
+      nodes.register(writer, "computation");
+      nodes.register(reader, "effect");
+      registerDependentEdge(state, writer, reader);
+      nodes.get(writer)!.liveRefs = 3;
+
+      expect(() => assertLivenessEquivalence(state, "a site", true)).toThrow(
+        "liveness drift after a site: writer: incremental=3 rebuilt=1",
+      );
+      expect(nodes.get(writer)?.liveRefs).toBe(1);
+    });
+  });
+
+  describe("resetLivenessWork()", () => {
+    it("zeroes the work counters a mutation advanced", () => {
+      const { nodes, state } = createGraph();
+      const writer = named("writer");
+      const reader = named("reader");
+      nodes.register(writer, "computation");
+      nodes.register(reader, "effect");
+      registerDependentEdge(state, writer, reader);
+      expect(livenessWork.operations).toBeGreaterThan(0);
+      expect(livenessWork.nodeWrites).toBeGreaterThan(0);
+
+      resetLivenessWork();
+
+      expect(livenessWork).toEqual({
+        nodeWrites: 0,
+        edgeVisits: 0,
+        operations: 0,
+      });
     });
   });
 

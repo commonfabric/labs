@@ -4,6 +4,7 @@ import {
   assertNotStrictEquals,
   assertStrictEquals,
 } from "@std/assert";
+import { dirname, join } from "@std/path";
 import ts from "typescript";
 
 import { parseModule } from "../transformed-ast.ts";
@@ -341,7 +342,7 @@ function printProbeType(
           };
         }
         const resolvedFileName = `${
-          new URL(literal.text, `file://${containingFile}`).pathname
+          join(dirname(containingFile), literal.text)
         }.ts`;
         return contents[resolvedFileName] !== undefined
           ? {

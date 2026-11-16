@@ -67,6 +67,33 @@ Deno.test("toolshedRuntimeOptions splits MEMORY_URL/API_URL and honors the env r
   assertEquals(options.cfcEnforcementMode, "enforce-strict");
 });
 
+Deno.test("toolshedRuntimeOptions follows the posture another host publishes, under the flags set explicitly", () => {
+  const env: Record<string, string> = {
+    EXPERIMENTAL_FOLLOWED_POSTURE: JSON.stringify({
+      serverExecution: !SERVER_EXECUTION_DEFAULT_ENABLED,
+      modernCellRep: true,
+      lazyMaterialization: true,
+    }),
+    EXPERIMENTAL_LAZY_MATERIALIZATION: "false",
+  };
+  const options = toolshedRuntimeOptions(
+    {
+      MEMORY_URL: "http://memory.test:8000/",
+      API_URL: "http://api.test:9000/",
+      API_INTERNAL_URL: undefined,
+    },
+    { sentinel: true } as unknown as RuntimeOptions["storageManager"],
+    (name) => env[name],
+  );
+
+  assertEquals(
+    options.experimental?.serverExecution,
+    !SERVER_EXECUTION_DEFAULT_ENABLED,
+  );
+  assertEquals(options.experimental?.modernCellRep, true);
+  assertEquals(options.experimental?.lazyMaterialization, false);
+});
+
 Deno.test("toolshedRuntimeOptions sends self-addressed requests to API_INTERNAL_URL and changes no URL", async () => {
   // A co-hosted toolshed's own requests take the internal origin (OW55) by
   // way of the runtime's fetch, and only by way of it: the storage base

@@ -9,7 +9,11 @@
 
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
-import { CompileTurns } from "../harness/compile-interleave.ts";
+import {
+  type CompileClaims,
+  CompileTurns,
+} from "../harness/compile-interleave.ts";
+import type { ModuleCompiler } from "../harness/module-compile.ts";
 import {
   type ExperimentalOptions,
   type ModuleByteCache,
@@ -74,6 +78,22 @@ export type ServingRuntimeFactoryOptions = {
   moduleByteCache?: ModuleByteCache;
 
   /**
+   * The turns at a cold compile the serving runtimes take with whatever else
+   * shares {@link moduleByteCache}: for a cache on disk, the other realms and
+   * processes that use it. Absent, the factory's runtimes take turns among
+   * themselves. Unused without a byte cache.
+   */
+  compileClaims?: CompileClaims;
+
+  /**
+   * Where every serving runtime the factory builds runs the type-check,
+   * transform and emit step of its compiles: a compile worker, which keeps
+   * that step and its heap off the thread the serving loop runs on. Absent,
+   * each runtime compiles on that thread.
+   */
+  moduleCompiler?: ModuleCompiler;
+
+  /**
    * Called with each serving runtime's storage manager before the runtime
    * that uses it is constructed, so a test can replace one of its providers'
    * methods. The returned function, if any, runs once the runtime, and with
@@ -97,7 +117,7 @@ export function servingRuntimeFactory(
   // byte cache take turns, which keeps it compiling a program once.
   const sharedByteCache = options.moduleByteCache === undefined ? {} : {
     moduleByteCache: options.moduleByteCache,
-    compileTurns: new CompileTurns(),
+    compileTurns: options.compileClaims ?? new CompileTurns(),
   };
   return (space, context) => {
     const storageManager = LoopbackStorageManager.connect(options.server, {
@@ -133,6 +153,9 @@ export function servingRuntimeFactory(
         ...SERVING_RUNTIME_EXPERIMENTAL,
       },
       ...sharedByteCache,
+      ...(options.moduleCompiler === undefined
+        ? {}
+        : { moduleCompiler: options.moduleCompiler }),
     });
     return Promise.resolve({
       runtime,

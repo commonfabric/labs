@@ -89,7 +89,7 @@ describe("Runner node plans", () => {
           resultCell as Cell<any>,
           compiled,
         );
-        if (plan !== undefined) plans.push(plan);
+        plans.push(plan);
       }
     } finally {
       tx.abort("node plans: read-only");
@@ -173,7 +173,7 @@ describe("Runner node plans", () => {
         node,
         resultCell.withTx(tx),
         compiled,
-      )!;
+      );
     }
 
     /** The addresses `tx` has read, in the order it read them. */
@@ -291,6 +291,75 @@ describe("Runner node plans", () => {
       } finally {
         secondTx.abort("node plans: read-only");
       }
+    });
+  });
+
+  describe("of a node the runner cannot run", () => {
+    // Each case plans a node of a running instance with its module replaced,
+    // and plans the node as compiled to show the replacement is what throws.
+
+    let compiled: Pattern;
+    let resultCell: Cell<any>;
+
+    beforeEach(async () => {
+      compiled = await runtime.patternManager.compilePattern(PROGRAM, {
+        space,
+      });
+      resultCell = runtime.getCell(space, "node plan unrunnable module");
+      await runtime.runSynced(resultCell, compiled, {
+        seed: 1,
+        items: [],
+        count: 0,
+      });
+    });
+
+    /**
+     * Plans `node` as it is, and returns a call that plans it with `module` in
+     * place of its own.
+     */
+    function planWith(node: Node, module: Node["module"]): () => NodePlan {
+      const tx = runtime.edit();
+      try {
+        runtime.runner.accessForTestingOnly.nodePlan(
+          tx,
+          node,
+          resultCell.withTx(tx),
+          compiled,
+        );
+      } finally {
+        tx.abort("node plans: read-only");
+      }
+      return () => {
+        const replaced = runtime.edit();
+        try {
+          return runtime.runner.accessForTestingOnly.nodePlan(
+            replaced,
+            { ...node, module },
+            resultCell.withTx(replaced),
+            compiled,
+          );
+        } finally {
+          replaced.abort("node plans: read-only");
+        }
+      };
+    }
+
+    it("throws for a module of a type the runner does not run", () => {
+      const [node] = compiled.nodes;
+      expect(planWith(node, { ...node.module, type: "isolated" })).toThrow(
+        "Unknown module type: isolated",
+      );
+    });
+
+    it("throws for a pattern module whose implementation is not a pattern", () => {
+      const node = compiled.nodes.find(({ module }) =>
+        module.type === "pattern"
+      )!;
+      expect(
+        planWith(node, { ...node.module, implementation: "not a pattern" }),
+      ).toThrow(
+        "Invalid pattern",
+      );
     });
   });
 });

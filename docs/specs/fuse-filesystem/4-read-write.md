@@ -74,14 +74,11 @@ piece root. All pieces have a `.handlers` file at the piece root.
    - synthetic shebang text for `.handler` / `.tool` files
 5. Return the requested byte range (offset + size from the read call).
 
-Mounted callable reads return synthetic text whose first line is:
-
-```text
-#!<stable-cf-shim> exec
-```
-
-This is display-only for this change. The supported execution contract is
-`cf exec <mounted-callable-file> ...`.
+Mounted callable reads return a synthetic shell script: a `#!/bin/sh` line,
+comments giving the callable's input schema and type, and a line that runs
+`cf exec` on the file with the arguments it was given. Running the file
+directly and running `cf exec <mounted-callable-file> ...` reach the same
+callable.
 
 Reads are served from a cache. The cache is populated eagerly for subscribed
 cells and lazily for others.

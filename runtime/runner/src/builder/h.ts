@@ -9,62 +9,48 @@ import type {
 } from "@commonfabric/api";
 import { isPlainObject } from "@commonfabric/js-values/types";
 
-import { isCell } from "../cell.ts";
+import { asBoundCell, type Cell } from "../cell.ts";
 import { KeepAsCell } from "../link-utils.ts";
-import { getCellOrThrow, isCellResult } from "../query-result-proxy.ts";
 
 /**
  * Fragment element name used for JSX fragments.
  */
 const FRAGMENT_ELEMENT = "cf-fragment";
 
-type LinkableCell = {
-  getAsLink(options?: unknown): unknown;
-};
-
 const isDeferredLinkContextError = (error: unknown): boolean =>
   error instanceof Error &&
   error.message.startsWith("Cannot create cell link - ");
 
-function bindingTargetLink(value: unknown): unknown {
-  if (isCell(value)) {
-    try {
-      return (value as unknown as LinkableCell).getAsLink({
-        includeSchema: true,
-        keepAsCell: KeepAsCell.All,
-      });
-    } catch (error) {
-      if (isDeferredLinkContextError(error)) return value;
-      throw error;
-    }
+/**
+ * Returns what a `$` prop binds `value`, which is `cell` or a query result read
+ * from it, to: the cell's link, or `value` itself while the cell has no link
+ * yet.
+ */
+function bindingTargetLink(cell: Cell<unknown>, value: unknown): unknown {
+  try {
+    return cell.getAsLink({ includeSchema: true, keepAsCell: KeepAsCell.All });
+  } catch (error) {
+    if (isDeferredLinkContextError(error)) return value;
+    throw error;
   }
-  if (isCellResult(value)) {
-    try {
-      return (getCellOrThrow(value) as unknown as LinkableCell).getAsLink({
-        includeSchema: true,
-        keepAsCell: KeepAsCell.All,
-      });
-    } catch (error) {
-      if (isDeferredLinkContextError(error)) return value;
-      throw error;
-    }
-  }
-  return value;
-}
-
-/** Whether `value` is a cell, or a query result read from one. */
-function isBindable(value: unknown): boolean {
-  return isCell(value) || isCellResult(value);
 }
 
 /**
- * Whether `value` is a record of cells: a plain object with at least one
- * field, every one of which is a cell.
+ * Returns the fields of `value`, each with the cell it is, when `value` is a
+ * record of cells: a plain object with at least one field, every one of which
+ * is a cell. Returns `undefined` for anything else.
  */
-function isCellRecord(value: unknown): value is Record<string, unknown> {
-  if (!isPlainObject(value)) return false;
-  const members = Object.values(value);
-  return members.length > 0 && members.every(isBindable);
+function cellRecordFields(
+  value: unknown,
+): [name: string, cell: Cell<unknown>, member: unknown][] | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const fields: [string, Cell<unknown>, unknown][] = [];
+  for (const [name, member] of Object.entries(value)) {
+    const cell = asBoundCell(member);
+    if (cell === undefined) return undefined;
+    fields.push([name, cell, member]);
+  }
+  return fields.length > 0 ? fields : undefined;
 }
 
 /**
@@ -110,20 +96,25 @@ export const h: HFunction = Object.assign(
               "\n" +
               "And then using it like `<Item {item} />`",
           );
-        } else if (isBindable(value)) {
-          props![key] = bindingTargetLink(value);
-        } else if (isCellRecord(value)) {
-          props![key] = Object.fromEntries(
-            Object.entries(value).map((
-              [name, member],
-            ) => [name, bindingTargetLink(member)]),
-          );
-        } else {
+        }
+        const cell = asBoundCell(value);
+        if (cell !== undefined) {
+          props![key] = bindingTargetLink(cell, value);
+          return;
+        }
+        const fields = cellRecordFields(value);
+        if (fields === undefined) {
           throw new Error(
             `Bidirectionally bound property ${key} is not reactive\n` +
               "Use pattern parameter or create a cell using new Writable()",
           );
         }
+        props![key] = Object.fromEntries(
+          fields.map(([name, field, member]) => [
+            name,
+            bindingTargetLink(field, member),
+          ]),
+        );
       });
       return { type: "vnode", name, props, children: children.flat() };
     }

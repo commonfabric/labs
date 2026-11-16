@@ -85,7 +85,9 @@ export class ACLManager {
     if (!isDID(user) || (capability !== "READ" && capability !== "WRITE")) {
       throw new Error("A grant must be READ or WRITE.");
     }
-    await this.get();
+    if (await this.get() === null) {
+      throw new Error("No ACL initialized for space.");
+    }
     return await this.#write((current) => {
       if (current === null) throw new Error("No ACL initialized for space.");
       const existing = current[user] ?? current["*"];
@@ -99,14 +101,11 @@ export class ACLManager {
   }
 
   async remove(user: ACLUser): Promise<ACL> {
-    const acl = await this.get();
-    if (acl === null) {
+    if (await this.get() === null) {
       throw new Error("No ACL initialized for space.");
     }
     return await this.#write((current) => {
-      if (current === null) {
-        throw new Error("No ACL initialized for space.");
-      }
+      if (current === null) throw new Error("No ACL initialized for space.");
       const { [user]: _removed, ...rest } = current;
       return rest;
     });
@@ -213,7 +212,6 @@ export function writeAcl(
  */
 export class SpaceMembersRemainError extends Error {
   override readonly name = "SpaceMembersRemainError";
-  readonly #others: readonly string[];
 
   /** Constructs an instance for `space`, whose list also names `others`. */
   constructor(space: DID, others: readonly string[]) {
@@ -221,12 +219,6 @@ export class SpaceMembersRemainError extends Error {
       `Only the sole member of ${space} may delete it; its access list also ` +
         `names ${others.join(", ")}`,
     );
-    this.#others = others;
-  }
-
-  /** The principals besides the deleting one that the list names. */
-  get others(): readonly string[] {
-    return this.#others;
   }
 }
 

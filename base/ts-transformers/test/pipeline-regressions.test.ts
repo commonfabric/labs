@@ -244,6 +244,7 @@ Deno.test(
       "IndirectBuilderCallbackValidationTransformer",
       "CfcPolicyAuthoringTransformer",
       "CfcPolicyOfValidationTransformer",
+      "JsxPropNameValidationTransformer",
       "JsxExpressionSiteRouterTransformer",
       "AssertDiagnosticsTransformer",
       "LiftLoweringTransformer",

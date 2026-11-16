@@ -27,7 +27,7 @@ import type { IExtendedStorageTransaction } from "../storage/interface.ts";
  */
 export function streamData(
   inputsCell: Cell<{
-    url: string;
+    url?: string;
     options?: { body?: any; method?: string; headers?: Record<string, string> };
     result?: any;
   }>,
@@ -267,8 +267,15 @@ export function streamData(
           runtime.trackAsyncWork(
             settleAbandonedRequest(
               runtime,
-              "streamData",
-              effectKey,
+              {
+                builtinId: "streamData",
+                effectKey,
+                // Never served: the builtin refuses to run under server
+                // execution, so its runs carry no scope-key identity.
+                identity: undefined,
+                scope: outputScope,
+                attributeToBuiltin: true,
+              },
               (settleTx) => {
                 // The announcement rode the abandoned transaction, so it is
                 // made again whoever owns the answer now.

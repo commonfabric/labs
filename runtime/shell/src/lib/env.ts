@@ -25,6 +25,7 @@ declare global {
   var $EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS: string | undefined;
   var $EXPERIMENTAL_SHARED_MEMORY_CONNECTION: string | undefined;
   var $EXPERIMENTAL_LOCAL_FOLD: string | undefined;
+  var $EXPERIMENTAL_SYNC_CID_REFERENCES: string | undefined;
 }
 
 const ENVIRONMENT_DEFINE = typeof $ENVIRONMENT === "string"
@@ -64,6 +65,11 @@ const EXPERIMENTAL_READER_SCHEMA_PRECEDENCE_DEFINE =
 const EXPERIMENTAL_LOCAL_FOLD_DEFINE =
   typeof $EXPERIMENTAL_LOCAL_FOLD === "string"
     ? $EXPERIMENTAL_LOCAL_FOLD
+    : undefined;
+
+const EXPERIMENTAL_SYNC_CID_REFERENCES_DEFINE =
+  typeof $EXPERIMENTAL_SYNC_CID_REFERENCES === "string"
+    ? $EXPERIMENTAL_SYNC_CID_REFERENCES
     : undefined;
 
 export const ENVIRONMENT: "development" | "production" =
@@ -163,6 +169,11 @@ export const EXPERIMENTAL = {
   // `EXPERIMENTAL_LOCAL_FOLD=true` bakes a shell whose worker keeps such a
   // write as a fold instead of reverting it.
   localFold: flagValue(EXPERIMENTAL_LOCAL_FOLD_DEFINE),
+  // Taking schema documents by reference, the client's own opt-in: a
+  // deployment's posture never sets it. `EXPERIMENTAL_SYNC_CID_REFERENCES=true`
+  // bakes a shell that opts in; a host embedding a release shell opts in
+  // through its host toggle instead (`host-toggles.ts`).
+  syncCidReferences: flagValue(EXPERIMENTAL_SYNC_CID_REFERENCES_DEFINE),
 };
 
 /**

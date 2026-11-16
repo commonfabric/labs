@@ -7,12 +7,12 @@ import {
   isObjectNotArray,
   isObjectOrArray,
 } from "@commonfabric/js-values/types";
+import { isCfcFieldCommitment } from "@commonfabric/memory/v2/cfc-release-authority";
 import {
   type AtomPattern,
   isAtomPattern,
   isAtomVarPlaceholder,
 } from "./atom-pattern.ts";
-import { isCfcFieldCommitment } from "./label-representation.ts";
 import type { JSONSchema } from "../builder/types.ts";
 
 export const CFC_POLICY_MANIFEST_ID_PREFIX = "of:cfc-policy-manifest:";

@@ -4,6 +4,7 @@ import { reservesStdoutForCommandOutput } from "../lib/json-output.ts";
 import { cliText } from "../lib/cli-name.ts";
 import {
   buildGetLabelCommand,
+  buildReleaseByIntentCommand,
   buildSetLabelCommand,
   pieceDataCommand,
 } from "./piece.ts";
@@ -45,4 +46,9 @@ arguments cell instead of the result.`),
   /* cell get-label */
   .command("get-label", buildGetLabelCommand("cell get-label"))
   /* cell set-label */
-  .command("set-label", buildSetLabelCommand("cell set-label"));
+  .command("set-label", buildSetLabelCommand("cell set-label"))
+  /* cell release-by-intent */
+  .command(
+    "release-by-intent",
+    buildReleaseByIntentCommand("cell release-by-intent"),
+  );

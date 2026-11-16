@@ -309,8 +309,7 @@ export default pattern(() => {
     comments: profileComments,
     commentDraft: profileCommentDraft,
     profileName: "Ada",
-    profilePicture: adaPicture,
-    profileAvatar: "🐙",
+    profileFace: { picture: adaPicture },
   });
   // A profile with avatar text and no picture: its comments carry the text.
   const textComments = new Writable<TopicComment[] | Default<[]>>([]);
@@ -325,7 +324,7 @@ export default pattern(() => {
     comments: textComments,
     commentDraft: textCommentDraft,
     profileName: "Grace",
-    profileAvatar: " 🦊 ",
+    profileFace: { avatar: "🦊" },
   });
   const profileSaveBody = saveProfileBody({
     upgrade: profileUpgrade,
@@ -574,19 +573,17 @@ export default pattern(() => {
     )
   );
 
-  // A profile with no picture is drawn with its avatar text; one with a
-  // picture carries the picture alone.
-  const assert_author_falls_back_to_avatar_text = assert(() => {
-    const textOnly = topicAuthorFromPerson("Ada", undefined, " 🦊 ");
-    const both = topicAuthorFromPerson(
-      "Ada",
-      new FabricBytes(new Uint8Array(ADA_PICTURE)),
-      "🦊",
-    );
-    const neither = topicAuthorFromPerson("Ada", undefined, "  ");
-    return textOnly?.avatar === "🦊" && textOnly.picture === undefined &&
-      isAdaPicture(both?.picture) && both?.avatar === undefined &&
-      neither?.avatar === undefined && neither?.picture === undefined;
+  // A comment's author carries the face the Profile gives, picture or avatar
+  // text, and none when it gives none.
+  const assert_author_carries_face = assert(() => {
+    const text = topicAuthorFromPerson("Ada", { avatar: "🦊" });
+    const picture = topicAuthorFromPerson("Ada", {
+      picture: new FabricBytes(new Uint8Array(ADA_PICTURE)),
+    });
+    const none = topicAuthorFromPerson("Ada");
+    return text?.avatar === "🦊" && text.picture === undefined &&
+      isAdaPicture(picture?.picture) && picture?.avatar === undefined &&
+      none?.avatar === undefined && none?.picture === undefined;
   });
 
   const assert_profile_comment_submitted = assert(() => {
@@ -1274,7 +1271,7 @@ export default pattern(() => {
       { assertion: assert_profile_topic_named },
       { action: action_submit_profile_comment },
       { assertion: assert_profile_comment_submitted },
-      { assertion: assert_author_falls_back_to_avatar_text },
+      { assertion: assert_author_carries_face },
       { action: action_submit_text_comment },
       { assertion: assert_text_comment_carries_avatar },
       { action: action_save_profile_body },

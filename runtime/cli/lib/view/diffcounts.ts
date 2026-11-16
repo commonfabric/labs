@@ -333,6 +333,18 @@ export function sumDiffLineCounts(
   return { adds, dels };
 }
 
+/**
+ * Orders counts by net change (added minus removed lines), largest growth
+ * first, and then by total changed lines, largest first.
+ */
+export function compareNetChange(
+  a: DiffLineCounts,
+  b: DiffLineCounts,
+): number {
+  return (b.adds - b.dels) - (a.adds - a.dels) ||
+    (b.adds + b.dels) - (a.adds + a.dels);
+}
+
 function withoutWhitespace(text: string): string {
   return text.replace(/\s/gu, "");
 }

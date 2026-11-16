@@ -1,0 +1,1 @@
+{"date":"2026-11-04","from":{"k":"unit","s":"state-inspector","n":"operation field inspection > addresses a per-user field's anchors document by scope name and reports a diverged head"},"to":{"k":"unit","s":"state-inspector","n":"operation field inspection > a field's anchors > addresses a per-user field's anchors document by scope name and reports one that holds no anchor map"}}

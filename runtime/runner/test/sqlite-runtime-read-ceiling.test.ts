@@ -24,10 +24,10 @@ import {
   type SqliteParamsWire,
 } from "@commonfabric/memory/v2";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { effectiveReadCeiling } from "../src/builtins/sqlite-builtins.ts";
-import type { CfcConfClause } from "../src/cfc/clause.ts";
 import { meetCfcObservationCeilings } from "../src/cfc/observation.ts";
 import { buildCfcReadCeiling } from "../src/cfc/read-ceiling.ts";
 import { stampWaveRunContext, waveRunContextOf } from "../src/executor/wave.ts";
@@ -258,6 +258,25 @@ describe("sqliteQuery under a runtime read ceiling", () => {
           onExceed: "skip",
         });
         expect(runtime.cfcReadMaxConfidentiality).toEqual(["did:key:owner"]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("hands the ceiling with no `onExceed` when the client names none", async () => {
+      let declared: SessionReadCeiling | undefined;
+      storageManager.setSessionReadCeiling = (ceiling) => {
+        declared = ceiling;
+      };
+      const runtime = construct({
+        experimental: { serverExecution: true },
+        cfcReadMaxConfidentiality: ["did:key:owner"],
+      });
+      try {
+        expect(declared).toStrictEqual({
+          maxConfidentiality: ["did:key:owner"],
+        });
+        expect(Object.keys(declared!)).toEqual(["maxConfidentiality"]);
       } finally {
         await runtime.dispose();
       }

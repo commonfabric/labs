@@ -29,6 +29,7 @@ import type {
 import type { SpaceSession } from "@commonfabric/memory/v2/client";
 import { ROUTED_HOLDINGS_LIMIT } from "@commonfabric/memory/v2/routed-limits";
 import { settingsForDeployedClient } from "@commonfabric/runner/deployment-meta";
+import { namesInstancesByDefault } from "@commonfabric/runner/instance-naming";
 import {
   RemoteSessionFactory,
   type SessionFactory,
@@ -472,7 +473,11 @@ export async function openSession(
     () => storageAddressForHost(memoryHost),
     session.as,
   );
-  const opened = await factory.create(space);
+  // The server admits a session by the naming mode it declares (INV-16), and
+  // no runtime is here to declare one, so the session declares the mode a
+  // runtime given these settings would.
+  factory.setInstanceNames?.(namesInstancesByDefault(experimental));
+  const opened = await factory.create(space, session.as);
   return {
     space,
     session: opened.session,

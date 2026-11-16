@@ -214,8 +214,6 @@ export class CFGrid extends BaseElement {
   }
 
   private getGridTemplateRows(): string {
-    if (!this.rows) return "";
-
     // Check if it's a number
     const num = parseInt(this.rows);
     if (!isNaN(num) && num >= 1) {

@@ -68,13 +68,10 @@ class BulletWidget extends WidgetType {
     span.textContent = "•";
     return span;
   }
-
-  override eq() {
-    return true;
-  }
 }
 
-// Singleton — safe to reuse because eq() always returns true (no instance state).
+// Singleton — safe to reuse because the widget holds no instance state, and
+// CodeMirror keeps the element it drew for a widget identical to the new one.
 const bulletWidget = new BulletWidget();
 
 /**
@@ -126,13 +123,10 @@ class HorizontalRuleWidget extends WidgetType {
     hr.className = "cm-prose-hr";
     return hr;
   }
-
-  override eq() {
-    return true;
-  }
 }
 
-// Singleton — safe to reuse because eq() always returns true (no instance state).
+// Singleton — safe to reuse because the widget holds no instance state, and
+// CodeMirror keeps the element it drew for a widget identical to the new one.
 const hrWidget = new HorizontalRuleWidget();
 
 /**
@@ -674,7 +668,8 @@ export function createProseMarkdownPlugin() {
       update(update: ViewUpdate) {
         if (
           update.docChanged || update.viewportChanged ||
-          update.selectionSet || update.focusChanged
+          update.selectionSet || update.focusChanged ||
+          syntaxTree(update.startState) !== syntaxTree(update.state)
         ) {
           this.decorations = Decoration.set(
             buildProseDecorations(update.view.state, update.view.hasFocus),

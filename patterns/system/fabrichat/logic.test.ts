@@ -3,10 +3,13 @@ import { expect } from "@std/expect";
 import {
   isInMain,
   isSingleEmoji,
+  sameNameMarks,
   THREAD_EXCERPT_LENGTH,
   threadExcerpt,
   type ViewItem,
   viewPlaces,
+  windowCount,
+  windowSlice,
 } from "./logic.ts";
 
 describe("logic", () => {
@@ -89,6 +92,60 @@ describe("logic", () => {
     });
   });
 
+  describe("windowCount()", () => {
+    it("returns the count requested, rounded down, up to the most", () => {
+      expect(windowCount(3, 10)).toBe(3);
+      expect(windowCount(3.7, 10)).toBe(3);
+      expect(windowCount(30, 10)).toBe(10);
+    });
+
+    it("returns 0 for a count that is negative, not finite, or not a number", () => {
+      for (const requested of [-1, Number.NaN, Infinity, "3", undefined]) {
+        expect(windowCount(requested, 10)).toBe(0);
+      }
+    });
+  });
+
+  describe("windowSlice()", () => {
+    it("returns the newest messages of a view for a window at its end", () => {
+      expect(windowSlice(5, { before: "end" }, 2)).toEqual({
+        start: 3,
+        end: 5,
+        hasOlder: true,
+        hasNewer: false,
+      });
+    });
+
+    it("returns the oldest messages of a view for a window at its start", () => {
+      expect(windowSlice(5, { after: "start" }, 2)).toEqual({
+        start: 0,
+        end: 2,
+        hasOlder: false,
+        hasNewer: true,
+      });
+    });
+
+    it("returns the whole view, with nothing beyond it, for a window as large as it or larger", () => {
+      for (const anchor of [{ before: "end" }, { after: "start" }] as const) {
+        expect(windowSlice(3, anchor, 7)).toEqual({
+          start: 0,
+          end: 3,
+          hasOlder: false,
+          hasNewer: false,
+        });
+      }
+    });
+
+    it("returns an empty window over an empty view", () => {
+      expect(windowSlice(0, { before: "end" }, 4)).toEqual({
+        start: 0,
+        end: 0,
+        hasOlder: false,
+        hasNewer: false,
+      });
+    });
+  });
+
   describe("threadExcerpt()", () => {
     it("returns text within the length as it stands", () => {
       const text = "x".repeat(THREAD_EXCERPT_LENGTH);
@@ -135,6 +192,45 @@ describe("logic", () => {
     it("returns no code point split by the cut", () => {
       const excerpt = threadExcerpt("😺".repeat(60));
       expect(excerpt).toBe(`${"😺".repeat(THREAD_EXCERPT_LENGTH - 1)}…`);
+    });
+  });
+
+  describe("sameNameMarks()", () => {
+    const ada = "did:key:z6MkAdaLovelaceAAAAAA";
+    const otherAda = "did:key:z6MkAdaLovelaceBBBBBB";
+    const grace = "did:key:z6MkGraceHopperCCCCCC";
+
+    it("returns the empty string for each person whose name no one else shows", () => {
+      expect(sameNameMarks([
+        { principal: ada, name: "Ada Lovelace" },
+        { principal: grace, name: "Grace Hopper" },
+      ])).toStrictEqual({ [ada]: "", [grace]: "" });
+    });
+
+    it("returns the end of each principal for people showing the same name", () => {
+      expect(sameNameMarks([
+        { principal: ada, name: "Ada Lovelace" },
+        { principal: otherAda, name: "Ada Lovelace" },
+        { principal: grace, name: "Grace Hopper" },
+      ])).toStrictEqual({
+        [ada]: "…AAAAAA",
+        [otherAda]: "…BBBBBB",
+        [grace]: "",
+      });
+    });
+
+    it("returns marks for names that differ only in case and surrounding space", () => {
+      expect(sameNameMarks([
+        { principal: ada, name: "Ada Lovelace" },
+        { principal: otherAda, name: "  ada lovelace " },
+      ])).toStrictEqual({ [ada]: "…AAAAAA", [otherAda]: "…BBBBBB" });
+    });
+
+    it("returns the empty string for people showing no name", () => {
+      expect(sameNameMarks([
+        { principal: ada, name: undefined },
+        { principal: otherAda, name: "  " },
+      ])).toStrictEqual({ [ada]: "", [otherAda]: "" });
     });
   });
 });

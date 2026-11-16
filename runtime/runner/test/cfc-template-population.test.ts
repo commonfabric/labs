@@ -5,6 +5,7 @@ import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -13,7 +14,6 @@ import {
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { canonicalizeCfcMetadata } from "../src/cfc/canonical.ts";
-import type { CfcConfClause } from "../src/cfc/clause.ts";
 import {
   commitCfcFieldValue,
   containsCfcFieldCommitment,

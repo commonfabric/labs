@@ -29,7 +29,7 @@ import {
 import type { HarnessModelTurnRequest } from "../src/model/client.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import type { SandboxRuntime } from "../src/sandbox/types.ts";
-import { callVerbTool } from "../src/tools/call-verb.ts";
+import { callVerbTool, createCallVerbTool } from "../src/tools/call-verb.ts";
 import { describeHandleTool } from "../src/tools/describe-handle.ts";
 import {
   runPatternTool,
@@ -329,6 +329,33 @@ describe("call-verb", () => {
         "start: minutes must be positive",
       );
       expect(await readField(ref, "status")).toBe("idle");
+    });
+
+    it("answers a call whose handling's outcome is withheld as one that ran, with that message and no result", async () => {
+      // Under server execution, a served handling that read data its
+      // stream's space doesn't admit reports the same thing whether it
+      // committed or not; a stand-in runtime runs no served handling, so the
+      // call returns that outcome as `callVerb()` would.
+      const ref = await createTimer();
+      const withheld = 'the event for "start" was handled, and its ' +
+        "outcome is withheld";
+      const tool = createCallVerbTool(() =>
+        Promise.resolve({ status: "withheld" as const, message: withheld })
+      );
+
+      const output = await tool.invoke(contextWith(session, held), {
+        token: ref,
+        verb: "start",
+        event: { minutes: 5 },
+      });
+
+      expect(output).toMatchObject({
+        status: "ok",
+        verb: "start",
+        message: withheld,
+      });
+      expect(output).not.toHaveProperty("result");
+      expect(output).not.toHaveProperty("resultRef");
     });
 
     it("runs a verb that takes no event", async () => {

@@ -29,6 +29,7 @@ Deno.test("meta routes", async (t) => {
       "did:key:z6Mkqqy6FetDFSzm3oegQmJEUWrqBpxAZvWrw3xZTyNqJYj9",
     );
     assertEquals(json.gitSha, null);
+    assertEquals(json.browserAssetBase, "/");
     // A source run has no compiled marker: the shell's baked
     // server-execution define is unknown (null), like gitSha.
     assertEquals(json.shellServerExecutionDefine, null);
