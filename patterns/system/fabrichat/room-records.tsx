@@ -570,9 +570,9 @@ const indexesOf = (
  * The value of `cell`, or `undefined` where it lacks a field its schema
  * requires or holds one of `fields` of a type the schema doesn't accept. A
  * field like that, read through a list holding the value or through the value
- * itself, refuses the whole computation reading it, so the value is read as
- * that of its own cell, and each of `fields` as the value of a cell of its
- * own, where it reads as `undefined` instead.
+ * itself, refuses the whole computation reading it, so the value is read
+ * through `cell` alone rather than through the list, and each of `fields`
+ * through a cell for that field alone, where it reads as `undefined` instead.
  */
 const readableRecord = <T extends object>(
   cell: Cell<T>,
@@ -645,11 +645,9 @@ export const messageEntries = (
   const entries = indexesOf(messages).flatMap(
     (index): MessageEntry[] => {
       // The message is read at its place in the list, under the list's own
-      // element schema, and resolved for the document it is only. The
-      // resolved cell keeps the schema its stored link carries, which is
-      // that of the program that sent the message: a message an earlier
-      // program sent and a later one rewrote, such as its tombstone, may
-      // not fit it.
+      // element schema; the cell its link resolves to only names its
+      // document. That cell keeps the schema of the program that sent the
+      // message (see `messageInRoom()`).
       const element = cellAt(messages, index);
       const record = readableMessage(element);
       if (record === undefined) return [];
@@ -1330,10 +1328,9 @@ const messageInRoom = (
   room: Cell<unknown>,
   link: MessageCell | undefined,
 ): MessageTarget => {
-  const target = link?.resolveAsCell();
-  if (link === undefined || target === undefined || !isInRoomOf(room, target)) {
-    throw new Error(NOT_IN_ROOM);
-  }
+  if (link === undefined) throw new Error(NOT_IN_ROOM);
+  const target = link.resolveAsCell();
+  if (!isInRoomOf(room, target)) throw new Error(NOT_IN_ROOM);
   return { target, current: link.get() };
 };
 
@@ -1363,7 +1360,7 @@ const obliterationRefusal = (
  * no author.
  */
 const leaveTombstone = (
-  { target, current }: { target: MessageCell; current: MessageRecord },
+  { target, current }: MessageTarget & { current: MessageRecord },
   keepsAuthor: boolean,
 ): void => {
   target.set({
