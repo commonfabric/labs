@@ -3,7 +3,7 @@
     "module": "compare/fixtures/flat-keys.tsx",
     "patterns": [
       {
-        "line": 21,
+        "line": 33,
         "name": "default",
         "noResultPath": [],
         "plan": {
@@ -50,14 +50,15 @@
               "construct": "flatMap",
               "membership": {
                 "body": {
-                  "op": "const"
+                  "op": "slot",
+                  "slot": 5
                 },
                 "collection": 2,
                 "op": "fold"
               },
-              "name": "halves",
+              "name": "people",
               "source": {
-                "slot": 4
+                "slot": 0
               },
               "within": []
             },
@@ -65,14 +66,120 @@
               "construct": "map",
               "membership": {
                 "body": {
-                  "op": "const"
+                  "op": "slot",
+                  "slot": 5
                 },
                 "collection": 2,
                 "op": "fold"
               },
-              "name": "loudHalves",
+              "name": "loudPeople",
               "source": {
                 "collection": 2,
+                "via": "map"
+              },
+              "within": []
+            },
+            {
+              "construct": "flatMap",
+              "membership": {
+                "body": {
+                  "branches": [
+                    {
+                      "by": {
+                        "expression": true
+                      },
+                      "inputs": [
+                        {
+                          "op": "slot",
+                          "slot": 9
+                        },
+                        {
+                          "op": "const"
+                        }
+                      ],
+                      "op": "derive"
+                    },
+                    {
+                      "by": {
+                        "expression": true
+                      },
+                      "inputs": [
+                        {
+                          "op": "slot",
+                          "slot": 9
+                        },
+                        {
+                          "op": "const"
+                        }
+                      ],
+                      "op": "derive"
+                    }
+                  ],
+                  "condition": {
+                    "op": "slot",
+                    "slot": 8
+                  },
+                  "op": "select",
+                  "selector": 0
+                },
+                "collection": 4,
+                "op": "fold"
+              },
+              "name": "halves",
+              "source": {
+                "slot": 7
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "body": {
+                  "branches": [
+                    {
+                      "by": {
+                        "expression": true
+                      },
+                      "inputs": [
+                        {
+                          "op": "slot",
+                          "slot": 9
+                        },
+                        {
+                          "op": "const"
+                        }
+                      ],
+                      "op": "derive"
+                    },
+                    {
+                      "by": {
+                        "expression": true
+                      },
+                      "inputs": [
+                        {
+                          "op": "slot",
+                          "slot": 9
+                        },
+                        {
+                          "op": "const"
+                        }
+                      ],
+                      "op": "derive"
+                    }
+                  ],
+                  "condition": {
+                    "op": "slot",
+                    "slot": 8
+                  },
+                  "op": "select",
+                  "selector": 0
+                },
+                "collection": 4,
+                "op": "fold"
+              },
+              "name": "loudHalves",
+              "source": {
+                "collection": 4,
                 "via": "map"
               },
               "within": []
@@ -82,7 +189,7 @@
             {
               "at": {
                 "file": "compare/fixtures/flat-keys.tsx",
-                "start": 760
+                "start": 1244
               },
               "bodies": [],
               "entry": "names",
@@ -102,7 +209,7 @@
             {
               "at": {
                 "file": "compare/fixtures/flat-keys.tsx",
-                "start": 817
+                "start": 1301
               },
               "bodies": [],
               "entry": "loudNames",
@@ -121,13 +228,14 @@
             {
               "at": {
                 "file": "compare/fixtures/flat-keys.tsx",
-                "start": 871
+                "start": 1356
               },
               "bodies": [],
-              "entry": "halves",
+              "entry": "people",
               "picks": [],
               "selectors": [],
               "slots": [
+                4,
                 5
               ],
               "within": [
@@ -140,10 +248,10 @@
             {
               "at": {
                 "file": "compare/fixtures/flat-keys.tsx",
-                "start": 940
+                "start": 1414
               },
               "bodies": [],
-              "entry": "loudHalves",
+              "entry": "loudPeople",
               "picks": [],
               "selectors": [],
               "slots": [
@@ -152,6 +260,47 @@
               "within": [
                 {
                   "element": 3
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/flat-keys.tsx",
+                "start": 1477
+              },
+              "bodies": [],
+              "entry": "halves",
+              "picks": [],
+              "selectors": [
+                0
+              ],
+              "slots": [
+                8,
+                9
+              ],
+              "within": [
+                {
+                  "element": 4
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/flat-keys.tsx",
+                "start": 1587
+              },
+              "bodies": [],
+              "entry": "loudHalves",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                10
+              ],
+              "within": [
+                {
+                  "element": 5
                 }
               ],
               "writes": []
@@ -239,11 +388,12 @@
               "constraints": [],
               "kept": true,
               "path": [
-                "halves"
+                "people"
               ],
               "template": {
                 "body": {
-                  "op": "const"
+                  "op": "slot",
+                  "slot": 5
                 },
                 "collection": 2,
                 "op": "fold"
@@ -254,23 +404,12 @@
               "constraints": [],
               "kept": true,
               "path": [
-                "halves",
+                "people",
                 "*"
               ],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 5
-                  },
-                  {
-                    "op": "const"
-                  }
-                ],
-                "op": "derive"
+                "op": "slot",
+                "slot": 4
               }
             },
             {
@@ -279,11 +418,12 @@
               "constraints": [],
               "kept": true,
               "path": [
-                "loudHalves"
+                "loudPeople"
               ],
               "template": {
                 "body": {
-                  "op": "const"
+                  "op": "slot",
+                  "slot": 5
                 },
                 "collection": 2,
                 "op": "fold"
@@ -294,7 +434,7 @@
               "constraints": [],
               "kept": true,
               "path": [
-                "loudHalves",
+                "loudPeople",
                 "*"
               ],
               "template": {
@@ -312,13 +452,172 @@
                 ],
                 "op": "derive"
               }
+            },
+            {
+              "collection": 4,
+              "cone": 4,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "halves"
+              ],
+              "template": {
+                "body": {
+                  "branches": [
+                    {
+                      "by": {
+                        "expression": true
+                      },
+                      "inputs": [
+                        {
+                          "op": "slot",
+                          "slot": 9
+                        },
+                        {
+                          "op": "const"
+                        }
+                      ],
+                      "op": "derive"
+                    },
+                    {
+                      "by": {
+                        "expression": true
+                      },
+                      "inputs": [
+                        {
+                          "op": "slot",
+                          "slot": 9
+                        },
+                        {
+                          "op": "const"
+                        }
+                      ],
+                      "op": "derive"
+                    }
+                  ],
+                  "condition": {
+                    "op": "slot",
+                    "slot": 8
+                  },
+                  "op": "select",
+                  "selector": 0
+                },
+                "collection": 4,
+                "op": "fold"
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "halves",
+                "*"
+              ],
+              "template": {
+                "branches": [
+                  {
+                    "op": "const"
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "condition": {
+                  "op": "slot",
+                  "slot": 8
+                },
+                "op": "select",
+                "selector": 0
+              }
+            },
+            {
+              "collection": 5,
+              "cone": 5,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "loudHalves"
+              ],
+              "template": {
+                "body": {
+                  "branches": [
+                    {
+                      "by": {
+                        "expression": true
+                      },
+                      "inputs": [
+                        {
+                          "op": "slot",
+                          "slot": 9
+                        },
+                        {
+                          "op": "const"
+                        }
+                      ],
+                      "op": "derive"
+                    },
+                    {
+                      "by": {
+                        "expression": true
+                      },
+                      "inputs": [
+                        {
+                          "op": "slot",
+                          "slot": 9
+                        },
+                        {
+                          "op": "const"
+                        }
+                      ],
+                      "op": "derive"
+                    }
+                  ],
+                  "condition": {
+                    "op": "slot",
+                    "slot": 8
+                  },
+                  "op": "select",
+                  "selector": 0
+                },
+                "collection": 4,
+                "op": "fold"
+              }
+            },
+            {
+              "cone": 5,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "loudHalves",
+                "*"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 10
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
             }
           ],
           "patterns": [
             "unhashed:pattern/compare/fixtures/flat-keys.tsx#default"
           ],
           "picks": [],
-          "selectors": [],
+          "selectors": [
+            {
+              "arity": 2
+            }
+          ],
           "slots": [
             {
               "observes": "enumeration",
@@ -362,6 +661,39 @@
               "schema": "unhashed:schema/3"
             },
             {
+              "observes": "identity",
+              "path": [
+                "people"
+              ],
+              "root": {
+                "collection": 2,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "people"
+              ],
+              "root": {
+                "collection": 2,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "name"
+              ],
+              "root": {
+                "collection": 3,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
               "observes": "enumeration",
               "path": [
                 "words"
@@ -373,9 +705,19 @@
             },
             {
               "observes": "value",
+              "path": [
+                "flip"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "value",
               "path": [],
               "root": {
-                "collection": 2,
+                "collection": 4,
                 "kind": "element"
               },
               "schema": "unhashed:schema/3"
@@ -384,7 +726,7 @@
               "observes": "value",
               "path": [],
               "root": {
-                "collection": 3,
+                "collection": 5,
                 "kind": "element"
               },
               "schema": "unhashed:schema/3"
@@ -398,6 +740,9 @@
             "id": "unhashed:schema/0",
             "schema": {
               "properties": {
+                "flip": {
+                  "type": "boolean"
+                },
                 "groups": {
                   "items": {
                     "properties": {
@@ -409,11 +754,26 @@
                       },
                       "name": {
                         "type": "string"
+                      },
+                      "people": {
+                        "items": {
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
                       }
                     },
                     "required": [
                       "name",
-                      "members"
+                      "members",
+                      "people"
                     ],
                     "type": "object"
                   },
@@ -428,7 +788,8 @@
               },
               "required": [
                 "groups",
-                "words"
+                "words",
+                "flip"
               ],
               "type": "object"
             }
@@ -446,11 +807,26 @@
                   },
                   "name": {
                     "type": "string"
+                  },
+                  "people": {
+                    "items": {
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
                   }
                 },
                 "required": [
                   "name",
-                  "members"
+                  "members",
+                  "people"
                 ],
                 "type": "object"
               },
@@ -470,6 +846,29 @@
             "id": "unhashed:schema/3",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "items": {
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "type": "boolean"
             }
           }
         ],

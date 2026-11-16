@@ -170,6 +170,16 @@ export type Origin = { entry: number; spread: boolean; key?: string };
 /** The origin of each position of an array the executor assembled. */
 const origins = new WeakMap<object, readonly Origin[]>();
 
+/**
+ * The elements of the assembled result of a per-element construct, by
+ * the array, each with its key, and the element keys the construct was
+ * evaluated under.
+ */
+const assembledElements = new WeakMap<
+  object,
+  { members: readonly Element[]; context: Context }
+>();
+
 /** An entry of an array that is written as a spread. */
 class Spread {
   constructor(readonly values: readonly unknown[]) {}
@@ -2157,6 +2167,10 @@ export class Instance {
               key,
             })),
           );
+          assembledElements.set(array, {
+            members: host.members ?? [],
+            context,
+          });
           return array;
         };
         switch (record.construct) {
@@ -2172,24 +2186,25 @@ export class Instance {
             return keyed(kept.map(given));
           }
           case "flatMap": {
+            // An element of the result has the key of its source
+            // element together with a part formed from the member (PL
+            // §1.3, "The key of an element that a `flatMap`
+            // contributes"; ruling Z22).
             const members: Omit<Element, "index">[] = [];
             const flat = results.flatMap((result, index) => {
-              const segment = host.v(result);
               const { key } = elements[index];
               const entry = this.#perElement(collection, key);
-              if (!Array.isArray(segment)) {
-                members.push({ key: `${key}/0`, source: { entry, at: [] } });
-                return [segment];
+              const inner = new Map([...context, [
+                collection,
+                elements[
+                  index
+                ],
+              ]]);
+              const segment = this.#segment(result, entry, inner, host);
+              for (const { part, source } of segment.members) {
+                members.push({ key: `${key}/${part}`, source });
               }
-              // The key of the source element with the position in its
-              // segment (PL §1.3, assumed there under question 101).
-              segment.forEach((_, position) =>
-                members.push({
-                  key: `${key}/${position}`,
-                  source: { entry, at: [`${position}`] },
-                })
-              );
-              return segment;
+              return segment.values;
             });
             host.members = numbered(members);
             return keyed(flat);
@@ -2211,6 +2226,120 @@ export class Instance {
         }
       }, outer);
     };
+  }
+
+  /**
+   * The members of the segment that the callback of a `flatMap` returned
+   * for one source element: what the result holds for each, and for each
+   * the part of its key that is formed from the member itself, by the
+   * rule for any array (ruling Z22). The part is the identity of the cell
+   * for a member that is a reference and the value for a member that is
+   * a plain value, with the count of the earlier members of the segment
+   * with the same identity or value. The position in the segment is in
+   * no part.
+   *
+   * - A segment that is a stored array, which the callback passed on, is
+   *   keyed as a stored array is, and a member that is a plain value in
+   *   place is named by the array and its key.
+   * - A segment that is the assembled result of another per-element
+   *   construct has the keys of that result (assumed in PL §8, question
+   *   101).
+   * - A segment the callback wrote is keyed by what each member is. A
+   *   member that is a plain value is read from the callback's result
+   *   at the position that holds its key now, so two members that change
+   *   places are read as the values they were.
+   * - A callback that returns one value yields a segment of one member.
+   */
+  #segment(
+    result: unknown,
+    entry: Lazy,
+    inner: Context,
+    host: Host,
+  ): {
+    values: unknown[];
+    members: { part: string; source: Element["source"] }[];
+  } {
+    const read = result !== null && typeof result === "object"
+      ? this.store.addresses.get(result)
+      : undefined;
+    const stored = result instanceof Ref ? result : read;
+    if (stored !== undefined) {
+      const held = this.store.locate(stored, true).value;
+      if (Array.isArray(held)) {
+        const values = host.v(stored) as unknown[];
+        return {
+          values: Array.isArray(values) ? values : [],
+          members: this.#stored(stored, host).map(({ key, source }) => ({
+            part: key,
+            source,
+          })),
+        };
+      }
+    }
+    const assembled = Array.isArray(result)
+      ? assembledElements.get(result)
+      : undefined;
+    if (assembled !== undefined) {
+      return {
+        values: result as unknown[],
+        members: assembled.members.map(({ key, source }) => ({
+          part: key,
+          // The result of the inner construct's body, for the element
+          // keys the callback was evaluated under.
+          source: source instanceof Ref || !("entry" in source) ? source : {
+            entry: () => source.entry(inner),
+            at: source.at,
+          },
+        })),
+      };
+    }
+    const written = Array.isArray(result) ? result : [result];
+    const parts = this.#parts(written);
+    return {
+      values: host.v(written) as unknown[],
+      members: written.map((member, index) => {
+        if (member instanceof Ref) {
+          return { part: parts[index], source: member };
+        }
+        const part = parts[index];
+        const whole = Array.isArray(result);
+        return {
+          part,
+          source: {
+            entry: (context: Context) => {
+              const current = entry(context);
+              const now = Array.isArray(current.value)
+                ? current.value
+                : [current.value];
+              const position = whole ? this.#parts(now).indexOf(part) : 0;
+              return { ...current, value: now[position] };
+            },
+            at: [],
+          },
+        };
+      }),
+    };
+  }
+
+  /**
+   * The part of the key of each member of an array the instance holds
+   * that is formed from the member itself: what a reference names, or the
+   * value, with the count of the earlier members with the same part.
+   */
+  #parts(members: readonly unknown[]): string[] {
+    const seen = new Map<string, number>();
+    return members.map((member) => {
+      let part: string;
+      if (member instanceof Ref) {
+        const { named } = this.store.locate(member, true, undefined, true);
+        part = `cell:${named.doc}:${canonical(named.path)}`;
+      } else {
+        part = `value:${canonical(this.stored(member))}`;
+      }
+      const count = seen.get(part) ?? 0;
+      seen.set(part, count + 1);
+      return `${part}#${count}`;
+    });
   }
 
   /**

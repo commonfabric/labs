@@ -93,10 +93,11 @@ const WRITTEN: Record<string, Written[]> = {
   "flat-keys": [{
     argument: {
       groups: [
-        { name: "g", members: ["a", "b"] },
-        { name: "h", members: ["c"] },
+        { name: "g", members: ["a", "b"], people: [{ name: "p" }] },
+        { name: "h", members: ["c"], people: [{ name: "q" }, { name: "r" }] },
       ],
       words: ["x", "y"],
+      flip: true,
     },
   }],
   "keyed": [{

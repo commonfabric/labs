@@ -293,13 +293,22 @@ output has no mark, the executor keys by what the positions of the output hold.
 The executor keys an element of the result of a `map`, a `filter` or a `flatMap`
 by the key of the element it came from, so a change of one element evaluates
 that element's cone instances down a chain of constructs and no other element's.
-An element of the result of a `flatMap` has that key with the position in the
-element's segment, so two members of one segment that change places are two keys
-whose values changed (`compare/fixtures/flat-keys.tsx`, over references and over
-plain values). When elements move it evaluates nothing for them but what read
-the index: the entries of a key stay with the key. `Instance.counts` has the
-evaluations of cone instances of an element body (`elementEvaluations`) and the
-assemblies of a collection (`assemblies`) apart.
+An element of the result of a `flatMap` has that key together with a part formed
+from the member itself (ruling Z22): the identity of the cell for a member that
+is a reference, and the value for a member that is a plain value, with the count
+of the earlier equal members of the same segment. The position in the segment is
+in no key, so two members of one segment that change places keep their keys, and
+nothing is evaluated for them in a body over the result
+(`compare/fixtures/flat-keys.tsx`: a segment of plain values and a segment of
+references that the source element holds, over a source of references, and a
+segment of plain values that the callback writes, over a source of plain values
+in place). A member that is a plain value and whose value changes is another
+key. A segment that is the assembled result of another per-element construct has
+the keys of that result, as the documents assume, with no test. When elements
+move it evaluates nothing for them but what read the index: the entries of a key
+stay with the key. `Instance.counts` has the evaluations of cone instances of an
+element body (`elementEvaluations`) and the assemblies of a collection
+(`assemblies`) apart.
 
 When a key leaves its collection, the executor drops the cone instances of the
 key and deletes nothing that is stored under it (ruling Z18): a state cell the
