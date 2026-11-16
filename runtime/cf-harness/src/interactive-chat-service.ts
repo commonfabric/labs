@@ -2272,8 +2272,14 @@ export class HarnessInteractiveChatService {
         allowedToolIds: options.allowedToolIds,
         allowedSubagentProfiles: options.allowedSubagentProfiles,
       },
+      // The failure is logged as its description, as the CLI logs it. The
+      // console keeps what it is handed, and an error's call sites keep their
+      // receivers, this engine among them, and with it the fabric session and
+      // its runtime, past the session's close.
       onGrantsUnavailable: (error) =>
-        console.error("fabric grants unavailable for this turn:", error),
+        console.error(
+          `fabric grants unavailable for this turn: ${describeFailure(error)}`,
+        ),
     });
     return {
       loop: this.#createPromptLoop({ ...options, engine }),
