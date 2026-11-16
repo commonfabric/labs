@@ -18,6 +18,7 @@ import { BoundedKeyMap } from "@commonfabric/collections/cache";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { getLogger } from "@commonfabric/logger";
 import { backtickQuote } from "@commonfabric/text/markdown";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import {
   requireLocalReadCondition,
@@ -203,7 +204,14 @@ import {
   unwrapOneLevelAndBindToDoc,
 } from "./pattern-binding.ts";
 import {
+  closeDelegationsFor,
+  type EdgeStamps,
+  type StampedEdges,
+} from "./module-delegations.ts";
+import {
+  emptyPieceSourceRecord,
   PatternManager,
+  type PieceSourceRecord,
   type PreparedSourceUpdate,
 } from "./pattern-manager.ts";
 import { isCellResultForDereferencing } from "./query-result-proxy.ts";
@@ -313,6 +321,7 @@ import {
   type TrustSnapshot,
 } from "./cfc/types.ts";
 import {
+  type ModuleDelegationMap,
   prepareSourceClosureVerification,
   readVerifiedSourceClosure,
 } from "./compilation-cache/cell-cache.ts";
@@ -2073,6 +2082,9 @@ export interface RunSyncedOptions {
 
   /** See `RunnerRunOptions.attributeInitialization`. */
   attributeInitialization?: boolean;
+
+  /** See `RunnerRunOptions.runtimeStarted`. */
+  runtimeStarted?: boolean;
 }
 
 /** Options for a pattern setup whose fresh source revision proves a commit. */
@@ -2134,6 +2146,9 @@ type SetupValidationOptions = {
 
   /** Keep the next start on the persisted-result dependency-sync path. */
   prepareForResume?: boolean;
+
+  /** See `RunnerRunOptions.runtimeStarted`. */
+  runtimeStarted?: boolean;
 };
 
 export type PieceSourceRevisionOperation =
@@ -2171,6 +2186,46 @@ export interface PieceSourceRevision {
    * the piece from being moved to an earlier release.
    */
   releasedAt?: number;
+}
+
+/**
+ * The `pieceSourceDelegations` meta member: the writer-authority delegations
+ * of the pattern the piece runs, and the direct edges of every delegation the
+ * piece's history made.
+ *
+ * Only {@link applyPieceSourceTransition} writes it, through the meta seam,
+ * in the transaction that moves the pointer, and every transition writes it
+ * for the next pattern. A runtime that starts or swaps the piece to
+ * `identity` registers the `delegations` entries whose module is in that
+ * pattern's verified closure (`PatternManager.readInheritedAuthority()`), and
+ * reads nothing else.
+ */
+export interface PieceSourceDelegations {
+  /** The pattern the delegations are for. */
+  identity: string;
+
+  /**
+   * One entry per module of `identity`'s closure granted any: the module's
+   * identity, and every module of the piece's earlier patterns whose
+   * authority it exercises, closed over `edges`.
+   */
+  delegations: { identity: string; predecessors: string[] }[];
+
+  /**
+   * One entry per module the piece's history has delegated to: the module's
+   * identity, and each module it was delegated from directly, with every
+   * history position at which a transition recorded that, each list
+   * ascending: `at` where the module was derived from it, which a walk
+   * continues through, and `terminal` where the module took it in from a
+   * predecessor record's closed list, which a walk reaches from a bound at or
+   * above the position and does not continue past. Read only by a
+   * transition, which closes the next pattern's `delegations` over it along
+   * non-increasing positions.
+   */
+  edges: {
+    identity: string;
+    predecessors: { identity: string; at: number[]; terminal: number[] }[];
+  }[];
 }
 
 export interface PieceSourceSnapshot {
@@ -2460,6 +2515,11 @@ const LIST_OP_INPUT_SCHEMAS = {
 // `#startAfterSuccessfulCommit()`.
 export type RunnerRunOptions = {
   doNotUpdateOnPatternChange?: boolean;
+  // The runtime starts this setup on its own, to repair a piece or to carry
+  // on with a pattern an earlier transaction chose, so the transaction it is
+  // given holds none of the reads that chose the pattern
+  // (`#runtimeStartedSetupTransactions`).
+  runtimeStarted?: boolean;
   // Resumed-from-synced-state: hold each action's initial rehydration/run until
   // the space has finished syncing, so consumers don't race the data.
   awaitSyncBeforeInitialRun?: boolean;
@@ -2853,11 +2913,26 @@ export class Runner {
    * transaction or a swap, has that standing too when it carries the reads
    * that decided it from an asking one that is committing or committed
    * (`#carriedStanding`).
-   * Every other setup transaction, a repair's or a swap's that no setup here
-   * staged, holds none of those reads, so re-minting the stored membership
-   * there would drop a clause they carried.
+   * A setup the runtime starts on its own and hands a transaction, a repair
+   * or a continuation, is added too, though it holds none of those reads
+   * either, so its membership re-mint can drop a clause they carried; it is
+   * also one of `#runtimeStartedSetupTransactions`, which keeps the value of
+   * a result holding data out of that re-mint. Every other setup
+   * transaction, a repair's the runner makes itself or a swap's that no setup
+   * here staged, is not added, so it leaves the stored membership.
    */
   readonly #askingSetupTransactions = new WeakSet<
+    IExtendedStorageTransaction
+  >();
+
+  /**
+   * The asking transactions (`#askingSetupTransactions`) a setup the runtime
+   * started on its own runs in (`runtimeStarted`), and the ones the runner
+   * makes later carrying the reads of one of them (`#runDecisionOf()`). They
+   * hold none of the reads that chose the pattern, so a setup in one leaves
+   * the value of an unchanged result holding data as stored (§8.9.1.3).
+   */
+  readonly #runtimeStartedSetupTransactions = new WeakSet<
     IExtendedStorageTransaction
   >();
 
@@ -3811,7 +3886,7 @@ export class Runner {
   ): Promise<Cell<R>> {
     if (providedTx) {
       this.#callerOwnedSetupTransactions.add(providedTx);
-      this.#askingSetupTransactions.add(providedTx);
+      this.#noteAskingSetupTransaction(providedTx, options.runtimeStarted);
       this.#setupInternal(
         providedTx,
         patternOrModule,
@@ -3830,7 +3905,7 @@ export class Runner {
       // setup.
       return this.#runtime.editWithRetry((tx) => {
         this.#callerOwnedSetupTransactions.add(tx);
-        this.#askingSetupTransactions.add(tx);
+        this.#noteAskingSetupTransaction(tx, options.runtimeStarted);
         this.#setupInternal(tx, patternOrModule, argument, resultCell, options);
       }).then(({ error }) => {
         if (error) {
@@ -4308,6 +4383,7 @@ export class Runner {
         },
         buildDecided: !nameCarried,
         setupBegan: options.setupBegan,
+        runtimeStarted: this.#runtimeStartedSetupTransactions.has(tx),
       }, runtimeWritePolicyAuthorization);
     }
     if (changed) {
@@ -4381,6 +4457,12 @@ export class Runner {
     // reference holds no name of its own either, and reading its `NAME` slot
     // through the cell would follow the reference to the name of what it
     // reaches.
+    // TODO(danfuzz): The read of `NAME` below consumes the stored root's
+    // labels even when no name is stored there, so a restated result whose
+    // root holds a stale value stamp keeps it (§8.9.1.3). Make the absent
+    // case consume nothing once the specification rules that such a read
+    // decides nothing written; the pinned limit is in
+    // `sub-pattern-update-labels.test.ts`.
     const previousResult = writableResultCell.getRaw({
       meta: { ...ignoreReadForScheduling, ...writeDestinationRead },
     });
@@ -5465,16 +5547,8 @@ export class Runner {
         tx,
         entryRef,
         validationOptions.pieceSourceTransition,
+        { sourceUpdate: validationOptions.sourceUpdate },
       );
-      if (validationOptions.sourceUpdate !== undefined) {
-        this.#runtime.patternManager.stageSourceUpdate(
-          validationOptions.sourceUpdate,
-          resultCell.space,
-          validationOptions.pieceSourceTransition.expected.pattern.identity,
-          entryRef.identity,
-          tx,
-        );
-      }
     }
 
     const runningSetup = this.#maybeReuseRunningSetup(
@@ -8235,6 +8309,7 @@ export class Runner {
       rootCell.space,
       identityRef.identity,
       revisions.map((revision) => revision.pattern.identity),
+      getPieceSourceDelegations(rootCell, identityRef.identity),
     );
   }
 
@@ -8475,6 +8550,22 @@ export class Runner {
   }
 
   /**
+   * Records `tx` as one a setup was asked in (`#askingSetupTransactions`),
+   * and as one the runtime started on its own where `runtimeStarted` holds
+   * (`#runtimeStartedSetupTransactions`). Both are marks on the transaction,
+   * not on one setup: an asking setup in a transaction a runtime-started one
+   * already marked counts as runtime-started too, and leaves a stored value
+   * entry it could have re-derived, which never lowers one.
+   */
+  #noteAskingSetupTransaction(
+    tx: IExtendedStorageTransaction,
+    runtimeStarted: boolean | undefined,
+  ): void {
+    this.#askingSetupTransactions.add(tx);
+    if (runtimeStarted === true) this.#runtimeStartedSetupTransactions.add(tx);
+  }
+
+  /**
    * Takes what decided a run `from` deferred into a transaction the runner
    * makes later (`carryRunDecision()`), and returns the step that hands it to
    * that transaction, along with `from`'s standing once `from` commits: a
@@ -8497,9 +8588,11 @@ export class Runner {
       return (status === "pending" || status === "done") &&
         this.#isAsking(from);
     };
+    const runtimeStarted = this.#runtimeStartedSetupTransactions.has(from);
     return (to) => {
       carry(to);
       this.#carriedStanding.set(to, standing);
+      if (runtimeStarted) this.#runtimeStartedSetupTransactions.add(to);
     };
   }
 
@@ -10105,7 +10198,7 @@ export class Runner {
     // A run given no transaction starts in one the runner makes, which holds
     // none of the reads that chose the pattern, so it is not an asking one.
     if (providedTx !== undefined) {
-      this.#askingSetupTransactions.add(providedTx);
+      this.#noteAskingSetupTransaction(providedTx, options.runtimeStarted);
     }
     return this.#runWithStartOwnership(
       providedTx,
@@ -10537,6 +10630,10 @@ export class Runner {
         resultCell.space,
         transition.expected.pattern.identity,
         candidateRef.identity,
+        getPieceSourceRecord(
+          resultCell,
+          transition.expected.pattern.identity,
+        ),
       )
       : undefined;
 
@@ -10574,7 +10671,7 @@ export class Runner {
     };
     if (givenTx) {
       this.#callerOwnedSetupTransactions.add(givenTx);
-      this.#askingSetupTransactions.add(givenTx);
+      this.#noteAskingSetupTransaction(givenTx, options?.runtimeStarted);
       if (sourceUpdate !== undefined) {
         throw new Error(
           "source update authority requires an owned setup transaction",
@@ -10639,7 +10736,7 @@ export class Runner {
             setCfcTrustSnapshot(tx, options.cfcTrustSnapshot);
           }
           assertExpectedPatternIdentity(resultCell.withTx(tx));
-          this.#askingSetupTransactions.add(tx);
+          this.#noteAskingSetupTransaction(tx, options?.runtimeStarted);
           return this.#setupInternal(
             tx,
             pattern,
@@ -17625,6 +17722,182 @@ export function setPatternSource(
   );
 }
 
+/**
+ * The entries of one list of {@link PieceSourceDelegations}, or `undefined`
+ * where it is malformed: anything but an array of entries each naming a
+ * module once, with at least one predecessor, none of them the module.
+ */
+function pieceSourceDelegationEntries(
+  value: unknown,
+): ModuleDelegationMap | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const entries = new Map<string, ReadonlySet<string>>();
+  for (const entry of value as unknown[]) {
+    if (
+      !isObjectOrArray(entry) || Array.isArray(entry) ||
+      typeof entry.identity !== "string" || entry.identity.length === 0 ||
+      entries.has(entry.identity) ||
+      !Array.isArray(entry.predecessors) || entry.predecessors.length === 0 ||
+      !entry.predecessors.every((predecessor: unknown) =>
+        typeof predecessor === "string" && predecessor.length > 0 &&
+        predecessor !== entry.identity
+      )
+    ) {
+      return undefined;
+    }
+    entries.set(entry.identity, new Set(entry.predecessors as string[]));
+  }
+  return entries;
+}
+
+/**
+ * The piece's `pieceSourceDelegations` member, raw, when it names
+ * `patternIdentity`.
+ */
+function pieceSourceDelegationsFor(
+  resultCell: Cell<unknown>,
+  patternIdentity: string,
+): Record<string, unknown> | undefined {
+  const raw = resultCell.getMetaRaw("pieceSourceDelegations", {
+    meta: ignoreReadForScheduling,
+  });
+  return isObjectOrArray(raw) && !Array.isArray(raw) &&
+      raw.identity === patternIdentity
+    ? raw as Record<string, unknown>
+    : undefined;
+}
+
+/**
+ * The delegations the piece's `pieceSourceDelegations` member records for
+ * `patternIdentity`, which a start registers: empty when the member is
+ * absent, names another pattern, or its `delegations` are malformed. A
+ * malformed member grants nothing and refuses nothing. It reads nothing but
+ * the `delegations`.
+ */
+export function getPieceSourceDelegations(
+  resultCell: Cell<unknown>,
+  patternIdentity: string,
+): ModuleDelegationMap {
+  return pieceSourceDelegationEntries(
+    pieceSourceDelegationsFor(resultCell, patternIdentity)?.delegations,
+  ) ?? new Map();
+}
+
+/**
+ * What the piece's `pieceSourceDelegations` member records for
+ * `patternIdentity`, both fields, for a transition that records the member:
+ * empty when the member is absent, names another pattern, or either field
+ * is malformed, but in every case read at the piece's history length.
+ */
+export function getPieceSourceRecord(
+  resultCell: Cell<unknown>,
+  patternIdentity: string,
+): PieceSourceRecord {
+  let position = 0;
+  try {
+    // One past the history's length, so that a piece with no history yet
+    // still records at a position above 0.
+    position = getPieceSourceRevisions(resultCell).length + 1;
+  } catch {
+    // An invalid history admits no stamp; the transition reports it.
+  }
+  const raw = pieceSourceDelegationsFor(resultCell, patternIdentity);
+  const delegations = pieceSourceDelegationEntries(raw?.delegations);
+  const edges = pieceSourceStampedEdges(raw?.edges, position);
+  return delegations === undefined || edges === undefined
+    ? emptyPieceSourceRecord(position)
+    : { delegations, edges, position };
+}
+
+/**
+ * The stamped edges of {@link PieceSourceDelegations}, or `undefined` where
+ * they are malformed: anything but an array of entries each naming a module
+ * once, with at least one predecessor, each named once, none the module, and
+ * each with an `at` and a `terminal` list holding at least one stamp between
+ * them, every stamp a whole number below `position` (no edge can have been
+ * recorded at one past the history's length or later) and each list
+ * strictly ascending.
+ */
+function pieceSourceStampedEdges(
+  value: unknown,
+  position: number,
+): StampedEdges | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const edges = new Map<string, Map<string, EdgeStamps>>();
+  for (const entry of value as unknown[]) {
+    if (
+      !isObjectOrArray(entry) || Array.isArray(entry) ||
+      typeof entry.identity !== "string" || entry.identity.length === 0 ||
+      edges.has(entry.identity) ||
+      !Array.isArray(entry.predecessors) || entry.predecessors.length === 0
+    ) {
+      return undefined;
+    }
+    const predecessors = new Map<string, EdgeStamps>();
+    for (const predecessor of entry.predecessors as unknown[]) {
+      if (
+        !isObjectOrArray(predecessor) || Array.isArray(predecessor) ||
+        typeof predecessor.identity !== "string" ||
+        predecessor.identity.length === 0 ||
+        predecessor.identity === entry.identity ||
+        predecessors.has(predecessor.identity) ||
+        !validStamps(predecessor.at, position) ||
+        !validStamps(predecessor.terminal, position) ||
+        (predecessor.at as unknown[]).length +
+              (predecessor.terminal as unknown[]).length === 0
+      ) {
+        return undefined;
+      }
+      predecessors.set(predecessor.identity, {
+        at: [...predecessor.at as number[]],
+        terminal: [...predecessor.terminal as number[]],
+      });
+    }
+    edges.set(entry.identity, predecessors);
+  }
+  return edges;
+}
+
+/**
+ * Whether `value` is a list of stamps: whole numbers from 0 to below
+ * `position`, strictly ascending.
+ */
+function validStamps(value: unknown, position: number): boolean {
+  return Array.isArray(value) &&
+    (value as unknown[]).every((stamp, index, stamps) =>
+      Number.isInteger(stamp) && (stamp as number) >= 0 &&
+      (stamp as number) < position &&
+      (index === 0 || (stamp as number) > (stamps[index - 1] as number))
+    );
+}
+
+/** `edges` as {@link PieceSourceDelegations.edges}, canonically ordered. */
+function pieceSourceStampedEdgeList(
+  edges: StampedEdges,
+): PieceSourceDelegations["edges"] {
+  return [...edges].sort(([a], [b]) => utf8Compare(a, b))
+    .map(([identity, predecessors]) => ({
+      identity,
+      predecessors: [...predecessors].sort(([a], [b]) => utf8Compare(a, b))
+        .map(([predecessor, { at, terminal }]) => ({
+          identity: predecessor,
+          at: [...at].sort((a, b) => a - b),
+          terminal: [...terminal].sort((a, b) => a - b),
+        })),
+    }));
+}
+
+/** `entries` as a list of {@link PieceSourceDelegations}, canonically ordered. */
+function pieceSourceDelegationList(
+  entries: ModuleDelegationMap,
+): { identity: string; predecessors: string[] }[] {
+  return [...entries].sort(([a], [b]) => utf8Compare(a, b))
+    .map(([identity, predecessors]) => ({
+      identity,
+      predecessors: [...predecessors].sort(utf8Compare),
+    }));
+}
+
 /** Read the validated, append-only source revisions carried by a piece. */
 export function getPieceSourceRevisions(
   resultCell: Cell<unknown>,
@@ -18068,6 +18341,17 @@ export async function preparePieceSourceTransitionBaseline(
  * Append a source revision and change active origin in the pattern setup
  * transaction. A legacy or externally changed current state first receives a
  * baseline revision so no source or origin is skipped.
+ *
+ * It also writes the piece's `pieceSourceDelegations` member
+ * ({@link PieceSourceDelegations}) for the next pattern. Given
+ * `options.sourceUpdate`, the transition is that source update's, and the
+ * member records the delegations it grants the next pattern
+ * (`PatternManager.stageSourceUpdate()`), composed at preparation with
+ * what the member recorded for the current one. Any other transition carries
+ * what the member recorded for the current pattern over to the next, keyed
+ * by module, so a module the next pattern keeps keeps its grant and a new
+ * module gets none. A preparation composed over a member that has moved
+ * since is refused as {@link PIECE_SOURCE_MOVED}.
  */
 export function applyPieceSourceTransition(
   runtime: Runtime,
@@ -18075,6 +18359,7 @@ export function applyPieceSourceTransition(
   tx: IExtendedStorageTransaction,
   nextPattern: { identity: string; symbol: string },
   transition: PieceSourceTransition,
+  options: { sourceUpdate?: PreparedSourceUpdate } = {},
 ): void {
   const candidate = resultCell.withTx(tx);
   // Same live-session-pointer read as the prepare step above: the guard's
@@ -18175,6 +18460,58 @@ export function applyPieceSourceTransition(
     patternIdentityKey(recordedCurrent.pattern) !==
       patternIdentityKey(current.pattern) ||
     (recordedCurrent.origin ?? null) !== currentOrigin.origin;
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/101 The member
+  // carries the delegations, so that a runtime starting the piece holds them
+  // before the staging on the cache records, which follows this
+  // transaction's commit, lands.
+  const recorded = getPieceSourceRecord(candidate, current.pattern.identity);
+  // Every transition writes the member for the next pattern. A source update
+  // composed its record at preparation. Any other carries the edges as they
+  // are and closes the next pattern's modules over them, on this trusted
+  // path: a module the next pattern keeps or brings back gets what the
+  // piece's history granted it, and a new module gets nothing.
+  let next: { delegations: ModuleDelegationMap; edges: StampedEdges };
+  if (options.sourceUpdate !== undefined) {
+    // A backstop: every transition appends a revision, so the snapshot check
+    // above refuses one that came between preparing and here. This refuses a
+    // member written without a transition.
+    if (
+      !runtime.patternManager.sourceUpdateComposedWith(
+        options.sourceUpdate,
+        recorded,
+      )
+    ) {
+      throw new Error(PIECE_SOURCE_MOVED);
+    }
+    next = runtime.patternManager.stageSourceUpdate(
+      options.sourceUpdate,
+      resultCell.space,
+      transition.expected.pattern.identity,
+      nextPattern.identity,
+      tx,
+      recorded,
+    );
+  } else {
+    const closure = readVerifiedSourceClosure(
+      runtime,
+      resultCell.space,
+      nextPattern.identity,
+      tx,
+    );
+    next = {
+      delegations: closeDelegationsFor(recorded.edges, closure?.keys() ?? []),
+      edges: recorded.edges,
+    };
+  }
+  candidate.setMetaRaw(
+    "pieceSourceDelegations",
+    next.delegations.size === 0 && next.edges.size === 0 ? undefined : {
+      identity: nextPattern.identity,
+      delegations: pieceSourceDelegationList(next.delegations),
+      edges: pieceSourceStampedEdgeList(next.edges),
+    },
+    rawMetaWriteAuthorization,
+  );
   if (needsBaseline && transition.baseline.kind === "retain") {
     history.push({
       revisionId: transition.baseline.revisionId,

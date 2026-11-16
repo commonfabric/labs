@@ -146,12 +146,24 @@ describe("exec.handlers", () => {
     ]);
   });
 
-  it("aborts the service call when the request's timeout passes, and not before", async () => {
-    using time = new FakeTime();
+  /**
+   * Sends a request whose command outlasts its 5-second timeout to a service
+   * that answers nothing until it is aborted, with `headers`, and moves the
+   * fake clock to the timeout once the handler has called the service.
+   * Returns whether the call was aborted after 4999 ms, whether it was after
+   * 5000, and the response.
+   */
+  async function timeOutAgainstSilentService(
+    time: FakeTime,
+    headers: (body: string) => Promise<HeadersInit>,
+  ) {
     let aborted = false;
+    const { promise: serviceCalled, resolve: markServiceCalled } = Promise
+      .withResolvers<void>();
     const app = createTestApp(createSandboxExecRouter({
       fetch: (_input, init) =>
         new Promise<Response>((_resolve, reject) => {
+          markServiceCalled();
           init?.signal?.addEventListener("abort", () => {
             aborted = true;
             reject(init.signal?.reason);
@@ -165,7 +177,29 @@ describe("exec.handlers", () => {
       command: "sleep 60",
       timeout: 5000,
     });
-    const headers = await signFirstPartyHttpRequest({
+    const pending = app.request("/api/sandbox/exec", {
+      method: "POST",
+      headers: await headers(body),
+      body,
+    });
+    // The handler arms its timeout only after it has awaited the request's
+    // signature check and body, which are asynchronous work the fake clock
+    // neither drives nor waits for, and before its first call to the service.
+    // So the clock moves once the service has been called, and a tick taken
+    // earlier would pass before there was a timeout to pass. A request the
+    // handler refuses before calling the service settles instead, and is
+    // returned as it is.
+    await Promise.race([serviceCalled, pending]);
+    await time.tickAsync(4999);
+    const abortedEarly = aborted;
+    await time.tickAsync(1);
+    const response = await pending;
+    return { abortedEarly, aborted, response };
+  }
+
+  /** Signs `body` as a first-party request to the exec route. */
+  const signed = (body: string) =>
+    signFirstPartyHttpRequest({
       url: new URL("/api/sandbox/exec", "http://localhost"),
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -173,21 +207,33 @@ describe("exec.handlers", () => {
       signer,
     });
 
-    const pending = app.request("/api/sandbox/exec", {
-      method: "POST",
-      headers,
-      body,
-    });
-    await time.tickAsync(4999);
-    expect(aborted).toBe(false);
-    await time.tickAsync(1);
-    const response = await pending;
+  it("aborts the service call when the request's timeout passes, and not before", async () => {
+    using time = new FakeTime();
 
+    const { abortedEarly, aborted, response } =
+      await timeOutAgainstSilentService(time, signed);
+
+    expect(abortedEarly).toBe(false);
     expect(aborted).toBe(true);
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({
       error: "Exec failed: Sandbox exec timed out",
     });
+  });
+
+  it("answers a request it refuses before calling the service with that refusal", async () => {
+    // An unsigned request never reaches the service, so the timeout case's
+    // clock has nothing to wait for and the refusal is what comes back.
+
+    using time = new FakeTime();
+
+    const { aborted, response } = await timeOutAgainstSilentService(
+      time,
+      () => Promise.resolve({ "Content-Type": "application/json" }),
+    );
+
+    expect(aborted).toBe(false);
+    expect(response.status).toBe(401);
   });
 
   describe("sandbox creation", () => {

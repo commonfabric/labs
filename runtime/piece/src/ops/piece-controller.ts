@@ -30,6 +30,7 @@ import {
   getPatternRepository,
   getPatternSource,
   getPieceReconciliation,
+  getPieceSourceRecord,
   getPieceSourceRevisions,
   getPieceSourceSnapshot,
   getValueAtPath,
@@ -5937,6 +5938,10 @@ async function pieceSourceCompatibilityReview(
   // The delegations the update would propose, derived before the reads below
   // so that nothing they load waits on another `await` before it is read. An
   // update whose baseline does not retain the current source proposes none.
+  // For a candidate the space does not hold yet, they come from the modules
+  // this session evaluated it with, which leave out a module imported only
+  // for its types, so the review can be stricter than the commit
+  // (`proposedSourceUpdateDelegations()`).
   const patternManager = pieces.runtime.patternManager;
   const entry = patternManager.getArtifactEntryRef(candidate);
   const proposal =
@@ -5946,6 +5951,7 @@ async function pieceSourceCompatibilityReview(
         piece.space,
         previous.ref.identity,
         entry.identity,
+        getPieceSourceRecord(piece, previous.ref.identity),
       );
   let schema: string | undefined;
   if (previous.pattern === undefined) {

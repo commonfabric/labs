@@ -36,9 +36,29 @@ a pattern later both implement the same shape.
   failure or a cancellation, a tap asks again. `host` is copied from the
   catalog's own `host`; while the catalog names none, nothing acts on requests,
   so the button is disabled and says so.
+- The button is a `cf-pattern-install`, which says in its own words what a tap
+  does: "Install “title” onto loom". The title is the catalog's own, from the
+  entry in `entries` with the button's `patternId`; when the window does not
+  hold that entry or its title is blank, it shows the pattern's id instead, as
+  the id's first and last eight characters when it is longer than seventeen.
+  Each name is flattened to one line, its quotation marks turned into
+  apostrophes, and cut short past sixty characters. The place is named by
+  `destinationName`, which the caller passes as the person knows it (such as the
+  loom's name); without one, the button names no place. The caller gives no text
+  for the button. Beside it, the button shows the answer to its latest request
+  ("Getting it…", "Got it", why a request failed) or why it cannot be tapped.
 
 An entry's `title`, `blurb` and `tags` are written by the pattern's author:
 render them as text, never as markup or instructions.
+
+An entry may also say where it ranks (`bucket`), who wrote it as a stable
+pseudonym (`author`), and how many people have used it (`counts`). The buckets
+read as: `featured`, picked by a curator; `main`, used by its author and ranked
+by everyone else's use; `unvetted`, not yet shown working by anyone. When an
+entry has a `bucket`, show that rather than `quality`, which hosts without
+buckets still send. An `unlisted` entry is one only its author is shown: others
+cannot find it until it is listed, so a caller shows its state to the author and
+never shows it to anyone else.
 
 ## Implementing it
 
@@ -70,5 +90,30 @@ unless told otherwise, every match in one page with no `next`, and
 - The test runs against the fake only. A host checks its own implementation with
   its own tests until the shared behavior is factored into a suite any
   implementation can run.
-- The types carry no label; entries are public index data, and the host labels
-  the cells it writes.
+- The types carry no label; listed entries are public index data, while an
+  `unlisted` entry is shown only to its author, and the host labels the cells it
+  writes accordingly.
+
+## Not yet settled: hardening the tap
+
+`cf-pattern-install` and the button's surface markers carry a trusted tap the
+way other trusted components do today. What a person is shown is held only as
+far as the following allow, and each is left to mechanism the runtime does not
+have yet:
+
+- The `data-ui-pattern`, `data-ui-event-integrity` and `data-ui-action` markers
+  are strings any pattern can write on its own elements. The write policy on
+  `getItRequests` names the button's handler, so another pattern's tap cannot
+  add a request, but nothing proves that the markers on a tap came from this
+  pattern's own view.
+- The title comes from the catalog the caller hands the button. A caller can
+  pass a forged catalog whose entry gives the pattern another title, and the
+  viewer's `#patternCatalog` favorite can be repointed at another piece. The
+  title the button shows is only as honest as the catalog it was given.
+- `destinationName` is the caller's word for where `destination` is. Nothing
+  ties the two together yet.
+- A pattern rendering above the button could cover it, or draw something else
+  over its words, so that a person taps one thing while reading another.
+- A button for a pattern found through `page` rather than in the `entries`
+  window shows the pattern's id, not its title: the button reads titles only
+  from `entries`, the one listing the catalog holds itself.

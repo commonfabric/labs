@@ -453,12 +453,13 @@ describe("RealmCodecEngine", () => {
       }
     });
 
-    it("returns a `FabricHash` for a terminal state carrying a reserved key and a cycle", () => {
+    it("leaves a terminal state carrying a reserved key and a cycle to its codec, which refuses it", () => {
       // A terminal state is opaque, per Section 3.3: the walk hands it to its
       // codec without descending, so the reserved-key rule of Section 3.2 and
       // the cycle rule of Section 4 -- both of which refuse these outright in
-      // a walked container -- never reach inside one. `Hash@1` reads `tag`
-      // and `hash` and never looks at the rest.
+      // a walked container -- never reach inside one. What refuses it is
+      // `Hash@1` itself, reading `tag` and `hash` and refusing a state holding
+      // anything else (Section 7.1).
 
       const state: Record<string, unknown> = {
         tag: "fid1",
@@ -466,18 +467,15 @@ describe("RealmCodecEngine", () => {
       };
 
       Object.defineProperty(state, "constructor", {
-        value: "reserved, and ignored",
+        value: "reserved, and left to the codec",
         enumerable: true,
         configurable: true,
         writable: true,
       });
       state.self = state;
 
-      const decoded = fabricFromRealmValue(wire(tagged("Hash@1", state)));
-
-      expect(decoded).toBeInstanceOf(FabricHash);
-      expect((decoded as FabricHash).tag).toBe("fid1");
-      expect([...(decoded as FabricHash).bytes]).toEqual([1, 2, 3]);
+      expect(() => fabricFromRealmValue(wire(tagged("Hash@1", state))))
+        .toThrow(/not one this codec decodes/);
     });
 
     it("throws when given a reserved key in a container it walks", () => {
@@ -507,7 +505,7 @@ describe("RealmCodecEngine", () => {
         wire(tagged("Unavailable@1", {
           reason: "error",
           errorKind: "general",
-          errorMessage: undefined,
+          message: undefined,
         })),
         NULL_LIVE_ENVIRONMENT,
       );

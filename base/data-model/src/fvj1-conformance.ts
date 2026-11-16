@@ -597,6 +597,13 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     make: () => new FabricUnavailable("error", "network"),
   },
   {
+    name: "unavailable error whose message is this package's default for " +
+      "its kind, kept as it arrived",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network",' +
+      '"message":"A network request failed.","reason":"error"}}',
+  },
+  {
     name: "problematic value whose tag is not a tag",
     section: "3-json-encoding.md section 3, `Problematic@1`",
     text: 'fvj1:{"/Problematic@1":{"error":"e","state":{"/Undefined@1":null},' +
@@ -782,10 +789,10 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     text: `fvj1:${JSON.stringify({ "/Hash@1": { hash: "AQ", tag } })}`,
   })),
   {
-    name: "key pair with a key outside base64url",
+    name: "key pair whose keys are strings rather than `Bytes@1` values",
     section: "3-json-encoding.md section 3, `KeyPair@1`",
     text: 'fvj1:{"/KeyPair@1":{"algorithm":"A","privateKey":"AA",' +
-      '"publicKey":"+"}}',
+      '"publicKey":"AQ"}}',
   },
   {
     name: "unavailable pairing an error kind with a transient reason",
@@ -1036,19 +1043,42 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   {
     name: "unavailable error with a numeric message",
     section: SECTION_UNAVAILABLE,
-    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network","errorMessage":5,' +
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network","message":5,' +
       '"reason":"error"}}',
   },
   {
     name: "unavailable error with a null message",
     section: SECTION_UNAVAILABLE,
     text: 'fvj1:{"/Unavailable@1":{"errorKind":"network",' +
-      '"errorMessage":null,"reason":"error"}}',
+      '"message":null,"reason":"error"}}',
   },
   {
     name: "unavailable pairing a message with a transient reason",
     section: SECTION_UNAVAILABLE,
-    text: 'fvj1:{"/Unavailable@1":{"errorMessage":"m","reason":"pending"}}',
+    text: 'fvj1:{"/Unavailable@1":{"message":"m","reason":"pending"}}',
+  },
+  {
+    name: "unavailable error holding a field its codec does not read",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network",' +
+      '"errorMessage":"boom","reason":"error"}}',
+  },
+  {
+    name: "hash holding a field its codec does not read",
+    section: "3-json-encoding.md section 3, `Hash@1`",
+    text: 'fvj1:{"/Hash@1":{"extra":1,"hash":"AQ","tag":"fid1"}}',
+  },
+  {
+    name: "problematic value holding a field its codec does not read",
+    section: "3-json-encoding.md section 3, `Problematic@1`",
+    text: 'fvj1:{"/Problematic@1":{"error":"e","extra":1,"state":null,' +
+      '"tag":"x"}}',
+  },
+  {
+    name: "key pair holding a field its codec does not read",
+    section: "3-json-encoding.md section 3, `KeyPair@1`",
+    text: 'fvj1:{"/KeyPair@1":{"algorithm":"A","extra":1,' +
+      '"privateKey":{"/Bytes@1":"AA"},"publicKey":{"/Bytes@1":"AQ"}}}',
   },
   {
     name: "tag with no version",

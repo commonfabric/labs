@@ -29,6 +29,12 @@ import {
   FabricMap,
   FabricSet,
 } from "@/fabric-instances";
+import {
+  FabricBytes,
+  FabricKeyPair,
+  type FabricPrimitiveClassesByName,
+  FabricUnavailable,
+} from "@/fabric-primitives";
 import { FABRIC_PRIMITIVE_CODEC_TYPE_TAGS } from "@/fabric-primitives/interface.ts";
 import { isFabricArray, isFabricPlainObject } from "@/types";
 import { createDefaultJsonRegistry, jsonFromFabricValue } from "./codecs.ts";
@@ -291,6 +297,17 @@ export const SIZE_GUARANTEES: {
   });
 
 /**
+ * The instances of the data model that this package implements as primitives,
+ * each class name paired with the tag its codec writes.
+ */
+const INSTANCES_AS_PRIMITIVES = Object.freeze(
+  {
+    FabricKeyPair: CODEC_TYPE_TAGS.KeyPair,
+    FabricUnavailable: CODEC_TYPE_TAGS.Unavailable,
+  } as const,
+);
+
+/**
  * The tags of the primitives, whose states hold no value of their own: a
  * tagged value under one is no container, and what its state holds is
  * measured by {@link measurePrimitiveState}.
@@ -300,7 +317,9 @@ const PRIMITIVE_TAGS: ReadonlySet<string> = new Set([
   CODEC_TYPE_TAGS.SpecialNumber,
   CODEC_TYPE_TAGS.Symbol,
   CODEC_TYPE_TAGS.Undefined,
-  ...Object.values(FABRIC_PRIMITIVE_CODEC_TYPE_TAGS),
+  ...Object.values(FABRIC_PRIMITIVE_CODEC_TYPE_TAGS).filter((tag) =>
+    !Object.values<string>(INSTANCES_AS_PRIMITIVES).includes(tag)
+  ),
 ]);
 
 /**
@@ -439,7 +458,7 @@ function sizesOf(
 /**
  * Notes the sizes of what the state of a primitive under `tag` holds: the
  * bytes a base64url state or field writes, whether a byte sequence's or a
- * bigint's, a registered symbol's key, and any other string.
+ * bigint's, a registered symbol's key, and a hash's algorithm tag.
  */
 function measurePrimitiveState(
   tag: string,
@@ -472,11 +491,6 @@ function measurePrimitiveState(
       noteString(fieldOf("tag"));
       noteBytes(fieldOf("hash"));
       break;
-    case CODEC_TYPE_TAGS.KeyPair:
-      noteString(fieldOf("algorithm"));
-      noteBytes(fieldOf("publicKey"));
-      noteBytes(fieldOf("privateKey"));
-      break;
     case CODEC_TYPE_TAGS.Symbol:
       if (typeof state === "string") {
         note("symbolKeyLength", codePointCountOf(state));
@@ -493,11 +507,6 @@ function measurePrimitiveState(
     case CODEC_TYPE_TAGS.Undefined:
       // A number, written as a string or not at all.
       break;
-    default:
-      noteString(state);
-      if (typeof state === "object" && state !== null) {
-        Object.values(state).forEach(noteString);
-      }
   }
 }
 
@@ -1248,7 +1257,7 @@ interface InstanceFields<Class> {
 
   /**
    * The fields of `value`, in the order their probes take, or `undefined` if
-   * it is not of this class.
+   * it is not of this class or has no fields to probe.
    */
   readonly fieldsOf: (value: FabricValue) => InstanceField[] | undefined;
 
@@ -1265,12 +1274,12 @@ interface InstanceFields<Class> {
 
 /**
  * Returns how the fields of instances of `cls` are found, `fieldsOfInstance`
- * returning those of one instance, and `madeOf` making a new one like
- * `like` from fields.
+ * returning those of one instance, or `undefined` for one with no fields to
+ * probe, and `madeOf` making a new one like `like` from fields.
  */
 function fielded<Class extends abstract new (...args: never) => object>(
   cls: Class,
-  fieldsOfInstance: (value: InstanceType<Class>) => InstanceField[],
+  fieldsOfInstance: (value: InstanceType<Class>) => InstanceField[] | undefined,
   madeOf: (
     like: InstanceType<Class>,
     fields: ReadonlyMap<string, FabricValue>,
@@ -1294,14 +1303,22 @@ function isInstanceOf<Class extends abstract new (...args: never) => object>(
 }
 
 /**
- * The fields of every concrete instance class, keyed the way the instance
- * class table keys the classes. Its type is what holds it complete. The
- * open-ended part of an instance is always one field holding a record, so
- * that its keys are probed as a record's are.
+ * The classes whose values are instances in the data model, keyed the way the
+ * class tables key them: every concrete instance class, and the primitive
+ * classes {@link INSTANCES_AS_PRIMITIVES} names.
+ */
+type InstanceClassesByName =
+  & FabricInstanceClassesByName
+  & Pick<FabricPrimitiveClassesByName, keyof typeof INSTANCES_AS_PRIMITIVES>;
+
+/**
+ * The fields of every class {@link InstanceClassesByName} names. Its type is
+ * what holds it complete. The open-ended part of an instance is always one
+ * field holding a record, so that its keys are probed as a record's are.
  */
 const INSTANCE_FIELDS: {
-  readonly [Name in keyof FabricInstanceClassesByName]: InstanceFields<
-    FabricInstanceClassesByName[Name]
+  readonly [Name in keyof InstanceClassesByName]: InstanceFields<
+    InstanceClassesByName[Name]
   >;
 } = {
   FabricError: fielded(
@@ -1329,6 +1346,18 @@ const INSTANCE_FIELDS: {
         cause: fields.get("cause"),
         extras: recordField(fields, "extras"),
       }),
+  ),
+  FabricKeyPair: fielded(
+    FabricKeyPair,
+    // A pair holding handles has no state, so no fields, and is left to the
+    // encoder to refuse.
+    (value) => value.hasMaterial ? Object.entries(value.state) : undefined,
+    (_like, fields) =>
+      new FabricKeyPair(
+        stringField(fields, "algorithm"),
+        bytesField(fields, "publicKey"),
+        bytesField(fields, "privateKey"),
+      ),
   ),
   FabricLink: fielded(
     FabricLink,
@@ -1359,6 +1388,15 @@ const INSTANCE_FIELDS: {
         stringField(fields, "error"),
       ),
   ),
+  FabricUnavailable: fielded(
+    FabricUnavailable,
+    (value) => Object.entries(value.state),
+    // Its fields are strings, which the codec never decodes to `null`, so no
+    // patch replaces one and the instance they make is `like` itself. Making
+    // one afresh through the constructor would drop a message equal to its
+    // kind's default, which the state holds as it arrived.
+    (like) => like,
+  ),
   UnknownValue: fielded(
     UnknownValue,
     (value) => [["state", value.state]],
@@ -1378,6 +1416,22 @@ function stringField(
   const held = fields.get(name);
   if (typeof held !== "string") {
     throw new Error(`Field \`${name}\` not a string: ${String(held)}`);
+  }
+  return held;
+}
+
+/**
+ * Returns the byte sequence `fields` holds under `name`.
+ *
+ * @throws If it holds anything else there.
+ */
+function bytesField(
+  fields: ReadonlyMap<string, FabricValue>,
+  name: string,
+): FabricBytes {
+  const held = fields.get(name);
+  if (!(held instanceof FabricBytes)) {
+    throw new Error(`Field \`${name}\` not a byte sequence`);
   }
   return held;
 }
@@ -1417,7 +1471,7 @@ function instanceMadeOf(
 
 /**
  * Returns the fields of `value`, in the order their probes take, or
- * `undefined` if it is not an instance.
+ * `undefined` if it is not an instance with fields to probe.
  */
 function instanceFieldsOf(value: FabricValue): InstanceField[] | undefined {
   for (const entry of Object.values(INSTANCE_FIELDS)) {

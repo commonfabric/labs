@@ -9,12 +9,13 @@
  * Callers supply the signer and may substitute the HTTP transport.
  */
 
-import type { JSONSchema } from "@commonfabric/api";
+import type { JSONSchema, JSONValue } from "@commonfabric/api";
 import {
   type FirstPartyHttpSigner,
   signFirstPartyHttpRequest,
 } from "@commonfabric/runner/toolshed-http-auth";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
 import type { PatternIndexFetch } from "./http-fetch.ts";
 
 /** Own and publication-bounded inherited evidence computed by the index. */
@@ -37,6 +38,105 @@ export type PatternIndexPatternKind = "part" | "app";
 /** Evidence tier the deployed index computed from recorded run outcomes. */
 export type PatternIndexQuality = "penalized" | "unproven" | "proven";
 
+/**
+ * Where a listed pattern ranks. `featured` is set by an admin; `main` holds
+ * patterns their author has used in a loom, ranked by other people's use;
+ * `unvetted` holds listed patterns nobody has shown working yet, returned only
+ * as a fallback or on request.
+ *
+ * Like every state enum the index answers, this may gain values; a consumer
+ * treats one it does not know as absent.
+ */
+export type PatternIndexBucket = "featured" | "main" | "unvetted";
+
+/**
+ * Where a pattern's listing request stands. A new publication starts at
+ * `not_requested`; its owner's request makes it `pending` while the gate
+ * gardeners run; it is `passed` once every gate passed and `held` when one
+ * did not. `error` means a gardener run failed and waits for an admin re-run.
+ * Whether others can find it is `listed`, which also covers grandfathered and
+ * hidden patterns.
+ */
+export type PatternIndexListing =
+  | "not_requested"
+  | "pending"
+  | "passed"
+  | "held"
+  | "error";
+
+/** One gardener run's state on one pattern. */
+export type PatternIndexGardenerStatus =
+  | "pending"
+  | "running"
+  | "passed"
+  | "failed"
+  | "error";
+
+/**
+ * Something a gardener found. It names the problem without repeating the
+ * value that caused it.
+ */
+export interface PatternIndexFinding {
+  file?: string;
+  line?: number;
+  category: string;
+  why: string;
+}
+
+/**
+ * One gardener's latest verdict on a pattern. A gate gardener's verdict
+ * decides listing; an annotation gardener's never does. `output` is shaped by
+ * that gardener's declared output schema (see `getGardenerPrompt`).
+ *
+ * Verdicts go only to the pattern's owner and to admins: a finding says where
+ * a personal detail is, and the pattern's source stays readable by id.
+ */
+export interface PatternIndexGardenerVerdict {
+  status: PatternIndexGardenerStatus;
+
+  /** Increments on each admin re-run; a late run from an older attempt is ignored. */
+  attempt: number;
+
+  promptVersion?: string;
+  findings?: readonly PatternIndexFinding[];
+  output?: JSONValue;
+}
+
+/** How an event type accumulates into a pattern lineage's evidence. */
+export type PatternIndexAggregation =
+  | "raw"
+  | "count"
+  | "distinct_actors"
+  | "distinct_actor_days"
+  | "last_seen";
+
+/** Whose events of a type count toward a lineage. */
+export type PatternIndexEventAudience = "author" | "others" | "any";
+
+/** An event type as the index declares it. */
+export interface PatternIndexEventTypeDeclaration {
+  weight: number;
+  aggregate: PatternIndexAggregation;
+  audience: PatternIndexEventAudience;
+
+  /** An effect beyond ranking: the author's first use promotes to `main`. */
+  promotes?: "author_first_success";
+}
+
+/**
+ * One event type's accumulated evidence for a lineage. `value` is what the
+ * declared aggregation counts: events (`count`), distinct people
+ * (`distinct_actors`), or person-days (`distinct_actor_days`, which also
+ * reports how many people came back on a later day). `raw` types keep their
+ * events as a stream and produce no aggregate. A day is `YYYY-MM-DD`.
+ */
+export interface PatternIndexAggregate {
+  aggregate: PatternIndexAggregation;
+  value: number;
+  returningActors?: number;
+  lastSeenDay?: string;
+}
+
 /** One hit from `searchPatterns`. Carries metadata and never source. */
 export interface PatternIndexSearchResult {
   patternId: string;
@@ -46,7 +146,13 @@ export interface PatternIndexSearchResult {
 
   description: string;
   hashtags: readonly string[];
-  ownerDid: string;
+
+  /**
+   * The publisher's DID, from deployments that predate pseudonymous authors.
+   * Newer deployments answer `handle` instead.
+   */
+  ownerDid?: string;
+
   createdAt: string;
   dependencies: readonly string[];
   signals?: PatternIndexSignals;
@@ -71,12 +177,33 @@ export interface PatternIndexSearchResult {
    * current successor in that generation's place.
    */
   supersedes?: string;
+
+  /** Which ranked bucket this hit came from, absent on older deployments. */
+  bucket?: PatternIndexBucket;
+
+  /** The author's stable pseudonym on this index. */
+  handle?: string;
+
+  /** Whether the caller is its author. */
+  mine?: boolean;
+
+  /** The first generation of this pattern's version chain. */
+  lineageId?: string;
+
+  /** Evidence per event type, accumulated over the lineage. */
+  aggregates?: Readonly<Record<string, PatternIndexAggregate>>;
 }
 
 export interface PatternIndexSearchRequest {
   tags?: readonly string[];
   text?: string;
   limit?: number;
+
+  /**
+   * Also return `unvetted` hits after `featured` and `main`. Without it the
+   * index returns unvetted hits only when nothing vetted matched.
+   */
+  includeUnvetted?: boolean;
 }
 
 /**
@@ -86,6 +213,9 @@ export interface PatternIndexSearchRequest {
  */
 export interface PatternIndexSearchResponse {
   results: readonly PatternIndexSearchResult[];
+
+  /** How many matches were left out, by reason, such as `unlisted` or `unvetted`. */
+  excluded?: Readonly<Record<string, number>>;
 }
 
 export interface PatternIndexProgramFile {
@@ -111,7 +241,15 @@ export interface PatternIndexPattern {
   /** Short display name, when the index has or could derive one. */
   name?: string;
 
-  ownerDid: string;
+  /** The publisher's DID, from deployments that predate `handle`. */
+  ownerDid?: string;
+
+  /** The author's stable pseudonym on this index. */
+  handle?: string;
+
+  /** Whether the caller is its author. */
+  mine?: boolean;
+
   createdAt: string;
   description: string;
   hashtags: readonly string[];
@@ -119,7 +257,35 @@ export interface PatternIndexPattern {
   resultSchema?: JSONSchema;
   dependencies: readonly string[];
   priorPatternId?: string;
+  remixedFrom?: string;
+  lineageId?: string;
   program?: PatternIndexProgram;
+
+  /**
+   * Whether others can find it. `getPattern` serves a pattern by id whether
+   * or not it is listed, so a direct link always works.
+   */
+  listed?: boolean;
+
+  /** Where its listing request stands. */
+  listing?: PatternIndexListing;
+
+  /** Held by the index before listing existed, and listed without a check. */
+  grandfathered?: true;
+
+  /** Kept out of discovery by an admin. */
+  hidden?: true;
+
+  bucket?: PatternIndexBucket;
+
+  /** When its author first used it in a loom (ISO 8601), which put it in `main`. */
+  authorProvenAt?: string;
+
+  /** Gate gardener verdicts by gardener name; owner and admins only. */
+  gates?: Readonly<Record<string, PatternIndexGardenerVerdict>>;
+
+  /** Annotation gardener verdicts by gardener name; owner and admins only. */
+  annotations?: Readonly<Record<string, PatternIndexGardenerVerdict>>;
 }
 
 export interface PatternIndexGetRequest {
@@ -142,7 +308,15 @@ export interface PatternIndexListedPattern {
   description: string;
   hashtags: readonly string[];
   keywords: readonly string[];
-  ownerDid: string;
+
+  /** The publisher's DID, from deployments that predate `handle`. */
+  ownerDid?: string;
+
+  /** The author's stable pseudonym on this index. */
+  handle?: string;
+
+  /** Whether the caller is its author. */
+  mine?: boolean;
 
   /** `null` for a pattern the index holds no creation time for. */
   createdAt: string | null;
@@ -151,6 +325,9 @@ export interface PatternIndexListedPattern {
   events: Readonly<Record<string, number>>;
 
   /**
+   * @deprecated Retired with pseudonymous authors: newer deployments store no
+   * author DIDs on events and never answer this.
+   *
    * Event type to author DID to count, for this generation's own events.
    * Absent on indexes that return totals without author attribution.
    */
@@ -163,13 +340,48 @@ export interface PatternIndexListedPattern {
 
   /** Evidence tier computed by the index, absent on older deployments. */
   quality?: PatternIndexQuality;
+
+  bucket?: PatternIndexBucket;
+  listed?: boolean;
+  listing?: PatternIndexListing;
+  grandfathered?: true;
+  hidden?: true;
+
+  /** Owner and admins only. */
+  gates?: Readonly<Record<string, PatternIndexGardenerVerdict>>;
+  annotations?: Readonly<Record<string, PatternIndexGardenerVerdict>>;
+
+  lineageId?: string;
+  aggregates?: Readonly<Record<string, PatternIndexAggregate>>;
+}
+
+/**
+ * Which patterns to list. An unlisted pattern is returned only to its owner
+ * and to admins. Deployments that predate listing ignore these filters and
+ * return everything, so a caller that relies on them checks `whoami` first,
+ * which those deployments do not answer.
+ */
+export interface PatternIndexListPatternsRequest {
+  /** Only the caller's own patterns, including unlisted ones. */
+  mine?: boolean;
+
+  /** Only featured patterns. */
+  featured?: boolean;
 }
 
 export interface PatternIndexListPatternsResponse {
   patterns: readonly PatternIndexListedPattern[];
 
-  /** Event type to the weight `score` counts one of them at. */
+  /**
+   * Event type to the weight `score` counts one of them at. Kept for older
+   * readers; `eventTypeDeclarations` carries the weight too.
+   */
   eventTypes: Readonly<Record<string, number>>;
+
+  /** Each event type's full declaration, absent on older deployments. */
+  eventTypeDeclarations?: Readonly<
+    Record<string, PatternIndexEventTypeDeclaration>
+  >;
 }
 
 export interface PatternIndexListEventsRequest {
@@ -191,6 +403,7 @@ export interface PatternIndexEvent {
   /** `null` for an event the index holds no timestamp for. */
   ts: string | null;
 
+  /** @deprecated Newer deployments store no free text on events. */
   note?: string;
 }
 
@@ -211,14 +424,39 @@ export type PatternIndexEventType =
   | "thumbs_up"
   | "thumbs_down";
 
+/**
+ * What a person did with a pattern in their loom, reported by Loom through
+ * `recordUsageEvent`. A harness or agent run never sends these: they are what
+ * ranks a pattern by people's use, and `viewed_in_loom` from its author is
+ * what promotes it to `main`.
+ *
+ * - `deployed`: a person placed the pattern into a loom.
+ * - `viewed_in_loom`: a person opened a loom holding a piece they placed.
+ * - `removed`: a person removed such a piece.
+ */
+export type PatternIndexUsageEventType =
+  | "deployed"
+  | "viewed_in_loom"
+  | "removed";
+
+export interface PatternIndexRecordUsageEventRequest {
+  patternId: string;
+  eventType: PatternIndexUsageEventType;
+}
+
 /** Signed event payload; the client supplies the author from its identity. */
 export interface PatternIndexRecordEventRequest {
   patternId: string;
   eventType: PatternIndexEventType;
 
-  /** Author DID, which the index must verify against the CF1 signer. */
+  /**
+   * Author DID, which an older deployment verifies against the CF1 signer.
+   * A deployment that attributes events to the signer's member drops it, so
+   * the client keeps sending it to work with both.
+   */
   did: string;
 
+  /** @deprecated Newer deployments store no free text on events. */
   note?: string;
 }
 
@@ -258,19 +496,31 @@ export interface PatternIndexPublishRequest {
   hashtags: readonly string[];
 
   /**
-   * The request this pattern was written to answer, kept by the index for
-   * ranking and never returned by a read.
+   * The request this pattern was written to answer. Deployments that predate
+   * listing require it; newer ones neither require nor store it, since it can
+   * carry the requester's personal details. New callers leave it out.
    */
-  directQuery: string;
+  directQuery?: string;
 
   keywords?: readonly string[];
   program: PatternIndexProgram;
   argumentSchema?: JSONSchema;
   resultSchema?: JSONSchema;
   dependencies?: readonly string[];
+
+  /**
+   * The same author's previous version. The new version keeps that
+   * version's standing; a predecessor owned by someone else is refused.
+   */
   priorPatternId?: string;
 
-  /** Explicitly offers this entry to search on publication. */
+  /** Someone else's pattern this one was built from; credits it, inherits nothing. */
+  remixedFrom?: string;
+
+  /**
+   * Explicitly offers this entry to search on publication. Deployments with
+   * listing ignore it: discovery follows `requestListing` and the gardeners.
+   */
   discoverable?: true;
 
   /**
@@ -291,6 +541,161 @@ export interface PatternIndexPublishResponse {
 
   /** `false` when the index already held this identity, which is not an error. */
   created: boolean;
+
+  /** Request fields this deployment no longer stores and dropped. */
+  ignored?: readonly string[];
+}
+
+/** An owner's request that a pattern be considered for discovery. */
+export interface PatternIndexRequestListingRequest {
+  patternId: string;
+}
+
+/**
+ * The listing state after the request. Over the caller's daily gardener cap
+ * the index refuses with 429 and a `resetsAt` time, which arrives as
+ * `PatternIndexError.retryAt`, and the pattern stays `not_requested`.
+ */
+export interface PatternIndexRequestListingResponse {
+  patternId: string;
+  listing: PatternIndexListing;
+}
+
+/** Asks for one gardener's prompt, so a client can run the same check locally. */
+export interface PatternIndexGardenerPromptRequest {
+  name: string;
+}
+
+export interface PatternIndexGardenerPromptResponse {
+  name: string;
+  kind: "gate" | "annotation";
+
+  /** A hash of `prompt` and `outputSchema`; a client reports the one it used. */
+  promptVersion: string;
+
+  prompt: string;
+  outputSchema: JSONSchema;
+
+  /**
+   * The format of the input the prompt describes (`pattern-json-1`); a
+   * client renders that input itself, so one it does not know is one it
+   * cannot ask faithfully. Absent on deployments that predate it.
+   */
+  inputFormat?: string;
+}
+
+/** An admin mints a single-use invite. */
+export interface PatternIndexCreateInviteRequest {
+  /** Seconds until the invite expires; the index applies its own default and cap. */
+  ttlSeconds?: number;
+}
+
+/**
+ * The invite. `code` is the secret: it travels in a link's fragment and the
+ * index keeps only a verifier for it.
+ */
+export interface PatternIndexCreateInviteResponse {
+  inviteId: string;
+  code: string;
+  expiresAt: string;
+
+  /** The invite as a link to share, with `code` in its fragment. */
+  link?: string;
+}
+
+/** Redeems an invite; the signing key becomes the new member's root. */
+export interface PatternIndexRedeemInviteRequest {
+  inviteId: string;
+  code: string;
+}
+
+/**
+ * A member of the index: the caller (`whoami`) or one just admitted or moved.
+ * A member is a delegation-chain root; the index keeps no list of the other
+ * keys a person acts through.
+ */
+export interface PatternIndexMember {
+  handle: string;
+  role: "admin" | "user";
+
+  /** @deprecated Always 1: the index knows only a member's root. */
+  keys?: number;
+}
+
+/**
+ * Hands the caller's member's root to the signing key. `rootDelegation` is a
+ * delegation from the current root to the signer, for `/index/root`, in
+ * unpadded base64url. It works once.
+ */
+export interface PatternIndexMoveRootRequest {
+  rootDelegation: string;
+}
+
+/** An admin points a member who lost their root key at a new one. */
+export interface PatternIndexMoveMemberRootRequest {
+  handle: string;
+  did: string;
+}
+
+/**
+ * Refuses a delegation in the caller's member's chains from now on, or
+ * removes one of the caller's legacy keys (one admitted before chains, which
+ * has no delegation to revoke).
+ */
+export type PatternIndexRevokeRequest =
+  | { delegation: string }
+  | { legacyKey: string };
+
+export type PatternIndexRevokeResponse =
+  | { revoked: string }
+  | { removed: true };
+
+/** An admin admits a key as a new member, invited by that admin. */
+export interface PatternIndexAdmitKeyRequest {
+  did: string;
+}
+
+/**
+ * An admin hides a pattern from discovery, with the reason the record keeps,
+ * or shows it again. Showing again never lists a pattern its gates hold.
+ */
+export type PatternIndexSetHiddenRequest =
+  | { patternId: string; hidden: true; reason: string }
+  | { patternId: string; hidden: false; reason?: undefined };
+
+/** The pattern's listing after the change; `changed` is false when it already was so. */
+export interface PatternIndexSetHiddenResponse {
+  patternId: string;
+  changed: boolean;
+  listed?: boolean;
+  listing?: PatternIndexListing;
+  hidden?: true;
+
+  /** Why and when an admin hid it; owner and admins only. */
+  hiddenReason?: string;
+  hiddenAt?: string;
+}
+
+/** An admin features or unfeatures a listed pattern. */
+export interface PatternIndexSetFeaturedRequest {
+  patternId: string;
+  featured: boolean;
+
+  /** Lower ranks first among featured hits. */
+  rank?: number;
+
+  note?: string;
+}
+
+export interface PatternIndexSetFeaturedResponse {
+  patternId: string;
+  featured: boolean;
+}
+
+/** An admin re-runs a gardener on a pattern, as a fresh attempt. */
+export interface PatternIndexRegardenRequest {
+  patternId: string;
+  gardener: string;
 }
 
 /**
@@ -315,12 +720,18 @@ export class PatternIndexError extends Error {
    */
   readonly detail?: string;
 
-  constructor(fn: string, status: number, detail?: string) {
+  /** When a refusal for a limit says to try again (ISO 8601). */
+  readonly retryAt?: string;
+
+  constructor(fn: string, status: number, detail?: string, retryAt?: string) {
     super(`pattern index ${fn} failed (${status})`);
     this.fn = fn;
     this.status = status;
     if (detail !== undefined) {
       this.detail = detail;
+    }
+    if (retryAt !== undefined) {
+      this.retryAt = retryAt;
     }
   }
 }
@@ -329,7 +740,22 @@ export interface PatternIndexClientOptions {
   baseUrl: string;
   fetchFn?: PatternIndexFetch;
   signer: FirstPartyHttpSigner;
+
+  /**
+   * The delegation chain the signer acts for its member through, root first:
+   * each link a delegation for `/index` about the root, in unpadded base64url,
+   * the first issued by the root itself, the last to the signer and expiring
+   * within 90 days; at most 8. Sent inside every signed call. Without it the
+   * signer is its own root.
+   */
+  proofs?: readonly string[];
 }
+
+/** A JSON object's own property, or `undefined` for anything else. */
+const ownField = (value: unknown, key: string): unknown =>
+  isObjectOrArray(value) && !Array.isArray(value)
+    ? Object.getOwnPropertyDescriptor(value, key)?.value
+    : undefined;
 
 /**
  * Joins an index function onto the configured base, keeping every segment the
@@ -344,6 +770,7 @@ export class PatternIndexClient {
   readonly #baseUrl: string;
   readonly #fetchFn: PatternIndexFetch;
   readonly #signer: FirstPartyHttpSigner;
+  readonly #proofs?: readonly string[];
 
   constructor(options: PatternIndexClientOptions) {
     // The function name is appended to the base's path, so a base carrying a
@@ -363,6 +790,16 @@ export class PatternIndexClient {
     this.#baseUrl = base.origin + base.pathname;
     this.#fetchFn = options.fetchFn ?? ((input, init) => fetch(input, init));
     this.#signer = options.signer;
+    if (options.proofs !== undefined) {
+      // The index refuses a longer chain on every call; say so once, here.
+      if (options.proofs.length > MAX_PROOF_CHAIN_LENGTH) {
+        throw new Error(
+          `pattern index proofs: the chain is longer than ${MAX_PROOF_CHAIN_LENGTH} links`,
+        );
+      }
+      // A copy, so the caller's later edits never change what is sent.
+      this.#proofs = [...options.proofs];
+    }
   }
 
   /**
@@ -384,7 +821,11 @@ export class PatternIndexClient {
     const url = functionUrl(this.#baseUrl, fn);
     // The proof commits to the body hash, so the bytes signed and the bytes
     // sent must be identical — serialize once.
-    const body = JSON.stringify(payload);
+    const body = JSON.stringify(
+      this.#proofs === undefined
+        ? payload
+        : { ...payload, proofs: [...this.#proofs] },
+    );
     const headers = await signFirstPartyHttpRequest({
       url,
       method: "POST",
@@ -414,7 +855,13 @@ export class PatternIndexClient {
           typeof (parsed as { error?: unknown }).error === "string"
         ? (parsed as { error: string }).error
         : text.slice(0, 200);
-      throw new PatternIndexError(fn, response.status, error);
+      const resetsAt = ownField(parsed, "resetsAt");
+      throw new PatternIndexError(
+        fn,
+        response.status,
+        error,
+        typeof resetsAt === "string" ? resetsAt : undefined,
+      );
     }
     if (parsed === undefined) {
       throw new PatternIndexError(
@@ -452,6 +899,9 @@ export class PatternIndexClient {
       ...(request.tags !== undefined ? { tags: [...request.tags] } : {}),
       ...(request.text !== undefined ? { text: request.text } : {}),
       ...(request.limit !== undefined ? { limit: request.limit } : {}),
+      ...(request.includeUnvetted !== undefined
+        ? { includeUnvetted: request.includeUnvetted }
+        : {}),
     });
   }
 
@@ -469,14 +919,22 @@ export class PatternIndexClient {
    * as a whole. Counts, weights and available author counts are public;
    * individual event notes remain in the caller's own event stream.
    */
-  listPatterns(): Promise<PatternIndexListPatternsResponse> {
-    return this.#call<PatternIndexListPatternsResponse>("listPatterns", {});
+  listPatterns(
+    request: PatternIndexListPatternsRequest = {},
+  ): Promise<PatternIndexListPatternsResponse> {
+    return this.#call<PatternIndexListPatternsResponse>("listPatterns", {
+      ...(request.mine !== undefined ? { mine: request.mine } : {}),
+      ...(request.featured !== undefined ? { featured: request.featured } : {}),
+    });
   }
 
   /**
-   * The calling identity's OWN events, newest first. The index answers each
-   * signer with their own stream and nobody else's, so this is what a run made
-   * of the index rather than what everyone made of it.
+   * The calling identity's OWN events, newest first, from a deployment that
+   * still keeps a per-author stream.
+   *
+   * @deprecated A deployment that keeps none answers HTTP 410 (see "Index
+   *   service contract for authors" in the cf-harness console README), and
+   *   nothing in this checkout calls it.
    */
   listEvents(
     request: PatternIndexListEventsRequest = {},
@@ -527,7 +985,9 @@ export class PatternIndexClient {
       patternId: request.patternId,
       program: request.program,
       meta: {
-        directQuery: request.directQuery,
+        ...(request.directQuery !== undefined
+          ? { directQuery: request.directQuery }
+          : {}),
         description: request.description,
         hashtags: [...request.hashtags],
         ...(request.keywords !== undefined
@@ -549,6 +1009,97 @@ export class PatternIndexClient {
       ...(request.priorPatternId !== undefined
         ? { priorPatternId: request.priorPatternId }
         : {}),
+      ...(request.remixedFrom !== undefined
+        ? { remixedFrom: request.remixedFrom }
+        : {}),
     });
+  }
+
+  /**
+   * Reports what a person did with a pattern in their loom. Only Loom calls
+   * this; a harness or agent run never does.
+   */
+  recordUsageEvent(
+    request: PatternIndexRecordUsageEventRequest,
+  ): Promise<PatternIndexRecordEventResponse> {
+    return this.#call("recordUsageEvent", { ...request });
+  }
+
+  /** Asks that an owned pattern be checked and, if it passes, listed. */
+  requestListing(
+    request: PatternIndexRequestListingRequest,
+  ): Promise<PatternIndexRequestListingResponse> {
+    return this.#call("requestListing", { ...request });
+  }
+
+  /** Reads a gardener's prompt and output schema. */
+  getGardenerPrompt(
+    request: PatternIndexGardenerPromptRequest,
+  ): Promise<PatternIndexGardenerPromptResponse> {
+    return this.#call("getGardenerPrompt", { ...request });
+  }
+
+  /** Re-runs a gardener on a pattern as a fresh attempt. Admin only. */
+  regarden(
+    request: PatternIndexRegardenRequest,
+  ): Promise<PatternIndexRequestListingResponse> {
+    return this.#call("regarden", { ...request });
+  }
+
+  /** Mints a single-use invite. Admin only. */
+  createInvite(
+    request: PatternIndexCreateInviteRequest = {},
+  ): Promise<PatternIndexCreateInviteResponse> {
+    return this.#call("createInvite", { ...request });
+  }
+
+  /** Redeems an invite, making this client's key a new member's root. */
+  redeemInvite(
+    request: PatternIndexRedeemInviteRequest,
+  ): Promise<PatternIndexMember> {
+    return this.#call("redeemInvite", { ...request });
+  }
+
+  /** Makes this client's key its member's root, with the current root's consent. */
+  moveRoot(request: PatternIndexMoveRootRequest): Promise<PatternIndexMember> {
+    return this.#call("moveRoot", { ...request });
+  }
+
+  /** Points a member's root at a new key. Admin only. */
+  moveMemberRoot(
+    request: PatternIndexMoveMemberRootRequest,
+  ): Promise<PatternIndexMember> {
+    return this.#call("moveMemberRoot", { ...request });
+  }
+
+  /** Revokes a delegation in the caller's chains, or removes a legacy key. */
+  revoke(
+    request: PatternIndexRevokeRequest,
+  ): Promise<PatternIndexRevokeResponse> {
+    return this.#call("revoke", { ...request });
+  }
+
+  /** Admits a key as a new member. Admin only. */
+  admitKey(request: PatternIndexAdmitKeyRequest): Promise<PatternIndexMember> {
+    return this.#call("admitKey", { ...request });
+  }
+
+  /** Who this client's key acts as. */
+  whoami(): Promise<PatternIndexMember> {
+    return this.#call("whoami", {});
+  }
+
+  /** Hides a pattern from discovery, or shows it again. Admin only. */
+  setPatternHidden(
+    request: PatternIndexSetHiddenRequest,
+  ): Promise<PatternIndexSetHiddenResponse> {
+    return this.#call("setPatternHidden", { ...request });
+  }
+
+  /** Features or unfeatures a listed pattern. Admin only. */
+  setPatternFeatured(
+    request: PatternIndexSetFeaturedRequest,
+  ): Promise<PatternIndexSetFeaturedResponse> {
+    return this.#call("setPatternFeatured", { ...request });
   }
 }
