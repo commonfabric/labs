@@ -314,20 +314,43 @@ describe("cell-cache", () => {
       });
     }
 
-    it("refuses, and leaves the stamp, where a stamped source record holds a declared clause", async () => {
-      const program = await writeProgram(PROGRAM);
+    it("refuses, and leaves the stamp, where the attestation at a stamped source record's list also holds a clause", async () => {
+      const program = await writeDelegatingProgram();
       const id = idOf(sourceDocKey(program.entryIdentity));
       await plant(id, [
         ...rootPairStamp(space),
         {
-          path: ["filename"],
+          path: ["delegatedModuleIdentities"],
           origin: "declared",
-          label: { confidentiality: [space] },
+          label: {
+            confidentiality: [space],
+            integrity: [COMPILED_INTEGRITY_ATOM],
+          },
         } as unknown as FabricValue,
       ]);
 
       expect(await repair(program.entryIdentity)).toBe("refused");
       expect(atomsOn(id)).toContain(space);
+    });
+
+    it("refuses, and writes nothing, where the repair's transaction reads a record it does not write", async () => {
+      const program = await writeDelegatingProgram();
+      const id = idOf(sourceDocKey(program.entryIdentity));
+      await plant(id, rootPairStamp(space));
+      const util = program.modules.find((m) => m.filename === "/util.ts")!;
+
+      const outcome = await repairCompileCacheStamps(
+        runtime,
+        space,
+        program.entryIdentity,
+        RUNTIME_VERSION,
+        (tx) => {
+          tx.readOrThrow(address(idOf(sourceDocKey(util.identity))));
+        },
+      );
+
+      expect(outcome).toBe("refused");
+      expect(atomsOn(id)).toEqual([space, space]);
     });
 
     it("refuses a closure whose edge lands on a record that is not at its own key, and carries no list from it", async () => {
