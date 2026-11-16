@@ -317,7 +317,7 @@ is relitigated.
   flow through it per value. Each thing the body is given has its own
   label: the element has the label of its own slot of the collection
   and of what that slot holds, the index and the whole collection
-  have theirs only where the callback declares them, and each
+  have theirs only for a node that reads them, and each
   captured value has its own. A node of the body takes the labels of
   what it reads and closes over, and nothing of what another node of
   the same body reads. So a handler that closes over the element alone
@@ -939,6 +939,20 @@ as an assumption.
     stream.
 137. **The key of an element of a `filter` result** (PL question 91).
     *Assumed:* it keeps the key it has in the source, count included.
+
+138. **State and identity that derive from the index** (PL question
+    92). *Assumed:* a state cell declared with a value from the index
+    keeps what it holds when its element moves, because the declared
+    value is written at first creation only. A cell or child that a
+    function body makes under an explicit cause that holds the index
+    is named by the cause, so a move names another; the alternative
+    is a compile error. A binding of a function body that copies the
+    index is a stream named by the copied value, so a move names
+    another stream.
+139. **The label of the index** (PL question 93). *Assumed:* the
+    whole membership the collection iterates. The alternative is the
+    membership through the element's position alone, as `findIndex`
+    has.
 
 ## Open, and not needing the owner
 
