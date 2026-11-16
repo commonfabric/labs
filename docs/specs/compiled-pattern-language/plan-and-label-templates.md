@@ -1936,6 +1936,72 @@ One stored array can hold a link at one position and a plain value at
 another, and the first two cases then apply position by position. A
 rule of this document that names no case holds in all three.
 
+**Which stored forms make which case.** Which of the first two cases a
+position of a stored array is of follows from how its element was
+written. The runtime of today stores three forms.
+
+- **A record that a function body writes into a stored list through a
+  handle** becomes a document of its own, and the list holds a link to
+  it. `set`, `push` and `addUnique` do so: `Cell.set`, `Cell.pushAll`
+  and `Cell.addUnique` in `runtime/runner/src/cell.ts` call
+  `diffAndUpdate` and `diffAndAppend` with the anchor ids of the
+  writing frame (`frameAnchorIds`), and `normalizeAndDiff` then gives
+  a plain object that sits in an array a document through
+  `anchorValueAsEntity` (`runtime/runner/src/data-updating.ts`). The
+  document is named from where the record was written and by which
+  run, so two writes of equal records make two documents. A record
+  that the list held before the write stays as it was, in place or as
+  the link it was. Today `map` keys such an element by the record's
+  document, and a reference to a member of the record that is stored
+  elsewhere reads the record after the list no longer holds it.
+- **A record of the argument that an instance is created with, and a
+  record of a default of the argument,** is stored in place in the
+  argument document: `Runner.#updateArgument` in
+  `runtime/runner/src/runner.ts` writes the argument through
+  `diffAndUpdate` with no source of anchor ids. Today `map` keys such
+  an element by its position (`cellIdentityKey` in
+  `runtime/runner/src/builtins/scope-policy.ts`), and a reference to a
+  member of it that is stored elsewhere names the position: after a
+  move or a removal it reads the element that stands at the position,
+  and nothing once no element stands there.
+- **A string, a number, or another primitive** is stored in place
+  however it is written. Today it is keyed by its position, and a
+  reference to it reads what stands at the position.
+
+So "a record is a cell of its own" holds today for a record that a
+function body wrote into a list through a handle, and for no other
+record. The cases of this document are produced as follows.
+
+- **An array of references** is a stored array whose positions hold
+  links: a list that function bodies filled with records through
+  `set`, `push` or `addUnique`; a list of the records that
+  `elementById` names; an array of cell handles or of pattern
+  instances; and an array that holds containers a body read and
+  passed on unchanged (`execution-and-storage.md` §2.4).
+- **An array of plain values in place** is an array of primitives,
+  however written; the records of an argument that an instance is
+  created with, or of a default; and the records of an array that a
+  `lift` or a `computed` built and returns whole.
+- **The result of another per-element construct** is no stored form.
+  It is the output of a `map`, a `filter` or a `flatMap` of the plan,
+  whatever the upstream positions hold.
+
+In this design a record that a function body writes into a stored
+list through a handle, with `set`, `push` or `addUnique`, is stored
+as today: it is a document of its own, and the list holds a link to
+it (`language-subset.md` §4.4.1; `builtin-inventory.md`, "Element
+keys"). Such a list is an array of references, and the rules for a
+plain value in place, the reference by key included, do not concern
+it. The prototype's executor does the same. *Assumed* (section 8,
+question 118): the document is named as a cell that the body creates
+with no explicit cause is (`execution-and-storage.md` §5.4 and §5.5),
+so two writes of equal records make two documents; a record written
+at one position through a handle that names the position, as
+`items.key(0).set({ ... })`, gets a document as a record written
+with the whole array does; and a record in a constant first value of
+a state cell, or in a default that is read and not stored, is a plain
+value in place.
+
 **What is named from a key.** By ruling, what an element body holds is
 named from the enclosing instance and the key: the instance, the steps
 of `within`, whose `element` step contributes the collection's name and
@@ -2035,13 +2101,20 @@ to an element is the link to its cell, which a move does not change.
   handle to a value the instance computes (section 3.11).
 - **After the element is removed** no position holds the key, and a
   read through the reference reads as nothing. That is a deliberate
-  difference from the runtime of today, which the ruling names: there
-  an element that is a record is a cell of its own, and a reference to
-  it reads the record after the array no longer holds it. A handler
-  that stores a member of an element in a cell, as
-  `center.set(stop.position)` does, stores a reference by key, and the
-  cell reads as nothing once the element is removed. An author who
-  wants the value kept copies it, or makes the elements cells.
+  difference from the runtime of today, which the ruling names. Today
+  a reference to an element that is a plain value in place, or to a
+  member of it, names the position ("Which stored forms make which
+  case", above): after a removal it reads the element that moved to
+  the position, and nothing once no element stands there. In this
+  design it reads as nothing in both. A handler that stores a member
+  of such an element in a cell, as `center.set(stop.position)` does
+  where the list holds its records in place, stores a reference by
+  key, and the cell reads as nothing once the element is removed.
+  Where function bodies wrote the records into the list with `push`,
+  the list is an array of references: the cell holds a link into the
+  record's document and reads the record after the removal, today
+  and in this design. An author who wants the value kept copies it,
+  or makes the elements cells.
 - **Occurrences.** The key holds the occurrence count. Where two equal
   values stand in a collection and the first is removed, the one that
   remains is occurrence 0: a reference to occurrence 0 resolves to it,
@@ -11820,3 +11893,24 @@ this document made.
      arise over an array of plain values in place or over the result
      of another per-element construct, whose elements have no such
      record.
+118. **The document of a record that a function body writes into a
+     list** (for the project owner). The runtime of today gives a
+     record that `set`, `push` or `addUnique` writes into a stored
+     array a document of its own and stores a link, and keeps in place
+     a record of the argument that an instance is created with, or of
+     a default (section 1.3, "Which stored forms make which case").
+     The documents have the compiled path store the first as today,
+     so a list that function bodies fill is an array of references.
+     *Assumed:* the document is named as a cell that the body creates
+     with no explicit cause is, where today's name is formed from a
+     counter of the writing frame, the list's document and path, and
+     the frame's cause; two writes of equal records make two
+     documents in both. *Assumed* as well: a record written through a
+     handle that names one position gets a document; and a record in
+     a constant first value of a state cell, or in a default that is
+     read and not stored, is a plain value in place. The alternative
+     stores every record in place, which makes every list of records
+     an array of plain values in place, under the rulings on a
+     reference by key. The question decides which case a stored list
+     is of. It does not arise for the result of another per-element
+     construct, which is no stored form.

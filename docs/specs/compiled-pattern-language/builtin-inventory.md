@@ -549,10 +549,17 @@ the value takes the place of the position.
 Which elements are plain values follows from how lists are written.
 `diffAndUpdate` in `runtime/runner/src/data-updating.ts` gives a plain
 object written into an array by `set`, `push`, or `addUnique` a document of
-its own and stores a link (`nextAnchorId`). A list of records built by
-handlers therefore holds links, and its elements are keyed by identity.
-Plain-value elements are primitives, and records in an array that a
-computation built, which are stored inline. A record that a computation
+its own and stores a link (`nextAnchorId`, `anchorValueAsEntity`). A list
+of records built by handlers therefore holds links, and its elements are
+keyed by identity: it is an array of references, today and in this
+design. Plain-value elements are primitives; records of the argument
+that an instance is created with, or of a default, which
+`Runner.#updateArgument` in `runtime/runner/src/runner.ts` writes with
+no source of anchor ids; and records in an array that a computation
+built. All of them are stored inline, and today each is keyed by its
+position. Which writes give a record a document in this design, and
+how the document is named, is assumed
+(`plan-and-label-templates.md` §8, question 118). A record that a computation
 read and passes on unchanged is a reference
 ([What the plan records](#what-the-plan-records-for-calls-in-bodies),
 "References"): the array holds a link to where the record was read, and
@@ -618,9 +625,12 @@ the element is keyed by the identity of that cell.
   the position that holds the key. A move changes nothing the
   reference holds. After the element is removed, or edited in place,
   no position holds the key, and a reference stored elsewhere reads as
-  nothing. That differs from today, deliberately: today a record
-  written into a list is a cell of its own, and a reference to it
-  reads the record after the list no longer holds it. What a write
+  nothing. That differs from today, deliberately: today a reference
+  to a value stored in place names its position, and reads whatever
+  stands there. A record that a handler wrote into a list with `set`,
+  `push` or `addUnique` is not this case. It is a cell of its own,
+  today and in this design, and a reference to it reads the record
+  after the list no longer holds it. What a write
   that changes the value does to the reference, how the reference is
   stored and labeled, and which readers hold one are assumed
   (`plan-and-label-templates.md` §8, questions 112 to 115). Over an

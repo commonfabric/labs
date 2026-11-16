@@ -1935,14 +1935,24 @@ references, where the element is a cell.
   reference by key with the member's path. It follows the element when
   the element moves. After the element is removed no position holds
   the key, and the cell reads as nothing. That is a deliberate
-  difference from the runtime of today, for which an element that is a
-  record is a cell of its own that a reference keeps reading. Four
-  values of the prototype's corpus run differ for it
-  (`patterns/examples/map-demo/map-demo.tsx`).
+  difference from the runtime of today, where a reference to a member
+  of a record stored in place names the position: after a removal it
+  reads the element that moved to the position, and nothing once no
+  element stands there (`plan-and-label-templates.md` §1.3, "Which
+  stored forms make which case").
 
-The prototype's executor stores a copy of the value in the place of
-the reference by key, and one value of its corpus run differs for the
-first item (`patterns/dev/gideon-tests/test-cell-equals.tsx`).
+A list that function bodies fill with records through `set`, `push`
+or `addUnique` is not this case. Each record is a document of its own
+and the list holds a link to it, today and in this design (section
+4.8; `plan-and-label-templates.md` §1.3), so the list is an array of
+references. A stored reference to a member of such a record is a link
+into the record's document, and it reads the record after the list no
+longer holds it. The stops of
+`patterns/examples/map-demo/map-demo.tsx` and the elements of
+`patterns/dev/gideon-tests/test-cell-equals.tsx` are such records:
+both modules fill their list with `push`, and the prototype's
+executor, which stores a record so written as a document of its own,
+computes for them the values of today's runtime.
 
 **A chain of per-element constructs.** By ruling an element of a
 collection that is the result of a per-element construct is keyed by
@@ -3182,7 +3192,14 @@ facts about the current layout.
 - **A document per record written into an array through a cell.** A plain
   object that `set()`, `push()` or `addUnique()` puts into an array becomes
   a document of its own, and the array holds a link to it
-  (`anchorValueAsEntity` in `runtime/runner/src/data-updating.ts`).
+  (`anchorValueAsEntity` in `runtime/runner/src/data-updating.ts`,
+  which `normalizeAndDiff` calls where `Cell.set`, `Cell.pushAll` or
+  `Cell.addUnique` in `runtime/runner/src/cell.ts` supplied anchor
+  ids). A record of the argument that an instance is created with, or
+  of a default of the argument, gets no document. It is stored in
+  place in the argument document, because `Runner.#updateArgument` in
+  `runtime/runner/src/runner.ts` writes the argument with no source
+  of anchor ids, and `map` keys it by its position.
 - **The rendered tree is stored in many documents.** It follows from the
   items above: the static structure of a pattern's tree is
   in that pattern's result document, every position a node computes is a

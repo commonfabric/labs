@@ -641,6 +641,10 @@ comes from.
   construction such as another `map` that builds object literals, in a
   standard-library member marked "R" that builds its elements, such as
   `Object.entries`, or in a function body that built the records.
+- A record of the argument that an instance is created with, or of a
+  default, is a plain value: it is stored in place
+  (`plan-and-label-templates.md` §1.3, "Which stored forms make which
+  case").
 - A record written into a stored array by `set`, `push`, or `addUnique`
   is stored as a document of its own, and the array holds a link to it
   (`builtin-inventory.md`, "Element keys"). A record a function body
@@ -665,7 +669,11 @@ element, as any edit of a plain value in place does, so the callback
 is evaluated for it again, with new state cells. And once
 the element is removed, a reference kept elsewhere, as by
 `center.set(stop.position)`, reads as `undefined`; in the runtime of
-today such a reference keeps reading the record. An author who wants
+today such a reference names the position and reads the element that
+stands there. A record that a function body wrote into the array with
+`set`, `push`, or `addUnique` is a cell and not this case: a reference
+to it reads the record after the array no longer holds it, today and
+in this design. An author who wants
 the value kept writes a copy, and one who wants the element to keep
 its identity across edits makes the elements cells
 (`plan-and-label-templates.md` §1.3; what a write that changes the
