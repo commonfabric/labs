@@ -467,6 +467,11 @@ const mergeWritePolicyAnyOf = (
   if (!Array.isArray(existing) || !Array.isArray(candidate)) {
     throw unstable("one side is not a list of alternatives");
   }
+  // A write policy is a nonempty list, so an empty one omits nothing: it is
+  // ill-formed, wherever the write puts its values.
+  if (candidate.length === 0) {
+    throw unstable("the candidate lists no alternative");
+  }
   // Each stored alternative is matched by content, wherever the candidate
   // lists it, which accepts a candidate listing them in another order: the
   // list is a set ("Order carries no meaning", §8.15.6.1). Where `existing` is
@@ -837,9 +842,10 @@ export interface MergeCfcSchemaEnvelopeOptions {
   /**
    * Which side of the merge is the envelope the document stores, where one of
    * them is. A write policy that the other side lists only in part keeps the
-   * stored alternatives it omits (see `mergeWritePolicyAnyOf()`). Absent,
-   * neither side is stored, and a write policy that the candidate lists only
-   * in part refuses the merge.
+   * stored alternatives it omits (see `mergeWritePolicyAnyOf()`), and a writer
+   * claim the two sides stamp differently, lone or an alternative, keeps the
+   * stored side's stamp. Absent, neither side is stored, and a write policy
+   * that the candidate lists only in part refuses the merge.
    */
   storedSide?: StoredSide;
 }

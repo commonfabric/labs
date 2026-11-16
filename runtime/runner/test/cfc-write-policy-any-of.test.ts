@@ -335,6 +335,21 @@ async function withFixture(
 }
 
 /**
+ * A document holding `send`'s `note` beside a `tag` whose write policy is
+ * `alternatives`, so that a write of the note leaves the tag's position
+ * untouched.
+ */
+function noteBesideTag(alternatives: readonly unknown[]): JSONSchemaObj {
+  return {
+    type: "object",
+    properties: {
+      note: { type: "string", ifc: { writeAuthorizedBy: writerClaim("send") } },
+      tag: { type: "string", ifc: { writePolicyAnyOf: alternatives } },
+    },
+  } as JSONSchemaObj;
+}
+
+/**
  * The alternatives of the write policy the document `id` stores at the logical
  * path `path`, each as its writer and the action its contract names, joined by
  * a slash, and where `stamped`, the module its writer is stamped with after an
@@ -1108,7 +1123,30 @@ describe("cfc-write-policy-any-of", () => {
           await f.write("send", "Send", {
             schema: { type: "string", ifc: { writePolicyAnyOf: [] } },
           }),
-        ).toContain("malformed writePolicyAnyOf at /");
+        ).toContain("the candidate lists no alternative");
+      });
+    });
+
+    it("refuses a schema listing no alternatives at a position the write leaves untouched", async () => {
+      await withFixture(async (f) => {
+        expect(
+          await f.write("send", undefined, {
+            schema: noteBesideTag(SCHEMA.ifc!.writePolicyAnyOf!),
+            value: { note: "first" },
+          }),
+        ).toBeUndefined();
+
+        expect(
+          await f.write("send", undefined, {
+            schema: noteBesideTag([]),
+            value: { note: "again" },
+          }),
+        ).toContain(
+          "writePolicyAnyOf must remain stable at /tag: the candidate lists " +
+            "no alternative",
+        );
+        expect(storedAlternatives(f.runtime, "protected-value", ["tag"]))
+          .toEqual(["send/Send", "edit/Edit"]);
       });
     });
 
@@ -1568,6 +1606,23 @@ describe("cfc-write-policy-any-of", () => {
       it("returns no issue from the dry run of a write omitting one", () => {
         expect(storedCfcEnvelopeMergeIssue(SCHEMA, narrowed)).toBeUndefined();
       });
+
+      it("throws for an empty list, and the dry run returns that issue", () => {
+        const empty: JSONSchemaObj = {
+          type: "string",
+          ifc: { writePolicyAnyOf: [] },
+        };
+
+        expect(() =>
+          mergeCfcSchemaEnvelopes(SCHEMA, empty, { storedSide: "existing" })
+        ).toThrow("the candidate lists no alternative");
+        expect(() =>
+          mergeCfcSchemaEnvelopes(empty, SCHEMA, { storedSide: "candidate" })
+        ).toThrow("the candidate lists no alternative");
+        expect(storedCfcEnvelopeMergeIssue(SCHEMA, empty)?.message).toContain(
+          "the candidate lists no alternative",
+        );
+      });
     });
   });
 
@@ -1737,6 +1792,27 @@ describe("cfc-write-policy-any-of", () => {
               module: "other-module",
             }),
           ).toContain("writePolicyAnyOf failed at /");
+        });
+      });
+
+      it("refuses a release listing no alternatives at a position the write leaves untouched", async () => {
+        await withFixture(async (f) => {
+          expect(
+            await f.write("send", undefined, {
+              schema: noteBesideTag(SCHEMA.ifc!.writePolicyAnyOf!),
+              value: { note: "first" },
+            }),
+          ).toBeUndefined();
+
+          const { error } = await f.writeWithRetry(
+            "send",
+            undefined,
+            { schema: noteBesideTag([]), value: { note: "released" } },
+            (tx) => markRelease(f.runtime, tx, true),
+          );
+          expect(error?.message).toContain(
+            "the candidate lists no alternative",
+          );
         });
       });
 
