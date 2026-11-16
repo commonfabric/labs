@@ -4673,3 +4673,397 @@ place, or the result of another per-element construct.
      code. The counts of evaluations over the corpus differ by a few from those
      of the run of note 342 before any change of this round, which was not
      examined. No fresh run of today's runtime over the corpus was made.
+
+## Rulings Z18 to Z23, a seeded comparison, and instances a function body makes
+
+Notes 367 to 386 are about the owner's rulings Z18 to Z23 of 2026-11-16, about a
+seeded `Math.random` in the comparison, and about a pattern instantiated and a
+handler bound in a function body. Each note says what the crate and the executor
+do, which statement of an earlier note it replaces, and what a ruling leaves
+undetermined. A note that ends with **Needs a ruling** names something the owner
+has to decide. Every statement about a per-element construct says which case it
+is about: an array of references, an array of plain values in place, or the
+result of another per-element construct.
+
+367. **Z18: a key that left its collection** (replaces the first request of note
+     326 and note 352). The executor did what the ruling has, and no code
+     changed: `Instance.#drop` drops the cone instances of the key and their
+     memo entries, and the document of a state cell declared under the key
+     stays. `fixtures/key-returns.tsx` declares a cell in the body of a `map`
+     over the result of a `filter`, once over records that a handler pushed,
+     which are references, and once over plain values in place. The tests of "a
+     key that left its collection" in `exec/test/executor.test.ts` have five
+     cases: a link that leaves an array of references and stands in it again, a
+     plain value that leaves an array in place and is written again at another
+     position, the last occurrence of two equal plain values, and an upstream
+     key that leaves the result of the `filter` and enters it again, over
+     references and over plain values in place. In each the cone instances of
+     the key are gone while it is away, no document is made or deleted, and the
+     key that returns reads what its cell held. Against today's runtime the
+     fixture has 72 of 72 values equal, with the keys leaving and entering the
+     result of the `filter`. Over plain values in place today's key is the
+     position, so a value that returns at another position is the one case where
+     today's runtime would read another cell, and the comparison does not have
+     it. The executor has no state of an operation that is kept per key and no
+     child of an element body, so neither is exercised.
+368. **Z18: an event for the stream of a key that is away.** ES §2.6 has "a
+     binding of the key has the stream it had" once the key returns. A link to
+     that stream can be stored outside the collection while the key is away, and
+     an event can be sent through it. The executor finds the element of a stream
+     in its element tables alone and refuses the event ("no element holds the
+     stream"). The alternative handles it with each slot of root `element`
+     reading as nothing over plain values in place (ruling Z12) and as the cell
+     over references. This is the same over an array of references, over an
+     array of plain values in place, and over the result of another per-element
+     construct. **Needs a ruling**: whether an event for the stream of a key
+     that left its collection is refused or handled.
+369. **Z19: which output keeps its value** (replaces the first open point of
+     note 328). `Instance.settle` stores the result with each failed output left
+     as it was stored: `Instance.#check` finds the markers at a position no
+     listed path covers, `Instance.#holderOf` finds for each the kept entry of
+     `Plan.outputs` with the longest path that the position is at or below, with
+     `*` for the index of an element, and the stored value at that path is put
+     back. `Instance.failures` has one entry per such marker, with the output,
+     its path, the binding and the position. The evaluation named is the one
+     that stores, whichever cone called `host.stream`: in
+     `fixtures/stream-marker.tsx` one cone computes the whole tree, the plan has
+     an entry of `Plan.outputs` per path of it, and the entry at
+     `$UI/children/0` keeps its value while an event changes `count`, which is
+     stored. For a cone of an element body the output that fails is that of the
+     row that holds the position, and the rows beside it are stored: the test
+     removes the listed path of a binding over references, over plain values in
+     place, and over the result of a `filter`, and the rows hold nothing while
+     the member written after the spread and the other lists are stored. Two
+     things are undetermined.
+     - A stream at a member of the result, as `inc` in the same fixture, is at
+       no entry of `Plan.outputs`: the crate has an output for a value a cone
+       computes and none for a position that holds a stream alone. The executor
+       then leaves the position itself as it was. And where the plan has an
+       entry per path of a rendered tree, the unit that keeps its stored value
+       is as small as the entry nearest the position, so a tree can be stored
+       with one subtree of an earlier evaluation in it. **Needs a ruling**: what
+       "the output that holds the position" is where the plan has entries at
+       several depths above the position, and where it has none.
+     - The stored value put back is the one at the same position. Where the
+       element moved in the evaluation that fails, the row keeps what another
+       key had stored there: a limit of the prototype, which stores a result by
+       position.
+370. **Z19: the memo.** The executor keeps the memo entry of the cone that
+     computed the value, markers included, and records the failure once per
+     evaluation. A reader of an interim output of that cone gets the new value
+     while the stored result holds the old one, which is what ES §2.2 assumes
+     for a derived write that is dropped. Nothing of the corpus run exercises
+     it: see note 373 for the one module where an evaluation fails.
+371. **Z20: a stream a function body returns** (replaces note 333). `Host.pass`
+     hands a marker in the computed argument of a body to the body as a handle
+     to the stream, wherever it is in the argument. Before, it handed the record
+     `{ $stream: true }`, and a body that returned it had that record stored.
+     What the body returns holds the reference, which is stored as the link to
+     the stream and checked against nothing. `fixtures/stream-returned.tsx` has
+     a `lift` that returns the stream it is handed, for a binding outside every
+     element body and for a binding of an element body over references and over
+     plain values in place: the stored link has the key of the element in each,
+     and no path of `Binding.result` names the position (16 of 16 values equal
+     today's). One gap of the plan showed. `body_record` in `src/plan.rs`
+     records nothing for a stream bound to a formal of a body (`Place::Stream`),
+     so `Body.computed` has no entry that says the position holds a stream,
+     where ES §2.2 assumes an `identity` entry. The executor does not need the
+     entry. The documents should say which record tells the runtime that a
+     position of a body's argument is the stream of a binding. Over the corpus 6
+     more stored positions hold a stream at no listed path, 9 where note 342 had
+     3, all in `examples/cfc-spec-gallery/main.tsx`: they held the record
+     before.
+372. **Z21: the form** (replaces the request of note 334). An entry of
+     `Binding.result` is `{ path, stars }`, as `ResultPath` of PL §1.1 has it,
+     with one entry of `stars` for each `*` of the path. The crate carries the
+     kind with each path while it builds the plan (`StreamAt` and `Star` in
+     `src/plan.rs`). The `*` of a collection is `element` where the binding has
+     an `element` step for it and `every` where it has none (`star_of`). A
+     member written after a spread is `member` with the number of entries
+     written before it, counted over the members and the spreads of the array
+     literal or of the children (`jsx_children` and the array literal in
+     `eval`). A stream reached through a member of an element has what its
+     source gives: `inside` for a member of an array written in place, and the
+     kind of the upstream `*` for the result of another per-element construct,
+     which is `element` where the binding has the upstream step
+     (`streams_of_elements`). Of the 1,420 listed paths of the 382 corpus
+     patterns, 448 have a `*`, and their 476 `*` are 215 `inside`, 207
+     `element`, 51 `member` and 3 `every`. In every path with a `*` the number
+     of `element` kinds is the number of `element` steps of the binding. The
+     kinds are the same whether the collection is over references or over plain
+     values in place: the plan does not say which (`tests/plan.rs`,
+     `each_star_of_a_result_path_states_what_it_stands_for` and
+     `a_star_through_a_member_of_an_element_is_inside_or_element`).
+373. **Z21: the check by kind.** The executor has the origin of each position of
+     an array it assembled (`Origin` in `exec/executor.ts`): the entry the
+     position was written with, whether it is an element of what a spread holds,
+     and the key for an element of the result of a `map`, a `filter` or a
+     `flatMap`. Value code hands it the entries apart: an array literal with a
+     spread is `$rt.list([...])` with each spread as `$rt.spread(value)`, the
+     children of a view node are flattened by `$rt.h`, and those of a tag that
+     names a pattern by `$rt.children`. `coversPosition` accepts a marker at a
+     `*` of kind `element` at the position that holds the key the marker has for
+     that step, of kind `every` or `inside` at an element of a collection, and
+     of kind `member` at the member written at that entry. A position of an
+     array with no origin is covered by no `*`. `fixtures/star-kinds.tsx` has
+     each kind, `every` and `element` over references and over plain values in
+     place, `inside` over an array of plain values written in place, and
+     `element` over the result of another construct. The tests restate one kind
+     as another and get the failures the kinds predict, and two collections
+     spread into one array of children are told apart by their keys. Over the
+     corpus scenarios of note 365 no evaluation fails. With the events that note
+     381 has the executor handle for the first time, 3 evaluations of
+     `apps/base/contacts.tsx` fail: a promoted `computed` with a block body
+     returns a tree that holds the stream of `openInNewView`, value code places
+     the marker, and the crate lists no path for the binding. A defect of the
+     crate's list, which the check found.
+374. **Z21: three places where the kind is not determined or not right.**
+     - The result of a `flatMap` whose elements hold the stream of a binding of
+       the upstream body. PL has `element` "where the binding has the `element`
+       step of the collection whose keys the result has". Under ruling Z22 a
+       position of the result has the upstream key together with a member part,
+       and every member of one segment holds the stream of the one upstream key.
+       The crate states `element`, and the executor would compare the upstream
+       key with the composed one and refuse. No pattern of the corpus has the
+       case. **Needs a ruling**: what a `*` at the result of a `flatMap` is for
+       a binding of the upstream body, over a segment of references and over a
+       segment of plain values.
+     - The result of a `filter`. The crate records the streams of what a
+       callback returns for a `map` alone, so a stream inside an element that a
+       `filter` passes on, read downstream, has no listed path. A defect of the
+       crate, with no case in the corpus run.
+     - An array assembled from entries that is spread into another. The crate
+       gives the positions the kind they have in the inner array, so a `member`
+       has the `index` it has there, and the executor does the same. The
+       documents do not have the case.
+375. **Z21: a reader with the plan alone** (replaces the second half of note
+     334). `streamAt` in `compare/harness.ts` resolves a listed path from the
+     kinds, in the order of the plan, and the two workarounds are gone: it tried
+     a path with no `*` first, and it resolved no position where a child
+     followed the assembled array. Today's run stores the assembled array of a
+     `map` as one child, so there a `member` is at the position its `index`
+     gives, and an element is at the position of the array and then at its own.
+     `fixtures/star-kinds.tsx` has 49 of 49 values equal with an event for each
+     binding but one. Three things showed.
+     - Two collections spread into one array. The kind does not say which of the
+       two a `*` stands for, as PL §1.1 has under question 78, and the harness
+       sends no event for such a binding: one event of the fixture. The
+       alternative of PL, an `index` on a `*` that stands for a collection,
+       would resolve it. A `member` in an array that is stored flat needs the
+       same: the reader adds "the length of each collection spread before it",
+       and the path does not name those collections. Under the layout the
+       compiled path stores, the children of a view node are such an array.
+       **Needs a ruling**: whether a `*` that stands for a collection holds the
+       entry it is written at, as `member` does.
+     - Kind `inside` does not say which element holds the stream. A reader finds
+       it by the link that is stored. The harness does not read which binding a
+       stored stream is of, and takes the bindings that list one path to be in
+       the order of the elements.
+     - A `map` over an array written in place runs when today's pattern is
+       built, and today's run holds its elements as children of their own. The
+       harness takes the children as the positions for `inside` where no child
+       is an assembled array.
+376. **Z22: the key of an element of a `flatMap` result** (replaces note 337).
+     `Instance.#segment` forms the member part by the rule for any array, with
+     the count among the members of the one segment, and the key is the source
+     key, `/`, and that part. A segment that is a stored array, which the
+     callback passed on, is keyed as a stored array is: a link by the identity
+     of its cell, a plain value by its value. A segment the callback wrote is
+     keyed by what each member is. `fixtures/flat-keys.tsx` has, over a source
+     of references, a segment of plain values and a segment of references that
+     the element holds, and over a source of plain values in place a segment of
+     plain values that the callback writes in an order an input chooses. Two
+     members of one segment that change places evaluate nothing in the body over
+     the result, for plain values and for references. Where the callback
+     computes the members, the callback is evaluated, once per source element,
+     and the body over the result for no member. Equal members of one segment
+     are occurrences 0 and 1, an equal member of another segment has another
+     key, a plain member whose value changes is another key, and a member that
+     is a reference keeps its key when the value of its cell changes. 6 of 6
+     values equal today's. The state cell of a body over the result is named by
+     the key, so it stays with the member: no fixture declares one there.
+377. **Z22: what the executor assumes beside the ruling.**
+     - A member that is a plain value in place of a stored array, which the
+       callback passed on, is named by that array and its key in it (ruling
+       Z12), and the body over the result reads through that reference. PL §1.3
+       names the collection of such a reference as "the assembled result". The
+       two differ in what a move between two segments is: the executor's
+       reference stays with the stored array. The documents should say which
+       collection a reference by key to a member of a `flatMap` result names.
+     - A segment that is the assembled result of another per-element construct
+       has the keys of that result, as PL assumes under question 101
+       (`assembledElements` in `exec/executor.ts`). No test has the case.
+     - A member the callback computes has no address and is passed on as its
+       value. The body over the result reads it from the callback's result at
+       the position that holds its key at that time.
+378. **Z23: the record of a key of a list** (replaces the request of note 338).
+     Nothing changed in what the executor stores: `Instance.keyedElement` names
+     a cell by the address of the list and the key, which has no document until
+     something writes it. The tests of "the record of a key" show that a write
+     through the handle makes no document of the list and evaluates no reader of
+     the list before a reference to the record is a member, and that a reader
+     that follows the reference is stale on a write to the record afterwards.
+     The plan holds no record that names the record of a key: the body of
+     `fixtures/keyed.tsx` has a write edge and an envelope with target `handle`
+     at `*` below the list, and an entry of `Body.handles` for the list, as
+     `footprint-analysis.md` §7 has it. The executor uses the path `*` for its
+     count of the writes an edge covers and for nothing else. By the ruling the
+     write is "no write at `*` below the list for the label", and the edge at
+     `*` is the only edge whose template could label it. The documents should
+     say which template labels a write to the record, with question 89 of ES.
+379. **A seeded `Math.random`** (replaces the range of note 365).
+     `compare/random.ts` installs a `Math.random` before today's runtime freezes
+     the intrinsics of the realm, and the harness and the executor's run seed it
+     with the index of each event. Today's sandbox calls the host's
+     `Math.random` while a handler runs (`sandboxRandom` in
+     `runtime/runner/src/builder/safe-builtins.ts`), and the executor runs a
+     body in the host realm. No pattern and no runtime code changed. Three
+     things had to be kept out of the sequence. The jitter of a retry's delay
+     (`computeBackoffDelayMs` in `runtime/runner/src/scheduler/backpressure.ts`)
+     calls the function with no receiver, and gets a draw of the realm's own
+     generator. The timing statistics of the logger draw inside a handler's run
+     once a statistic holds 1,000 samples (`TimingDataStore.record` in
+     `base/logger/src/logger.ts`), and cannot be told from the handler: the
+     harness empties them before each event (`resetAllTimingStats`). And the
+     sequence starts again for each run of a handler, by its frame, since
+     today's runtime can run the handler of one event more than once.
+     `fixtures/random.tsx` has 18 of 18 values equal. With it
+     `showcase/card-piles/main.tsx` has the same values in three runs of today's
+     runtime, alone and in one process with 13 other modules, and 9 of its 28
+     values differ in every run: the case of note 348, which still needs its
+     ruling. `showcase/wordsearch/wordsearch.tsx` draws as well, and its 3
+     differences of the earlier runs are gone in a fresh run (note 384). A
+     handler that sends to another stream is one run in the executor and two in
+     today's runtime, and the two would then draw differently: no module of the
+     corpus run shows it.
+380. **A pattern instantiated in a function body: the artifact** (replaces the
+     first half of note 341). The smallest change that lets an executor find the
+     callee is in value code, and the plan is as it was. In the text of a module
+     the marker of each `pattern(...)` has, in the place of the pattern's
+     function, the identity of the pattern: the entry that the pattern's own
+     `Plan.patterns` begins with (`Finished.identities` in `src/emit.rs`;
+     `tests/emit.rs`,
+     `a_pattern_is_written_with_the_identity_its_plan_begins_with`). An artifact
+     holds the text of every module its code imports, so the factory value that
+     a body of the caller calls carries the identity of a callee from another
+     module. The executor is given the artifacts of the program and finds the
+     callee's by that identity (`options.artifacts` of `Instance`): the output
+     of `emit --corpus` has one artifact per pattern of every module, and the
+     comparison builds the table from it. Two things follow. The output of
+     `emit` for one file holds the artifacts of that file alone, so a callee
+     from another file is found only in the output for the corpus. And `Child`
+     of the crate's plan still has no `callee`, where PL §1.1 has the hash of
+     the compiled pattern: the footprint record of a call (`BodyRecord.calls` in
+     `src/footprint.rs`) names the kind of the call and not the callee. A
+     runtime that takes the callee from the factory value does not need the
+     member for a named pattern, and needs nothing else for a factory value
+     received as data. The documents should say whether `Child.callee` is what a
+     runtime instantiates from, or the factory value.
+381. **A pattern instantiated in a function body: the executor.**
+     `Instance.instantiate` makes an instance of the callee's plan with
+     documents of its own in the same store, each named with a prefix. The body
+     gets a handle to the result, and what stores it stores a link to the result
+     document. A handle in the argument is stored as a link, so a binding of the
+     callee writes the caller's cell. An event is routed to the instance its
+     stream is of (`StreamRef.instance`), and a handler that throws leaves no
+     instance. `fixtures/instantiate.tsx` has 27 of 27 values equal today's,
+     with two instances made by two events. Over the corpus the 6 events that
+     failed with "a pattern called in a function body" are handled or fail
+     later: 3 now fail at `navigateTo` in the handler, which requests an effect.
+     Four limits are the prototype's. The name of an instance is the run that
+     made it and the ordinal among all that the run made, where PL §1.3 has the
+     site and the ordinal at that site. A run of a `lift` or a `computed` is
+     named by the body and its element keys, and a run of a handler by a count
+     of the events handled, where PL has the receipt of the handling. An
+     instance is never torn down. And an instance that a run names again has its
+     argument written whole.
+382. **A handler bound in a function body** (replaces the second half of note
+     341). `handler(...)` at module scope is, in the executor, a factory that a
+     body can call with the state: `Instance.bind` makes a stream with the index
+     -1 and a key that names it as an instance is named, and an event for it
+     runs the handler with the state the body bound. The stored position holds
+     the link, at no listed path (ruling Z20). The fixture binds `bump` twice in
+     a `computed`: an event for the second stream writes the cell, the
+     `computed` is not evaluated again, and the streams are the ones it bound.
+     PL §1.3 identifies such a binding by "the enclosing instance, the handler,
+     and what the binding holds, and not the place of the site". The executor
+     names it by the run and the ordinal: a limit of the prototype.
+     `apps/base/person.tsx` and `apps/base/family-member.tsx` are executed for
+     the first time, with 2 of 18 and 2 of 16 values that differ, at a child of
+     the tree that today's run holds as nothing. Not examined.
+383. **The fixtures.**
+     `deno run -A --no-check base/pattern-compiler/compare/values-fixtures.ts`
+     runs 37 of the 41 fixtures, 44 runs in all, and 673 of 674 compared values
+     are equal, where note 364 had 39 runs and 489 of 490. The added runs are
+     `key-returns` (72 values), `stream-returned` (16), `star-kinds` (49),
+     `random` (18) and `instantiate` (27), and `flat-keys` has 6 values where it
+     had 4. The one value that differs is that of note 360. The run now prints
+     the events the harness did not send: one, of `star-kinds` (note 375). One
+     event of `handle-passed` is not handled by the executor: its handler
+     instantiates a pattern, which the executor now does, and then calls
+     `navigateTo`.
+384. **The corpus.** Two runs, both of `values-corpus.ts again`. The first is on
+     the values of today's runtime that the run of note 322 read, with the line
+     of `showcase/card-piles/main.tsx` from a seeded run of today's runtime in
+     its place. The second is on a fresh seeded run of today's runtime over all
+     272 modules (`values-corpus.ts run`), which sends more events: with the
+     kinds the harness resolves the stream of more bindings, most of them
+     through a `*` of kind `inside`.
+
+     |                                               |       Note 365 | Saved values | Fresh run |
+     | --------------------------------------------- | -------------: | -----------: | --------: |
+     | Modules run by today's runtime                |            215 |          215 |       215 |
+     | Executed                                      |            194 |          196 |       196 |
+     | Every value equal and every event handled     |     168 or 169 |          168 |       169 |
+     | Values compared                               |          4,735 |        4,769 |     5,410 |
+     | Values equal                                  | 4,641 to 4,650 |        4,680 |     5,324 |
+     | Values that differ                            |       85 to 94 |           89 |        86 |
+     | Modules with a difference                     |       22 or 23 |           25 |        24 |
+     | Committed events the executor does not handle |      15 of 293 |    10 of 295 | 10 of 475 |
+     | Evaluations that fail the check of a marker   |              0 |            3 |         3 |
+     | Stored stream positions at no listed path     |              3 |           31 |        31 |
+     | Documents the executor stored                 |            598 |          615 |       793 |
+
+     Each run gives the same file byte for byte when it is repeated. Before the
+     instances of notes 380 to 382, and with rulings Z18 to Z23 applied, the
+     first run had the figures of note 365 with `card-piles` at its 9
+     differences: 4,641 of 4,735 values, 94 that differ in 23 modules, 168
+     modules fully equal, 15 of 293 events, 598 documents. No value that was
+     equal differs for a ruling. Against that, in the first run:
+     `apps/base/contacts.tsx` has 17 differences where it had 26, with its 4
+     events handled; `person.tsx` and `family-member.tsx` are executed, with 2
+     differences each (note 382), which is the 2 modules more with a difference;
+     `dev/self-reference-test` has its event handled and its 2 differences
+     still; and 3 events fail at `navigateTo`. The stored stream positions at no
+     listed path are 9 of ruling Z20 (note 371) and 22 in `person.tsx`,
+     `family-member.tsx`, `contacts.tsx` and `dev/self-reference-test`: the
+     streams of bindings a function body made, and those of bindings of an
+     instance a function body made, which the count reads against the plan of
+     the instance it started with. The 17 documents more are 5 argument and 5
+     result documents, of the 2 modules and of 3 instances, and 7 cells and
+     records of theirs. In the fresh run `wordsearch.tsx` has no difference
+     where it had 3, which is the seed, and 7 modules send more events than
+     before, 180 more committed in all, with every value of theirs equal.
+385. **What was not done.** The crate's `null` constants for the literal
+     arguments of a call of a pattern compiled in (note 287, `atoms-demo`), and
+     the other categories of modules that are not executed, were not started.
+     The 19 modules not executed are 6 whose value code throws, 4 at an output
+     that no value function computes, 5 at a debug string, and one each at
+     `linksOf`, at a spread in the argument of a pattern compiled in, at value
+     code that does not parse, and at a name value code does not bind.
+386. **Rules of the task not kept, and what is not verified.** The tests of
+     rulings Z18 and Z23 describe what the executor did and changed no code. The
+     tests of rulings Z19, Z20, Z21 and Z22, of the seed, and of the executor's
+     part of notes 381 and 382 were written and seen to fail before the code.
+     The test of the emitter's pattern identity in `tests/emit.rs` was written
+     in the same step as the code. The fresh run of today's runtime was made
+     once, with the crate and the executor as they were before notes 380 to 382,
+     and `again` compares the current ones with it: that today's values are the
+     same in a second fresh run is shown for `card-piles` and the 13 other
+     modules of `showcase/` alone. The differences of `person.tsx` and
+     `family-member.tsx` are not examined. The classes of note 374 rest on a
+     reading of the crate and have no fixture. The comparison's scripts are run
+     with `--no-check`: `values-corpus.ts` does not pass the type check, at a
+     call that gives a pattern of the corpus where an `Artifact` is declared.
+     The call was written so before this round, and that it failed the check
+     then was not run.

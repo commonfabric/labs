@@ -443,7 +443,8 @@ undetermined, and the figures of the comparison after them. Notes 325 on do the
 same for the rulings on `Cone.within` and on who places a stream, and for
 `reduce`, the record of a key of a list, and the keys of the result of a
 `flatMap`. Notes 344 on have what today's runtime stores when a record gets into
-a list, and rulings Z12 to Z17.
+a list, and rulings Z12 to Z17. Notes 367 on have rulings Z18 to Z23, the seeded
+`Math.random`, and the instances and bindings a function body makes.
 
 ## The parser
 
