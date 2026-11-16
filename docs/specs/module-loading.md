@@ -917,8 +917,10 @@ cell's contents. The cache is designed around this:
   `runtime.undeclarable-store` marker naming its document
   (`recordUndeclarablePolicyStore`), and the check skips the ceiling there.
   The marker covers only what a builtin wrote: a write of the record under
-  any other identity in the same transaction is measured as any writer's is,
-  whatever the cache writes after it (`cfc-enforcement-matrix.md` §4).
+  any other identity in the same transaction, or an unmarked one on the
+  storage transaction beneath, is measured as any writer's is, whatever the
+  cache writes after it. Code holding the transaction object can still write
+  around that record (`cfc-enforcement-matrix.md` §4).
   The skip is scoped to a join the target's own space produced: where a clause
   reached the join from another space, the cache write is measured like any
   other, so a compile cannot carry a foreign space's labeled value into a

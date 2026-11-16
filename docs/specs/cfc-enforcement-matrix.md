@@ -481,15 +481,17 @@ The strict-only delta is:
   every value write made under an identity other than a builtin's, an
   unattributed or a verified one alike (`CfcTxState.nonBuiltinWrites`), and a
   document such a write reached is measured, marker or not, as any writer's
-  would be. A write made on the storage transaction beneath the extended one
-  passes none of its write chokepoint, so it carries no identity, and is
-  recorded the same way whatever the transaction's identity is when it is made
-  (`reportUnmarkedWrites()`). A later builtin write to the same path does not lift that: a builtin
-  can read the transaction's view and write it back, so its write is no evidence
-  that the value is its own, and the rule cannot rely on every builtin guarding
-  what it carries. The cache writer does guard its delegation-list carry: a list
-  another identity wrote in the transaction is carried into neither record's
-  list (`writtenByAnotherIdentity()` in `cell-cache.ts`), and on a compiled
+  would be. A `write()` or `writeBatch()` made on the storage transaction
+  beneath the extended one without its write chokepoint's mark carries no
+  identity, and is recorded the same way whatever the transaction's identity is
+  when it is made (`reportUnmarkedWrites()`); it also retires a standing
+  preparation, as any write does. A later builtin write to the same path does
+  not lift that: a builtin can read the transaction's view and write it back,
+  so its write is no evidence that the value is its own, and the rule cannot
+  rely on every builtin guarding what it carries. The cache writer does guard
+  its delegation-list carry: a list another identity wrote in the transaction
+  is carried into neither record's list (`writtenByAnotherIdentity()` in
+  `cell-cache.ts`), and on a compiled
   record, whose attestation sits at its root, another identity's write anywhere
   on it excludes its list. It carries the annotations even where another
   identity wrote them: they bear no evidence, and that identity's write leaves
@@ -501,6 +503,18 @@ The strict-only delta is:
   `gateRuntimeMintedIntegrity` treats a schema's evidence at a path such a write
   overlaps as it treats an unattributed write's, so a record keeps no
   attestation over a value another identity chose.
+
+  The record holds against code that writes through the transaction it is
+  handed, not against code that takes the transaction apart. Code holding the
+  transaction object can still write around it: through a second extended
+  transaction it builds over the same storage transaction, whose own marked
+  writes the first never hears; through a storage transaction it puts in
+  place of `.tx`; with a chokepoint mark taken from a marked write's options;
+  through `accessForTestingOnly.privilegedSystemWrite`, which also writes a
+  label map directly; by committing `.tx` itself, with no preparation; or by
+  writing a storage transaction before any extended one wraps it. Each needs
+  the transaction object, which host code holds and pattern code does not
+  reach.
 
   One thing this class does NOT take from §18.6.2 is its write-side mirror.
   That section states its read exclusion as mirroring "the write-side rule

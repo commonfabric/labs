@@ -2744,9 +2744,13 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
 
     it("counts a marker recorded without the runtime's mark for nothing", async () => {
       // The gate ACTS on this claim, and the recording method is on the public
-      // transaction interface, so pattern-authored code reaching `cell.tx` can
-      // name whatever document it likes. What separates the two is the
-      // authorization the runtime passes alongside.
+      // transaction interface, so any code holding a transaction can name
+      // whatever document it likes. Pattern code is not among it: a cell keeps
+      // its transaction in a private field, and two walks of what a handler
+      // and a lift receive found none (each with limits: one skipped own
+      // getters and stopped six levels down, the other did not read the
+      // `computed` half or probe module top level). What separates the two is
+      // the authorization the runtime passes alongside.
       const storageManager = StorageManager.emulate({ as: signer });
       const runtime = strictRuntime(storageManager);
       try {

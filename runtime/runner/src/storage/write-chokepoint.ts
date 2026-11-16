@@ -12,9 +12,13 @@
  * kind of member unless the write carries this mark, which says only that
  * the chokepoint saw it, and reports every other write without it to the
  * extended transaction, which counts it as made under no identity
- * (`reportUnmarkedWrites()`). A symbol cannot be named by a module that did
- * not import it, and the sandbox hands pattern code the builder namespace
- * rather than the runner's modules.
+ * (`reportUnmarkedWrites()`).
+ *
+ * The mark keeps an unjudged write from passing as a judged one only for code
+ * that cannot see a marked write's options. The sandbox hands pattern code the
+ * builder namespace rather than the runner's modules, and no transaction. Code
+ * holding the transaction object can read the symbol off a marked write's
+ * options (`Object.getOwnPropertySymbols()`), or import this module by path.
  */
 
 import { isObjectNotArray } from "@commonfabric/js-values/types";
