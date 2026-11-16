@@ -597,27 +597,46 @@ export interface PatternIndexRedeemInviteRequest {
   code: string;
 }
 
-/** A member of the index: the caller (`whoami`) or one just admitted. */
+/**
+ * A member of the index: the caller (`whoami`) or one just admitted or moved.
+ * A member is a delegation-chain root; the index keeps no list of the other
+ * keys a person acts through.
+ */
 export interface PatternIndexMember {
   handle: string;
   role: "admin" | "user";
 
-  /** How many keys act as this member, the root included. */
-  keys: number;
-
-  /** From `linkKey`: what the linked key is, and when its link lapses. */
-  kind?: "root" | "device" | "cli" | "derived";
-  expiresAt?: string;
+  /** @deprecated Always 1: the index knows only a member's root. */
+  keys?: number;
 }
 
 /**
- * Links the signing key to an existing member. `delegation` is a UCAN chain
- * text whose audience is the signing key and whose issuer is the member's
- * root, granting the `/index` command.
+ * Hands the caller's member's root to the signing key. `rootDelegation` is a
+ * delegation from the current root to the signer, for `/index/root`, in
+ * unpadded base64url. It works once.
  */
-export interface PatternIndexLinkKeyRequest {
-  delegation: string;
+export interface PatternIndexMoveRootRequest {
+  rootDelegation: string;
 }
+
+/** An admin points a member who lost their root key at a new one. */
+export interface PatternIndexMoveMemberRootRequest {
+  handle: string;
+  did: string;
+}
+
+/**
+ * Refuses a delegation in the caller's member's chains from now on, or
+ * removes one of the caller's legacy keys (one admitted before chains, which
+ * has no delegation to revoke).
+ */
+export type PatternIndexRevokeRequest =
+  | { delegation: string }
+  | { legacyKey: string };
+
+export type PatternIndexRevokeResponse =
+  | { revoked: string }
+  | { removed: true };
 
 /** An admin admits a key as a new member, invited by that admin. */
 export interface PatternIndexAdmitKeyRequest {
@@ -710,6 +729,15 @@ export interface PatternIndexClientOptions {
   baseUrl: string;
   fetchFn?: PatternIndexFetch;
   signer: FirstPartyHttpSigner;
+
+  /**
+   * The delegation chain the signer acts for its member through, root first:
+   * each link a delegation for `/index` about the root, in unpadded base64url,
+   * the first issued by the root itself, the last to the signer and expiring
+   * within 90 days; at most 8. Sent inside every signed call. Without it the
+   * signer is its own root.
+   */
+  proofs?: readonly string[];
 }
 
 /** A JSON object's own property, or `undefined` for anything else. */
@@ -731,6 +759,7 @@ export class PatternIndexClient {
   readonly #baseUrl: string;
   readonly #fetchFn: PatternIndexFetch;
   readonly #signer: FirstPartyHttpSigner;
+  readonly #proofs?: readonly string[];
 
   constructor(options: PatternIndexClientOptions) {
     // The function name is appended to the base's path, so a base carrying a
@@ -750,6 +779,9 @@ export class PatternIndexClient {
     this.#baseUrl = base.origin + base.pathname;
     this.#fetchFn = options.fetchFn ?? ((input, init) => fetch(input, init));
     this.#signer = options.signer;
+    if (options.proofs !== undefined) {
+      this.#proofs = options.proofs;
+    }
   }
 
   /**
@@ -771,7 +803,11 @@ export class PatternIndexClient {
     const url = functionUrl(this.#baseUrl, fn);
     // The proof commits to the body hash, so the bytes signed and the bytes
     // sent must be identical — serialize once.
-    const body = JSON.stringify(payload);
+    const body = JSON.stringify(
+      this.#proofs === undefined
+        ? payload
+        : { ...payload, proofs: [...this.#proofs] },
+    );
     const headers = await signFirstPartyHttpRequest({
       url,
       method: "POST",
@@ -1003,9 +1039,23 @@ export class PatternIndexClient {
     return this.#call("redeemInvite", { ...request });
   }
 
-  /** Links this client's key to the member whose root issued the delegation. */
-  linkKey(request: PatternIndexLinkKeyRequest): Promise<PatternIndexMember> {
-    return this.#call("linkKey", { ...request });
+  /** Makes this client's key its member's root, with the current root's consent. */
+  moveRoot(request: PatternIndexMoveRootRequest): Promise<PatternIndexMember> {
+    return this.#call("moveRoot", { ...request });
+  }
+
+  /** Points a member's root at a new key. Admin only. */
+  moveMemberRoot(
+    request: PatternIndexMoveMemberRootRequest,
+  ): Promise<PatternIndexMember> {
+    return this.#call("moveMemberRoot", { ...request });
+  }
+
+  /** Revokes a delegation in the caller's chains, or removes a legacy key. */
+  revoke(
+    request: PatternIndexRevokeRequest,
+  ): Promise<PatternIndexRevokeResponse> {
+    return this.#call("revoke", { ...request });
   }
 
   /** Admits a key as a new member. Admin only. */
