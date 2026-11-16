@@ -2388,14 +2388,12 @@ collection, so one transaction forms it once per collection.
 The position of a key is a function of the length of the array and of
 which element part each position holds. For a position that holds a
 link, the element part is the identity of the cell linked, and the
-second part above is its label. Two cases are not settled by the
-ruling.
+second part above is its label. Two more cases are ruled.
 
 - **A position that holds a plain value in place.** Its element part is
   derived from the value (section 1.3), so which key stands at which
-  position is a function of the values. *Assumed* (section 8, question
-  94): the label of the array holds the root `shape` of such a position
-  and not its `value`. Deciding which key an element has is the
+  position is a function of the values. By ruling the label of the
+  array holds the root `shape` of such a position and not its `value`. Deciding which key an element has is the
   runtime's observation and not the body's (section 1.3), and a node
   that reads the index is given a number and no value. A node that
   reads the element as well carries the element's label by its own
@@ -2405,8 +2403,8 @@ ruling.
   3.7 gives the label of that array. It includes what the predicates
   read, which can be values behind links of the source. That is the
   label of which elements the array holds and not of what its links
-  point to. *Assumed* (section 8, question 95): the label is formed
-  whole, as for a stored array.
+  point to. By ruling the label is formed whole, as for a stored
+  array.
 
 **The label of an `identity` slot.** By ruling, a handle that a body passes
 on without reading through it adds nothing of the label of its cell to what
@@ -4405,9 +4403,9 @@ entries.
   its membership template and the roots of the elements the body
   returned, and for the result of a `map`, whose membership is its
   source's and whose positions have the roots the body's template gives
-  them (section 3.6). *Assumed* (section 8, question 95): the label is
-  formed whole, and it joins nothing for the positions of the source
-  that the predicate dropped beyond what the membership template holds.
+  them (section 3.6). By ruling the label is formed whole, and it joins
+  nothing for the positions of the source that the predicate dropped
+  beyond what the membership template holds.
 
 `xs.flatMap((x) => body)`:
 
@@ -10243,39 +10241,17 @@ this document made.
     nothing of what the links point to. It is the label of the whole
     array, and no narrower label is formed for the positions up to the
     element's own (sections 2.2 and 3.6). The entry keeps its number.
-94. **The label of the index over plain values stored in place** (for
-    the project owner). The ruling on the label of the index speaks of
-    an array of links. Where a position holds a plain value, no link
-    stands between the array and the value, and the element part of the
-    key derives from the value, so which key stands at which position
-    is a function of the values. *Assumed:* the label of the array
-    holds, for such a position, the label of whether the position holds
-    anything and of what kind (a `shape` slot in place), and not the
-    label of the value (section 2.2). The ground is that the ruling
-    gives the index the label of the position and not of the values,
-    and that deciding which key an element has is the runtime's
-    observation (section 1.3). What a reader of the index then learns
-    without the label of the values is where the occurrences of equal
-    values stand, for a node that holds per-key state or a stream. The
-    alternative joins the `value` of every position that holds a plain
-    value, which gives every node that reads the index the label of
-    every such element.
-95. **The label of the index over a derived collection** (for the
-    project owner). The array of a `filter` or a `flatMap` result was
-    computed, and its label is the construct's membership template,
-    joined with the label of which reference each position holds
-    (section 3.7). That label includes what every predicate read, which
-    can be values behind links of the source. The ruling excludes what
-    the links point to, and does not speak to an array whose content
-    depends on such values. *Assumed:* the label of the array of a
-    derived collection is as section 3.7 gives it, because which
-    elements the array holds, and so every position in it, depends on
-    every predicate. It is formed whole, as for a stored array. It
-    joins nothing for a source position the predicate dropped beyond
-    what the membership template holds. A predicate whose result
-    differs between elements read the element, the index, or state
-    held per key. A read of the element or of the index carries the
-    label of which reference the source position holds, and a read of
-    state held per key does not. The alternative joins the label of
-    the array the source record iterates as well, which covers that
-    case.
+94. **The label of the index over plain values stored in place.** Not
+    open. Where a position holds a plain value in place, the label of
+    the array holds the label of whether the position holds anything
+    and of what kind (a `shape` slot in place), and not the label of
+    the value (section 2.2). A reader of the index then learns, without
+    the label of the values, where the occurrences of equal values
+    stand. The entry keeps its number.
+95. **The label of the index over a derived collection.** Not open.
+    The label of the array of a `filter` or a `flatMap` result is the
+    construct's membership template, joined with the label of which
+    reference each position holds (section 3.7). It includes what
+    every predicate read. It is formed whole, and it joins nothing for
+    a source position the predicate dropped beyond what the membership
+    template holds. The entry keeps its number.

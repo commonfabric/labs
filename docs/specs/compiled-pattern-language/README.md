@@ -1069,21 +1069,15 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   authored function one of them or the reactive tier calls, and not a
   `handler`, an `action`, or an inline event handler
   ([language subset](language-subset.md), §13, question 26).
-- **Element bodies and equal elements.** The rulings leave five things
+- **Element bodies and equal elements.** The rulings leave three things
   open ([plan format and label templates](plan-and-label-templates.md),
-  §8, questions 36, 90, 91, 94, and 95). Which state an occurrence has
+  §8, questions 36, 90, and 91). Which state an occurrence has
   depends on which equal elements stand before it, and a reader of the
-  row can see that: assumed accepted. Whether the label of the index
-  over plain values stored in place holds the label of the values, from
-  which the element keys derive: assumed not, so it holds the label of
-  the array's length and of whether each position holds anything.
-  Whether the label of the index over a derived collection, such as a
-  `filter` result, holds what the predicates read: assumed so, because
-  which elements that array holds depends on every predicate. Whether a
-  binding that a `lift` or a `computed` written in an element body makes
-  has a stream per occurrence: assumed not, as a binding made in a
-  function body is named by what it holds. And whether an element of a
-  `filter` result keeps the key it has in the source: assumed.
+  row can see that: assumed accepted. Whether a binding that a `lift`
+  or a `computed` written in an element body makes has a stream per
+  occurrence: assumed not, as a binding made in a function body is
+  named by what it holds. And whether an element of a `filter` result
+  keeps the key it has in the source: assumed.
 - **An explicit cause in a handler.** A later event that instantiates
   under a cause an earlier event gave creates nothing. Whether it writes
   the argument it passes is open. *Assumed:* it does not

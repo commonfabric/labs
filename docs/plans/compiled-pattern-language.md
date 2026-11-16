@@ -410,7 +410,12 @@ is relitigated.
   its length and which link each slot holds. It holds nothing of what
   the links point to, which is what a `findIndex` reads and the index
   does not. It is the label of the whole array, not of the slots up
-  to the element's position.
+  to the element's position. Where a position holds a plain value in
+  place, the label has that the position holds something and of what
+  kind, and not the value. For the result of a `filter` or a
+  `flatMap`, the label is the membership of the result, which holds
+  what every predicate read, joined with which reference each
+  position of the result holds.
 - A state cell declared with a value from the index keeps what it
   holds when its element moves, because the declared value is written
   at first creation only. A cell or child that a function body makes
@@ -951,19 +956,6 @@ as an assumption.
     stream.
 137. **The key of an element of a `filter` result** (PL question 91).
     *Assumed:* it keeps the key it has in the source, count included.
-
-138. **The label of the index over plain values stored in place** (PL
-    question 94). The ruling on the label of the index speaks of
-    links. A position that holds a plain value in place has no link,
-    and the element key derives from the value, so which key stands
-    at which position depends on the values. *Assumed:* the label has
-    that each position holds something and of what kind, and not the
-    value. The alternative joins the value of every such position.
-139. **The label of the index over a derived collection** (PL question
-    95). *Assumed:* the label of the array of a `filter` or `flatMap`
-    result is the membership of the result, which holds what every
-    predicate read, joined with which reference each result position
-    holds. The alternative also joins the label of the source's array.
 
 ## Open, and not needing the owner
 
