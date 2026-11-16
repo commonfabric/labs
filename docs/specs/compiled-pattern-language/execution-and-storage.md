@@ -990,16 +990,21 @@ which nothing is stored reads the callee's default
 (`plan-and-label-templates.md` §1.1). Expression code reads the slot
 with `host.slot` and takes the default, a constant of the value code,
 where the slot yields nothing. A sandboxed body of the callee finds the
-slot in the argument that the runtime builds from `Body.reads`, and an
-entry there holds no default. *Assumed* (question 85): the value code
-passes the defaults to `host.invoke`, as a list of places of the body's
-argument, each with the callee's default for it. The runtime puts the
-default at a listed place where the entry of the slot reads nothing and
-the place the slot resolves to declares no default of its own. The
-interface above does not show the list, and stays as it is until the
-question is decided. The alternative gives `ReadInput` a member for
-the default. "Nothing" is an absent value: a stored `null` is a value,
-and no default takes its place.
+slot in the argument that the runtime builds from `Body.reads`. By
+ruling the entry holds the callee's default (`ReadInput.default`), and
+the value code passes `host.invoke` nothing for it, so the interface
+above needs no member for defaults. The runtime puts the default at the
+entry's place `at` where the slot reads nothing and no place the slot
+resolves through declares a default of its own. "Nothing" is an absent
+value: a stored `null` is a value, and no default takes its place. The
+rule is the same for a body used in an element body, over an array of
+references, over an array of plain values in place, and over the
+result of another per-element construct. For a handler of the callee
+the default is assumed to be held by the binding
+(`plan-and-label-templates.md` §8, question 110), and the runtime
+applies it when it resolves the state path at dispatch. The prototype's
+executor passes `host.invoke` a list of places with their defaults in
+place of the member.
 
 **An output with entries below it.** A constructed value, such as a
 rendered tree, has an entry of `Plan.outputs` for its container and one
@@ -5152,17 +5157,12 @@ Added by the ruling that the scheduler is switched per space (section 9):
     number of static targets is of the first kind.
 85. **How a sandboxed body of a compiled-in callee is handed the
     callee's default** (section 2.2; `plan-and-label-templates.md`
-    §1.1). By ruling a path of the callee's argument bound to a slot
-    of the caller at which nothing is stored reads the callee's
-    default. `ConeHost.invoke` takes a body and its computed inputs,
-    and the runtime builds the slot part of the argument from
-    `Body.reads`, whose entries hold no default. *Assumed:* the value
-    code passes `host.invoke` a list of places with the callee's
-    default for each, as the prototype does. The alternative gives
-    `ReadInput` a member for the default, so the plan holds it and the
-    value code passes nothing. The question is the same for a body
-    used in an element body, in each of the three cases of a
-    per-element source.
+    §1.1). Not open: by ruling the entry of `Body.reads` holds the
+    default, in `ReadInput.default`, and the value code passes
+    `host.invoke` nothing for it. The same for a body used in an
+    element body, in each of the three cases of a per-element source.
+    Where a handler's binding holds the default is assumed in
+    `plan-and-label-templates.md` (its §8, question 110).
 86. **What a write below the root of a state cell that holds nothing
     stores** (section 4.1). By ruling a state cell whose first value
     is a constant has no document until something writes it, and the

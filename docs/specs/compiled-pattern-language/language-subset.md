@@ -2241,7 +2241,9 @@ Eight points complete the table.
   path that the call leaves out, where the callee declares a default
   for it, reads that default. And a path that the call binds to a place
   at which nothing is stored also reads the callee's default, as it
-  does today. Which default is read where several are declared is
+  does today. A reference to such a path that the callee passes on
+  carries the callee's declared default, so a reader of the callee's
+  result reads it as well. Which default is read where several are declared is
   ruled: the one declared nearest the end of the chain of places the
   read resolves through, the stored place last, and the reader's own,
   a callee's included, only where no place along the chain declares

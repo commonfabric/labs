@@ -848,7 +848,8 @@ unsupported construct included.
   constant, 144 hold `null`, where the earlier commit had 200. Value
   code of a callee reads a slot with the callee's default at 49 reads,
   and passes a sandboxed body a list of places with their defaults in
-  27 uses of a body (question 152). The crate applies the default to a
+  27 uses of a body, where the ruling has the entry of `Body.reads`
+  hold the default (question 152). The crate applies the default to a
   name the callee's parameter destructures and where the call writes
   its argument as a record, and in no other form; both limits are the
   prototype's.
@@ -1128,6 +1129,17 @@ is relitigated.
   `runtime/runner/src/link-resolution.ts`, `combineSchemaForLink` in
   `runtime/runner/src/traverse.ts`). A schema on the handle that wrote
   the final document counts for nothing, because it is not stored.
+- A sandboxed body of a pattern compiled into another finds the
+  callee's default in the plan. The entry of `Body.reads` for a path
+  that the call binds to a slot of the caller holds the default the
+  callee declares for the path (`ReadInput.default`), and value code
+  does not pass it. Where the callee passes such a path on by
+  reference, the stored reference carries the callee's declared
+  default. The rule that the default nearest the end of the chain is
+  read then gives a reader of the callee's result the value the runtime
+  of today shows. Both are the same inside an element body over an
+  array of references, over an array of plain values in place, and over
+  the result of another per-element construct.
 - A read of a default carries no integrity. Where a stored object has
   an absent property and a default fills it, the defaulted part carries
   the empty integrity, not the object's claims. The specification has no
@@ -2082,22 +2094,19 @@ into the documents as an assumption, which is the prototype's choice
 unless the entry says otherwise.
 
 152. **How a sandboxed body of a compiled-in callee is handed the
-     callee's default** (ES question 85). By ruling a path bound to a
-     slot of the caller at which nothing is stored reads the callee's
-     default, and an entry of `Body.reads` holds no default.
-     *Assumed:* the value code passes `host.invoke` a list of places
-     with their defaults. The alternative gives `ReadInput` a member
-     for the default. The same inside an element body over an array of
-     references, over an array of plain values in place, and over the
-     result of another per-element construct.
+     callee's default** (ES question 85). Settled by ruling: the entry
+     of `Body.reads` holds the default (`ReadInput.default`), and value
+     code does not pass it. The same inside an element body over an
+     array of references, over an array of plain values in place, and
+     over the result of another per-element construct. The entry keeps
+     its number.
 153. **A path of a compiled-in callee's result that passes on a path
-     the caller left empty** (PL question 106). The callee reads
-     nothing of it, and the result holds a link to the caller's empty
-     slot. *Assumed:* the callee's default is applied to a read alone,
-     so a reader of the result reads the default of the place, or
-     nothing. The alternative shows the callee's default there, as the
-     prototype observed today's runtime to do. The same in all three
-     cases.
+     the caller left empty** (PL question 106). Settled by ruling: the
+     stored reference carries the callee's declared default, so a
+     reader of the result reads the default of the caller's place where
+     it declares one and the callee's default otherwise, as today. The
+     same in all three cases. Question 158 has what the two rulings
+     leave open. The entry keeps its number.
 154. **A write below the root of a state cell that holds nothing** (ES
      question 86, PL question 109). The default stands for the whole
      value of a cell with no document. *Assumed:* the write makes the
@@ -2132,6 +2141,22 @@ unless the entry says otherwise.
      cell of the instance, which adds no label where it is passed on.
      Open: what a read through it is. Not about a per-element
      construct.
+
+**From the rulings on questions 145 and 152 to 156.** Each is what a
+ruling leaves undetermined, written into the documents as an
+assumption.
+
+158. **Where the callee's default is held beside `Body.reads`** (PL
+     question 110). By ruling the entry of `Body.reads` of a sandboxed
+     body of a pattern compiled in holds the callee's default, and a
+     reference to a path of its argument that the callee passes on
+     carries it. A handler is one body for all its bindings.
+     *Assumed:* the entry of `Binding.state` whose place is a slot the
+     call bound holds the default; and every reference to a path of
+     its argument that the callee stores carries the default, not only
+     one at a path of the result. The same inside an element body over
+     an array of references, over an array of plain values in place,
+     and over the result of another per-element construct.
 
 Two questions above are restated by the same notes. Question 145 has
 the four consequences and the two alternatives. For the assumption of

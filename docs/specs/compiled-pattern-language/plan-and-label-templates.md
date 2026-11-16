@@ -415,6 +415,15 @@ export interface ReadInput {
    * path below the handle's cell (section 3.9).
    */
   readonly at: Path;
+  /**
+   * For an entry of a body of a pattern compiled in, whose slot is a
+   * slot of the caller that the call bound a path of the callee's
+   * argument to: the default the callee declares for that path. The
+   * runtime puts it at `at` where the slot yields nothing and no place
+   * the slot resolves through declares a default of its own (section
+   * 1.1). Absent where the callee declares none.
+   */
+  readonly default?: unknown;
 }
 
 /** One path of a computed value that a body observes in one way. */
@@ -1114,6 +1123,14 @@ export interface Binding {
       | { readonly stream: Index }
       | { readonly constant: unknown };
     /**
+     * For a binding of a pattern compiled in, at a path whose `place`
+     * is a slot of the caller that the call bound a path of the
+     * callee's argument to: the default the callee declares for that
+     * path, as `ReadInput.default` holds it for a body. Assumed
+     * (section 8, question 110).
+     */
+    readonly default?: unknown;
+    /**
      * For a path bound by reference in a function body: the reference the
      * binding holds, or the references it is one of, as
      * `WriteEdge.reference` says of a written path. Each is an `identity`
@@ -1304,27 +1321,45 @@ Four things follow from the ruling and the rules above.
   default is read in its place. A stored `undefined` is assumed to
   read as absent does (section 2.5; section 8, question 104).
 
-Two things the ruling does not determine.
+Two further rulings say how the callee's default reaches what is not
+a read of a cone. Both are the same where the callee is called in an
+element body, over an array of references, over an array of plain
+values in place, and over the result of another per-element construct.
 
-- **How a sandboxed body of the callee is handed the default.** A body
-  of the callee that reads a path bound to a slot at which nothing is
-  stored has to find the callee's default in its argument, and an
-  entry of `Body.reads` holds a slot and a place and no default.
-  `execution-and-storage.md` §2.2 assumes that the value code passes
-  the default to `host.invoke` (its §11, question 85). The alternative
-  gives `ReadInput` a member for it.
+- **A sandboxed body of the callee finds the default in the plan.** A
+  body of the callee that reads a path bound to a slot at which nothing
+  is stored has to find the callee's default in its argument. By ruling
+  the entry of `Body.reads` holds it: `ReadInput.default` is the
+  default the callee declares for the path, and value code does not
+  pass it. The runtime puts the default at the entry's place where the
+  slot yields nothing and no place the slot resolves through declares
+  a default of its own (`execution-and-storage.md` §2.2). A `Body` has
+  the `site` step of the call in its `within`, so two calls of one
+  callee have two records, and each holds the default of its own call.
+  A handler is one `Body` however many bindings name it, and which path
+  of the callee's argument a state path of it is bound to is a fact of
+  the binding. *Assumed* (section 8, question 110): for a state path of
+  a binding whose `place` is such a slot, the entry of `Binding.state`
+  holds the default, in a member `default`, and the runtime applies it
+  when it resolves the path at dispatch.
 - **A callee that passes the path on by reference** reads nothing of
   it. Where a path of the callee's result passes on such a path of its
   argument, and the path is bound to a slot of the caller at which
-  nothing is stored, the result holds a link to the caller's slot. A
-  reader of that path of the result resolves the link and reads the
-  default the place declares, or nothing. The prototype observed the
-  runtime of today, for which the callee is an instance with an
-  argument schema, to show the callee's default there. *Assumed*
-  (section 8, question 106): the callee's default is applied to a read
-  that a cone or a body of the callee makes and to nothing else, so a
-  path passed on by reference holds the link alone, and its reader
-  does not read the callee's default.
+  nothing is stored, the result holds a link to the caller's slot. By
+  ruling the stored reference carries the callee's declared default:
+  the link holds the schema that the callee declares for the path, and
+  so its default, as every link holds the schema of the place it names
+  as the plan that wrote the link declares it (section 2.5). A reader
+  of that path of the result resolves the link. The link is on the
+  chain of the read and the caller's place ends it, so the reader reads
+  the default of the caller's place where that declares one, and the
+  callee's default otherwise. That is the value the runtime of today
+  shows, for which the callee is an instance with an argument schema.
+  The read has the empty integrity of a default either way. *Assumed*
+  (section 8, question 110): the rule holds for every reference to a
+  path of its argument that code of the callee stores, in a state
+  cell, in the argument of a child, or through a handle, as it does
+  for one at a path of the result.
 
 **Where a slot of `Body.reads` sits in the body's argument.** By ruling
 each entry of `Body.reads` holds the path in the body's argument at
@@ -3376,7 +3411,10 @@ callee's default is read where no place along the chain declares one.
   slot at which nothing is stored also reads the default the callee
   declares for the path, and only where the place of the slot declares
   none, by the order above (section 1.1, "A constant of the argument,
-  and a path the call leaves out").
+  and a path the call leaves out"). By ruling a reference to such a
+  path that the callee stores is a link that carries the callee's
+  declared default, so the callee's declaration is on the chain of
+  whoever reads through the link, before the caller's place.
 - **A property default, in a read of an object whole.** The ruling
   speaks of the default read at a position. A slot that reads a stored
   object whole also reads the properties below its position, and a
@@ -11152,21 +11190,14 @@ this document made.
      stored there is found again; that would conflict with the ruling
      that stored per-element state is not carried over.
 106. **A path of a compiled-in callee's result that passes on a path
-     the caller left empty** (for the project owner). By ruling a path
-     of the callee's argument that the call binds to a slot of the
-     caller at which nothing is stored reads the callee's default.
-     Where the callee passes the path on by reference and reads
-     nothing of it, the result holds a link to the caller's slot, and
-     the prototype observed the runtime of today to show the callee's
-     default to a reader of that path. *Assumed:* the callee's default
-     is applied to a read that a cone or a body of the callee makes
-     and to nothing else, so the reader of the result reads the
-     default the place declares, or nothing (section 1.1). The
-     alternative has the result hold what today's shows, which needs
-     the link to carry the callee's schema or the callee's default to
-     be written. The question does not concern a per-element construct
-     and is the same inside an element body in each of the three
-     cases.
+     the caller left empty.** Not open. By ruling the stored reference
+     carries the callee's declared default: the link in the result
+     holds the schema the callee declares for the path. A reader of
+     the result reads the default of the caller's place where that
+     declares one and the callee's default otherwise, by the ruling
+     question 102 records, which is the value the runtime of today
+     shows (section 1.1). The same inside an element body in each of
+     the three cases. The entry keeps its number.
 107. **An output that passes a derived collection on unchanged** (for
      the project owner). The case is the result of another per-element
      construct that a cone returns as it is, and a per-element
@@ -11201,3 +11232,24 @@ this document made.
      The alternative stores them with the label of a default, the
      empty integrity. The question is the same for a state cell of an
      element body in each of the three cases.
+110. **Where the callee's default is held beside `Body.reads`** (for
+     the project owner). By ruling the entry of `Body.reads` of a
+     sandboxed body of a pattern compiled in holds the callee's default
+     (`ReadInput.default`), and a reference to a path of its argument
+     that the callee passes on carries the callee's declared default
+     (section 1.1). Two things the rulings do not name. A handler is
+     one `Body` for all its bindings, and which path of the callee's
+     argument a state path is bound to is a fact of the binding.
+     *Assumed:* the entry of `Binding.state` whose `place` is a slot
+     the call bound holds the default, in a member `default`. The
+     alternative holds it in the handler's entries of root `binding`,
+     which is right only where every binding of the handler binds the
+     path to the same path of the argument. And the ruling on a path
+     passed on speaks of the stored reference. *Assumed:* every
+     reference to a path of its argument that code of the callee
+     stores carries the default, in a state cell, in the argument of a
+     child, and through a handle as at a path of the result. The
+     alternative limits it to the result. Both parts are the same
+     inside an element body over an array of references, over an array
+     of plain values in place, and over the result of another
+     per-element construct.
