@@ -251,6 +251,32 @@ describe("cell-cache", () => {
       }]);
     });
 
+    it("writes no stamp placement on the record it rewrites", async () => {
+      const program = await writeDelegatingProgram();
+      const id = idOf(sourceDocKey(program.entryIdentity));
+      const tx = runtime.edit();
+      const current = storedFields(tx, address(id)) as Stored;
+      seedStoredEnvelope(tx, address(id), {
+        ...current,
+        cfc: {
+          ...current.cfc!,
+          labelMap: {
+            ...current.cfc!.labelMap,
+            entries: [
+              ...current.cfc!.labelMap.entries,
+              ...rootPairStamp(space),
+            ],
+          },
+          stampPlacement: "committed",
+        },
+      } as unknown as FabricValue);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      expect(stored(id).cfc?.stampPlacement).toBe("committed");
+
+      expect(await repair(program.entryIdentity)).toBe("repaired");
+      expect(stored(id).cfc).not.toHaveProperty("stampPlacement");
+    });
+
     it("erases a stamped compiled record whose list the source record grants", async () => {
       const program = await writeDelegatingProgram();
       const compiled = idOf(

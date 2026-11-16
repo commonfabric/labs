@@ -2790,8 +2790,6 @@ async function planStampRepair(
       return "refused";
     }
     const imports = canonicalSourceImports(
-      runtime,
-      space,
       closure,
       identity,
       dataIdentities,
@@ -2891,8 +2889,6 @@ async function planStampRepair(
  * view does not resolve.
  */
 function canonicalSourceImports(
-  runtime: Runtime,
-  space: MemorySpace,
   closure: ReadonlyMap<string, SourceDoc>,
   identity: string,
   dataIdentities: ReadonlySet<string>,
@@ -2928,13 +2924,8 @@ function canonicalSourceImports(
 
   const authored: ModuleImportRef[] = [];
   if (!dataIdentities.has(identity)) {
-    const declarations = new Map<string, { imports: readonly string[] }>();
-    for (const id of viewIds) {
-      const imports = runtime.attestedSourceImports(space, id);
-      if (imports !== undefined) {
-        declarations.set(closure.get(id)!.filename, { imports });
-      }
-    }
+    // The scan is of the bytes the identity hashes, never an import list a
+    // compiled record attests, so no record's stored list orders the edges.
     const edges = resolveModuleImports(
       {
         main: doc.filename,
@@ -2949,7 +2940,6 @@ function canonicalSourceImports(
             closure.get(id)!.filename
           ),
         ),
-        ...(declarations.size === 0 ? {} : { declarations }),
       },
     );
     const own = edges.get(doc.filename);
