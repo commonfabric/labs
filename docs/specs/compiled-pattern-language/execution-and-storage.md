@@ -1475,6 +1475,26 @@ every body that writes, unchanged.
 A body that is a materializer is not invoked through `host.invoke`. It runs
 in a transaction of its own (section 6.7).
 
+**The record of a key of a list.** `h.elementById(id)` on a handle of a
+list yields a handle for the record of that key (`language-subset.md`
+§4.7), and `footprint-analysis.md` §7 records it as the handle at `*`
+below the list, not anchored. In the runtime of today the record is an
+entity of its own, named from the list and the key, and it is no
+position of the list until something adds it (`elementById` in
+`runtime/runner/src/cell.ts`). No rule of the documents says where the
+compiled path stores the record. *Assumed* (section 11, question 89), as
+today and as the prototype's executor does: the record is named by the
+address of the list and the key; it has no document until something
+writes it; it is a member of the list once a reference to it is added,
+as `addUnique` adds one unless the list holds it, and `removeByValue`
+removes the members that are that reference; and a write through the
+handle is a write at `*` below the list, for the footprint and for the
+label, whether or not the record is a member. The list here is one a
+handle names, and its members are references to the records. The key is
+the one the caller passes and is no element key of a per-element
+construct, and a per-element construct over such a list is the case of
+an array of references.
+
 ### 2.5 Element cones
 
 `plan-and-label-templates.md` §1.3 and `builtin-inventory.md` ("Element
@@ -1837,7 +1857,11 @@ of the source of that construct, for the positions the result holds. A
 change of one upstream element makes stale the cone instances of that
 key in each body of the chain, by the first row of the table, and no
 cone instance of another key. For a `flatMap` the key is assumed there
-(its §8, question 101).
+(its §8, question 101): the key of the source element with the
+position in the segment that element contributed, whether the segment
+holds references or plain values in place. Under the assumption a move
+of the source elements evaluates nothing, and two members of one
+segment that change places are both evaluated again.
 
 The dependency is by key, and it is no edge of `Plan.edges`: a cone
 instance of the downstream body depends on the results of the upstream
@@ -3881,6 +3905,12 @@ membership of that collection (section 6.5).
   positions, each with the join of its prefix as its label
   (`plan-and-label-templates.md` §3.13).
 - **Rebuild.** Evaluate the fold from the initial value.
+- **The three cases.** The fold is in the order the collection iterates,
+  and the state is the same, over an array of references, over an array
+  of plain values in place, and over the result of another per-element
+  construct. In the baseline the fold is not kept per key, so one
+  changed element evaluates every step (`plan-and-label-templates.md`
+  §3.13).
 
 ### 6.3 Collection indexes
 
@@ -5301,6 +5331,24 @@ Added by the ruling that the scheduler is switched per space (section 9):
     of plain values in place, and over the result of another per-element
     construct: the instance that fails is the one of the key whose
     output holds the position.
+89. **Where the record of a key of a list is stored** (`elementById`;
+    section 2.4). `footprint-analysis.md` §7 has the handle at `*` below
+    the list and not anchored, and no document says where the record is.
+    *Assumed,* as the runtime of today does: an entity of its own, named
+    by the address of the list and the key, with no document until
+    something writes it, and no member of the list until a reference to
+    it is added. *Assumed* with it: a record that is no member of the
+    list is below the list for the footprint and for a reader of the
+    list's label, so a write through the handle is a write at `*` below
+    the list. The alternatives store the record at a position of the
+    list, or give it a label of its own that a reader of the list does
+    not take until the record is a member. In the prototype's fixture 48
+    of 48 values equal those of the runtime of today. The question is
+    about a list whose members are references to the records. It is the
+    case of an array of references for a per-element construct over the
+    list, and does not arise over an array of plain values in place or
+    over the result of another per-element construct, whose elements
+    have no such record.
 
 ### 11.2 For another document or the prototype
 

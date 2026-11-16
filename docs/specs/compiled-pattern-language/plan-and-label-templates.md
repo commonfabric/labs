@@ -6460,7 +6460,12 @@ expression.
     element through slots of root `element` that name it. A step that
     uses the index lists the slot of root `index` that names it. The
     steps are evaluated per position, so the slot's value is the
-    position of the step.
+    position of the step. The step cone is a cone of the body of that
+    collection, so the last `element` step of its `Cone.within` names
+    the collection (section 1.4). No member of the `Operation` names
+    it, and `Operation.input` holds the `fold` node at no fixed place,
+    so a reader of the plan takes the collection of a `reduce` from
+    that step.
   - The step cone reads the accumulator through a slot with root
     `operation` that names the `reduce` itself, at the empty path. The
     runtime binds it to the accumulator as it stands before the step.
@@ -6483,6 +6488,17 @@ expression.
     `collection:reduce-callback`). The result is the
     stored result of the operation and has that label, instantiated. A
     cone that uses it reads a slot with root `operation`.
+
+  The record and the evaluation are the same over an array of
+  references, over an array of plain values in place, and over the
+  result of another per-element construct: the steps follow the order
+  the collection iterates, and a step reads its element as a body of a
+  `map` over the same source does. The prototype evaluates the initial
+  value and then each step in that order as one unit, and evaluates the
+  whole fold again when what a step read, the membership, or the order
+  changed, which is the baseline above. Its fixture folds over each of
+  the three cases, the second with the index, and the values equal those
+  of the runtime of today.
 
 **Today.** `reduce` and `findIndex` on a cell mint a `lift` inline
 (`reduce` and `findIndex` in `runtime/runner/src/cell.ts`), which reads the
@@ -11389,7 +11405,15 @@ this document made.
      source element together with its position in the segment that
      element contributed (section 1.3). An element that moves inside
      its segment is then another element for a body applied to the
-     result. The alternative keys an element of a segment by its own
+     result: two members of one segment that change places are two keys
+     whose values changed, and both are evaluated again, where a moved
+     element of a `map` keeps its results. A state cell declared in a
+     body over the result stays with the position in the segment and
+     not with the member. The prototype keys this way. In its fixture a
+     segment behind a reference that grows evaluates the new position
+     alone, a move of the source elements evaluates nothing, and a
+     plain value that enters the source evaluates its own segment. The
+     alternative keys an element of a segment by its own
      identity or value and its count in the segment, under the source
      element's key. The case is the result of another per-element
      construct, the `flatMap`, over a source of any of the three cases.
