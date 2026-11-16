@@ -56,11 +56,12 @@ describe("cfcheck", () => {
   /** A context over the fixture corpus in `root`, saying into `said`. */
   function fixtureContext(env: Record<string, string> = {}): CfcheckContext {
     return {
-      corpus: [
-        "patterns/mistyped.tsx",
-        "patterns/sound.tsx",
-        "patterns/unresolved.tsx",
-      ],
+      corpus: () =>
+        Promise.resolve([
+          "patterns/mistyped.tsx",
+          "patterns/sound.tsx",
+          "patterns/unresolved.tsx",
+        ]),
       root,
       runtime: createRuntime,
       env: (name) => env[name],
@@ -70,9 +71,10 @@ describe("cfcheck", () => {
 
   describe("checkoutContext()", () => {
     it("returns the repository's own corpus, relative to its root", async () => {
-      const context = await checkoutContext();
-      expect(context.corpus).toContain("patterns/examples/counter/counter.tsx");
-      expect(context.corpus).not.toContain(
+      const context = checkoutContext();
+      const corpus = await context.corpus();
+      expect(corpus).toContain("patterns/examples/counter/counter.tsx");
+      expect(corpus).not.toContain(
         "patterns/examples/counter/counter.test.tsx",
       );
       expect(
@@ -148,6 +150,22 @@ describe("cfcheck", () => {
       });
       expect(output).toEqual({
         err: "Unknown argument: --update\n" +
+          "usage: deno task cfcheck [--only <pattern>]...",
+        code: 2,
+      });
+      expect(said).toEqual([]);
+    });
+
+    it("returns 2 with the failure and the usage for a corpus it cannot read, and checks nothing", async () => {
+      const output = await cfcheck([], {
+        ...fixtureContext(),
+        corpus: () => Promise.reject(new Error("The patterns are unreadable.")),
+        runtime: () => {
+          throw new Error("A run refused at its corpus built a runtime.");
+        },
+      });
+      expect(output).toEqual({
+        err: "The patterns are unreadable.\n" +
           "usage: deno task cfcheck [--only <pattern>]...",
         code: 2,
       });

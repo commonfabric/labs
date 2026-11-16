@@ -24,8 +24,8 @@ import { type CommandOutput, emit } from "./command-output.ts";
 
 /** What a run reads from the machine it runs on. */
 export interface CfcheckContext {
-  /** Every pattern file of the corpus, relative to `root`. */
-  readonly corpus: readonly string[];
+  /** Reads every pattern file of the corpus, relative to `root`. */
+  readonly corpus: () => Promise<readonly string[]>;
 
   /**
    * The directory the pattern paths are relative to, which also bounds the
@@ -44,9 +44,9 @@ export interface CfcheckContext {
 }
 
 /** The context of a run over this repository's own corpus. */
-export async function checkoutContext(): Promise<CfcheckContext> {
+export function checkoutContext(): CfcheckContext {
   return {
-    corpus: await collectAllPatternFiles(REPO_ROOT),
+    corpus: () => collectAllPatternFiles(REPO_ROOT),
     root: REPO_ROOT,
     runtime: createRuntime,
     env: Deno.env.get,
@@ -68,7 +68,8 @@ export function diagnosticFile(name: string | undefined, root: string): string {
 /**
  * Checks the patterns a command line selects from the corpus, and returns
  * what the run says and the code it exits with: 2 for a command line it
- * cannot read, 1 when any pattern fails, and 0 otherwise.
+ * cannot read or a corpus it cannot read, 1 when any pattern fails, and 0
+ * otherwise.
  */
 export async function cfcheck(
   argv: readonly string[],
@@ -77,7 +78,7 @@ export async function cfcheck(
   const { root } = context;
   let filesToCheck: string[];
   try {
-    filesToCheck = selectionFor(context.corpus, argv);
+    filesToCheck = selectionFor(await context.corpus(), argv);
   } catch (error) {
     return { err: `${describeFailure(error)}\n${USAGE}`, code: 2 };
   }
@@ -156,4 +157,4 @@ export async function cfcheck(
   };
 }
 
-if (import.meta.main) emit(await cfcheck(Deno.args, await checkoutContext()));
+if (import.meta.main) emit(await cfcheck(Deno.args, checkoutContext()));
