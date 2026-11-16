@@ -306,8 +306,8 @@ export const DEFAULT_SPARE_SERVING_WORKERS = 1;
 /**
  * The largest a toolshed's serving worker's heap may grow unless told, in
  * megabytes: well above what a worker serving one space holds, about 80 MB,
- * and far below the 16 GiB each isolate of the toolshed's own process may
- * reach, so a runaway space ends its own worker rather than the process.
+ * and below the limit of the toolshed's main thread, V8's default of about
+ * 4 GB, so a runaway space ends its own worker rather than the process.
  */
 export const DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB = 2048;
 
