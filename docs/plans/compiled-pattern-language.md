@@ -488,8 +488,9 @@ notes 281 to 306. Notes 281 to 302 say what the executor needed that the
 documents did not give, and are written into the documents. Of the
 questions they raised, the place of a slot of `Body.reads`, a path that
 a call leaves out, the first value of a state cell, a moved element,
-and a cone with side-writes are ruled ([Decided](#decided)). Questions
-141 and 144 to 148 below, and questions 81 to 84 of
+and a cone with side-writes are ruled, and so is which default is read
+along a chain of places ([Decided](#decided)). Questions 141, 144 to
+147, and 149 to 151 below, and questions 81 to 84 of
 `execution-and-storage.md`, are open. Notes 303 to 306 are the results
 here.
 Nothing was timed.
@@ -608,9 +609,10 @@ first reading of the source and the two values and are not verified.
 No difference is classed as a gap of the design by itself. The gaps this
 round found are in what the executor needed in order to compute a value
 at all. Each showed as a wrong value or a failed run before the emitter
-or the executor supplied what was missing. Five are ruled
-([Decided](#decided)), and the rest are questions: 141 and 144 to 148
-below, and questions 81 to 84 of `execution-and-storage.md`.
+or the executor supplied what was missing. Six are ruled
+([Decided](#decided)), and the rest are questions: 141, 144 to 147,
+and 149 to 151 below, and questions 81 to 84 of
+`execution-and-storage.md`.
 The one design difference in the table is by the documents: in
 `patterns/dev/gideon-tests/test-ifelse-both-branches.tsx` today's
 runtime evaluates both branches of an `ifElse` and the executor the
