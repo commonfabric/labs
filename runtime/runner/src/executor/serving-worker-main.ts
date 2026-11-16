@@ -81,10 +81,8 @@ export function serveFromPort(
   options: ServingWorkerMainOptions = {},
 ): void {
   // From here on, so the profile covers what serving allocates from the
-  // first message. The init waits for it and answers with its failure, if
-  // any, rather than the worker ending on an unhandled rejection first.
+  // first message; the init waits for it.
   const sampling = startHeapSampling();
-  sampling.catch(() => {});
   const endpoint = servingPlaneEndpoint(port);
   endpoint.onRequest("worker.init", async (init) => {
     adoptProcessInstanceId(init.processInstanceId);

@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
 import {
@@ -70,6 +71,37 @@ describe("heap-profile", () => {
         (bytes.get("allocatesWhatItKeeps") ?? 0) / 4,
       );
       expect(kept.length).toBe(COUNT);
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("serves on where sampling cannot start, as without sys access, and its profile request says why", async () => {
+    const directory = await Deno.makeTempDir({ prefix: "heap-profile-" });
+    try {
+      const script = new URL(
+        "./support/heap-profile-without-sys.ts",
+        import.meta.url,
+      );
+      const { code, stdout } = await new Deno.Command(Deno.execPath(), {
+        args: [
+          "run",
+          "--no-lock",
+          "--no-check",
+          "--allow-read",
+          `--allow-write=${directory}`,
+          fromFileUrl(script),
+          directory,
+        ],
+        stdout: "piped",
+        stderr: "inherit",
+      }).output();
+      const lines = new TextDecoder().decode(stdout).trim().split("\n");
+      expect(code).toBe(0);
+      expect(lines[0]).toBe("started without rejecting");
+      expect(lines[1]).toContain("heap sampling could not start");
+      expect(lines[1]).toContain("inspector");
+      expect([...Deno.readDirSync(directory)]).toEqual([]);
     } finally {
       await Deno.remove(directory, { recursive: true });
     }
