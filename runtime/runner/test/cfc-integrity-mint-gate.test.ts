@@ -435,6 +435,97 @@ describe("CFC integrity mint gate", () => {
         expect(paths).toEqual([]);
       });
 
+      describe("made after the transaction prepared", () => {
+        // Such a write changes what the transaction commits, so the
+        // preparation no longer stands, as after any other write.
+
+        /**
+         * Commits a transaction in which the builtin writes the record `name`
+         * through `recordSchema` and the transaction prepares, and then
+         * `after` runs under the builtin's identity, and returns the commit's
+         * error and the stored value.
+         */
+        const commitAfterPreparing = async (
+          name: string,
+          after: (tx: IExtendedStorageTransaction, runtime: Runtime) => void,
+        ) => {
+          const storageManager = StorageManager.emulate({ as: signer });
+          const runtime = new Runtime({
+            apiUrl: new URL("https://example.com"),
+            storageManager,
+          });
+          try {
+            const tx = runtime.edit();
+            setCfcImplementationIdentity(tx, BUILTIN);
+            runtime.getCell(signer.did(), name, recordSchema, tx).set({
+              note: "builtin",
+              tag: "builtin",
+            });
+            tx.prepareCfc();
+            expect(tx.getCfcState().prepare.status).toBe("prepared");
+            after(tx, runtime);
+            const error = (await tx.commit().settled).error;
+            const rtx = runtime.edit();
+            try {
+              return {
+                error,
+                stored: runtime.getCell(signer.did(), name, undefined, rtx)
+                  .getRaw(),
+              };
+            } finally {
+              rtx.abort();
+            }
+          } finally {
+            await runtime.dispose();
+            await storageManager.close();
+          }
+        };
+
+        it("refuses the commit after a single write", async () => {
+          const { error, stored } = await commitAfterPreparing(
+            "mint-gate-inner-after-prepare",
+            (tx, runtime) => {
+              expect(
+                tx.tx.write(
+                  storageAddress(
+                    tx,
+                    runtime,
+                    "mint-gate-inner-after-prepare",
+                    "tag",
+                  ),
+                  "chosen",
+                ).error,
+              ).toBeUndefined();
+            },
+          );
+
+          expect(error?.message).toContain("write-after-prepare");
+          expect(stored).toBeUndefined();
+        });
+
+        it("refuses the commit after a batch", async () => {
+          const { error, stored } = await commitAfterPreparing(
+            "mint-gate-inner-batch-after-prepare",
+            (tx, runtime) => {
+              expect(
+                tx.tx.writeBatch!([{
+                  address: storageAddress(
+                    tx,
+                    runtime,
+                    "mint-gate-inner-batch-after-prepare",
+                    "tag",
+                  ),
+                  value: "chosen",
+                }]).error,
+              ).toBeUndefined();
+            },
+          );
+
+          expect(error?.message).toContain("write-after-prepare");
+          expect(stored).toBeUndefined();
+        });
+      });
+
       describe("for an operation recorded there with no write", () => {
         // An operation other than a write lands no value of its own: a text
         // change or a mergeable op stands in for the diff of a value written

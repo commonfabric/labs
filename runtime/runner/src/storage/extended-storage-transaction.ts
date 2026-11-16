@@ -994,9 +994,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.#cfcInstrumentation = cfcInstrumentation;
     // A write made on `tx` directly passes none of the write chokepoint
     // below, so it carries no identity, whatever this transaction's identity
-    // is when it is made.
+    // is when it is made. It is an attempted write all the same, so it
+    // retires a standing preparation as one made through the chokepoint does.
     tx.reportUnmarkedWrites?.((address) =>
-      this.#noteWriteIdentity(address, { unmarked: true })
+      this.#noteAttemptedWrite(address, { unmarked: true })
     );
   }
 
@@ -1984,6 +1985,23 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     if (!deepEqual(summary.identity, current)) {
       summary.multiple = true;
       summary.identity = undefined;
+    }
+  }
+
+  /**
+   * Notes an attempted value write at `address` for CFC: it advances the
+   * activity epoch, records its identity (`#noteWriteIdentity()`, which
+   * `unmarked` goes to), and invalidates a standing preparation. A write
+   * leaving the value unchanged is an attempted write too.
+   */
+  #noteAttemptedWrite(
+    address: IMemorySpaceAddress,
+    options?: { unmarked?: boolean },
+  ): void {
+    this.#noteCfcActivity();
+    this.#noteWriteIdentity(address, options);
+    if (this.#cfcState.prepare.status === "prepared") {
+      this.invalidateCfc("write-after-prepare");
     }
   }
 
@@ -4395,13 +4413,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // counts a write that leaves the value unchanged among the attempted
       // writes, and has any write after a preparation invalidate it;
       // `docs/specs/cfc-commit-preparation.md` covers the arrangement.
-      const noteWriteIdentity = (address: IMemorySpaceAddress) => {
-        this.#noteCfcActivity();
-        this.#noteWriteIdentity(address);
-        if (this.#cfcState.prepare.status === "prepared") {
-          this.invalidateCfc("write-after-prepare");
-        }
-      };
+      const noteWriteIdentity = (address: IMemorySpaceAddress) =>
+        this.#noteAttemptedWrite(address);
       const refuseMalformedSchemaMeta = (
         address: IMemorySpaceAddress,
         value: FabricValue | undefined,

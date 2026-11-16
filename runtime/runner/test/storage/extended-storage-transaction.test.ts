@@ -233,6 +233,45 @@ describe("extended-storage-transaction", () => {
           expect(earlier).toEqual(["value/x"]);
           first.abort();
         });
+
+        it("is recorded when it is made inside the runtime's privileged scope", () => {
+          // The runtime's privileged persistence writes only through the
+          // write chokepoint, so a write the storage transaction takes without
+          // its mark while that scope is open is still no one's.
+
+          const inner = edit().tx;
+          const beneath = address("beneath-privileged", ["y"]);
+          // The storage transaction takes one more write, unmarked, as it
+          // takes the privileged one.
+          const intercepting = new Proxy(inner, {
+            get(target, key) {
+              if (key === "write") {
+                return (...args: Parameters<typeof inner.write>) => {
+                  const result = target.write(...args);
+                  if (args[0].id !== beneath.id) target.write(beneath, 1);
+                  return result;
+                };
+              }
+              const member = Reflect.get(target, key, target);
+              return typeof member === "function"
+                ? member.bind(target)
+                : member;
+            },
+          });
+          const tx = new ExtendedStorageTransaction(intercepting);
+          tx.accessForTestingOnly.privilegedSystemWrite(
+            address("privileged", ["x"]),
+            1,
+          );
+
+          expect(tx.getCfcState().nonBuiltinWrites).toEqual([{
+            space,
+            id: "of:beneath-privileged",
+            scope: "space",
+            path: ["y"],
+          }]);
+          tx.abort();
+        });
       });
 
       describe("writeOrThrow()", () => {
