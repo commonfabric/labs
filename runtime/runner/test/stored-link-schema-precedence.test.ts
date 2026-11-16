@@ -13,7 +13,9 @@
  * the stored schema. A stored `false`, a stored `unknown`, a reader typed
  * `unknown`, and the strict rollback keep the stored schema at the read's
  * entry. A link into another space carries its stored schema across
- * recomposed, and the entry resolves against it the same way.
+ * recomposed, and the entry resolves against it the same way. A handle from
+ * `resolveAsCell()` is the resolution's rather than a read's, and carries the
+ * stored schema whatever the reader declared.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -34,6 +36,8 @@ import {
   setReaderSchemaPrecedenceConfig,
 } from "../src/reader-schema-precedence-config.ts";
 import { Runtime } from "../src/runtime.ts";
+import { recomposeSchemaRefs } from "../src/schema-decompose.ts";
+import { lookupSchemaDocument } from "../src/schema-registry.ts";
 import { rendererVDOMSchema } from "../src/schemas.ts";
 import { UI } from "../src/shared.ts";
 import type { CellLinkRefPayload } from "../src/sigil-types.ts";
@@ -441,6 +445,91 @@ describe("stored-link-schema-precedence", () => {
         )
         .get() as unknown as Cell<Row>;
       expect(projectionOf(handle.get())).toEqual({ title: "cruller" });
+    });
+
+    describe("a handle from `resolveAsCell()`", () => {
+      // A handle from `resolveAsCell()` is the link resolution's, not a read's:
+      // it carries the nearest stored schema that constrains, whatever the
+      // caller's schema declares, and a read of it starts from that schema. The
+      // row each case reaches lacks a field only the stored schema requires.
+
+      /** The element slot of a one-row holder over a row lacking `glaze`. */
+      const narrowRowSlot = (): Cell<Row> => {
+        const row = runtime.getCell(
+          space,
+          `row-${seq}-resolved`,
+          undefined,
+          tx,
+        );
+        row.setRaw({ title: "cruller" });
+        const holder = runtime.getCell<Holder>(
+          space,
+          `holder-${seq}-resolved`,
+          holderSchema,
+          tx,
+        );
+        holder.setRaw({ rows: [linkCarrying(row, wideStoredSchema)] } as never);
+        return holder.key("rows").key(0);
+      };
+
+      /** The schema `cell` carries, its `cid:` references recomposed. */
+      const schemaOf = (cell: Cell<unknown>) => {
+        const { schema } = cell.getAsNormalizedFullLink();
+        return schema === undefined
+          ? undefined
+          : recomposeSchemaRefs(schema, lookupSchemaDocument);
+      };
+
+      it("carries the stored schema for a shaped reader", () => {
+        expect(schemaOf(narrowRowSlot().resolveAsCell()))
+          .toEqual(wideStoredSchema);
+      });
+
+      it("reads `undefined` for a shaped reader where a keyed read returns the row", () => {
+        const slot = narrowRowSlot();
+
+        expect(projectionOf(slot.get())).toEqual({ title: "cruller" });
+        expect(slot.resolveAsCell().get()).toBeUndefined();
+      });
+
+      it("carries the stored schema where an `asCell` read of the same slot keeps the reader's", () => {
+        const slot = narrowRowSlot();
+        const minted = slot.asSchema({ ...rowSchema, asCell: ["cell"] })
+          .get() as unknown as Cell<Row>;
+
+        expect(schemaOf(minted)).toEqual(rowSchema);
+        expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
+      });
+
+      it("carries the stored schema for a reader with no schema", () => {
+        const slot = narrowRowSlot().asSchema(undefined);
+
+        expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
+      });
+
+      it("carries the stored schema for a `true` reader", () => {
+        const slot = narrowRowSlot().asSchema(true);
+
+        expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
+      });
+
+      it("carries the stored schema for an empty reader", () => {
+        const slot = narrowRowSlot().asSchema({});
+
+        expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
+      });
+
+      it("carries the stored schema for a reader typed `unknown`", () => {
+        const slot = narrowRowSlot().asSchema({ type: "unknown" });
+
+        expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
+      });
+
+      it("carries the stored schema for a cell typed by `asSchemaFromLinks()`", () => {
+        const slot = narrowRowSlot().asSchemaFromLinks();
+
+        expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
+      });
     });
 
     describe("a stored schema that is nothing but a default", () => {

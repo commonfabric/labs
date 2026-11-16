@@ -58,20 +58,19 @@ agnostic reader adopted — later links no longer reshape it.
 
 ### The read entry
 
-A read addressed at a slot that holds a link — a keyed cell's `get()`, a
-handle minted by `resolveAsCell()` — crosses that link before its
-traversal starts. Link resolution carries the nearest stored schema that
-constrains across the crossing (one that constrains nothing — `true`,
-`{}`, or a `cid:` reference resolving to either — leaves the reader's
-traveling), and the entry then resolves that stored schema against the
-reader's by the same precedence as a hop: a shaped reader's schema stands,
-an agnostic reader adopts the stored one, and a `false` reader selects
-nothing. The traversal starts at the target with whichever schema won. So
-an element read by its own path projects the same as that element read
-within its array, where the array's traversal crosses the same link under
-the reader's item schema; and a renderer reading a link slot by its own
-schema reads the target's UI whatever narrower view the link was written
-from.
+A read addressed at a slot that holds a link, such as a keyed cell's
+`get()`, crosses that link before its traversal starts. Link resolution
+carries the nearest stored schema that constrains across the crossing (one
+that constrains nothing — `true`, `{}`, or a `cid:` reference resolving to
+either — leaves the reader's traveling), and the entry then resolves that
+stored schema against the reader's by the same precedence as a hop: a
+shaped reader's schema stands, an agnostic reader adopts the stored one,
+and a `false` reader selects nothing. The traversal starts at the target
+with whichever schema won. So an element read by its own path projects the
+same as that element read within its array, where the array's traversal
+crosses the same link under the reader's item schema; and a renderer
+reading a link slot by its own schema reads the target's UI whatever
+narrower view the link was written from.
 
 A keyed cell's reader schema is its parent's narrowed to the key
 (`Cell.key()`). Where the parent refuses the key — a property declared
@@ -155,6 +154,18 @@ recomposed into a self-contained form, its `cid:` closure loaded from the
 space that holds the link
 ([`content-addressed-schemas.md`](content-addressed-schemas.md), "Space
 boundaries"), and the entry resolves against it the same way.
+
+A handle from `resolveAsCell()` is not a read, so no entry rule applies to
+it. It is the link resolution itself, and carries what resolution carries:
+the nearest stored schema that constrains, or the caller's schema where no
+stored schema does, whatever the caller's schema declares. A read of the
+handle starts from that schema as its own. So through a link whose stored
+schema requires a field the target lacks, a shaped reader's keyed `get()`
+reads the target, and a `get()` of the same slot's `resolveAsCell()` reads
+`undefined`. A caller that wants its own projection of the target reads the
+slot by key, or re-types the handle with `asSchema()`; one that wants a
+handle typed by its own schema reads the slot under that schema wrapped in
+`asCell`.
 
 The strict pseudo-intersection (`combineSchema`) remains in use for one
 job: merging a compound schema's base keywords with its own
@@ -296,7 +307,9 @@ cell-level reads — the entry rule (by path the same as within the array, a
 `false` reader, a renderer's read past a narrower stored view, an agnostic
 reader along a chain, a link into another space) and the four cases that
 keep the stored schema (a stored `false`, both `unknown` directions, the
-rollback), the asCell handle regression, and the inherited default.
+rollback), the asCell handle regression, the stored schema a
+`resolveAsCell()` handle carries for each reader shape, and the inherited
+default.
 `runtime/runner/test/render-read-link-schema.test.ts` pins a render read
 under the entry rule, `runtime/html/test/in-process-link-schema.test.ts`
 the reconciler's root mount, and
