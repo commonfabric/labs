@@ -209,7 +209,7 @@ async function compactedNames(store: Store): Promise<string[]> {
 const OPTIONS = {
   days: COMPACTION_LAG_DAYS,
   bucket: "cf-ci-metadata",
-  rawPrefix: "labs/test-records/submissions/ci",
+  prefix: "labs/test-records",
   token: "t",
   now: NOW,
   plan: false,
@@ -804,6 +804,38 @@ describe("test-records-compact", () => {
         `would compact ${DAY}: 1 object(s), 0.0 MB -> 1 shard(s) under ` +
         rollupPrefix(DAY),
       ]);
+    });
+
+    it("reads and writes under the dataset prefix the environment names", async () => {
+      const store: Store = {
+        objects: {
+          [`probe/records/submissions/ci/v1/${DAY}/run-0-Test.ndjson`]:
+            buildObjectBody(contextOn(DAY), [RECORD]),
+          // The default dataset holds a day of its own, which a run over
+          // the probe dataset must leave alone.
+          ...storeOf(DAY, [buildObjectBody(contextOn(DAY), [RECORD])]).objects,
+        },
+        created: {},
+        size: 1000,
+      };
+      const { result: code } = await captureConsole(() =>
+        runCompactCommand(
+          ["--days", String(COMPACTION_LAG_DAYS)],
+          (name) =>
+            ({
+              TEST_RECORDS_GCS_TOKEN: "federated",
+              TEST_RECORDS_PREFIX: "probe/records",
+            })[name],
+          { fetchImpl: storeFetch(store), now: NOW },
+        )
+      );
+      expect(code).toBe(0);
+      expect(Object.keys(store.created).sort()).toEqual([
+        "probe/records/aggregated/ci/v1/2026/08/11/0000-of-0001.ndjson",
+        "probe/records/aggregated/ci/v1/2026/08/11/partition.json",
+        "probe/records/aggregated/ci/v1/2026/08/11/rollup.json",
+      ]);
+      expect(await compactedNames(store)).toEqual([RECORD.test.n]);
     });
 
     it("compacts with the token the environment supplies", async () => {

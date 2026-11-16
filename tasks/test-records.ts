@@ -223,10 +223,6 @@ export interface ShipTransport {
   fetchImpl?: typeof fetch;
 }
 
-function mintStoreToken(key: PersonalKeyFile): Promise<string> {
-  return tokenFromKey(key, STORE_WRITE_SCOPE);
-}
-
 /**
  * Ships one spool: gathers its fragments, uploads one gzipped object under
  * the key holder's own prefix, and deletes the directory. Returns true
@@ -248,7 +244,8 @@ export async function shipSpool(
   try {
     const body = buildObjectBody(contents.context, contents.records);
     const gzipped = await gzipText(body);
-    const token = await (transport.mintToken ?? mintStoreToken)(key);
+    const token = await (transport.mintToken?.(key) ??
+      tokenFromKey(key, STORE_WRITE_SCOPE));
     const name = `${localSubmissionsPrefix(key.cf_username, env)}/` +
       localObjectName(contents.context);
     const createOptions: Parameters<typeof createObject>[0] = {
