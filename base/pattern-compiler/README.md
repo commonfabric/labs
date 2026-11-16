@@ -229,8 +229,11 @@ event by running the handler's body and evaluating again what read a position
 the body wrote. It instantiates no label, checks no constraint, persists
 nothing, and answers every effect as pending. It does not narrow a slot to its
 observation class, does not instantiate a pattern or bind a handler in a
-function body, and does not evaluate `reduce`, `elementById` or the debug
-strings. From the repository root:
+function body, and does not evaluate `reduce` or the debug strings. The record
+of a key of a list (`elementById`) is a place of its own, named by the list and
+the key, which has a document once something writes it, and `addUnique` and
+`removeByValue` change the list's membership by reference. From the repository
+root:
 
 ```sh
 base/pattern-compiler/target/release/pattern-compiler emit path/to/module.tsx > artifact.json

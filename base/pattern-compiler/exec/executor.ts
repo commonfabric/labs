@@ -453,6 +453,42 @@ export class Handle {
     this.set(held.filter((other) => !this.instance.same(other, member)));
   }
 
+  /** Removes each member that is `member` (`removeByValue` of a cell). */
+  removeByValue(member: unknown): void {
+    this.removeAll(member);
+  }
+
+  /** Appends `member` unless the list holds it (`addUnique` of a cell). */
+  addUnique(member: unknown): void {
+    const held = this.get();
+    if (
+      Array.isArray(held) &&
+      held.some((other) => this.instance.same(other, member))
+    ) {
+      return;
+    }
+    this.push(member);
+  }
+
+  /**
+   * The record of a key of this list (`elementById` of a cell): a place
+   * named by the list and the key, which is no position of the list. A
+   * body makes the record a member with `addUnique`. A write through the
+   * handle counts as a write at `*` below the list, which is how
+   * `footprint-analysis.md` §7 records it.
+   */
+  elementById(key: unknown): Handle {
+    if (this.target instanceof StreamRef) return this;
+    return new Handle(
+      this.instance,
+      this.instance.keyedElement(this.target, `${key}`),
+      this.host,
+      this.slot,
+      [...this.below, "*"],
+      schemaBelow(this.declared, "0"),
+    );
+  }
+
   equals(other: unknown): boolean {
     return this.instance.same(this, other);
   }
@@ -1196,6 +1232,18 @@ export class Instance {
         this.counts.evaluations += 1;
         this.store.write(new Ref(id, []), this.stored(first(reader)));
       }
+    }
+    return new Ref(id, []);
+  }
+
+  /**
+   * The place of the record of a key of a list. It holds nothing, and
+   * has no document, until something writes it.
+   */
+  keyedElement(list: Ref, key: string): Ref {
+    const id = `keyed:${addressOf(this.store.locate(list, true).ref)}:${key}`;
+    if (!this.store.declared.has(id)) {
+      this.store.declare(id, "keyed element", undefined);
     }
     return new Ref(id, []);
   }
@@ -2315,7 +2363,10 @@ const commonfabric = (instance: Instance): unknown => {
     return made;
   };
   const caused = new Map<string, Handle>();
-  const cells = {
+  // A cell constructor is called with `new` or through `of`.
+  const cells = Object.assign(function (value: unknown) {
+    return instance.createCell(value);
+  }, {
     equals: (a: unknown, b: unknown) => instance.same(a, b),
     of: (value: unknown) => instance.createCell(value),
     // A cell a body makes under a cause is the same cell for the same
@@ -2329,7 +2380,7 @@ const commonfabric = (instance: Instance): unknown => {
     perSpace: undefined as unknown,
     perUser: undefined as unknown,
     perSession: undefined as unknown,
-  };
+  });
   cells.perSpace = cells;
   cells.perUser = cells;
   cells.perSession = cells;

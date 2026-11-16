@@ -436,6 +436,60 @@ describe("a chain of element constructs", () => {
   });
 });
 
+// `fixtures/keyed.tsx`: the handle methods of a function body that name
+// the record of a key (`elementById`) and change the membership of a list
+// by value (`addUnique`, `removeByValue`), and a cell constructed with
+// `new`. The list holds references to the records.
+describe("the record of a key", () => {
+  type Pins = { pins: { id: string; title: string }[]; last: string };
+
+  it("is written once, and is a member of the list once", async () => {
+    const instance = new Instance(await artifactOf("keyed"), { note: "n" });
+
+    expect(instance.send(0, { id: "a", title: "first" }).committed).toBe(true);
+    instance.send(0, { id: "b", title: "second" });
+    // The same key again: the record keeps its title, and the list holds
+    // it once.
+    instance.send(0, { id: "a", title: "again" });
+
+    expect((instance.result() as Pins).pins).toEqual([
+      { id: "a", title: "first" },
+      { id: "b", title: "second" },
+    ]);
+    // The list holds a reference to each record, and each record is a
+    // document of its own.
+    expect(instance.documents()["keyed element"]).toBe(2);
+    // Every write is one a write edge or an envelope of the body covers.
+    expect(instance.counts.writesNotCovered).toBe(0);
+  });
+
+  it("leaves the list by value, and is cleared", async () => {
+    const instance = new Instance(await artifactOf("keyed"), { note: "n" });
+    instance.send(0, { id: "a", title: "first" });
+    instance.send(0, { id: "b", title: "second" });
+
+    expect(instance.send(1, { id: "a" }).committed).toBe(true);
+
+    expect((instance.result() as Pins).pins).toEqual([
+      { id: "b", title: "second" },
+    ]);
+    // A later record of the key starts from nothing.
+    instance.send(0, { id: "a", title: "later" });
+    expect((instance.result() as Pins).pins).toEqual([
+      { id: "b", title: "second" },
+      { id: "a", title: "later" },
+    ]);
+  });
+
+  it("can be made with `new` in a function body, as any cell", async () => {
+    const instance = new Instance(await artifactOf("keyed"), { note: "n" });
+
+    expect(instance.send(2, { title: "t" }).committed).toBe(true);
+
+    expect((instance.result() as Pins).last).toBe("t!");
+  });
+});
+
 // `fixtures/flat-keys.tsx`: an element of the result of a `flatMap` has
 // the key of the element its segment came from, with the position in the
 // segment (PL §1.3, assumed there under question 101).

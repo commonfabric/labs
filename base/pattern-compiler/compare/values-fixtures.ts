@@ -78,6 +78,16 @@ const WRITTEN: Record<string, Written[]> = {
       words: ["x", "y"],
     },
   }],
+  "keyed": [{
+    argument: { note: "n" },
+    events: [
+      { binding: 0, event: { id: "a", title: "first" } },
+      { binding: 0, event: { id: "b", title: "second" } },
+      { binding: 0, event: { id: "a", title: "again" } },
+      { binding: 2, event: { title: "t" } },
+      { binding: 1, event: { id: "a" } },
+    ],
+  }],
   "callee-default": [true, false].map((given) => ({
     argument: { amount: 420, ...(given ? { sign: "kr" } : {}) },
   })),
