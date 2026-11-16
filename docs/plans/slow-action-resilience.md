@@ -129,7 +129,14 @@ Nothing below should be sized from a suspicion.
 - From Estuary's toolshed logs and `/api/health/stats` for 2026-11-15: the
   workers the watchdog ended, `lease.lost`, the failure-park backoff per
   space, and which spaces shared a worker with the Topics space.
-- On a clone of the board
+- On a copy of the board's space installed on Rapids
+  ([staging copy procedure](../development/staging-space-copy.md)): the same
+  counters, the worker's heartbeats and the kills, for a cold start and for
+  one comment to one Topic. Rapids runs server execution on, deploys every
+  green `main`, and has few users, where Estuary has the people who use the
+  board daily. This is the measurement of the deployment: the pool, the
+  sharded server, and a stall as other spaces see it.
+- On a local clone of the same snapshot
   ([rehearsal procedure](../development/space-clone-rehearsal.md)), served by
   one worker with read accounting on: wall time, distinct documents and link
   resolutions for each of the board's actions on a cold start and on one
