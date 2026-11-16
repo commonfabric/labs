@@ -1225,6 +1225,8 @@ const ARGUMENT_PROVIDERS: Readonly<
     Promise.resolve(directive({ kind: "files" })),
   "piece new:main": patternFiles,
   "pattern publish:entry": patternFiles,
+  "index move-root:file": () =>
+    Promise.resolve(directive({ kind: "files", glob: "*.json" })),
   "piece setsrc:main": patternFiles,
   "check:files": patternFiles,
   "test:paths": patternFiles,

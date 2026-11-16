@@ -9,11 +9,13 @@ import {
   checkIndexChain,
   DEFAULT_SIGNER_LINK_SECONDS,
   issueIndexChain,
+  issueRootMove,
 } from "../src/membership.ts";
 import { chainForSigner, resolvePatternIndexUrl } from "../src/access.ts";
 import {
   adoptIndexChain,
   joinPatternIndex,
+  moveMembershipRoot,
   parseInviteLink,
 } from "../src/join.ts";
 import { PatternIndexStore } from "../src/store.ts";
@@ -191,6 +193,42 @@ describe("access", () => {
 
     it("returns undefined where no membership is recorded", async () => {
       expect(await chainForSigner(store, cfKey, NOW)).toBeUndefined();
+    });
+  });
+
+  describe("moveMembershipRoot()", () => {
+    it("moves the member to the signing key and records it as the root here", async () => {
+      const oldRoot = await Identity.fromPassphrase("access move old root");
+      const index = new FakePatternIndex();
+      index.admit(oldRoot.did(), "p-3");
+      const move = await issueRootMove({ root: oldRoot, to: cfKey.did() });
+      const result = await moveMembershipRoot({
+        baseUrl: BASE,
+        signer: cfKey,
+        store,
+        fetchFn: index.fetchFn,
+        rootDelegation: move.bytes,
+      });
+      expect(result).toMatchObject({ handle: "p-3", root: cfKey.did() });
+      expect((await store.membership())!.root).toBe(cfKey.did());
+      expect(await chainForSigner(store, cfKey, NOW)).toBeUndefined();
+    });
+
+    it("throws for an /index delegation, which never moves a root", async () => {
+      const oldRoot = await Identity.fromPassphrase("access move old root");
+      const [link] = await issueIndexChain({
+        issuer: oldRoot,
+        to: cfKey.did(),
+        held: [],
+      });
+      await expect(moveMembershipRoot({
+        baseUrl: BASE,
+        signer: cfKey,
+        store,
+        fetchFn: new FakePatternIndex().fetchFn,
+        rootDelegation: link,
+      })).rejects.toThrow("does not move a root");
+      expect(await store.membership()).toBeUndefined();
     });
   });
 

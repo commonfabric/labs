@@ -242,7 +242,7 @@ export const delegation = new Command()
         .option(
           "--index-root",
           "Delegate the single-use /index/root that moves your membership's " +
-            "root to --to, which then calls moveRoot.",
+            "root to --to, which presents it with cf index move-root.",
         )
         .env(
           "CF_PATTERN_INDEX_URL=<url:string>",

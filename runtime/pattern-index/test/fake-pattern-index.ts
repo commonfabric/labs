@@ -7,7 +7,11 @@
  */
 
 import { fromBase64url } from "@commonfabric/bytes/base64url";
-import type { DIDKey } from "@commonfabric/identity";
+import {
+  decodeDelegation,
+  type DIDKey,
+  verifyDelegation,
+} from "@commonfabric/identity";
 import type {
   PatternIndexListedPattern,
   PatternIndexListing,
@@ -104,6 +108,7 @@ export class FakePatternIndex {
       }
     }
     if (fn === "redeemInvite") return this.#redeem(root, body);
+    if (fn === "moveRoot") return await this.#moveRoot(signer, body);
     const member = this.#members.get(root);
     if (member === undefined) return json(403, { error: "not a member" });
     switch (fn) {
@@ -138,6 +143,27 @@ export class FakePatternIndex {
       role: "user" as const,
     };
     this.#members.set(root, member);
+    return json(200, member);
+  }
+
+  async #moveRoot(
+    signer: DIDKey,
+    body: Record<string, unknown>,
+  ): Promise<Response> {
+    const move = await decodeDelegation(
+      fromBase64url(String(body.rootDelegation)),
+    );
+    await verifyDelegation(move);
+    const member = this.#members.get(move.payload.iss);
+    if (
+      member === undefined || move.payload.cmd !== "/index/root" ||
+      move.payload.aud !== signer || move.payload.sub !== move.payload.iss
+    ) {
+      return json(403, { error: "not a root move" });
+    }
+    if (this.#members.has(signer)) return json(409, { error: "taken" });
+    this.#members.delete(move.payload.iss);
+    this.#members.set(signer, member);
     return json(200, member);
   }
 

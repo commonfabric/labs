@@ -6,14 +6,19 @@
  * they ran first.
  */
 
-import type { DIDKey } from "@commonfabric/identity";
+import { decodeDelegation, type DIDKey } from "@commonfabric/identity";
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { PatternIndexClient, type PatternIndexMember } from "./client.ts";
 import {
   openPatternIndexClient,
   type PatternIndexAccessOptions,
 } from "./access.ts";
-import { checkIndexChain, indexProofs } from "./membership.ts";
+import {
+  checkIndexChain,
+  INDEX_ROOT_COMMAND,
+  indexProofs,
+} from "./membership.ts";
 import { PatternIndexStore, patternIndexStoreDir } from "./store.ts";
 
 /** An invite as its link carries it. */
@@ -241,6 +246,74 @@ export async function adoptIndexChain(
     root: checked.root,
     signer: options.signer.did(),
     joined: recorded === undefined,
+    storeDir: store.dir,
+  };
+}
+
+export interface MoveRootOptions extends PatternIndexAccessOptions {
+  /**
+   * The single-use `/index/root` delegation from the current root to
+   * `signer`, as `cf delegation issue --index-root` issues it.
+   */
+  rootDelegation: Uint8Array;
+}
+
+/**
+ * Makes `signer` its member's root, presenting the current root's consent,
+ * and records the membership as rooted here. A chain issued from the old
+ * root stops working: the index keeps one root per member.
+ *
+ * @throws JoinError (400) for a delegation that is not a root move to
+ *   `signer`, or with the index's status when it refuses the move.
+ */
+export async function moveMembershipRoot(
+  options: MoveRootOptions,
+): Promise<JoinResult> {
+  const store = options.store ??
+    new PatternIndexStore(patternIndexStoreDir(options.baseUrl));
+  let move;
+  try {
+    move = await decodeDelegation(options.rootDelegation);
+  } catch {
+    throw new JoinError(400, "The root delegation is not a delegation");
+  }
+  if (
+    move.payload.cmd !== INDEX_ROOT_COMMAND ||
+    move.payload.aud !== options.signer.did() ||
+    move.payload.sub !== move.payload.iss
+  ) {
+    throw new JoinError(
+      400,
+      `The delegation does not move a root to ${options.signer.did()}`,
+    );
+  }
+  const client = new PatternIndexClient({
+    baseUrl: options.baseUrl,
+    signer: options.signer,
+    ...(options.fetchFn === undefined ? {} : { fetchFn: options.fetchFn }),
+  });
+  let member: PatternIndexMember;
+  try {
+    member = await client.moveRoot({
+      rootDelegation: toUnpaddedBase64url(options.rootDelegation),
+    });
+  } catch (error) {
+    throw new JoinError(
+      redeemStatus(error),
+      `The index refused the move: ${describeFailure(error)}`,
+    );
+  }
+  await store.recordMembership({
+    handle: member.handle,
+    role: member.role,
+    root: options.signer.did(),
+  });
+  return {
+    handle: member.handle,
+    role: member.role,
+    root: options.signer.did(),
+    signer: options.signer.did(),
+    joined: false,
     storeDir: store.dir,
   };
 }

@@ -3313,79 +3313,93 @@ Use `--launcher-help` for launcher-specific help. Normal CLI flags such as
 
 ## Publishing to the pattern index
 
-The pattern index is where patterns are published and found. Three commands take
-a pattern there: `cf index join` once, `cf pattern publish` each time a pattern
-is ready to share, and `cf pattern mine` to see where they stand. `cf index`
-holds the membership commands and `cf pattern` the publishing ones. All three
+The pattern index is where patterns are published and found. `cf index` holds
+the membership commands and `cf pattern` the publishing ones: `cf index join`
+once, `cf pattern publish` each time a pattern is ready to share, and
+`cf pattern ls` (also `cf pattern mine`) to see where they stand. All of them
 sign with the identity (`--identity` or `CF_IDENTITY`) and talk to the index
 `--pattern-index-url` or `CF_PATTERN_INDEX_URL` names, the deployment's by
 default.
 
 ### Joining
 
-The index admits people by invite. `cf index join <link>` (or the link piped on
-stdin, which keeps it out of shell history) makes a key for the index alone,
+The index admits people by invite. `cf index join` reads the invite link from
+stdin, which keeps the secret code in its fragment out of shell history and
+transcripts, or takes it as an argument. It makes a key for the index alone,
 redeems the invite with it so it becomes the root of the person's membership,
-and has that root delegate `/index` to the `cf` identity. The person's main
+and has that root delegate `/index` to the `cf` identity. The person's own
 identity never becomes their index root, so nothing the index learns links to
 their spaces or profile. The root key and the chains it issued are kept under
 `$XDG_STATE_HOME/commonfabric/pattern-index/<host>/` (or `~/.local/state/…`, or
 `CF_PATTERN_INDEX_HOME`), private to the user; that directory is the person's
-standing on the index and is worth backing up. Joining again redeems nothing.
+standing on the index and is worth backing up. Joining again redeems nothing,
+and a join whose redemption landed without its answer arriving is completed by
+running it again.
 
-The chain's last link holds for at most 90 days, so every index call from `cf`
+A link to a signing key holds for at most 90 days, so every index call from `cf`
 renews it from the kept root when it has under a week left. Other keys act for
 the same person through chains the root issues:
 
 - `cf delegation issue --index --to <did> --out <file>` writes the chain another
   key presents: a Loom instance key, or a second machine, which then runs
-  `cf index join --chain <file>` instead of redeeming a second invite.
+  `cf index join --chain <file>` instead of redeeming a second invite. A chain
+  adopted this way is not renewed where the root is not kept; the root's machine
+  issues a new one before it lapses.
 - `cf delegation issue --index-root --to <did> --out <file>` writes the
-  single-use delegation the index's `moveRoot` takes, to move the membership to
-  a new root.
+  single-use delegation that moves the membership to a new root key, which
+  presents it with `cf index move-root <file>`. Chains from the old root stop
+  working.
 
 `cf index whoami` says which member the index sees the identity as. An admin
 admits a key without an invite with `cf index admit <did>`.
 
 ### Publishing
 
-`cf pattern publish <entry file>` compiles the entry and its relative imports
-exactly as `cf piece new` does, against the same fabric (`--api-url`,
-`--space`), so the id it publishes under is the one a deploy computes. The
-description is the first paragraph of the entry's leading doc comment, and the
-tags are its `@hashtags` and `@keywords` lines; `--description`, `--hashtags`
-and `--keywords` override them.
+`cf pattern publish <entry file>` compiles the pattern as `cf piece new` does,
+against the same fabric (`--api-url`, `--space`), so that the id it publishes
+under is the one a deploy computes; `--test`, `--datafile`, `--main-export` and
+`--root` package it the same way and must match how the piece was deployed. The
+description is the first paragraph of the entry's doc comment, which may follow
+`//` lines and imports, and the tags are its `@hashtags` and `@keywords` lines;
+`--description`, `--hashtags` and `--keywords` override them. An identity that
+is no member is refused before anything compiles.
 
 Before publishing, it asks the index's own privacy question locally: it fetches
-the prompt the index's privacy gardener runs (`getGardenerPrompt`) and asks it
-of the toolshed's LLM. When the answer is that the pattern would reveal
+the prompt the index's privacy check runs and sends it, with the pattern, to the
+fabric toolshed's LLM. When the answer is that the pattern would reveal
 something identifying, it asks for a generalized version, with specific values
 lifted into arguments and fields renamed away from personal names, at most
-twice, recompiling and checking each. A rewrite that passes is written over the
-files only when every file it changes is committed as it stands (`--allow-dirty`
-overrides), and the command names the kinds of change and the files, never a
-value, and says to review with `git diff`. Otherwise the pattern is published as
-it is on disk, with the findings shown. When the LLM does not answer, the local
-check is skipped with one line saying so; the index checks every listing request
-either way. `--skip-local-check` skips it on purpose.
+twice, recompiling and checking each. A rewrite may change only the files the
+findings name. A rewrite that passes is written over those files only when git
+tracks each one, it has no uncommitted edits, it is not a symbolic link, and it
+has not changed since it was read (`--allow-dirty` waives the git checks). The
+command then names the kinds of change and the files, never a value, and says to
+review with `git diff`. When a rewrite passes but cannot be written, nothing is
+published and the command exits 1, saying what to do. When no rewrite passes,
+the pattern is published as it is, with the findings shown, and the index's own
+check keeps it out of search until they are fixed. When the LLM call fails, the
+local check is skipped with one line saying so; the index checks every listing
+request either way. `--skip-local-check` skips it on purpose.
 
 A publish names the id last published from the same entry file on this machine
 as its predecessor (`priorPatternId`), so the new version keeps the old one's
-standing. Source saved with `cf piece getsrc` from a piece that
+standing. A file `cf piece getsrc` wrote from a piece that
 `cf piece new --from-index` created is published as a remix of that pattern
-(`remixedFrom`), or as a new version of it when it was the caller's own.
+(`remixedFrom`), or as a new version of it when it was the caller's own;
 `--remixed-from` names the source where `cf` has no record. Publishing then
-requests a listing; past the index's daily limit it says when the limit resets,
+requests a listing. Past the index's daily limit it says when the limit resets,
 and running the same command then requests it again. The next step it prints is
-opening the pattern in a loom with `/deploy index:<id>`.
+deploying the pattern with `cf piece new --from-index <id>`, or opening it in a
+loom with `/deploy index:<id>`. A listed pattern moves from Unvetted to Main
+once its author opens it in a loom.
 
 ### Where patterns stand
 
-`cf pattern mine` lists the caller's patterns, one row per lineage (a pattern
-and its later versions): whether the newest version is being checked, held (with
-the findings to fix and the command that republishes it), in error waiting for
-an admin re-run, or listed, and then its bucket, its use counts, and what moves
-it on.
+`cf pattern ls` lists the caller's patterns, one row per lineage (a pattern and
+its later versions): whether the newest version is being checked, held (with the
+findings to fix and the command that republishes it), in error waiting for an
+admin re-run, or listed, and then its bucket, its use counts, and what moves it
+on.
 
 ## JSON command contract
 
@@ -3430,12 +3444,14 @@ The supported output switches are:
   object naming the file, the space, the audience, and the chain's length; with
   `--index` or `--index-root` the object names the command and the index root
   instead of a space, and the expiry.
-- `cf index join --json` and `cf index whoami --json` print the membership: the
-  handle, the role, and the keys involved.
-- `cf pattern publish --json` prints the publish report: the id, whether it was
-  new, the local check's outcome (findings and changes by category and file,
-  never a value), the listing request's outcome, and the next step.
-  `cf pattern mine --json` prints its rows.
+- `cf index join --json` and `cf index move-root --json` print
+  `{handle, role, root, signer, joined, storeDir}`; `cf index whoami --json`
+  prints the handle, the role and the signer.
+- `cf pattern publish --json` prints the publish report. Its `outcome` is
+  `published`, with the id, whether it was new, the listing request's outcome
+  and the next step, or `blocked`, with nothing published and the next step.
+  Both carry the local check's outcome: findings and changes by category and
+  file, never a value. `cf pattern ls --json` prints its rows.
 - `cf check --json` compiles without evaluating and prints one object with a
   `files` array. Each entry has the input `path` and the compiled module bodies
   in `output`.

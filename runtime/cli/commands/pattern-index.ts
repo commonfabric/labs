@@ -13,6 +13,7 @@ import {
   adoptIndexChain,
   joinPatternIndex,
   type JoinResult,
+  moveMembershipRoot,
   parseInviteLink,
 } from "@commonfabric/pattern-index/join";
 import { render } from "../lib/render.ts";
@@ -133,6 +134,27 @@ async function admit(options: IndexOptions, did: string): Promise<void> {
   );
 }
 
+async function moveRoot(options: IndexOptions, file: string): Promise<void> {
+  const chains = decodeDelegationChains(await Deno.readTextFile(file));
+  if (chains.length !== 1 || chains[0].length !== 1) {
+    throw new ValidationError(
+      `${file} does not hold one root-move delegation; cf delegation issue --index-root writes one.`,
+    );
+  }
+  const signer = await loadIdentity(requireIdentityPath(options));
+  const result = await moveMembershipRoot({
+    baseUrl: resolvePatternIndexUrl(options.patternIndexUrl),
+    signer,
+    rootDelegation: chains[0][0],
+  });
+  render(
+    options.json
+      ? result
+      : `${result.handle} is now rooted at ${result.root}. Chains issued from the old root no longer work; issue new ones with cf delegation issue --index.`,
+    { json: options.json },
+  );
+}
+
 /** The options every subcommand shares. */
 // deno-lint-ignore no-explicit-any
 export const indexAccessOptions = (cmd: Command<any>) =>
@@ -197,6 +219,19 @@ export const index = new Command()
         )
         .arguments("<did:string>"),
     ).action(admit),
+  )
+  /* index move-root */
+  .command(
+    "move-root",
+    indexAccessOptions(
+      new Command()
+        .description(
+          "Make your identity your membership's root, presenting the " +
+            "single-use delegation the current root issued with " +
+            "cf delegation issue --index-root --to <this identity's DID>.",
+        )
+        .arguments("<file:string>"),
+    ).action(moveRoot),
   )
   /* index whoami */
   .command(
