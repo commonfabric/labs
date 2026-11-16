@@ -2976,8 +2976,10 @@ async function tryResolveLivePieceToolCallable(
  *
  * Under server execution dispatch starts nothing: the event goes to the server,
  * which runs the handler, and this process reads what is stored to resolve the
- * callable. Otherwise dispatch starts only the addressed piece before resolving
- * the requested callable, and a verb sending into an existing root's `addPiece`
+ * callable. Otherwise dispatch starts the addressed piece, after the pieces its
+ * inputs come from (`startWithInputSources()` in
+ * `runtime/runner/src/ensure-piece-running.ts`), before resolving the
+ * requested callable, and a verb sending into an existing root's `addPiece`
  * stream has the scheduler start that root at delivery through
  * `ensurePieceRunningVerdict()` in `runtime/runner/src/ensure-piece-running.ts`.
  *

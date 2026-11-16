@@ -15,6 +15,7 @@ import type { Cancel } from "../cancel.ts";
 import {
   ensurePieceRunningVerdict,
   type EnsurePieceVerdict,
+  handlerRunCounts,
   type OwningRootAddress,
   type RefusedUpdate,
 } from "../ensure-piece-running.ts";
@@ -950,14 +951,11 @@ function refusedUpdateNote(verdict: EnsurePieceVerdict): string {
 
 /**
  * Starts the piece an event's stream belongs to. A runtime whose run of the
- * handler is the one that counts, a serving runtime or any runtime with server
- * execution off, starts first the pieces its inputs come from
- * (`EnsurePieceOptions.startInputSources`): a stream a nested pattern defines
- * belongs to the nested instance, whose handler reads what the instance
- * enclosing it derives. A client under server execution runs the handler only
- * as its speculative echo, which the served run replaces, so it starts the
- * piece alone and leaves the pieces upstream of it, and the documents they
- * read, to the server. A serving runtime also has the piece's origin followed
+ * handler is the one that counts (`handlerRunCounts()`) starts first the
+ * pieces its inputs come from (`EnsurePieceOptions.startInputSources`): a
+ * stream a nested pattern defines belongs to the nested instance, whose
+ * handler reads what the instance enclosing it derives. Any other runtime
+ * starts the piece alone. A serving runtime also has the piece's origin followed
  * before its first start of it (`EnsurePieceOptions.originFollowed`, which
  * the serving loop installs as `Runtime.pieceOriginFollowed`): nothing else
  * opens a piece it serves, so the start is where the piece's source is
@@ -971,8 +969,7 @@ function startEventPiece(
   eventLink: NormalizedFullLink,
 ): Promise<EnsurePieceVerdict> {
   return ensurePieceRunningVerdict(runtime, eventLink, {
-    startInputSources: runtime.experimental.serverExecution !== true ||
-      runtime.servingPosture,
+    startInputSources: handlerRunCounts(runtime),
     originFollowed: runtime.pieceOriginFollowed,
     forEvent: true,
   });

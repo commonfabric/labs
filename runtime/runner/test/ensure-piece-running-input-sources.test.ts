@@ -6,6 +6,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   ensurePieceRunningVerdict,
   type OwningRootAddress,
+  startWithInputSources,
 } from "../src/ensure-piece-running.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
 import { getMetaLink } from "../src/link-utils.ts";
@@ -273,6 +274,181 @@ describe("ensure-piece-running", () => {
     });
 
     expect(verdict.started).toBe(false);
+  });
+
+  describe("startWithInputSources()", () => {
+    /**
+     * Opens the nested instance that owns `stream` in a new runtime, with
+     * `experimental`, through `startWithInputSources()`, recording whether it
+     * called `start`, then takes an event on `stream` there, and returns what
+     * the handler recorded, the runtime, and the nested instance's root.
+     */
+    const openThenEvent = async (
+      stream: NormalizedFullLink,
+      experimental?: ExperimentalOptions,
+    ) => {
+      const opener = newRuntime(experimental);
+      const owner = opener.getCellFromLink({
+        ...getMetaLink(opener.getCellFromLink(stream), "result")!,
+        path: [],
+      });
+      await owner.sync();
+      let calledStart = false;
+      const started = await startWithInputSources(opener, owner, () => {
+        calledStart = true;
+        return opener.start(owner);
+      });
+      opener.scheduler.queueEvent(stream, {});
+      await opener.idle();
+      const seen = opener.getCell<{ seen?: number }>(
+        space,
+        ARGUMENT_CAUSE,
+        { type: "object", properties: { seen: { type: "number" } } },
+      );
+      await seen.sync();
+      return {
+        opener,
+        owner,
+        started,
+        calledStart,
+        seen: seen.get().seen,
+      };
+    };
+
+    it("starts the enclosing piece before a nested piece opened on its own, so a later event's handler reads what the enclosing piece derives now", async () => {
+      const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
+
+      const { opener, started, calledStart, seen } = await openThenEvent(
+        stream,
+      );
+
+      expect(seen).toBe(10);
+      expect(started).toBe(true);
+      // The enclosing piece's graph set the nested one up as its child.
+      expect(calledStart).toBe(false);
+      expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
+        true,
+      );
+    });
+
+    it("starts only the opened piece for a client under server execution, whose run of a handler is an echo", async () => {
+      const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
+
+      const { opener, owner, started, calledStart } = await openThenEvent(
+        stream,
+        { serverExecution: true },
+      );
+
+      expect(started).toBe(true);
+      expect(calledStart).toBe(true);
+      expect(opener.runner.isRunning(owner)).toBe(true);
+      expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
+        false,
+      );
+    });
+
+    it("starts the opened piece on its own where its argument's links cannot be read", async () => {
+      const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
+      const sync = storageManager.syncCell.bind(storageManager);
+      storageManager.syncCell =
+        ((cell, options) =>
+          cell.getAsNormalizedFullLink().id === enclosing.id
+            ? Promise.reject(new Error("the store refused the read"))
+            : sync(cell, options)) as typeof storageManager.syncCell;
+
+      const opener = newRuntime();
+      const owner = opener.getCellFromLink({
+        ...getMetaLink(opener.getCellFromLink(stream), "result")!,
+        path: [],
+      });
+      await owner.sync();
+      const started = await startWithInputSources(
+        opener,
+        owner,
+        () => opener.start(owner),
+      );
+
+      expect(started).toBe(true);
+      expect(opener.runner.isRunning(owner)).toBe(true);
+      expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
+        false,
+      );
+    });
+
+    it("calls only `start` for a piece that runs already", async () => {
+      const { stream } = await stopAfterInputChanges(PROGRAM);
+      const opener = newRuntime();
+      const owner = opener.getCellFromLink({
+        ...getMetaLink(opener.getCellFromLink(stream), "result")!,
+        path: [],
+      });
+      await owner.sync();
+      await opener.start(owner);
+      const walked: string[] = [];
+      const sync = storageManager.syncCell.bind(storageManager);
+      storageManager.syncCell = ((cell, options) => {
+        walked.push(cell.getAsNormalizedFullLink().id);
+        return sync(cell, options);
+      }) as typeof storageManager.syncCell;
+
+      let calledStart = false;
+      const started = await startWithInputSources(opener, owner, () => {
+        calledStart = true;
+        return Promise.resolve(true);
+      });
+
+      expect(started).toBe(true);
+      expect(calledStart).toBe(true);
+      expect(walked).toEqual([]);
+    });
+
+    it("starts two pieces each of whose arguments links to the other's result", async () => {
+      const first = newRuntime();
+      const compiled = await first.patternManager.compilePattern(PROGRAM, {
+        space,
+      });
+      const [left, right] = ["left", "right"].map((side) =>
+        first.getCell<{ doubled: number }>(
+          space,
+          `input sources ${side} result`,
+          compiled.resultSchema,
+        )
+      );
+      {
+        const tx = first.edit();
+        first.run(tx, compiled, { value: 1 }, left);
+        first.run(tx, compiled, { value: 1 }, right);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      // Each piece's stored argument gains a link to the other's result.
+      {
+        const tx = first.edit();
+        const storedArgument = (result: typeof left) =>
+          first.getCellFromLink(getMetaLink(result, "argument")!);
+        storedArgument(left).withTx(tx).key("other").set(right);
+        storedArgument(right).withTx(tx).key("other").set(left);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      first.runner.stop(left);
+      first.runner.stop(right);
+      await first.idle();
+      await first.storageManager.synced();
+
+      const opener = newRuntime();
+      const [openedLeft, openedRight] = [left, right].map((result) =>
+        opener.getCellFromLink(result.getAsNormalizedFullLink())
+      );
+      await openedLeft.sync();
+      const started = await startWithInputSources(
+        opener,
+        openedLeft,
+        () => opener.start(openedLeft),
+      );
+
+      expect(started).toBe(true);
+      expect(opener.runner.isRunning(openedLeft)).toBe(true);
+      expect(opener.runner.isRunning(openedRight)).toBe(true);
+    });
   });
 
   it("starts a source behind a document of the owner's own id in another scope", async () => {

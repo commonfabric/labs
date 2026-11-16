@@ -77,6 +77,7 @@ import {
   settingsForDeployedClient,
   type SpaceCellContents,
   SpaceNotFoundError,
+  startWithInputSources,
 } from "@commonfabric/runner";
 import type {
   CfcConfClause,
@@ -1109,10 +1110,17 @@ export class PiecesController<T = unknown> {
     }
     if (start && !viewScoped) {
       // start() handles pattern loading and running. It's idempotent - no
-      // effect if already running.
+      // effect if already running. The pieces the piece's inputs come from
+      // start first, so that a nested instance opened on its own runs
+      // against what its enclosing instance derives.
       await timePiecePhase(
         "get.runtime.start",
-        () => this.runtime.start(piece),
+        () =>
+          startWithInputSources(
+            this.runtime,
+            piece,
+            () => this.runtime.start(piece),
+          ),
       );
       // A start that was in flight before the pointer moved may have
       // instantiated the outgoing pattern. Its watcher begins the follow as
@@ -2046,9 +2054,14 @@ export class PiecesController<T = unknown> {
     await timePiecePhase(
       "startPiece.runtime.start",
       () =>
-        options.awaitSetupCommit
-          ? this.runtime.startWithCommit(piece)
-          : this.runtime.start(piece),
+        startWithInputSources(
+          this.runtime,
+          piece,
+          () =>
+            options.awaitSetupCommit
+              ? this.runtime.startWithCommit(piece)
+              : this.runtime.start(piece),
+        ),
     );
     await timePiecePhase(
       "startPiece.result.pull",
@@ -2261,7 +2274,11 @@ export class PiecesController<T = unknown> {
     }
 
     if (targetIsPiece && start) {
-      await this.runtime.start(targetCell);
+      await startWithInputSources(
+        this.runtime,
+        targetCell,
+        () => this.runtime.start(targetCell),
+      );
       await this.getResult(targetCell).pull();
     }
     await this.synced();

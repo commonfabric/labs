@@ -23,6 +23,7 @@ import {
   type NormalizedFullLink,
   type Runtime,
   sendEvent,
+  startWithInputSources,
   transactionFailureMessage,
 } from "@commonfabric/runner";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
@@ -407,7 +408,7 @@ export async function callVerb(
     };
   }
 
-  if (!await runtime.start(cell)) {
+  if (!await startWithInputSources(runtime, cell, () => runtime.start(cell))) {
     return {
       status: "refused",
       message:

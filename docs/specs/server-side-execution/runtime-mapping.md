@@ -276,7 +276,16 @@ source it had. An argument whose links cannot be read fails the start
 rather than running the handler over what those pieces derived last. A
 client under server execution runs the handler only as its speculative
 echo, which the served run replaces, so its auto-start starts the nested
-instance alone.
+instance alone. A start that names a piece on its own, as a client's open
+and a `cf` command's start of a piece do, starts the pieces its inputs come
+from the same way wherever the runtime's run of a handler counts
+(`startWithInputSources()` in `ensure-piece-running.ts`): once a nested
+instance runs, no event starts its enclosing instance, so a nested
+instance opened alone would run every later event's handler against
+inputs nothing in the runtime derives. That start is best effort: a source
+that cannot start, and an argument whose links cannot be read, leave the
+opened piece to start alone, so an open fails only where the piece's own
+start does.
 The derivation path needs no analog: a commit dirtying docs read by
 unmaterialized nodes leaves them dirty-unmaterialized until a
 value-granular client pull (a subscription) demands them and their

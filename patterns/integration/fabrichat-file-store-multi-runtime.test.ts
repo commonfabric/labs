@@ -7,11 +7,20 @@
  * computes, and it computes them only for a piece it has started, so this is
  * the case of a piece reached only through a data link
  * (`docs/specs/server-side-execution/verification-coverage.md`, flag 4).
+ *
+ * The store takes adds from every member of the room's space, not only the
+ * one whose runtime created it, and records each member as the adder of their
+ * own files, with server execution on or off.
+ *
+ * No toolshed or browser required (Deno workers + in-process storage server).
  */
 
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
+import { afterEach, describe, it } from "@std/testing/bdd";
+import { hashOf } from "@commonfabric/data-model";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { Identity } from "@commonfabric/identity";
 
 import {
   MultiRuntimeHarness,
@@ -26,24 +35,44 @@ const PROGRAM_PATH = join(
 );
 const ROOT_PATH = join(import.meta.dirname!, "..");
 
-describe("fabrichat file store across runtimes", () => {
-  let harness: MultiRuntimeHarness;
-  let ada: MultiRuntimeSession;
+/** The record of a small image stored as `name`, as the blob store keeps it. */
+const photo = (name: string) => ({
+  type: "image/png",
+  body: new FabricBytes(new Uint8Array([137, 80, 78, 71])),
+  name,
+});
 
-  beforeAll(async () => {
+/**
+ * Makes `session`'s home list a profile of its own named `name`, as a home
+ * made before any room is.
+ */
+const listOwnProfile = async (
+  harness: MultiRuntimeHarness,
+  session: MultiRuntimeSession,
+  name: string,
+): Promise<void> => {
+  const profile = await session.createOwnProfile(name);
+  await session.send("holdProfile", { profile });
+  await harness.settle();
+  await session.client().call("selectProfile", { path: ["profile"] });
+  await harness.settle();
+};
+
+describe("fabrichat file store across runtimes", () => {
+  let harness: MultiRuntimeHarness | undefined;
+
+  afterEach(async () => {
+    await harness?.dispose();
+    harness = undefined;
+  });
+
+  it("lists the entries of a store the room reaches only through a link", async () => {
     harness = await MultiRuntimeHarness.create({
       programPath: PROGRAM_PATH,
       rootPath: ROOT_PATH,
       sessions: ["fabrichat-file-store-ada"],
     });
-    [ada] = harness.sessions;
-  });
-
-  afterAll(async () => {
-    await harness?.dispose();
-  });
-
-  it("lists the entries of a store the room reaches only through a link", async () => {
+    const [ada] = harness.sessions;
     await ada.send("ensureFileStore", {});
     await harness.settleUntil(async () =>
       (await ada.read(["fileStore", "entries"])) !== undefined
@@ -57,4 +86,159 @@ describe("fabrichat file store across runtimes", () => {
     );
     expect(await later.read(["fileStore", "entries"])).toEqual([]);
   });
+
+  for (const serverExecution of [false, true]) {
+    describe(`with server execution ${serverExecution ? "on" : "off"}`, () => {
+      const cfc = { experimental: { serverExecution } };
+
+      /**
+       * Opens the store in `session`'s runtime through `opened`, then adds the
+       * file at `index` of the store's entries there, and checks that the
+       * store took it with the profile named `adder` as its adder.
+       */
+      const expectAdd = async (
+        session: MultiRuntimeSession,
+        opened: { id: string; space: string },
+        add: (
+          session: MultiRuntimeSession,
+          opened: { id: string; space: string },
+          requestId: string,
+          name: string,
+        ) => Promise<unknown>,
+        index: number,
+        adder: string,
+      ) => {
+        // The store runs in the runtime before the add arrives, as it does in
+        // a client that shows the store's files.
+        expect(await session.read(["entries", "length"], { piece: opened }))
+          .toBe(index);
+        await harness!.settle();
+
+        const name = `file-${index}.png`;
+        expect(await add(session, opened, `add-${index}`, name))
+          .toMatchObject({ status: "done", name });
+        expect(
+          await session.read(["entries", index, "name"], { piece: opened }),
+        ).toBe(name);
+        expect(
+          await session.read(["entries", index, "addedBy", "name"], {
+            piece: opened,
+          }),
+        ).toBe(adder);
+      };
+
+      /**
+       * A harness whose creator and member each have a profile of their own,
+       * and a store the creator's runtime alone created, as one member's
+       * client does in a room, with a file the creator added. Returns the
+       * harness's sessions, the member's identity, the store, the link the
+       * room's record holds to it, and the means to add a file to it.
+       */
+      const storeTheCreatorMade = async () => {
+        const creatorIdentity = await Identity.fromPassphrase(
+          "fabrichat-file-store-creator",
+          { implementation: "noble" },
+        );
+        const memberIdentity = await Identity.fromPassphrase(
+          "fabrichat-file-store-member",
+          { implementation: "noble" },
+        );
+        harness = await MultiRuntimeHarness.create({
+          programPath: PROGRAM_PATH,
+          rootPath: ROOT_PATH,
+          sessions: [
+            {
+              label: "fabrichat-file-store-creator",
+              identity: creatorIdentity,
+              cfc,
+            },
+            {
+              label: "fabrichat-file-store-member",
+              identity: memberIdentity,
+              cfc,
+            },
+          ],
+          aclMode: "enforce",
+        });
+        const [creator, member] = harness.sessions;
+        await listOwnProfile(harness, creator, "Creator");
+        await listOwnProfile(harness, member, "Member");
+
+        await creator.send("ensureFileStore", {});
+        await harness.settleUntil(async () =>
+          (await creator.read(["fileStore", "entries"])) !== undefined
+        );
+        const store = await creator.link(["fileStore"]);
+        const { space } = store;
+        const record = await creator.link(["fileStoreRecord"]);
+        const { value: slot } = await creator.rawRead({
+          ...record,
+          path: ["value", "store", "/", "link@1", "id"],
+        });
+        expect(typeof slot).toBe("string");
+
+        // Adds a file whose bytes the store's space holds, as the room's
+        // composer does, and returns the store's outcome as `session` reads
+        // it through `opened`.
+        const add = async (
+          session: MultiRuntimeSession,
+          opened: { id: string; space: string },
+          requestId: string,
+          name: string,
+        ) => {
+          const blob = photo(name);
+          const id = hashOf(blob).toString();
+          await session.rawWrite({ id: `cid:${id}`, space }, { value: blob });
+          await session.send("addToStore", {
+            requestId,
+            name,
+            mediaType: blob.type,
+            blob: { space, id },
+            size: 4,
+          });
+          await harness!.settleUntil(async () =>
+            (await session.read(["requests", requestId], { piece: opened })) !==
+              undefined
+          );
+          return await session.read(["requests", requestId], {
+            piece: opened,
+          });
+        };
+        await expectAdd(creator, store, add, 0, "Creator");
+        return {
+          member,
+          memberIdentity,
+          store,
+          slot: { id: slot as string, space },
+          add,
+        };
+      };
+
+      it("takes an add from a member who opened the store by its own id, recording that member as its adder", async () => {
+        const { member, store, add } = await storeTheCreatorMade();
+
+        await expectAdd(member, store, add, 1, "Member");
+      });
+
+      it("takes an add from a member who opened the store through the link the room holds, recording that member as its adder", async () => {
+        const { member, slot, add } = await storeTheCreatorMade();
+
+        await expectAdd(member, slot, add, 1, "Member");
+      });
+
+      it("takes an add from a second runtime of a member, which opened the store after the member's first runtime did", async () => {
+        const { member, memberIdentity, store, add } =
+          await storeTheCreatorMade();
+        expect(await member.read(["entries", "length"], { piece: store }))
+          .toBe(1);
+
+        const again = await harness!.addSession({
+          label: "fabrichat-file-store-member-again",
+          identity: memberIdentity,
+          cfc,
+        });
+        await expectAdd(again, store, add, 1, "Member");
+      });
+    });
+  }
 });
