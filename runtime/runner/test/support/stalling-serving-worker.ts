@@ -1,29 +1,20 @@
 /**
  * A serving worker's entry module whose verb named `stall` stops the worker's
  * thread for good, inside its host's wave cycle and holding the space's lease,
- * as an action that never returns does, creating the file the module URL's
- * `stalled` parameter names, if any, just before. Its verb named `compile` compiles a
+ * as an action that never returns does. Its verb named `compile` compiles a
  * program with the compiler already loaded, and returns how many times a timer
  * on the worker's thread fired during that compile. Its verb named `evaluate`
  * returns the same count for the evaluation of a two-module graph, by the serving
  * runtime's engine and by an engine with the default for a runtime that does not
- * serve. Every other verb runs and returns `served`. Its heap snapshot holds
- * the thread for {@link SNAPSHOT_HOLDS_MS} before it writes, as a large heap's
- * does while it is written.
+ * serve. Every other verb runs and returns `served`.
  */
 
 import type { Source } from "@commonfabric/js-compiler";
 import type { PortLike } from "../../src/executor/serving-port-protocol.ts";
 import { serveFromPort } from "../../src/executor/serving-worker-main.ts";
-import { writeThreadHeapSnapshot } from "../../src/heap-snapshot.ts";
 import { Engine } from "../../src/harness/engine.ts";
 import type { RuntimeProgram } from "../../src/harness/types.ts";
 import type { Runtime } from "../../src/runtime.ts";
-
-/** How long a heap snapshot holds the thread before it writes. */
-const SNAPSHOT_HOLDS_MS = 3_000;
-
-const stalledMarker = new URL(import.meta.url).searchParams.get("stalled");
 
 const SOURCE: Source[] = [{
   name: "/main.tsx",
@@ -104,23 +95,11 @@ async function timerFiresDuringEvaluation(engine: Engine): Promise<number> {
 }
 
 serveFromPort(self as unknown as PortLike, {
-  heapSnapshot: (directory) => {
-    Atomics.wait(
-      new Int32Array(new SharedArrayBuffer(4)),
-      0,
-      0,
-      SNAPSHOT_HOLDS_MS,
-    );
-    return writeThreadHeapSnapshot(directory, "stalling");
-  },
   runLifecycleVerb: async (host, space, verb) => {
     const receipt = await host.runLifecycleVerb(space, {
       name: verb.name,
       run: async (runtime): Promise<string | number | number[]> => {
         if (verb.name === "stall") {
-          if (stalledMarker !== null) {
-            Deno.writeTextFileSync(stalledMarker, "");
-          }
           Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
         }
         if (verb.name === "compile") return timerFiresDuringCompile(runtime);

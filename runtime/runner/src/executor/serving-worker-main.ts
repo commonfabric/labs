@@ -18,7 +18,7 @@ import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import { adoptProcessInstanceId } from "@commonfabric/memory/v2/execution-lease";
 import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 import { setPatternEnvironment } from "../builder/env.ts";
-import { writeThreadHeapSnapshot } from "../heap-snapshot.ts";
+import { startHeapSampling, writeThreadHeapProfile } from "../heap-profile.ts";
 import { threadId } from "@node/worker_threads";
 import { collectedMemory } from "../collected-memory.ts";
 import { openSharedCompileCache } from "../compilation-cache/shared-compile-cache.deno.ts";
@@ -53,12 +53,6 @@ export type ServingWorkerMainOptions = {
     serviceIdentity: Identity,
   ) => Promise<LifecycleVerbRun>;
 
-  /**
-   * Writes a heap snapshot of this worker's isolate into `directory` and
-   * returns the file's path; absent, {@link writeThreadHeapSnapshot}.
-   */
-  heapSnapshot?: (directory: string) => string;
-
   /** The serving runtimes' outbound fetch; absent, the platform fetch. */
   fetch?: RuntimeFetch;
 
@@ -89,6 +83,7 @@ export function serveFromPort(
   const endpoint = servingPlaneEndpoint(port);
   endpoint.onRequest("worker.init", async (init) => {
     adoptProcessInstanceId(init.processInstanceId);
+    await startHeapSampling();
     // A timer on this thread, so that the watchdog on the server's thread hears
     // nothing once this thread stops (serving-loop.md §2). It also runs once
     // a handler of this thread has ended at the heap limit, which is how the
@@ -179,9 +174,8 @@ export function serveFromPort(
       // server's thread.
       diagnostics: () => servingLoopDiagnostics(ownCompiler),
       collectedMemory,
-      heapSnapshot: options.heapSnapshot ??
-        ((directory) =>
-          writeThreadHeapSnapshot(directory, `worker-${threadId}`)),
+      heapProfile: (directory) =>
+        writeThreadHeapProfile(directory, `worker-${threadId}`),
       occupancy: () => host.occupancy,
       noteSpaceAclChanged: (space) => host.noteSpaceAclChanged(space),
       runLifecycleVerb: (space, verb) => {

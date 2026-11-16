@@ -1,11 +1,12 @@
 /**
- * A round of heap snapshots: the main thread's file, then what the serving
+ * A round of heap profiles: the main thread's file, then what the serving
  * workers wrote, and a manifest beside them naming each file and its spaces.
  */
 
 import { assert, assertEquals } from "@std/assert";
-import type { WorkerHeapSnapshot } from "@commonfabric/runner/executor/serving-worker-host";
-import { writeHeapSnapshots } from "./heap-snapshots.ts";
+import { startHeapSampling } from "@commonfabric/runner/heap-profile";
+import type { WorkerHeapProfile } from "@commonfabric/runner/executor/serving-worker-host";
+import { writeHeapProfiles } from "./heap-profiles.ts";
 
 /** The permission bits of `path`. */
 async function modeOf(path: string): Promise<number | null> {
@@ -13,34 +14,31 @@ async function modeOf(path: string): Promise<number | null> {
   return mode === null ? null : mode & 0o777;
 }
 
-Deno.test("writes the main thread's snapshot and a manifest naming it and each worker's, in a directory it creates, each readable by its user alone", async () => {
-  const root = await Deno.makeTempDir({ prefix: "heap-snapshots-" });
+Deno.test("writes the main thread's profile and a manifest naming it and each worker's, in a directory it creates, each readable by its user alone", async () => {
+  await startHeapSampling();
+  const root = await Deno.makeTempDir({ prefix: "heap-profiles-" });
   try {
-    const directory = `${root}/snapshots`;
+    const directory = `${root}/profiles`;
     const asked: string[] = [];
-    const workerFile = `${directory}/heap-worker-1`;
-    const workers: WorkerHeapSnapshot[] = [
-      { outcome: { path: workerFile }, spaces: ["did:a"] },
+    const workers: WorkerHeapProfile[] = [
+      { outcome: { path: `${directory}/heap-worker-1` }, spaces: ["did:a"] },
       { outcome: { error: "the worker closed" }, spaces: [] },
     ];
-    const { path, manifest } = await writeHeapSnapshots(
+    const { path, manifest } = await writeHeapProfiles(
       directory,
-      async (where) => {
+      (where) => {
         asked.push(where);
-        // As a worker's thread writes it, under the process's umask.
-        await Deno.writeTextFile(workerFile, "{}", { mode: 0o644 });
-        await Deno.chmod(workerFile, 0o644);
-        return workers;
+        return Promise.resolve(workers);
       },
     );
     assertEquals(asked, [directory]);
     assert(manifest.main.startsWith(`${directory}/heap-${Deno.pid}-main-`));
-    const head = (await Deno.readTextFile(manifest.main)).slice(0, 12);
-    assertEquals(head, '{"snapshot":');
+    const profile = JSON.parse(await Deno.readTextFile(manifest.main));
+    assert(Array.isArray(profile.samples));
     assertEquals(manifest.workers, workers);
     assertEquals(JSON.parse(await Deno.readTextFile(path)), manifest);
     assertEquals(await modeOf(directory), 0o700);
-    for (const file of [manifest.main, workerFile, path]) {
+    for (const file of [manifest.main, path]) {
       assertEquals(await modeOf(file), 0o600, file);
     }
   } finally {
@@ -49,9 +47,10 @@ Deno.test("writes the main thread's snapshot and a manifest naming it and each w
 });
 
 Deno.test("leaves the workers out of the manifest where the serving loop has none", async () => {
-  const directory = await Deno.makeTempDir({ prefix: "heap-snapshots-" });
+  await startHeapSampling();
+  const directory = await Deno.makeTempDir({ prefix: "heap-profiles-" });
   try {
-    const { manifest } = await writeHeapSnapshots(
+    const { manifest } = await writeHeapProfiles(
       directory,
       () => Promise.resolve(undefined),
     );

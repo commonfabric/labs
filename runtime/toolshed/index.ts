@@ -26,7 +26,7 @@ import {
   startServerExecutionHost,
   stopServerExecutionHost,
 } from "@/lib/server-execution.ts";
-import { listenForHeapSnapshotSignal } from "@/lib/heap-snapshots.ts";
+import { listenForHeapProfileSignal } from "@/lib/heap-profiles.ts";
 import { shutdownOpenTelemetry } from "@/lib/otel.ts";
 import { lifecycleRequestHandler } from "@/lib/pattern-lifecycle-handler.ts";
 import {
@@ -61,11 +61,11 @@ if (import.meta.main) {
   });
   Deno.addSignalListener("SIGINT", shutdown.handle);
   Deno.addSignalListener("SIGTERM", shutdown.handle);
-  listenForHeapSnapshotSignal({
-    directory: Deno.env.get("HEAP_SNAPSHOT_DIR") ||
-      `${Deno.env.get("TMPDIR") || "/tmp"}/toolshed-heap-snapshots`,
-    workerHeapSnapshots: (directory) =>
-      serverExecutionHost()?.workerHeapSnapshots(directory) ??
+  await listenForHeapProfileSignal({
+    directory: Deno.env.get("HEAP_PROFILE_DIR") ||
+      `${Deno.env.get("TMPDIR") || "/tmp"}/toolshed-heap-profiles`,
+    workerHeapProfiles: (directory) =>
+      serverExecutionHost()?.workerHeapProfiles(directory) ??
         Promise.resolve(undefined),
     log,
     error,
