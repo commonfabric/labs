@@ -359,6 +359,15 @@ function ascendingOnce(paths: SortedAndCompactPaths): SortedAndCompactPaths {
 /** The actions reading one path: one bare, a few in an array, more in a set. */
 type Readers = Action | Action[] | Set<Action>;
 
+/** How many actions `readers` holds. */
+function readerCount(readers: Readers): number {
+  return typeof readers === "function"
+    ? 1
+    : Array.isArray(readers)
+    ? readers.length
+    : readers.size;
+}
+
 /** Whether `readers` holds `action`. */
 function readersHold(readers: Readers, action: Action): boolean {
   return typeof readers === "function"
@@ -588,6 +597,45 @@ export class EntityTriggers {
     writePath: Path,
     visit: (path: Path, action: Action) => void,
   ): void {
+    this.#walk(
+      writePath,
+      (path, readers) => visitReaders(path, readers, visit),
+    );
+  }
+
+  /**
+   * The registered paths a write to `writePath` reaches, grouped by action.
+   *
+   * Each group holds a subset of what its action registered, in ascending
+   * path order, which is the order {@link determineTriggeredActions} reads
+   * them in. The groups themselves are in no particular order: the scheduler
+   * settles run order in `topology.ts` from the dependency edges and each
+   * action's registration ordinal, not from the order a change woke them.
+   */
+  matching(writePath: Path): Map<Action, SortedAndCompactPaths> {
+    const byAction = new Map<Action, SortedAndCompactPaths>();
+    this.#walk(writePath, (path, readers) => {
+      if (typeof readers === "function") {
+        const paths = byAction.get(readers);
+        if (paths === undefined) byAction.set(readers, [path]);
+        else paths.push(path);
+        return;
+      }
+      for (const action of readers) {
+        const paths = byAction.get(action);
+        if (paths === undefined) byAction.set(action, [path]);
+        else paths.push(path);
+      }
+    });
+    return byAction;
+  }
+
+  /**
+   * Helper for {@link forEachMatching} and {@link matching}, which calls
+   * `visit` once for each entry a write to `writePath` reaches that some
+   * action still reads, in ascending path order, with that entry's readers.
+   */
+  #walk(writePath: Path, visit: (path: Path, readers: Readers) => void): void {
     triggerScanWork.scans++;
     const blocks = this.#blockCount();
     let b = 0;
@@ -613,7 +661,10 @@ export class EntityTriggers {
       if (!hasPrefix(path, writePath, depth)) return;
       if (path.length === depth) {
         const readers = this.#readersIn(b)[at];
-        if (readers !== undefined) visitReaders(path, readers, visit);
+        if (readers !== undefined) {
+          triggerScanWork.pathsMatched += readerCount(readers);
+          visit(path, readers);
+        }
         if (++at === paths.length) {
           b++;
           at = 0;
@@ -633,28 +684,12 @@ export class EntityTriggers {
         const path = paths[at]!;
         if (!hasPrefix(path, writePath, depth)) return;
         const reading = readers[at];
-        if (reading !== undefined) visitReaders(path, reading, visit);
+        if (reading !== undefined) {
+          triggerScanWork.pathsMatched += readerCount(reading);
+          visit(path, reading);
+        }
       }
     }
-  }
-
-  /**
-   * The registered paths a write to `writePath` reaches, grouped by action.
-   *
-   * Each group holds a subset of what its action registered, in ascending
-   * path order, which is the order {@link determineTriggeredActions} reads
-   * them in. The groups themselves are in no particular order: the scheduler
-   * settles run order in `topology.ts` from the dependency edges and each
-   * action's registration ordinal, not from the order a change woke them.
-   */
-  matching(writePath: Path): Map<Action, SortedAndCompactPaths> {
-    const byAction = new Map<Action, SortedAndCompactPaths>();
-    this.forEachMatching(writePath, (path, action) => {
-      const paths = byAction.get(action);
-      if (paths === undefined) byAction.set(action, [path]);
-      else paths.push(path);
-    });
-    return byAction;
   }
 
   /**
