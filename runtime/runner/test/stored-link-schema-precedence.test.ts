@@ -40,7 +40,6 @@ import { rendererVDOMSchema } from "../src/schemas.ts";
 import { UI } from "../src/shared.ts";
 import type { CellLinkRefPayload } from "../src/sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
-
 import { resolvedSchema } from "./schema-ref-helpers.ts";
 
 const signer = await Identity.fromPassphrase("stored link schema precedence");

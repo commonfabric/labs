@@ -1869,6 +1869,7 @@ export interface IResolvable<T, C extends AnyBrandedCell<T>> {
    * this cell's own projection.
    */
   resolveAsCell(): C;
+
   getArgumentCell<U>(schema?: JSONSchema): Cell<U> | undefined;
 }
 
