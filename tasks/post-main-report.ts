@@ -828,7 +828,7 @@ export async function main(
   }
 
   const changed = new Set(
-    (await git("diff", "--name-only", parent, commit))
+    (await git("diff", "--name-only", "--no-renames", parent, commit))
       .split("\n").map((line) => line.trim()).filter((line) => line.length > 0),
   );
 
