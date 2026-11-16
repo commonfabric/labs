@@ -794,7 +794,9 @@ The compiler partitions the pattern body into cones.
   slots in `Cone.slots`, the outputs its incoming edges of that kind name,
   and nothing else.
 - The body of an element construct (`map`, `filter`, `flatMap`, a predicate,
-  a key function) is one or more cones whose slots include `element` roots.
+  a key function) is one or more cones, each of which names the
+  construct's collection in `Cone.within`. Most list slots of root
+  `element`, and one that lists none is a cone of the body all the same.
   They are evaluated once per element key (section 2.5).
 
 **The scope a function is evaluated in.** The value code of a compiled

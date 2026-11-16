@@ -1997,8 +1997,11 @@ cycle, and a cycle exists only through a side-write (section 3.11).
 **The inputs of a cone.** The compiler partitions what an instance
 computes into cones. Every value the instance computes is computed by
 exactly one cone, and a cone computes one or more outputs (`Output.cone`).
-The body of an element construct is one or more cones whose slots include
-`element` roots, each evaluated once per element key (section 1.3). A
+The body of an element construct is one or more cones, each of which
+names the construct's collection in `Cone.within` and is evaluated once
+per element key (section 1.3; "The `within` of a cone", below). Most
+list slots of root `element`, and one that lists none is a cone of the
+body all the same. A
 cone's value function receives two kinds of
 input: the slots in `Cone.slots`, and the outputs of other cones that its
 incoming edges of kind `output` name. It receives nothing else. An output
