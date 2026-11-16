@@ -1929,19 +1929,31 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * runtime-minted evidence a builtin's write stamps, and the runtime's claim
    * that no schema declares a policy on a document, stand for what the
    * builtin wrote, and preparation withholds both where such a write reached.
+   * A builtin's write replaces the value at its path, so it retires the
+   * records of the writes it overwrites: those at its path or beneath it, on
+   * the same document. A record of a write at a shorter path stays, since
+   * the builtin's write leaves the rest of that value as it was.
    */
   #noteWriteIdentity(address: IMemorySpaceAddress): void {
     if (this.#privilegedSystemWriteDepth > 0) return;
     const current = this.#cfcState.implementationIdentity;
-    if (current?.kind !== "builtin") {
-      const path = canonicalizeDocumentPath(toDocumentPath(address.path));
-      if (path !== undefined) {
+    const path = canonicalizeDocumentPath(toDocumentPath(address.path));
+    if (path !== undefined) {
+      const scope = normalizeCellScope(address.scope);
+      if (current?.kind !== "builtin") {
         this.#cfcState.unattestedWrites.push(deepFreeze({
           space: address.space,
           id: address.id,
-          scope: normalizeCellScope(address.scope),
+          scope,
           path,
         }));
+      } else if (this.#cfcState.unattestedWrites.length > 0) {
+        this.#cfcState.unattestedWrites = this.#cfcState.unattestedWrites
+          .filter((write) =>
+            write.space !== address.space || write.id !== address.id ||
+            write.scope !== scope || write.path.length < path.length ||
+            !path.every((segment, index) => write.path[index] === segment)
+          );
       }
     }
     const summary = this.#cfcState.writeIdentity;
@@ -4473,7 +4485,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * Drops the records this transaction accumulated for preparation: the
    * write-policy inputs and the identities that recorded them, the
    * dereference traces, trigger reads, structure containers, asserted value
-   * roots, consulted grants and manifests, the observations, and the
+   * roots, the writes made under a non-builtin identity, consulted grants and
+   * manifests, the observations, and the
    * preparation that verified them, whose input holds the same records. A
    * preparation that was invalidated holds its reasons and no input, and
    * stays for whoever reads why a commit was refused. A transaction that has

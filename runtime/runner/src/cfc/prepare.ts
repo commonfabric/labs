@@ -3096,10 +3096,10 @@ const identityForSchemaPath = (
 
 /**
  * The payload paths of `target` that the transaction wrote under an identity
- * other than a builtin's (`CfcTxState.unattestedWrites`). Runtime-minted
- * evidence a builtin's schema names at a path one of them overlaps would
- * stand for a value that identity chose, so `gateRuntimeMintedIntegrity`
- * answers it as for an unattributed write.
+ * other than a builtin's that no later builtin write replaced
+ * (`CfcTxState.unattestedWrites`). Runtime-minted evidence a builtin's schema
+ * names at a path one of them overlaps would stand for a value that identity
+ * chose, so `gateRuntimeMintedIntegrity` treats it as an unattributed write's.
  */
 const unattestedWritePaths = (
   tx: IExtendedStorageTransaction,
@@ -13063,9 +13063,9 @@ export function* prepareBoundaryCommitSteps(
       return undefined;
     };
 
-    // The identity a schema's runtime-minted evidence answers to at a path:
+    // The identity a schema's runtime-minted evidence is gated by at a path:
     // the schema input's, unless a write another identity made overlaps the
-    // path (`unattestedWritePaths()`), where it answers to none.
+    // path (`unattestedWritePaths()`), where it is none.
     const unattested = unattestedWritePaths(tx, target);
     const mintingIdentityForPath = (
       path: readonly string[],

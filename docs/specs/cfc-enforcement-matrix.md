@@ -477,16 +477,20 @@ The strict-only delta is:
   respect in which it is narrower than the ownership marker, which answers for
   stores a later transaction writes.
 
-  The marker also stands only for what the cache wrote. The transaction records
-  every value write made under an identity other than a builtin's
-  (`CfcTxState.unattestedWrites`), and a document such a write reached is
-  measured, marker or not, as any writer's would be. So after a labeled read, a
-  write of a cache record from outside the cache writer misfits, whether it
-  shares the cache writer's transaction or has one of its own. The compiler's
-  attestation is held to the same line as every runtime-minted atom:
-  `gateRuntimeMintedIntegrity` answers a schema's evidence at a path such a
-  write overlaps as it answers an unattributed write's, so a record keeps no
-  attestation over a value another identity chose.
+  The marker also stands only for what a builtin wrote. The transaction records
+  every value write made under an identity other than a builtin's, an
+  unattributed or a verified one alike (`CfcTxState.unattestedWrites`). A
+  later builtin write at the same path or above it, on the same document,
+  replaces that value and retires the record. A document a write still on
+  record reached is measured, marker or not, as any writer's would be. So
+  after a labeled read, a pattern's or an unattributed host's write of a cache
+  record misfits, whether it shares the cache writer's transaction or has one
+  of its own, unless a builtin overwrote it. A write made under any builtin
+  identity is the runtime's own and stays exempt. The compiler's attestation
+  is held to the same line as every runtime-minted atom: `gateRuntimeMintedIntegrity`
+  treats a schema's evidence at a path a write on record overlaps as it treats
+  an unattributed write's, so a record keeps no attestation over a value
+  another identity chose.
 
   One thing this class does NOT take from §18.6.2 is its write-side mirror.
   That section states its read exclusion as mirroring "the write-side rule

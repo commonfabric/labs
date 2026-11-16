@@ -3061,8 +3061,9 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * This transaction alone, with no enrollment beside it: the measurement runs
    * over documents the asking transaction wrote, so a marker recorded beside
    * the write always covers the question. A value write on the document made
-   * under any identity but a builtin's (`CfcTxState.unattestedWrites`) is
-   * not the runtime's to vouch for, so the answer is then no.
+   * under any identity but a builtin's, and not replaced by a later builtin
+   * write (`CfcTxState.unattestedWrites`), is not the runtime's to vouch for,
+   * so this then returns `false`.
    *
    * Takes the runtime's mark for the same reason {@link isRuntimeOwnedStore}
    * does: the gate acts on the claim rather than measuring it.

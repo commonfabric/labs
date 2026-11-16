@@ -27,6 +27,7 @@ import {
   runtimeWritePolicyAuthorization,
 } from "../src/cfc/types.ts";
 import type { JSONSchema, Pattern } from "../src/builder/types.ts";
+import type { ImplementationIdentity } from "../src/cfc/types.ts";
 import { trustExecutable } from "./support/trusted-builder.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
@@ -2557,10 +2558,17 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       }, authorized ? runtimeWritePolicyAuthorization : undefined);
     };
 
+    /** The identity the compilation cache writes its documents under. */
+    const CACHE_WRITER = {
+      kind: "builtin",
+      builtinId: "compile-cache",
+    } as const;
+
     /**
      * Read the seeded source and write what it carries onto `targetName`, at
-     * the path a delegation union lands on. `mark` decides whether the target
-     * is named, and how.
+     * the path a delegation union lands on, under `identity` (the cache's
+     * builtin unless given; `null` for none). `mark` decides whether the
+     * target is named, and how.
      */
     const writeTaintedRecord = async (
       runtime: Runtime,
@@ -2570,6 +2578,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         tx: ReturnType<Runtime["edit"]>,
         doc: { getAsNormalizedFullLink(): NormalizedFullLink },
       ) => void,
+      identity: ImplementationIdentity | null = CACHE_WRITER,
     ) => {
       const tx = runtime.edit();
       const source = runtime.getCell(signer.did(), sourceName, undefined, tx);
@@ -2582,7 +2591,9 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         tx,
       );
       mark?.(tx, target);
+      setCfcImplementationIdentity(tx, identity ?? undefined);
       target.set({ delegatedModuleIdentities: [`predecessor/${raw.secret}`] });
+      setCfcImplementationIdentity(tx, undefined);
       const targetId = target.getAsNormalizedFullLink().id;
       tx.prepareCfc();
       return { targetId, result: await tx.commit().settled };
@@ -2645,6 +2656,47 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         await storageManager.close();
       }
     });
+
+    const VERIFIED_WRITER: ImplementationIdentity = {
+      kind: "verified",
+      moduleIdentity: "module:writer-fit-marked",
+      symbol: "write",
+      bindingPath: ["write"],
+    };
+
+    for (
+      const [who, identity] of [
+        ["no identity", null],
+        ["a verified identity", VERIFIED_WRITER],
+      ] as const
+    ) {
+      it(`measures a write ${who} makes to a marked document`, async () => {
+        // The marker is the runtime's claim about what a builtin wrote, so a
+        // write under another identity is measured as any writer's is,
+        // whatever the document is named.
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = strictRuntime(storageManager);
+        try {
+          const source = `wf-cache-${identity?.kind ?? "none"}-source`;
+          await seedSecretSource(runtime, source);
+          const { targetId, result } = await writeTaintedRecord(
+            runtime,
+            source,
+            `wf-cache-${identity?.kind ?? "none"}-doc`,
+            (tx, doc) => markUndeclarable(tx, doc),
+            identity,
+          );
+
+          expect(result.error?.message).toContain(
+            "writer-fit confidentiality misfit",
+          );
+          expect(result.error?.message).toContain(`for ${targetId} at /`);
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+    }
 
     it("counts a marker recorded without the runtime's mark for nothing", async () => {
       // The gate ACTS on this claim, and the recording method is on the public
@@ -2772,7 +2824,9 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           tx,
         );
         markUndeclarable(tx, parent);
+        setCfcImplementationIdentity(tx, CACHE_WRITER);
         parent.set([{ note: `${raw.secret}!` }]);
+        setCfcImplementationIdentity(tx, undefined);
         const parentId = parent.getAsNormalizedFullLink().id;
         tx.prepareCfc();
 

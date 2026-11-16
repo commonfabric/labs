@@ -28,6 +28,7 @@ import {
   ROOT_LINK_SPECIFIER,
   type SourceDoc,
   sourceDocKey,
+  stageModuleDelegations,
   verifySourceDocs,
   writeCompiledDocs,
   writeSourceAndCompiledDocs,
@@ -3158,17 +3159,20 @@ describe("cell-cache", () => {
 
     /**
      * Commits one transaction that reads the labeled document first when
-     * `labeled`, writes the program's records through the cache writer, and
-     * then runs `after` outside it, and returns the commit's error.
+     * `labeled`, runs `before`, writes the program's records through the
+     * cache writer, and then runs `after` outside it, and returns the
+     * commit's error.
      */
     const commitWith = async (
       labeled: boolean,
       after: (tx: IExtendedStorageTransaction) => void,
+      before: (tx: IExtendedStorageTransaction) => void = () => {},
     ) => {
       const tx = runtime.edit();
       if (labeled) {
         tx.readOrThrow({ space, scope: "space", id: SECRET_ID, path: [] });
       }
+      before(tx);
       writeSourceAndCompiledDocs(
         runtime,
         space,
@@ -3226,39 +3230,81 @@ describe("cell-cache", () => {
       }
     };
 
-    it("commits the cache writer's records alone and keeps their attestation", async () => {
+    it("leaves a compiled record a load accepts when the cache writer writes it alone", async () => {
       expect(await commitWith(false, () => {})).toBeUndefined();
 
       expect(await compiledEntryLoads()).toBe(true);
     });
 
+    it("leaves a compiled record a load accepts when the cache writer rewrites what another identity wrote before it", async () => {
+      // The cache writer writes the record whole, which replaces the value
+      // the other identity's earlier write put at a field.
+
+      expect(
+        await commitWith(false, () => {}, (tx) => {
+          record("compiled", tx).key("exportNames").set(["hush"]);
+        }),
+      ).toBeUndefined();
+
+      expect(await compiledEntryLoads()).toBe(true);
+      const tx = runtime.edit();
+      try {
+        expect(record("compiled", tx).getRaw()?.exportNames).not.toEqual([
+          "hush",
+        ]);
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("leaves a compiled record that no load accepts when another identity rewrote it before the cache writer staged only its list", async () => {
+      // Staging writes the delegation list alone, which leaves the rest of
+      // the value the other identity wrote.
+
+      expect(await commitWith(false, () => {})).toBeUndefined();
+      const tx = runtime.edit();
+      const raw = record("compiled", tx).getRaw() as Record<string, unknown>;
+      record("compiled", tx).setRawUntyped({ ...raw, exportNames: ["hush"] });
+      stageModuleDelegations(
+        runtime,
+        space,
+        new Map([[entryIdentity, new Set(["predecessor-identity"])]]),
+        RTVER,
+        tx,
+      );
+      tx.prepareCfc();
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      expect(await compiledEntryLoads()).toBe(false);
+    });
+
     for (
       const [what, write] of [
         [
-          "writes its `exportNames`",
+          "writes the `exportNames` of the",
           (tx: IExtendedStorageTransaction) =>
             record("compiled", tx).key("exportNames").set(["hush"]),
         ],
         [
-          "adds a cache-root edge to it",
+          "adds a cache-root edge to the",
           (tx: IExtendedStorageTransaction) => {
             const raw = record("compiled", tx).getRaw() as {
               imports: unknown[];
             };
             record("compiled", tx).key("imports").set(
-              [...raw.imports, rootLinkOf("compiled")] as never,
+              [...raw.imports, rootLinkOf("compiled")],
             );
           },
         ],
       ] as const
     ) {
-      it(`keeps no attestation on a compiled record when another identity ${what}`, async () => {
+      it(`leaves a compiled record that no load accepts when another identity ${what} compiled record`, async () => {
         expect(await commitWith(false, write)).toBeUndefined();
 
         expect(await compiledEntryLoads()).toBe(false);
       });
 
-      it(`refuses a compiled record when another identity ${what} after a labeled read`, async () => {
+      it(`returns a writer-fit misfit from the commit when another identity ${what} compiled record after a labeled read`, async () => {
         const error = await commitWith(true, write);
 
         expect(error?.message).toContain("writer-fit confidentiality misfit");
@@ -3268,7 +3314,7 @@ describe("cell-cache", () => {
     for (
       const [what, write] of [
         [
-          "changes one of its import specifiers",
+          "changes an import specifier of the",
           (tx: IExtendedStorageTransaction) => {
             const raw = record("source", tx).getRaw() as {
               imports: { specifier: string; link: unknown }[];
@@ -3276,24 +3322,24 @@ describe("cell-cache", () => {
             record("source", tx).key("imports").set(
               raw.imports.map((edge, index) =>
                 index === 0 ? { ...edge, specifier: "hush" } : edge
-              ) as never,
+              ),
             );
           },
         ],
         [
-          "adds a cache-root edge to it",
+          "adds a cache-root edge to the",
           (tx: IExtendedStorageTransaction) => {
             const raw = record("source", tx).getRaw() as {
               imports: unknown[];
             };
             record("source", tx).key("imports").set(
-              [...raw.imports, rootLinkOf("source")] as never,
+              [...raw.imports, rootLinkOf("source")],
             );
           },
         ],
       ] as const
     ) {
-      it(`refuses a source record when another identity ${what} after a labeled read`, async () => {
+      it(`returns a writer-fit misfit from the commit when another identity ${what} source record after a labeled read`, async () => {
         const error = await commitWith(true, write);
 
         expect(error?.message).toContain("writer-fit confidentiality misfit");
