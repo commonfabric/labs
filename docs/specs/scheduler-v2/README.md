@@ -942,11 +942,14 @@ correctness comes from cancellation, not staging:
      (Future server-routed/cross-runtime event delivery would reopen this
      with an origin-attestation design; deferred until such a path
      exists.)
-   If the send observes that its origin transaction is already settled, it
-   does not create pending lineage: an already-committed origin is treated as
-   confirmed immediately, and an already-failed origin is treated as failed
-   immediately so descendants cancel or drop instead of waiting for a callback
-   that will never arrive.
+   If the send, or a requeue recording a follow-up's lineage again for a re-run,
+   observes that its origin transaction is already settled, wherever its commit
+   went (a commit sealed into a serving wave or the client's speculation overlay
+   settles the transaction while the storage transaction it wraps still reads
+   `ready`), it does not create pending lineage: an already-committed origin is
+   treated as confirmed immediately, and an already-failed origin is treated as
+   failed immediately so descendants cancel or drop instead of waiting for a
+   callback that will never arrive.
 2. Client-side, the runtime keeps a lineage registry: origin tx →
    {queued events, started pieces}. When an origin's failure becomes known
    locally, undispatched descendant events (parked or queued) are cancelled
