@@ -76,8 +76,10 @@ shared host, a tailnet with an access policy — and not behind a public address
   `$CF_HARNESS_HOME/auth.json`, both written by `cf-harness config set` and
   `cf-harness auth`. `CF_HARNESS_HOME` defaults to `$HOME/.cf-harness`. For
   `openai-compatible-gateway`, the key comes from `CF_HARNESS_API_KEY` or
-  `OPENAI_API_KEY` instead; for `openai-codex`, the server preflights the stored
-  credential and refuses to start when it is not connected.
+  `OPENAI_API_KEY` instead; for `openai-codex`, the stored credential is checked
+  as each turn starts. Until it is connected a turn is refused with a 503 before
+  it starts, and the health page says so; once it is, the next turn runs, with
+  no restart.
 - **A model credential.** For `openai-compatible-gateway`, `CF_HARNESS_API_KEY`
   or `OPENAI_API_KEY`; a turn started without one fails on its first model call
   rather than at startup, because the key is read per request.

@@ -8,9 +8,12 @@ import { pieceUrl } from "../../src/piece-url.ts";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
+  consoleCodexHealthProbe,
+  consoleCodexReadiness,
   consoleDataDirectories,
   consoleHealthRows,
   consoleHelpText,
+  type ConsoleModelReadiness,
   consoleSandboxBanner,
   ConsoleServer,
   consoleStartupBanner,
@@ -25,6 +28,7 @@ import {
   startConsoleServer,
 } from "../support/on-linux.ts";
 import { ConsoleHealth, type ConsoleHealthRow } from "../../console/health.ts";
+import { FileHarnessCredentialStore } from "../../src/auth/credential-store.ts";
 import {
   harnessSessionChatPolicy,
   harnessSessionEngineOptions,
@@ -1764,30 +1768,38 @@ describe("console/server", () => {
       ).toEqual(["unknown", "unknown"]);
     });
 
-    for (const mode of ["missing", "key", "none", "codex"] as const) {
+    it("leaves a codex credential to its live probe, which names the store", async () => {
+      const rows = consoleHealthRows(await config(), undefined, {
+        modelProvider: "openai-codex",
+        modelAuthSource: "cf-harness-local-store",
+      });
+      expect(rows.find((row) => row.id === "model.provider")?.value).toBe(
+        "openai-codex",
+      );
+      expect(rows.find((row) => row.id === "model.auth")).toBeUndefined();
+      expect(consoleCodexHealthProbe("/console/.cf-harness").initial)
+        .toMatchObject([{
+          id: "model.auth",
+          source: "harness credential store",
+          detail: "/console/.cf-harness/auth.json",
+        }]);
+    });
+
+    for (const mode of ["missing", "key", "none"] as const) {
       it(`reports ${mode} credential provenance without publishing a credential`, async () => {
-        const options: CreateHarnessPromptLoopOptions = mode === "codex"
-          ? {
-            modelProvider: "openai-codex",
-            modelAuthSource: "cf-harness-local-store",
-          }
-          : {
-            modelProvider: "openai-compatible-gateway",
-            gatewayAuthMode: mode === "none" ? "none" : "bearer",
-            ...(mode === "key" ? { apiKey: "secret-test-value" } : {}),
-          };
+        const options: CreateHarnessPromptLoopOptions = {
+          modelProvider: "openai-compatible-gateway",
+          gatewayAuthMode: mode === "none" ? "none" : "bearer",
+          ...(mode === "key" ? { apiKey: "secret-test-value" } : {}),
+        };
         const rows = consoleHealthRows(await config(), undefined, options, {
           CF_HARNESS_API_KEY: mode === "key" ? "secret-test-value" : undefined,
         });
         expect(rows.find((row) => row.id === "model.auth")).toMatchObject({
           label: "Model Authentication",
           state: mode === "missing" ? "failed" : "ok",
-          source: mode === "codex"
-            ? "harness credential store"
-            : "console environment",
-          detail: mode === "codex"
-            ? "/console/.cf-harness/auth.json"
-            : mode === "none"
+          source: "console environment",
+          detail: mode === "none"
             ? "CF_HARNESS_GATEWAY_AUTH_MODE"
             : mode === "key"
             ? "CF_HARNESS_API_KEY"
@@ -5046,3 +5058,147 @@ const kindsUntil = async (
   (await envelopesUntil(response, finalKind)).map((envelope) =>
     envelope.event.kind
   );
+
+describe("console/server model readiness", () => {
+  type Refusal = Awaited<ReturnType<ConsoleModelReadiness>>;
+  const unconnected: Refusal = {
+    code: "provider-auth-required",
+    message: "cf-harness Codex is disconnected",
+  };
+
+  /** A server whose readiness the test flips, counting the turns it runs. */
+  const serverWithReadiness = async (readiness: { refusal: Refusal }) => {
+    let turns = 0;
+    const server = new ConsoleServer(
+      await config(),
+      (onEvent) =>
+        new HarnessInteractiveChatService({
+          createPromptLoop: (options) => {
+            turns += 1;
+            return answeringLoop(options);
+          },
+          now: advancingClock(),
+          onEvent,
+        }),
+      undefined,
+      undefined,
+      () => Promise.resolve(readiness.refusal),
+    );
+    return { server, turns: () => turns };
+  };
+
+  /** A harness home whose store holds a Codex credential expiring at `expiresAt`, or none. */
+  const harnessHomeWith = async (expiresAt?: number): Promise<string> => {
+    const harnessHome = await Deno.makeTempDir();
+    if (expiresAt !== undefined) {
+      await new FileHarnessCredentialStore({
+        path: join(harnessHome, "auth.json"),
+      }).set("local", "openai-codex", {
+        type: "oauth",
+        providerId: "openai-codex",
+        accessToken: "access-local",
+        refreshToken: "refresh-local",
+        expiresAt,
+        accountId: "account-local",
+      });
+    }
+    return harnessHome;
+  };
+
+  it("refuses a turn before it starts while the model is not ready, and serves one once it is, without a restart", async () => {
+    const readiness: { refusal: Refusal } = { refusal: unconnected };
+    const { server, turns } = await serverWithReadiness(readiness);
+
+    const refused = await server.handle(
+      jsonRequest("/api/task", { text: "hello" }),
+    );
+    expect(refused.status).toBe(503);
+    expect(await refused.json()).toEqual({
+      error: "cf-harness Codex is disconnected",
+      code: "provider-auth-required",
+    });
+    expect(turns()).toBe(0);
+    const listed = await server.handle(getRequest("/api/sessions"));
+    expect((await listed.json()).sessions).toEqual([]);
+
+    readiness.refusal = undefined;
+    const started = await server.handle(
+      jsonRequest("/api/task", { text: "hello" }),
+    );
+    expect(started.status).toBe(200);
+    const { sessionId, turnId } = await started.json();
+    await server.service.waitForTurn(sessionId, turnId);
+    expect(turns()).toBe(1);
+  });
+
+  it("answers a malformed request as malformed even while the model is not ready", async () => {
+    const { server } = await serverWithReadiness({ refusal: unconnected });
+    const response = await server.handle(jsonRequest("/api/task", {}));
+    expect(response.status).toBe(400);
+  });
+
+  it("reads Codex readiness from the store: refused when absent, ready when stored, and ready when expired but refreshable", async () => {
+    const homes = await Promise.all([
+      harnessHomeWith(),
+      harnessHomeWith(4_000_000_000_000),
+      harnessHomeWith(1),
+    ]);
+    try {
+      const [absent, stored, expired] = await Promise.all(
+        homes.map((home) => consoleCodexReadiness(home)()),
+      );
+      expect(absent?.code).toBe("provider-auth-required");
+      expect(absent?.message).toMatch(/^cf-harness Codex is (?!connected)/);
+      expect(absent?.message).toContain("cf-harness auth login openai-codex");
+      expect(stored).toBeUndefined();
+      expect(expired).toBeUndefined();
+    } finally {
+      await Promise.all(
+        homes.map((home) => Deno.remove(home, { recursive: true })),
+      );
+    }
+  });
+
+  it("reports the Codex credential live, failed while unconnected and ok once connected", async () => {
+    const readiness: { refusal: Refusal } = { refusal: unconnected };
+    const probe = consoleCodexHealthProbe(
+      "/harness-home",
+      () => Promise.resolve(readiness.refusal),
+    );
+    const [failed] = await probe.read();
+    expect(failed.id).toBe("model.auth");
+    expect(failed.state).toBe("failed");
+    expect(failed.reason).toBe("cf-harness Codex is disconnected");
+
+    readiness.refusal = undefined;
+    const [connected] = await probe.read();
+    expect(connected.state).toBe("ok");
+    expect(connected.value).toBe("cf-harness-local-store connected");
+  });
+
+  it("gives a Codex console's health page its live credential row, and a gateway console the launch row", async () => {
+    const harnessHome = await harnessHomeWith();
+    try {
+      const codexConfig = { ...await config(), harnessHome };
+      const rowFor = async (options: CreateHarnessPromptLoopOptions) => {
+        const health = createConsoleHealth(codexConfig, undefined, options, {});
+        await health.refresh();
+        return health.snapshot().rows.find((row) => row.id === "model.auth");
+      };
+      expect(
+        await rowFor({
+          modelProvider: "openai-codex",
+          modelAuthSource: "cf-harness-local-store",
+        }),
+      ).toMatchObject({ state: "failed", value: "not connected" });
+      expect(
+        (await rowFor({
+          modelProvider: "openai-compatible-gateway",
+          gatewayAuthMode: "none",
+        }))?.source,
+      ).toBe("console environment");
+    } finally {
+      await Deno.remove(harnessHome, { recursive: true });
+    }
+  });
+});
