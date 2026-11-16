@@ -132,7 +132,8 @@ type ProgramClosureGrace = {
 const DEFAULT_ROOT_ENSURE_DEADLINE_MS = 30_000;
 
 /** `fetch`, with each request refused once it has gone `deadlineMs`
- * without an answer: the request is aborted and the call rejects. A peer
+ * without its whole answer, body included: the request is aborted and the
+ * call rejects. The response it returns has its body already read. A peer
  * that stops answering reports nothing, so this deadline is the only end
  * a silent host's request has. */
 function fetchWithin(fetch: RuntimeFetch, deadlineMs: number): RuntimeFetch {
@@ -155,7 +156,16 @@ function fetchWithin(fetch: RuntimeFetch, deadlineMs: number): RuntimeFetch {
         reject(error);
       }, deadlineMs);
     });
-    const answered = fetch(input, { ...init, signal: abort.signal });
+    // The deadline runs until the body is read, not just the headers: a
+    // host can answer the headers and then go silent mid-body.
+    const answered = fetch(input, { ...init, signal: abort.signal }).then(
+      async (response) =>
+        new Response(await response.arrayBuffer(), {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        }),
+    );
     answered.catch(() => {});
     return Promise.race([answered, silent]).finally(() => clearTimeout(timer));
   };

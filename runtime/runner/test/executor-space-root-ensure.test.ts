@@ -288,6 +288,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
    * (a never-settling promise — the unbounded-remote-fetch shape the
    * ensure's deadline exists to bound). */
   let hangPatternFetches = false;
+  let stallPatternBodies = false;
   /** A slow ensure: the serving runtime's compile waits for this gate,
    * when set, after resolving `compileEntered`. */
   let heldCompile: PromiseWithResolvers<void> | undefined;
@@ -308,6 +309,10 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     if (hangPatternFetches && !url.searchParams.has("identity")) {
       return new Promise<Response>(() => {});
     }
+    if (stallPatternBodies && !url.searchParams.has("identity")) {
+      // Headers answer at once; the body never ends.
+      return Promise.resolve(new Response(new ReadableStream()));
+    }
     if (url.searchParams.has("identity")) {
       return identityFor(url.pathname).then((id) => new Response(id));
     }
@@ -327,6 +332,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     stats = emptyServingLoopStats();
     sinkLocalSeq = { value: 0 };
     hangPatternFetches = false;
+    stallPatternBodies = false;
     heldCompile = undefined;
     compileEntered = undefined;
     spaceServer = undefined;
@@ -958,6 +964,17 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     expect(stats.rootEnsure.runs).toBe(0);
     expect(stats.rootEnsure.created).toBe(0);
     // The tenure is alive and serving — the wedge parked nothing.
+    expect(created.active).toBe(true);
+  });
+
+  it("a host that answers the headers and then stalls the body hits the deadline too", async () => {
+    await seedAcl({ [space]: "OWNER" });
+    stallPatternBodies = true;
+    const created = newSpaceServer({ rootEnsureDeadlineMs: 300 });
+    expect(await created.activate()).toBe(true);
+
+    await ensures.matching((outcome) => outcome === "failed");
+    expect(stats.rootEnsure.created).toBe(0);
     expect(created.active).toBe(true);
   });
 
