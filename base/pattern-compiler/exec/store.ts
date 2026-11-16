@@ -66,6 +66,39 @@ export const withDefaults = (
   return value;
 };
 
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value) &&
+  (Object.getPrototypeOf(value) === Object.prototype ||
+    Object.getPrototypeOf(value) === null);
+
+/** A value as a string, with the members of each record in one order. */
+export const canonical = (value: unknown): string =>
+  JSON.stringify(
+    value,
+    (_, member) =>
+      isPlainRecord(member)
+        ? Object.fromEntries(
+          Object.entries(member).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
+        )
+        : member,
+  ) ?? "undefined";
+
+const KEY = "$key:";
+
+/**
+ * The segment of a path that names an element of an array by its key and
+ * not by its position (`plan-and-label-templates.md` §1.3, "A plain value
+ * in place has an identity"). A reference whose path holds one is a
+ * reference by key: the path up to the segment is the address of the
+ * collection, the segment holds the key, and the rest is the path below
+ * the element. A read or a write through it finds the position that
+ * holds the key at that time.
+ */
+export const keySegment = (key: string): string => `${KEY}${key}`;
+
+export const isKeySegment = (segment: string): boolean =>
+  segment.startsWith(KEY);
+
 /** A reference to a position of a document. */
 export class Ref {
   constructor(
@@ -138,8 +171,40 @@ export const isStreamSchema = (schema: Schema | undefined): boolean =>
   typeof schema === "object" && Array.isArray(schema.asCell) &&
   schema.asCell.includes("stream");
 
-/** A position that a read observed: the document and the path. */
-export type Position = { doc: string; path: readonly string[] };
+/**
+ * A position that a read observed: the document and the path. A read
+ * through a reference by key observed no position: it has `keyed`, the
+ * reference from the key on and the value it read there, and it is stale
+ * when a read through the reference gives another value. A move of the
+ * element changes neither, so nothing that read through the reference is
+ * evaluated for it.
+ */
+export type Position = {
+  doc: string;
+  path: readonly string[];
+  keyed?: { ref: Ref; seen: string };
+};
+
+/** What `Store.locate` found. */
+export type Located = {
+  /** The position, with a key resolved to the position that holds it. */
+  ref: Ref;
+  value: unknown;
+  /**
+   * The address in the form that names it: as `ref`, with each key the
+   * path crossed in the last document left as the key. Two references
+   * name one thing where their `named` are the same.
+   */
+  named: Ref;
+  /** A key of the path is held by no position. */
+  missing: boolean;
+  /**
+   * The default declared nearest the end of the chain of links the read
+   * resolved through: that of the last link whose schema declares one,
+   * and that of the reference's own schema where no link does.
+   */
+  fallback: unknown;
+};
 
 type StoredLink = { $link: { doc: string; path: string[]; schema?: Schema } };
 type StoredStream = { $stream: { binding: number; keys: string[] } };
@@ -173,6 +238,13 @@ const child = (value: unknown, segment: string): unknown => {
     ? (value as Record<string, unknown>)[segment]
     : undefined;
 };
+
+/** A write through a reference by key whose key no position holds. */
+export class MissingKey extends Error {
+  constructor() {
+    super("a write through a reference by key that no position holds");
+  }
+}
 
 /** The longest chain of links a read follows before it gives up. */
 const MAX_LINKS = 64;
@@ -216,45 +288,161 @@ export class Store {
       : document.value;
   }
 
+  /** The arrays whose keys are being formed. */
+  readonly #keying = new Set<string>();
+
+  /**
+   * The key of each position of a stored array
+   * (`plan-and-label-templates.md` §1.3, "Element keys"): the identity of
+   * the cell where the position holds a link, the value where it holds
+   * one, and the count of the earlier positions with the same element
+   * part. `copies` gives the values of the positions where the caller has
+   * read them.
+   */
+  keysOf(
+    held: readonly unknown[],
+    at: Ref,
+    copies?: readonly unknown[],
+  ): string[] {
+    const id = `${at.doc}:${canonical(at.path)}`;
+    // An element that holds a reference by key into its own array is
+    // keyed by its position while the keys of that array are formed.
+    const reentered = this.#keying.has(id);
+    this.#keying.add(id);
+    try {
+      const seen = new Map<string, number>();
+      return held.map((member, index) => {
+        let part: string;
+        if (isLink(member)) {
+          // What the link names, with no key resolved: a link to an
+          // element by key is keyed by that reference.
+          const { named } = this.locate(
+            new Ref(member.$link.doc, member.$link.path),
+            true,
+            undefined,
+            true,
+          );
+          part = `cell:${named.doc}:${canonical(named.path)}`;
+        } else if (reentered) {
+          part = `position:${index}`;
+        } else {
+          part = `value:${
+            canonical(
+              copies === undefined
+                ? this.read(at.key(`${index}`))
+                : copies[index],
+            )
+          }`;
+        }
+        const count = seen.get(part) ?? 0;
+        seen.set(part, count + 1);
+        return `${part}#${count}`;
+      });
+    } finally {
+      if (!reentered) this.#keying.delete(id);
+    }
+  }
+
   /**
    * The position a reference resolves to, with the value stored there.
    * A link at a segment on the way is followed. With `through`, a link at
-   * the last segment is followed as well. Each position where a link was
-   * crossed, and the last one, is added to `reads`.
+   * the last segment is followed as well. A segment that holds a key is
+   * resolved to the position of the array that holds the key now, and
+   * with `names` the walk ends there and resolves no key: two references
+   * by key are one where they name the same collection, key and path
+   * (`plan-and-label-templates.md` §1.3). Each
+   * position where a link was crossed, and the last one, is added to
+   * `reads`; from a key on, the one read by key stands for them.
    */
   locate(
     ref: Ref,
     through: boolean,
     reads?: Position[],
-  ): { ref: Ref; value: unknown } {
+    /** Stop at a key: the reference is named and no key is resolved. */
+    names = false,
+  ): Located {
     let doc = ref.doc;
     let value = this.#held(doc);
     let at: string[] = [];
+    let named_: string[] = [];
     let schema = ref.schema;
+    let fallback = typeof ref.schema === "object"
+      ? ref.schema.default
+      : undefined;
     let rest = [...ref.path];
     let links = 0;
+    let missing = false;
     for (;;) {
       while (isLink(value) && (rest.length > 0 || through)) {
         links += 1;
         if (links > MAX_LINKS) {
-          return { ref: new Ref(doc, at), value: undefined };
+          return {
+            ref: new Ref(doc, at),
+            value: undefined,
+            named: new Ref(doc, named_),
+            missing,
+            fallback: undefined,
+          };
         }
         reads?.push({ doc, path: at });
-        // The schema of the link nearest the position read, where the
-        // reference has none of its own.
-        schema ??= rest.reduce(schemaBelow, value.$link.schema);
+        const below = rest.reduce(schemaBelow, value.$link.schema);
+        // The schema of the first link crossed, where the reference has
+        // none of its own, and the default of the last link that
+        // declares one (ruling Z8).
+        schema ??= below;
+        if (typeof below === "object" && below.default !== undefined) {
+          fallback = below.default;
+        }
         doc = value.$link.doc;
         rest = [...value.$link.path, ...rest];
         at = [];
+        named_ = [];
         value = this.#held(doc);
       }
       const segment = rest.shift();
       if (segment === undefined) break;
+      if (isKeySegment(segment)) {
+        if (names) {
+          const named = new Ref(doc, [...named_, segment, ...rest], schema);
+          return { ref: named, value: undefined, named, missing, fallback };
+        }
+        if (reads !== undefined) {
+          const keyed = new Ref(doc, [...named_, segment, ...rest]);
+          reads.push({
+            doc,
+            path: at,
+            keyed: { ref: keyed, seen: canonical(this.read(keyed)) },
+          });
+          reads = undefined;
+        }
+        const index = Array.isArray(value)
+          ? this.keysOf(value, new Ref(doc, at)).indexOf(
+            segment.slice(KEY.length),
+          )
+          : -1;
+        named_ = [...named_, segment];
+        if (index < 0) {
+          missing = true;
+          value = undefined;
+          at = [...at, segment];
+        } else {
+          value = (value as unknown[])[index];
+          at = [...at, `${index}`];
+        }
+        continue;
+      }
       value = child(value, segment);
       at = [...at, segment];
+      named_ = [...named_, segment];
     }
     reads?.push({ doc, path: at });
-    return { ref: new Ref(doc, at, schema), value };
+    return {
+      ref: new Ref(doc, at, schema),
+      value,
+      named: new Ref(doc, named_, schema),
+      missing,
+      fallback,
+    };
   }
 
   /**
@@ -279,7 +467,9 @@ export class Store {
     // A container that is copied to fill in a default keeps the address
     // it was read from.
     const value = withDefaults(
-      this.#copy(located.value, reads, open, located.ref),
+      located.value === undefined && located.fallback !== undefined
+        ? structuredClone(located.fallback)
+        : this.#copy(located.value, reads, open, located.named),
       located.ref.schema,
       (from, to) => {
         const address = this.addresses.get(from);
@@ -288,7 +478,7 @@ export class Store {
     );
     open.delete(id);
     if (typeof value === "object" && value !== null) {
-      this.addresses.set(value, located.ref);
+      this.addresses.set(value, located.named);
     }
     return value;
   }
@@ -306,9 +496,26 @@ export class Store {
     if (isStream(value)) return { $stream: true };
     const here = new Ref(at.doc, at.path);
     if (Array.isArray(value)) {
+      // A member that is a container in place carries a reference by
+      // key, so what passes it on unchanged stores that reference.
+      const containers = value.some((member) =>
+        typeof member === "object" && member !== null && !isLink(member) &&
+        !isStream(member)
+      );
       const copy = value.map((member, index) =>
         this.#copy(member, reads, open, here.key(`${index}`))
       );
+      if (containers) {
+        const keys = this.keysOf(value, here, copy);
+        copy.forEach((member, index) => {
+          if (isLink(value[index])) return;
+          this.#readdress(
+            member,
+            here.key(`${index}`),
+            here.key(keySegment(keys[index])),
+          );
+        });
+      }
       this.addresses.set(copy, here);
       return copy;
     }
@@ -324,6 +531,29 @@ export class Store {
     return value;
   }
 
+  /** Gives what was read at or below `from` the address `to` in its place. */
+  #readdress(value: unknown, from: Ref, to: Ref): void {
+    if (typeof value !== "object" || value === null) return;
+    const address = this.addresses.get(value);
+    if (
+      address === undefined || address.doc !== from.doc ||
+      !isPrefix(from.path, address.path)
+    ) {
+      return;
+    }
+    this.addresses.set(
+      value,
+      new Ref(
+        to.doc,
+        [...to.path, ...address.path.slice(from.path.length)],
+        address.schema,
+      ),
+    );
+    for (const member of Object.values(value)) {
+      this.#readdress(member, from, to);
+    }
+  }
+
   /**
    * Stores a value at a reference. The value is in stored form: a
    * reference in it is a link already. A link at a segment on the way is
@@ -332,6 +562,10 @@ export class Store {
    */
   write(ref: Ref, value: unknown): void {
     const located = this.locate(ref, !isLink(value) && !isStream(value));
+    // A write through a reference by key whose key no position holds is
+    // refused (`plan-and-label-templates.md` §1.3, assumed there under
+    // question 112).
+    if (located.missing) throw new MissingKey();
     const { doc, path } = located.ref;
     let document = this.docs.get(doc);
     if (document === undefined) {
@@ -376,12 +610,21 @@ export class Store {
 
   /** Whether a write after `since` is at, above, or below a position. */
   changedSince(since: number, positions: readonly Position[]): boolean {
+    const last = this.log[this.log.length - 1];
+    if (last === undefined || last.at <= since) return false;
+    for (const { keyed } of positions) {
+      if (
+        keyed !== undefined && canonical(this.read(keyed.ref)) !== keyed.seen
+      ) {
+        return true;
+      }
+    }
     for (let index = this.log.length - 1; index >= 0; index--) {
       const entry = this.log[index];
       if (entry.at <= since) return false;
       for (const position of positions) {
         if (
-          position.doc === entry.doc &&
+          position.keyed === undefined && position.doc === entry.doc &&
           (isPrefix(position.path, entry.path) ||
             isPrefix(entry.path, position.path))
         ) {

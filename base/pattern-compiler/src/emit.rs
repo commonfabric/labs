@@ -1299,6 +1299,14 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 let value = self.render(arguments[1], Want::Pass);
                 Some(Self::wanted(want, format!("({test} && {value})")))
             }
+            // `equals` compares what its operands name, so each is passed
+            // as the reference it is, and the host resolves the links
+            // (PL §3.16; §1.3, "A plain value in place has an identity").
+            Some("equals") if arguments.len() == 2 => {
+                let left = self.render(arguments[0], Want::Pass);
+                let right = self.render(arguments[1], Want::Pass);
+                Some(format!("$h.equals({left}, {right})"))
+            }
             Some("unless") if arguments.len() == 2 => {
                 let test = self.render(arguments[0], Want::Use);
                 let value = self.render(arguments[1], Want::Pass);

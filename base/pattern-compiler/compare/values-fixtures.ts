@@ -101,6 +101,23 @@ const WRITTEN: Record<string, Written[]> = {
       { binding: 1, event: { title: "ccc" } },
     ],
   }],
+  // The elements are plain values in place. The events stop before one
+  // that removes an element or writes through one: from there on the
+  // values differ from today's by ruling Z12.
+  "value-identity": [{
+    argument: {
+      stops: [
+        { title: "a", done: false, position: { lat: 1, lng: 1 } },
+        { title: "b", done: false, position: { lat: 2, lng: 2 } },
+      ],
+      tags: ["x", "y", "x"],
+    },
+    events: [
+      { binding: 0, event: {} },
+      { binding: 4, event: {} },
+      { binding: 5, event: {} },
+    ],
+  }],
   "reduce": [{
     argument: {
       items: [{ title: "a", amount: 3 }, { title: "b", amount: 4 }],

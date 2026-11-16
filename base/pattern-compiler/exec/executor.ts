@@ -13,9 +13,11 @@
  * the documents do not give.
  */
 import {
+  canonical,
   isLink,
   isStream,
   isStreamSchema,
+  keySegment,
   markerOf,
   type Position,
   Ref,
@@ -166,18 +168,13 @@ type Element = {
   key: string;
   index: number;
   /**
-   * Where the element is read from; or its value, where it has no place;
-   * or, for an element of the result of a per-element construct, the
-   * result of that construct's body for the element's key, and a path
-   * below it.
+   * The reference to the element: to its cell, where the position holds a
+   * link, and by key, where it holds a plain value in place (ruling Z12).
+   * Or the element's value, where it has no place. Or, for an element of
+   * the result of a per-element construct, the result of that construct's
+   * body for the element's key, and a path below it.
    */
   source: Ref | { value: unknown } | { entry: Lazy; at: string[] };
-  /**
-   * For a plain value stored in place: the value, which the key is formed
-   * from. A cone of the element body reads it, and not the position,
-   * which a move changes (ES §2.6, "A moved element").
-   */
-  held?: { value: unknown };
 };
 
 type Context = ReadonlyMap<number, Element>;
@@ -252,14 +249,6 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value) &&
   (Object.getPrototypeOf(value) === Object.prototype ||
     Object.getPrototypeOf(value) === null);
-
-const canonical = (value: unknown): string =>
-  JSON.stringify(value, (_, member) =>
-    isRecord(member)
-      ? Object.fromEntries(
-        Object.entries(member).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
-      )
-      : member) ?? "undefined";
 
 const addressOf = (ref: Ref): string => `${ref.doc}:${canonical(ref.path)}`;
 
@@ -339,19 +328,31 @@ export class Handle {
     const { store } = this.instance;
     if (!declaresHandle(schema, depth)) return store.read(ref, reads);
     const located = store.locate(ref, true, reads);
-    const member = (segment: string) => {
+    const member = (segment: string, at: Ref) => {
       const below = schemaBelow(schema, segment);
-      const at = located.ref.key(segment);
       return typeof below === "object" && below.asCell !== undefined
         ? new Handle(this.instance, at, this.host, undefined, [], below)
         : this.#typed(at, below, reads, depth + 1);
     };
     if (Array.isArray(located.value)) {
-      return located.value.map((_, index) => member(`${index}`));
+      // A member that is a plain value in place is named by its key, and
+      // one that is a link by the position that holds the link (PL §1.3,
+      // assumed there under question 115).
+      const keys = store.keysOf(located.value, located.ref);
+      return located.value.map((held, index) =>
+        member(
+          `${index}`,
+          isLink(held)
+            ? located.ref.key(`${index}`)
+            : located.named.key(keySegment(keys[index])),
+        )
+      );
     }
     if (isRecord(located.value)) {
       return Object.fromEntries(
-        Object.keys(located.value).map((name) => [name, member(name)]),
+        Object.keys(located.value).map((
+          name,
+        ) => [name, member(name, located.named.key(name))]),
       );
     }
     return store.read(ref, reads);
@@ -398,9 +399,25 @@ export class Handle {
     this.set((typeof held === "number" ? held : 0) + by);
   }
 
+  /**
+   * Writes each member. It is one write for a reference by key: the key
+   * is resolved once, and each member is written at the position found.
+   */
   update(members: Record<string, unknown>): Handle {
+    const at = this.target instanceof Ref
+      ? this.instance.store.locate(this.target, true)
+      : undefined;
+    const base = at === undefined || at.missing ? this : new Handle(
+      this.instance,
+      at.ref,
+      this.host,
+      this.slot,
+      this.below,
+      this.declared,
+      this.fixed,
+    );
     for (const [name, member] of Object.entries(members)) {
-      this.key(name).set(member);
+      base.key(name).set(member);
     }
     return this;
   }
@@ -547,13 +564,6 @@ export class Host {
     readonly context: Context,
     /** The cone of the code being evaluated, where it belongs to one. */
     readonly cone: number | undefined,
-    /**
-     * Whether an element that is a plain value stored in place is given
-     * as its position: a handler writes through it, and the element table
-     * of a collection inside it is read from it. A cone is given the
-     * value.
-     */
-    readonly positions = false,
   ) {}
 
   /** The value of a slot, or its reference for an `identity` slot. */
@@ -686,6 +696,21 @@ export class Host {
    */
   stream(binding: number): StreamMarker {
     return markerOf(this.instance.streamFor(binding, this.context));
+  }
+
+  /**
+   * Whether two operands name one thing (PL §3.16): the links each
+   * reference holds are resolved, which the evaluation then depends on,
+   * and a reference by key is compared as the collection, the key and the
+   * path it holds, with no key resolved to a position.
+   */
+  equals(a: unknown, b: unknown): boolean {
+    for (const operand of [a, b]) {
+      if (operand instanceof Ref) {
+        this.instance.store.locate(operand, true, this.reads, true);
+      }
+    }
+    return this.instance.same(a, b);
   }
 
   /** A value with every reference in it replaced by what it refers to. */
@@ -1205,13 +1230,11 @@ export class Instance {
         if (element === undefined) {
           throw new Unsupported("an element slot read outside its collection");
         }
-        const { source, held } = element;
-        if (source instanceof Ref) {
-          // A plain value stored in place: a cone reads the value the
-          // key is formed from, so a move evaluates nothing, and what
-          // passes the element on stores the value (ES §2.6).
-          return held !== undefined && !host.positions ? held.value : source;
-        }
+        const { source } = element;
+        // A reference to a cell, or a reference by key for a plain value
+        // in place: a read through it is of the position that holds the
+        // key now, and what passes it on stores it (ruling Z12).
+        if (source instanceof Ref) return source;
         if ("entry" in source) {
           const upstream = host.depend(source.entry, [...source.at, ...path]);
           return host.at(upstream, source.at);
@@ -1402,6 +1425,25 @@ export class Instance {
     if (value instanceof StreamMarker) {
       return new Handle(this, streamOf(value), host, slot, [], declared);
     }
+    // A reference at a position whose declared type is no handle is a
+    // reference stand-in (ES §2.4): the body can pass it on, and what it
+    // passes on is stored as the reference. It has no member of its own,
+    // and the entries below its path are placed in it. The schema of a
+    // slot of a handler's state is that of the handler's declared type.
+    // The schema of another slot is that of the place, which does not
+    // say what the body declares, and the body is handed a handle.
+    if (
+      value instanceof Ref && typeof declared === "object" &&
+      declared.asCell === undefined && slot !== undefined &&
+      this.plan.slots[slot].root.kind === "binding"
+    ) {
+      const standIn = {};
+      this.store.addresses.set(
+        standIn,
+        this.store.locate(value, true, undefined, true).named,
+      );
+      return standIn;
+    }
     if (value instanceof Ref || value instanceof StreamRef) {
       return new Handle(this, value, host, slot, [], declared);
     }
@@ -1425,11 +1467,15 @@ export class Instance {
     const address = (value: unknown): string | undefined => {
       if (value instanceof Handle) {
         return value.target instanceof Ref
-          ? addressOf(this.store.locate(value.target, true).ref)
+          ? addressOf(
+            this.store.locate(value.target, true, undefined, true).named,
+          )
           : `stream:${value.target.binding}:${canonical(value.target.keys)}`;
       }
       if (value instanceof Ref) {
-        return addressOf(this.store.locate(value, true).ref);
+        return addressOf(
+          this.store.locate(value, true, undefined, true).named,
+        );
       }
       if (typeof value === "object" && value !== null) {
         const read = this.store.addresses.get(value);
@@ -1513,6 +1559,11 @@ export class Instance {
       ? { ...holder }
       : {};
     members[first] = this.placed(members[first], rest, value);
+    // A reference stand-in that gets a member is the stand-in still.
+    const address = isRecord(holder)
+      ? this.store.addresses.get(holder)
+      : undefined;
+    if (address !== undefined) this.store.addresses.set(members, address);
     return members;
   }
 
@@ -1571,8 +1622,7 @@ export class Instance {
       return held ?? this.#none();
     }
     this.#open.add(key);
-    // The assembly of a collection reads the positions of its elements.
-    const host = new Host(this, context, cone, kind === "assembly");
+    const host = new Host(this, context, cone);
     const evaluatedAt = this.store.clock;
     let value: unknown;
     try {
@@ -1868,13 +1918,11 @@ export class Instance {
         const results = elements.map((element) =>
           host.depend(this.#perElement(collection, element.key))
         );
-        // What the result holds for an element it passes on: the value
-        // of a plain value stored in place, and otherwise what the
-        // element is, a reference included.
-        const given = ({ source, held }: Element) =>
-          held !== undefined
-            ? held.value
-            : source instanceof Ref
+        // What the result holds for an element it passes on: what the
+        // element is, a reference to a cell or a reference by key
+        // included.
+        const given = ({ source }: Element) =>
+          source instanceof Ref
             ? source
             : "entry" in source
             ? host.at(host.depend(source.entry, source.at), source.at)
@@ -1951,19 +1999,8 @@ export class Instance {
       const slot = this.plan.slots[source.slot];
       host.demand(slot.root, slot.path);
       const base = host.at(this.rootOf(slot.root, host), slot.path);
-      if (base instanceof Ref) {
-        const located = this.store.locate(base, true, host.reads);
-        const held = Array.isArray(located.value) ? located.value : [];
-        members = held.map((member, index) =>
-          isLink(member)
-            ? this.store.locate(
-              new Ref(member.$link.doc, member.$link.path),
-              true,
-              host.reads,
-            ).ref
-            : located.ref.key(`${index}`)
-        );
-      } else if (Array.isArray(base)) {
+      if (base instanceof Ref) return this.#stored(base, host);
+      if (Array.isArray(base)) {
         members = base.map((member) =>
           member instanceof Ref ? member : { value: member }
         );
@@ -1989,64 +2026,48 @@ export class Instance {
       if (passed !== undefined) {
         return passed.map((member, index) => ({ ...member, index }));
       }
-      const array = held instanceof Ref
-        ? this.#positions(held, host)
-        : Array.isArray(held)
-        ? held
-        : [];
-      members = array.map((member) =>
+      if (held instanceof Ref) return this.#stored(held, host);
+      members = (Array.isArray(held) ? held : []).map((member) =>
         member instanceof Ref ? member : { value: member }
       );
     }
     const seen = new Map<string, number>();
     return members.map((member, index) => {
-      // A position that holds a plain value is keyed by the value, also
-      // where the element is read from that position.
-      const linked = member instanceof Ref &&
-        !(source.slot !== undefined &&
-          this.#inPlace(member, source.slot, host));
-      const value = linked
-        ? undefined
-        : member instanceof Ref
-        ? this.store.read(member)
-        : host.v(member.value);
-      const part = linked
-        ? `cell:${member.doc}:${canonical(member.path)}`
-        : `value:${canonical(value)}`;
+      // A reference is keyed by what it names, and a value by itself.
+      let part: string;
+      if (member instanceof Ref) {
+        const { named } = this.store.locate(member, true);
+        part = `cell:${named.doc}:${canonical(named.path)}`;
+      } else {
+        part = `value:${canonical(host.v(member.value))}`;
+      }
       const count = seen.get(part) ?? 0;
       seen.set(part, count + 1);
-      return {
-        key: `${part}#${count}`,
-        index,
-        source: member,
-        // A copy that carries no address: what a cone stores of it is
-        // the value, and no link to the position.
-        ...(member instanceof Ref && !linked
-          ? { held: { value: structuredClone(value) } }
-          : {}),
-      };
+      return { key: `${part}#${count}`, index, source: member };
     });
   }
 
-  /** Whether an element is a position of the array a slot names. */
-  #inPlace(member: Ref, slot: number, host: Host): boolean {
-    const record = this.plan.slots[slot];
-    const base = host.at(this.rootOf(record.root, host), record.path);
-    if (!(base instanceof Ref)) return false;
-    const located = this.store.locate(base, true).ref;
-    return located.doc === member.doc &&
-      member.path.length === located.path.length + 1 &&
-      located.path.every((segment, index) => segment === member.path[index]);
-  }
-
-  #positions(array: Ref, host: Host): unknown[] {
+  /**
+   * The elements of a stored array. An element whose position holds a
+   * link is the cell the link leads to. An element that is a plain value
+   * in place is named by the array and its key, and its `source` is that
+   * reference by key (ruling Z12).
+   */
+  #stored(array: Ref, host: Host): Element[] {
     const located = this.store.locate(array, true, host.reads);
     const held = Array.isArray(located.value) ? located.value : [];
-    return held.map((member, index) =>
-      isLink(member)
-        ? new Ref(member.$link.doc, member.$link.path)
-        : located.ref.key(`${index}`)
-    );
+    const keys = this.store.keysOf(held, located.ref);
+    return held.map((member, index) => ({
+      key: keys[index],
+      index,
+      source: isLink(member)
+        ? this.store.locate(
+          new Ref(member.$link.doc, member.$link.path),
+          true,
+          host.reads,
+        ).named
+        : located.named.key(keySegment(keys[index])),
+    }));
   }
 
   /**
@@ -2142,6 +2163,16 @@ export class Instance {
       }
     }
     return false;
+  }
+
+  /**
+   * Writes through the reference the result document holds at a path, as
+   * the rendered tree does at an attribute bound both ways, and evaluates
+   * what read the position written.
+   */
+  writeThrough(path: string[], value: unknown): void {
+    this.store.write(new Ref("result", path), this.stored(value));
+    this.settle();
   }
 
   /**
@@ -2370,9 +2401,9 @@ export class Instance {
     if (body === undefined || run === undefined) {
       return { binding, committed: false, error: "the handler has no body" };
     }
-    // A handler is given an element that is a plain value stored in place
-    // as its position, which it can write through.
-    const host = new Host(this, context, undefined, true);
+    // A handler is given the reference its row's cones hold for the
+    // element (ES §2.6, "A handler bound in the body").
+    const host = new Host(this, context, undefined);
     // The state: each slot of the body with root `binding`, resolved to
     // the place the binding's state entry names (PL §1.1).
     let state: unknown = {};

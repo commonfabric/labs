@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { type Artifact, Host, Instance } from "../executor.ts";
-import { Ref, Store } from "../store.ts";
+import { keySegment, Ref, Store } from "../store.ts";
 
 // The executor of `execution-and-storage.md` (ES) on the artifacts of the
 // fixtures of the comparison: `compare/fixtures/<name>.emit.json` is the
@@ -297,15 +297,21 @@ describe("an element construct", () => {
     expect(instance.counts.assemblies - before.assemblies).toBe(2);
   });
 
-  it("stores the value where a cone passes on an element that is a plain value", async () => {
+  it("stores a reference by key where a cone passes on an element that is a plain value in place", async () => {
     const instance = new Instance(await artifactOf("equal-values"), {
       tags: ["a", "b"],
     });
 
-    // No row holds a link to a position of the array.
+    // No row holds a link to a position of the array, and none a copy of
+    // the value: each holds the array, the key, and no path below it.
     const stored = JSON.stringify(instance.store.docs.get("result")?.value);
-    expect(stored).not.toContain('"path":["tags"');
-    expect(stored).toContain('"children":["a",');
+    expect(stored).not.toContain('"path":["tags","0"');
+    expect(stored).not.toContain('"children":["a",');
+    expect(stored).toContain(
+      JSON.stringify({
+        $link: { doc: "argument", path: ["tags", keySegment('value:"a"#0')] },
+      }).slice(0, -2),
+    );
   });
 
   it("gives a handler bound in the body the index its element has at the event", async () => {
@@ -1132,6 +1138,355 @@ describe("a cone with side-writes", () => {
   });
 });
 
+// Ruling Z12: an element that is a plain value in place is named by its
+// collection and its key. `fixtures/value-identity.tsx` has a `map` over
+// `stops`, records, and one over `tags`, strings. Each test says which
+// case it is about: an array of plain values in place, where the ruling
+// applies, or an array of references, where nothing changes.
+describe("an element that is a plain value in place", () => {
+  const stop = (title: string, at: number) => ({
+    title,
+    done: false,
+    position: { lat: at, lng: at },
+  });
+  const inPlace = () => ({
+    stops: [stop("a", 1), stop("b", 2), stop("c", 3)],
+    tags: ["x", "y", "x"],
+  });
+  const link = (name: string) => ({
+    $link: { doc: "argument", path: ["pool", name] },
+  });
+  const references = () => ({
+    pool: { a: stop("a", 1), b: stop("b", 2), c: stop("c", 3) },
+    stops: [link("a"), link("b"), link("c")],
+    tags: ["x", "y", "x"],
+  });
+  const keyOf = (title: string, at: number, count = 0) =>
+    `value:${
+      JSON.stringify({
+        done: false,
+        position: { lat: at, lng: at },
+        title,
+      })
+    }#${count}`;
+  type Row = {
+    title: string;
+    stop: unknown;
+    position: unknown;
+    isSelected: boolean;
+    open: boolean;
+    check: ViewNode;
+  };
+  type Result = {
+    rows: Row[];
+    words: { item: ViewNode }[];
+    selected: unknown;
+    center: unknown;
+    chosen: unknown;
+  };
+  const result = (instance: Instance) => instance.result() as Result;
+  const stored = (instance: Instance) =>
+    instance.store.docs.get("result")?.value as {
+      rows: { $link: { doc: string } }[] | Record<string, unknown>[];
+      words: Record<string, unknown>[];
+    };
+  const bindingOf = (instance: Instance, name: string) =>
+    instance.plan.bindings.findIndex((binding) => binding.name === name);
+  const cellOf = (instance: Instance, name: string) =>
+    instance.store.docs.get(
+      `state:${
+        instance.plan.stateCells.findIndex((cell) => cell.name === name)
+      }:[]`,
+    )?.value;
+  const start = async (argument: unknown = inPlace()) =>
+    new Instance(await artifactOf("value-identity"), argument);
+
+  it("is passed on as the collection, the key and the path, over plain values in place", async () => {
+    const instance = await start();
+
+    const row = stored(instance).rows[1] as Record<string, unknown>;
+    const element = ["stops", keySegment(keyOf("b", 2))];
+    expect(row.stop).toMatchObject({
+      $link: { doc: "argument", path: element },
+    });
+    expect(row.position).toMatchObject({
+      $link: { doc: "argument", path: [...element, "position"] },
+    });
+    // The member bound both ways holds the reference with the member's
+    // path.
+    expect((row.check as ViewNode).props.$checked).toMatchObject({
+      $link: { doc: "argument", path: [...element, "done"] },
+    });
+    // A string: the second `x` is occurrence 1.
+    expect(
+      (stored(instance).words[2].item as ViewNode).children[0],
+    ).toMatchObject({
+      $link: { doc: "argument", path: ["tags", keySegment('value:"x"#1')] },
+    });
+    expect(result(instance).rows.map((each) => each.stop)).toEqual(
+      inPlace().stops,
+    );
+    expect(
+      result(instance).words.map((word) => word.item.children[0]),
+    ).toEqual(["x", "y", "x"]);
+  });
+
+  it("is passed on as the link to its cell, over references", async () => {
+    const instance = await start(references());
+
+    const row = stored(instance).rows[1] as Record<string, unknown>;
+    expect(row.stop).toMatchObject({
+      $link: { doc: "argument", path: ["pool", "b"] },
+    });
+    expect(row.position).toMatchObject({
+      $link: { doc: "argument", path: ["pool", "b", "position"] },
+    });
+  });
+
+  it("is read at its new position after a move, and nothing is evaluated for it, over plain values in place", async () => {
+    const instance = await start();
+    const before = instance.counts.elementEvaluations;
+    const rowBefore = JSON.stringify(stored(instance).rows[0]);
+
+    instance.send(bindingOf(instance, "reverse"), {});
+
+    expect(instance.counts.elementEvaluations).toBe(before);
+    expect(result(instance).rows.map((row) => row.title)).toEqual([
+      "c",
+      "b",
+      "a",
+    ]);
+    expect(result(instance).rows.map((row) => row.position)).toEqual([
+      { lat: 3, lng: 3 },
+      { lat: 2, lng: 2 },
+      { lat: 1, lng: 1 },
+    ]);
+    // The row of `a` holds what it held, at the last position now.
+    expect(JSON.stringify(stored(instance).rows[2])).toBe(rowBefore);
+  });
+
+  it("is found by `equals` among the rows, before and after a move, over plain values in place", async () => {
+    const instance = await start();
+    // The row of `b` stores its element in `selected`.
+    instance.send(bindingOf(instance, "pick"), {}, [1]);
+
+    expect(cellOf(instance, "selected")).toMatchObject({
+      $link: {
+        doc: "argument",
+        path: ["stops", keySegment(keyOf("b", 2))],
+      },
+    });
+    expect(result(instance).rows.map((row) => row.isSelected)).toEqual([
+      false,
+      true,
+      false,
+    ]);
+
+    instance.send(bindingOf(instance, "removeFirst"), {});
+
+    expect(result(instance).rows.map((row) => [row.title, row.isSelected]))
+      .toEqual([["b", true], ["c", false]]);
+    expect(result(instance).selected).toEqual(stop("b", 2));
+  });
+
+  it("is found by `equals` among the rows, over references", async () => {
+    const instance = await start(references());
+    instance.send(bindingOf(instance, "pick"), {}, [1]);
+
+    expect(cellOf(instance, "selected")).toMatchObject({
+      $link: { doc: "argument", path: ["pool", "b"] },
+    });
+    instance.send(bindingOf(instance, "reverse"), {});
+    expect(result(instance).rows.map((row) => [row.title, row.isSelected]))
+      .toEqual([["c", false], ["b", true], ["a", false]]);
+  });
+
+  it("is told from an equal value by its occurrence, over plain values in place", async () => {
+    const instance = await start();
+    const chosen = new Ref(
+      `state:${
+        instance.plan.stateCells.findIndex((cell) => cell.name === "chosen")
+      }:[]`,
+      [],
+    );
+    const occurrence = (count: number) =>
+      new Ref("argument", ["tags", keySegment(`value:"x"#${count}`)]);
+    // The row of the second `x` stores a reference to its element.
+    instance.send(bindingOf(instance, "choose"), {}, [2]);
+
+    expect(instance.same(chosen, occurrence(1))).toBe(true);
+    expect(instance.same(chosen, occurrence(0))).toBe(false);
+    expect(result(instance).chosen).toBe("x");
+
+    // The first `x` leaves. The one that remains is occurrence 0, and
+    // the reference to occurrence 1 names nothing.
+    instance.send(bindingOf(instance, "removeFirst"), {});
+
+    expect(result(instance).chosen).toBe(undefined);
+
+    // An equal value is added: a position holds occurrence 1 again, and
+    // the reference resolves to it.
+    instance.send(bindingOf(instance, "addTag"), { tag: "x" });
+
+    expect(result(instance).chosen).toBe("x");
+  });
+
+  it("is not equal to a handle that names its position", async () => {
+    const instance = await start();
+    const element = new Ref("argument", ["stops", keySegment(keyOf("a", 1))]);
+    const position = new Ref("argument", ["stops", "0"]);
+
+    expect(instance.store.read(element)).toEqual(instance.store.read(position));
+    expect(instance.same(element, position)).toBe(false);
+    expect(instance.same(element, new Ref(element.doc, element.path))).toBe(
+      true,
+    );
+  });
+
+  it("reads as nothing through a stored reference to a member after it is removed, over plain values in place", async () => {
+    const instance = await start();
+    instance.send(bindingOf(instance, "pick"), {}, [0]);
+    expect(result(instance).center).toEqual({ lat: 1, lng: 1 });
+
+    instance.send(bindingOf(instance, "reverse"), {});
+    // The reference followed the element.
+    expect(result(instance).center).toEqual({ lat: 1, lng: 1 });
+
+    instance.writeArgument(["stops"], [stop("b", 2), stop("c", 3)]);
+
+    // Today's runtime reads the element that moved to the position here
+    // (`cpp/probe26`): the difference is the ruling's.
+    expect(result(instance).center).toBe(undefined);
+    expect(result(instance).selected).toBe(undefined);
+  });
+
+  it("keeps the value readable through a stored reference to a member after it is removed, over references", async () => {
+    const instance = await start(references());
+    instance.send(bindingOf(instance, "pick"), {}, [0]);
+
+    instance.writeArgument(["stops"], [link("b"), link("c")]);
+
+    expect(result(instance).center).toEqual({ lat: 1, lng: 1 });
+  });
+
+  it("is written at the position that holds its key, through a member bound both ways, over plain values in place", async () => {
+    const instance = await start();
+    instance.send(bindingOf(instance, "reverse"), {});
+
+    // As the rendered checkbox of the row of `a` writes its attribute.
+    instance.writeThrough(
+      ["rows", "2", "check", "props", "$checked"],
+      true,
+    );
+
+    expect(
+      (instance.store.docs.get("argument")?.value as { stops: unknown[] })
+        .stops,
+    ).toEqual([stop("c", 3), stop("b", 2), { ...stop("a", 1), done: true }]);
+  });
+
+  it("is written through a handler bound in the body, and the row then has another key, over plain values in place", async () => {
+    const instance = await start();
+    // The state cell of the row of `b` is set, and its element stored.
+    instance.send(bindingOf(instance, "toggle"), {}, [1]);
+    instance.send(bindingOf(instance, "pick"), {}, [1]);
+    expect(result(instance).rows[1].open).toBe(true);
+    const before = instance.counts.elementEvaluations;
+
+    // One write through the reference: `stop.key("done").set(true)`.
+    const outcome = instance.send(bindingOf(instance, "finish"), {}, [1]);
+
+    expect(outcome.committed).toBe(true);
+    const changed = { ...stop("b", 2), done: true };
+    expect(
+      (instance.store.docs.get("argument")?.value as { stops: unknown[] })
+        .stops[1],
+    ).toEqual(changed);
+    // The position holds another key: the cone instances of that key are
+    // evaluated, and its row holds the reference with the new key.
+    expect(instance.counts.elementEvaluations - before).toBeGreaterThan(0);
+    const key = `value:${
+      JSON.stringify({ done: true, position: { lat: 2, lng: 2 }, title: "b" })
+    }#0`;
+    expect((stored(instance).rows[1] as Record<string, unknown>).stop)
+      .toMatchObject({
+        $link: { doc: "argument", path: ["stops", keySegment(key)] },
+      });
+    // The state cell of the body is that of the new key, and reads its
+    // first value. The cell of the old key keeps its document.
+    expect(result(instance).rows[1].open).toBe(false);
+    expect(
+      instance.stateCells().filter(({ name }) => name === "open").map((
+        { keys, value },
+      ) => [keys[0], value]),
+    ).toContainEqual([keyOf("b", 2), true]);
+    // The reference `selected` holds keeps the key it was made with, and
+    // reads as nothing (PL §8, question 112, assumed).
+    expect(result(instance).selected).toBe(undefined);
+    expect(result(instance).rows.map((row) => row.isSelected)).toEqual([
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it("refuses a second write through the same reference after a write that changed the value, over plain values in place", async () => {
+    const instance = await start();
+    const before = structuredClone(instance.store.docs.get("argument")?.value);
+
+    // `stop.key("done").set(true)` and then `stop.key("title").set(...)`.
+    const outcome = instance.send(
+      bindingOf(instance, "finishAndRename"),
+      {},
+      [1],
+    );
+
+    // The second write finds no position that holds the key, and the
+    // event commits nothing, the first write included.
+    expect(outcome.committed).toBe(false);
+    expect(outcome.error).toBe(
+      "a write through a reference by key that no position holds",
+    );
+    expect(instance.store.docs.get("argument")?.value).toEqual(before);
+    expect(result(instance).rows.map((row) => row.title)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("takes two members in one `update`, over plain values in place", async () => {
+    const instance = await start();
+
+    const outcome = instance.send(bindingOf(instance, "update"), {}, [1]);
+
+    expect(outcome.committed).toBe(true);
+    expect(result(instance).rows.map((row) => row.title)).toEqual([
+      "a",
+      "updated",
+      "c",
+    ]);
+  });
+
+  it("takes two writes through one reference, and keeps the state of its row, over references", async () => {
+    const instance = await start(references());
+    instance.send(bindingOf(instance, "toggle"), {}, [1]);
+
+    const outcome = instance.send(
+      bindingOf(instance, "finishAndRename"),
+      {},
+      [1],
+    );
+
+    expect(outcome.committed).toBe(true);
+    expect(result(instance).rows[1]).toMatchObject({
+      title: "renamed",
+      open: true,
+      stop: { title: "renamed", done: true },
+    });
+  });
+});
+
 describe("a record a handler writes into a list", () => {
   // `fixtures/list-records.tsx`: `stops` is a list of records and `names`
   // a list of strings, both state cells, and the handler of a row stores
@@ -1266,6 +1621,11 @@ describe("a value read under a schema", () => {
       title: "b",
       done: false,
     }]);
-    expect(store.addresses.get(read[1])?.path).toEqual(["items", "1"]);
+    // The member is a plain value in place, so its address names it by
+    // the array and its key (ruling Z12).
+    expect(store.addresses.get(read[1])?.path).toEqual([
+      "items",
+      keySegment('value:{"title":"b"}#0'),
+    ]);
   });
 });

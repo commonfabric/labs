@@ -261,11 +261,31 @@ An element of the result of a `flatMap` has that key with the position in the
 element's segment, so two members of one segment that change places are two keys
 whose values changed (`compare/fixtures/flat-keys.tsx`, over references and over
 plain values). When elements move it evaluates nothing for them but what read
-the index: the entries of a key stay with the key. A cone reads an element that
-is a plain value stored in place as the value its key is formed from, and what
-passes such an element on stores the value. `Instance.counts` has the
+the index: the entries of a key stay with the key. `Instance.counts` has the
 evaluations of cone instances of an element body (`elementEvaluations`) and the
 assemblies of a collection (`assemblies`) apart.
+
+An element that is a plain value in place is named by its collection and its key
+(ruling Z12). The executor holds such a reference as a path whose segment at the
+array is the key and not a position (`keySegment` in `exec/store.ts`), and a
+read or a write through it finds the position that holds the key at that time
+(`Store.locate`). A cone, a handler bound in the body and a function body that
+read the array through a handle are all given that reference, and what passes
+the element or a member of it on stores it. A read through it depends on the
+value at the key and the path and on no position, so a move evaluates nothing.
+`equals` compares two such references as the collection, the key and the path
+they hold and resolves no key, and a reference by key is not equal to a
+reference to a cell or to a handle that names a position. After the element is
+removed a read gives nothing, and a write is refused, which rejects a handler's
+event. A write that changes the value leaves the position with another key, and
+the reference keeps the key it was made with, as the documents assume: a second
+write through it is refused. `compare/fixtures/value-identity.tsx` and the tests
+of "an element that is a plain value in place" in `exec/test/executor.test.ts`
+show each of these over an array of plain values in place, and beside it what
+holds over an array of references, where the element is a cell and nothing of
+this applies. An element of the result of a `map` whose body computes a value is
+passed on as that value: the executor stores no assembled result at an address a
+reference could name.
 
 A cone with side-writes has its kind in `Cone.sideWrites`, from the tier
 footprint analysis gives its bodies: `static` where every write target is one
