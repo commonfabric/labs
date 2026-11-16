@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 import { fromBase64url } from "@commonfabric/bytes/base64url";
-import { checkIndexChain } from "../src/membership.ts";
+import { checkIndexChain, issueIndexChain } from "../src/membership.ts";
 import { PatternIndexStore } from "../src/store.ts";
-import { Identity } from "@commonfabric/identity";
+import { encodeDelegationChains, Identity } from "@commonfabric/identity";
 import { verifyFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 
 const root = fromFileUrl(new URL("../../../", import.meta.url));
@@ -357,6 +357,106 @@ describe("cli", () => {
     });
     expect(calls[1].did).toBe(did);
     expect(calls[1].body.proofs).toHaveLength(1);
+  });
+
+  it("joins with a chain file into the store, keeping no root key", async () => {
+    const stores = `${directory}/stores`;
+    const member = await Identity.fromPassphrase("cli chain root");
+    const chain = await issueIndexChain({
+      issuer: member,
+      to: did as `did:key:${string}`,
+      held: [],
+    });
+    reply = () => Response.json({ handle: "p-8", role: "user" });
+
+    const output = await callHelper(
+      directory,
+      baseUrl,
+      { op: "join", chain: encodeDelegationChains([chain]) },
+      `${directory}/identity.key`,
+      stores,
+    );
+
+    expect(JSON.parse(output.stdout)).toMatchObject({
+      ok: true,
+      value: { handle: "p-8", root: member.did(), rootKeptHere: false },
+    });
+    expect(calls.map((call) => call.fn)).toEqual(["whoami"]);
+    const store = new PatternIndexStore(join(stores, new URL(baseUrl).host));
+    expect(await store.rootKey()).toBeUndefined();
+  });
+
+  it("returns 400 for a join whose chain is not a chain file, calling nothing", async () => {
+    const output = await callHelper(
+      directory,
+      baseUrl,
+      { op: "join", chain: "not json" },
+      `${directory}/identity.key`,
+      `${directory}/stores`,
+    );
+
+    expect(JSON.parse(output.stdout)).toEqual({
+      ok: false,
+      status: 400,
+      error: "chain is not a chain file",
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("returns 400 for a join whose chain file holds two chains, calling nothing", async () => {
+    const member = await Identity.fromPassphrase("cli chain root");
+    const chain = await issueIndexChain({
+      issuer: member,
+      to: did as `did:key:${string}`,
+      held: [],
+    });
+
+    const output = await callHelper(
+      directory,
+      baseUrl,
+      { op: "join", chain: encodeDelegationChains([chain, chain]) },
+      `${directory}/identity.key`,
+      `${directory}/stores`,
+    );
+
+    expect(JSON.parse(output.stdout)).toMatchObject({
+      ok: false,
+      status: 400,
+      error: "chain must hold exactly one chain",
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("returns 400 for a join with neither a link nor a chain", async () => {
+    const output = await callHelper(
+      directory,
+      baseUrl,
+      { op: "join" },
+      `${directory}/identity.key`,
+      `${directory}/stores`,
+    );
+
+    expect(JSON.parse(output.stdout)).toMatchObject({ ok: false, status: 400 });
+    expect(calls).toEqual([]);
+  });
+
+  it("answers admit with the admitted member, sending the did", async () => {
+    const admitted = await Identity.fromPassphrase("cli admitted key");
+    reply = () => Response.json({ handle: "p-9", role: "user" });
+
+    const output = await callHelper(directory, baseUrl, {
+      op: "admit",
+      did: admitted.did(),
+    });
+
+    expect(JSON.parse(output.stdout)).toEqual({
+      ok: true,
+      value: { handle: "p-9", role: "user" },
+    });
+    expect(calls[0]).toMatchObject({
+      fn: "admitKey",
+      body: { did: admitted.did() },
+    });
   });
 
   it("returns the index's status for a refused invite, never the code", async () => {

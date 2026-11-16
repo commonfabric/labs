@@ -51,6 +51,10 @@ describe("access", () => {
       });
     });
 
+    it("throws for text that is not a link", () => {
+      expect(() => parseInviteLink("not a link")).toThrow("not a link");
+    });
+
     it("throws without quoting a link that carries no code", () => {
       const link = "https://fbrc.social/index-join?invite=inv1&x=secret-code";
       expect(() => parseInviteLink(link)).toThrow("after #");
@@ -63,6 +67,21 @@ describe("access", () => {
   });
 
   describe("resolvePatternIndexUrl()", () => {
+    it("throws for a URL that is not http(s)", () => {
+      expect(() => resolvePatternIndexUrl("ftp://index.test")).toThrow(
+        "must be http(s)",
+      );
+    });
+
+    it("throws for a URL carrying a query or a fragment", () => {
+      expect(() => resolvePatternIndexUrl("https://index.test/?x=1")).toThrow(
+        "query or fragment",
+      );
+      expect(() => resolvePatternIndexUrl("https://index.test/#x")).toThrow(
+        "query or fragment",
+      );
+    });
+
     it("returns the flag over the environment, and the environment over the default", () => {
       const env = (key: string) =>
         key === "CF_PATTERN_INDEX_URL" ? "https://env.test" : undefined;
@@ -135,6 +154,48 @@ describe("access", () => {
         .toHaveLength(1);
     });
 
+    it("throws 409 when the index knows the signer as another member than the one recorded", async () => {
+      const root = await store.createRootKey();
+      await store.recordMembership({
+        handle: "p-old",
+        role: "user",
+        root: root.did(),
+      });
+      const index = new FakePatternIndex();
+      index.admit(root.did(), "p-new");
+      const attempt = joinPatternIndex({
+        baseUrl: BASE,
+        signer: cfKey,
+        store,
+        fetchFn: index.fetchFn,
+        invite: parseInviteLink(LINK),
+      });
+      await expect(attempt).rejects.toMatchObject({ status: 409 });
+      await expect(attempt).rejects.toThrow("not as the member p-old");
+    });
+
+    const refusals: [number, number, string][] = [
+      [409, 409, "already used"],
+      [410, 410, "has expired"],
+      [500, 502, "500"],
+    ];
+    for (const [indexStatus, status, says] of refusals) {
+      it(`throws ${status} saying "${says}" for a redemption the index answers ${indexStatus}`, async () => {
+        const attempt = joinPatternIndex({
+          baseUrl: BASE,
+          signer: cfKey,
+          store,
+          fetchFn: () =>
+            Promise.resolve(
+              Response.json({ error: "refused" }, { status: indexStatus }),
+            ),
+          invite: parseInviteLink(LINK),
+        });
+        await expect(attempt).rejects.toMatchObject({ status });
+        await expect(attempt).rejects.toThrow(says);
+      });
+    }
+
     it("throws naming the refusal and never the code", async () => {
       const index = new FakePatternIndex({ invites: { inv1: "other" } });
       const attempt = joinPatternIndex({
@@ -189,6 +250,57 @@ describe("access", () => {
       });
       await store.recordChain(cfKey.did(), held);
       expect(await chainForSigner(store, cfKey, NOW + 60)).toEqual(held);
+    });
+
+    it("renews from the kept root a held chain that no longer checks", async () => {
+      const root = await store.createRootKey();
+      await store.recordMembership({
+        handle: "p-1",
+        role: "user",
+        root: root.did(),
+      });
+      await store.recordChain(cfKey.did(), [new Uint8Array([1, 2, 3])]);
+      const chain = await chainForSigner(store, cfKey, NOW);
+      expect((await checkIndexChain(chain!, cfKey.did(), NOW)).root).toBe(
+        root.did(),
+      );
+    });
+
+    it("returns the held chain as it is when the root is kept elsewhere", async () => {
+      const elsewhere = await Identity.fromPassphrase("access root elsewhere");
+      await store.recordMembership({
+        handle: "p-1",
+        role: "user",
+        root: elsewhere.did(),
+      });
+      const held = await issueIndexChain({
+        issuer: elsewhere,
+        to: cfKey.did(),
+        held: [],
+        expiresAt: NOW + 60,
+        nowSeconds: NOW,
+      });
+      await store.recordChain(cfKey.did(), held);
+      expect(await chainForSigner(store, cfKey, NOW)).toEqual(held);
+    });
+
+    it("returns a renewed chain even when the store cannot keep it", async () => {
+      const root = await store.createRootKey();
+      await store.recordMembership({
+        handle: "p-1",
+        role: "user",
+        root: root.did(),
+      });
+      await Deno.chmod(dir, 0o500);
+      try {
+        const chain = await chainForSigner(store, cfKey, NOW);
+        expect((await checkIndexChain(chain!, cfKey.did(), NOW)).root).toBe(
+          root.did(),
+        );
+      } finally {
+        await Deno.chmod(dir, 0o700);
+      }
+      expect(await store.chainFor(cfKey.did())).toBeUndefined();
     });
 
     it("returns undefined where no membership is recorded", async () => {
@@ -253,6 +365,16 @@ describe("access", () => {
         rootDelegation: move.bytes,
       })).rejects.toThrow("refused the move");
       expect(await store.membership()).toBeUndefined();
+    });
+
+    it("throws 400 for bytes that are not a delegation", async () => {
+      await expect(moveMembershipRoot({
+        baseUrl: BASE,
+        signer: cfKey,
+        store,
+        fetchFn: new FakePatternIndex().fetchFn,
+        rootDelegation: new Uint8Array([1, 2, 3]),
+      })).rejects.toThrow("not a delegation");
     });
 
     it("throws for an /index delegation, which never moves a root", async () => {

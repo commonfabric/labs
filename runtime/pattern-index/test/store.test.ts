@@ -141,6 +141,35 @@ describe("store", () => {
       await expect(store.indexedPiece("p")).rejects.toThrow("is not JSON");
     });
 
+    it("throws, rather than reading nothing, where a record is unreadable", async () => {
+      // Each record is a directory here, which no read of a file gets past.
+      const store = new PatternIndexStore(join(dir, "store"));
+      for (
+        const name of [
+          "root.key",
+          "published.json",
+          join("pending-root-move", "inside"),
+        ]
+      ) {
+        await Deno.mkdir(join(store.dir, name), {
+          recursive: true,
+          mode: 0o700,
+        });
+      }
+      await Deno.chmod(store.dir, 0o700);
+      await expect(store.rootKey()).rejects.toThrow();
+      await expect(store.lastPublished("x")).rejects.toThrow();
+      await expect(store.pendingRootMove()).rejects.toThrow();
+      await expect(store.recordPendingRootMove(undefined)).rejects.toThrow();
+    });
+
+    it("throws for a store path below a file", async () => {
+      const file = join(dir, "file");
+      await Deno.writeTextFile(file, "");
+      await expect(new PatternIndexStore(join(file, "store")).membership())
+        .rejects.toThrow();
+    });
+
     it("throws for a store path that is a file", async () => {
       const file = join(dir, "file");
       await Deno.writeTextFile(file, "");
@@ -189,6 +218,12 @@ describe("store", () => {
         .toBeUndefined();
     });
 
+    it("throws for a store root that is a file", async () => {
+      const file = join(dir, "file");
+      await Deno.writeTextFile(file, "");
+      await expect(findIndexedPiece(file, "fid1:p")).rejects.toThrow();
+    });
+
     it("returns the store of whichever index recorded the piece", async () => {
       const staging = new PatternIndexStore(join(dir, "staging.test"));
       await new PatternIndexStore(join(dir, "index.test")).recordIndexedPiece(
@@ -196,6 +231,8 @@ describe("store", () => {
         "id-other",
       );
       await staging.recordIndexedPiece("fid1:piece", "id-1");
+      // A file beside the stores is not one.
+      await Deno.writeTextFile(join(dir, "notes.txt"), "");
       const found = await findIndexedPiece(dir, "fid1:piece");
       expect(found?.patternId).toBe("id-1");
       expect(found?.store.dir).toBe(staging.dir);

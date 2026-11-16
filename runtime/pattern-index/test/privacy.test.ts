@@ -117,6 +117,26 @@ describe("privacy", () => {
         InvalidModelAnswer,
       );
     });
+
+    const malformed: [string, unknown][] = [
+      ["an answer that is not an object", ["pass"]],
+      ["findings that are not a list", { ...PASS, findings: {} }],
+      ["generalizations that are not a list", { ...PASS, generalizations: 1 }],
+      ["a finding that is not an object", { ...FAIL, findings: ["x"] }],
+      ["a finding without a category", {
+        ...FAIL,
+        findings: [{ why: "a name" }],
+      }],
+      ["a generalization without a suggestion", {
+        ...FAIL,
+        generalizations: [{ finding: 0, category: "remove" }],
+      }],
+    ];
+    for (const [shape, answer] of malformed) {
+      it(`throws for ${shape}`, () => {
+        expect(() => readPrivacyVerdict(answer)).toThrow(InvalidModelAnswer);
+      });
+    }
   });
 
   describe("readPrivacyRewrite()", () => {
@@ -128,6 +148,25 @@ describe("privacy", () => {
         )
       ).toThrow("no finding names");
     });
+
+    const malformedRewrites: [string, unknown][] = [
+      ["an answer that is not an object", "rewrite"],
+      ["files that are not a list", { files: {}, changes: [] }],
+      ["a file without contents", {
+        files: [{ name: "/main.tsx" }],
+        changes: [],
+      }],
+      ["a change without a category", {
+        files: [],
+        changes: [{ file: "/main.tsx" }],
+      }],
+    ];
+    for (const [shape, answer] of malformedRewrites) {
+      it(`throws for ${shape}`, () => {
+        expect(() => readPrivacyRewrite(answer, new Set(["/main.tsx"])))
+          .toThrow(InvalidModelAnswer);
+      });
+    }
 
     it("drops a change it reports for a file no finding names", () => {
       const read = readPrivacyRewrite(
@@ -288,6 +327,35 @@ describe("privacy", () => {
       expect(outcome.reasons[0]).toBe(
         "rewrite 1: its check gave no valid answer",
       );
+    });
+
+    it("throws what the model throws while rewriting, other than a malformed answer", async () => {
+      const generate: ObjectGenerator = (request) =>
+        request.system === GARDENER.prompt
+          ? Promise.resolve(FAIL)
+          : Promise.reject(new Error("model unreachable"));
+      await expect(runPrivacyCheck({
+        gardener: GARDENER,
+        input: INPUT,
+        generate,
+        recompile: recompileFrom().recompile,
+      })).rejects.toThrow("model unreachable");
+    });
+
+    it("throws what the model throws while checking a rewrite", async () => {
+      let checks = 0;
+      const generate: ObjectGenerator = (request) => {
+        if (request.system !== GARDENER.prompt) return Promise.resolve(REWRITE);
+        return checks++ === 0
+          ? Promise.resolve(FAIL)
+          : Promise.reject(new Error("model unreachable"));
+      };
+      await expect(runPrivacyCheck({
+        gardener: GARDENER,
+        input: INPUT,
+        generate,
+        recompile: recompileFrom().recompile,
+      })).rejects.toThrow("model unreachable");
     });
 
     it("returns held after two rewrites, never recompiling more often", async () => {

@@ -97,6 +97,15 @@ describe("membership", () => {
       })).rejects.toThrow("not after now");
     });
 
+    it("throws for an audience that is not an ed25519 did:key", async () => {
+      await expect(issueIndexChain({
+        issuer: root,
+        to: "did:web:example.test" as `did:key:${string}`,
+        held: [],
+        nowSeconds: NOW,
+      })).rejects.toThrow("not an ed25519 did:key");
+    });
+
     it("throws for the issuer as its own audience", async () => {
       await expect(issueIndexChain({
         issuer: root,
@@ -180,6 +189,78 @@ describe("membership", () => {
   });
 
   describe("checkIndexChain()", () => {
+    it("throws for an empty chain", async () => {
+      await expect(checkIndexChain([], laptop.did(), NOW)).rejects.toThrow(
+        "the chain is empty",
+      );
+    });
+
+    it("throws for a chain longer than the index accepts", async () => {
+      const [link] = await issueIndexChain({
+        issuer: root,
+        to: laptop.did(),
+        held: [],
+        nowSeconds: NOW,
+      });
+      await expect(
+        checkIndexChain(
+          Array.from({ length: MAX_INDEX_CHAIN_LENGTH + 1 }, () => link),
+          laptop.did(),
+          NOW,
+        ),
+      ).rejects.toThrow(`longer than ${MAX_INDEX_CHAIN_LENGTH}`);
+    });
+
+    it("throws for bytes that are not a delegation, naming the link", async () => {
+      await expect(
+        checkIndexChain([new Uint8Array([1, 2, 3])], laptop.did(), NOW),
+      ).rejects.toThrow("link 0 is not a delegation that verifies");
+    });
+
+    it("throws for a link its predecessor's audience did not issue", async () => {
+      const first = await issueIndexChain({
+        issuer: root,
+        to: laptop.did(),
+        held: [],
+        nowSeconds: NOW,
+      });
+      const stray = await issueDelegation(agent, {
+        aud: laptop.did(),
+        sub: root.did(),
+        cmd: INDEX_COMMAND,
+        pol: [],
+        exp: NOW + 60,
+      });
+      await expect(
+        checkIndexChain([first[0], stray.bytes], laptop.did(), NOW),
+      ).rejects.toThrow("link 1 is not issued by the previous link's audience");
+    });
+
+    it("throws for a link that is not valid yet", async () => {
+      const early = await issueDelegation(root, {
+        aud: laptop.did(),
+        sub: root.did(),
+        cmd: INDEX_COMMAND,
+        pol: [],
+        nbf: NOW + 60,
+        exp: NOW + 120,
+      });
+      await expect(checkIndexChain([early.bytes], laptop.did(), NOW)).rejects
+        .toThrow("link 0 is not valid yet");
+    });
+
+    it("throws for a link that has expired", async () => {
+      const lapsed = await issueDelegation(root, {
+        aud: laptop.did(),
+        sub: root.did(),
+        cmd: INDEX_COMMAND,
+        pol: [],
+        exp: NOW,
+      });
+      await expect(checkIndexChain([lapsed.bytes], laptop.did(), NOW)).rejects
+        .toThrow("expired");
+    });
+
     it("throws for a link to the signer that never expires", async () => {
       const open = await issueDelegation(root, {
         aud: laptop.did(),

@@ -101,6 +101,32 @@ describe("publish", () => {
       });
     });
 
+    it("returns a program without test roots or data files, with the schemas and lineage given", () => {
+      const request = publishRequestFor({
+        ...fields,
+        program: {
+          main: "/main.tsx",
+          files: [{ name: "/main.tsx", contents: "export default 1;" }],
+          mainExport: "other",
+        },
+        argumentSchema: { type: "object" },
+        resultSchema: { type: "string" },
+        priorPatternId: "id-0",
+        remixedFrom: "id-r",
+      });
+      expect(request.program).toEqual({
+        main: "/main.tsx",
+        files: [{ name: "/main.tsx", contents: "export default 1;" }],
+        mainExport: "other",
+      });
+      expect(request).toMatchObject({
+        argumentSchema: { type: "object" },
+        resultSchema: { type: "string" },
+        priorPatternId: "id-0",
+        remixedFrom: "id-r",
+      });
+    });
+
     it("returns no dependency a data file's text names", () => {
       expect(publishRequestFor(fields).dependencies).toEqual([]);
     });

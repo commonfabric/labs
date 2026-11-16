@@ -187,12 +187,8 @@ export const compileProgram = async (
   return {
     ...(patternId !== undefined ? { patternId } : {}),
     program,
-    ...(pattern.argumentSchema !== undefined
-      ? { argumentSchema: pattern.argumentSchema }
-      : {}),
-    ...(pattern.resultSchema !== undefined
-      ? { resultSchema: pattern.resultSchema }
-      : {}),
+    argumentSchema: pattern.argumentSchema,
+    resultSchema: pattern.resultSchema,
   };
 };
 
