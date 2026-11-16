@@ -20,7 +20,8 @@
  * their own, each only while it points at none. `holdingHome` holds an inbox
  * it did not make while its profile points at another it did not make, and
  * `labeledHoldingHome` holds one its profile points at through a pointer
- * carrying the owner's label. Fixture for
+ * carrying the owner's label, and `labeledHandOffHome` does the same without
+ * the `createOwnPrivateInbox` stream. Fixture for
  * `private-inbox-multi-runtime.test.ts` and
  * `private-inbox-labeled-pointer-multi-runtime.test.ts`.
  */
@@ -708,6 +709,116 @@ const HomeStandIn = pattern<{ label: string }, HomeStandInOutput>(
 );
 
 /**
+ * What {@link HandOffHomeStandIn} answers: a Home without its creating stream.
+ */
+export type HandOffHomeStandInOutput = Omit<
+  HomeStandInOutput,
+  "createOwnPrivateInbox"
+>;
+
+/**
+ * Stands in for a Home without the `createOwnPrivateInbox` stream, as one of a
+ * vintage before it. The host has it create no inbox before the ensure, so the
+ * ensure hands its event on to the creating step itself, in a run that has
+ * read Home's holder. Otherwise as {@link HomeStandIn}.
+ */
+const HandOffHomeStandIn = pattern<
+  { label: string },
+  HandOffHomeStandInOutput
+>(
+  ({ label }) => {
+    const privateInbox = new Writable<PrivateInboxHolder>({}).for(
+      "privateInbox",
+    );
+    const ownPrivateInbox = new Writable<PrivateInboxHolder>({}).for(
+      "ownPrivateInbox",
+    );
+    const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([])
+      .for("retainedPrivateInboxes");
+    const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({})
+      .for("privateInboxRefusal");
+    const privateInboxReplacement = new Writable<
+      PrivateInboxReplacementHolder
+    >({}).for("privateInboxReplacement");
+    const profiles = new Writable<ProfileHomeOutput[]>([]).for("profiles");
+    const defaultProfile = new Writable<DefaultProfileSlot>({}).for(
+      "defaultProfileSlot",
+    );
+    const requested = new Writable<Record<string, boolean>>({}).for(
+      "privateInboxRequests",
+    );
+    const pointProfiles = pointProfilesAtPrivateInbox({
+      privateInbox,
+      retainedPrivateInboxes,
+      // deno-lint-ignore no-explicit-any
+      profiles: profiles as any,
+    });
+    const ensure = ensurePrivateInbox({
+      privateInbox,
+      ownPrivateInbox,
+      retainedPrivateInboxes,
+      privateInboxRefusal,
+      // deno-lint-ignore no-explicit-any
+      profiles: profiles as any,
+      pointProfiles,
+      createOwn: createOwnPrivateInbox({
+        ownPrivateInbox,
+        ensure: ensurePrivateInboxOnly({
+          privateInbox,
+          ownPrivateInbox,
+          retainedPrivateInboxes,
+          privateInboxRefusal,
+          // deno-lint-ignore no-explicit-any
+          profiles: profiles as any,
+          pointProfiles,
+        }),
+      }),
+    });
+    return {
+      [NAME]: label,
+      privateInbox,
+      ownPrivateInbox,
+      retainedPrivateInboxes,
+      privateInboxRefusal,
+      privateInboxReplacement,
+      profiles,
+      defaultProfile,
+      setDefaultProfile: setDefaultProfile({ profiles, defaultProfile }),
+      ensurePrivateInbox: ensure,
+      requestPrivateInbox: requestPrivateInbox({
+        // deno-lint-ignore no-explicit-any
+        profiles: profiles as any,
+        requested,
+        answers: PrivateInboxAnswering({
+          privateInbox,
+          // deno-lint-ignore no-explicit-any
+          profiles: profiles as any,
+          requested,
+        }).answers,
+        ensure,
+      }),
+      replaceRefusedPrivateInbox: replaceRefusedPrivateInbox({
+        privateInbox,
+        ownPrivateInbox,
+        privateInboxRefusal,
+        privateInboxReplacement,
+        repointProfiles: repointProfilesFromReplacedInbox({
+          privateInbox,
+          privateInboxReplacement,
+          // deno-lint-ignore no-explicit-any
+          profiles: profiles as any,
+        }),
+      }),
+      createProfile: createProfile({
+        profiles,
+        seedName: seedProfileName({}),
+      }),
+      createEarlierProfile: createEarlierProfile({ profiles }),
+    };
+  },
+);
+
+/**
  * The event a Home of the vintage before the refusal record takes: an inbox to
  * adopt and the deciding profile, and nothing about a refusal.
  */
@@ -1205,6 +1316,28 @@ export interface MainOutput {
    * Points one of `labeledHoldingHome`'s profiles at `labeledHoldingInbox`'s.
    */
   pointLabeledHoldingProfile: Stream<PointElsewhereRequest>;
+
+  /**
+   * A Home like `labeledHoldingHome` without the `createOwnPrivateInbox`
+   * stream, so that its ensure takes the in-pattern hand-off over the labeled
+   * holder.
+   */
+  labeledHandOffHome: HandOffHomeStandInOutput;
+
+  /** The inbox `labeledHandOffHome` holds, shaped as a loom daemon's. */
+  labeledHandOffInbox: PrivateInboxHolder;
+
+  /** As `createLabeledHoldingProfile`, for `labeledHandOffHome`. */
+  createLabeledHandOffProfile: Stream<void>;
+
+  /** As `createLabeledHoldingInbox`, kept in `labeledHandOffInbox`. */
+  createLabeledHandOffInbox: Stream<void>;
+
+  /** As `holdLabeledHoldingInbox`, for `labeledHandOffHome`. */
+  holdLabeledHandOffInbox: Stream<void>;
+
+  /** As `pointLabeledHoldingProfile`, for `labeledHandOffHome`. */
+  pointLabeledHandOffProfile: Stream<PointElsewhereRequest>;
 }
 
 export default pattern<MainInput, MainOutput>((
@@ -1261,6 +1394,12 @@ export default pattern<MainInput, MainOutput>((
   const labeledHoldingInbox = new Writable<PrivateInboxHolder>({}).for(
     "labeledHoldingInbox",
   );
+  const labeledHandOffHome = HandOffHomeStandIn({
+    label: "Home handing on its creation over a labeled pointer",
+  });
+  const labeledHandOffInbox = new Writable<PrivateInboxHolder>({}).for(
+    "labeledHandOffInbox",
+  );
   const ownPrivateInbox = new Writable<PrivateInboxHolder>({}).for(
     "ownPrivateInbox",
   );
@@ -1313,6 +1452,8 @@ export default pattern<MainInput, MainOutput>((
     holdingDecidingInbox,
     labeledHoldingHome,
     labeledHoldingInbox,
+    labeledHandOffHome,
+    labeledHandOffInbox,
     copiedOffers,
     ownPrivateInbox,
     retainedPrivateInboxes,
@@ -1481,6 +1622,21 @@ export default pattern<MainInput, MainOutput>((
     pointLabeledHoldingProfile: pointProfileAt({
       profiles: labeledHoldingHome.profiles,
       inbox: labeledHoldingInbox,
+    }),
+    createLabeledHandOffProfile: createLabeledProfile({
+      profiles: labeledHandOffHome.profiles,
+      seedName: seedProfileName({}),
+    }),
+    createLabeledHandOffInbox: createSharedInbox({
+      inbox: labeledHandOffInbox,
+    }),
+    holdLabeledHandOffInbox: holdFirstProfileInbox({
+      privateInbox: labeledHandOffHome.privateInbox,
+      profiles: labeledHandOffHome.profiles,
+    }),
+    pointLabeledHandOffProfile: pointProfileAt({
+      profiles: labeledHandOffHome.profiles,
+      inbox: labeledHandOffInbox,
     }),
     createRequestingPointerOnlyProfile: createPointerOnlyProfile({
       profiles: requestingHome.profiles,

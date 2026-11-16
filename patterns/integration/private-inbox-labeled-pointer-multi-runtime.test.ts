@@ -7,7 +7,10 @@
  * carries the owner's label too. Ensuring the Home's inbox creates one of its
  * own in that one's place, in a step that reads neither, retains that one, and
  * points the profile at its own, with nothing refused by the CFC write gate
- * and no event dropped. The fixture is `private-inbox-multi-runtime.test.ts`'s.
+ * and no event dropped. It does so for a Home with the `createOwnPrivateInbox`
+ * stream, which the host has create the inbox first, and for one without it,
+ * whose ensure hands the creation on itself. The fixture is
+ * `private-inbox-multi-runtime.test.ts`'s.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -109,20 +112,37 @@ describe("private inbox through a labeled pointer across runtimes", () => {
     await harness?.dispose();
   });
 
-  it("creates its own inbox in place of the one it holds, retains that one, and points the profile at its own", async () => {
+  /** The fixture's fields for one labeled Home. */
+  type LabeledHome = {
+    home: string;
+    inbox: string;
+    createProfile: string;
+    createInbox: string;
+    pointProfile: string;
+    holdInbox: string;
+  };
+
+  /**
+   * Has the Home `names.home` hold `names.inbox`'s inbox, which its profile
+   * points at through the labeled pointer, ensures its inbox as the host
+   * does, and checks that it created its own in that one's place, retained
+   * that one and pointed the profile at its own, with nothing refused by the
+   * write gate and no event dropped.
+   */
+  async function replacesTheLabeledInbox(names: LabeledHome): Promise<void> {
     expect(harness.spaceDid).toBe(LABELED_OWNER);
-    await owner.send("createLabeledHoldingProfile");
-    await owner.send("createLabeledHoldingInbox");
+    await owner.send(names.createProfile);
+    await owner.send(names.createInbox);
     await harness.settle();
-    await owner.send("pointLabeledHoldingProfile", { index: 0 });
-    const held = ["labeledHoldingHome", "privateInbox", "piece"];
-    const pointer = ["labeledHoldingHome", "profiles", 0, "inbox", "piece"];
-    const loom = await owner.link(["labeledHoldingInbox", "piece"]);
+    await owner.send(names.pointProfile, { index: 0 });
+    const held = [names.home, "privateInbox", "piece"];
+    const pointer = [names.home, "profiles", 0, "inbox", "piece"];
+    const loom = await owner.link([names.inbox, "piece"]);
     await harness.settleUntil(async () =>
       (await owner.read(pointer)) !== undefined &&
       (await owner.link(pointer)).id === loom.id
     );
-    await owner.send("holdLabeledHoldingInbox");
+    await owner.send(names.holdInbox);
     await harness.settleUntil(async () =>
       (await owner.read(held)) !== undefined &&
       (await owner.link(held)).id === loom.id
@@ -131,7 +151,7 @@ describe("private inbox through a labeled pointer across runtimes", () => {
     const droppedBefore = await dropped();
 
     const ensured = await owner.client().call("ensurePrivateInbox", {
-      path: ["labeledHoldingHome"],
+      path: [names.home],
     }) as HostEnsure;
     // A refusal ends the wait too, so that a refused creation fails the
     // assertions below rather than leaving the wait to time out.
@@ -148,12 +168,41 @@ describe("private inbox through a labeled pointer across runtimes", () => {
     expect(own.space).not.toBe(loom.space);
     expect(own.space).not.toBe(harness.spaceDid);
     expect(
-      (await owner.link(["labeledHoldingHome", "ownPrivateInbox", "piece"]))
+      (await owner.link([names.home, "ownPrivateInbox", "piece"]))
         .id,
     ).toBe(own.id);
     expect((await owner.link(pointer)).id).toBe(own.id);
-    const retained = ["labeledHoldingHome", "retainedPrivateInboxes"];
+    const retained = [names.home, "retainedPrivateInboxes"];
     expect(((await owner.readRaw(retained)) as unknown[]).length).toBe(1);
     expect((await owner.link([...retained, 0])).id).toBe(loom.id);
+  }
+
+  it("creates its own inbox in place of the one it holds, retains that one, and points the profile at its own", async () => {
+    await replacesTheLabeledInbox({
+      home: "labeledHoldingHome",
+      inbox: "labeledHoldingInbox",
+      createProfile: "createLabeledHoldingProfile",
+      createInbox: "createLabeledHoldingInbox",
+      pointProfile: "pointLabeledHoldingProfile",
+      holdInbox: "holdLabeledHoldingInbox",
+    });
+  });
+
+  it("does the same through the ensure's hand-off, for a Home without the creating stream", async () => {
+    // The host creates no inbox first for this Home, so its ensure, in a run
+    // that has read the labeled holder, sends the creating step its event.
+    // That holds only while an event carries no label of the run that sent
+    // it.
+
+    expect(await owner.readRaw(["labeledHandOffHome", "createOwnPrivateInbox"]))
+      .toBeUndefined();
+    await replacesTheLabeledInbox({
+      home: "labeledHandOffHome",
+      inbox: "labeledHandOffInbox",
+      createProfile: "createLabeledHandOffProfile",
+      createInbox: "createLabeledHandOffInbox",
+      pointProfile: "pointLabeledHandOffProfile",
+      holdInbox: "holdLabeledHandOffInbox",
+    });
   });
 });
