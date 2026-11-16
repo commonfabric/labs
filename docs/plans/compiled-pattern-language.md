@@ -1148,6 +1148,9 @@ is relitigated.
   of today shows. Both are the same inside an element body over an
   array of references, over an array of plain values in place, and over
   the result of another per-element construct.
+- The name a pattern binds to `[SELF]` is a reference to the result
+  cell of the instance. Passed on, it adds no label, as a handle passed
+  on without a read adds none.
 - A read of a default carries no integrity. Where a stored object has
   an absent property and a default fills it, the defaulted part carries
   the empty integrity, not the object's claims. The specification has no
@@ -2143,11 +2146,12 @@ unless the entry says otherwise.
      array of references and over an upstream array of plain values in
      place alike. Question 159 has what the ruling leaves open. The
      entry keeps its number.
-157. **The name a pattern binds to `[SELF]`** (PL question 108). No
-     record of the plan holds it. *Assumed:* a reference to the result
-     cell of the instance, which adds no label where it is passed on.
-     Open: what a read through it is. Not about a per-element
-     construct.
+157. **A read through the name a pattern binds to `[SELF]`** (PL
+     question 108). By ruling the name is a reference to the result
+     cell of the instance ([Decided](#decided)). Open: what a read
+     through it is, of a path of the result that a cone of the
+     instance computes; no record of the plan holds it. Not about a
+     per-element construct.
 
 **From the rulings on questions 145 and 152 to 156.** Each is what a
 ruling leaves undetermined, written into the documents as an

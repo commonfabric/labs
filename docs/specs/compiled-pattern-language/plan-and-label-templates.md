@@ -1407,14 +1407,14 @@ the well-known key `[SELF]` of its input parameter
 (`language-subset.md` §4.1 and §4.6). In the runtime of today the name
 is a reference to the pattern's own result (`factoryFromPattern` in
 `runtime/runner/src/builder/pattern.ts`). No slot root names the result
-of the instance, and no record holds the name. *Assumed* (section 8,
-question 108): in value code the name is a reference to the result cell
-of the instance, which the runtime supplies. A cone can place it in a
+of the instance, and no record holds the name. By ruling, in value
+code the name is a reference to the result cell of the instance, which
+the runtime supplies. A cone can place it in a
 value, where the runtime stores a link to the result, and can pass it
 to a body as a reference. Passed on, it adds no label, as a handle
 passed on without a read adds none. What a read through it is, of a
 path of the result that a cone of the instance computes, has no record
-and is open with the question.
+and is open (section 8, question 108).
 
 **The order of `Binding.result`.** The paths are in source order: the
 order in which the positions that hold the stream are written in the
@@ -11378,11 +11378,11 @@ this document made.
      upstream array of plain values in place alike. In the prototype's
      corpus run, `patterns/examples/todo-list/todo-list.tsx` differed
      in 6 values without it. The entry keeps its number.
-108. **The name a pattern binds to `[SELF]`.** No record of the plan
-     holds it. *Assumed:* a reference to the result cell of the
+108. **A read through the name a pattern binds to `[SELF]`.** By
+     ruling the name is a reference to the result cell of the
      instance, which the runtime supplies to value code and which adds
-     no label where it is passed on (section 1.1). Open: what a read
-     through it is. One module of the prototype's corpus run,
+     no label where it is passed on (section 1.1). No record of the
+     plan holds it. Open: what a read through it is. One module of the prototype's corpus run,
      `patterns/dev/test/input-self/subjects.tsx`, holds in its result a
      reference to the result, and a read of it that follows the
      reference differs between the two runs.
