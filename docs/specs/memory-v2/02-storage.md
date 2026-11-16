@@ -164,6 +164,13 @@ a digested commit that wrote anything is in `revision` at the commit's `seq` and
 its operation index. A digested payload is recognized by its shape: an object
 with a `digest` object and no `operations`, which no `ClientCommit` can be.
 
+The engine also writes a revision of its own into a derived commit that touches
+a stream's entries document: the patch of that document's `eventWatermark`, at
+the operation index after the highest one the commit's operations wrote. That
+index can be `digest.operations` or more, or the index of an operation that
+wrote nothing, so nothing in a digested payload tells such a revision from one
+an operation wrote.
+
 A derived commit holding a `sqlite`, `apply-op` or `release-op-field` operation
 is stored whole. A `sqlite` operation's statement is stored nowhere else, and
 the operation-field tables join to the whole request.

@@ -208,6 +208,8 @@ interface Commit {
   branch: BranchId;
   sessionId: SessionId;
   localSeq: number;
+  // A stored derived commit may hold its digested form instead
+  // (03-commit-model.md §3.7.2).
   original: ClientCommit | BranchLifecycleWrite;
   resolution: {
     seq: number;

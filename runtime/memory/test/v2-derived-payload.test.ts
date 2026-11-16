@@ -17,6 +17,7 @@ import {
   serverSeq,
 } from "../v2/engine.ts";
 import { executionLeaseHolder } from "../v2/execution-lease.ts";
+import { readGenesisRoot } from "../v2/genesis-root.ts";
 import { CODEMIRROR_CHANGESET_CODEC } from "../v2/operation-codec.ts";
 import {
   type ClientCommit,
@@ -274,6 +275,8 @@ describe("derived commit payload", () => {
             operations: commit.operations.slice(0, 1),
           }),
         );
+        // The genesis receipt reads a commit at seq 1 back whole.
+        expect(readGenesisRoot(fresh)).toBeUndefined();
       } finally {
         close(fresh);
       }
@@ -295,7 +298,7 @@ describe("derived commit payload", () => {
       );
     });
 
-    it("stores a derived commit carrying an `apply-op` whole", () => {
+    it("stores a derived commit carrying an `apply-op` whole, and one carrying a `release-op-field`", () => {
       wave({
         localSeq: 1,
         reads: noReads(),
@@ -329,8 +332,26 @@ describe("derived commit payload", () => {
       };
 
       const { seq } = wave(commit);
+      const release: ClientCommit = {
+        localSeq: 3,
+        reads: noReads(),
+        operations: [
+          { op: "set", id: "of:derived", value: { value: { n: 2 } } },
+          {
+            op: "release-op-field",
+            id: "of:collaborative",
+            path: toValuePath(["body"]),
+            codec: CODEMIRROR_CHANGESET_CODEC,
+            cursor: { epoch: 1, version: 1 },
+          },
+        ],
+      };
+      const released = wave(release);
 
       expect(storedRow(seq).original).toBe(encodeMemoryBoundary(commit));
+      expect(storedRow(released.seq).original).toBe(
+        encodeMemoryBoundary(release),
+      );
     });
   });
 
@@ -363,8 +384,10 @@ describe("derived commit payload", () => {
   describe("a pending read naming a digested layer", () => {
     // The holder's own commit at localSeq 1 writes `of:p` and is stored
     // digested. A later commit of the same session reads `of:p` through that
-    // layer from the basis before it, so the layer's stored payload is what
-    // the engine would replay the read's view from.
+    // layer from the basis before it. A digested layer keeps no operations to
+    // reconstruct the reader's view or prove an identity from, so it gives
+    // the read neither identity rule (03-commit-model.md §3.6.1, §3.6.3), and
+    // the read is judged from its declared basis alone.
 
     /** Applies the layer and returns the seq the read declares as its basis. */
     const layer = (): number => {
@@ -418,6 +441,62 @@ describe("derived commit payload", () => {
       });
 
       expect(() => wave(reader(basisSeq))).toThrow(ConflictError);
+    });
+
+    it("throws `ConflictError` for a reader whose write would be an identity through the layer", () => {
+      const basisSeq = layer();
+      applyCommit(engine, {
+        sessionId: "session:author",
+        commit: {
+          localSeq: 2,
+          reads: noReads(),
+          operations: [{ op: "set", id: "of:p", value: { value: { n: 2 } } }],
+        },
+      });
+
+      expect(() =>
+        wave({
+          ...reader(basisSeq),
+          operations: [{ op: "set", id: "of:p", value: { value: { n: 2 } } }],
+        })
+      ).toThrow(ConflictError);
+    });
+
+    it("throws `ConflictError` when the layer was accepted as an identity commit", () => {
+      applyCommit(engine, {
+        sessionId: "session:author",
+        commit: {
+          localSeq: 2,
+          reads: noReads(),
+          operations: [{ op: "set", id: "of:p", value: { value: { n: 1 } } }],
+        },
+      });
+      const readSeq = serverSeq(engine);
+      applyCommit(engine, {
+        sessionId: "session:author",
+        commit: {
+          localSeq: 3,
+          reads: noReads(),
+          operations: [{ op: "set", id: "of:p", value: { value: { n: 2 } } }],
+        },
+      });
+      // A stale read whose write the space already holds: admission accepts
+      // the layer as an identity commit and elides its one operation.
+      const identity = wave({
+        localSeq: 1,
+        reads: {
+          confirmed: [{ id: "of:p", path: toDocumentPath([]), seq: readSeq }],
+          pending: [],
+        },
+        operations: [{ op: "set", id: "of:p", value: { value: { n: 2 } } }],
+      });
+      expect(identity.elidedOpIndexes).toEqual([0]);
+      expect(identity.revisions).toEqual([]);
+      expect(payloadDigest(
+        decodeTrustedMemoryBoundary(storedRow(identity.seq).original),
+      )).toBeDefined();
+
+      expect(() => wave(reader(readSeq))).toThrow(ConflictError);
     });
   });
 });
