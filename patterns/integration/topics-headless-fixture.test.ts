@@ -166,6 +166,29 @@ describe("topics-headless-fixture", () => {
       expect(fixture.topics[1].mentions).toEqual([2, 3, 2]);
     });
 
+    it("returns each topic numbered one past its index, unless `shortNames` gives another number or none", () => {
+      const fixture = buildTopicsFixture({
+        topicCount: 5,
+        mentions: { shape: "none" },
+        shortNames: { 1: null, 2: "1", 3: " 4" },
+      });
+      expect(fixture.topics.map((topic) => topic.shortName)).toEqual([
+        "1",
+        undefined,
+        "1",
+        " 4",
+        "5",
+      ]);
+      expect(Object.hasOwn(fixture.topics[1], "shortName")).toBe(false);
+      expect(() =>
+        buildTopicsFixture({
+          topicCount: 2,
+          mentions: { shape: "none" },
+          shortNames: { 2: "3" },
+        })
+      ).toThrow(RangeError);
+    });
+
     it("returns a board listing a duplicated topic again after every other entry", () => {
       const fixture = buildTopicsFixture({
         topicCount: 6,

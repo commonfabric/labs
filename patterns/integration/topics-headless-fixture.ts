@@ -122,6 +122,13 @@ export interface TopicsFixtureOptions {
 
   /** A topic listed on the board a second time, after every other entry. */
   readonly duplicateBoardEntry?: number;
+
+  /**
+   * The number a topic stores as its `shortName`, by topic index, where it is
+   * not the default of its index plus one: a string stored as given, well
+   * formed or not, or `null` for a topic that stores none.
+   */
+  readonly shortNames?: Readonly<Record<number, string | null>>;
 }
 
 /** A comment's timestamps, which are what the reached lifts read of it. */
@@ -167,6 +174,9 @@ export interface FixtureTopic {
 
   /** When the topic was last renamed. */
   readonly titleUpdatedAt: number;
+
+  /** The number the topic stores, absent on a topic that stores none. */
+  readonly shortName?: string;
 }
 
 /** Synthetic Topics data, before anything is written to storage. */
@@ -186,6 +196,8 @@ export interface TopicsFixture {
  * by topic index in turn, a comment retraction, a comment edit, and a link
  * retraction, for a topic with a comment, or for the last of the three a link,
  * to carry it.
+ *
+ * Topic `i` stores the number `i + 1` unless `shortNames` says otherwise.
  *
  * @throws RangeError when a count is out of range, or an option names a topic
  * index outside the fixture, or `repeatedMention` names a topic with nothing
@@ -221,6 +233,9 @@ export function buildTopicsFixture(
     const index = options[name];
     if (index !== undefined) requireCount(name, index, 0, topicCount - 1);
   }
+  for (const key of Object.keys(options.shortNames ?? {})) {
+    requireCount("shortNames", Number(key), 0, topicCount - 1);
+  }
 
   const topics = Array.from({ length: topicCount }, (_, index) => {
     const mentions = shapedMentions(graph, index, topicCount);
@@ -233,7 +248,17 @@ export function buildTopicsFixture(
       }
       mentions.push(mentions[0]);
     }
-    return fixtureTopic(index, mentions, commentsPerTopic, linksPerTopic);
+    const topic = fixtureTopic(
+      index,
+      mentions,
+      commentsPerTopic,
+      linksPerTopic,
+    );
+    const shortName = options.shortNames !== undefined &&
+        Object.hasOwn(options.shortNames, index)
+      ? options.shortNames[index]
+      : String(index + 1);
+    return shortName === null ? topic : { ...topic, shortName };
   });
   const board = topics.map((_, index) => index);
   if (options.duplicateBoardEntry !== undefined) {
