@@ -138,7 +138,7 @@ struct Frame {
     scope: ScopeId,
 }
 
-/// What a per-element callback needs for the rule on shared state.
+/// What the corpus report counts of a per-element callback.
 #[derive(Default)]
 struct ElementState {
     plain: bool,
@@ -2627,22 +2627,20 @@ impl<'p, 'a> Checker<'p, 'a> {
         let uses_index = self.out.bodies[body].uses_index;
         if uses_index && !reduce {
             self.report(
-                "collection:index-keyed",
+                "collection:index-read",
                 function.span(),
-                format!("The callback of `{name}` uses its index, so its elements are keyed by position"),
+                format!(
+                    "The callback of `{name}` uses its index, so what reads it is evaluated \
+                     again for each element whose position changes"
+                ),
             );
         }
-        if state.plain && state.child && !uses_index {
-            self.count("child instantiated per element of plain values");
-        }
-        if let (true, false, false, Some(span)) =
-            (state.plain, uses_index, state.child, state.state)
-        {
-            self.report(
-                "collection:shared-element-state",
-                span,
-                "A state cell declared per element of a collection of plain values, without the index",
-            );
+        // "Equal elements share nothing": a state cell or a handler
+        // binding in a per-element body is per occurrence over every
+        // collection (`language-subset.md` §4.4.1), so nothing is
+        // reported. The count is for the corpus table of its §11.3.
+        if state.plain && !uses_index && !state.child && state.state.is_some() {
+            self.count("state per element of plain values without the index");
         }
     }
 

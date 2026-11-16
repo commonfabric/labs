@@ -186,7 +186,7 @@ pub const CATALOG: &[Entry] = &[
          function type; an accumulator whose code type shows only in the step's \
          expression is not decided",
     ),
-    done("collection:index-keyed", Hint),
+    done("collection:index-read", Hint),
     part("cell:unsupported-method", Error, HANDLE_REST),
     part("cell:collection-method-in-function", Error, HANDLE_REST),
     done("cell:cause-not-literal", Error),
@@ -253,13 +253,6 @@ pub const CATALOG: &[Entry] = &[
     ),
     done("function-body:event-context-in-computation", Error),
     done("function-body:wish", Error),
-    part(
-        "collection:shared-element-state",
-        Error,
-        "reported when the collection is plain by its syntax: a module-scope \
-         constant, an array literal, or the result of `Object.keys`, \
-         `Object.entries`, or `split`; any other collection needs its element type",
-    ),
     done("function-body:instantiation-without-cause", Warning),
     done("verb-result:undeclared-return", Error),
     part(

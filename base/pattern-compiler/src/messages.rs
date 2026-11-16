@@ -118,7 +118,7 @@ pub fn rewrite(id: &str) -> &'static str {
             "Accumulate into an object, an array, or a primitive. To fold into a `Map`, write \
              the loop inside `computed(() => ...)` and return data."
         }
-        "collection:index-keyed" => {
+        "collection:index-read" => {
             "Drop the index if the element can supply what it was used for, such as a \
              stable identifier in place of `key={index}`."
         }
@@ -197,10 +197,6 @@ pub fn rewrite(id: &str) -> &'static str {
             "Call `wish` in the pattern body and read its result in the function body. Where \
              the query depends on a value the body computes, call it in the body of a pattern \
              the function body instantiates."
-        }
-        "collection:shared-element-state" => {
-            "Take the index parameter and use it, for example in the cell's cause. Or make \
-             the elements cells: keep the list in a cell that a handler writes records into."
         }
         "verb-result:undeclared-return" => {
             "Declare the result (`action<Event, Result>(...)`, \

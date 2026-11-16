@@ -386,7 +386,7 @@ impl Report {
                 "per-element bodies over plain values that bind a handler without the index",
                 "11.3",
                 7,
-                self.diagnostic("collection:shared-element-state"),
+                self.construct("state per element of plain values without the index"),
             ),
             row("`any` in a type", "11.3", 132, any.saturating_sub(as_any)),
             row("`as any`", "11.3", 52, as_any),

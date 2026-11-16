@@ -211,7 +211,7 @@ const CASES: &[Case] = &[
         "const Box = pattern<{ names: string[] }>(({ names }) => ({ joined: names.reduce((joined, name) => joined + name, \"\") }));",
     ),
     case(
-        "collection:index-keyed",
+        "collection:index-read",
         "const Box = pattern<{ names: string[] }>(({ names }) => ({ rows: names.map(/*!*/(name, index) => `${index}. ${name}`) }));",
         "const Box = pattern<{ names: string[] }>(({ names }) => ({ rows: names.map((name) => `${name}!`) }));",
     ),
@@ -334,11 +334,6 @@ const CASES: &[Case] = &[
         "function-body:wish",
         "const find = handler<unknown, { last: Writable<unknown> }>((_, { last }) => { last.set(/*!*/wish({ query: \"#profile\" })); });",
         "const Box = pattern(() => { const profile = wish({ query: \"#profile\" }); return { profile }; });",
-    ),
-    case(
-        "collection:shared-element-state",
-        "const GLAZES = [\"plain\", \"glazed\"];\nconst Box = pattern(() => { const rows = GLAZES.map((glaze) => { const open = /*!*/new Writable(false); return <li onClick={() => open.set(!open.get())}>{glaze}</li>; }); return { rows }; });",
-        "const GLAZES = [\"plain\", \"glazed\"];\nconst Box = pattern(() => { const rows = GLAZES.map((glaze, index) => { const open = new Writable(false); return <li onClick={() => open.set(!open.get())}>{index + 1}. {glaze}</li>; }); return { rows }; });",
     ),
     case(
         "function-body:instantiation-without-cause",
@@ -976,11 +971,31 @@ fn call_of_a_property_in_the_reactive_tier_is_decided_by_its_declared_type() {
 }
 
 #[test]
-fn state_cell_per_element_of_a_stored_list_of_primitives_is_refused() {
+fn state_cell_per_element_of_plain_values_is_accepted_with_or_without_the_index() {
+    // `language-subset.md` §4.4.1, "Equal elements share nothing": the
+    // body of a per-element construct "may declare a state cell over any
+    // collection, a collection of plain values included", and §12.8: "A
+    // per-element body over plain values that declares a state cell is
+    // accepted as written".
     let cell = "const Box = pattern<{ names: string[] }>(({ names }) => ({ rows: names.map((name) => { const open = new Writable(false); return { name, open }; }) }));\n";
-    assert_eq!(ids(&check(cell)), ["collection:shared-element-state"]);
+    assert_eq!(ids(&check(cell)), Vec::<&str>::new());
+    let constant = "const GLAZES = [\"plain\", \"plain\"];\nconst Box = pattern(() => { const rows = GLAZES.map((glaze) => { const open = new Writable(false); return <li onClick={() => open.set(!open.get())}>{glaze}</li>; }); return { rows }; });\n";
+    assert_eq!(ids(&check(constant)), Vec::<&str>::new());
     let records = "const Box = pattern<{ donuts: { name: string }[] }>(({ donuts }) => ({ rows: donuts.map((donut) => { const open = new Writable(false); return { donut, open }; }) }));\n";
     assert_eq!(ids(&check(records)), Vec::<&str>::new());
+}
+
+#[test]
+fn the_hint_for_a_callback_that_uses_its_index_does_not_say_the_elements_are_keyed_by_position() {
+    // `language-subset.md` §4.4.1: "The position is never in the key,
+    // also where the callback uses the index", and the hint is
+    // `collection:index-read`.
+    let module = "const Box = pattern<{ names: string[] }>(({ names }) => ({ rows: names.map((name, index) => `${index}. ${name}`) }));\n";
+    let found = check(module);
+    let ids: Vec<&str> = found.iter().map(|diagnostic| diagnostic.id).collect();
+    assert_eq!(ids, ["collection:index-read"]);
+    let message = &found[0].message;
+    assert!(!message.contains("keyed by position"), "{message}");
 }
 
 #[test]
