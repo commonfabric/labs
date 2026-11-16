@@ -397,30 +397,34 @@ is relitigated.
   fine, and the runtime decides it by a rule about size.
 - A state cell's identifier derives from its cause, with the name taken from
   the assigned variable as the transformer's `.for(...)` does.
-- A `map` element is keyed by its value when it is a plain value and by its
-  cell identity otherwise. The index joins the key only when the callback
-  uses it. A value-derived key is salted with a secret of the space.
-- Equal plain values share a cone for computation only. A per-element body
-  over plain values that declares a state cell without using the index is
-  a compile error. A body that binds a handler and declares no state cell
-  is accepted: equal elements bind equal state, and they share one
-  stream.
-- Where a per-element body over plain values instantiates a child, the
-  position joins the element key, so equal elements have a child each.
+- A `map` element is keyed by its cell identity where the collection
+  holds a reference, and by its value otherwise. In both cases the key
+  also holds the count of earlier occurrences of the same identity or
+  value in the collection, so two equal elements have two keys.
+  Position alone is not in the key, so moving an element recomputes
+  nothing in almost all cases. The index joins the key only when the
+  callback uses it. A value-derived key is salted with a secret of the
+  space.
+- Everything an element body holds is per element key, and so per
+  occurrence: its state cells, its streams, its effects, and its
+  children. Equal elements share nothing. A body with no state of its
+  own (no handler, no declared cell, no effect, no child) could reuse
+  one outcome for equal values; the design does not special-case it.
+  So a per-element body over plain values that declares a state cell
+  is legal, and where two equal values stand in a collection and the
+  first is removed, the state that remains is that of the first
+  occurrence.
 - Stored per-element state is not carried over from the current runtime.
 
 **Labels**
 
-- Template labels are equal to or tighter than today's, with three
+- Template labels are equal to or tighter than today's, with two
   deliberate exceptions. One is the collection index, where the keys of
   absent elements join a bucket's membership label. The second is a read
   through a handle that is static because every run that returns normally
   makes it: a run that throws before the read carries the read's label
-  all the same. The third is what is stored once for an element key (an
-  effect's request and result, operation state, a child's argument, a
-  side-write, a binding's copied state): where positions that hold equal
-  plain values resolve to different labels, it carries the join. The
-  third is to be revisited.
+  all the same. Nothing is stored once for several positions of a
+  collection, so no stored label joins the labels of two positions.
 - A read through a handle at a static place that is conditional stays
   dynamic.
 - `minBy`, `maxBy`, and a keyed lookup break a tie among equal keys by
@@ -931,20 +935,6 @@ as an assumption.
     does, which is equal to today for `askToRetire` of
     `patterns/system/profile-picker/profile-picker.tsx`. No record of
     the plan holds that declared label.
-132. **Per-value flow and the join over the positions that hold one
-    key** (PL question 86). Two rulings differ in one case. What is
-    stored once per element key carries the join over the positions
-    that hold the key. The element has the label of its own slot, and
-    nothing of another element reaches a node that reads neither the
-    index nor the collection. Where two positions hold one key (equal
-    plain values with no position in the key, or links to one cell)
-    and resolve to different labels, the first gives a handler that
-    closes over the element alone the labels of both positions, and
-    the second the label of one. *Assumed:* the first stands at these
-    positions and the second holds everywhere else. The alternatives:
-    read "element" in the second ruling as the element key; or end
-    the exception, which needs a stream and everything else stored
-    once to be stored per position.
 133. **A written path that holds a link, for a write edge with no
     reference** (PL question 87). *Assumed:* the row is not compared
     where the run stored a link at the written path, and is counted
