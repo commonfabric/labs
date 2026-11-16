@@ -539,6 +539,20 @@ describe("stored-link-schema-precedence", () => {
         });
       });
 
+      it("keeps a caller's schema that declares a stream over a stored schema that only declares one", () => {
+        // The one shape of caller's schema the handle keeps: the stored
+        // schema here is a stream's declaration and nothing else.
+
+        const typedStream = {
+          ...rowSchema,
+          asCell: ["stream"],
+        } as const satisfies JSONSchema;
+        const slot = holderOverLinkCarrying({ asCell: ["stream"] }).key("rows")
+          .key(0).asSchema(typedStream);
+
+        expect(schemaOf(slot.resolveAsCell())).toEqual(typedStream);
+      });
+
       it("carries the stored schema for a row-typed cell reached through `asSchemaFromLinks()`", () => {
         // The holder is reached through a link whose stored schema types its
         // rows by the reader's row schema, so `asSchemaFromLinks()` types the
