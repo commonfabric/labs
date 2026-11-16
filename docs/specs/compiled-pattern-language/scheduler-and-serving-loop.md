@@ -112,7 +112,9 @@ The terms of the sibling documents are used unchanged: *instance*, *cone*,
 - **Demanded.** A kept output is demanded when something outside its cone
   needs its current value (section 4). A cone instance is demanded when one
   of its kept outputs is, or when something demanded reads the target of
-  one of its write edges.
+  one of its write edges or passes that target on by reference: by
+  ruling the write targets of a cone count as its outputs for demand
+  (section 4.3).
 - **Handling.** One event on one stream, identified by its receipt
   (section 5.5).
 - **Scope instance.** One instance of a scoped document: the space's, one
@@ -184,7 +186,7 @@ recorded here because the tables depend on them.
 | --- | --- | --- |
 | P1, one change channel | Kept | Committed changes arrive through the storage subscription only. The writes the open transaction has staged are matched against the same index (section 3.5), so that a cone instance reads what its own transaction staged before the transaction seals. That is one matching mechanism with two sources, not a second channel with rules of its own |
 | P2, value-accurate invalidation | Kept | A slot becomes dirty only when what its observation class observes at its bound address changed (section 3.3). Reachability is used for order and for demand, never to decide that something is stale |
-| P3, demand gates execution | Kept | A cone instance is evaluated only when it is stale and demanded: one of its kept outputs is demanded, or something demanded reads the target of one of its write edges, or a demanded cone instance pulls one of its outputs |
+| P3, demand gates execution | Kept | A cone instance is evaluated only when it is stale and demanded: one of its kept outputs is demanded, or something demanded reads the target of one of its write edges or passes that target on by reference, or a demanded cone instance pulls one of its outputs. A materializer is the exception: by ruling it is evaluated whenever one of its inputs changes (section 7) |
 | P4, one static write surface | Kept, and stricter | The plan lists every write edge and every write envelope, and the runtime refuses a write that neither covers (`plan-and-label-templates.md`, §3.11 and §7.4). The registration-time log that could seed a write surface is not carried over. A handler received as a factory value is the exception: its write edges are known when the binding is made, not when the binder is compiled |
 | P5, self-identification through the transaction | Changed | The source of a commit is a cause's transaction, not a node (`sourceAction` today, set in `runSchedulerAction`). The index has already been applied to that transaction's staged writes, so its own commit notification marks nothing. Materializers and effect operations keep suppression per unit |
 | P6, subscriptions are durable and runs apply deltas | Removed for slots; kept for dynamic reads | Slot entries change only when a slot is rebound, element entries when a collection's membership changes, and the entries of a slot whose path holds `*` when the children of its container change. The journaled reads of a `dynamic` node are diffed against the registered ones after each evaluation, as a node's read log is today |
@@ -921,7 +923,16 @@ key, the position and the binding of each element slot.
   evaluation it causes rebuilds the table, and the scheduler then replaces
   the entries of the positions that changed. An element that moved keeps
   its key, so its cone instances that read element slots alone are not
-  stale, which is the property the element-key rule exists for.
+  stale, which is the property the element-key rule exists for. By
+  ruling the runtime moves what the key holds, its stored results
+  included, to the new position, and evaluates nothing for the element
+  (`execution-and-storage.md` §2.6).
+- A collection that is the result of a per-element construct has, by
+  ruling, the keys of the elements it came from: an element of a `map`
+  or a `filter` result has the key of its source element
+  (`plan-and-label-templates.md` §1.3). A change to one source element
+  therefore marks dirty the element slots of that key in each body of a
+  chain of such constructs, and of no other key.
 - The position is in no key. A cone that reads the index lists a slot of
   root `index` (`plan-and-label-templates.md` §1.3). When the rebuilt
   table gives a key another position, the scheduler marks that slot dirty
@@ -1359,6 +1370,27 @@ producers. Three cases of step 1 are worth naming.
   the parent, or of the computation that made the instance (section 2.7).
 - A slot bound to a cell that a cone side-writes, a state cell or a cell
   reached through a handle, has that cone's write edge as its writer.
+- That holds for a slot that passes the cell on and reads nothing of
+  it: the `identity` slot at the root of a state cell, and the one at a
+  handle's own position. A write to the cell does not make such a slot
+  dirty, and the plan lists no `ConeEdge` to its cone
+  (`plan-and-label-templates.md` §3.11). For demand it counts, by
+  ruling: step 1 looks up the address of the cell the slot names, and
+  the write edges the writer map holds at or below that address have
+  their demand counts raised. So where a kept path of a result passes
+  on a state cell that a cone of the pattern side-writes, and that
+  cone has no kept output, demand on the path is demand on the cone,
+  and the cone is evaluated before the path is stored
+  (`execution-and-storage.md` §2.3). A body that holds such a slot in
+  order to write through the handle, and neither reads the cell nor
+  passes it on, demands nothing by it.
+
+These cases are one rule. By ruling a cone whose writes go to a small,
+fixed set of targets that the compiler names is an ordinary node, and
+its write targets count as its outputs for demand. A cone whose write
+set is dynamic or very large is a materializer, which is not demanded
+by its readers and is evaluated whenever one of its inputs changes
+(section 7).
 
 A slot's value is supplied when the value function first asks for it, and
 a slot the function does not ask for is not recorded as read
@@ -2581,6 +2613,24 @@ one such write is a materializer for all of its writes. The plan records an
 `Operation` of kind `materializer` whose `implementation` names the body,
 and the body's `writes` and `envelopes` are its declared write envelope
 (`plan-and-label-templates.md` §3.11; section 2.4).
+
+By ruling a cone with side-writes is of one of two kinds. One whose
+writes go to a small, fixed set of targets that the compiler names is
+an ordinary node, whose write targets count as its outputs for demand
+(section 4.3). One whose write set is dynamic or very large is the
+materializer of this section: it is evaluated eagerly whenever one of
+its inputs changes, as a rule after the rest of the wave has been
+evaluated, and its writes make their readers stale, which a further
+wave evaluates. The rules of section 7.2 are that ruling in this
+document's terms. "Standing demand" is the eager evaluation. "Idle
+priority" is the run after the events of a cycle and the derivation
+transaction behind them. "Its writes are a cause" is the further wave.
+Promotion is the one case in which a materializer runs ahead of the
+rest: a reader whose bound address is inside its envelope would
+otherwise read what the run is about to replace. *Assumed*
+(`execution-and-storage.md` §11, question 80): which kind a body is
+follows from its footprint, by `footprint-analysis.md` §6.3, and no
+number is set for "very large".
 
 A materializer is not part of the compiled evaluation of its instance. It
 keeps a transaction per run and today's label rule: every path it writes
