@@ -54,7 +54,7 @@ render them as text, never as markup or instructions.
 An entry may also say where it ranks (`bucket`), who wrote it as a stable
 pseudonym (`author`), and how many people have used it (`counts`). The buckets
 read as: `featured`, picked by a curator; `main`, used by its author and
-ranked by everyone else's use; `unvetted`, new and not yet shown working. When
+ranked by everyone else's use; `unvetted`, not yet shown working by anyone. When
 an entry has a `bucket`, show that rather than `quality`, which hosts without
 buckets still send. An `unlisted` entry is one only its author is shown:
 others cannot find it until it is listed, so a caller shows its state to the
@@ -90,8 +90,9 @@ unless told otherwise, every match in one page with no `next`, and
 - The test runs against the fake only. A host checks its own implementation with
   its own tests until the shared behavior is factored into a suite any
   implementation can run.
-- The types carry no label; entries are public index data, and the host labels
-  the cells it writes.
+- The types carry no label; listed entries are public index data, while an
+  `unlisted` entry is shown only to its author, and the host labels the cells
+  it writes accordingly.
 
 ## Not yet settled: hardening the tap
 

@@ -671,18 +671,18 @@ export interface PatternIndexClientOptions {
   signer: FirstPartyHttpSigner;
 }
 
-/**
- * Joins an index function onto the configured base, keeping every segment the
- * base already carries. `new URL(fn, base)` would drop the base's last
- * segment whenever it has no trailing slash, which is how a deployment served
- * under a path prefix loses that prefix.
- */
 /** A JSON object's own property, or `undefined` for anything else. */
 const ownField = (value: unknown, key: string): unknown =>
   isObjectOrArray(value) && !Array.isArray(value)
     ? Object.getOwnPropertyDescriptor(value, key)?.value
     : undefined;
 
+/**
+ * Joins an index function onto the configured base, keeping every segment the
+ * base already carries. `new URL(fn, base)` would drop the base's last
+ * segment whenever it has no trailing slash, which is how a deployment served
+ * under a path prefix loses that prefix.
+ */
 const functionUrl = (baseUrl: string, fn: string): URL =>
   new URL(`${baseUrl.replace(/\/+$/, "")}/${fn}`);
 
