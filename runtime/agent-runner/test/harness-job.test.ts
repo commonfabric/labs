@@ -186,6 +186,18 @@ describe("runHarnessJob()", () => {
       return loopResult(runRoot);
     };
 
+  it("throws before preparing a workspace when the spec asks for progress with nowhere to publish it", async () => {
+    await expect(
+      runHarnessJob(plainSpec({ progress: true }), {
+        runRoot,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("Progress requires a host publication channel");
+    await expect(Deno.stat(join(runRoot, "workspace"))).rejects.toThrow(
+      Deno.errors.NotFound,
+    );
+  });
+
   for (const progress of [false, true]) {
     it(`offers milestone reporting only when opted in: ${progress}`, async () => {
       const messages: string[] = [];

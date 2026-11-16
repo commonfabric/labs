@@ -1,5 +1,5 @@
 import { ConsoleEvent } from "@astral/astral";
-import { basename } from "@std/path";
+import { basename, join } from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
 import {
   FragmentWriter,
@@ -19,13 +19,17 @@ import { BrowserController } from "./browser.ts";
 import { Reporter } from "./reporter.ts";
 import { TestFileResults, TestResultError } from "./interface.ts";
 
-// The record scope of the harnessed package: the last segment of its
-// manifest's name, or the directory's own name when no manifest names it.
-// deno.json is read first because Deno resolves it first when both exist.
-async function packageScope(): Promise<string> {
+/**
+ * Returns the record scope of the package in `dir`: the last segment of its
+ * manifest's name, or the directory's own name when no manifest names it.
+ * deno.json is read first because Deno resolves it first when both exist.
+ */
+export async function packageScope(dir: string): Promise<string> {
   for (const manifest of ["deno.json", "deno.jsonc"]) {
     try {
-      const parsed = parseJsonc(await Deno.readTextFile(manifest)) as {
+      const parsed = parseJsonc(
+        await Deno.readTextFile(join(dir, manifest)),
+      ) as {
         name?: string;
       };
       if (typeof parsed.name === "string" && parsed.name.length > 0) {
@@ -35,7 +39,7 @@ async function packageScope(): Promise<string> {
       // The next candidate or the fallback answers instead.
     }
   }
-  return basename(Deno.cwd());
+  return basename(dir);
 }
 
 export class Runner {
@@ -68,7 +72,7 @@ export class Runner {
     // failure stays visible in CI. A file inside no repository is no test
     // of one and records nothing either.
     const recordsFragment = FragmentWriter.openForRun();
-    const scope = await packageScope();
+    const scope = await packageScope(Deno.cwd());
 
     // Files and the tests inside them both run in the order the seed
     // puts them in, which is finer than `deno test --shuffle` reaches:

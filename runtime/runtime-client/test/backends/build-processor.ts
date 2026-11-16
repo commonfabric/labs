@@ -32,13 +32,15 @@ export function buildProcessor(parts: {
   runtime?: unknown;
   cc?: unknown;
   space?: MemorySpace;
+  /** The pieces controllers of further spaces the processor has opened. */
+  spaces?: Map<MemorySpace, unknown>;
   identity?: unknown;
   telemetry?: RuntimeTelemetry;
   ipcSizes?: () => WorkerIpcSizes | null;
 } = {}): RuntimeProcessor {
   const space = parts.space ?? standInSigner.did();
   const identity = (parts.identity ?? standInSigner) as Identity;
-  return RuntimeProcessor.accessForTestingOnly.construct(
+  const processor = RuntimeProcessor.accessForTestingOnly.construct(
     (parts.runtime ?? {}) as Runtime,
     (parts.cc ?? {}) as PiecesController,
     space,
@@ -51,4 +53,11 @@ export function buildProcessor(parts: {
     },
     parts.ipcSizes,
   );
+  for (const [opened, pieces] of parts.spaces ?? []) {
+    processor.accessForTestingOnly.spaces.set(
+      opened,
+      pieces as PiecesController,
+    );
+  }
+  return processor;
 }
