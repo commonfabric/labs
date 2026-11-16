@@ -22,8 +22,18 @@ the part of it that passes the hard limit stops working.
 
 Estuary ran with server execution on during 2026-11-15, and spaces stalled.
 The owner's report names the Topics space as the likely source: a board of
-over 3,000 Topics whose assembly takes over a minute. Nothing in this plan has
-confirmed that from Estuary's logs; stage 0 does.
+over 3,000 Topics whose assembly takes over a minute.
+
+Estuary's logs for those days show the loop described below. Server execution
+was turned on at 22:58 UTC on 2026-11-14, and the first serving worker was
+ended by the watchdog three minutes later. 96 were ended over the next two
+days, each for sending no message within the watchdog's limit, and 83 of them
+in the first three hours, one every 80 to 90 seconds. Each ended worker held
+8 or 9 spaces. The 34 in the first 70 minutes all came from one toolshed
+instance, the one that serves the Topics space; the rest have not been
+attributed. The log lines do not name the action a worker was
+in, so they do not show that the board's assembly was what held it; stage 0
+does that on a copy of the space.
 
 The board's source supports the suspicion. Three of its derivations read every
 Topic in one action and run again when any Topic changes: `crossrefTable`,
@@ -55,12 +65,14 @@ Each of these is the specified behavior, and each is reasonable alone.
   action.
 - **The watchdog cannot tell busy from hung.** A worker's heartbeat is a timer
   on the thread the action holds, so a long action is silence. After 60 s of
-  silence the pool ends the worker, releases its leases, and places its spaces
+  silence, or the number of seconds `SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS`
+  gives, the pool ends the worker, releases its leases, and places its spaces
   again through the path a failed worker takes (`serving-loop.md` §2, "The
-  watchdog"). The successor loads the same program over the same store and
-  runs the same action. If that action takes longer than the limit, every
-  placement ends the same way, and the spaces that shared the worker are ended
-  with it each time.
+  watchdog"). Estuary ran with that setting at 300, so a worker there was
+  held for five minutes before it was ended. The successor loads the same
+  program over the same store and runs the same action. If that action takes
+  longer than the limit, every placement ends the same way, and the spaces
+  that shared the worker are ended with it each time.
 - **The heap limit has the rule the time limit lacks.** A worker ended at its
   heap limit is not placed again as a failed worker is, "since a program that
   grew one heap to the limit grows the next": a space alone on the worker is
@@ -153,6 +165,32 @@ Nothing below should be sized from a suspicion.
   [the served vote's fan-out](served-vote-fan-out.md) are the plans for the
   main thread's cost. The stages below are for time a worker's thread spends
   inside an action.
+
+Measured so far, on 2026-11-16: Rapids holds a copy of the board's space
+from 2026-11-13, and a `topics` command read one Topic from it. That
+command's session watches the board's documents; it does not ask for what
+the shell's view of the board asks for. The space had a serving worker to
+itself, with the watchdog at its default.
+
+| Measure                                  | Value                        |
+| ---------------------------------------- | ---------------------------- |
+| Time for the command to return           | 52 s                         |
+| Main thread, CPU in the first minute     | 22 s                         |
+| Main thread, longest block               | about 12.6 s                 |
+| Serving worker, CPU until it went idle   | about 97 s over 125 s        |
+| Derived commits, and waves               | 148 in about 150             |
+| Waves in each 10 s of that work          | 16 to 18                     |
+| Store reads                              | about 99,500                 |
+| Worker heap at its highest               | about 1.85 GB                |
+| Process resident memory, before and peak | 0.5 GB and 3.9 GB            |
+| Workers the watchdog ended               | none                         |
+
+The health route did not return during the main thread's block, so every
+space of that instance waited there, whatever worker it had. The worker
+committed throughout its work, so no single action held it for long, and the
+silence Estuary's watchdog saw did not occur. What remains to measure is the
+same space with the board open in a shell, and with other spaces on its
+worker, which is how Estuary ran it.
 
 Exit: a record in `docs/history/` that names the actions, their costs, the
 thread each cost fell on, and whether the watchdog loop above happened.
@@ -334,7 +372,7 @@ spaces is a bound of its own, since each costs what any worker costs; past
 it, an isolated space joins the isolated worker with the fewest spaces, and
 slow spaces then wait on one another and on nothing else.
 
-**The watchdog steps back while a run is live.** Its 60 s of silence ends a
+**The watchdog steps back while a run is live.** Its limit of silence ends a
 worker whose thread is in no run, as today. A worker inside a run is held to
 the two limits above and not to the watchdog's, so an isolated space's
 two-minute action is no longer ended at one.
