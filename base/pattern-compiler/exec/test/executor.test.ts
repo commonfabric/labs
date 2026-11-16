@@ -2898,3 +2898,152 @@ describe("what a `*` of a result path stands for", () => {
     expect(instance.failures).toEqual([]);
   });
 });
+
+// `fixtures/instantiate.tsx`: a pattern instantiated in a function body
+// and a handler bound in one (ES §2.8; PL §3.14, §3.15). The value code
+// names the callee by its identity, and the executor is given the
+// artifacts of the program to find it among.
+describe("an instance a function body makes", () => {
+  const start = async () => {
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL(
+          "../../compare/fixtures/instantiate.emit.json",
+          import.meta.url,
+        ),
+      ),
+    ) as { patterns: Artifact[] }[];
+    const artifacts = (id: string) =>
+      patterns.find((pattern) => pattern.plan.patterns?.[0] === id);
+    const main = patterns.find((pattern) => pattern.name === "default")!;
+    return new Instance(main, { note: "n" }, { artifacts });
+  };
+  type Rows = {
+    rows: { title: string; count: number }[];
+    total: number;
+    pressed: number;
+    buttons: { by: number; press: unknown }[];
+  };
+  const ADD = 1;
+  const result = (instance: Instance) => instance.result() as Rows;
+  /** A handle to the stream the result stores at a path. */
+  const streamAt = (instance: Instance, path: string[]) =>
+    new Handle(instance, new Ref("result", path), undefined, undefined, []);
+
+  it("is an instance of the callee's plan, with documents of its own in the same store", async () => {
+    const instance = await start();
+    const before = instance.documents();
+
+    expect(instance.send(ADD, { title: "a" }).committed).toBe(true);
+    expect(instance.send(ADD, { title: "b" }).committed).toBe(true);
+
+    // Each event's run makes an instance, and the list holds a
+    // reference to its result.
+    expect(result(instance).rows).toEqual([
+      {
+        title: "a",
+        count: 0,
+        bump: { $stream: true },
+        tally: {
+          $stream: true,
+        },
+      },
+      {
+        title: "b",
+        count: 0,
+        bump: { $stream: true },
+        tally: {
+          $stream: true,
+        },
+      },
+    ]);
+    const stored = instance.store.docs.get("state:0:[]")?.value as {
+      $link: { doc: string; path: string[] };
+    }[];
+    expect(stored.map(({ $link }) => $link.path)).toEqual([[], []]);
+    expect(new Set(stored.map(({ $link }) => $link.doc)).size).toBe(2);
+    // An argument and a result document for each instance, and the
+    // state cell of the list.
+    expect(instance.documents()).toEqual({
+      ...before,
+      "argument": 3,
+      "result": 3,
+      "state cell": 1,
+    });
+  });
+
+  it("handles an event for a binding of the instance, in the instance", async () => {
+    const instance = await start();
+    instance.send(ADD, { title: "a" });
+    instance.send(ADD, { title: "b" });
+
+    streamAt(instance, ["rows", "1", "bump"]).send({ by: 2 });
+    instance.dispatch();
+
+    // The state cell of the second instance, and of no other.
+    expect(result(instance).rows.map(({ count }) => count)).toEqual([0, 2]);
+  });
+
+  it("is handed a cell of the caller by reference, and a binding of it writes that cell", async () => {
+    const instance = await start();
+    instance.send(ADD, { title: "a" });
+
+    streamAt(instance, ["rows", "0", "tally"]).send({ by: 5 });
+    instance.dispatch();
+
+    expect(result(instance).total).toBe(5);
+    expect(result(instance).rows[0].count).toBe(0);
+  });
+
+  it("is not made when the handler's run fails", async () => {
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL(
+          "../../compare/fixtures/instantiate.emit.json",
+          import.meta.url,
+        ),
+      ),
+    ) as { patterns: Artifact[] }[];
+    const main = patterns.find((pattern) => pattern.name === "default")!;
+    // With no artifact for the callee, the instantiation fails, and the
+    // event commits nothing.
+    const instance = new Instance(main, { note: "n" });
+    const before = instance.documents();
+
+    const outcome = instance.send(ADD, { title: "a" });
+
+    expect(outcome.committed).toBe(false);
+    expect(outcome.error).toBe("a pattern called in a function body");
+    expect(instance.documents()).toEqual(before);
+  });
+
+  it("binds a handler in a function body, and an event for its stream runs the handler with the state the body bound", async () => {
+    const instance = await start();
+
+    expect(result(instance).buttons).toEqual([
+      { by: 1, press: { $stream: true } },
+      { by: 2, press: { $stream: true } },
+    ]);
+    // The stored positions hold a link to a stream each, which no path
+    // of `Binding.result` names and no check concerns (ruling Z20).
+    const stored = instance.store.docs.get("result")?.value as {
+      buttons: { press: { $stream: { binding: number; keys: string[] } } }[];
+    };
+    const [first, second] = stored.buttons.map(({ press }) => press.$stream);
+    expect(first.binding).toBe(-1);
+    expect(first.keys).not.toEqual(second.keys);
+    expect(instance.failures).toEqual([]);
+
+    streamAt(instance, ["buttons", "1", "press"]).send({ by: 4 });
+    instance.dispatch();
+
+    expect(result(instance).pressed).toBe(4);
+    // The body read nothing that changed: it is not evaluated again, and
+    // the streams are the ones it bound.
+    expect(
+      (instance.store.docs.get("result")?.value as typeof stored).buttons.map((
+        { press },
+      ) => press.$stream),
+    ).toEqual([first, second]);
+  });
+});

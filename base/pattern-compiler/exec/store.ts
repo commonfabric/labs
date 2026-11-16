@@ -147,9 +147,18 @@ export class Ref {
   }
 }
 
-/** A reference to the stream of a binding, for one key of each element. */
+/**
+ * A reference to the stream of a binding, for one key of each element.
+ * `instance` names the instance the binding is of, where that is one a
+ * function body made, by the prefix of its documents. A binding that a
+ * function body made has the index -1, and its one key names it.
+ */
 export class StreamRef {
-  constructor(readonly binding: number, readonly keys: readonly string[]) {}
+  constructor(
+    readonly binding: number,
+    readonly keys: readonly string[],
+    readonly instance = "",
+  ) {}
 }
 
 /**
@@ -223,7 +232,9 @@ export type Located = {
 };
 
 type StoredLink = { $link: { doc: string; path: string[]; schema?: Schema } };
-type StoredStream = { $stream: { binding: number; keys: string[] } };
+type StoredStream = {
+  $stream: { binding: number; keys: string[]; instance?: string };
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);

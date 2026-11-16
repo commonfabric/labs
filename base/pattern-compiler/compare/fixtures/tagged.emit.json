@@ -11,7 +11,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/tagged.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern, \"UI\": UI } = $rt.external(\"commonfabric\");\n\nconst Row = pattern(undefined);\n\nconst $default = (pattern(undefined));\nObject.defineProperty($exports, \"Row\", { enumerable: true, get: () => Row });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + (\"!\"))));\n$rt.value(2, ($h) => ($rt.h(\"span\", {  }, [$h.output(0)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(1) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern, \"UI\": UI } = $rt.external(\"commonfabric\");\n\nconst Row = pattern(\"unhashed:pattern/compare/fixtures/tagged.tsx#Row\");\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/tagged.tsx#default\"));\nObject.defineProperty($exports, \"Row\", { enumerable: true, get: () => Row });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + (\"!\"))));\n$rt.value(2, ($h) => ($rt.h(\"span\", {  }, [$h.output(0)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(1) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -202,7 +202,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/tagged.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern, \"UI\": UI } = $rt.external(\"commonfabric\");\n\nconst Row = pattern(undefined);\n\nconst $default = (pattern(undefined));\nObject.defineProperty($exports, \"Row\", { enumerable: true, get: () => Row });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + (\"!\"))));\n$rt.value(2, ($h) => ($rt.h(\"span\", {  }, [$h.output(0)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(1) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s1 = $rt.setups[1]({  }, $h);\n$rt.value(3, ($h) => ($rt.h(\"div\", {  }, [$h.at($rt.force($s1, $h), [\"$UI\"])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(3) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern, \"UI\": UI } = $rt.external(\"commonfabric\");\n\nconst Row = pattern(\"unhashed:pattern/compare/fixtures/tagged.tsx#Row\");\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/tagged.tsx#default\"));\nObject.defineProperty($exports, \"Row\", { enumerable: true, get: () => Row });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + (\"!\"))));\n$rt.value(2, ($h) => ($rt.h(\"span\", {  }, [$h.output(0)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(1) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s1 = $rt.setups[1]({  }, $h);\n$rt.value(3, ($h) => ($rt.h(\"div\", {  }, [$h.at($rt.force($s1, $h), [\"$UI\"])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(3) })));\n});"
             }
           ],
           "outputsBelow": [],

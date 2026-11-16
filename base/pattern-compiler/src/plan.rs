@@ -6792,7 +6792,18 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
             }
         }
+        // The identity of every pattern of the program, for the value
+        // code of each module the artifact holds.
+        let mut identities = HashMap::new();
+        for (home, bodies) in self.bodies.iter().enumerate() {
+            for (index, start) in body_functions(self.resolver, home, bodies) {
+                if bodies[index].kind == BodyKind::Pattern {
+                    identities.insert((home, start), self.pattern_identity(home, start));
+                }
+            }
+        }
         let finished = crate::emit::Finished {
+            identities,
             facts: std::mem::take(&mut self.facts),
             position,
             output_of,

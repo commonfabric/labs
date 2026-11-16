@@ -94,6 +94,14 @@ const WRITTEN: Record<string, Written[]> = {
     argument: { note: "n" },
     events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
   }],
+  // A pattern instantiated in a function body: two instances.
+  "instantiate": [{
+    argument: { note: "n" },
+    events: [
+      { binding: 1, event: { title: "a" } },
+      { binding: 1, event: { title: "b" } },
+    ],
+  }],
   "flat-keys": [{
     argument: {
       groups: [
@@ -267,8 +275,13 @@ const artifactOf = async (name: string) => {
   // The pattern the module exports as its default, which the crate names
   // `default` where it is written in place.
   const patterns = modules[0].patterns;
-  return patterns.find((pattern) => pattern.name === "default") ??
-    patterns[patterns.length - 1];
+  return {
+    artifact: patterns.find((pattern) => pattern.name === "default") ??
+      patterns[patterns.length - 1],
+    // The artifact of a pattern of the fixture, by its identity.
+    artifacts: (id: string) =>
+      patterns.find((pattern) => pattern.plan.patterns?.[0] === id),
+  };
 };
 
 /** One compared run of a fixture. */
@@ -286,7 +299,7 @@ export const compareFixtures = async (
   const names = [...Object.keys(WRITTEN), ...GENERATED].sort();
   for (const fixture of names) {
     if (only !== undefined && fixture !== only) continue;
-    const artifact = await artifactOf(fixture);
+    const { artifact, artifacts } = await artifactOf(fixture);
     const plan = artifact.plan as unknown as Plan;
     const program = {
       main: "/main.tsx",
@@ -301,6 +314,7 @@ export const compareFixtures = async (
           comparison: await compareScenarioValues(
             { program, plan, ...scenario },
             artifact,
+            artifacts,
           ),
         });
       }
@@ -330,6 +344,7 @@ export const compareFixtures = async (
           events,
         },
         artifact,
+        artifacts,
       ),
     });
   }

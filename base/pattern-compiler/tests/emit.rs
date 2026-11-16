@@ -130,7 +130,13 @@ export const P = pattern<{ tag: Tag }>(({ tag }) => {
         "{text}"
     );
     assert!(text.contains("log.push(entry);"), "{text}");
-    assert!(text.contains("pattern(undefined)"), "{text}");
+    // In the place of its function the pattern has its identity, the
+    // entry of `Plan.patterns` of its own plan: a function body that
+    // calls the pattern names the callee's artifact with it.
+    assert!(
+        text.contains(r#"pattern("unhashed:pattern/case.tsx#P")"#),
+        "{text}"
+    );
     // The handler's body is one function, called with the event and the
     // state.
     assert!(text.contains("$rt.body(0, ($e, $s) => ("), "{text}");
@@ -809,4 +815,46 @@ export const P = pattern<{ items: Item[]; tags: string[]; note: string }>(({ ite
     // An array with no spread is an array literal.
     assert!(text.contains("plain: [$h.slot("), "{text}");
     assert!(!text.contains("...("), "{text}");
+}
+
+/// A pattern that a function body instantiates is named, in value code,
+/// by the identity of the callee: the marker of each `pattern(...)` of a
+/// module holds the entry of `Plan.patterns` that the callee's own plan
+/// begins with, so the factory value a body calls carries it, whichever
+/// module the callee is written in.
+#[test]
+fn a_pattern_is_written_with_the_identity_its_plan_begins_with() {
+    let text = r#"import { handler, pattern, Writable } from "commonfabric";
+const Row = pattern<{ title: string }>(({ title }) => {
+  return { title };
+});
+const add = handler<{ title: string }, { rows: Writable<unknown[]> }>((event, { rows }) => {
+  rows.push(Row({ title: event.title }));
+});
+export default pattern<{ note: string }>(({ note }) => {
+  const rows = Writable.of<unknown[]>([]);
+  return { note, rows, add: add({ rows }) };
+});
+"#;
+    let (plan, code) = emitted(text, "default");
+    let (row, _) = emitted(text, "Row");
+    let written = source(&code);
+    assert_eq!(row["patterns"][0], json!("unhashed:pattern/case.tsx#Row"));
+    assert_eq!(
+        plan["patterns"][0],
+        json!("unhashed:pattern/case.tsx#default")
+    );
+    assert!(
+        written.contains(r#"const Row = pattern("unhashed:pattern/case.tsx#Row");"#),
+        "{written}"
+    );
+    assert!(
+        written.contains(r#"pattern("unhashed:pattern/case.tsx#default")"#),
+        "{written}"
+    );
+    // The body calls the factory value by its name.
+    assert!(
+        written.contains("rows.push(Row({ title: event.title }));"),
+        "{written}"
+    );
 }

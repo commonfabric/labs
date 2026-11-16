@@ -11,7 +11,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/defaulted.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(undefined));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (((JSON).stringify($h.v($h.slot(0))))));\nreturn $rt.thunk(($h) => (({ whole: $h.slot(3), nick: $h.slot(2), name: $h.slot(1), derived: $h.output(0) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/defaulted.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (((JSON).stringify($h.v($h.slot(0))))));\nreturn $rt.thunk(($h) => (({ whole: $h.slot(3), nick: $h.slot(2), name: $h.slot(1), derived: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],

@@ -40,6 +40,11 @@ type Root = {
 
 /** The members of a plan the executor reads (PL §1.1). */
 export type Plan = {
+  /**
+   * The patterns whose code the plan holds: the pattern the plan is
+   * compiled from, by its identity, and then each pattern compiled in.
+   */
+  patterns?: string[];
   argumentSchema?: string;
   resultSchema?: string;
   slots: { root: Root; path: string[]; observes: string; schema?: string }[];
@@ -636,8 +641,8 @@ export class Handle {
     }
     const located = this.instance.store.locate(this.target, true);
     if (isStream(located.value)) {
-      const { binding, keys } = located.value.$stream;
-      this.instance.queue(new StreamRef(binding, keys), event);
+      const { binding, keys, instance } = located.value.$stream;
+      this.instance.queue(new StreamRef(binding, keys, instance), event);
       return;
     }
     // A stream the instance was given, which the argument holds nothing
@@ -1009,7 +1014,12 @@ export class Host {
       if (given === undefined) continue;
       argument = instance.placed(argument, at, given);
     }
-    return instance.returned(run(argument));
+    return instance.returned(
+      instance.during(
+        `body:${body}:${canonical(instance.contextKeys(this.context))}`,
+        () => run(argument),
+      ),
+    );
   }
 
   /**
@@ -1067,7 +1077,34 @@ export type Outcome = {
 
 /** One instance of a compiled pattern. */
 export class Instance {
-  readonly store = new Store();
+  readonly store: Store;
+  /**
+   * What the identifier of each document of the instance begins with:
+   * nothing for the instance the executor was started with, and for an
+   * instance a function body made the name of that instance.
+   */
+  readonly prefix: string;
+  /** The instance the executor was started with. */
+  readonly root: Instance;
+  /** On the root: every instance a function body made, by its prefix. */
+  readonly #instances = new Map<string, Instance>();
+  /** The instances that a function body of this instance made. */
+  readonly #children: Instance[] = [];
+  /**
+   * On the root: each binding a function body made, by the key of its
+   * stream, with the handler and the state the body bound.
+   */
+  readonly #bound = new Map<
+    string,
+    { run: (...given: unknown[]) => unknown; state: unknown }
+  >();
+  /**
+   * The run of a function body in progress: what names it, and how many
+   * instances and bindings it has made (ES §2.8, "Identity").
+   */
+  #running: { name: string; made: number } | undefined;
+  /** The events handled, which name the run of a handler. */
+  #events = 0;
   readonly plan: Plan;
   readonly code: Code;
   readonly counts: Counts = {
@@ -1158,9 +1195,23 @@ export class Instance {
   constructor(
     readonly artifact: Artifact,
     argument: unknown,
-    /** `space`: the space the instance is in, which `spaceOf` gives. */
-    readonly options: { space?: string } = {},
+    /**
+     * `space`: the space the instance is in, which `spaceOf` gives.
+     * `artifacts`: the artifact of a pattern, by the identity its plan
+     * begins with (`Plan.patterns`), for a pattern that a function body
+     * instantiates. `parent` and `prefix`: for an instance a function
+     * body made, the instance that made it and the name of this one.
+     */
+    readonly options: {
+      space?: string;
+      artifacts?: (id: string) => Artifact | undefined;
+      parent?: Instance;
+      prefix?: string;
+    } = {},
   ) {
+    this.store = options.parent?.store ?? new Store();
+    this.prefix = options.prefix ?? "";
+    this.root = options.parent?.root ?? this;
     this.plan = artifact.plan;
     this.code = artifact.code;
     for (const { id, schema } of artifact.schemas) {
@@ -1171,8 +1222,8 @@ export class Instance {
         this.valueOfOutput.set(value.output, index);
       }
     });
-    this.store.create("argument", "argument", this.stored(argument));
-    this.store.create("result", "result", undefined);
+    this.store.create(this.doc("argument"), "argument", this.stored(argument));
+    this.store.create(this.doc("result"), "result", undefined);
     this.#load();
     this.#sideWriters();
     // A state cell of the pattern's own body exists from the start, and
@@ -1291,7 +1342,7 @@ export class Instance {
     return {
       nohost: none,
       // What `[SELF]` of the pattern's parameter names: the result.
-      self: new Ref("result", []),
+      self: new Ref(this.doc("result"), []),
       setups: this.#setups,
       external: (specifier: string) => instance.#external(specifier),
       module: (index: number) => instance.#module(index),
@@ -1334,9 +1385,9 @@ export class Instance {
       handler: (binding: number, run: (...given: unknown[]) => unknown) => {
         this.#handlers.set(binding, run);
       },
-      // A handler a function body binds has a stream, and the executor
-      // makes no binding of a function body: the stream takes no event.
-      bound: (_run: unknown) => new StreamRef(-1, []),
+      // A handler that a function body writes in place and binds.
+      bound: (run: (...given: unknown[]) => unknown) =>
+        instance.bind(run, undefined),
       thunk: (evaluate: (host: Host) => unknown) => new Thunk(evaluate),
       force,
       at: (root: unknown, path: string[], host: Host) => {
@@ -1424,6 +1475,7 @@ export class Instance {
     return new StreamRef(
       binding,
       this.keysOf(this.plan.bindings[binding].within, { context }),
+      this.prefix,
     );
   }
 
@@ -1449,7 +1501,7 @@ export class Instance {
   rootOf(root: Root, host: Host, path: readonly string[] = []): unknown {
     switch (root.kind) {
       case "argument":
-        return new Ref("argument", []);
+        return new Ref(this.doc("argument"), []);
       case "state":
         return this.stateCell(root.cell ?? 0, host);
       case "element": {
@@ -1505,7 +1557,7 @@ export class Instance {
   stateCell(cell: number, host: Host): Ref {
     const record = this.plan.stateCells[cell];
     const keys = this.keysOf(record.within, host);
-    const id = `state:${cell}:${canonical(keys)}`;
+    const id = this.doc(`state:${cell}:${canonical(keys)}`);
     if (!this.#cells.has(id)) {
       this.#cells.set(id, { cell, keys });
       const schema = this.schemaOf(record.schema);
@@ -1548,7 +1600,7 @@ export class Instance {
   /** A cell a function body made. */
   createCell(value: unknown): Handle {
     this.#created += 1;
-    const id = `created:${this.#created}`;
+    const id = this.doc(`created:${this.#created}`);
     this.store.create(id, "created cell", this.stored(value));
     return new Handle(this, new Ref(id, []), undefined, undefined, []);
   }
@@ -1565,7 +1617,13 @@ export class Instance {
       };
     }
     if (value instanceof StreamRef) {
-      return { $stream: { binding: value.binding, keys: [...value.keys] } };
+      return {
+        $stream: {
+          binding: value.binding,
+          keys: [...value.keys],
+          ...(value.instance === "" ? {} : { instance: value.instance }),
+        },
+      };
     }
     // The link to the stream a marker stands for, in the marker's place
     // (ES §2.2, "The replacement").
@@ -1615,7 +1673,7 @@ export class Instance {
     );
     if (!inArray) return members;
     this.#created += 1;
-    const id = `record:${this.#created}`;
+    const id = this.doc(`record:${this.#created}`);
     this.store.create(id, "element record", members);
     return { $link: { doc: id, path: [] } };
   }
@@ -1686,7 +1744,7 @@ export class Instance {
       declared.asCell !== undefined
     ) {
       this.#created += 1;
-      const id = `constant:${this.#created}`;
+      const id = this.doc(`constant:${this.#created}`);
       this.store.create(id, "held constant", this.stored(value));
       return new Handle(this, new Ref(id, []), host, slot, [], declared, true);
     }
@@ -1704,7 +1762,9 @@ export class Instance {
           ? addressOf(
             this.store.locate(value.target, true, undefined, true).named,
           )
-          : `stream:${value.target.binding}:${canonical(value.target.keys)}`;
+          : `stream:${value.target.instance}:${value.target.binding}:${
+            canonical(value.target.keys)
+          }`;
       }
       if (value instanceof Ref) {
         return addressOf(
@@ -1802,6 +1862,11 @@ export class Instance {
   }
 
   // ----- evaluation -----
+
+  /** The element keys of a context, by collection. */
+  contextKeys(context: Context): [number, string][] {
+    return [...context].map(([collection, { key }]) => [collection, key]);
+  }
 
   #contextKey(collections: readonly number[], context: Context): string {
     return collections.map((collection) => context.get(collection)?.key ?? "?")
@@ -2490,7 +2555,9 @@ export class Instance {
       for (const held of this.#check(entry)) {
         stored = replaced(stored, held, this.#storedAt(held));
       }
-      this.store.write(new Ref("result", []), stored);
+      this.store.write(new Ref(this.doc("result"), []), stored);
+      // The instances that function bodies of this one made.
+      for (const child of this.#children) child.settle();
       this.#afterWave = true;
       try {
         for (const materializer of this.#materializers) materializer(none);
@@ -2597,7 +2664,7 @@ export class Instance {
 
   /** What the result document stores at a path, with no link followed. */
   #storedAt(path: readonly string[]): unknown {
-    let held = this.store.docs.get("result")?.value;
+    let held = this.store.docs.get(this.doc("result"))?.value;
     for (const segment of path) {
       if (Array.isArray(held)) held = held[Number(segment)];
       else if (isRecord(held)) held = held[segment];
@@ -2612,7 +2679,7 @@ export class Instance {
    * what read the position written.
    */
   writeThrough(path: string[], value: unknown): void {
-    this.store.write(new Ref("result", path), this.stored(value));
+    this.store.write(new Ref(this.doc("result"), path), this.stored(value));
     this.settle();
   }
 
@@ -2621,13 +2688,13 @@ export class Instance {
    * instance does, and evaluates what read it.
    */
   writeArgument(path: string[], value: unknown): void {
-    this.store.write(new Ref("argument", path), this.stored(value));
+    this.store.write(new Ref(this.doc("argument"), path), this.stored(value));
     this.settle();
   }
 
   /** The result, with every link in it followed. */
   result(): unknown {
-    return this.store.read(new Ref("result", []));
+    return this.store.read(new Ref(this.doc("result"), []));
   }
 
   /**
@@ -2693,7 +2760,7 @@ export class Instance {
         }
       }
     };
-    walk(this.store.docs.get("result")?.value, []);
+    walk(this.store.docs.get(this.doc("result"))?.value, []);
     const names = (listed: ResultPath, path: string[]) =>
       namesPosition(listed.path, path);
     const counts = {
@@ -2734,7 +2801,88 @@ export class Instance {
   // ----- events -----
 
   queue(stream: StreamRef, event: unknown): void {
-    this.#queue.push({ stream, event });
+    this.root.#queue.push({ stream, event });
+  }
+
+  /** The identifier of a document of this instance. */
+  doc(name: string): string {
+    return `${this.prefix}${name}`;
+  }
+
+  /**
+   * Names what the run of a function body in progress makes next: the
+   * run, and the ordinal among what it has made (ES §2.8, "Identity").
+   * The run of a `lift` or a `computed` is named by the body and the
+   * element keys it is evaluated for, so an evaluation that makes the
+   * same things again names the same ones. The run of a handler is named
+   * by its event, so each event makes its own.
+   */
+  #made(): string {
+    const running = this.#running ?? { name: "outside", made: 0 };
+    const name = `${running.name}/${running.made}`;
+    running.made += 1;
+    return name;
+  }
+
+  /** Runs a function body under a name for what it makes. */
+  during<T>(name: string, run: () => T): T {
+    const outer = this.#running;
+    this.#running = { name, made: 0 };
+    try {
+      return run();
+    } finally {
+      this.#running = outer;
+    }
+  }
+
+  /**
+   * Instantiates a pattern in a function body (ES §2.8): an instance of
+   * the callee's plan, with documents of its own in the same store,
+   * named from this instance, the run that makes it, and the ordinal.
+   * The body gets a handle to the instance's result. The argument is
+   * stored as the body wrote it: a handle in it as a link, so a write of
+   * the callee through it lands in the caller's cell. A run that names
+   * an instance that exists writes its argument and makes nothing.
+   */
+  instantiate(id: unknown, argument: unknown): Handle {
+    const artifact = typeof id === "string"
+      ? this.options.artifacts?.(id)
+      : undefined;
+    if (artifact === undefined) {
+      throw new Unsupported("a pattern called in a function body");
+    }
+    const prefix = `${this.prefix}instance:${this.#made()}:`;
+    const given = this.stored(this.returned(argument));
+    let child = this.root.#instances.get(prefix);
+    if (child === undefined) {
+      child = new Instance(artifact, given, {
+        ...this.options,
+        parent: this,
+        prefix,
+      });
+      this.root.#instances.set(prefix, child);
+      this.#children.push(child);
+    } else {
+      this.store.write(new Ref(child.doc("argument"), []), given);
+    }
+    return new Handle(
+      this,
+      new Ref(child.doc("result"), []),
+      undefined,
+      undefined,
+      [],
+    );
+  }
+
+  /**
+   * Binds a handler in a function body (PL §3.14): a stream of its own,
+   * named as an instance a body makes is, with the state the body bound.
+   * An event for the stream runs the handler with that state.
+   */
+  bind(run: (...given: unknown[]) => unknown, state: unknown): StreamRef {
+    const key = `${this.prefix}bound:${this.#made()}`;
+    this.root.#bound.set(key, { run, state });
+    return new StreamRef(-1, [key], this.prefix);
   }
 
   /** Counts a write of the handler being run against its record. */
@@ -2786,21 +2934,41 @@ export class Instance {
       context.set(element, chosen);
       keys.push(chosen.key);
     }
-    this.#queue.push({ stream: new StreamRef(binding, keys), event });
-    const outcome = this.#drain(context, binding);
-    this.settle();
+    this.queue(new StreamRef(binding, keys, this.prefix), event);
+    const outcome = this.root.#drain(context, binding);
+    this.root.settle();
     return outcome;
   }
 
-  #drain(first: Context, binding: number): Outcome {
+  /**
+   * Handles the events that are queued, as one that a writer outside the
+   * instance sent through a stored link to a stream, and evaluates what
+   * read a position their handlers wrote.
+   */
+  dispatch(): void {
+    this.root.#drain(undefined, -1);
+    this.root.settle();
+  }
+
+  /** Handles the queued events, each in the instance its stream is of. */
+  #drain(first: Context | undefined, binding: number): Outcome {
     let outcome: Outcome = { binding, committed: true };
     let context: Context | undefined = first;
     for (let next = this.#queue.shift(); next; next = this.#queue.shift()) {
-      const handled = this.#handle(
-        next.stream,
-        next.event,
-        context ?? this.#contextOf(next.stream),
-      );
+      const target = next.stream.instance === ""
+        ? this
+        : this.#instances.get(next.stream.instance);
+      const handled = target === undefined
+        ? {
+          binding: next.stream.binding,
+          committed: false,
+          error: "the stream of an instance that does not exist",
+        }
+        : target.#handle(
+          next.stream,
+          next.event,
+          context ?? target.#contextOf(next.stream),
+        );
       if (context !== undefined) outcome = handled;
       context = undefined;
     }
@@ -2830,11 +2998,17 @@ export class Instance {
     const binding = stream.binding;
     const record = this.plan.bindings[binding];
     if (record === undefined) {
-      return {
-        binding,
-        committed: false,
-        error: "the stream of a binding made in a function body",
-      };
+      // A binding a function body made: the handler, with the state the
+      // body bound.
+      const bound = this.root.#bound.get(stream.keys[0]);
+      if (bound === undefined) {
+        return {
+          binding,
+          committed: false,
+          error: "the stream of a binding that does not exist",
+        };
+      }
+      return this.#run(binding, undefined, bound.run, event, bound.state);
     }
     const body = record.handler.body;
     const run = body === undefined
@@ -2907,22 +3081,47 @@ export class Instance {
       if (given === undefined) continue;
       state = this.placed(state, read.path, given);
     }
+    return this.#run(binding, body, run, event, state);
+  }
+
+  /**
+   * Runs a handler for an event. A handler that throws commits nothing
+   * (PL §5.4): the documents are as they were, and what the run queued,
+   * instantiated and bound is gone.
+   */
+  #run(
+    binding: number,
+    body: number | undefined,
+    run: (...given: unknown[]) => unknown,
+    event: unknown,
+    state: unknown,
+  ): Outcome {
+    const { root } = this;
     const before = [...this.store.docs].map((
       [id, document],
     ) => [id, structuredClone(document)] as const);
-    const queued = this.#queue.length;
+    const queued = root.#queue.length;
+    const instances = new Set(root.#instances.keys());
+    const bound = new Map(root.#bound);
+    const children = this.#children.length;
+    root.#events += 1;
     this.#handling = body;
     try {
-      run(event, state);
+      this.during(`event:${root.#events}`, () => run(event, state));
     } catch (error) {
-      // A handler that throws commits nothing (PL §5.4).
       this.store.docs.clear();
       for (const [id, document] of before) this.store.docs.set(id, document);
       this.store.clock += 1;
       for (const [id] of before) {
         this.store.log.push({ doc: id, path: [], at: this.store.clock });
       }
-      this.#queue.length = queued;
+      root.#queue.length = queued;
+      for (const prefix of [...root.#instances.keys()]) {
+        if (!instances.has(prefix)) root.#instances.delete(prefix);
+      }
+      root.#bound.clear();
+      for (const [key, held] of bound) root.#bound.set(key, held);
+      this.#children.length = children;
       return {
         binding,
         committed: false,
@@ -3020,8 +3219,28 @@ const commonfabric = (instance: Instance): unknown => {
     FS: "$FS",
     TESTS: "$TESTS",
     VIEWS: "$VIEWS",
-    pattern: marker("pattern"),
-    handler: marker("handler"),
+    // A pattern is, in value code, a factory that holds the identity of
+    // the pattern: a function body that calls it instantiates the
+    // pattern (ES §2.8).
+    pattern: (id: unknown) => (argument: unknown) => {
+      if (instance.loading) {
+        throw new Unsupported("a pattern called at module scope");
+      }
+      return instance.instantiate(id, argument);
+    },
+    // A handler is a factory that a function body can call with the
+    // state: the call binds the handler (PL §3.14).
+    handler: (...given: unknown[]) => {
+      const run = given.findLast((member) => typeof member === "function") as
+        | ((...given: unknown[]) => unknown)
+        | undefined;
+      return (state: unknown) => {
+        if (instance.loading || run === undefined) {
+          throw new Unsupported("a handler called in a function body");
+        }
+        return instance.bind(run, state);
+      };
+    },
     lift: marker("lift"),
     action: marker("action"),
     Writable: cells,

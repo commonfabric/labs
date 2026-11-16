@@ -263,23 +263,35 @@ evaluates the body of an element construct once per element key, and handles an
 event by running the handler's body and evaluating again what read a position
 the body wrote. It instantiates no label, checks no constraint, persists
 nothing, and answers every effect as pending. It does not narrow a slot to its
-observation class, does not instantiate a pattern or bind a handler in a
-function body, and does not evaluate the debug strings. The record of a key of a
-list (`elementById`) is a place of its own, named by the list and the key, which
-has a document once something writes it, and `addUnique` and `removeByValue`
-change the list's membership by reference. The record is a cell of its own and
-no member of the list until a reference to it is added (ruling Z23): a write
-through the handle is a write to the record, at no position of the list, and
-makes no reader of the list stale. The plan has no record that names it: the
-body's write edge and envelope are at `*` below the list, as
-`footprint-analysis.md` §7 records the handle, and the executor reads them for
-its count of covered writes alone. A record that a function body puts into an
-array through a handle, with `push`, `addUnique` or a `set` of the list, gets a
-document of its own, and the list stores a link to it, as today's runtime does
-(`anchorValueAsEntity` in `runtime/runner/src/data-updating.ts`): the list is
-then an array of references. A record of the argument the instance is created
-with, and a plain value that is no record, stay in the list's document, which is
-the case of an array of plain values in place. From the repository root:
+observation class and does not evaluate the debug strings. A function body can
+instantiate a pattern and bind a handler (ES §2.8). In value code the marker of
+each `pattern(...)` holds the identity of the pattern, the entry that the
+pattern's own `Plan.patterns` begins with, so the factory value a body calls
+names the callee, in whichever module it is written. The executor is given the
+artifacts of the program (`options.artifacts` of `Instance`), finds the callee's
+among them, and makes an instance of it with documents of its own in the same
+store, named from the instance that made it, the run of the body, and the
+ordinal among what that run made. The run of a `lift` or a `computed` is named
+by the body and its element keys, and the run of a handler by its event. A
+handler that a body binds has a stream named the same way, and an event for it
+runs the handler with the state the body bound
+(`compare/fixtures/instantiate.tsx`). The record `Child` of the crate's plan has
+no `callee`. The record of a key of a list (`elementById`) is a place of its
+own, named by the list and the key, which has a document once something writes
+it, and `addUnique` and `removeByValue` change the list's membership by
+reference. The record is a cell of its own and no member of the list until a
+reference to it is added (ruling Z23): a write through the handle is a write to
+the record, at no position of the list, and makes no reader of the list stale.
+The plan has no record that names it: the body's write edge and envelope are at
+`*` below the list, as `footprint-analysis.md` §7 records the handle, and the
+executor reads them for its count of covered writes alone. A record that a
+function body puts into an array through a handle, with `push`, `addUnique` or a
+`set` of the list, gets a document of its own, and the list stores a link to it,
+as today's runtime does (`anchorValueAsEntity` in
+`runtime/runner/src/data-updating.ts`): the list is then an array of references.
+A record of the argument the instance is created with, and a plain value that is
+no record, stay in the list's document, which is the case of an array of plain
+values in place. From the repository root:
 
 ```sh
 base/pattern-compiler/target/release/pattern-compiler emit path/to/module.tsx > artifact.json

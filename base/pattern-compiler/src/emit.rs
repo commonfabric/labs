@@ -199,6 +199,10 @@ pub(crate) struct Finished {
     /// result of a scan.
     pub values: Vec<(usize, Option<usize>, bool)>,
     pub slots: Vec<SlotKey>,
+    /// The identity of each pattern of the program, by its module and
+    /// the start of its function: the entry that the pattern's own
+    /// `Plan.patterns` begins with.
+    pub identities: HashMap<(usize, u32), String>,
 }
 
 /// Whether a reader wants the value at a place, or passes on what is
@@ -1951,10 +1955,19 @@ impl<'a> Visit<'a> for Rewriter<'_, '_, '_, 'a> {
                 .as_deref()
                 == Some("pattern")
         {
+            // In its place the marker holds the identity of the pattern,
+            // so a function body that calls the factory value names the
+            // artifact of the callee.
             for argument in &it.arguments {
                 if let Some(function) = FunctionLike::of_argument(argument) {
                     let span = function.span();
-                    self.edit(span.start, span.end, "undefined");
+                    let identity = self
+                        .generator
+                        .finished
+                        .identities
+                        .get(&(self.module, span.start))
+                        .map_or_else(|| "undefined".to_string(), |id| json!(id).to_string());
+                    self.edit(span.start, span.end, identity);
                 }
             }
         }

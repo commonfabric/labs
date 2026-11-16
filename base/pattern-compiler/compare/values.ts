@@ -321,6 +321,11 @@ export const compareValues = (
   outcomes:
     (Pick<EventOutcome, "outcome" | "elements"> & { reason?: string })[],
   runtime: Values,
+  /**
+   * The artifact of a pattern by its identity, for a pattern that a
+   * function body instantiates.
+   */
+  artifacts?: (id: string) => Artifact | undefined,
 ): ValueComparison => {
   const comparison: ValueComparison = {
     compared: 0,
@@ -385,7 +390,10 @@ export const compareValues = (
   });
   let instance: Instance;
   try {
-    instance = new Instance(artifact, argument, { space: runtime.space });
+    instance = new Instance(artifact, argument, {
+      space: runtime.space,
+      artifacts,
+    });
     compare("settled", runtime.settled, snapshot(instance));
   } catch (error) {
     comparison.notExecuted = categoryOf(error);
@@ -449,6 +457,7 @@ export const compareValues = (
 export const compareScenarioValues = async (
   scenario: Scenario,
   artifact: Artifact,
+  artifacts?: (id: string) => Artifact | undefined,
 ): Promise<ValueComparison> => {
   const { probe, values } = readingValues(scenario.plan);
   const run = await runScenario({ ...scenario, probe });
@@ -466,5 +475,6 @@ export const compareScenarioValues = async (
     scenario.events ?? [],
     run.events,
     values,
+    artifacts,
   );
 };

@@ -75,7 +75,22 @@ export type ModuleValues = {
   };
 };
 
-const runOne = async (module: EmittedModule): Promise<ModuleValues> => {
+/** The artifact of a pattern of the corpus, by its identity. */
+const artifactsOf = (modules: Iterable<EmittedModule>) => {
+  const known = new Map<string, Artifact>();
+  for (const module of modules) {
+    for (const pattern of module.patterns) {
+      const id = pattern.plan.patterns?.[0];
+      if (id !== undefined) known.set(id, pattern);
+    }
+  }
+  return (id: string) => known.get(id);
+};
+
+const runOne = async (
+  module: EmittedModule,
+  artifacts: (id: string) => Artifact | undefined,
+): Promise<ModuleValues> => {
   const chosen = await mainPattern(module);
   if (chosen === undefined) {
     return { module: module.module, skipped: "exports no pattern" };
@@ -106,7 +121,14 @@ const runOne = async (module: EmittedModule): Promise<ModuleValues> => {
   return {
     module: module.module,
     pattern: artifact.name,
-    comparison: compareValues(artifact, argument, events, outcomes, values),
+    comparison: compareValues(
+      artifact,
+      argument,
+      events,
+      outcomes,
+      values,
+      artifacts,
+    ),
     events: {
       sent: outcomes.filter(({ outcome }) => outcome !== "not sent").length,
       committed: outcomes.filter(({ outcome }) => outcome === "committed")
@@ -124,6 +146,7 @@ const again = async (file: string, to: string) => {
   const modules = new Map(
     (await corpusArtifacts()).map((module) => [module.module, module]),
   );
+  const artifacts = artifactsOf(modules.values());
   const lines: string[] = [];
   for (const earlier of await readResults(file)) {
     const module = modules.get(earlier.module);
@@ -137,7 +160,14 @@ const again = async (file: string, to: string) => {
     const { argument, events, outcomes, values } = earlier.runtime;
     lines.push(JSON.stringify({
       ...earlier,
-      comparison: compareValues(artifact, argument, events, outcomes, values),
+      comparison: compareValues(
+        artifact,
+        argument,
+        events,
+        outcomes,
+        values,
+        artifacts,
+      ),
     }));
   }
   await Deno.writeTextFile(to, lines.map((line) => `${line}\n`).join(""));
@@ -168,7 +198,9 @@ const readResults = async (file: string): Promise<ModuleValues[]> => {
 };
 
 const run = async (file: string, only: string | undefined) => {
-  const modules = (await corpusArtifacts()).filter((module) =>
+  const emitted = await corpusArtifacts();
+  const artifacts = artifactsOf(emitted);
+  const modules = emitted.filter((module) =>
     module.patterns.length > 0 &&
     module.patterns.every((pattern) => pattern.unsupported.length === 0) &&
     (only === undefined || module.module.includes(only))
@@ -187,7 +219,7 @@ const run = async (file: string, only: string | undefined) => {
       { append: true },
     );
     console.error(module.module);
-    const result = await runOne(module);
+    const result = await runOne(module, artifacts);
     await Deno.writeTextFile(file, `${JSON.stringify(result)}\n`, {
       append: true,
     });

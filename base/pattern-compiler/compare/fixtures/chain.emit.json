@@ -18,7 +18,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/chain.tsx",
-              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(undefined));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ label: ($h.v($h.slot(1)) + (\"!\")), done: $h.slot(2) })));\n}\n{\n$rt.element(1, ($h) => ((!$h.v($h.slot(3)))));\n}\n{\n$rt.element(2, ($h) => (($h.v($h.slot(5)) + (\"?\"))));\n}\n{\n$rt.element(3, ($h) => (($h.v($h.slot(7)) + (\"!\"))));\n}\n{\n$rt.element(4, ($h) => (($h.v($h.slot(8)) !== (\"skip!\"))));\n}\n{\n$rt.element(5, ($h) => (($h.v($h.slot(10)) + (\"?\"))));\n}\nreturn $rt.thunk(($h) => (({ open: $h.output(6), loud: $h.output(12) })));\n});"
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/chain.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ label: ($h.v($h.slot(1)) + (\"!\")), done: $h.slot(2) })));\n}\n{\n$rt.element(1, ($h) => ((!$h.v($h.slot(3)))));\n}\n{\n$rt.element(2, ($h) => (($h.v($h.slot(5)) + (\"?\"))));\n}\n{\n$rt.element(3, ($h) => (($h.v($h.slot(7)) + (\"!\"))));\n}\n{\n$rt.element(4, ($h) => (($h.v($h.slot(8)) !== (\"skip!\"))));\n}\n{\n$rt.element(5, ($h) => (($h.v($h.slot(10)) + (\"?\"))));\n}\nreturn $rt.thunk(($h) => (({ open: $h.output(6), loud: $h.output(12) })));\n});"
             }
           ],
           "outputsBelow": [],
