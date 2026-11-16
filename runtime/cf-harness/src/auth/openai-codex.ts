@@ -480,9 +480,12 @@ export class OpenAICodexCredentialResolver {
    *
    * Returns the credential to issue the request again with: the refreshed
    * one (`fresh`), or the stored one when another process has already
-   * replaced the refused token. Returns `undefined` when there is none to try: the owner
-   * disconnected, the credential already needs reconnection, or the refresh
-   * was refused for good (which marks it so) or could not be completed.
+   * replaced the refused token. Returns `undefined` when there is none to
+   * try: the owner disconnected, the credential already needs reconnection,
+   * or the refresh was refused for good (which marks it so). A refresh that
+   * could not be completed, or a store that could not be updated, rejects as
+   * `provider-unavailable`, as it does in `resolve`: the credential is still
+   * connected, and the refusal is not the reason the request failed.
    */
   async refreshRejected(
     rejected: OpenAICodexOAuthCredential,
@@ -513,9 +516,15 @@ export class OpenAICodexCredentialResolver {
       return record.health === undefined && record.credential !== undefined
         ? { credential: record.credential, fresh }
         : undefined;
-    } catch {
+    } catch (error) {
       if (signal?.aborted) throw abortReason(signal);
-      return undefined;
+      if (error instanceof HarnessControlError) throw error;
+      throw new HarnessControlError(
+        "provider-unavailable",
+        error instanceof OpenAICodexAuthError
+          ? error.message
+          : "OpenAI Codex credential storage could not be updated",
+      );
     }
   }
 

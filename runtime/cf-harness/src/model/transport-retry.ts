@@ -23,13 +23,23 @@ export type HarnessTransientFailureKind =
   | "provider_error";
 
 /**
+ * Why a client issued another attempt: a transient failure, or the provider
+ * refusing the access token (a 401), after which the request is issued once
+ * more with a refreshed token. A refusal is outside the retry schedule: it
+ * waits out no backoff and is not counted against the schedule's attempts.
+ */
+export type HarnessModelAttemptRetryKind =
+  | HarnessTransientFailureKind
+  | "credential_refused";
+
+/**
  * What an attempt record carries when the attempt failed transiently and the
  * client issues another: the kind of failure, and the backoff before the next
  * attempt starts.
  */
 export interface HarnessModelAttemptRetry {
-  /** Which transient failure the attempt ended in. */
-  kind: HarnessTransientFailureKind;
+  /** What the attempt ended in that another attempt follows. */
+  kind: HarnessModelAttemptRetryKind;
 
   /** Milliseconds waited before the next attempt. */
   delayMs: number;
@@ -150,7 +160,7 @@ export class TransportRetrySchedule {
   retryAfter(
     attempt: number,
     kind: HarnessTransientFailureKind | undefined,
-  ): HarnessModelAttemptRetry | undefined {
+  ): { kind: HarnessTransientFailureKind; delayMs: number } | undefined {
     if (kind === undefined || attempt >= this.#maxAttempts) return undefined;
     return { kind, delayMs: this.delayMsBefore(attempt + 1) };
   }

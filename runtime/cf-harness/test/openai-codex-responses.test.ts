@@ -2045,6 +2045,7 @@ const rejectionHarness = (
     tokens: [] as (string | null)[],
     refreshedFrom: [] as string[],
     marked: [] as string[],
+    attempts: [] as HarnessModelAttemptDiagnostic[],
   };
   const client = new OpenAICodexResponsesClient({
     transportRetries: 0,
@@ -2070,7 +2071,13 @@ const rejectionHarness = (
       return Promise.resolve(next);
     },
   });
-  return { client, seen };
+  const request = {
+    ...helloRequest,
+    onAttempt: (attempt: HarnessModelAttemptDiagnostic) => {
+      seen.attempts.push(attempt);
+    },
+  };
+  return { client, seen, request };
 };
 
 const refreshedCredential: OpenAICodexOAuthCredential = {
@@ -2085,12 +2092,12 @@ const assertAuthRequired = async (run: () => Promise<unknown>) => {
 };
 
 Deno.test("Codex Responses issues a refused request again with a refreshed token", async () => {
-  const { client, seen } = rejectionHarness(
+  const { client, seen, request } = rejectionHarness(
     [refusedToken(), completedHello()],
     { credential: refreshedCredential, fresh: true },
   );
 
-  const result = await client.complete(helloRequest);
+  const result = await client.complete(request);
 
   assertEquals(result.assistant.content, "hello");
   assertEquals(seen.tokens, [
@@ -2099,6 +2106,57 @@ Deno.test("Codex Responses issues a refused request again with a refreshed token
   ]);
   assertEquals(seen.refreshedFrom, ["access-secret"]);
   assertEquals(seen.marked, []);
+  // the refused attempt says why another followed, and both count it
+  assertEquals(
+    seen.attempts.map((a) => [
+      a.attempt,
+      a.maxTransportAttempts,
+      a.httpStatus,
+      a.retry,
+    ]),
+    [
+      [1, 2, 401, { kind: "credential_refused", delayMs: 0 }],
+      [2, 2, 200, undefined],
+    ],
+  );
+});
+
+Deno.test("Codex Responses reports a refresh that could not be completed, not the refusal", async () => {
+  const attempts: HarnessModelAttemptDiagnostic[] = [];
+  let requests = 0;
+  const client = new OpenAICodexResponsesClient({
+    transportRetries: 0,
+    credentialResolver: {
+      resolve: () => Promise.resolve(credential),
+      refreshRejected: () =>
+        Promise.reject(
+          new HarnessControlError(
+            "provider-unavailable",
+            "OpenAI Codex token refresh failed (503)",
+          ),
+        ),
+    },
+    fetchFn: () => {
+      requests += 1;
+      return Promise.resolve(refusedToken());
+    },
+  });
+
+  const error = await assertRejects(() =>
+    client.complete({
+      ...helloRequest,
+      onAttempt: (attempt) => {
+        attempts.push(attempt);
+      },
+    })
+  );
+
+  assertEquals((error as HarnessControlError).code, "provider-unavailable");
+  assertEquals(requests, 1);
+  assertEquals(
+    attempts.map((a) => [a.maxTransportAttempts, a.httpStatus, a.retry]),
+    [[1, 401, undefined]],
+  );
 });
 
 Deno.test("Codex Responses marks a credential whose refreshed token is refused too", async () => {

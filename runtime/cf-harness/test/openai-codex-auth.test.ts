@@ -1759,7 +1759,9 @@ Deno.test("a refused Codex token whose refresh cannot be completed stays connect
     () => new Response("unavailable", { status: 503 }),
   );
 
-  assertEquals(await resolver.refreshRejected(refused), undefined);
+  const error = await assertRejects(() => resolver.refreshRejected(refused));
+  assertEquals(error instanceof HarnessControlError, true);
+  assertEquals((error as HarnessControlError).code, "provider-unavailable");
   assertEquals(
     (await new OpenAICodexAuthService(store, "local").status()).status,
     "connected",

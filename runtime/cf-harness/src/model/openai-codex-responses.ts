@@ -69,6 +69,8 @@ export interface OpenAICodexCredentialResolverLike {
    * credential to issue the request again with, and whether this call
    * refreshed it (`fresh`) or found it already replaced; `undefined` when
    * there is none. A resolver without it has no second credential to offer.
+   * Rejects with a `HarnessControlError` when the refresh could not be
+   * completed, which is then why the request failed.
    */
   refreshRejected?(
     rejected: OpenAICodexOAuthCredential,
@@ -293,6 +295,12 @@ interface CodexExchange {
   credential: OpenAICodexOAuthCredential;
   body: string;
   affinityKey: string;
+  /**
+   * Set once the provider has refused the access token and the request is
+   * being issued again with another: whether that one was refreshed for this
+   * request (`fresh`) or found already stored by another process.
+   */
+  reissued?: { fresh: boolean };
 }
 
 /**
@@ -308,8 +316,11 @@ type CodexAttemptOutcome =
   | {
     error: HarnessControlError;
     retry?: HarnessTransientFailureKind;
-    /** The provider answered 401: it refused the access token itself. */
-    rejected?: true;
+    /**
+     * The provider refused the access token and there is another to issue
+     * the request with.
+     */
+    reissue?: { credential: OpenAICodexOAuthCredential; fresh: boolean };
   };
 
 const selectedHeaders = (
@@ -612,13 +623,6 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
     });
     assertHarnessModelInputBound(body, request.maxInputBytes);
     let exchange: CodexExchange = { request, credential, body, affinityKey };
-    // A 401 refuses the access token before any work is done, whatever the
-    // stored expiry said. The request is issued once more with a refreshed
-    // token. When the provider refuses a token refreshed here, no token this
-    // credential can obtain is accepted, and it is marked as needing
-    // reconnection; a refused token that another process put there is left
-    // for the next request to refresh.
-    let reissued: { fresh: boolean } | undefined;
     // Nothing leaves this loop until an attempt reaches a completed terminal
     // response, so a tool call streamed by an attempt that failed is never
     // the one the harness dispatches.
@@ -631,23 +635,13 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
           outcome.rawPayload,
         );
       }
-      if (outcome.rejected) {
-        if (reissued !== undefined) {
-          if (reissued.fresh) {
-            await this.#resolver.markRejected?.(
-              exchange.credential,
-              request.signal,
-            );
-          }
-          throw outcome.error;
-        }
-        const next = await this.#resolver.refreshRejected?.(
-          exchange.credential,
-          request.signal,
-        );
-        if (next === undefined) throw outcome.error;
-        reissued = { fresh: next.fresh };
-        exchange = { ...exchange, credential: next.credential };
+      if (outcome.reissue !== undefined) {
+        // no backoff: the provider did no work, and waiting changes nothing
+        exchange = {
+          ...exchange,
+          credential: outcome.reissue.credential,
+          reissued: { fresh: outcome.reissue.fresh },
+        };
         continue;
       }
       if (outcome.retry === undefined) throw outcome.error;
@@ -712,7 +706,10 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
       operation: "responses.stream",
       endpoint: this.#endpoint,
       attempt,
-      maxTransportAttempts: bounded ? 1 : this.#retrySchedule.maxAttempts,
+      // the attempt a refused token is issued again as is one more than the
+      // schedule's own
+      maxTransportAttempts: (bounded ? 1 : this.#retrySchedule.maxAttempts) +
+        (exchange.reissued === undefined ? 0 : 1),
       startedAt: startedAt.toISOString(),
       request: {
         model: request.model,
@@ -730,7 +727,20 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
       kind: HarnessTransientFailureKind | undefined,
       record: Omit<HarnessModelAttemptDiagnostic, keyof typeof attemptBase>,
       error: HarnessControlError,
+      reissue?: { credential: OpenAICodexOAuthCredential; fresh: boolean },
     ): Promise<CodexAttemptOutcome> => {
+      if (reissue !== undefined && !request.signal?.aborted) {
+        // A refused token is issued again whatever the schedule or a bound
+        // allows: the provider did no work on the refused request.
+        await emitAttempt(request.onAttempt, {
+          ...attemptBase,
+          maxTransportAttempts: attemptBase.maxTransportAttempts + 1,
+          ...record,
+          retry: { kind: "credential_refused", delayMs: 0 },
+        });
+        if (request.signal?.aborted) throw abortReason(request.signal);
+        return { error, reissue };
+      }
       const retry = bounded || request.signal?.aborted
         ? undefined
         : this.#retrySchedule.retryAfter(attempt, kind);
@@ -808,7 +818,34 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
           errorDetail = redact(signal.reason.message);
         }
       }
-      const refused = await failed(
+      // A 401 refuses the access token before any work is done, whatever the
+      // stored expiry said. The request is issued once more with a refreshed
+      // token. When the provider refuses a token refreshed for this request,
+      // no token this credential can obtain is accepted, and it is marked as
+      // needing reconnection; a refused token that another process stored is
+      // left for the next request to refresh. A refresh that could not be
+      // completed is why the request failed, in place of the refusal.
+      let failure = httpFailure(response.status, providerError);
+      let reissue:
+        | { credential: OpenAICodexOAuthCredential; fresh: boolean }
+        | undefined;
+      if (response.status === 401) {
+        if (exchange.reissued === undefined) {
+          try {
+            reissue = await this.#resolver.refreshRejected?.(
+              credential,
+              request.signal,
+            );
+          } catch (error) {
+            if (request.signal?.aborted) throw abortReason(request.signal);
+            if (!(error instanceof HarnessControlError)) throw error;
+            failure = error;
+          }
+        } else if (exchange.reissued.fresh) {
+          await this.#resolver.markRejected?.(credential, request.signal);
+        }
+      }
+      return await failed(
         isTransientHttpStatus(response.status) ? "http_status" : undefined,
         {
           ...httpAttempt,
@@ -817,11 +854,9 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
           ...(providerError !== undefined ? { providerError } : {}),
           ...(errorDetail !== undefined ? { errorDetail } : {}),
         },
-        httpFailure(response.status, providerError),
+        failure,
+        reissue,
       );
-      return response.status === 401 && "error" in refused
-        ? { ...refused, rejected: true }
-        : refused;
     }
     let reading: StreamReading;
     try {
