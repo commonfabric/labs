@@ -526,7 +526,11 @@ export function pathsOf(listing: string): Set<string> {
   return new Set(listing.split("\0").filter((path) => path.length > 0));
 }
 
-/** The files this change touched, as the repository names them. */
+/**
+ * The files this change touched, as the repository names them. A file the
+ * change moved is both of its paths, since what reaches the path it left
+ * is as touched as what reaches the path it came to.
+ */
 export async function changedFiles(
   root: string,
   base: string | undefined,
@@ -539,7 +543,7 @@ export async function changedFiles(
   return pathsOf(
     await gitOutput(
       root,
-      ["diff", "-z", "--name-only", `${base}...HEAD`],
+      ["diff", "-z", "--name-only", "--no-renames", `${base}...HEAD`],
       `cannot diff against ${base}`,
     ),
   );
@@ -802,14 +806,8 @@ export function batchesOf(
     // A `describe` that fails as a whole is recorded under its own title,
     // and the outermost `describe` registers one test under its title, so
     // skipping that title skips every leaf inside it. A title enclosing a
-    // chosen name therefore stays off the list, and its hooks run, so its
-    // own cost is part of what the unit takes.
+    // chosen name therefore stays off the list, and its hooks run.
     const around = new Set([...names].flatMap(enclosingNames));
-    const runs = whole
-      ? all
-      : all.filter((entry) =>
-        names.has(entry.test.n) || around.has(entry.test.n)
-      );
     const request: UnitRequest = {
       unit,
       skip: whole ? [] : all
@@ -817,7 +815,6 @@ export function batchesOf(
           !names.has(entry.test.n) && !around.has(entry.test.n)
         )
         .map((entry) => entry.test.n),
-      cost: runs.reduce((total, entry) => total + entry.cost, 0),
     };
     const suiteKnows = known.get(suiteId) ?? new Set();
     known.set(suiteId, suiteKnows);
@@ -1701,14 +1698,15 @@ export interface Missed {
  * An identity that went unaccounted for while its unit recorded costs an
  * excusal rather than the run, unless what the pass registered shows the
  * tree holds no such test. A manifest is hours old by construction, and it
- * holds every identity the default branch recorded in a file the tree
- * still holds, so it names tests renamed since. No run of this tree can
- * record one of those, and its missing record says
- * nothing about whether an invocation stopped, so it is set apart as
- * absent and an excusal stands beside it. Where the pass's registrations
- * say nothing about a unit, as for a suite whose processes leave no name
- * map or a process that stopped before leaving one, the identity stays
- * unaccounted for.
+ * holds every identity the default branch was still recording in a file the
+ * tree held then, so it can name tests the tree under test does not hold,
+ * such as one renamed since. Only that tree's registrations show which those
+ * are. No run of the tree can record an identity they show absent, and its
+ * missing record says nothing about whether an invocation stopped, so it is
+ * set apart as absent and an excusal stands beside it. Where the pass's
+ * registrations say nothing about a unit, as for a suite whose processes
+ * leave no name map or a process that stopped before leaving one, the
+ * identity stays unaccounted for.
  */
 export function accountFor(
   batch: Batch,

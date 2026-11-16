@@ -25,8 +25,10 @@ import {
   readRefusal,
   type RenderLabelSummary,
   type RenderPolicy,
+  UNREADABLE_LABELS,
 } from "@commonfabric/html/worker";
 import { fabricAwareEqual, type FabricValue } from "@commonfabric/data-model";
+import type { DID } from "@commonfabric/identity";
 import { isPlainObject } from "@commonfabric/js-values/types";
 import {
   type Cancel,
@@ -34,6 +36,7 @@ import {
   hostValueOf,
   isStream,
   type MetaField,
+  type ProjectedRead,
   readProjected,
   type SinkConsumedLabel,
   sinkProjected,
@@ -46,6 +49,7 @@ import {
   redactCaveatSourcesForDisplay,
   reportCfcDenial,
   type SpaceMembershipProvider,
+  StoredCfcMetadataError,
 } from "@commonfabric/runner/cfc";
 
 import {
@@ -71,10 +75,36 @@ const FIELDS_SCHEMA = {
   additionalProperties: { asCell: ["cell"] },
 } as const;
 
-/** What the display ceiling's refusal of a host's read says. */
-const DISPLAY_CEILING_REFUSAL: CellReadRefusal = Object.freeze({
-  refusedBy: "display-ceiling",
-});
+/**
+ * What the display ceiling's refusal of a host's read says: that the ceiling
+ * refused it, and the kind of label `refusal` was decided on, which carries
+ * nothing of the label itself.
+ */
+function displayCeilingRefusal(refusal: RenderLabelSummary): CellReadRefusal {
+  return Object.freeze({
+    refusedBy: "display-ceiling",
+    labelSource: refusal.labelSource,
+  });
+}
+
+/**
+ * Reads `cell` once through `project`, as `readProjected()` does, or returns
+ * `undefined` where the read reached a document whose stored labels this
+ * build cannot interpret. Such a read fails closed with a
+ * `StoredCfcMetadataError` (`docs/specs/cfc-stored-envelope.md`), and is
+ * decided as one whose labels could not be read, which refuses it.
+ */
+function readProjectedOrUnreadable<R>(
+  cell: Cell<unknown>,
+  project: (value: unknown) => R,
+): ProjectedRead<R> | undefined {
+  try {
+    return readProjected(cell, project);
+  } catch (error) {
+    if (error instanceof StoredCfcMetadataError) return undefined;
+    throw error;
+  }
+}
 
 /**
  * Marks `answer` as one this gate made. This is the only place the mark is
@@ -167,13 +197,9 @@ export class HostReadGate {
    */
   async settle(cell: Cell<unknown>): Promise<void> {
     await this.#settle((policy, sources, watch) => {
-      readRefusal(
-        cell,
-        [readProjected(cell, hostValueOf).consumed],
-        policy,
-        sources,
-        watch,
-      );
+      const read = readProjectedOrUnreadable(cell, hostValueOf);
+      if (read === undefined) return;
+      readRefusal(cell, [read.consumed], policy, sources, watch);
     });
   }
 
@@ -257,15 +283,9 @@ export class HostReadGate {
     if (policy === undefined) {
       value = hostValueOf(cell.get());
     } else {
-      const read = readProjected(cell, hostValueOf);
-      const refusal = readRefusal(
-        cell,
-        [read.consumed],
-        policy,
-        this.#sources,
-      );
-      if (refusal !== undefined) {
-        const refused = this.#refuse(refusal, policy);
+      const read = this.#decide(cell, cell, hostValueOf, policy);
+      if ("refusal" in read) {
+        const refused = this.#refuse(read.refusal, policy);
         if (!options.includeRef) return refused;
         // The address alone, without the label view a ref carries: a
         // refused read gives no label.
@@ -329,9 +349,9 @@ export class HostReadGate {
    * Subscribes a host to `cell`, delivering each read as a cell update for
    * `ref`: its value, or the refusal that stands in its place, decided again
    * whenever the membership or a module policy its labels name changes. A
-   * read that finds the value and label the last update delivered sends
-   * nothing: the host holds them already, and a change elsewhere in what the
-   * read depends on is no change to it. Each change to a refused read
+   * read that finds the value, label and written principal the last update
+   * delivered sends nothing: the host holds them already, and a change
+   * elsewhere in what the read depends on is no change to it. Each change to a refused read
    * delivers a refusal of its own, so a host that listens only for change
    * still hears one, and the first value admitted after a refusal is
    * delivered whatever it holds. `inspect` sees each value as it was read,
@@ -339,45 +359,65 @@ export class HostReadGate {
    *
    * A stream holds no value: its sink delivers the events sent to it, which
    * no read consumed, so an event is decided on the labels of the stream's
-   * own document.
+   * own document, and carries no written principal. A read that reaches a
+   * document whose stored labels this build cannot interpret is delivered as
+   * the refusal of a read whose labels could not be read, and the
+   * subscription goes on, so that a later write that can be read delivers
+   * what it holds.
+   *
+   * `includeCfcLabel` adds the cell's display label to each update, and
+   * `includeWrittenPrincipal` the principal the value's own cell represents
+   * (`writtenPrincipalAt()`), each read on the sink's transaction with the
+   * value.
    */
   subscribe(
     cell: Cell<unknown>,
     ref: CellRef,
-    options: { includeCfcLabel?: boolean },
+    options: { includeCfcLabel?: boolean; includeWrittenPrincipal?: boolean },
     inspect: (value: unknown) => void,
     deliver: (update: CellUpdateNotification) => void,
   ): Cancel {
     const includeCfcLabel = options.includeCfcLabel === true;
-    // Sends `value` with `label`, the display form of a label view.
+    const includeWrittenPrincipal = options.includeWrittenPrincipal === true;
+    const sinkOptions = { includeCfcLabel, includeWrittenPrincipal };
+    // Sends `value` with `label`, the display form of a label view, and
+    // `writtenPrincipal`.
     const sendUpdate = (
       value: FabricValue,
       label: CfcLabelView | undefined,
+      writtenPrincipal: DID | undefined,
     ): void =>
       deliver(decided({
         type: NotificationType.CellUpdate as const,
         cell: ref,
         value,
         ...(includeCfcLabel ? { cfcLabel: label } : {}),
+        ...(includeWrittenPrincipal ? { writtenPrincipal } : {}),
       }));
     // What the last update delivered, or `undefined` while none has, and
     // again after a refusal.
     let sent:
-      | { value: FabricValue; cfcLabel: CfcLabelView | undefined }
+      | {
+        value: FabricValue;
+        cfcLabel: CfcLabelView | undefined;
+        writtenPrincipal: DID | undefined;
+      }
       | undefined;
     const deliverValue = (
       value: FabricValue,
       cfcLabel: CfcLabelView | undefined,
+      writtenPrincipal: DID | undefined,
     ): void => {
       const label = includeCfcLabel ? displayLabel(cfcLabel) : undefined;
       if (
         sent !== undefined && fabricAwareEqual(sent.value, value) &&
-        fabricAwareEqual(sent.cfcLabel, label)
+        fabricAwareEqual(sent.cfcLabel, label) &&
+        sent.writtenPrincipal === writtenPrincipal
       ) {
         return;
       }
-      sent = { value, cfcLabel: label };
-      sendUpdate(value, label);
+      sent = { value, cfcLabel: label, writtenPrincipal };
+      sendUpdate(value, label, writtenPrincipal);
     };
     // An event is an occurrence, and two alike are two: each is sent as it
     // comes, compared with nothing.
@@ -385,14 +425,18 @@ export class HostReadGate {
       event: FabricValue,
       cfcLabel: CfcLabelView | undefined,
     ): void =>
-      sendUpdate(event, includeCfcLabel ? displayLabel(cfcLabel) : undefined);
+      sendUpdate(
+        event,
+        includeCfcLabel ? displayLabel(cfcLabel) : undefined,
+        undefined,
+      );
     const policy = this.#policy;
     if (policy === undefined) {
       const send = holdsEvents(cell) ? deliverEvent : deliverValue;
-      return cell.sink((value, cfcLabel) => {
+      return cell.sink((value, cfcLabel, _consumed, writtenPrincipal) => {
         inspect(value);
-        send(hostValueOf(value), cfcLabel);
-      }, { includeCfcLabel });
+        send(hostValueOf(value), cfcLabel, writtenPrincipal);
+      }, sinkOptions);
     }
     const refusedUpdate = (refusal: RenderLabelSummary) => {
       this.#report(refusal, policy);
@@ -400,7 +444,7 @@ export class HostReadGate {
       return decided({
         type: NotificationType.CellUpdate as const,
         cell: ref,
-        refused: DISPLAY_CEILING_REFUSAL,
+        refused: displayCeilingRefusal(refusal),
       });
     };
     if (holdsEvents(cell)) {
@@ -434,20 +478,23 @@ export class HostReadGate {
     }
     const [cancel, addCancel] = useCancelGroup();
     let last:
-      | { value: FabricValue; cfcLabel: CfcLabelView | undefined }
+      | {
+        value: FabricValue;
+        cfcLabel: CfcLabelView | undefined;
+        writtenPrincipal: DID | undefined;
+      }
       | undefined;
     let consumed: SinkConsumedLabel | undefined;
     const decide = () => {
       if (last === undefined) return;
-      const refusal = readRefusal(
-        cell,
-        [consumed],
-        policy,
-        this.#sources,
-        watch,
-      );
-      if (refusal === undefined) deliverValue(last.value, last.cfcLabel);
-      else deliver(refusedUpdate(refusal));
+      // No labels is a read whose labels could not be read, refused whatever
+      // the policy, as a one-shot read of the same cell is.
+      const refusal = consumed === undefined
+        ? UNREADABLE_LABELS
+        : readRefusal(cell, [consumed], policy, this.#sources, watch);
+      if (refusal === undefined) {
+        deliverValue(last.value, last.cfcLabel, last.writtenPrincipal);
+      } else deliver(refusedUpdate(refusal));
     };
     const watch: FitWatch = {
       watched: new Set<string>(),
@@ -457,11 +504,11 @@ export class HostReadGate {
     addCancel(sinkProjected(cell, (value) => {
       inspect(value);
       return hostValueOf(value);
-    }, (value, read, cfcLabel) => {
-      last = { value, cfcLabel };
+    }, (value, read, cfcLabel, writtenPrincipal) => {
+      last = { value, cfcLabel, writtenPrincipal };
       consumed = read;
       decide();
-    }, { includeCfcLabel }));
+    }, sinkOptions));
     return cancel;
   }
 
@@ -489,27 +536,17 @@ export class HostReadGate {
   async fields(cell: Cell<unknown>): Promise<CellFieldsResponse> {
     const listed = cell.asSchema(FIELDS_SCHEMA);
     await this.#settle((policy, sources, watch) => {
-      readRefusal(
-        cell,
-        [readProjected(listed, fieldNamesOf).consumed],
-        policy,
-        sources,
-        watch,
-      );
+      const read = readProjectedOrUnreadable(listed, fieldNamesOf);
+      if (read === undefined) return;
+      readRefusal(cell, [read.consumed], policy, sources, watch);
     });
     const policy = this.#policy;
     let names: string[] | undefined;
     if (policy === undefined) {
       names = fieldNamesOf(listed.get());
     } else {
-      const read = readProjected(listed, fieldNamesOf);
-      const refusal = readRefusal(
-        cell,
-        [read.consumed],
-        policy,
-        this.#sources,
-      );
-      if (refusal !== undefined) return this.#refuse(refusal, policy);
+      const read = this.#decide(cell, listed, fieldNamesOf, policy);
+      if ("refusal" in read) return this.#refuse(read.refusal, policy);
       names = read.value;
     }
     // Nothing to list, which is not a record that holds no fields.
@@ -524,13 +561,35 @@ export class HostReadGate {
     return decided({ fields });
   }
 
+  /**
+   * Reads `read` once through `project` and decides it under `policy` as a
+   * read of `cell`, on what it consumed: the projection, or the label that
+   * refuses it.
+   */
+  #decide<R>(
+    cell: Cell<unknown>,
+    read: Cell<unknown>,
+    project: (value: unknown) => R,
+    policy: RenderPolicy,
+  ): { value: R } | { refusal: RenderLabelSummary } {
+    const projected = readProjectedOrUnreadable(read, project);
+    if (projected === undefined) return { refusal: UNREADABLE_LABELS };
+    const refusal = readRefusal(
+      cell,
+      [projected.consumed],
+      policy,
+      this.#sources,
+    );
+    return refusal === undefined ? { value: projected.value } : { refusal };
+  }
+
   /** A refusal of a read, reported as a refused render is. */
   #refuse(
     refusal: RenderLabelSummary,
     policy: RenderPolicy,
   ): CellGetResponse & CellRefusedAnswer {
     this.#report(refusal, policy);
-    return decided({ refused: DISPLAY_CEILING_REFUSAL });
+    return decided({ refused: displayCeilingRefusal(refusal) });
   }
 
   #report(refusal: RenderLabelSummary, policy: RenderPolicy): void {

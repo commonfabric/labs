@@ -209,7 +209,11 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
     return "";
   });
 
-  const commitsData = fetchJson<CommitResponse>({ url: fallbackApiUrl });
+  // The result is absent while the URL is empty or the request is pending,
+  // and typing it as optional lets the computations below run meanwhile.
+  const commitsData = fetchJson<CommitResponse | undefined>({
+    url: fallbackApiUrl,
+  });
   const commits = commitsData.result;
   const fallbackPrompt = computed(() => {
     const commitList = commits ?? [];
@@ -292,359 +296,378 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
 
   return {
     [NAME]: pieceName,
-    [UI]: state.pullRequestIndex
-      ? (
-        <cf-screen>
-          <cf-vstack gap="4" padding="4">
-            <cf-hstack justify="between" align="center" gap="3" wrap>
-              <div>
-                <cf-heading level={2}>GitHub pull requests</cf-heading>
-                <cf-text tone="muted">
-                  @{state.pullRequestIndex.viewer} · generation{" "}
-                  {state.pullRequestIndex.generation}
-                </cf-text>
-              </div>
-              <cf-badge
-                color={healthColor(state.health?.status)}
-                variant="solid"
-              >
-                {state.health?.status ?? "index available"}
-              </cf-badge>
-            </cf-hstack>
+    // The ternary sits in a fragment because the transformer lowers it to an
+    // ifElse on the input's value there; as a bare property value it would
+    // test the input's cell, which is always present.
+    [UI]: (
+      <>
+        {state.pullRequestIndex
+          ? (
+            <cf-screen>
+              <cf-vstack gap="4" padding="4">
+                <cf-hstack justify="between" align="center" gap="3" wrap>
+                  <div>
+                    <cf-heading level={2}>GitHub pull requests</cf-heading>
+                    <cf-text tone="muted">
+                      @{state.pullRequestIndex.viewer} · generation{" "}
+                      {state.pullRequestIndex.generation}
+                    </cf-text>
+                  </div>
+                  <cf-badge
+                    color={healthColor(state.health?.status)}
+                    variant="solid"
+                  >
+                    {state.health?.status ?? "index available"}
+                  </cf-badge>
+                </cf-hstack>
 
-            <cf-hgroup gap="md" wrap>
-              <cf-card style={{ minWidth: "150px", flex: "1" }}>
-                <cf-vstack gap="1">
-                  <cf-text tone="muted">Tracked PRs</cf-text>
-                  <cf-heading level={3}>{pullRequestCount}</cf-heading>
-                </cf-vstack>
-              </cf-card>
-              <cf-card style={{ minWidth: "150px", flex: "1" }}>
-                <cf-vstack gap="1">
-                  <cf-text tone="muted">Repositories</cf-text>
-                  <cf-heading level={3}>{repositoryCount}</cf-heading>
-                </cf-vstack>
-              </cf-card>
-              <cf-card style={{ minWidth: "150px", flex: "1" }}>
-                <cf-vstack gap="1">
-                  <cf-text tone="muted">Ready to land</cf-text>
-                  <cf-heading level={3}>{readyToLandCount}</cf-heading>
-                </cf-vstack>
-              </cf-card>
-              <cf-card style={{ minWidth: "150px", flex: "1" }}>
-                <cf-vstack gap="1">
-                  <cf-text tone="muted">Tests running</cf-text>
-                  <cf-heading level={3}>{testsRunningCount}</cf-heading>
-                </cf-vstack>
-              </cf-card>
-              <cf-card style={{ minWidth: "150px", flex: "1" }}>
-                <cf-vstack gap="1">
-                  <cf-text tone="muted">Needs attention</cf-text>
-                  <cf-heading level={3}>{needsAttentionCount}</cf-heading>
-                </cf-vstack>
-              </cf-card>
-              <cf-card style={{ minWidth: "150px", flex: "1" }}>
-                <cf-vstack gap="1">
-                  <cf-text tone="muted">Drafts</cf-text>
-                  <cf-heading level={3}>{draftCount}</cf-heading>
-                </cf-vstack>
-              </cf-card>
-            </cf-hgroup>
-
-            <cf-tabs $value={activeTab}>
-              <cf-tab-list>
-                <cf-tab value="pull-requests">All pull requests</cf-tab>
-                <cf-tab value="recent">Recent activity</cf-tab>
-                <cf-tab value="sync">Sync details</cf-tab>
-              </cf-tab-list>
-
-              <cf-tab-panel value="pull-requests">
-                <cf-vstack gap="3" padding="3">
-                  <cf-text tone="muted">
-                    {computed(() =>
-                      `${pullRequestCount} synchronized pull requests`
-                    )}
-                  </cf-text>
-
-                  {computed(() => pullRequestCount === 0)
-                    ? <cf-empty-state message="No synchronized pull requests" />
-                    : (
-                      <cf-card>
-                        <cf-table fullWidth hover>
-                          <thead>
-                            <tr>
-                              <th>Repository</th>
-                              <th>Pull request</th>
-                              <th>Status</th>
-                              <th>Review</th>
-                              <th>Checks</th>
-                              <th>Merge</th>
-                              <th>Updated</th>
-                              <th>Snapshot</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {indexedPullRequests.map((row) => (
-                              <tr>
-                                <td>
-                                  <a
-                                    href={row.repositoryUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                  >
-                                    {row.repository}
-                                  </a>
-                                </td>
-                                <td>
-                                  <cf-vstack gap="1">
-                                    <a
-                                      href={row.url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                    >
-                                      #{row.number} {row.title}
-                                    </a>
-                                    <cf-text variant="caption" tone="muted">
-                                      {row.headRepository
-                                        ? `${row.headRepository}:`
-                                        : ""}
-                                      {row.headRefName} → {row.baseRefName}
-                                    </cf-text>
-                                  </cf-vstack>
-                                </td>
-                                <td>
-                                  <cf-badge
-                                    color={statusColor(row.status)}
-                                    variant="solid"
-                                  >
-                                    {statusLabel(row.status)}
-                                  </cf-badge>
-                                </td>
-                                <td>{enumLabel(row.reviewDecision)}</td>
-                                <td>{enumLabel(row.checkState)}</td>
-                                <td>{enumLabel(row.mergeState)}</td>
-                                <td>{formatDate(row.updatedAt)}</td>
-                                <td>
-                                  <details>
-                                    <summary>Fields</summary>
-                                    <cf-vstack gap="1">
-                                      <cf-text variant="caption">
-                                        ID: {row.id}
-                                      </cf-text>
-                                      <cf-text variant="caption">
-                                        Visibility: {row.visibility}
-                                      </cf-text>
-                                      <cf-text variant="caption">
-                                        Mergeable: {enumLabel(row.mergeable)}
-                                      </cf-text>
-                                      <cf-text variant="caption">
-                                        Base: {row.baseRefName} @{" "}
-                                        {shortOid(row.baseRefOid)}
-                                      </cf-text>
-                                      <cf-text variant="caption">
-                                        Head: {row.headRefName} @{" "}
-                                        {shortOid(row.headRefOid)}
-                                      </cf-text>
-                                      <cf-text variant="caption">
-                                        Created: {formatDate(row.createdAt)}
-                                      </cf-text>
-                                      <cf-text variant="caption">
-                                        Observed: {formatDate(row.observedAt)}
-                                      </cf-text>
-                                    </cf-vstack>
-                                  </details>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </cf-table>
-                      </cf-card>
-                    )}
-                </cf-vstack>
-              </cf-tab-panel>
-
-              <cf-tab-panel value="recent">
-                <cf-vstack gap="3" padding="3">
-                  <cf-heading level={4}>
-                    Recently updated pull requests
-                  </cf-heading>
-                  {recentPullRequests.length === 0
-                    ? (
-                      <cf-empty-state message="No recent pull-request activity" />
-                    )
-                    : recentPullRequests.map((row) => (
-                      <cf-card>
-                        <cf-hstack
-                          justify="between"
-                          align="center"
-                          gap="3"
-                          wrap
-                        >
-                          <cf-vstack gap="1">
-                            <a
-                              href={row.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              {row.repository} #{row.number}: {row.title}
-                            </a>
-                            <cf-text variant="caption" tone="muted">
-                              Updated {formatDate(row.updatedAt)} · observed
-                              {" "}
-                              {formatDate(row.observedAt)}
-                            </cf-text>
-                          </cf-vstack>
-                          <cf-badge
-                            color={statusColor(row.status)}
-                            variant="solid"
-                          >
-                            {statusLabel(row.status)}
-                          </cf-badge>
-                        </cf-hstack>
-                      </cf-card>
-                    ))}
-                </cf-vstack>
-              </cf-tab-panel>
-
-              <cf-tab-panel value="sync">
-                <cf-vstack gap="3" padding="3">
-                  <cf-card>
-                    <cf-vstack gap="2">
-                      <cf-heading level={4}>Published index</cf-heading>
-                      <cf-table fullWidth>
-                        <tbody>
-                          <tr>
-                            <th>Viewer</th>
-                            <td>@{state.pullRequestIndex.viewer}</td>
-                          </tr>
-                          <tr>
-                            <th>Generation</th>
-                            <td>{state.pullRequestIndex.generation}</td>
-                          </tr>
-                          <tr>
-                            <th>Collection observed</th>
-                            <td>
-                              {formatDate(
-                                state.pullRequestIndex.lastCompleteCollectionAt,
-                              )}
-                            </td>
-                          </tr>
-                          <tr>
-                            <th>Index published</th>
-                            <td>
-                              {formatDate(state.pullRequestIndex.generatedAt)}
-                            </td>
-                          </tr>
-                          <tr>
-                            <th>Pull requests</th>
-                            <td>{pullRequestCount}</td>
-                          </tr>
-                        </tbody>
-                      </cf-table>
+                <cf-hgroup gap="md" wrap>
+                  <cf-card style={{ minWidth: "150px", flex: "1" }}>
+                    <cf-vstack gap="1">
+                      <cf-text tone="muted">Tracked PRs</cf-text>
+                      <cf-heading level={3}>{pullRequestCount}</cf-heading>
                     </cf-vstack>
                   </cf-card>
+                  <cf-card style={{ minWidth: "150px", flex: "1" }}>
+                    <cf-vstack gap="1">
+                      <cf-text tone="muted">Repositories</cf-text>
+                      <cf-heading level={3}>{repositoryCount}</cf-heading>
+                    </cf-vstack>
+                  </cf-card>
+                  <cf-card style={{ minWidth: "150px", flex: "1" }}>
+                    <cf-vstack gap="1">
+                      <cf-text tone="muted">Ready to land</cf-text>
+                      <cf-heading level={3}>{readyToLandCount}</cf-heading>
+                    </cf-vstack>
+                  </cf-card>
+                  <cf-card style={{ minWidth: "150px", flex: "1" }}>
+                    <cf-vstack gap="1">
+                      <cf-text tone="muted">Tests running</cf-text>
+                      <cf-heading level={3}>{testsRunningCount}</cf-heading>
+                    </cf-vstack>
+                  </cf-card>
+                  <cf-card style={{ minWidth: "150px", flex: "1" }}>
+                    <cf-vstack gap="1">
+                      <cf-text tone="muted">Needs attention</cf-text>
+                      <cf-heading level={3}>{needsAttentionCount}</cf-heading>
+                    </cf-vstack>
+                  </cf-card>
+                  <cf-card style={{ minWidth: "150px", flex: "1" }}>
+                    <cf-vstack gap="1">
+                      <cf-text tone="muted">Drafts</cf-text>
+                      <cf-heading level={3}>{draftCount}</cf-heading>
+                    </cf-vstack>
+                  </cf-card>
+                </cf-hgroup>
 
-                  {state.health
-                    ? (
+                <cf-tabs $value={activeTab}>
+                  <cf-tab-list>
+                    <cf-tab value="pull-requests">All pull requests</cf-tab>
+                    <cf-tab value="recent">Recent activity</cf-tab>
+                    <cf-tab value="sync">Sync details</cf-tab>
+                  </cf-tab-list>
+
+                  <cf-tab-panel value="pull-requests">
+                    <cf-vstack gap="3" padding="3">
+                      <cf-text tone="muted">
+                        {computed(() =>
+                          `${pullRequestCount} synchronized pull requests`
+                        )}
+                      </cf-text>
+
+                      {computed(() => pullRequestCount === 0)
+                        ? (
+                          <cf-empty-state message="No synchronized pull requests" />
+                        )
+                        : (
+                          <cf-card>
+                            <cf-table fullWidth hover>
+                              <thead>
+                                <tr>
+                                  <th>Repository</th>
+                                  <th>Pull request</th>
+                                  <th>Status</th>
+                                  <th>Review</th>
+                                  <th>Checks</th>
+                                  <th>Merge</th>
+                                  <th>Updated</th>
+                                  <th>Snapshot</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {indexedPullRequests.map((row) => (
+                                  <tr>
+                                    <td>
+                                      <a
+                                        href={row.repositoryUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                      >
+                                        {row.repository}
+                                      </a>
+                                    </td>
+                                    <td>
+                                      <cf-vstack gap="1">
+                                        <a
+                                          href={row.url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                        >
+                                          #{row.number} {row.title}
+                                        </a>
+                                        <cf-text variant="caption" tone="muted">
+                                          {row.headRepository
+                                            ? `${row.headRepository}:`
+                                            : ""}
+                                          {row.headRefName} → {row.baseRefName}
+                                        </cf-text>
+                                      </cf-vstack>
+                                    </td>
+                                    <td>
+                                      <cf-badge
+                                        color={statusColor(row.status)}
+                                        variant="solid"
+                                      >
+                                        {statusLabel(row.status)}
+                                      </cf-badge>
+                                    </td>
+                                    <td>{enumLabel(row.reviewDecision)}</td>
+                                    <td>{enumLabel(row.checkState)}</td>
+                                    <td>{enumLabel(row.mergeState)}</td>
+                                    <td>{formatDate(row.updatedAt)}</td>
+                                    <td>
+                                      <details>
+                                        <summary>Fields</summary>
+                                        <cf-vstack gap="1">
+                                          <cf-text variant="caption">
+                                            ID: {row.id}
+                                          </cf-text>
+                                          <cf-text variant="caption">
+                                            Visibility: {row.visibility}
+                                          </cf-text>
+                                          <cf-text variant="caption">
+                                            Mergeable:{" "}
+                                            {enumLabel(row.mergeable)}
+                                          </cf-text>
+                                          <cf-text variant="caption">
+                                            Base: {row.baseRefName} @{" "}
+                                            {shortOid(row.baseRefOid)}
+                                          </cf-text>
+                                          <cf-text variant="caption">
+                                            Head: {row.headRefName} @{" "}
+                                            {shortOid(row.headRefOid)}
+                                          </cf-text>
+                                          <cf-text variant="caption">
+                                            Created: {formatDate(row.createdAt)}
+                                          </cf-text>
+                                          <cf-text variant="caption">
+                                            Observed:{" "}
+                                            {formatDate(row.observedAt)}
+                                          </cf-text>
+                                        </cf-vstack>
+                                      </details>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </cf-table>
+                          </cf-card>
+                        )}
+                    </cf-vstack>
+                  </cf-tab-panel>
+
+                  <cf-tab-panel value="recent">
+                    <cf-vstack gap="3" padding="3">
+                      <cf-heading level={4}>
+                        Recently updated pull requests
+                      </cf-heading>
+                      {recentPullRequests.length === 0
+                        ? (
+                          <cf-empty-state message="No recent pull-request activity" />
+                        )
+                        : recentPullRequests.map((row) => (
+                          <cf-card>
+                            <cf-hstack
+                              justify="between"
+                              align="center"
+                              gap="3"
+                              wrap
+                            >
+                              <cf-vstack gap="1">
+                                <a
+                                  href={row.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  {row.repository} #{row.number}: {row.title}
+                                </a>
+                                <cf-text variant="caption" tone="muted">
+                                  Updated {formatDate(row.updatedAt)} · observed
+                                  {" "}
+                                  {formatDate(row.observedAt)}
+                                </cf-text>
+                              </cf-vstack>
+                              <cf-badge
+                                color={statusColor(row.status)}
+                                variant="solid"
+                              >
+                                {statusLabel(row.status)}
+                              </cf-badge>
+                            </cf-hstack>
+                          </cf-card>
+                        ))}
+                    </cf-vstack>
+                  </cf-tab-panel>
+
+                  <cf-tab-panel value="sync">
+                    <cf-vstack gap="3" padding="3">
                       <cf-card>
                         <cf-vstack gap="2">
-                          <cf-heading level={4}>Connector host</cf-heading>
+                          <cf-heading level={4}>Published index</cf-heading>
                           <cf-table fullWidth>
                             <tbody>
                               <tr>
-                                <th>Status</th>
-                                <td>{state.health.status}</td>
+                                <th>Viewer</th>
+                                <td>@{state.pullRequestIndex.viewer}</td>
                               </tr>
                               <tr>
-                                <th>Updated</th>
-                                <td>{formatDate(state.health.updatedAt)}</td>
+                                <th>Generation</th>
+                                <td>{state.pullRequestIndex.generation}</td>
                               </tr>
                               <tr>
-                                <th>Last sync</th>
-                                <td>{state.health.sync?.status ?? "—"}</td>
-                              </tr>
-                              <tr>
-                                <th>Reason</th>
-                                <td>{state.health.sync?.reason ?? "—"}</td>
-                              </tr>
-                              <tr>
-                                <th>Sync started</th>
+                                <th>Collection observed</th>
                                 <td>
-                                  {formatDate(state.health.sync?.startedAt)}
+                                  {formatDate(
+                                    state.pullRequestIndex
+                                      .lastCompleteCollectionAt,
+                                  )}
                                 </td>
                               </tr>
                               <tr>
-                                <th>Sync completed</th>
+                                <th>Index published</th>
                                 <td>
-                                  {formatDate(state.health.sync?.completedAt)}
+                                  {formatDate(
+                                    state.pullRequestIndex.generatedAt,
+                                  )}
                                 </td>
                               </tr>
                               <tr>
-                                <th>Reported PR count</th>
-                                <td>
-                                  {state.health.sync?.pullRequestCount ?? "—"}
-                                </td>
-                              </tr>
-                              <tr>
-                                <th>Error</th>
-                                <td>{state.health.sync?.error ?? "—"}</td>
-                              </tr>
-                              <tr>
-                                <th>Index cell</th>
-                                <td style="font-family: monospace; overflow-wrap: anywhere;">
-                                  {state.health.target.cells.index}
-                                </td>
-                              </tr>
-                              <tr>
-                                <th>Health cell</th>
-                                <td style="font-family: monospace; overflow-wrap: anywhere;">
-                                  {state.health.target.cells.health}
-                                </td>
+                                <th>Pull requests</th>
+                                <td>{pullRequestCount}</td>
                               </tr>
                             </tbody>
                           </cf-table>
                         </cf-vstack>
                       </cf-card>
-                    )
-                    : (
-                      <cf-empty-state message="No connector health snapshot is connected" />
-                    )}
-                </cf-vstack>
-              </cf-tab-panel>
-            </cf-tabs>
-          </cf-vstack>
-        </cf-screen>
-      )
-      : (
-        <div>
-          <div style="margin-bottom: 16px;">
-            <cf-input
-              $value={state.repoUrl}
-              placeholder="https://github.com/owner/repo"
-              customStyle="width: 100%; padding: 8px; font-size: 14px;"
-            />
-          </div>
 
-          {summary.pending
-            ? (
+                      {state.health
+                        ? (
+                          <cf-card>
+                            <cf-vstack gap="2">
+                              <cf-heading level={4}>Connector host</cf-heading>
+                              <cf-table fullWidth>
+                                <tbody>
+                                  <tr>
+                                    <th>Status</th>
+                                    <td>{state.health.status}</td>
+                                  </tr>
+                                  <tr>
+                                    <th>Updated</th>
+                                    <td>
+                                      {formatDate(state.health.updatedAt)}
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <th>Last sync</th>
+                                    <td>{state.health.sync?.status ?? "—"}</td>
+                                  </tr>
+                                  <tr>
+                                    <th>Reason</th>
+                                    <td>{state.health.sync?.reason ?? "—"}</td>
+                                  </tr>
+                                  <tr>
+                                    <th>Sync started</th>
+                                    <td>
+                                      {formatDate(state.health.sync?.startedAt)}
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <th>Sync completed</th>
+                                    <td>
+                                      {formatDate(
+                                        state.health.sync?.completedAt,
+                                      )}
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <th>Reported PR count</th>
+                                    <td>
+                                      {state.health.sync?.pullRequestCount ??
+                                        "—"}
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <th>Error</th>
+                                    <td>{state.health.sync?.error ?? "—"}</td>
+                                  </tr>
+                                  <tr>
+                                    <th>Index cell</th>
+                                    <td style="font-family: monospace; overflow-wrap: anywhere;">
+                                      {state.health.target.cells.index}
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <th>Health cell</th>
+                                    <td style="font-family: monospace; overflow-wrap: anywhere;">
+                                      {state.health.target.cells.health}
+                                    </td>
+                                  </tr>
+                                </tbody>
+                              </cf-table>
+                            </cf-vstack>
+                          </cf-card>
+                        )
+                        : (
+                          <cf-empty-state message="No connector health snapshot is connected" />
+                        )}
+                    </cf-vstack>
+                  </cf-tab-panel>
+                </cf-tabs>
+              </cf-vstack>
+            </cf-screen>
+          )
+          : (
+            <div>
               <div style="margin-bottom: 16px;">
-                <cf-loader showElapsed /> Generating summary...
+                <cf-input
+                  $value={state.repoUrl}
+                  placeholder="https://github.com/owner/repo"
+                  customStyle="width: 100%; padding: 8px; font-size: 14px;"
+                />
               </div>
-            )
-            : summary.result
-            ? (
-              <div style="margin-bottom: 16px; padding: 12px; background: #f5f5f5; border-radius: 4px;">
-                <h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600;">
-                  Activity Summary
-                </h3>
-                <p style="margin: 0; line-height: 1.5;">{summary.result}</p>
-              </div>
-            )
-            : null}
 
-          {computed(() => renderGithubCommits(commits))}
-        </div>
-      ),
+              {summary.pending
+                ? (
+                  <div style="margin-bottom: 16px;">
+                    <cf-loader showElapsed /> Generating summary...
+                  </div>
+                )
+                : summary.result
+                ? (
+                  <div style="margin-bottom: 16px; padding: 12px; background: #f5f5f5; border-radius: 4px;">
+                    <h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600;">
+                      Activity Summary
+                    </h3>
+                    <p style="margin: 0; line-height: 1.5;">{summary.result}</p>
+                  </div>
+                )
+                : null}
+
+              {computed(() => renderGithubCommits(commits))}
+            </div>
+          )}
+      </>
+    ),
     pullRequests,
     pullRequestCount,
     repositoryCount,

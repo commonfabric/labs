@@ -241,6 +241,7 @@ import {
   type MergeCfcSchemaEnvelopeOptions,
   mergeCfcSchemaEnvelopes,
   withoutUndefinedMembers,
+  writerClaimStamp,
 } from "./schema-merge.ts";
 import {
   canonicalizeCfcSchemaDocument,
@@ -1294,6 +1295,23 @@ const claimPathToLogicalPath = (
   return undefined;
 };
 
+/**
+ * Whether, in `space`, module `successor` is attested to succeed module
+ * `predecessor`, directly or through a chain, by the delegations the
+ * transaction is pinned to. A transaction staging a source update is pinned to
+ * that update's proposed delegations as well (see `Runtime.edit()`), so a
+ * release sees the succession it is about to attest.
+ */
+const moduleSucceeds = (
+  tx: IExtendedStorageTransaction,
+  space: MemorySpace,
+  successor: string,
+  predecessor: string,
+): boolean =>
+  tx.getCfcState().moduleDelegations.get(space)?.get(successor)?.includes(
+    predecessor,
+  ) === true;
+
 const writeAuthorizedByReason = (
   tx: IExtendedStorageTransaction,
   schema: JSONSchema,
@@ -1360,9 +1378,12 @@ const writeAuthorizedByReason = (
     typeof writerModuleIdentity === "string" &&
     writerModuleIdentity.length > 0 &&
     (writerModuleIdentity === claimedModuleIdentity ||
-      tx.getCfcState().moduleDelegations.get(targetSpace)?.get(
-          writerModuleIdentity,
-        )?.includes(claimedModuleIdentity) === true);
+      moduleSucceeds(
+        tx,
+        targetSpace,
+        writerModuleIdentity,
+        claimedModuleIdentity,
+      ));
   if (
     !identityArmMatches ||
     !arraysEqual(identity.bindingPath, bindingIdentity.path)
@@ -4050,6 +4071,18 @@ const isPureLinkStructure = (value: unknown): boolean => {
 };
 
 /**
+ * Whether `value` holds a reference anywhere, as a result root whose data
+ * sits beside its wiring's references does (`withRestatedResultWirings`).
+ */
+const holdsReference = (value: unknown): boolean => {
+  if (isPrimitiveCellLink(value)) return true;
+  if (isWalkableObjectOrArray(value)) {
+    return Object.values(value).some((member) => holdsReference(member));
+  }
+  return false;
+};
+
+/**
  * The whole-value roots recorded in `target` by the identity the
  * transaction's flow join names: a root another identity wrote in the same
  * transaction is not this writer's to claim.
@@ -4671,17 +4704,22 @@ const forEachFlowObservation = (
  * The result wirings a setup writes or restates in this transaction
  * (§8.9.1.3), by document, from the runtime's own record of each: whether the
  * build and the piece's identity alone decided which reference sits at each
- * slot, and the journal position the setup began at. A document set up more
- * than once is build-decided only where every setup says so, and takes the
- * latest position, so that what every setup's choice rested on joins. Only a
- * wiring at the document's root is taken.
+ * slot, the journal position the setup began at, and whether the runtime
+ * started the setup on its own. A document set up more than once is
+ * build-decided only where every setup says so, and takes the latest
+ * position, so that what every setup's choice rested on joins; it is
+ * runtime-started where any setup is. Only a wiring at the document's root is
+ * taken.
  */
 const resultWiringsByTarget = (
   tx: IExtendedStorageTransaction,
-): Map<string, { buildDecided: boolean; setupBegan: number }> => {
+): Map<
+  string,
+  { buildDecided: boolean; setupBegan: number; runtimeStarted: boolean }
+> => {
   const result = new Map<
     string,
-    { buildDecided: boolean; setupBegan: number }
+    { buildDecided: boolean; setupBegan: number; runtimeStarted: boolean }
   >();
   for (const input of tx.getCfcState().writePolicyInputs) {
     if (
@@ -4699,6 +4737,7 @@ const resultWiringsByTarget = (
     result.set(key, {
       buildDecided: input.buildDecided && (known?.buildDecided ?? true),
       setupBegan: Math.max(input.setupBegan, known?.setupBegan ?? 0),
+      runtimeStarted: input.runtimeStarted || (known?.runtimeStarted ?? false),
     });
   }
   return result;
@@ -4711,13 +4750,17 @@ const resultWiringsByTarget = (
  * slots that changed, while the wiring's membership is the root container's:
  * taking the root as written is what re-mints that membership either way.
  * What the root holds is read as the transaction leaves it, through a
- * verifier read that consumes nothing. Only a root holding nothing but
- * references is taken: the restatement re-mints membership, and a root holding
- * data as well would take a value stamp from what the setup read, which no
- * write of that data made. A document the transaction does not hold a value
+ * verifier read that consumes nothing. A root holding data beside
+ * references is taken too, where the setup is an asking one
+ * (`#isAsking` in `runner.ts`) that the runtime did not start on its own: one
+ * holding the reads that chose what the data shows. The persist region
+ * re-derives that root's value entries from the transaction's join, as the
+ * setup's write of the root would, and leaves its existence entry as it is
+ * (`restatedDataRoot` there). A document the transaction does not hold a value
  * for is left out.
  */
 // SPEC-PENDING https://github.com/commonfabric/specs/pull/88
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/98
 const withRestatedResultWirings = (
   tx: IExtendedStorageTransaction,
   targets: ReturnType<typeof valueWriteTargets>,
@@ -4725,7 +4768,7 @@ const withRestatedResultWirings = (
   const wirings = resultWiringsByTarget(tx);
   if (wirings.size === 0) return targets;
   const result: ReturnType<typeof valueWriteTargets> = new Map(targets);
-  for (const key of wirings.keys()) {
+  for (const [key, wiring] of wirings) {
     const written = targets.get(key);
     if (written?.paths.some((path) => path.length === 0)) continue;
     const { space, id, scope } = targetFromKey(key);
@@ -4736,7 +4779,15 @@ const withRestatedResultWirings = (
       type: "application/json",
       path: ["value"],
     }, { meta: internalVerifierRead }).ok?.value;
-    if (value === undefined || !isPureLinkStructure(value)) continue;
+    // A root holding data and no reference is left as stored: whether a
+    // restatement re-derives its value entry is a question on specs#98.
+    if (
+      value === undefined ||
+      (!isPureLinkStructure(value) &&
+        (wiring.runtimeStarted || !holdsReference(value)))
+    ) {
+      continue;
+    }
     const root = pathKey([]);
     result.set(key, {
       space,
@@ -10877,41 +10928,32 @@ export const releaseMergeOptions = (
   // The modules of the program the release installs (see
   // `PatternManager.programModuleIdentities`).
   programModules: Iterable<string>,
-): Pick<
-  MergeCfcSchemaEnvelopeOptions,
-  "beneathStoredLink" | "adoptsStamp"
-> => {
+  // The stored document's foreign positions, where the caller has found them.
+  foreign: ForeignPositions = storedForeignPositions(
+    storedValuesAt(tx, target),
+    storedSchema,
+  ),
+): ReleaseMergeOptions => {
   const modules = new Set(programModules);
   return {
-    beneathStoredLink: beneathForeignPosition(
-      storedForeignPositions(storedValuesAt(tx, target), storedSchema),
-    ),
+    beneathStoredLink: beneathForeignPosition(foreign),
     adoptsStamp: (claim) => {
       const stamp = writerClaimStamp(claim);
       return stamp !== undefined && modules.has(stamp.moduleIdentity);
     },
+    writePolicyRelease: {
+      installs: (moduleIdentity) => modules.has(moduleIdentity),
+      succeeds: (successor, predecessor) =>
+        moduleSucceeds(tx, target.space, successor, predecessor),
+    },
   };
 };
 
-/** A stamped writer claim's module identity and file, if it is one. */
-const writerClaimStamp = (
-  claim: unknown,
-):
-  | { moduleIdentity: string; file: string | undefined; path: string[] }
-  | undefined => {
-  const binding = isObjectNotArray(claim) &&
-      isObjectNotArray(claim.__ctWriterIdentityOf)
-    ? claim.__ctWriterIdentityOf
-    : {};
-  const { moduleIdentity, file, path } = binding;
-  return typeof moduleIdentity === "string"
-    ? {
-      moduleIdentity,
-      file: typeof file === "string" ? file : undefined,
-      path: Array.isArray(path) ? path.map(String) : [],
-    }
-    : undefined;
-};
+/** What {@link releaseMergeOptions} returns. */
+export type ReleaseMergeOptions = Pick<
+  MergeCfcSchemaEnvelopeOptions,
+  "beneathStoredLink" | "adoptsStamp" | "writePolicyRelease"
+>;
 
 /**
  * Whether one of `identities` is the writer a stamp names: a verified identity
@@ -10944,15 +10986,9 @@ const stampIsWriters = (
  * outside a release, the writer a stamp names is the only one that may.
  */
 const mergeOptionsForWriters = (
-  release: Pick<
-    MergeCfcSchemaEnvelopeOptions,
-    "beneathStoredLink" | "adoptsStamp"
-  >,
+  release: ReleaseMergeOptions,
   writersOwnStamp: (claim: unknown) => boolean,
-): Pick<
-  MergeCfcSchemaEnvelopeOptions,
-  "beneathStoredLink" | "adoptsStamp"
-> => ({
+): ReleaseMergeOptions => ({
   ...release,
   adoptsStamp: (claim) =>
     release.adoptsStamp?.(claim) === true || writersOwnStamp(claim),
@@ -12885,23 +12921,28 @@ export function* prepareBoundaryCommitSteps(
       : undefined;
     let storedSchema: JSONSchema | undefined;
     let mergedSchema = schema;
+    // What a release may do to the stored envelope, where it merges one;
+    // nothing outside one.
+    let release: ReleaseMergeOptions | undefined;
     if (stored.status === "loaded" && undefinedCandidate) {
       storedSchema = stored.schema;
       mergedSchema = storedSchema;
     } else if (stored.status === "loaded") {
       storedSchema = stored.schema;
+      release = foreignPositions === undefined
+        ? undefined
+        : releaseMergeOptions(
+          tx,
+          { space, id, scope },
+          storedSchema,
+          releaseProgramModules(tx, { space, id, scope }),
+          foreignPositions,
+        );
       try {
         mergedSchema = mergeStoredCfcEnvelope(storedSchema, schema, {
           generatedOutputPaths: generatedOutputPaths.get(key),
           ...mergeOptionsForWriters(
-            foreignPositions !== undefined
-              ? releaseMergeOptions(
-                tx,
-                { space, id, scope },
-                storedSchema,
-                releaseProgramModules(tx, { space, id, scope }),
-              )
-              : {},
+            release ?? {},
             stampIsWriters(writeAuthorIdentities.get(key)?.values() ?? []),
           ),
         });
@@ -12941,6 +12982,7 @@ export function* prepareBoundaryCommitSteps(
         storedSchema,
         mergedSchema,
         foreignPositions,
+        release?.writePolicyRelease,
       );
       if (dropped !== undefined) {
         reasons.push(verdictReason(dropped));
@@ -13209,10 +13251,25 @@ export function* prepareBoundaryCommitSteps(
       ]),
     );
     const flowTarget = flowPersist ? flowTargets?.get(key) : undefined;
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/98
+    // A result wiring a setup restates, on a document holding data beside
+    // references, without writing its root
+    // (`withRestatedResultWirings`). Its derived value entries, at the root
+    // and below it, are replaced by one at the root (below), as a write of
+    // the root would replace them, but the root is not a written path: no
+    // existence entry records a creation this attempt did not make, and the
+    // membership entries below it keep what the writes there left.
+    const restatedDataRoot = flowTarget !== undefined &&
+      resultWirings.has(key) &&
+      flowTarget.paths.some((path) => path.length === 0) &&
+      !(valueTargets.get(key)?.paths.some((path) => path.length === 0) ??
+        false) &&
+      !isPureLinkStructure(flowTarget.valuesByPath.get(pathKey([])));
     // A served event's processed claim takes nothing of the attempt's reads
     // (§6.2.2; `CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM`), so its path is
     // neither stamped with the join nor measured against the store.
     const flowWrittenPaths = (flowTarget?.paths ?? []).filter((path) =>
+      !(restatedDataRoot && path.length === 0) &&
       !isProcessedClaimPath(
         tx,
         target,
@@ -13807,10 +13864,15 @@ export function* prepareBoundaryCommitSteps(
         }) && entryPath[entryPath.length - 1] === "*"
         ? entryPath.slice(0, -1)
         : entryPath;
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/98
+      // A restated data root replaces the derived value entries at and below
+      // it (`restatedDataRoot`); its existence entry was carried above.
       if (
         flowPersist &&
         (entry.origin === "derived" || entry.origin === "structure") &&
-        flowWrittenPrefixes.hasPrefixOf(clearProbePath)
+        (flowWrittenPrefixes.hasPrefixOf(clearProbePath) ||
+          (restatedDataRoot && entry.origin === "derived" &&
+            entry.observes !== "shape"))
       ) {
         flowCleared = true;
         if (
@@ -14388,6 +14450,27 @@ export function* prepareBoundaryCommitSteps(
           }
         }
       }
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/98
+      // A restated data root's value entry is re-derived from the attempt's
+      // join, as the setup's write of the root would set it (§8.9.1.3); the
+      // stale ones, at and below the root, were cleared above. It is not
+      // measured against the store, as the membership stamps are not, and
+      // mints no existence entry.
+      if (restatedDataRoot && flowHasJoin) {
+        persistedLabelEntries.push(markFlowStampEntry({
+          path: [],
+          label: {
+            ...(flowConfidentiality.length > 0
+              ? { confidentiality: [...flowConfidentiality] }
+              : {}),
+            ...(flowIntegrity.length > 0
+              ? { integrity: [...flowIntegrity] }
+              : {}),
+          },
+          origin: "derived",
+          observes: "value",
+        }));
+      }
       for (const path of onwardStampPaths) {
         const at = declaredOnwardKey({ ...targetFromKey(key), path });
         const onward = flowJoin.declaredOnwardAt.get(at)?.confidentiality ?? [];
@@ -14581,7 +14664,10 @@ export function* prepareBoundaryCommitSteps(
       // tx had no label of its own): the shallowest written path covering
       // the cleared legacy entry — or, when none does (a declared re-mint
       // without a write there), the entry's own path — receives the frozen
-      // shape entry so the existence history survives the migration.
+      // shape entry so the existence history survives the migration. One that
+      // a restated data root cleared, where no write covers it, takes the
+      // legacy confidentiality alone: a restatement is not a creation, so the
+      // restating attempt's join reaches no existence entry (§8.9.1.3).
       const leftoverByPath = new Map<
         string,
         { path: readonly string[]; atoms: CfcConfClause[] }
@@ -14601,8 +14687,12 @@ export function* prepareBoundaryCommitSteps(
         }
         const anchor = shallowest ?? cleared.path;
         const key = pathKey(anchor);
-        const bucket = leftoverByPath.get(key) ??
-          { path: anchor, atoms: [...flowConfidentiality] };
+        const bucket = leftoverByPath.get(key) ?? {
+          path: anchor,
+          atoms: restatedDataRoot && shallowest === undefined
+            ? []
+            : [...flowConfidentiality],
+        };
         for (const atom of cleared.confidentiality) bucket.atoms.push(atom);
         leftoverByPath.set(key, bucket);
       });

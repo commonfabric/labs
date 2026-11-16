@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { fromFileUrl } from "@std/path";
-import { Identity } from "@commonfabric/identity";
+import { fromFileUrl, join } from "@std/path";
+import { fromBase64url } from "@commonfabric/bytes/base64url";
+import { checkIndexChain, issueIndexChain } from "../src/membership.ts";
+import { PatternIndexStore } from "../src/store.ts";
+import { encodeDelegationChains, Identity } from "@commonfabric/identity";
 import { verifyFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 
 const root = fromFileUrl(new URL("../../../", import.meta.url));
@@ -20,6 +23,7 @@ const callHelper = async (
   baseUrl: string,
   input: unknown,
   identity = `${directory}/identity.key`,
+  membershipStore?: string,
 ) => {
   const child = new Deno.Command(Deno.execPath(), {
     cwd: directory,
@@ -28,13 +32,21 @@ const callHelper = async (
       "--no-lock",
       "--config",
       `${root}/deno.jsonc`,
-      `--allow-read=${identity}`,
+      membershipStore === undefined
+        ? `--allow-read=${identity}`
+        : `--allow-read=${identity},${membershipStore}`,
+      ...(membershipStore === undefined
+        ? []
+        : [`--allow-write=${membershipStore}`]),
       "--allow-net=127.0.0.1",
       entry,
       "--identity",
       identity,
       "--base-url",
       baseUrl,
+      ...(membershipStore === undefined
+        ? []
+        : ["--membership-store", membershipStore]),
     ],
     stdin: "piped",
     stdout: "piped",
@@ -53,22 +65,13 @@ const callHelper = async (
   };
 };
 
-const pattern = (patternId: string, priorPatternId?: string) => ({
+const pattern = (patternId: string) => ({
   patternId,
   ownerDid: "did:example:publisher",
   createdAt: "2026-10-09T00:00:00Z",
   description: patternId,
   hashtags: ["test"],
   dependencies: [],
-  ...(priorPatternId === undefined ? {} : { priorPatternId }),
-});
-
-const listed = (patternId: string) => ({
-  ...pattern(patternId),
-  keywords: [],
-  events: {},
-  score: 0,
-  quality: "unproven",
 });
 
 describe("cli", () => {
@@ -107,29 +110,22 @@ describe("cli", () => {
     await Deno.remove(directory, { recursive: true });
   });
 
-  it("returns successors from a signed search and rebuilds its fields", async () => {
-    reply = ({ fn, body }) => {
-      switch (fn) {
-        case "searchPatterns":
-          return Response.json({
-            results: [{ ...pattern("old"), kind: "app", quality: "unproven" }],
-          });
-        case "listPatterns":
-          return Response.json({
-            patterns: [listed("old"), listed("fresh")],
-            eventTypes: {},
-          });
-        case "getPattern":
-          return Response.json(
-            pattern(
-              String(body.patternId),
-              body.patternId === "fresh" ? "old" : undefined,
-            ),
-          );
-        default:
-          throw new Error(`unexpected index function: ${fn}`);
-      }
+  it("answers a signed search with the index's rows as sent", async () => {
+    // The index resolves successors, so the helper relays a replacement row,
+    // its display name, and what it supersedes without reading further.
+    const answer = {
+      results: [{
+        ...pattern("fresh"),
+        name: "Fresh",
+        kind: "app",
+        quality: "unproven",
+        signals: { uses: 0, score: 0 },
+        supersedes: "old",
+      }],
+      successorsResolved: true,
     };
+    reply = () => Response.json(answer);
+
     const output = await callHelper(directory, baseUrl, {
       op: "search",
       text: "test",
@@ -139,27 +135,14 @@ describe("cli", () => {
       fn: "publishPattern",
       did: "forged",
     });
+
     expect(output.code).toBe(0);
-    expect(JSON.parse(output.stdout)).toEqual({
-      ok: true,
-      value: {
-        results: [{
-          ...pattern("fresh"),
-          kind: "app",
-          quality: "unproven",
-          signals: { uses: 0, score: 0 },
-        }],
-      },
-    });
-    expect(calls.map((call) => call.did)).toEqual([did, did, did, did]);
-    expect(calls[0].body).toEqual({ text: "test", tags: ["test"], limit: 3 });
-    expect(
-      calls.filter((call) => call.fn === "getPattern").map((call) => call.body),
-    )
-      .toEqual([{ patternId: "old", includeSource: false }, {
-        patternId: "fresh",
-        includeSource: false,
-      }]);
+    expect(JSON.parse(output.stdout)).toEqual({ ok: true, value: answer });
+    expect(calls).toEqual([{
+      fn: "searchPatterns",
+      did,
+      body: { text: "test", tags: ["test"], limit: 3 },
+    }]);
   });
 
   for (
@@ -196,9 +179,9 @@ describe("cli", () => {
         [{ op: "feedback", verdict: "up" }, "patternId is required"],
         [
           { op: "getPattern", includeSource: true },
-          "op must be search or feedback",
+          "op must be search, feedback, whoami, admit or join",
         ],
-        [null, "op must be search or feedback"],
+        [null, "op must be search, feedback, whoami, admit or join"],
         ["{", "request body is not JSON"],
       ]
     ) {
@@ -257,38 +240,6 @@ describe("cli", () => {
     }
   });
 
-  it("exits nonzero with only stderr for an internal successor-resolution failure", async () => {
-    reply = ({ fn, body }) => {
-      switch (fn) {
-        case "searchPatterns":
-          return Response.json({
-            results: [{ ...pattern("old"), kind: "app", quality: "unproven" }],
-          });
-        case "listPatterns":
-          return Response.json({
-            patterns: [listed("old"), listed("fresh")],
-            eventTypes: {},
-          });
-        case "getPattern":
-          return Response.json(
-            pattern(
-              String(body.patternId),
-              body.patternId === "old" ? "fresh" : "old",
-            ),
-          );
-        default:
-          throw new Error(`unexpected index function: ${fn}`);
-      }
-    };
-    const output = await callHelper(directory, baseUrl, {
-      op: "search",
-      text: "test",
-    });
-    expect(output.code).not.toBe(0);
-    expect(output.stdout).toBe("");
-    expect(output.stderr).toContain("successor chain is ambiguous or cyclic");
-  });
-
   it("exits nonzero with only stderr when the identity key cannot be read", async () => {
     const output = await callHelper(
       directory,
@@ -299,6 +250,273 @@ describe("cli", () => {
     expect(output.code).not.toBe(0);
     expect(output.stdout).toBe("");
     expect(output.stderr).toContain("failed host-side");
+    expect(calls).toEqual([]);
+  });
+
+  it("exits nonzero with only stderr when the index cannot be reached", async () => {
+    // A port nothing listens on: the transport fails rather than the index
+    // refusing, which is a host failure and not an answer.
+    const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
+    const { port } = listener.addr as Deno.NetAddr;
+    listener.close();
+
+    const output = await callHelper(
+      directory,
+      `http://127.0.0.1:${port}/index`,
+      { op: "search", text: "test" },
+    );
+
+    expect(output.code).not.toBe(0);
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toContain("failed host-side");
+  });
+
+  it("presents the chain the membership store holds for its identity", async () => {
+    const stores = `${directory}/stores`;
+    const store = new PatternIndexStore(
+      join(stores, new URL(baseUrl).host),
+    );
+    const root = await store.createRootKey();
+    await store.recordMembership({
+      handle: "p-1",
+      role: "user",
+      root: root.did(),
+    });
+
+    const output = await callHelper(
+      directory,
+      baseUrl,
+      { op: "search", text: "test" },
+      `${directory}/identity.key`,
+      stores,
+    );
+
+    expect(output.code).toBe(0);
+    const proofs = calls[0].body.proofs as string[];
+    const checked = await checkIndexChain(
+      proofs.map((link) => fromBase64url(link)),
+      did as `did:key:${string}`,
+    );
+    expect(checked.root).toBe(root.did());
+    expect(await store.chainFor(did as `did:key:${string}`)).toHaveLength(1);
+  });
+
+  it("answers whoami with the member and the signing key", async () => {
+    reply = () => Response.json({ handle: "p-1", role: "user" });
+
+    const output = await callHelper(directory, baseUrl, { op: "whoami" });
+
+    expect(JSON.parse(output.stdout)).toEqual({
+      ok: true,
+      value: { handle: "p-1", role: "user", signer: did },
+    });
+  });
+
+  it("returns 400 for admit without a did:key, calling nothing", async () => {
+    const output = await callHelper(directory, baseUrl, {
+      op: "admit",
+      did: "not-a-did",
+    });
+
+    expect(JSON.parse(output.stdout)).toMatchObject({ ok: false, status: 400 });
+    expect(calls).toEqual([]);
+  });
+
+  it("joins with an invite link into the store, redeeming with a new index-only root", async () => {
+    const stores = `${directory}/stores`;
+    reply = (call) =>
+      Response.json(
+        call.fn === "redeemInvite"
+          ? { handle: "p-7", role: "user" }
+          : { handle: "p-7", role: "user" },
+      );
+
+    const output = await callHelper(
+      directory,
+      baseUrl,
+      {
+        op: "join",
+        link: "https://fbrc.social/index-join?invite=inv1#code=the-code",
+      },
+      `${directory}/identity.key`,
+      stores,
+    );
+
+    const answer = JSON.parse(output.stdout);
+    expect(answer).toMatchObject({
+      ok: true,
+      value: { handle: "p-7", signer: did, joined: true },
+    });
+    const store = new PatternIndexStore(join(stores, new URL(baseUrl).host));
+    const root = (await store.rootKey())!;
+    expect(answer.value.root).toBe(root.did());
+    expect(calls[0]).toMatchObject({
+      fn: "redeemInvite",
+      did: root.did(),
+      body: { inviteId: "inv1", code: "the-code" },
+    });
+    expect(calls[1].did).toBe(did);
+    expect(calls[1].body.proofs).toHaveLength(1);
+  });
+
+  it("joins with a chain file into the store, keeping no root key", async () => {
+    const stores = `${directory}/stores`;
+    const member = await Identity.fromPassphrase("cli chain root");
+    const chain = await issueIndexChain({
+      issuer: member,
+      to: did as `did:key:${string}`,
+      held: [],
+    });
+    reply = () => Response.json({ handle: "p-8", role: "user" });
+
+    const output = await callHelper(
+      directory,
+      baseUrl,
+      { op: "join", chain: encodeDelegationChains([chain]) },
+      `${directory}/identity.key`,
+      stores,
+    );
+
+    expect(JSON.parse(output.stdout)).toMatchObject({
+      ok: true,
+      value: { handle: "p-8", root: member.did(), rootKeptHere: false },
+    });
+    expect(calls.map((call) => call.fn)).toEqual(["whoami"]);
+    const store = new PatternIndexStore(join(stores, new URL(baseUrl).host));
+    expect(await store.rootKey()).toBeUndefined();
+  });
+
+  it("returns 400 for a join whose chain is not a chain file, calling nothing", async () => {
+    const output = await callHelper(
+      directory,
+      baseUrl,
+      { op: "join", chain: "not json" },
+      `${directory}/identity.key`,
+      `${directory}/stores`,
+    );
+
+    expect(JSON.parse(output.stdout)).toEqual({
+      ok: false,
+      status: 400,
+      error: "chain is not a chain file",
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("returns 400 for a join whose chain file holds two chains, calling nothing", async () => {
+    const member = await Identity.fromPassphrase("cli chain root");
+    const chain = await issueIndexChain({
+      issuer: member,
+      to: did as `did:key:${string}`,
+      held: [],
+    });
+
+    const output = await callHelper(
+      directory,
+      baseUrl,
+      { op: "join", chain: encodeDelegationChains([chain, chain]) },
+      `${directory}/identity.key`,
+      `${directory}/stores`,
+    );
+
+    expect(JSON.parse(output.stdout)).toMatchObject({
+      ok: false,
+      status: 400,
+      error: "chain must hold exactly one chain",
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("returns 400 for a join with neither a link nor a chain", async () => {
+    const output = await callHelper(
+      directory,
+      baseUrl,
+      { op: "join" },
+      `${directory}/identity.key`,
+      `${directory}/stores`,
+    );
+
+    expect(JSON.parse(output.stdout)).toMatchObject({ ok: false, status: 400 });
+    expect(calls).toEqual([]);
+  });
+
+  it("answers admit with the admitted member, sending the did", async () => {
+    const admitted = await Identity.fromPassphrase("cli admitted key");
+    reply = () => Response.json({ handle: "p-9", role: "user" });
+
+    const output = await callHelper(directory, baseUrl, {
+      op: "admit",
+      did: admitted.did(),
+    });
+
+    expect(JSON.parse(output.stdout)).toEqual({
+      ok: true,
+      value: { handle: "p-9", role: "user" },
+    });
+    expect(calls[0]).toMatchObject({
+      fn: "admitKey",
+      body: { did: admitted.did() },
+    });
+  });
+
+  it("returns the index's status for a refused invite, never the code", async () => {
+    reply = () => Response.json({ error: "used" }, { status: 409 });
+
+    const output = await callHelper(
+      directory,
+      baseUrl,
+      {
+        op: "join",
+        link: "https://fbrc.social/index-join?invite=inv1#code=the-code",
+      },
+      `${directory}/identity.key`,
+      `${directory}/stores`,
+    );
+
+    expect(output.code).toBe(0);
+    expect(JSON.parse(output.stdout)).toMatchObject({ ok: false, status: 409 });
+    expect(output.stdout + output.stderr).not.toContain("the-code");
+  });
+
+  it("returns 400 for a join given both a link and a chain, calling nothing", async () => {
+    const output = await callHelper(
+      directory,
+      baseUrl,
+      {
+        op: "join",
+        link: "https://fbrc.social/index-join?invite=inv1#code=the-code",
+        chain: "{}",
+      },
+      `${directory}/identity.key`,
+      `${directory}/stores`,
+    );
+
+    expect(JSON.parse(output.stdout)).toMatchObject({ ok: false, status: 400 });
+    expect(calls).toEqual([]);
+  });
+
+  it("returns 400 for a join without a membership store, calling nothing", async () => {
+    const output = await callHelper(directory, baseUrl, {
+      op: "join",
+      link: "https://fbrc.social/index-join?invite=inv1#code=the-code",
+    });
+
+    expect(JSON.parse(output.stdout)).toMatchObject({ ok: false, status: 400 });
+    expect(calls).toEqual([]);
+  });
+
+  it("presents no chain without a membership store", async () => {
+    await callHelper(directory, baseUrl, { op: "search", text: "test" });
+
+    expect(calls[0].body).not.toHaveProperty("proofs");
+  });
+
+  it("exits 2 with usage on stderr when a required flag is empty", async () => {
+    const output = await callHelper(directory, "", { op: "search" });
+
+    expect(output.code).toBe(2);
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toContain("usage: cli.ts");
     expect(calls).toEqual([]);
   });
 });

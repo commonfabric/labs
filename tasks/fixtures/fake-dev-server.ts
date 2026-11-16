@@ -4,8 +4,9 @@
  * themselves. A `deno` on `PATH` that runs this module with its own arguments
  * makes each launch start one of these in place of the real server.
  * It answers every request on the port the real server would take, prints the
- * line the script waits for, and exits with the real servers' code 3 when that
- * port is already in use.
+ * line the script waits for, and exits as the real server does when that port
+ * is already in use: with code 3 as the shell or the toolshed, and code 1 as
+ * the console.
  *
  * While it runs, it holds a shared lock on the file `FAKE_DEV_SERVER_LOCK`
  * names, so a test taking an exclusive lock on that file gets it once every
@@ -17,7 +18,10 @@
  * `FAKE_DEV_SERVER_SILENT` names one server (`shell`, `toolshed`, or
  * `console`) that serves without printing its line, so that the script waits
  * on it until something stops the script. That server also answers 503, so
- * that a script waiting for HTTP 200 waits too.
+ * that a script waiting for HTTP 200 waits too. `FAKE_DEV_SERVER_QUITS` names
+ * one server that exits with status 0 once it has given notice, without
+ * binding its port. `FAKE_DEV_SERVER_UNHEALTHY` names one server that prints
+ * its line and answers 503.
  *
  * With `FAKE_DEV_SERVER_CHILD` set, each server starts a process of its own
  * before it gives notice, as the shell dev server starts esbuild. That process
@@ -122,10 +126,11 @@ async function startChild(): Promise<void> {
 const port = name === "shell"
   ? Number(requiredEnv("SHELL_PORT"))
   : portArgument(args);
+// The line each real server prints once it has bound its port.
 const readyLine = {
-  shell: "Dev server listening on",
-  toolshed: "Server running on",
-  console: "Console listening on",
+  shell: `Dev server listening on http://localhost:${port}`,
+  toolshed: `Server running on http://localhost:${port}`,
+  console: `\n  cf-harness console: http://127.0.0.1:${port}`,
 }[name];
 
 if (Deno.env.get("FAKE_DEV_SERVER_CHILD")) await startChild();
@@ -135,15 +140,20 @@ const notice = await Deno.connect({
 });
 notice.close();
 
+if (Deno.env.get("FAKE_DEV_SERVER_QUITS") === name) Deno.exit(0);
+
 const silent = Deno.env.get("FAKE_DEV_SERVER_SILENT") === name;
+const unhealthy = silent || Deno.env.get("FAKE_DEV_SERVER_UNHEALTHY") === name;
 try {
   Deno.serve({
     port,
     onListen() {
-      if (!silent) console.log(`${readyLine} port ${port}`);
+      if (!silent) console.log(readyLine);
     },
-  }, () => new Response("ok", { status: silent ? 503 : 200 }));
+  }, () => new Response("ok", { status: unhealthy ? 503 : 200 }));
 } catch (error) {
-  if (error instanceof Deno.errors.AddrInUse) Deno.exit(PORT_IN_USE_EXIT);
+  if (error instanceof Deno.errors.AddrInUse) {
+    Deno.exit(name === "console" ? 1 : PORT_IN_USE_EXIT);
+  }
   throw error;
 }

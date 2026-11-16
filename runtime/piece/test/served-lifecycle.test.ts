@@ -45,6 +45,7 @@ import {
   confirmServedSetSource,
   finishServedRegistration,
   prepareServedRegistration,
+  readServedInstantiateReceipt,
   servedFollowPieceSource,
   type ServedFollowPreparation,
   type ServedFollowReceipt,
@@ -854,6 +855,37 @@ export default pattern(() => {
       const argument = pieces.getArgument<{ seed: string }>(piece.getCell());
       await argument.sync();
       expect(argument.get().seed).toBe("first");
+    });
+
+    it("answers a later client the receipt its request key left, and nothing for another key or caller", async () => {
+      const receipt = await instantiate({ program: BASE_PROGRAM }, {
+        seed: "first",
+      }, {
+        requestKey: "read-back",
+      });
+      const pieces = await clientPieces();
+
+      expect(
+        await readServedInstantiateReceipt(
+          pieces,
+          "read-back",
+          aliceSigner.did(),
+        ),
+      ).toEqual(receipt);
+      expect(
+        await readServedInstantiateReceipt(
+          pieces,
+          "never-sent",
+          aliceSigner.did(),
+        ),
+      ).toBeUndefined();
+      expect(
+        await readServedInstantiateReceipt(
+          pieces,
+          "read-back",
+          (await Identity.generate()).did(),
+        ),
+      ).toBeUndefined();
     });
 
     it("creates a piece a later client reads with the pattern pointer and argument the verb wrote", async () => {

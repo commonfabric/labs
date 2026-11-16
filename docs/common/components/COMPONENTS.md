@@ -180,6 +180,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-modal` | Accessible modal dialog with bottom-sheet presentation mode | `$open` |
 | `cf-oauth` | Generic OAuth authentication | `$auth` |
 | `cf-owner-view` | Sets a per-user presentation predicate from the runtime's acting principal and a stored creator attestation (see [owner view](#cf-owner-view)) | `$originator`, `$result` |
+| `cf-pattern-install` | Button that installs one pattern onto one loom and says so in its own words ("Install “title” onto loom"); its real (trusted) click carries the surface's UI integrity, and it takes no text for its button (see [cf-pattern-install](#cf-pattern-install)) | |
 | `cf-picker` | Carousel selection over cells with `[UI]` | `$items`, `$selectedIndex` |
 | `cf-piece` | Provides piece context to child components | |
 | `cf-plaid-link` | Plaid banking integration | `$auth` |
@@ -254,6 +255,28 @@ when its text is identical to the submitted text. The bound field uses
 
 The draft binding supplies its own initial text and controls clearing; a bound
 field does not use `initialValue` or clear itself after dispatch.
+
+## cf-pattern-install
+
+A trusted surface places it where a tap must authorize installing a pattern.
+Its words are its own: from `patternTitle` (or `patternId` when there is no
+title), an optional `author`, and `destinationName` (left out when absent), it
+shows "Install “title” by author onto loom". It takes no button text, so a
+caller chooses which pattern and which loom it names but cannot make it say
+anything else. The element does not know what its host's `onClick` does, so
+the surface placing it passes the title of the pattern a tap installs, taken
+from the same source as the action. Each name is flattened to one line, with its quotation
+marks turned into apostrophes, cut short when long, and drawn in a chip of its
+own, so it cannot pass for the words around it.
+
+Wire `onClick` on the element together with `data-ui-action`, inside an
+ancestor carrying `data-ui-pattern` and `data-ui-event-integrity`, as with
+`cf-submit-input`. The button is a native `<button>`, so Enter and Space on it
+are trusted clicks as a pointer tap is. Only a trusted click on the enabled
+button reaches the host's `onClick`: a scripted click, a click on the host's
+box around the button, and a second click before the first has been handled
+are stopped by a capture listener on the host. The pattern
+catalog's `GetItButton` (`patterns/system/pattern-catalog/`) is the caller.
 
 ## cf-form
 
@@ -1203,7 +1226,9 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
   bound property $profile is not reactive"*, blanking the whole pattern. Resolve
   `wish({query:"#profile"})` once and place the badge in the static JSX; gate only
   its *siblings* reactively, or use `ifElse(cond, staticA, staticB)` as a child of a
-  static wrapper. Repro: `patterns/dev/scope-bug-computed-vnode-blank/`.
+  static wrapper. Repro:
+  `patterns/dev/scope-bug-computed-vnode-blank/`; the refusal is tested in
+  `runtime/runner/test/h-binding-validation.test.ts`.
 
 ---
 

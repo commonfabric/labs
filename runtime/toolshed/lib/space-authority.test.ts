@@ -10,7 +10,7 @@ import {
   genesisAcl,
   LoopbackSessionFactory,
   TestStorageManager,
-} from "@/lib/test-support/memory-acl.ts";
+} from "@/test/support/memory-acl.ts";
 import {
   authorizeSpaceOwner,
   authorizeSpaceWriter,
@@ -193,6 +193,34 @@ describe("authorizeSpaceOwner against real ACL enforcement", () => {
     expect(notHosted.kind).toBe(notOwned.kind);
     expect(notHosted.message).toBe(notOwned.message);
     expect(notHosted.logDetail).not.toBe(notOwned.logDetail);
+  });
+
+  it("refuses an owner check for a space that is not a DID with the unhosted denial, before asking whether it is hosted", async () => {
+    const asked: string[] = [];
+
+    const badDid = await authorizeSpaceOwner(
+      {
+        ...deps(),
+        hostsSpace: (target) => {
+          asked.push(target);
+          return true;
+        },
+      },
+      "not-a-did",
+      alice.did(),
+    );
+    const notHosted = await authorizeSpaceOwner(
+      { ...deps(), hostsSpace: () => false },
+      space,
+      alice.did(),
+    );
+
+    assert(!badDid.ok);
+    assert(!notHosted.ok);
+    expect(badDid.kind).toBe(notHosted.kind);
+    expect(badDid.message).toBe(notHosted.message);
+    expect(badDid.logDetail).toBe("space did failed shape check");
+    expect(asked).toEqual([]);
   });
 
   it("refuses a writer with one denial for a bad DID, an unhosted space, and no ACL", async () => {

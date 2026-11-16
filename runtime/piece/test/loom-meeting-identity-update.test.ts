@@ -94,9 +94,6 @@ describe("loom-meeting-identity-update", () => {
       {
         main: join(loomDirectory, "main.tsx"),
         root: fromFileUrl(new URL("../../../patterns/", import.meta.url)),
-        testPaths: Array.from(Deno.readDirSync(loomDirectory))
-          .filter((entry) => entry.isFile && entry.name.endsWith(".test.tsx"))
-          .map((entry) => join(loomDirectory, entry.name)),
       },
     );
     const piece = await pieces.create({

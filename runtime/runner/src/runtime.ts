@@ -124,7 +124,7 @@ import {
 } from "./executor/wave.ts";
 import type { OwningRootAddress } from "./ensure-piece-running.ts";
 import { applyLocalExperimentalDefaults } from "./experimental-defaults.ts";
-import type { CompileTurns } from "./harness/compile-interleave.ts";
+import type { CompileClaims } from "./harness/compile-interleave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { ModuleCompiler } from "./harness/module-compile.ts";
@@ -1026,12 +1026,14 @@ export interface RuntimeOptions {
   moduleByteCache?: ModuleByteCache;
 
   /**
-   * The turns at a cold compile this runtime takes with the other runtimes that
-   * share its {@link RuntimeOptions.moduleByteCache}, so that a compile that
-   * yields does not leave them to read a miss and compile the same modules.
+   * The turns at a cold compile this runtime takes, keyed by the modules it
+   * compiles, with whatever else shares its
+   * {@link RuntimeOptions.moduleByteCache}: the other runtimes of this realm,
+   * and where the cache is on disk, the other realms and processes that use
+   * it. Two that would compile the same modules at once then compile them once.
    * When unset, this runtime compiles without waiting for any other.
    */
-  compileTurns?: CompileTurns;
+  compileTurns?: CompileClaims;
 
   /**
    * Where this runtime's compiles run their type-check, transform and emit
@@ -1326,6 +1328,7 @@ type RuntimeSetupOptions = {
   initialPieceSourceOrigin?: string;
   reapplyStoredSetup?: boolean;
   prepareForResume?: boolean;
+  runtimeStarted?: boolean;
 };
 
 /**
@@ -1501,7 +1504,7 @@ export class Runtime {
   readonly #writeTeardown = new AbortController();
   readonly #transactions = new WeakSet<IExtendedStorageTransaction>();
   readonly #derivedInternalCellIds = new DerivedInternalCellIds();
-  readonly #compileTurns: CompileTurns | undefined;
+  readonly #compileTurns: CompileClaims | undefined;
   readonly #moduleCompiler: ModuleCompiler | undefined;
 
   readonly id: string;
@@ -1714,7 +1717,7 @@ export class Runtime {
   }
 
   /** See `RuntimeOptions.compileTurns`. */
-  get compileTurns(): CompileTurns | undefined {
+  get compileTurns(): CompileClaims | undefined {
     return this.#compileTurns;
   }
 
@@ -1788,7 +1791,9 @@ export class Runtime {
 
   /**
    * The writer-authority delegations this runtime has learned from verified
-   * source closures and integrity-valid compiled closures, by attesting
+   * source closures and integrity-valid compiled closures, from the source
+   * updates it committed, and from the pieces' `pieceSourceDelegations`
+   * members (`PatternManager.readInheritedAuthority()`), by attesting
    * space. `edit()` hands every transaction the registry's published
    * transitive snapshot, so an in-flight authorization decision cannot
    * change when another module loads, and authorization in one space can
@@ -2954,9 +2959,24 @@ export class Runtime {
       sourceUpdate?: PreparedSourceUpdate;
     } = {},
   ): IExtendedStorageTransaction {
+    return this.#newTransaction(
+      options.changeGroup,
+      this.#moduleDelegationSnapshot(options.sourceUpdate),
+    );
+  }
+
+  /**
+   * Helper for `edit()` and `readTxProposingDelegations()`, which creates a
+   * transaction in `changeGroup`, pinned to the delegation snapshot
+   * `delegations`.
+   */
+  #newTransaction(
+    changeGroup: ChangeGroup | undefined,
+    delegations: ModuleDelegationSnapshot,
+  ): ExtendedStorageTransaction {
     const tx = this.storageManager.edit();
-    if (options.changeGroup !== undefined) {
-      tx.changeGroup = options.changeGroup;
+    if (changeGroup !== undefined) {
+      tx.changeGroup = changeGroup;
     }
     (tx as { writeTraceScopeId?: string }).writeTraceScopeId = this.id;
     const debugActionId = this.getWriteDebugContext();
@@ -2986,9 +3006,7 @@ export class Runtime {
     wrapped.setCfcClientIdentity(
       this.servingPosture ? undefined : this.userIdentityDID,
     );
-    wrapped.setCfcModuleDelegations(
-      this.#moduleDelegationSnapshot(options.sourceUpdate),
-    );
+    wrapped.setCfcModuleDelegations(delegations);
     setCfcTrustSnapshot(wrapped, this.trustSnapshotProvider());
     wrapped.configureSealDestination(
       this.#transactionSealDestination ?? this.#speculationDestination(),
@@ -3683,10 +3701,15 @@ export class Runtime {
    * After `fn` returns, while retry budget remains, the runtime may load
    * documents read as absent that the replica has not examined. If any exist,
    * it aborts the staged attempt and invokes `fn` with a fresh transaction
-   * before sending a commit. These reconciliation re-runs and retries after
+   * before sending a commit. After `fn` throws, the runtime does the same
+   * before reporting the throw: if a document the attempt read as absent
+   * exists, `fn` runs again with a fresh transaction, and the throw is
+   * reported only when none does, so a check that refuses on a document not
+   * loaded yet sees it loaded. These reconciliation re-runs and retries after
    * commit rejection share one `maxRetries` budget, in addition to the initial
-   * invocation. With no budget left, reconciliation is skipped and the current
-   * transaction proceeds to ordinary commit validation.
+   * invocation. With no budget left, reconciliation is skipped: the current
+   * transaction proceeds to ordinary commit validation, or the throw is
+   * reported.
    *
    * A retryable commit rejection also re-runs `fn` while budget remains.
    * Retryability is decided by the shared rejection vocabulary
@@ -3728,7 +3751,8 @@ export class Runtime {
    * @returns `{ ok }` once the transaction commits, carrying whatever `fn`
    *   returned, or `{ error }` when it does not commit: a rejection that is not
    *   retryable, a retryable one whose retries are spent, or `fn` itself
-   *   throwing, which aborts the transaction.
+   *   throwing, which aborts the transaction, on an attempt that read no
+   *   absent document that exists or that has no retry budget left.
    */
   editWithRetry<T = void>(
     fn: (tx: IExtendedStorageTransaction) => T,
@@ -3764,14 +3788,41 @@ export class Runtime {
     } catch (error) {
       // fn(tx) threw before commit -- abort the transaction so it isn't
       // orphaned, and surface the error as a Result instead of a rejection.
+      // A throw can follow from a read that found a document absent, as a
+      // check that refuses on the `undefined` does, so the attempt's absences
+      // are reconciled as a returning attempt's are (below): when one of them
+      // turns out to exist, `fn` runs again against it. The absences are
+      // named before the abort, which ends the transaction's reads. Naming
+      // them only decides whether to run again, so a failure to name them, or
+      // to count them, reports the throw as it is, or the owner's cancellation
+      // when that came first.
+      let reconciliation: number | Promise<number> = 0;
+      if (maxRetries > 0) {
+        try {
+          reconciliation = this.#awaitUnexaminedAbsences(tx);
+        } catch {
+          reconciliation = 0;
+        }
+      }
       tx.abort(error);
-      return Promise.resolve({
+      const thrown = {
         error: {
           name: "StorageTransactionAborted" as const,
           message: `editWithRetry action threw: ${error}`,
           reason: error,
         },
-      });
+      };
+      if (typeof reconciliation === "number") return Promise.resolve(thrown);
+      return reconciliation.then(
+        (present) => {
+          if (signal.aborted) return stoppedResult();
+          if (present > 0) {
+            return this.editWithRetry<T>(fn, maxRetries - 1, options);
+          }
+          return thrown;
+        },
+        () => signal.aborted ? stoppedResult() : thrown,
+      );
     }
     const commitPrepared = (): Promise<
       { ok: T; error?: undefined } | { ok?: undefined; error: CommitError }
@@ -4596,6 +4647,32 @@ export class Runtime {
       return tx;
     }
     return this.#createReadTx();
+  }
+
+  /**
+   * A transaction that cannot write, pinned for `space` to the published
+   * delegations with `delegations` layered over them, as the setup
+   * transaction of a source update proposing them is (see `edit()`), and
+   * reading as `scopeKeyIdentity`'s instance where it names one. A review
+   * reads through it to judge a candidate by `delegations`, which judges it as
+   * the update's commit will only as far as they are the update's own
+   * proposal (see `PatternManager.proposedSourceUpdateDelegations()`); being
+   * unable to write, it authorizes nothing.
+   */
+  readTxProposingDelegations(
+    space: MemorySpace,
+    delegations: ReadonlyMap<string, ReadonlySet<string>>,
+    scopeKeyIdentity?: ScopeKeyIdentity,
+  ): IExtendedStorageTransaction {
+    const tx = this.#newTransaction(
+      undefined,
+      this.#moduleDelegations.snapshotWith(space, delegations),
+    );
+    if (scopeKeyIdentity !== undefined) {
+      tx.tx.scopeKeyIdentity = scopeKeyIdentity;
+    }
+    tx.setReadOnly("runtime.readTxProposingDelegations()");
+    return tx;
   }
 
   #createReadTx(): IExtendedStorageTransaction {

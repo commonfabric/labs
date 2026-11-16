@@ -106,10 +106,11 @@ import {
   listPieces,
   listSpaceSlugs,
   MapFormat,
-  newPiece,
+  newPieceWithReceipt,
   partitionVerbListing,
   pathRequiredRefusal,
   PieceConfig,
+  type PieceEntry,
   pieceIdOnlyPathRefusal,
   PieceResultProjectionError,
   PieceVerbReadError,
@@ -144,6 +145,10 @@ import {
   type UnreportedRunDeps,
 } from "../lib/unreported-run.ts";
 import { absPath } from "../lib/utils.ts";
+import {
+  PatternIndexStore,
+  patternIndexStoreDir,
+} from "@commonfabric/pattern-index/store";
 import { noteWroteTo } from "../lib/write-receipt.ts";
 
 // Hint system: print helpful next-step suggestions after operations. The
@@ -2452,7 +2457,7 @@ export const piece = targetOptions(
   .action(searchPiecesFromCommand)
   /* piece new */
   .command("new", "Create a new piece with a pattern.")
-  .usage(`${spaceUsage} <main>`)
+  .usage(`${spaceUsage} [main]`)
   .example(
     cliText(`cf piece new ${EX_ID} ${EX_COMP} ./main.tsx`),
     `Create a new piece, using ./main.tsx as source.`,
@@ -2473,7 +2478,35 @@ export const piece = targetOptions(
     ),
     `Create a piece and take "project-notes" from whatever it names now.`,
   )
-  .arguments("<main:string>")
+  .example(
+    cliText(
+      `cf piece new ${EX_ID} ${EX_COMP} --from-index <patternId> --pattern-index-url https://index.example`,
+    ),
+    `Create a piece from a published pattern, deployed the way run_pattern deploys one.`,
+  )
+  .arguments("[main:string]")
+  .option(
+    "--from-index <patternId:string>",
+    "Create the piece from this published pattern instead of local source.",
+    {
+      conflicts: [
+        "main-export",
+        "root",
+        "repository",
+        "test",
+        "datafile",
+      ],
+    },
+  )
+  .env(
+    "CF_PATTERN_INDEX_URL=<url:string>",
+    "Base URL of the pattern index --from-index reads.",
+    { prefix: "CF_" },
+  )
+  .option(
+    "--pattern-index-url <url:string>",
+    "Base URL of the pattern index --from-index reads.",
+  )
   .option(
     "--request-key <key:string>",
     "Reuse a creation request after an uncertain result without creating another piece.",
@@ -2514,6 +2547,10 @@ export const piece = targetOptions(
   .option(
     "--dangerously-allow-incompatible-schema",
     "Accepted for deploy-script symmetry; a new piece has no previous schema to compare.",
+  )
+  .option(
+    "--json",
+    'Output {"pieceId", "name"} as JSON; name only for --from-index, when the index has one.',
   )
   .action(newPieceFromCommand)
   /* piece set-slug */
@@ -5030,8 +5067,41 @@ export async function restoreFromCommand(
 }
 
 export interface NewPieceCommandDependencies {
-  newPiece?: typeof newPiece;
+  newPiece?: typeof newPieceWithReceipt;
+
+  /** Where the receipt goes, stdout unless the caller says otherwise. */
+  render?: typeof render;
+
+  /** Records which published pattern a piece came from; the local store by default. */
+  recordIndexedPiece?: (
+    patternIndexUrl: string,
+    pieceId: string,
+    patternId: string,
+  ) => Promise<void>;
 }
+
+/**
+ * Remembers that `pieceId` was created from `patternId`, so source saved
+ * from it with `cf piece getsrc` and published again credits the original
+ * (`remixedFrom`). A record that cannot be written costs that credit and
+ * nothing else, so it warns rather than failing a creation that succeeded.
+ */
+const recordIndexedPiece = async (
+  patternIndexUrl: string,
+  pieceId: string,
+  patternId: string,
+): Promise<void> => {
+  try {
+    await new PatternIndexStore(patternIndexStoreDir(patternIndexUrl))
+      .recordIndexedPiece(pieceId, patternId);
+  } catch (error) {
+    console.error(
+      `Could not record that ${pieceId} came from ${patternId}: ${
+        describeFailure(error)
+      }`,
+    );
+  }
+};
 
 /**
  * `cf piece new`'s action, as a function a test can call.
@@ -5041,13 +5111,74 @@ export interface NewPieceCommandDependencies {
  * which options become the naming request `newPiece` receives, and that the
  * address it points a reader at is the slug when there is one.
  */
+/**
+ * Where `cf piece new`'s program comes from: the `main` file, or the
+ * published pattern `--from-index` names, never both and never neither. A
+ * published pattern needs the index to read it from, and a missing one is
+ * refused here rather than when the deploy reaches the network.
+ */
+function newPieceEntry(
+  options: {
+    fromIndex?: string;
+    patternIndexUrl?: string;
+    mainExport?: string;
+    repository?: string;
+    root?: string;
+    test?: string[];
+    datafile?: string[];
+  },
+  main: string | undefined,
+): PieceEntry {
+  if (options.fromIndex === undefined) {
+    if (main === undefined) {
+      throw new ValidationError(
+        "Missing a pattern: pass a source file, or --from-index <patternId>.",
+      );
+    }
+    return localPatternEntry(main, options);
+  }
+  if (main !== undefined) {
+    throw new ValidationError(
+      `--from-index creates the piece from a published pattern; drop the source file "${main}", or drop --from-index.`,
+    );
+  }
+  const patternId = options.fromIndex.trim();
+  if (patternId === "") {
+    throw new ValidationError("--from-index requires a non-blank pattern id.");
+  }
+  const patternIndexUrl = options.patternIndexUrl?.trim();
+  if (patternIndexUrl === undefined || patternIndexUrl === "") {
+    throw new ValidationError(
+      "--from-index needs the pattern index to read from: pass --pattern-index-url <url>, or set CF_PATTERN_INDEX_URL.",
+    );
+  }
+  // The index client appends a function name to the base's path, so it
+  // refuses a base with a query or fragment; refused here too, before the
+  // space root is touched.
+  const base = URL.parse(patternIndexUrl);
+  if (
+    base === null || (base.protocol !== "https:" && base.protocol !== "http:")
+  ) {
+    throw new ValidationError(
+      `--pattern-index-url must be an http(s) URL: ${patternIndexUrl}`,
+    );
+  }
+  if (base.search !== "" || base.hash !== "") {
+    throw new ValidationError(
+      `--pattern-index-url must not carry a query or fragment: ${patternIndexUrl}`,
+    );
+  }
+  return { patternId, patternIndexUrl };
+}
+
 export async function newPieceFromCommand(
   // deno-lint-ignore no-explicit-any
   options: any,
-  main: string,
+  main: string | undefined,
   deps: NewPieceCommandDependencies = {},
 ): Promise<void> {
   setQuietMode(!!options.quiet);
+  const entry = newPieceEntry(options, main);
   const spaceConfig = parseSpaceOptions(options);
   const input = options.inputFile === undefined
     ? undefined
@@ -5058,9 +5189,9 @@ export async function newPieceFromCommand(
   ) {
     throw new Error("`--input-file` must contain a JSON object.");
   }
-  const pieceId = await (deps.newPiece ?? newPiece)(
+  const { pieceId, name } = await (deps.newPiece ?? newPieceWithReceipt)(
     spaceConfig,
-    localPatternEntry(main, options),
+    entry,
     {
       start: options.start,
       slug: options.slug,
@@ -5071,11 +5202,32 @@ export async function newPieceFromCommand(
         : { requestKey: options.requestKey }),
     },
   );
-  render(pieceId);
+  // `--json` is the machine surface: one object naming the piece and, for a
+  // piece from the index that has one, the pattern's display name.
+  const print = deps.render ?? render;
+  if (options.json) {
+    print(
+      { pieceId, ...(name === undefined ? {} : { name }) },
+      { json: true },
+    );
+  } else {
+    print(pieceId);
+  }
+  if ("patternId" in entry) {
+    await (deps.recordIndexedPiece ?? recordIndexedPiece)(
+      entry.patternIndexUrl,
+      pieceId,
+      entry.patternId,
+    );
+  }
   const browserPieceRef = options.slug ?? pieceId;
+  // A piece from the index has no local source to update from until it is
+  // saved; building on it publishes it as a remix.
+  const updateCode = main === undefined
+    ? `\n  → Build on it:     cf piece getsrc --cell ${pieceId} ./src, edit, then cf pattern publish ./src/<entry file>`
+    : `\n  → Update code:     cf piece setsrc --cell ${pieceId} ${main} ...`;
   hint(cliText(`NEXT STEPS:
-  → Open in browser: ${spaceConfig.apiUrl}/${spaceConfig.space}/${browserPieceRef}
-  → Update code:     cf piece setsrc --cell ${pieceId} ${main} ...
+  → Open in browser: ${spaceConfig.apiUrl}/${spaceConfig.space}/${browserPieceRef}${updateCode}
   → Test a callable: cf piece call --cell ${pieceId} <callableName> ...
   → Inspect state:   cf piece inspect --cell ${pieceId} ...`));
 }

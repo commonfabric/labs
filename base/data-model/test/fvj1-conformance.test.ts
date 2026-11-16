@@ -45,13 +45,6 @@ const STUB_CODEC_CLASSES: ReadonlySet<string> = new Set([
   "FabricSet",
 ]);
 
-/**
- * The classes that bind no codec, and so have no text.
- *
- * TODO(danfuzz): Remove, with its use below, once `FabricRegExp` is deleted.
- */
-const NO_CODEC_CLASSES: ReadonlySet<string> = new Set(["FabricRegExp"]);
-
 /** One entry of the fixture, as `fvj1-conformance.md` defines it. */
 interface FixtureEntry {
   readonly name: string;
@@ -266,10 +259,7 @@ describe("fvj1-conformance", () => {
     };
     for (const [name, cls] of Object.entries(classes)) {
       expect({ name, covered: values.some((v) => v instanceof cls) })
-        .toEqual({
-          name,
-          covered: !STUB_CODEC_CLASSES.has(name) && !NO_CODEC_CLASSES.has(name),
-        });
+        .toEqual({ name, covered: !STUB_CODEC_CLASSES.has(name) });
     }
   });
 
@@ -328,22 +318,6 @@ describe("fvj1-conformance", () => {
         canonical: 'fvj1:{"__proto__":1}',
         divergence: { note: "note", encode: { refused: "unencodable" } },
       });
-    });
-
-    it("returns an entry requiring the flavors a case marks", () => {
-      const entry = JSON.parse(
-        fvj1ConformanceFixtureTextForTestingOnly([
-          {
-            name: "unconstructed",
-            section: "s",
-            text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025",' +
-              '"source":"("}}',
-            requires: { flavors: ["es2025"] },
-          },
-        ]),
-      ).cases[0];
-
-      expect(entry.requires).toEqual({ flavors: ["es2025"] });
     });
 
     it("returns an entry requiring the length of an array past the floor", () => {

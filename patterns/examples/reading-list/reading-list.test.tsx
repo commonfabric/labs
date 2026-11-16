@@ -10,10 +10,18 @@
  * - Status filtering (all, want, reading, finished, abandoned)
  * - Modifying item properties (status, rating, notes)
  * - Composition: items are ReadingItemDetail pieces with their own state
+ * - The name and summary outputs, and the rendered rows and their buttons
  *
  * Run: deno task cf test patterns/examples/reading-list/reading-list.test.tsx --verbose
  */
-import { action, assert, pattern, TESTS } from "commonfabric";
+import { action, assert, NAME, pattern, TESTS, UI } from "commonfabric";
+import {
+  clickButton,
+  clickInRow,
+  findElement,
+  hasText,
+  viewShows,
+} from "../../tools/test-support/vnode-helpers.ts";
 import ReadingList from "./reading-list.tsx";
 
 export default pattern(() => {
@@ -150,18 +158,39 @@ export default pattern(() => {
   });
 
   const action_remove_all_remaining = action(() => {
-    // Remove items one by one (3 remaining after first remove)
+    // Remove the items left one by one
     const items = list.items;
     if (items && items[0]) list.removeItem.send({ item: items[0] });
   });
 
   // ==========================================================================
+  // Actions - Through the Rendered View
+  // ==========================================================================
+
+  // The title field starts empty, so Add creates nothing.
+  const action_click_add_blank = action(() => clickButton(list[UI], "Add"));
+
+  // Edit opens the item's own piece; navigation changes nothing in the list.
+  const action_click_edit_book = action(() =>
+    clickInRow(list[UI], "Amazing Book", "Edit")
+  );
+
+  const action_click_remove_paper = action(() =>
+    clickInRow(list[UI], "Research Paper", "×")
+  );
+
+  // ==========================================================================
   // Assertions - Initial State
   // ==========================================================================
 
-  const assert_initial_empty = assert(() => list.totalCount === 0);
+  const assert_empty = assert(() => list.totalCount === 0);
   const assert_initial_filter_all = assert(() => list.currentFilter === "all");
   const assert_initial_filtered_empty = assert(() => list.filteredCount === 0);
+  const assert_initial_view = assert(() =>
+    list[NAME] === "Reading List (0)" && list.summary === "" &&
+    hasText(list[UI], "0 items") &&
+    findElement(list[UI], "cf-empty-state") !== undefined
+  );
 
   // ==========================================================================
   // Assertions - After Adding Items
@@ -195,8 +224,19 @@ export default pattern(() => {
     );
   });
 
-  // Empty/whitespace shouldn't add
-  const assert_still_four = assert(() => list.totalCount === 4);
+  // Each row shows the item's type, title, and author; the video has no
+  // author, so no byline.
+  const assert_rows_rendered = assert(() =>
+    list[NAME] === "Reading List (4)" &&
+    viewShows(list[UI], [
+      "4 items",
+      "📄Great Articleby Jane Doe",
+      "📚Amazing Bookby John Smith",
+      "📑Research Paper",
+      "🎬Tutorial Videowant",
+    ]) &&
+    findElement(list[UI], "cf-empty-state") === undefined
+  );
 
   // ==========================================================================
   // Assertions - After Status Changes
@@ -225,6 +265,18 @@ export default pattern(() => {
       "Really insightful piece about reactive programming"
   );
 
+  // The rows show each item's status, the book's five stars, and the
+  // article's notes; the summary lists every item with its status.
+  const assert_details_rendered = assert(() =>
+    viewShows(list[UI], [
+      "Amazing Bookby John Smithfinished★★★★★",
+      "readingReally insightful piece about reactive programming",
+    ], ["☆"]) &&
+    list.summary ===
+      "Great Article (reading), Amazing Book (finished), " +
+        "Research Paper (abandoned), Tutorial Video (want)"
+  );
+
   // ==========================================================================
   // Assertions - Filtering
   // ==========================================================================
@@ -241,6 +293,9 @@ export default pattern(() => {
   const assert_filter_want_correct_item = assert(() => {
     return list.filteredItems[0]?.title === "Tutorial Video";
   });
+  const assert_filter_want_view = assert(() =>
+    viewShows(list[UI], ["Tutorial Video", "4 items"], ["Great Article"])
+  );
 
   // When filter is "reading", should show 1 item (article)
   const assert_filter_reading_shows_one = assert(() => {
@@ -270,14 +325,15 @@ export default pattern(() => {
   // Assertions - After Removal
   // ==========================================================================
 
-  const assert_has_three_after_remove = assert(() => list.totalCount === 3);
   const assert_first_is_now_book = assert(() => {
     return list.items[0]?.title === "Amazing Book";
   });
 
-  const assert_has_two_after_remove = assert(() => list.totalCount === 2);
-  const assert_has_one_after_remove = assert(() => list.totalCount === 1);
-  const assert_back_to_empty = assert(() => list.totalCount === 0);
+  const assert_paper_removed = assert(() =>
+    list.totalCount === 2 && list.items[0]?.title === "Amazing Book" &&
+    list.items[1]?.title === "Tutorial Video" &&
+    !hasText(list[UI], "Research Paper")
+  );
 
   // ==========================================================================
   // Test Sequence
@@ -285,9 +341,10 @@ export default pattern(() => {
   return {
     [TESTS]: [
       // === Initial state ===
-      { assertion: assert_initial_empty },
+      { assertion: assert_empty },
       { assertion: assert_initial_filter_all },
       { assertion: assert_initial_filtered_empty },
+      { assertion: assert_initial_view },
 
       { action: action_add_article },
       { assertion: assert_has_one },
@@ -301,9 +358,12 @@ export default pattern(() => {
       { assertion: assert_has_four },
       { assertion: assert_video_has_empty_author },
       { action: action_add_empty },
-      { assertion: assert_still_four },
+      { assertion: assert_has_four },
       { action: action_add_whitespace },
-      { assertion: assert_still_four },
+      { assertion: assert_has_four },
+      { action: action_click_add_blank },
+      { assertion: assert_has_four },
+      { assertion: assert_rows_rendered },
       { action: action_set_first_reading },
       { assertion: assert_first_is_reading },
       { action: action_set_second_finished },
@@ -315,10 +375,12 @@ export default pattern(() => {
       { assertion: assert_book_has_rating },
       { action: action_add_notes_to_article },
       { assertion: assert_article_has_notes },
+      { assertion: assert_details_rendered },
       { assertion: assert_filter_all_shows_four },
       { action: action_filter_want },
       { assertion: assert_filter_want_shows_one },
       { assertion: assert_filter_want_correct_item },
+      { assertion: assert_filter_want_view },
       { action: action_filter_reading },
       { assertion: assert_filter_reading_shows_one },
       { assertion: assert_filter_reading_correct_item },
@@ -331,14 +393,16 @@ export default pattern(() => {
       { action: action_filter_all },
       { assertion: assert_filter_all_shows_four },
       { action: action_remove_first },
-      { assertion: assert_has_three_after_remove },
+      { assertion: assert_has_three },
       { assertion: assert_first_is_now_book },
+      { action: action_click_edit_book },
+      { assertion: assert_has_three },
+      { action: action_click_remove_paper },
+      { assertion: assert_paper_removed },
       { action: action_remove_all_remaining },
-      { assertion: assert_has_two_after_remove },
+      { assertion: assert_has_one },
       { action: action_remove_all_remaining },
-      { assertion: assert_has_one_after_remove },
-      { action: action_remove_all_remaining },
-      { assertion: assert_back_to_empty },
+      { assertion: assert_empty },
     ],
     // Expose subject for debugging
     list,

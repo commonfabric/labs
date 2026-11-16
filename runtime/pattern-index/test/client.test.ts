@@ -10,6 +10,7 @@ import {
   PatternIndexError,
 } from "@commonfabric/pattern-index/client";
 import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
+import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
 
 const signer = await Identity.fromPassphrase("cf-harness pattern-index client");
 
@@ -143,123 +144,32 @@ describe("PatternIndexClient", () => {
     });
   });
 
-  it("answers searchPatterns with the index's results", async () => {
-    const { client } = createClient([
-      jsonResponse({
-        results: [{
-          patternId: "pat-1",
-          description: "Totals an expense list",
-          hashtags: ["expenses"],
-          ownerDid: "did:key:zOwner",
-          createdAt: "2026-08-01T00:00:00.000Z",
-          dependencies: [],
-          signals: { uses: 4, score: 0.75 },
-        }],
-      }),
-      jsonResponse({ patterns: [], eventTypes: {} }),
-    ]);
-    const response = await client.searchPatterns({ tags: ["expenses"] });
-    expect(response.results.length).toBe(1);
-    expect(response.results[0].patternId).toBe("pat-1");
-    expect(response.results[0].signals).toEqual({ uses: 4, score: 0.75 });
-  });
-
-  it("refreshes catalog membership while caching immutable lineage metadata", async () => {
-    const metadata = (id: string, priorPatternId?: string) => ({
-      patternId: id,
-      ownerDid: signer.did(),
-      createdAt: "2026-09-17T00:00:00Z",
-      description: id,
-      hashtags: ["donuts"],
+  it("answers searchPatterns with the index's rows, from one request", async () => {
+    // The index substitutes successors itself, so a replacement row, its
+    // display name, and the generation it supersedes arrive as sent.
+    const row = {
+      patternId: "fresh",
+      name: "Expense Totaler",
+      description: "Totals an expense list",
+      hashtags: ["expenses"],
+      ownerDid: "did:key:zOwner",
+      createdAt: "2026-08-01T00:00:00.000Z",
       dependencies: [],
-      ...(priorPatternId === undefined ? {} : { priorPatternId }),
-    });
-    const records = [metadata("old"), metadata("fresh", "old")];
-    const requests: { fn: string; body: Record<string, unknown> }[] = [];
-    let listed = records.slice(0, 1);
-    const client = new PatternIndexClient({
-      baseUrl: "https://index.test/api",
-      signer,
-      fetchFn: (input, init) => {
-        const fn = new URL(String(input)).pathname.split("/").at(-1)!;
-        const body = JSON.parse(String(init?.body));
-        requests.push({ fn, body });
-        const output = fn === "searchPatterns"
-          ? { results: [{ ...records[0], quality: "proven", kind: "app" }] }
-          : fn === "listPatterns"
-          ? {
-            patterns: listed.map((entry) => ({
-              ...entry,
-              events: { created: 1 },
-              score: 0,
-              quality: "unproven",
-            })),
-            eventTypes: {},
-          }
-          : records.find((entry) => entry.patternId === body.patternId);
-        return Promise.resolve(jsonResponse(output));
-      },
-    });
-    const first = await client.searchPatterns({ text: "donuts", limit: 1 });
-    listed = records;
-    const second = await client.searchPatterns({ text: "donuts", limit: 1 });
-    const third = await client.searchPatterns({ text: "donuts", limit: 1 });
-    expect(first.results.map((hit) => hit.patternId)).toEqual(["old"]);
-    expect(second.results.map((hit) => hit.patternId)).toEqual(["fresh"]);
-    expect(third).toEqual(second);
-    expect(requests.filter((request) => request.fn === "listPatterns").length)
-      .toBe(3);
-    expect(
-      requests.filter((request) => request.fn === "getPattern").map((request) =>
-        request.body
-      ),
-    ).toEqual([
-      { patternId: "old", includeSource: false },
-      { patternId: "fresh", includeSource: false },
+      signals: { uses: 4, score: 0.75 },
+      quality: "proven",
+      kind: "app",
+      supersedes: "old",
+    };
+    const { client, requests } = createClient([
+      jsonResponse({ results: [row], successorsResolved: true }),
     ]);
-    expect(
-      (await client.getPattern({ patternId: "old", includeSource: true }))
-        .patternId,
-    ).toBe("old");
-    expect(requests.at(-1)?.body).toEqual({
-      patternId: "old",
-      includeSource: true,
-    });
-  });
 
-  it("does not cache failed or mismatched discovery metadata", async () => {
-    for (
-      const failure of [
-        jsonResponse({ error: "unavailable" }, 503),
-        jsonResponse({ patternId: "wrong" }),
-      ]
-    ) {
-      const hit = {
-        patternId: "old",
-        ownerDid: signer.did(),
-        quality: "unproven",
-        kind: "app",
-      };
-      const search = () => jsonResponse({ results: [hit] });
-      const catalog = () =>
-        jsonResponse({ patterns: [{ patternId: "old" }], eventTypes: {} });
-      const { client, requests } = createClient([
-        search(),
-        catalog(),
-        failure,
-        search(),
-        catalog(),
-        jsonResponse(hit),
-      ]);
-      await expect(client.searchPatterns({ text: "donuts" })).rejects.toThrow();
-      expect((await client.searchPatterns({ text: "donuts" })).results).toEqual(
-        [hit],
-      );
-      expect(
-        requests.filter((request) => request.url.endsWith("/getPattern"))
-          .length,
-      ).toBe(2);
-    }
+    const response = await client.searchPatterns({ tags: ["expenses"] });
+
+    expect(response.results).toEqual([row]);
+    expect(requests.map((request) => request.url)).toEqual([
+      "https://index.test/api/searchPatterns",
+    ]);
   });
 
   it("asks getPattern for source only when told to", async () => {
@@ -547,5 +457,259 @@ describe("PatternIndexClient", () => {
       .then(() => undefined, (thrown: unknown) => thrown);
     expect(error).toBeInstanceOf(PatternIndexError);
     expect((error as PatternIndexError).detail).toContain("not JSON");
+  });
+  it("asks for unvetted hits only when the caller does", async () => {
+    const { client, requests } = createClient([
+      jsonResponse({ results: [] }),
+      jsonResponse({ results: [] }),
+    ]);
+    await client.searchPatterns({ text: "expenses", includeUnvetted: true });
+    await client.searchPatterns({ text: "expenses" });
+    expect(JSON.parse(requests[0].body)).toEqual({
+      text: "expenses",
+      includeUnvetted: true,
+    });
+    expect(JSON.parse(requests[1].body)).toEqual({ text: "expenses" });
+  });
+
+  it("sends only the listPatterns filters the caller supplied", async () => {
+    const { client, requests } = createClient([
+      jsonResponse({ patterns: [], eventTypes: {} }),
+      jsonResponse({ patterns: [], eventTypes: {} }),
+    ]);
+    await client.listPatterns({ mine: true });
+    await client.listPatterns({ featured: true });
+    expect(JSON.parse(requests[0].body)).toEqual({ mine: true });
+    expect(JSON.parse(requests[1].body)).toEqual({ featured: true });
+  });
+
+  it("publishes without task text, and credits a remix", async () => {
+    const { client, requests } = createClient([
+      jsonResponse({ patternId: "pat-3", created: true }),
+    ]);
+    await client.publishPattern({
+      patternId: "pat-3",
+      description: "Doubles a number",
+      hashtags: ["math"],
+      program: {
+        main: "/main.tsx",
+        files: [{ name: "/main.tsx", contents: "export default 2;" }],
+      },
+      priorPatternId: "pat-2",
+      remixedFrom: "pat-other",
+    });
+    const body = JSON.parse(requests[0].body);
+    expect(Object.hasOwn(body.meta, "directQuery")).toBe(false);
+    expect(body.priorPatternId).toBe("pat-2");
+    expect(body.remixedFrom).toBe("pat-other");
+  });
+
+  it("posts each listing, identity and curation call to its function with only its fields", async () => {
+    const calls: Array<{
+      fn: string;
+      call: (client: PatternIndexClient) => Promise<unknown>;
+      body: Record<string, unknown>;
+    }> = [
+      {
+        fn: "recordUsageEvent",
+        call: (c) =>
+          c.recordUsageEvent({
+            patternId: "pat-1",
+            eventType: "viewed_in_loom",
+          }),
+        body: { patternId: "pat-1", eventType: "viewed_in_loom" },
+      },
+      {
+        fn: "regarden",
+        call: (c) => c.regarden({ patternId: "pat-1", gardener: "privacy" }),
+        body: { patternId: "pat-1", gardener: "privacy" },
+      },
+      {
+        fn: "requestListing",
+        call: (c) => c.requestListing({ patternId: "pat-1" }),
+        body: { patternId: "pat-1" },
+      },
+      {
+        fn: "getGardenerPrompt",
+        call: (c) => c.getGardenerPrompt({ name: "privacy" }),
+        body: { name: "privacy" },
+      },
+      { fn: "createInvite", call: (c) => c.createInvite(), body: {} },
+      {
+        fn: "createInvite",
+        call: (c) => c.createInvite({ ttlSeconds: 3600 }),
+        body: { ttlSeconds: 3600 },
+      },
+      {
+        fn: "redeemInvite",
+        call: (c) => c.redeemInvite({ inviteId: "inv-1", code: "secret" }),
+        body: { inviteId: "inv-1", code: "secret" },
+      },
+      {
+        fn: "moveRoot",
+        call: (c) => c.moveRoot({ rootDelegation: "deleg" }),
+        body: { rootDelegation: "deleg" },
+      },
+      {
+        fn: "moveMemberRoot",
+        call: (c) =>
+          c.moveMemberRoot({ handle: "quiet-fox", did: "did:key:z6Mk" }),
+        body: { handle: "quiet-fox", did: "did:key:z6Mk" },
+      },
+      {
+        fn: "revoke",
+        call: (c) => c.revoke({ delegation: "deleg" }),
+        body: { delegation: "deleg" },
+      },
+      {
+        fn: "revoke",
+        call: (c) => c.revoke({ legacyKey: "did:key:z6Mk" }),
+        body: { legacyKey: "did:key:z6Mk" },
+      },
+      {
+        fn: "admitKey",
+        call: (c) => c.admitKey({ did: "did:key:z6Mk" }),
+        body: { did: "did:key:z6Mk" },
+      },
+      { fn: "whoami", call: (c) => c.whoami(), body: {} },
+      {
+        fn: "setPatternHidden",
+        call: (c) =>
+          c.setPatternHidden({
+            patternId: "pat-1",
+            hidden: true,
+            reason: "spam",
+          }),
+        body: { patternId: "pat-1", hidden: true, reason: "spam" },
+      },
+      {
+        fn: "setPatternFeatured",
+        call: (c) =>
+          c.setPatternFeatured({ patternId: "pat-1", featured: true }),
+        body: { patternId: "pat-1", featured: true },
+      },
+      {
+        fn: "setPatternFeatured",
+        call: (c) =>
+          c.setPatternFeatured({
+            patternId: "pat-1",
+            featured: true,
+            rank: 2,
+            note: "good",
+          }),
+        body: { patternId: "pat-1", featured: true, rank: 2, note: "good" },
+      },
+    ];
+    for (const { fn, call, body } of calls) {
+      const { client, requests } = createClient([jsonResponse({})]);
+      await call(client);
+      expect(requests[0].url).toBe(`https://index.test/api/${fn}`);
+      expect(requests[0].method).toBe("POST");
+      expect(JSON.parse(requests[0].body)).toEqual(body);
+    }
+  });
+  it("carries a limit refusal's reset time, and none when the index gives none", async () => {
+    const { client } = createClient([
+      jsonResponse(
+        { error: "daily cap reached", resetsAt: "2026-11-16T00:00:00Z" },
+        429,
+      ),
+      jsonResponse({ error: "not found" }, 404),
+    ]);
+    const capped = await client.requestListing({ patternId: "pat-1" })
+      .then(() => undefined, (thrown: unknown) => thrown);
+    expect(capped).toBeInstanceOf(PatternIndexError);
+    expect((capped as PatternIndexError).status).toBe(429);
+    expect((capped as PatternIndexError).retryAt).toBe("2026-11-16T00:00:00Z");
+    const missing = await client.requestListing({ patternId: "pat-2" })
+      .then(() => undefined, (thrown: unknown) => thrown);
+    expect((missing as PatternIndexError).retryAt).toBeUndefined();
+  });
+  it("keeps usage events out of the call a harness run reports through", async () => {
+    const { client, requests } = createClient([jsonResponse({ ok: true })]);
+    await client.recordEvent({
+      patternId: "pat-1",
+      // @ts-expect-error: a person's use is reported only through recordUsageEvent
+      eventType: "viewed_in_loom",
+    });
+    expect(requests[0].url).toBe("https://index.test/api/recordEvent");
+  });
+  it("sends its delegation chain inside every signed call, and none when it has none", async () => {
+    const { fetchFn, requests } = recordingFetch([
+      jsonResponse({ handle: "quiet-fox", role: "user" }),
+      jsonResponse({ results: [] }),
+    ]);
+    const chained = new PatternIndexClient({
+      baseUrl: "https://index.test/api",
+      fetchFn,
+      signer,
+      proofs: ["root-link", "device-link"],
+    });
+    await chained.whoami();
+    await chained.searchPatterns({ text: "expenses" });
+    expect(JSON.parse(requests[0].body)).toEqual({
+      proofs: ["root-link", "device-link"],
+    });
+    expect(JSON.parse(requests[1].body)).toEqual({
+      text: "expenses",
+      proofs: ["root-link", "device-link"],
+    });
+    // The chain rides inside the signed bytes, so the signature still holds.
+    const verified = await verifyFirstPartyHttpRequest({
+      request: new Request(requests[0].url, {
+        method: requests[0].method,
+        headers: requests[0].headers,
+        body: requests[0].body,
+      }),
+    });
+    expect(verified.userDid).toBe(signer.did());
+
+    const { client, requests: plain } = createClient([
+      jsonResponse({ handle: "quiet-fox", role: "user" }),
+    ]);
+    await client.whoami();
+    expect(Object.hasOwn(JSON.parse(plain[0].body), "proofs")).toBe(false);
+  });
+  it("snapshots its chain, and refuses one longer than the index accepts", async () => {
+    const { fetchFn, requests } = recordingFetch([
+      jsonResponse({ handle: "quiet-fox", role: "user" }),
+    ]);
+    const proofs = ["root-link"];
+    const client = new PatternIndexClient({
+      baseUrl: "https://index.test/api",
+      fetchFn,
+      signer,
+      proofs,
+    });
+    proofs.push("added-later");
+    await client.whoami();
+    expect(JSON.parse(requests[0].body)).toEqual({ proofs: ["root-link"] });
+
+    const links = (n: number) => Array.from({ length: n }, (_, i) => `l${i}`);
+    expect(() =>
+      new PatternIndexClient({
+        baseUrl: "https://index.test/api",
+        fetchFn,
+        signer,
+        proofs: links(MAX_PROOF_CHAIN_LENGTH),
+      })
+    ).not.toThrow();
+    expect(() =>
+      new PatternIndexClient({
+        baseUrl: "https://index.test/api",
+        fetchFn,
+        signer,
+        proofs: links(MAX_PROOF_CHAIN_LENGTH + 1),
+      })
+    ).toThrow(`longer than ${MAX_PROOF_CHAIN_LENGTH} links`);
+  });
+  it("needs a reason to hide, and none to show again", () => {
+    const { client } = createClient([]);
+    const typesOnly = () => {
+      // @ts-expect-error: hiding without a reason is refused by the index
+      client.setPatternHidden({ patternId: "pat-1", hidden: true });
+      client.setPatternHidden({ patternId: "pat-1", hidden: false });
+    };
+    expect(typeof typesOnly).toBe("function");
   });
 });

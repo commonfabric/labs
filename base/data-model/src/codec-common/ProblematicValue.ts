@@ -15,6 +15,7 @@ import {
 } from "@/codec-interface/interface.ts";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
+import { hasOnlyKeys } from "./hasOnlyKeys.ts";
 import { toReportableState } from "./toReportableState.ts";
 import { toReportableTag } from "./toReportableTag.ts";
 
@@ -43,11 +44,11 @@ type ProblematicValueState = {
  * `toReportableState()` for the state, `toReportableTag()` for the tag.
  *
  * A rendering is deliberately not a conversion. A `Uint8Array` could be turned
- * into a `FabricBytes` and a `RegExp` into a `FabricRegExp`, and doing so would
- * misreport the wire: a reader would find a `FabricBytes` in `state` and
- * conclude the payload carried one, when it carried raw bytes this format does
- * not accept. A string plainly reads as a description of the value rather than
- * the value, which is the honest answer where fidelity is not available.
+ * into a `FabricBytes`, and doing so would misreport the wire: a reader would
+ * find a `FabricBytes` in `state` and conclude the payload carried one, when it
+ * carried raw bytes this format does not accept. A string plainly reads as a
+ * description of the value rather than the value, which is the honest answer
+ * where fidelity is not available.
  *
  * **This class encodes under a tag of its own**, `Problematic@1`, and carries
  * the preserved tag as data beside the state and the error. `UnknownValue` does
@@ -188,15 +189,19 @@ export class ProblematicValue extends BaseFabricInstance {
       /**
        * @inheritDoc
        *
-       * `tag` and `error` must be strings; `state` need only be present.
+       * `tag` and `error` must be strings; `state` need only be present. A
+       * record holding any other key is refused, this codec reading those
+       * three and nothing else.
        */
       canDecode(state: FabricValue): state is ProblematicValueState {
-        // Every `FabricValue` is a valid state, `undefined` among them, so an
-        // absent property is the only thing that marks a record this codec did
-        // not write -- and accepting one would put it back on the wire with
-        // the property filled in, which is a silent reshaping rather than a
-        // report.
-        return isPlainObject(state) && Object.hasOwn(state, "tag") &&
+        // Every `FabricValue` is a valid state, `undefined` among them, so
+        // `state` is checked for presence alone. A record without it is one
+        // this codec did not write, and accepting one would put it back on the
+        // wire with the property filled in, which is a silent reshaping rather
+        // than a report.
+        return isPlainObject(state) &&
+          hasOnlyKeys(state, ["tag", "state", "error"]) &&
+          Object.hasOwn(state, "tag") &&
           Object.hasOwn(state, "error") && Object.hasOwn(state, "state") &&
           (typeof state.tag === "string") && (typeof state.error === "string");
       }

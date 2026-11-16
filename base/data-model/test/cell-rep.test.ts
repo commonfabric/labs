@@ -132,6 +132,18 @@ describe("cell-rep", () => {
       expect(isLinkRef(linkRefFrom(PAYLOAD))).toBe(true);
     });
 
+    it("recognizes an envelope whose prototype has other enumerable keys", () => {
+      const envelope = Object.create({ inherited: 1 });
+      envelope["/"] = { [LINK_V1_TAG]: PAYLOAD };
+      expect(isLinkRef(envelope)).toBe(true);
+    });
+
+    it('returns `false` for an object whose `"/"` is inherited', () => {
+      const object = Object.create({ "/": { [LINK_V1_TAG]: PAYLOAD } });
+      object.other = 1;
+      expect(isLinkRef(object)).toBe(false);
+    });
+
     it("returns `false` for everything that is not a link-ref envelope", () => {
       // The `{ "/": string }` entity-ref form is deliberately NOT a link ref.
       expect(isLinkRef({ "/": "fid1:abc" })).toBe(false);

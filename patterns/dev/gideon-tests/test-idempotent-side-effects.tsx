@@ -3,27 +3,21 @@
 /**
  * Test Pattern: Idempotent Side Effects in computed()
  *
- * CLAIM TO VERIFY (from blessed/reactivity.md):
+ * CLAIM TO VERIFY:
  * "computed, lift, and derive CAN have side effects - but they MUST be idempotent."
  *
- * This pattern demonstrates the difference between:
- * 1. NON-IDEMPOTENT side effects: Appending to an array on every run (causes thrashing)
- * 2. IDEMPOTENT side effects: Check-before-write with deterministic keys (settles properly)
+ * Two computeds run off the same trigger:
+ * 1. NON-IDEMPOTENT: appends the trigger to an array and bumps a run counter
+ *    on every run
+ * 2. IDEMPOTENT: writes a key derived from the trigger, only when it is missing
  *
- * HOW TO MANUALLY VERIFY:
- * 1. Click "Trigger Re-computation" button multiple times
- * 2. Observe the "Non-Idempotent Run Count" - it will keep growing indefinitely
- * 3. Observe the "Non-Idempotent Data" array - it will accumulate duplicate entries
- * 4. Observe the "Idempotent Run Count" - it will stabilize after a few runs
- * 5. Observe the "Idempotent Data" map - it will contain only unique entries
- *
- * EXPECTED BEHAVIOR (confirms the claim):
- * - Non-idempotent approach: Run count grows without bound (thrashing)
- * - Idempotent approach: Run count stabilizes quickly (system settles)
- *
- * WHY THIS HAPPENS:
- * - Non-idempotent: Each run adds a new element, changing the array, triggering another run
- * - Idempotent: Check-before-write ensures no actual change after first run, system settles
+ * The scheduler does not re-run a computation for its own writes, so neither
+ * one loops: each runs once per change of its inputs. Both also read a re-run
+ * count, so "Re-run With Same Trigger" runs them again with the trigger
+ * unchanged. The non-idempotent one then appends a duplicate entry, and the
+ * recheck `cf test` makes of every computation reports it; the idempotent one
+ * leaves its map as it was. test-idempotent-side-effects.test.tsx asserts
+ * both.
  */
 import {
   computed,
@@ -34,275 +28,254 @@ import {
   pattern,
   toIndentedDebugString,
   UI,
+  type VNode,
   Writable,
 } from "commonfabric";
 
 interface TestInput {
   // Trigger value that we can change to force re-computation
   triggerCount: number | Default<0>;
+  // Changing this re-runs both computeds with the trigger unchanged
+  rerunCount: number | Default<0>;
+}
+
+interface KeyedEntry {
+  trigger: number;
 }
 
 export interface TestOutput {
-  // Note: Output types describe the inner value type, not the cell wrapper
-  // The pattern returns OpaqueCell<number>, so the output is `number`
+  [NAME]: string;
+  [UI]: VNode;
   triggerCount: number;
+  rerunCount: number;
   nonIdempotentRunCount: number;
+  nonIdempotentData: number[];
+  idempotentData: Record<string, KeyedEntry>;
+  /** How many distinct triggers the idempotent computed has recorded. */
   idempotentRunCount: number;
-  nonIdempotentData: unknown[];
-  idempotentData: Record<string, unknown>;
 }
 
-const incrementTrigger = handler<unknown, { triggerCount: Writable<number> }>(
-  (_args, state) => {
-    state.triggerCount.set(state.triggerCount.get() + 1);
+const increment = handler<unknown, { count: Writable<number> }>(
+  (_args, { count }) => {
+    count.set(count.get() + 1);
   },
 );
 
-export default pattern<TestInput, TestOutput>(({ triggerCount }) => {
-  // Shared state for tracking
-  const nonIdempotentArray = new Writable<unknown[]>([]);
-  const nonIdempotentCounter = new Writable(0);
+export default pattern<TestInput, TestOutput>(
+  ({ triggerCount, rerunCount }) => {
+    const nonIdempotentArray = new Writable<number[]>([]);
+    const nonIdempotentCounter = new Writable(0);
 
-  const idempotentMap = new Writable<Record<string, unknown>>({});
-  const idempotentCounter = new Writable(0);
+    const idempotentMap = new Writable<Record<string, KeyedEntry>>({});
 
-  // Computed values for conditional rendering
-  const isThrashing = computed(() => nonIdempotentCounter.get() > 10);
-  const isSettling = computed(() => {
-    const count = idempotentCounter.get();
-    return count > 2 && count < 10;
-  });
+    // More entries than triggers means some run appended for a trigger that an
+    // earlier run had already handled.
+    const hasDuplicates = computed(() =>
+      nonIdempotentArray.get().length > triggerCount
+    );
 
-  // NON-IDEMPOTENT APPROACH: Append to array on every run
-  // This causes thrashing - the computed keeps running forever because
-  // it modifies the array, which triggers another run, which modifies again, etc.
-  // NOTE: Only triggers when triggerCount > 0 to avoid thrashing on initial load
-  const nonIdempotentComputed = computed(() => {
-    // Read the trigger to create a dependency
-    const trigger = triggerCount;
+    // NON-IDEMPOTENT APPROACH: append to the array and bump the counter on
+    // every run, so a re-run with the same trigger changes state again. It acts
+    // only once the trigger is above zero, so loading the pattern writes
+    // nothing.
+    const nonIdempotentComputed = computed(() => {
+      const trigger = triggerCount;
+      const reruns = rerunCount;
 
-    // Only run side effect after user clicks (triggerCount > 0)
-    // This prevents thrashing during initial load
-    if (trigger > 0) {
-      // NON-IDEMPOTENT SIDE EFFECT: Always append. The non-idempotence is the
-      // unconditional append, not a clock read — the ambient clock throws in a
-      // computed (see docs/development/debugging/non-idempotent-detection.md),
-      // so `seq` is used as a per-run distinguishing value instead.
-      const current = nonIdempotentArray.get();
-      nonIdempotentArray.set([...current, {
-        trigger,
-        seq: current.length,
-      }]);
-
-      // Increment counter to show how many times this ran
-      nonIdempotentCounter.set(nonIdempotentCounter.get() + 1);
-    }
-
-    return nonIdempotentCounter.get() > 0
-      ? `Non-idempotent computed ran ${nonIdempotentCounter.get()} times`
-      : "Click trigger to start";
-  });
-
-  // IDEMPOTENT APPROACH: Check-before-write with deterministic keys
-  // This settles - the computed runs a few times but then stops because
-  // after the first run, the check-before-write prevents actual mutation
-  const idempotentComputed = computed(() => {
-    // Read the trigger to create a dependency
-    const trigger = triggerCount;
-
-    // Only run side effect after user clicks (triggerCount > 0)
-    if (trigger > 0) {
-      // IDEMPOTENT SIDE EFFECT: Only write if key doesn't exist
-      const current = idempotentMap.get();
-      const key = `trigger-${trigger}`; // Deterministic key based on input
-
-      // Check before write - idempotent! (No clock read: the ambient clock
-      // throws in a computed, and it is incidental to the idempotency here.)
-      if (!(key in current)) {
-        idempotentMap.set({
-          ...current,
-          [key]: { trigger },
-        });
+      if (trigger > 0) {
+        const current = nonIdempotentArray.get();
+        nonIdempotentArray.set([...current, trigger]);
+        nonIdempotentCounter.set(nonIdempotentCounter.get() + 1);
       }
 
-      // Increment counter to show how many times this ran
-      idempotentCounter.set(idempotentCounter.get() + 1);
-    }
+      return nonIdempotentCounter.get() > 0
+        ? `Non-idempotent computed ran ${nonIdempotentCounter.get()} times ` +
+          `(re-run ${reruns})`
+        : "Click trigger to start";
+    });
 
-    return idempotentCounter.get() > 0
-      ? `Idempotent computed ran ${idempotentCounter.get()} times`
-      : "Click trigger to start";
-  });
+    // IDEMPOTENT APPROACH: write a key derived from the trigger only when it is
+    // missing, so a re-run with the same trigger writes nothing.
+    const idempotentComputed = computed(() => {
+      const trigger = triggerCount;
+      const reruns = rerunCount;
 
-  return {
-    [NAME]: "Test: Idempotent Side Effects",
-    [UI]: (
-      <div style={{ padding: "20px", fontFamily: "system-ui, sans-serif" }}>
-        <h2>Idempotent Side Effects Test</h2>
+      if (trigger > 0) {
+        const current = idempotentMap.get();
+        const key = `trigger-${trigger}`;
+        if (!(key in current)) {
+          idempotentMap.set({ ...current, [key]: { trigger } });
+        }
+        return `Idempotent computed holds key "${key}" (re-run ${reruns})`;
+      }
 
-        <div
-          style={{
-            marginBottom: "20px",
-            padding: "10px",
-            backgroundColor: "#f0f0f0",
-            borderRadius: "5px",
-          }}
-        >
-          <p>
-            <strong>Trigger Count:</strong> {triggerCount}
-          </p>
-          <cf-button
-            onClick={incrementTrigger({ triggerCount })}
-            style={{ padding: "10px 20px", fontSize: "16px" }}
-          >
-            Trigger Re-computation
-          </cf-button>
-        </div>
+      return "Click trigger to start";
+    });
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: "20px",
-          }}
-        >
-          {/* Non-Idempotent Column */}
+    return {
+      [NAME]: "Test: Idempotent Side Effects",
+      [UI]: (
+        <div style={{ padding: "20px", fontFamily: "system-ui, sans-serif" }}>
+          <h2>Idempotent Side Effects Test</h2>
+
           <div
             style={{
-              padding: "15px",
-              backgroundColor: "#fee",
+              marginBottom: "20px",
+              padding: "10px",
+              backgroundColor: "#f0f0f0",
               borderRadius: "5px",
-              border: "2px solid #f88",
             }}
           >
-            <h3 style={{ color: "#c00" }}>❌ Non-Idempotent (Thrashing)</h3>
             <p>
-              <strong>Status:</strong> {nonIdempotentComputed}
+              <strong>Trigger Count:</strong> {triggerCount}
             </p>
-            <p>
-              <strong>Run Count:</strong> {nonIdempotentCounter}
-            </p>
-            <p>
-              <strong>Array Length:</strong> {nonIdempotentArray.get().length}
-            </p>
+            <cf-button
+              onClick={increment({ count: triggerCount })}
+              style={{ padding: "10px 20px", fontSize: "16px" }}
+            >
+              Trigger Re-computation
+            </cf-button>{" "}
+            <cf-button
+              onClick={increment({ count: rerunCount })}
+              style={{ padding: "10px 20px", fontSize: "16px" }}
+            >
+              Re-run With Same Trigger
+            </cf-button>
+          </div>
 
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "20px",
+            }}
+          >
+            {/* Non-Idempotent Column */}
             <div
               style={{
-                marginTop: "10px",
-                padding: "10px",
-                backgroundColor: "white",
-                borderRadius: "3px",
-                maxHeight: "200px",
-                overflow: "auto",
+                padding: "15px",
+                backgroundColor: "#fee",
+                borderRadius: "5px",
+                border: "2px solid #f88",
               }}
             >
-              <strong>Data (keeps growing):</strong>
-              <pre style={{ fontSize: "11px", margin: "5px 0" }}>
+              <h3 style={{ color: "#c00" }}>❌ Non-Idempotent (Accumulates)</h3>
+              <p>
+                <strong>Status:</strong> {nonIdempotentComputed}
+              </p>
+              <p>
+                <strong>Run Count:</strong> {nonIdempotentCounter}
+              </p>
+              <p>
+                <strong>Array Length:</strong> {nonIdempotentArray.get().length}
+              </p>
+
+              <div
+                style={{
+                  marginTop: "10px",
+                  padding: "10px",
+                  backgroundColor: "white",
+                  borderRadius: "3px",
+                  maxHeight: "200px",
+                  overflow: "auto",
+                }}
+              >
+                <strong>Data (keeps growing):</strong>
+                <pre style={{ fontSize: "11px", margin: "5px 0" }}>
                 {toIndentedDebugString(nonIdempotentArray.get())}
-              </pre>
+                </pre>
+              </div>
+
+              {ifElse(
+                hasDuplicates,
+                <div
+                  style={{
+                    marginTop: "10px",
+                    padding: "10px",
+                    backgroundColor: "#fdd",
+                    borderRadius: "3px",
+                  }}
+                >
+                  ⚠️ DUPLICATES: {nonIdempotentArray.get().length} entries for
+                  {" "}
+                  {triggerCount} triggers
+                </div>,
+                null,
+              )}
             </div>
 
-            {ifElse(
-              isThrashing,
-              <div
-                style={{
-                  marginTop: "10px",
-                  padding: "10px",
-                  backgroundColor: "#fdd",
-                  borderRadius: "3px",
-                }}
-              >
-                ⚠️ THRASHING DETECTED! Run count: {nonIdempotentCounter}
-              </div>,
-              null,
-            )}
-          </div>
-
-          {/* Idempotent Column */}
-          <div
-            style={{
-              padding: "15px",
-              backgroundColor: "#efe",
-              borderRadius: "5px",
-              border: "2px solid #8f8",
-            }}
-          >
-            <h3 style={{ color: "#080" }}>✅ Idempotent (Settles)</h3>
-            <p>
-              <strong>Status:</strong> {idempotentComputed}
-            </p>
-            <p>
-              <strong>Run Count:</strong> {idempotentCounter}
-            </p>
-            <p>
-              <strong>Unique Keys:</strong>{" "}
-              {Object.keys(idempotentMap.get()).length}
-            </p>
-
+            {/* Idempotent Column */}
             <div
               style={{
-                marginTop: "10px",
-                padding: "10px",
-                backgroundColor: "white",
-                borderRadius: "3px",
-                maxHeight: "200px",
-                overflow: "auto",
+                padding: "15px",
+                backgroundColor: "#efe",
+                borderRadius: "5px",
+                border: "2px solid #8f8",
               }}
             >
-              <strong>Data (stable):</strong>
-              <pre style={{ fontSize: "11px", margin: "5px 0" }}>
-                {toIndentedDebugString(idempotentMap.get())}
-              </pre>
-            </div>
+              <h3 style={{ color: "#080" }}>✅ Idempotent (Stable)</h3>
+              <p>
+                <strong>Status:</strong> {idempotentComputed}
+              </p>
+              <p>
+                <strong>Unique Keys:</strong>{" "}
+                {Object.keys(idempotentMap.get()).length}
+              </p>
 
-            {ifElse(
-              isSettling,
               <div
                 style={{
                   marginTop: "10px",
                   padding: "10px",
-                  backgroundColor: "#dfd",
+                  backgroundColor: "white",
                   borderRadius: "3px",
+                  maxHeight: "200px",
+                  overflow: "auto",
                 }}
               >
-                ✓ System settling (ran {idempotentCounter} times)
-              </div>,
-              null,
-            )}
+                <strong>Data (stable):</strong>
+                <pre style={{ fontSize: "11px", margin: "5px 0" }}>
+                {toIndentedDebugString(idempotentMap.get())}
+                </pre>
+              </div>
+            </div>
+          </div>
+
+          <div
+            style={{
+              marginTop: "20px",
+              padding: "15px",
+              backgroundColor: "#e8f4f8",
+              borderRadius: "5px",
+            }}
+          >
+            <h3>📚 Explanation</h3>
+            <p>
+              <strong>Non-Idempotent:</strong>{" "}
+              Always appends to array → every re-run with the same trigger adds
+              another entry
+            </p>
+            <p>
+              <strong>Idempotent:</strong>{" "}
+              Checks if key exists before writing → a re-run with the same
+              trigger changes nothing
+            </p>
+            <p>
+              <strong>Key Insight:</strong>{" "}
+              Side effects in computed() must be idempotent (same inputs = same
+              state), since a computation can run more than once for the same
+              inputs
+            </p>
           </div>
         </div>
-
-        <div
-          style={{
-            marginTop: "20px",
-            padding: "15px",
-            backgroundColor: "#e8f4f8",
-            borderRadius: "5px",
-          }}
-        >
-          <h3>📚 Explanation</h3>
-          <p>
-            <strong>Non-Idempotent:</strong>{" "}
-            Always appends to array → changes data → triggers re-run → appends
-            again → infinite loop
-          </p>
-          <p>
-            <strong>Idempotent:</strong>{" "}
-            Checks if key exists before writing → no change after first run →
-            system settles
-          </p>
-          <p>
-            <strong>Key Insight:</strong>{" "}
-            Side effects in computed() must be idempotent (same inputs = same
-            state) to avoid thrashing
-          </p>
-        </div>
-      </div>
-    ),
-    triggerCount,
-    nonIdempotentRunCount: nonIdempotentCounter,
-    idempotentRunCount: idempotentCounter,
-    nonIdempotentData: nonIdempotentArray,
-    idempotentData: idempotentMap,
-  };
-});
+      ),
+      triggerCount,
+      rerunCount,
+      nonIdempotentRunCount: nonIdempotentCounter,
+      nonIdempotentData: nonIdempotentArray,
+      idempotentData: idempotentMap,
+      idempotentRunCount: computed(() =>
+        Object.keys(idempotentMap.get()).length
+      ),
+    };
+  },
+);

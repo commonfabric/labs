@@ -347,20 +347,28 @@ rather than refused: a slot whose stored value is a link that cannot be
 dereferenced in that transaction (a nested piece's argument lives in its host's
 document, and "not yet synced" is not "invalid"), and a root carrying no
 completion marker at all, which gets one unvalidated setup because absence
-cannot be distinguished from a pending apply. A link that reaches another
-space or scope than the argument document's own is not read either: its slot is
-judged as holding a link, and what it reaches is checked by the reactive reads
-that follow it. That data is another piece's or another audience's, such as a
+cannot be distinguished from a pending apply. A link that reaches another space
+or scope than the argument document's own is not read either: its slot is judged
+as holding a link, and what it reaches is checked by the reactive reads that
+follow it. That data is another piece's or another audience's, such as a
 person's Home manager a room's argument links, and a read of it would join its
-labels to the transaction, which then refuses the setup wherever they do not
-fit the piece's own stores. A link within the argument document's own space and
-scope stored in a slot the new schema types as a cell handle (`Writable`,
-`Cell`, `Stream`) is judged as a handle, as it is in a slot typed as a handle or `undefined` (or `null`), since
-a link is neither: validation reads only the top level of what it reaches,
-without descending, and holds it to the type the slot's schema allows. What lies
-below is checked by the reactive reads that follow the handle, and leaving it
-unread keeps its labels out of the transaction that writes the piece's own
-stores. A write to a piece's input validates the input it lands in the same way.
+labels to the transaction, which then refuses the setup wherever they do not fit
+the piece's own stores. Nor is a link that reaches a document storing a
+confidentiality label, wherever it is: a read of what that document holds would
+join its labels to everything the setup writes, the result of a nested piece
+among it, and hide that result from every display not cleared for them. Only
+whether the document stores such a label is read, a fact label metadata does not
+hide. The cost is that a value of the wrong type behind such a link is not
+refused: the update commits, and the new version's reads of it find it absent. A
+link to a document within the argument document's own space and scope that
+stores no confidentiality label, stored in a slot the new schema types as a cell
+handle (`Writable`, `Cell`, `Stream`) is judged as a handle, as it is in a slot
+typed as a handle or `undefined` (or `null`), since a link is neither:
+validation reads only the top level of what it reaches, without descending, and
+holds it to the type the slot's schema allows. What lies below is checked by the
+reactive reads that follow the handle, and leaving it unread keeps its labels
+out of the transaction that writes the piece's own stores. A write to a piece's
+input validates the input it lands in the same way.
 
 A nested piece is set up again the same way when its code changes, over its
 existing argument document, with the argument its parent's expression supplies

@@ -3033,6 +3033,7 @@
           "npm:@codemirror/collab@^6.1.1",
           "npm:@codemirror/state@^6.7.1",
           "npm:@opentelemetry/api@^1.9.1",
+          "npm:@opentelemetry/sdk-trace-base@^2.9.0",
           "npm:@types/ws@8.18.1",
           "npm:fflate@0.8.3",
           "npm:ws@8.22.0"

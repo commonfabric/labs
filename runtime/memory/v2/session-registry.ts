@@ -185,6 +185,20 @@ export type SessionState = {
   capabilityPrincipal?: string;
 
   /**
+   * The issuers of the proof chain this session's latest open presented,
+   * root first. Fresh per open, like `capabilityPrincipal`.
+   */
+  chainIssuers?: readonly string[];
+
+  /**
+   * The person this session's activity is attributed to, which its spans
+   * record as `enduser.id`, or `undefined` for a session that stands for no
+   * person. The server decides it when the session opens, and again when a
+   * commit changes the space's access list.
+   */
+  person?: string;
+
+  /**
    * Set when the opening connection's client advertised `elidedVerdicts`:
    * its replica promotes a layer the verdict elides to the document its
    * transaction computed rather than folding it, so the engine may elide a
@@ -225,6 +239,8 @@ export type SessionLifecycleEvent =
   };
 
 type OpenSessionState = {
+  /** The state the registry now holds for the session. */
+  state: SessionState;
   sessionId: string;
   sessionToken: SessionToken;
   serverSeq: number;
@@ -340,6 +356,7 @@ export class SessionRegistry {
     elidedVerdicts = false,
     capabilityPrincipal?: string,
     inProcess = false,
+    chainIssuers?: readonly string[],
   ): OpenSessionState {
     this.#prune();
     const sessionId = session.sessionId ?? crypto.randomUUID();
@@ -395,7 +412,7 @@ export class SessionRegistry {
         existing.ownerConnectionId !== ownerConnectionId
       ? existing.ownerConnectionId
       : undefined;
-    this.#sessions.set(key, {
+    const state: SessionState = {
       id: sessionId,
       space,
       sessionToken,
@@ -472,10 +489,13 @@ export class SessionRegistry {
         : {}),
       // Fresh per open, like the binding: the chain THIS open presented.
       ...(capabilityPrincipal !== undefined ? { capabilityPrincipal } : {}),
+      ...(chainIssuers !== undefined ? { chainIssuers } : {}),
       ...(elidedVerdicts ? { elidedVerdicts: true } : {}),
-    });
-    this.#observer?.(openedEvent(this.#sessions.get(key)!));
+    };
+    this.#sessions.set(key, state);
+    this.#observer?.(openedEvent(state));
     return {
+      state,
       sessionId,
       sessionToken,
       serverSeq,

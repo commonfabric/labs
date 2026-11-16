@@ -22,6 +22,7 @@ import {
   NAME,
   pattern,
   UI,
+  type VNode,
   Writable,
 } from "commonfabric";
 import AggregatorPattern from "./folksonomy-aggregator.tsx";
@@ -453,7 +454,15 @@ const clearAll = handler<
   loadedCount.set(0);
 });
 
-export default pattern(() => {
+interface Output {
+  [NAME]: string;
+  [UI]: VNode;
+  loadedCount: number;
+  genMs: number;
+  loadMs: number;
+}
+
+export default pattern<Record<string, never>, Output>(() => {
   // Core state
   const eventsCell = new Cell<TagEvent[]>([]);
   const aggregator = AggregatorPattern({ events: eventsCell });

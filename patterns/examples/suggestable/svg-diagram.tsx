@@ -8,6 +8,7 @@ import {
   UI,
   type VNode,
 } from "commonfabric";
+import { promptAbout } from "./suggestion.ts";
 
 // ===== Types =====
 
@@ -37,10 +38,9 @@ const SvgDiagram = pattern<SvgDiagramInput, SvgDiagramOutput>(
     // state and makes no call until one arrives. A diagram with no topic has
     // nothing to draw, so the model is asked only once a caller names the
     // subject.
-    const prompt = computed(() => {
-      if (!topic) return "";
-      return `Create a clear SVG diagram illustrating: ${topic}`;
-    });
+    const prompt = computed(() =>
+      promptAbout(topic, "Create a clear SVG diagram illustrating: ")
+    );
 
     const response = generateText({
       system:

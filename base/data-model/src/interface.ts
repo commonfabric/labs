@@ -219,9 +219,7 @@ export abstract class FabricPrimitive extends BaseFabricSpecialObject {
    * concrete class supplies its own, and the getter reads no instance state,
    * so that it returns the same name when read off the class's `prototype`.
    */
-  // TODO(danfuzz): Once `FabricRegExp` is deleted, narrow this to
-  // `FabricPrimitiveSchemaType`.
-  abstract get schemaType(): FabricPrimitiveSchemaType | "object";
+  abstract get schemaType(): FabricPrimitiveSchemaType;
 
   static {
     Object.freeze(this);
@@ -256,7 +254,6 @@ export type FabricConvertibleJsObject =
   | Map<unknown, unknown>
   | Set<unknown>
   | Date
-  | RegExp
   | Uint8Array;
 
 /**

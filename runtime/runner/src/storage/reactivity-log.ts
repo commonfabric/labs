@@ -532,13 +532,16 @@ const schedulerDependencyReadMarker: unique symbol = Symbol(
 
 /**
  * Marks reads performed by the scheduler's dependency seeding
- * (populateDeclaredSchedulerReads and friends): they materialize declared
- * dependencies so the reactivity log covers them for subscriptions, but
- * they are scheduling machinery, not handler consumption (§8.10.1:
- * dependency-discovery reads must not count as consumed inputs). Flow-label
- * derivation and the runtime read ceiling exclude them; their materialized
- * values never enter the handler. The action body's own reads enforce its
- * ceiling and carry the taint.
+ * (populateDeclaredSchedulerReads and friends) and by the resolution of a new
+ * action's declared inputs that certifies its static read set
+ * (`#collectStaticReadTargetsWithCompleteness`): they materialize declared
+ * dependencies so the reactivity log covers them for subscriptions, or name
+ * them in the scheduler's certificate, but they are scheduling machinery, not
+ * handler consumption (§8.10.1). The flow join and the runtime read ceiling
+ * exclude them; the consumed set that egress and sinks check still counts
+ * them, and conflict detection keeps them. Their materialized values never
+ * enter the handler. The action body's own reads enforce its ceiling and
+ * carry the taint.
  */
 export const schedulerDependencyRead: Metadata = {
   [schedulerDependencyReadMarker]: true,
@@ -557,8 +560,10 @@ const machineryReadMarker: unique symbol = Symbol(
  * setting operations up or plumbing their results: binding node IO
  * (write-redirect resolution), collecting static redirect write targets,
  * dependency seeding's input/output materialization, result-write plumbing
- * (`sendValueToBinding`), and the list coordinators' container scaffolding
- * (presence probes, slot-identity diffs, `length` during instantiation).
+ * (`sendValueToBinding`), the list coordinators' container scaffolding
+ * (presence probes, slot-identity diffs, `length` during instantiation), and
+ * a setup's probes of the references a stored argument it stages again
+ * carries (`Runner.#readStoredArgument`).
  * Sibling of `schedulerDependencyRead` (§8.10.1: dependency-discovery reads
  * are not consumed inputs) but deliberately NARROWER in effect, and what it
  * excludes depends on what the marked read observed. A marked read that

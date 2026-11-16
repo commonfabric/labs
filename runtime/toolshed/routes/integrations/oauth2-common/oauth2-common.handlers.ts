@@ -1,7 +1,6 @@
-import type { Tokens } from "@cmd-johnson/oauth2-client";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { OAuth2TokenSchema } from "@commonfabric/runner";
-import type { JSONSchema } from "@commonfabric/runner";
+import type { JSONSchema, Runtime } from "@commonfabric/runner";
 import { getLogger } from "@commonfabric/logger";
 import type { Context } from "@hono/hono";
 
@@ -9,6 +8,7 @@ import type {
   CallbackResult,
   OAuth2HandlerOptions,
   OAuth2ProviderConfig,
+  OAuth2Tokens,
   UserInfo,
 } from "./oauth2-common.types.ts";
 import {
@@ -40,16 +40,8 @@ import {
  * using the separately-provided schema when the link itself has none.
  */
 function stripSchemaFromCellId(authCellId: string): string {
-  try {
-    const parsed = JSON.parse(authCellId);
-    if (parsed && typeof parsed === "object" && "schema" in parsed) {
-      const { schema: _, ...rest } = parsed;
-      return JSON.stringify(rest);
-    }
-    return authCellId;
-  } catch {
-    return authCellId;
-  }
+  const { schema: _, ...rest } = JSON.parse(authCellId);
+  return JSON.stringify(rest);
 }
 
 /**
@@ -78,11 +70,8 @@ function encodeOAuthState(data: {
 }
 
 /**
- * Decode an OAuth2 state string back into the original fields.
- *
- * Supports both the compact format (single-letter keys) and the legacy
- * format (full field names) for backward compatibility with any in-flight
- * OAuth flows that were started before this change was deployed.
+ * Decode an OAuth2 state string back into the original fields, or return
+ * `null` when it is not a state `encodeOAuthState()` produced.
  */
 function decodeOAuthState(state: string): {
   authCellId: string;
@@ -91,26 +80,8 @@ function decodeOAuthState(state: string): {
 } | null {
   try {
     const parsed = JSON.parse(atob(state));
-
-    // New compact format (single-letter keys)
-    if (parsed.a && parsed.v) {
-      return {
-        authCellId: parsed.a,
-        codeVerifier: parsed.v,
-        scopes: parsed.s,
-      };
-    }
-
-    // Legacy format (full field names)
-    if (parsed.authCellId && parsed.codeVerifier) {
-      return parsed as {
-        authCellId: string;
-        codeVerifier: string;
-        scopes?: string[];
-      };
-    }
-
-    return null;
+    if (!parsed.a || !parsed.v) return null;
+    return { authCellId: parsed.a, codeVerifier: parsed.v, scopes: parsed.s };
   } catch {
     return null;
   }
@@ -126,6 +97,11 @@ const EMPTY_OAUTH2_DATA: Record<string, unknown> = {
   user: { email: "", name: "", picture: "" },
 };
 
+export interface OAuth2HandlerDeps {
+  /** The runtime the auth cells are read and written through. */
+  runtime: () => Runtime;
+}
+
 /**
  * Create a set of OAuth2 route handlers for a given provider.
  *
@@ -134,13 +110,49 @@ const EMPTY_OAUTH2_DATA: Record<string, unknown> = {
  */
 export function createOAuth2Handlers(
   config: OAuth2ProviderConfig,
+  deps: OAuth2HandlerDeps,
   options: OAuth2HandlerOptions = {},
 ) {
   const logger = getLogger(`${config.name}-oauth`);
   const tokenMapper = options.tokenMapper ?? tokenToGenericAuthData;
-  const authSchema: JSONSchema = options.authSchema ??
-    (OAuth2TokenSchema as unknown as JSONSchema);
+  const authSchema: JSONSchema = options.authSchema ?? OAuth2TokenSchema;
   const emptyAuthData = options.emptyAuthData ?? EMPTY_OAUTH2_DATA;
+
+  function redirectUriFor(c: Context): string {
+    return `${
+      getBaseUrl(c.req.url)
+    }/api/integrations/${config.name}-oauth/callback`;
+  }
+
+  // Requests tokens from the provider's token endpoint with HTTP Basic client
+  // authentication, for providers configured with `tokenAuthMethod: "basic"`.
+  async function requestBasicTokens(
+    params: Record<string, string>,
+  ): Promise<OAuth2Tokens> {
+    const response = await fetch(config.tokenUri, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": `Basic ${
+          btoa(`${config.clientId}:${config.clientSecret}`)
+        }`,
+      },
+      body: new URLSearchParams(params),
+    });
+    if (!response.ok) {
+      throw new Error(
+        `Token request failed: ${response.status} ${await response.text()}`,
+      );
+    }
+    const raw = await response.json();
+    return {
+      accessToken: raw.access_token,
+      tokenType: raw.token_type ?? "Bearer",
+      scope: raw.scope?.split(" "),
+      expiresIn: raw.expires_in,
+      refreshToken: raw.refresh_token,
+    };
+  }
 
   async function login(c: Context) {
     try {
@@ -152,38 +164,27 @@ export function createOAuth2Handlers(
         return createLoginErrorResponse(c, "Missing authCellId in request");
       }
 
-      const redirectUri = `${
-        getBaseUrl(c.req.url)
-      }/api/integrations/${config.name}-oauth/callback`;
-      const client = createOAuth2Client(config, redirectUri, payload.scopes);
-      const scopeString = payload.scopes ? payload.scopes.join(" ") : undefined;
+      const client = createOAuth2Client(
+        config,
+        redirectUriFor(c),
+        payload.scopes,
+      );
+      const { uri, codeVerifier } = await client.code.getAuthorizationUri();
 
-      const { uri, codeVerifier } = await client.code.getAuthorizationUri({
-        scope: scopeString,
-      });
-
-      const stateParam = encodeOAuthState({
-        authCellId: payload.authCellId,
-        codeVerifier,
-        scopes: payload.scopes,
-      });
-
-      const authUrl = new URL(uri.toString());
-      authUrl.searchParams.set("state", stateParam);
-
-      // Apply provider-specific extra params (e.g. access_type=offline)
-      if (config.extraAuthParams) {
-        for (const [key, value] of Object.entries(config.extraAuthParams)) {
-          authUrl.searchParams.set(key, value);
-        }
+      uri.searchParams.set(
+        "state",
+        encodeOAuthState({
+          authCellId: payload.authCellId,
+          codeVerifier,
+          scopes: payload.scopes,
+        }),
+      );
+      for (const [key, value] of Object.entries(config.extraAuthParams ?? {})) {
+        uri.searchParams.set(key, value);
       }
 
-      if (scopeString) {
-        authUrl.searchParams.set("scope", scopeString);
-      }
-
-      logger.info("Generated OAuth URL", authUrl.toString());
-      return createLoginSuccessResponse(c, authUrl.toString());
+      logger.info("Generated OAuth URL", uri.toString());
+      return createLoginSuccessResponse(c, uri.toString());
     } catch (error) {
       logger.error("Failed to process login request", error);
       return createLoginErrorResponse(c, "Failed to process login request");
@@ -212,11 +213,7 @@ export function createOAuth2Handlers(
         return createCallbackResponse({ success: false, error: errorMsg });
       }
 
-      // Decode the base64-encoded state parameter. Supports both the new
-      // compact format (single-letter keys) and the legacy format (full
-      // field names) for backward compatibility.
       const decodedState = decodeOAuthState(state);
-
       if (!decodedState) {
         return createCallbackResponse({
           success: false,
@@ -224,81 +221,42 @@ export function createOAuth2Handlers(
         });
       }
 
-      const codeVerifier = decodedState.codeVerifier;
-      if (!codeVerifier) {
-        return createCallbackResponse({
-          success: false,
-          error: "Invalid state parameter: missing code verifier",
-        });
-      }
+      const { codeVerifier } = decodedState;
+      const redirectUri = redirectUriFor(c);
 
-      const baseUrl = getBaseUrl(c.req.url);
-      const redirectUri =
-        `${baseUrl}/api/integrations/${config.name}-oauth/callback`;
-      const client = createOAuth2Client(
-        config,
-        redirectUri,
-        decodedState.scopes,
-      );
-
-      let tokens: Tokens;
-
-      if (config.tokenAuthMethod === "basic") {
-        // Some providers (e.g. Airtable) require Basic auth on the token endpoint
-        const basicAuth = btoa(`${config.clientId}:${config.clientSecret}`);
-        const tokenResponse = await fetch(config.tokenUri, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Authorization": `Basic ${basicAuth}`,
-          },
-          body: new URLSearchParams({
+      let tokens: OAuth2Tokens;
+      try {
+        tokens = config.tokenAuthMethod === "basic"
+          ? await requestBasicTokens({
             grant_type: "authorization_code",
             code,
             redirect_uri: redirectUri,
             code_verifier: codeVerifier,
-          }),
+          })
+          : await createOAuth2Client(config, redirectUri, decodedState.scopes)
+            .code.getToken(
+              `${redirectUri}?code=${encodeURIComponent(code)}`,
+              { codeVerifier },
+            );
+      } catch (error) {
+        logger.error("Token exchange failed", error);
+        return createCallbackResponse({
+          success: false,
+          error: "Token exchange failed",
         });
-        if (!tokenResponse.ok) {
-          const errText = await tokenResponse.text();
-          logger.error(
-            "Token exchange failed",
-            tokenResponse.status,
-            errText,
-          );
-          return createCallbackResponse({
-            success: false,
-            error: "Token exchange failed",
-          });
-        }
-        const tokenData = await tokenResponse.json();
-        tokens = {
-          accessToken: tokenData.access_token,
-          tokenType: tokenData.token_type ?? "Bearer",
-          scope: tokenData.scope?.split(" "),
-          expiresIn: tokenData.expires_in,
-          refreshToken: tokenData.refresh_token,
-        } as Tokens;
-      } else {
-        tokens = await client.code.getToken(
-          new URL(`${redirectUri}?code=${code}`),
-          { codeVerifier },
-        );
       }
 
-      // Fetch user info if endpoint is configured
-      let userInfo: UserInfo = {};
-      if (config.userInfoEndpoint) {
-        userInfo = await fetchUserInfo(
+      const userInfo: UserInfo = config.userInfoEndpoint
+        ? await fetchUserInfo(
           tokens.accessToken,
           config.userInfoEndpoint,
           config.userInfoMapper,
-        );
-      }
+        )
+        : {};
 
       // Map tokens to the auth cell data shape
       const tokenData = tokenMapper(tokens);
-      if (userInfo && !userInfo.error) {
+      if (!userInfo.error) {
         tokenData.user = {
           email: userInfo.email || "",
           name: userInfo.name || "",
@@ -306,7 +264,12 @@ export function createOAuth2Handlers(
         };
       }
 
-      await persistTokens(tokenData, decodedState.authCellId, authSchema);
+      await persistTokens(
+        deps.runtime(),
+        tokenData,
+        decodedState.authCellId,
+        authSchema,
+      );
 
       const callbackResult: CallbackResult = {
         success: true,
@@ -337,47 +300,21 @@ export function createOAuth2Handlers(
       }
       const refreshToken: string = payload.refreshToken;
 
-      const baseUrl = getBaseUrl(c.req.url);
-      const redirectUri =
-        `${baseUrl}/api/integrations/${config.name}-oauth/callback`;
-
-      let newTokenData: Record<string, unknown>;
-
-      if (config.tokenAuthMethod === "basic") {
-        const basicAuth = btoa(`${config.clientId}:${config.clientSecret}`);
-        const tokenResponse = await fetch(config.tokenUri, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Authorization": `Basic ${basicAuth}`,
-          },
-          body: new URLSearchParams({
+      let tokens: OAuth2Tokens;
+      try {
+        tokens = config.tokenAuthMethod === "basic"
+          ? await requestBasicTokens({
             grant_type: "refresh_token",
             refresh_token: refreshToken,
-          }),
-        });
-        if (!tokenResponse.ok) {
-          return createRefreshErrorResponse(c, "Failed to refresh token");
-        }
-        const raw = await tokenResponse.json();
-        newTokenData = tokenMapper({
-          accessToken: raw.access_token,
-          tokenType: raw.token_type ?? "Bearer",
-          scope: raw.scope?.split(" "),
-          expiresIn: raw.expires_in,
-          refreshToken: raw.refresh_token,
-        });
-      } else {
-        const client = createOAuth2Client(config, redirectUri);
-        let newToken: Tokens;
-        try {
-          newToken = await client.refreshToken.refresh(refreshToken);
-        } catch (_error) {
-          return createRefreshErrorResponse(c, "Failed to refresh token");
-        }
-        newTokenData = tokenMapper(newToken);
+          })
+          : await createOAuth2Client(config, redirectUriFor(c)).refreshToken
+            .refresh(refreshToken);
+      } catch (error) {
+        logger.error("Token refresh failed", error);
+        return createRefreshErrorResponse(c, "Failed to refresh token");
       }
 
+      const newTokenData = tokenMapper(tokens);
       // Preserve existing refresh token if not returned
       if (!newTokenData.refreshToken) {
         newTokenData.refreshToken = refreshToken;
@@ -400,7 +337,12 @@ export function createOAuth2Handlers(
       }
 
       try {
-        await clearAuthData(payload.authCellId, authSchema, emptyAuthData);
+        await clearAuthData(
+          deps.runtime(),
+          payload.authCellId,
+          authSchema,
+          emptyAuthData,
+        );
         return createLogoutSuccessResponse(c, "Successfully logged out");
       } catch (error: unknown) {
         const errorMessage = describeFailure(error);
@@ -421,9 +363,3 @@ export function createOAuth2Handlers(
 
   return { login, callback, refresh, logout };
 }
-
-// Re-export response helpers and utils needed by provider-specific code
-export {
-  createLogoutErrorResponse,
-  createLogoutSuccessResponse,
-} from "./oauth2-common.utils.ts";

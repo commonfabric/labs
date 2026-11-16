@@ -28,7 +28,11 @@ export type TelemetryAnnotations = {
   /**
    * Concrete structural surface for a transformer-proven complete source lift.
    * This is runner-owned metadata; raw modules, handlers, and unresolved
-   * redirect surfaces leave it absent and therefore remain fail-closed.
+   * redirect surfaces leave it absent and therefore remain fail-closed. The
+   * reads that resolve it carry `schedulerDependencyRead`, so the flow join
+   * takes nothing of them. While that holds it must decide only whether and
+   * when the action runs, never anything the transaction that resolved it
+   * writes.
    */
   completeSchedulerScopeSummary?: {
     complete: true;

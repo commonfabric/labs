@@ -2,6 +2,7 @@ import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
+  type ServerMessage,
 } from "@commonfabric/memory/v2";
 import {
   type EncodedMemoryMessage,
@@ -225,10 +226,20 @@ export const warnOnOversizedOutboundFrame = (
   ]);
 };
 
+/** The part of a memory server that a socket's pipeline talks to. */
+export interface MemorySocketServer {
+  connect(send: (message: ServerMessage) => void): {
+    readonly id: string;
+    receive(payload: string): Promise<void>;
+    close(): void;
+  };
+}
+
 export const attachMemorySocketPipeline = (
   socket: WebSocket,
   negotiation: ReturnType<typeof bufferTextMessagesUntilNegotiated>,
   firstMessage: string,
+  server: MemorySocketServer = memoryServer,
 ): boolean => {
   const parsedFirstMessage = MemoryServer.parseClientMessage(firstMessage);
   if (parsedFirstMessage === null) {
@@ -270,7 +281,7 @@ export const attachMemorySocketPipeline = (
       closeConnection();
     },
   );
-  const connection = memoryServer.connect((message) => {
+  const connection = server.connect((message) => {
     const encoded = encodeMemoryBoundary(message);
     channel.send(
       encoded,
@@ -321,7 +332,6 @@ export const attachMemorySocketPipeline = (
       logMemWrites(firstMessage);
       negotiation.handoff({
         onMessage(message) {
-          if (closed) return;
           if (!compressionNegotiated && typeof message !== "string") {
             safeSocketClose(
               1003,
@@ -392,9 +402,12 @@ export const attachMemorySocketPipeline = (
  * first frame among them, is logged with its cause and closes the socket with
  * 1011 if it is still open. A socket closed without an error before its first
  * frame is not a failure, and is not logged. The returned promise never
- * rejects.
+ * rejects. `server` is the memory server the pipeline connects to.
  */
-export const setUpMemorySocket = (socket: WebSocket): Promise<void> =>
+export const setUpMemorySocket = (
+  socket: WebSocket,
+  server: MemorySocketServer = memoryServer,
+): Promise<void> =>
   createSpan("memory.socket.setup", async (setupSpan) => {
     const negotiation = bufferTextMessagesUntilNegotiated(socket);
     const firstMessage = await negotiation.firstMessage;
@@ -404,7 +417,7 @@ export const setUpMemorySocket = (socket: WebSocket): Promise<void> =>
       return;
     }
 
-    if (attachMemorySocketPipeline(socket, negotiation, firstMessage)) {
+    if (attachMemorySocketPipeline(socket, negotiation, firstMessage, server)) {
       setupSpan.setAttribute("socket.setup", "memory");
       return;
     }

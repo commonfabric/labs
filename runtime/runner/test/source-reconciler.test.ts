@@ -34,12 +34,24 @@ import {
   setPieceReconciliation,
   systemPatternSource,
 } from "../src/index.ts";
-import { readStoredCfcSchemaHash } from "../src/cfc/metadata.ts";
+import {
+  readStoredCfcMetadata,
+  readStoredCfcSchemaHash,
+} from "../src/cfc/metadata.ts";
 import { ensurePieceRunningVerdict } from "../src/ensure-piece-running.ts";
 import { PatternsRoute } from "../src/harness/patterns-route.deno.ts";
 import type { NormalizedFullLink } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
-import type { MemorySpace } from "../src/storage/interface.ts";
+import type {
+  IMemorySpaceAddress,
+  MemorySpace,
+} from "../src/storage/interface.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  storedFields,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("piece source reconciliation");
 const PARENT_PATH = "/api/patterns/system/reconcile-parent.tsx";
@@ -60,6 +72,33 @@ function source(marker: string): string {
   return [
     "import { computed, pattern } from 'commonfabric';",
     `export const ${SYMBOL} = pattern<Record<string, never>, { marker: string }>(() => ({ marker: computed(() => "${marker}") }));`,
+    "",
+  ].join("\n");
+}
+
+/**
+ * The tracked pattern with data beside its references: `note` is its data, and
+ * `release` changes only a comment.
+ */
+function sourceWithNote(release: string, note = "fixed"): string {
+  return [
+    "import { computed, pattern } from 'commonfabric';",
+    `export const ${SYMBOL} = pattern<Record<string, never>, { marker: string; note: string }>(() => ({ marker: computed(() => "v1"), note: "${note}" }));`,
+    `// ${release}`,
+    "",
+  ].join("\n");
+}
+
+/**
+ * The tracked pattern with a sub-pattern whose result holds data beside its
+ * references, as a view does; `release` changes only a comment.
+ */
+function sourceWithNestedNote(release: string): string {
+  return [
+    "import { computed, pattern } from 'commonfabric';",
+    `const View = pattern<Record<string, never>, { marker: string; note: string }>(() => ({ marker: computed(() => "v1"), note: "fixed" }));`,
+    `export const ${SYMBOL} = pattern<Record<string, never>, { view: { marker: string; note: string } }>(() => ({ view: View({}) }));`,
+    `// ${release}`,
     "",
   ].join("\n");
 }
@@ -515,6 +554,133 @@ describe("piece source reconciliation", () => {
       expect(await runtime.start(piece)).toBe(true);
       await runtime.idle();
       expect((await piece.pull())?.marker).toBe("v2");
+    });
+
+    describe("a value stamp an earlier attempt left on the piece's result", () => {
+      // A release adopted on open is a setup the runtime starts on its own
+      // (`runtimeStarted`): its transaction holds none of the reads that
+      // chose the release.
+
+      /**
+       * Sets up `first` (v1 of the noted pattern unless given), plants a
+       * derived value stamp at the root of its result, or of its
+       * sub-pattern's result with `nested`, starts the piece with `running`,
+       * adopts `next` as the newer release, and returns that root's derived
+       * value confidentiality afterward.
+       */
+      const stampAfterAdopting = async (
+        next: string,
+        options: { first?: string; nested?: boolean; running?: boolean } = {},
+      ): Promise<unknown[]> => {
+        const nextIdentity = await identityFor(next);
+        createRuntime(servingFetch(() => nextIdentity, () => next));
+        const space = signer.did();
+        const initial = await runtime.patternManager.compilePattern(
+          parentProgram(options.first ?? sourceWithNote("v1")),
+          { space },
+        );
+        const piece = runtime.getCell<{ note?: string; view?: unknown }>(
+          space,
+          `reconcile-${crypto.randomUUID()}`,
+        );
+        await runtime.setup(undefined, initial, {}, piece);
+        if (options.running) {
+          expect(await runtime.start(piece)).toBe(true);
+          await runtime.idle();
+        }
+        const link = options.nested
+          ? (() => {
+            const tx = runtime.edit();
+            try {
+              const { space, id, scope } = piece.withTx(tx).key("view")
+                .resolveAsCell().getAsNormalizedFullLink();
+              return { space, id, scope, path: [] };
+            } finally {
+              tx.abort("address read");
+            }
+          })()
+          : piece.getAsNormalizedFullLink();
+        const document: IMemorySpaceAddress = {
+          space: link.space,
+          scope: link.scope,
+          id: link.id,
+          path: [],
+        };
+        const planted = await runtime.editWithRetry((tx) => {
+          writeSeedEnvelopeDoc(tx, space);
+          const cfc = (storedFields(tx, document).cfc ?? {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: { version: 1, entries: [] },
+          }) as { labelMap: { entries: FabricValue[] } };
+          seedStoredEnvelope(tx, { ...document, path: ["cfc"] }, {
+            ...cfc,
+            labelMap: {
+              ...cfc.labelMap,
+              entries: [...cfc.labelMap.entries, {
+                path: [],
+                label: { confidentiality: ["bob-secret"] },
+                origin: "derived",
+                observes: "value",
+              }],
+            },
+          } as FabricValue);
+        });
+        expect(planted.error).toBeUndefined();
+        await stampSource(piece, PARENT_SOURCE);
+
+        expect(await reconcile(piece)).toBe("updated");
+        expect(getPatternIdentityRef(piece)).toEqual({
+          identity: nextIdentity,
+          symbol: SYMBOL,
+        });
+        await runtime.idle();
+        const tx = runtime.edit();
+        try {
+          return (readStoredCfcMetadata(tx, link)?.labelMap.entries ?? [])
+            .filter((entry) =>
+              entry.origin === "derived" && entry.observes === "value" &&
+              entry.path.length === 0
+            ).flatMap((entry) => entry.label.confidentiality ?? []);
+        } finally {
+          tx.abort("label read");
+        }
+      };
+
+      it("stays where the newer release leaves the result unchanged", async () => {
+        expect(await stampAfterAdopting(sourceWithNote("v2"))).toEqual([
+          "bob-secret",
+        ]);
+      });
+
+      it("comes off where the newer release rewrites the result", async () => {
+        expect(await stampAfterAdopting(sourceWithNote("v2", "changed")))
+          .toEqual([]);
+      });
+
+      it("stays where a running piece swaps to a newer release that leaves the result unchanged", async () => {
+        // A running piece also takes the release through its pattern
+        // watcher's swap.
+
+        expect(
+          await stampAfterAdopting(sourceWithNote("v2"), { running: true }),
+        ).toEqual(["bob-secret"]);
+      });
+
+      it("stays on a running piece's sub-pattern result the newer release leaves unchanged", async () => {
+        // The swap sets the sub-pattern up again in a transaction of its own,
+        // which carries the adoption's decision and with it that the runtime
+        // started it (`#runDecisionOf` in `runner.ts`), so a view an earlier
+        // update hid stays hidden there.
+
+        expect(
+          await stampAfterAdopting(sourceWithNestedNote("v2"), {
+            first: sourceWithNestedNote("v1"),
+            nested: true,
+            running: true,
+          }),
+        ).toEqual(["bob-secret"]);
+      });
     });
 
     it("moves a running piece's pointer and lets its watcher re-instantiate", async () => {

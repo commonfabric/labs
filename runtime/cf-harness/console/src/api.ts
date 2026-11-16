@@ -5,9 +5,6 @@
  */
 
 import type {
-  PatternIndexEvent,
-  PatternIndexListEventsRequest,
-  PatternIndexListEventsResponse,
   PatternIndexListPatternsResponse,
   PatternIndexPattern,
   PatternIndexSearchRequest,
@@ -48,7 +45,6 @@ export type {
   ConsoleSessionSummary,
   ConsoleTurnResult,
   HarnessChatEventEnvelope,
-  PatternIndexEvent,
   PatternIndexListPatternsResponse,
   PatternIndexPattern,
   PatternIndexSearchRequest,
@@ -191,14 +187,6 @@ const callIndex = async <Value>(
 export const listIndexPatterns = (): Promise<
   PatternIndexListPatternsResponse
 > => callIndex<PatternIndexListPatternsResponse>("listPatterns");
-
-export const listIndexEvents = async (
-  request: PatternIndexListEventsRequest = {},
-): Promise<readonly PatternIndexEvent[]> =>
-  (await callIndex<PatternIndexListEventsResponse>(
-    "listEvents",
-    { ...request },
-  )).events;
 
 /**
  * One pattern's metadata, schemas and dependencies. The server never asks the

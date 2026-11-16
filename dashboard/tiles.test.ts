@@ -27,7 +27,7 @@ import {
   weaverCiDuration,
 } from "./tiles/ci-duration.ts";
 import { recentCommits } from "./tiles/recent-commits.ts";
-import { dau, foldSeries, parseExcludes } from "./tiles/dau.ts";
+import { dau, foldSeries } from "./tiles/dau.ts";
 import { githubMembers } from "./tiles/github-members.ts";
 import { buildSnapshot, discordOnline } from "./tiles/discord-online.ts";
 import { gcpSpend } from "./tiles/gcp-spend.ts";
@@ -1171,39 +1171,22 @@ Deno.test("CI tiles declare the workflow snapshots that drive them", () => {
   ]);
 });
 
-Deno.test("dau: distinct identities per UTC day, excluding the DIDs we name", () => {
+Deno.test("dau: distinct people per UTC day", () => {
   const D = 86_400_000;
   const ser = (did: string, pts: [number, number][]) => ({
-    labels: [{ key: { name: "user.did" }, value: did }],
+    labels: [{ key: { name: "enduser.id" }, value: did }],
     values: pts.map(([timestamp, value]) => ({ timestamp, value })),
   });
   const day1 = 1_783_641_600_000, day2 = day1 + D;
   const series = [
     ser("did:key:alice", [[day1, 998], [day2, 3184]]),
     ser("did:key:bob", [[day2, 12]]),
-    ser("did:key:server", [[day1, 500], [day2, 500]]), // a service principal
   ];
-  const all = foldSeries(series, new Set());
-  assertEquals(all.get(day1)?.size, 2);
-  assertEquals(all.get(day2)?.size, 3);
-  // Naming the service principal takes it out of every day it appears in.
-  const human = foldSeries(series, new Set(["did:key:server"]));
-  assertEquals(human.get(day1)?.size, 1);
-  assertEquals(human.get(day2)?.size, 2);
-  // A bucket carrying no spans for an identity is not that identity being active.
-  assertEquals(
-    foldSeries([ser("did:key:alice", [[day1, 0]])], new Set()).size,
-    0,
-  );
-});
-
-Deno.test("dau: the exclusion list is read defensively", () => {
-  assertEquals([...parseExcludes("did:key:a, did:key:b ,, ")], [
-    "did:key:a",
-    "did:key:b",
-  ]);
-  assertEquals(parseExcludes(undefined).size, 0);
-  assertEquals(parseExcludes("").size, 0);
+  const byDay = foldSeries(series);
+  assertEquals(byDay.get(day1)?.size, 1);
+  assertEquals(byDay.get(day2)?.size, 2);
+  // A bucket carrying no spans for a person is not that person being active.
+  assertEquals(foldSeries([ser("did:key:alice", [[day1, 0]])]).size, 0);
 });
 
 Deno.test("gated tiles gray out cleanly without their env", async () => {

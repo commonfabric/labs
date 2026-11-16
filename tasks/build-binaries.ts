@@ -782,10 +782,21 @@ export async function runBuildBinaries(
       // --background re-runs this binary as a detached server child, so the
       // compiled binary needs permission to spawn itself.
       "--allow-run",
-      // V8's default limit of about 4 GB is less than a serving worker can need
-      // on a busy board. The limit applies to each isolate, so a worker gets
-      // its own.
-      "--v8-flags=--max-old-space-size=16384",
+      // No `--max-old-space-size`: V8 takes that flag over the heap limit each
+      // serving worker is started with (`SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`),
+      // so every worker could grow to the flag's size, and a compiled binary
+      // reads no V8 flags from its environment to take it back. The main
+      // thread has V8's default, about 4 GB.
+      //
+      // These two let `perf` on the host name the JavaScript a thread
+      // runs, serving workers' threads included: V8 writes the name and
+      // address of each compiled function to `/tmp/perf-<pid>.map`, and
+      // gives interpreted frames a native frame of their own. A stalled
+      // worker answers nothing, so sampling it from outside is the only way
+      // to see what it runs (2026-11-14, toolshed 8020 on Estuary). The map
+      // grows with each function compiled and is never trimmed; these come
+      // off once that investigation is done.
+      "--v8-flags=--perf-basic-prof-only-functions,--interpreted-frames-native-stack",
     ],
     binaries: requestedBinaries(args),
     cachedOnly: Deno.env.get("CF_DENO_DEPENDENCIES_INSTALLED") === "1",

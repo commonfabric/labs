@@ -34,6 +34,15 @@ describe("canvas", () => {
       expect(text(canvas)).toEqual(["abXYZ gh", "off the "]);
     });
 
+    it("draws only what of a region falls on the canvas", () => {
+      const canvas = new Canvas<never>(4, 2, BG);
+      canvas.put(-2, 0, [span("abcdef")]);
+      canvas.put(0, 2, [span("below")]);
+      canvas.put(0, -1, [span("above")]);
+
+      expect(text(canvas)).toEqual(["cdef", "    "]);
+    });
+
     it("blanks a wide character a region cuts in half, rather than half drawing it", () => {
       const canvas = new Canvas<never>(6, 1, BG);
       canvas.put(0, 0, [span("日本語")]);
@@ -64,6 +73,17 @@ describe("canvas", () => {
 
       expect(canvas.at(1, 0)).toEqual({ click: undefined, href: undefined });
       expect(text(canvas)[0]).toBe("gox   ");
+    });
+
+    it("shades only what of a rectangle falls on the canvas", () => {
+      const canvas = new Canvas<never>(2, 1, BG);
+      canvas.put(0, 0, [span("ab", { fg: [200, 200, 200] })]);
+      canvas.shade({ x: 1, y: -1, width: 4, height: 3 }, [10, 10, 10]);
+      const [row] = canvas.paint();
+
+      expect(stripAnsi(row)).toBe("ab");
+      expect(row).toContain("48;2;0;0;0ma");
+      expect(row).toContain("48;2;10;10;10mb");
     });
 
     it("paints a run of one style as one, and a link as a terminal hyperlink", () => {
@@ -111,6 +131,26 @@ describe("canvas", () => {
       expect(row).toContain("\x1b[38;2;0;0;0;48;2;1;1;1mgo");
       expect(row).toContain("\x1b[38;2;2;2;2;48;2;0;0;0mx");
       expect(row).toContain("\x1b[38;2;1;1;1;48;2;0;0;0mgo");
+    });
+
+    it("reaches nothing from outside the canvas, and holds down nothing outside it", () => {
+      const canvas = new Canvas<string>(2, 1, BG);
+      canvas.put(0, 0, [{ ...span("go", { fg: [1, 1, 1] }), click: "go!" }]);
+      const before = canvas.paint();
+
+      expect(canvas.reach(5, 5, (cell) => cell.click ?? "").size).toBe(0);
+
+      canvas.press(new Set([7]), [9, 9, 9]);
+
+      expect(canvas.paint()).toEqual(before);
+    });
+
+    it("draws a cell held down that leaves its color to the terminal in the color given", () => {
+      const canvas = new Canvas<string>(2, 1, BG);
+      canvas.put(0, 0, [{ ...span("go"), click: "go!" }]);
+      canvas.press(canvas.reach(0, 0, (cell) => cell.click ?? ""), [9, 9, 9]);
+
+      expect(canvas.paint()[0]).toContain("\x1b[38;2;0;0;0;48;2;9;9;9mgo");
     });
 
     it("fills a rectangle with a character that runs a command", () => {

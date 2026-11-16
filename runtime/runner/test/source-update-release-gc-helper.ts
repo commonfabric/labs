@@ -7,13 +7,21 @@
  * A writer stores two source closures, a predecessor and its successor. A
  * reader prepares the source update between them, which loads both closures,
  * and then, with nothing else holding what that load read, collects and runs
- * the two release passes that drop a document nothing holds. It then stages
- * the prepared update, as a source reconciliation's commit does, drops the
- * preparation, and collects and runs two passes again. It prints one line of
+ * the two release passes that drop a document nothing holds. It then commits
+ * the prepared update's transition, as a source reconciliation does, waits
+ * for the staging that follows the commit, drops the preparation, and
+ * collects and runs two passes again. It prints one line of
  * JSON: whether the successor's source document was still loaded after the
- * first passes (`keptThroughRelease`), the error staging returned, if any
- * (`stageError`), and whether the document was gone after the second
- * (`releasedOnceDone`).
+ * first passes (`keptThroughRelease`), the error the transition's commit
+ * returned, if any (`stageError`), the delegations the staging that follows
+ * the commit left on the successor's source record, as `"previous"` when they
+ * are the predecessor's identity alone (`staged`), and whether
+ * the document was gone after the second passes (`releasedOnceDone`).
+ *
+ * Given `--without-holds`, the reader prepares under a storage manager whose
+ * `holdDocument()` hands out tokens it does not record, so neither the
+ * preparation nor the cells its loads made hold anything, and the passes drop
+ * the successor's source documents before staging reads them.
  */
 
 import { Identity } from "@commonfabric/identity";
@@ -82,6 +90,10 @@ try {
   // The preparation lives only in `holder`, filled by a function that has
   // returned: a suspended async frame can keep the temporaries it used.
   const holder: { prepared?: PreparedSourceUpdate } = {};
+  const recordedHold = readerStorage.holdDocument;
+  if (Deno.args.includes("--without-holds")) {
+    readerStorage.holdDocument = () => ({});
+  }
   await (async () => {
     holder.prepared = await reader.patternManager.prepareSourceUpdate(
       space,
@@ -89,6 +101,7 @@ try {
       candidate.identity,
     );
   })();
+  readerStorage.holdDocument = recordedHold;
   const id = reader.getCell(space, sourceDocKey(candidate.identity))
     .getAsNormalizedFullLink().id as URI;
   const loaded = () =>
@@ -125,7 +138,28 @@ try {
     );
     return staged.error?.message ?? null;
   })();
+  // The transition's commit starts the staging; this waits for it.
+  await reader.patternManager.flushCompileCacheWrites();
   await readerStorage.synced();
+  const staged = (() => {
+    const readTx = reader.edit();
+    try {
+      // A copy, since the view would go on reading the document.
+      const stored = reader.getCell<{ delegatedModuleIdentities?: string[] }>(
+        space,
+        sourceDocKey(candidate.identity),
+        undefined,
+        readTx,
+      ).get()?.delegatedModuleIdentities;
+      if (stored === undefined) return null;
+      const copied = [...stored];
+      return copied.length === 1 && copied[0] === previous.identity
+        ? "previous"
+        : copied;
+    } finally {
+      readTx.abort();
+    }
+  })();
 
   // Once the update is done with its preparation, nothing holds the
   // documents, and release passes drop them as they would any other.
@@ -134,7 +168,12 @@ try {
   const releasedOnceDone = !loaded();
 
   console.log(
-    JSON.stringify({ keptThroughRelease, stageError, releasedOnceDone }),
+    JSON.stringify({
+      keptThroughRelease,
+      stageError,
+      staged,
+      releasedOnceDone,
+    }),
   );
 } finally {
   await reader.dispose();

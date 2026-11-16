@@ -2,10 +2,15 @@ import { join } from "@std/path";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import type { CreateRequest, MergeRequest } from "../lib/view/github.ts";
+import {
+  type CreateRequest,
+  GitHubRefusal,
+  type MergeRequest,
+} from "../lib/view/github.ts";
 import {
   clientDataHash,
   connectPinned,
+  describeFidoFailure,
   encodeRequest,
   runTool,
   type ToolResult,
@@ -76,6 +81,10 @@ const MERGE: MergeRequest = {
   method: "squash",
   sha: "c0ffee",
 };
+
+/** What merging {@link MERGE} resolves with, whatever the server's message
+ * says. */
+const MERGED = "Merged https://github.com/octo/repo/pull/12";
 
 /** Reads exactly `length` bytes from `conn`, or fewer when it ends or fails
  * first. */
@@ -281,6 +290,45 @@ describe("touchgate", () => {
     });
   });
 
+  describe("describeFidoFailure()", () => {
+    it("says what the last error libfido2's tool names means, naming the tool and the error", () => {
+      expect(
+        describeFidoFailure(
+          "fido2-assert",
+          "fido2-assert: fido_dev_get_assert: FIDO_ERR_RX\n",
+        ),
+      ).toBe(
+        "the security key stopped answering. It may have stopped waiting " +
+          "for a touch, been unplugged, or been in use by another program " +
+          "(fido2-assert: FIDO_ERR_RX)",
+      );
+      expect(
+        describeFidoFailure(
+          "fido2-assert",
+          "FIDO_ERR_RX then FIDO_ERR_USER_ACTION_TIMEOUT",
+        ),
+      ).toBe(
+        "the security key was not touched in time " +
+          "(fido2-assert: FIDO_ERR_USER_ACTION_TIMEOUT)",
+      );
+    });
+
+    it("returns what the tool printed when it names no error whose meaning is known", () => {
+      expect(describeFidoFailure("fido2-token", "no access\n")).toBe(
+        "fido2-token failed: no access",
+      );
+      expect(
+        describeFidoFailure(
+          "fido2-assert",
+          "fido2-assert: fido_dev_get_assert: FIDO_ERR_INTERNAL\n",
+        ),
+      ).toBe(
+        "fido2-assert failed: fido2-assert: fido_dev_get_assert: " +
+          "FIDO_ERR_INTERNAL",
+      );
+    });
+  });
+
   describe("touchGate()", () => {
     it("creates a pull request once the key signs the challenge, asking for the touch by the key's name, and resolves with its address", async () => {
       const request = encodeRequest(1, "laptop", [
@@ -318,7 +366,8 @@ describe("touchgate", () => {
         `${hash.toBase64()}\ntouch-gate\n${CREDENTIAL.toBase64()}\n`,
       );
       expect(written).toBe(
-        "\nTouch the “laptop” security key to create a PR.\n",
+        "\nTouch the “laptop” security key to create a PR.\n" +
+          "Touched. Sending the approval to touch-gate.\n",
       );
     });
 
@@ -399,10 +448,53 @@ describe("touchgate", () => {
       );
       await server.done;
 
-      expect(result).toBe("merged");
+      expect(result).toBe(MERGED);
       expect(server.seen.request).toEqual(concat(SECRET, request));
       expect(written).toBe(
-        "\nTouch the “laptop” security key to merge the PR.\n",
+        "\nTouch the “laptop” security key to merge the PR.\n" +
+          "Touched. Sending the approval to touch-gate.\n",
+      );
+    });
+
+    it("says the security key was touched before it sends the server the approval", async () => {
+      const request = encodeRequest(2, "laptop", [
+        "work",
+        "octo/repo",
+        12,
+        "squash",
+        "c0ffee",
+      ]);
+      const log: string[] = [];
+      let saidBeforeSending: string | undefined;
+      let saidBeforeTouch: string | undefined;
+      const server = fakeServer(async (conn) => {
+        await readExact(conn, SECRET.length + request.length);
+        await conn.write(concat(u32(0), CHALLENGE));
+        await readExact(conn, ASSERTION.length);
+        saidBeforeSending = log.join("");
+        await conn.write(reply(0, "merged"));
+      });
+      const { tool } = fakeTools("dev0");
+      const signing: ToolRunner = (program, args, input, signal) => {
+        if (args.includes("-p")) saidBeforeTouch = log.join("");
+        return tool(program, args, input, signal);
+      };
+
+      const { result } = await attempt(
+        configDirectory(server.port),
+        signing,
+        (service, write) =>
+          service.merge(MERGE, (text) => {
+            log.push(text);
+            write(text);
+          }, new AbortController().signal),
+      );
+      await server.done;
+
+      expect(result).toBe(MERGED);
+      expect(saidBeforeTouch).not.toContain("Touched.");
+      expect(saidBeforeSending).toContain(
+        "Touched. Sending the approval to touch-gate.",
       );
     });
 
@@ -452,6 +544,45 @@ describe("touchgate", () => {
       expect(error).toBe(
         "Error: touch-gate refused: GitHub said: Head branch was modified",
       );
+    });
+
+    it("rejects with GitHub's status and message when the server passes on GitHub's refusal", async () => {
+      const request = encodeRequest(2, "laptop", [
+        "work",
+        "octo/repo",
+        12,
+        "squash",
+        "c0ffee",
+      ]);
+      const server = challengingServer(
+        request.length,
+        reply(
+          1,
+          'GitHub replied with status 405: {"message":"Merge already in ' +
+            'progress","documentation_url":"https://docs.github.com/rest/' +
+            'pulls/pulls#merge-a-pull-request","status":"405"}',
+        ),
+      );
+
+      let thrown: unknown;
+      const { error } = await attempt(
+        configDirectory(server.port),
+        fakeTools().tool,
+        (service, write) =>
+          service.merge(MERGE, write, new AbortController().signal).catch(
+            (failure) => {
+              thrown = failure;
+              throw failure;
+            },
+          ),
+      );
+      await server.done;
+
+      expect(error).toBe(
+        "Error: GitHub answered 405: Merge already in progress",
+      );
+      expect(thrown).toBeInstanceOf(GitHubRefusal);
+      expect(thrown instanceof GitHubRefusal && thrown.retryable).toBe(false);
     });
 
     it("rejects when the server closes the connection before its message ends, or sends one that is not UTF-8", async () => {
@@ -530,6 +661,43 @@ describe("touchgate", () => {
       expect(after).toEqual(new Uint8Array(0));
     });
 
+    it("rejects, saying what libfido2's error means, when the security key stops answering while it waits for a touch", async () => {
+      const request = encodeRequest(2, "laptop", [
+        "work",
+        "octo/repo",
+        12,
+        "squash",
+        "c0ffee",
+      ]);
+      const server = fakeServer(async (conn) => {
+        await readExact(conn, SECRET.length + request.length);
+        await conn.write(concat(u32(0), CHALLENGE));
+        await readExact(conn, 1);
+      });
+      const { tool } = fakeTools(
+        "dev0",
+        (args) =>
+          args.includes("-p")
+            ? failed("fido2-assert: fido_dev_get_assert: FIDO_ERR_RX\n")
+            : undefined,
+      );
+
+      const { error, written } = await attempt(
+        configDirectory(server.port),
+        tool,
+        (service, write) =>
+          service.merge(MERGE, write, new AbortController().signal),
+      );
+      await server.done;
+
+      expect(written).toContain("Touch the “laptop” security key");
+      expect(error).toBe(
+        "Error: the security key stopped answering. It may have stopped " +
+          "waiting for a touch, been unplugged, or been in use by another " +
+          "program (fido2-assert: FIDO_ERR_RX)",
+      );
+    });
+
     it("rejects with the abort, asking no other security key, when its signal aborts while a key is asked about its credential", async () => {
       const controller = new AbortController();
       const { tool, calls } = fakeTools("dev1", (args) => {
@@ -605,6 +773,51 @@ describe("touchgate", () => {
       }
     });
 
+    it("rejects with the reason when the keys directory cannot be read", async () => {
+      const directory = configDirectory(1);
+      Deno.removeSync(join(directory, "keys"), { recursive: true });
+      Deno.writeTextFileSync(join(directory, "keys"), "not a directory");
+
+      const { error } = await attempt(
+        directory,
+        fakeTools().tool,
+        (service, write) =>
+          service.merge(MERGE, write, new AbortController().signal),
+      );
+
+      expect(error).toContain("NotADirectory");
+    });
+
+    it("rejects when the server's message is longer than a client accepts", async () => {
+      const request = encodeRequest(2, "laptop", [
+        "work",
+        "octo/repo",
+        12,
+        "squash",
+        "c0ffee",
+      ]);
+      const server = fakeServer(async (conn) => {
+        await readExact(conn, SECRET.length + request.length);
+        await conn.write(u32(1));
+        const chunk = new Uint8Array(1 << 16).fill(0x61);
+        for (let sent = 0; sent <= 1 << 20; sent += chunk.length) {
+          await conn.write(chunk).catch(() => {});
+        }
+      });
+
+      const { error } = await attempt(
+        configDirectory(server.port),
+        fakeTools().tool,
+        (service, write) =>
+          service.merge(MERGE, write, new AbortController().signal),
+      );
+      await server.done;
+
+      expect(error).toBe(
+        "Error: the touch-gate server sent a message too long",
+      );
+    });
+
     it("passes over a security key that cannot answer for one that holds the credential, and counts a request for a touch as holding it", async () => {
       const asked = (stderr: string) => (args: readonly string[]) =>
         args.at(-1) === "dev0" && args.includes("up=false")
@@ -634,7 +847,7 @@ describe("touchgate", () => {
         );
         await server.done;
 
-        expect(result).toBe("merged");
+        expect(result).toBe(MERGED);
         expect(calls.at(-1)!.args).toEqual(["-G", "-p", signer]);
       }
     });
@@ -650,7 +863,8 @@ describe("touchgate", () => {
                 ? failed("FIDO_ERR_RX\n")
                 : undefined,
           ).tool,
-          "cannot ask the security key dev1: FIDO_ERR_RX",
+          "cannot ask the security key dev1: the security key stopped " +
+          "answering.",
         ],
         [
           fakeTools(

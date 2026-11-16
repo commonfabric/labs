@@ -8,6 +8,7 @@ import {
   UI,
   Writable,
 } from "commonfabric";
+import { compileFailure } from "../compiler/compile-failure.ts";
 
 /**
  * Test pattern for fetchProgram builtin.
@@ -16,7 +17,7 @@ import {
 export default pattern(() => {
   // URL to a simple pattern file
   const url = new Writable(
-    "https://raw.githubusercontent.com/commonfabric/labs/main/patterns/examples/counter.tsx",
+    "https://raw.githubusercontent.com/commonfabric/labs/main/patterns/examples/counter/counter.tsx",
   );
 
   // Step 1: Fetch the program from URL
@@ -30,8 +31,15 @@ export default pattern(() => {
     main: program?.main ?? "",
     input: { value: 10 },
   }));
-  const { pending: compilePending, result, error: compileError } =
-    compileAndRun(compileParams);
+  const {
+    pending: compilePending,
+    result,
+    error: compileError,
+    errors: compileErrors,
+  } = compileAndRun(compileParams);
+  const compileProblem = computed(() =>
+    compileFailure(compileError, compileErrors)
+  );
 
   return {
     [NAME]: "Fetch Program Test",
@@ -45,8 +53,8 @@ export default pattern(() => {
         {fetchPending && <div>Fetching program...</div>}
         {compilePending && <div>Compiling...</div>}
         {fetchError && <div style="color: red">Fetch error: {fetchError}</div>}
-        {compileError && (
-          <div style="color: red">Compile error: {compileError}</div>
+        {compileProblem && (
+          <div style="color: red">Compile error: {compileProblem}</div>
         )}
         {result && (
           <div style="color: green">

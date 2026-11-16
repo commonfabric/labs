@@ -10,6 +10,7 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
+import { promptAbout } from "./suggestion.ts";
 
 // ===== Types =====
 
@@ -50,10 +51,13 @@ const Question = pattern<QuestionInput, QuestionOutput>(
     // state and makes no call until one arrives. A question with no topic has
     // nothing to ask about, so the model is asked only once a caller names the
     // subject.
-    const prompt = computed(() => {
-      if (!topic) return "";
-      return `Generate a single, thoughtful clarifying question about: ${topic}. Include 2-4 multiple choice options if appropriate, or leave options empty for a free-text answer.`;
-    });
+    const prompt = computed(() =>
+      promptAbout(
+        topic,
+        "Generate a single, thoughtful clarifying question about: ",
+        ". Include 2-4 multiple choice options if appropriate, or leave options empty for a free-text answer.",
+      )
+    );
 
     const response = generateObject<{
       question: string;

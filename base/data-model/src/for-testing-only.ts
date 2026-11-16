@@ -53,7 +53,6 @@ import {
   FabricHash,
   FabricKeyPair,
   type FabricPrimitiveClassesByName,
-  FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
 import {
@@ -190,13 +189,6 @@ export const FABRIC_PRIMITIVE_EXAMPLE_MAKERS_FOR_TESTING_ONLY: {
     ] as const,
   ),
 
-  FabricRegExp: Object.freeze(
-    [
-      () => new FabricRegExp(/a+/g),
-      () => new FabricRegExp("es2025", "^x$", ""),
-    ] as const,
-  ),
-
   FabricUnavailable: Object.freeze(
     [
       () => new FabricUnavailable("error", "general", "boom"),
@@ -324,13 +316,11 @@ export const SIZE_GUARANTEES_FOR_TESTING_ONLY: {
 
 /**
  * `requirementsOf()` from `conformance-fixtures.ts`, which returns what a
- * reader must support to read the fixture entry for a text and mods: the
- * flavors a case marks, and by each measure the size of the value the text
- * writes, past the floors.
+ * reader must support to read the fixture entry for a text and mods: by each
+ * measure the size of the value the text writes, past the floors.
  */
 export const requirementsOfForTestingOnly: (
   stated: TextWithMods,
-  flavors?: readonly string[],
 ) => FixtureRequirements | undefined = requirementsOf;
 
 /**
