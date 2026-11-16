@@ -131,8 +131,10 @@ describe.
   around them, about 80 KB. The board's own derivations read every Topic, so
   `Scheduler.readsEntity()` holds the documents, the release pass keeps their
   watches (as long as the session still delivers them; one the server retracted
-  gets no watch of its own), and the trigger index grows by about 50 KB per
-  create. That is the
+  gets no watch of its own), and the trigger index grows with the readers.
+  Measured on its own, with every byte that only the index keeps alive counted,
+  the index held 21.6 MiB of the serving worker's heap on a board four writers
+  had filled to 84 Topics, about 260 KB per Topic. That is the
   cost of a demanded board whose computations stay registered after they ran.
   Letting a computation that has run keep only its basis rows, loading its
   inputs again when a change dirties it, is the design in the introduction
