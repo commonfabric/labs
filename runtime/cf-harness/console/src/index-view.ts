@@ -1,18 +1,18 @@
 /**
  * The Index view: the pattern index as an operator reads it. What is
- * published and how it ranks, what this identity did with it, and what a query
- * would actually return — the last beside the request that produced it, because
- * the point of the playground is the search's behavior rather than its answer.
+ * published, who published it, where it stands in discovery and how it ranks,
+ * and what a query would actually return — the last beside the request that
+ * produced it, because the point of the playground is the search's behavior
+ * rather than its answer.
  *
  * Every read goes through the server, which signs it with the fabric identity
  * and refuses anything outside its allowlist. Source is not among what this
- * surface asks for: a pattern's metadata, schemas, dependencies and events are
- * what it shows, and source is read through the CLI.
+ * surface asks for: a pattern's metadata, schemas, dependencies and event
+ * counts are what it shows, and source is read through the CLI.
  */
 
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type {
-  PatternIndexEvent,
   PatternIndexListedPattern,
   PatternIndexPattern,
   PatternIndexSearchResult,
@@ -20,29 +20,24 @@ import type {
 import { html, LitElement, nothing, type TemplateResult } from "lit";
 import {
   eventBadges,
-  filterEvents,
   formatIndexTime,
+  listingLabel,
   matchRatio,
   patternsByScore,
   searchRequestOf,
   truncateId,
 } from "../index-inspector.ts";
 import {
-  listIndexEvents,
   listIndexPatterns,
   readIndexPattern,
   searchIndexPatterns,
 } from "./api.ts";
 
-/** One pattern read open, and that pattern's own events beside it. */
+/** One pattern read open. */
 interface OpenPattern {
   patternId: string;
   pattern?: PatternIndexPattern;
-  events?: readonly PatternIndexEvent[];
   error?: string;
-
-  /** Why `events` is absent when its read failed rather than pending. */
-  eventsError?: string;
 }
 
 const prettyJson = (value: unknown): string => JSON.stringify(value, null, 2);
@@ -53,9 +48,6 @@ export class ConsoleIndexView extends LitElement {
     eventTypes: { attribute: false },
     patternsError: { attribute: false },
     open: { attribute: false },
-    events: { attribute: false },
-    eventsError: { attribute: false },
-    eventFilter: { attribute: false },
     copied: { attribute: false },
     searchRequest: { attribute: false },
     searchResults: { attribute: false },
@@ -71,9 +63,6 @@ export class ConsoleIndexView extends LitElement {
 
   declare patternsError: string | undefined;
   declare open: OpenPattern | undefined;
-  declare events: readonly PatternIndexEvent[];
-  declare eventsError: string | undefined;
-  declare eventFilter: string;
 
   /** The identifier the last copy button copied, so the page can say so. */
   declare copied: string | undefined;
@@ -98,8 +87,6 @@ export class ConsoleIndexView extends LitElement {
     super();
     this.patterns = [];
     this.eventTypes = {};
-    this.events = [];
-    this.eventFilter = "";
     this.searching = false;
     this.loaded = false;
   }
@@ -114,16 +101,12 @@ export class ConsoleIndexView extends LitElement {
   }
 
   /**
-   * Re-reads both listings. Neither read's failure hides the other's answer,
-   * and a refresh superseded by a newer one writes nothing — two clicks in
-   * flight must not let the older answer land last.
+   * Re-reads the listing. A refresh superseded by a newer one writes nothing —
+   * two clicks in flight must not let the older answer land last.
    */
   async refresh(): Promise<void> {
     const generation = ++this.#refreshes;
-    await Promise.all([
-      this.#loadPatterns(generation),
-      this.#loadEvents(generation),
-    ]);
+    await this.#loadPatterns(generation);
     if (generation === this.#refreshes) {
       this.loaded = true;
     }
@@ -142,23 +125,7 @@ export class ConsoleIndexView extends LitElement {
     }
   }
 
-  async #loadEvents(generation: number): Promise<void> {
-    try {
-      const events = await listIndexEvents({ limit: 100 });
-      if (generation !== this.#refreshes) return;
-      this.events = events;
-      this.eventsError = undefined;
-    } catch (error) {
-      if (generation !== this.#refreshes) return;
-      this.eventsError = describeFailure(error);
-    }
-  }
-
-  /**
-   * Opens one pattern, or closes it when it is the one already open. The
-   * pattern and its events are read independently, so one endpoint refusing
-   * still shows what the other returned.
-   */
+  /** Opens one pattern, or closes it when it is the one already open. */
   async #openPattern(patternId: string): Promise<void> {
     if (this.open?.patternId === patternId) {
       // Closing also invalidates a read still in flight, so its late answer
@@ -169,17 +136,13 @@ export class ConsoleIndexView extends LitElement {
     }
     const read = ++this.#detailReads;
     this.open = { patternId };
-    const [pattern, events] = await Promise.all([
-      readIndexPattern(patternId).catch(describeFailure),
-      listIndexEvents({ patternId }).catch(describeFailure),
-    ]);
+    const pattern = await readIndexPattern(patternId).catch(describeFailure);
     if (read !== this.#detailReads) {
       return;
     }
     this.open = {
       patternId,
       ...(typeof pattern === "string" ? { error: pattern } : { pattern }),
-      ...(typeof events === "string" ? { eventsError: events } : { events }),
     };
   }
 
@@ -249,33 +212,18 @@ export class ConsoleIndexView extends LitElement {
     }`;
   }
 
-  #eventsTable(events: readonly PatternIndexEvent[]): TemplateResult {
-    return html`
-      <table class="index-table">
-        <thead>
-          <tr>
-            <th>when</th>
-            <th>event</th>
-            <th>pattern</th>
-            <th>author</th>
-            <th>note</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${events.map((event) =>
-            html`
-              <tr>
-                <td class="muted">${formatIndexTime(event.ts)}</td>
-                <td>${event.eventType}</td>
-                <td>${this.#idCell(event.patternId)}</td>
-                <td>${this.#idCell(event.did, 14)}</td>
-                <td>${event.note ?? ""}</td>
-              </tr>
-            `
-          )}
-        </tbody>
-      </table>
-    `;
+  /**
+   * Who published a pattern: the pseudonym the index gives its author, and
+   * `you` beside it when the caller is that author.
+   */
+  #owner(entry: { handle?: string; mine?: boolean }): TemplateResult {
+    return html`${this.#idCell(entry.handle, 14)}${
+      entry.mine
+        ? html`
+          <span class="index-mine">you</span>
+        `
+        : nothing
+    }`;
   }
 
   #detail(open: OpenPattern): TemplateResult {
@@ -291,7 +239,7 @@ export class ConsoleIndexView extends LitElement {
             : nothing)
           : html`
             <div class="label">
-              owner ${this.#idCell(pattern.ownerDid, 18)} · created
+              owner ${this.#owner(pattern)} · created
               ${formatIndexTime(pattern.createdAt)}
               ${pattern.priorPatternId === undefined
                 ? nothing
@@ -314,14 +262,6 @@ export class ConsoleIndexView extends LitElement {
               <pre class="raw">${prettyJson(pattern.resultSchema)}</pre>
             `}
           `}
-        <div class="label">its events</div>
-        ${open.eventsError !== undefined
-          ? html`<p class="error">${open.eventsError}</p>`
-          : open.events === undefined
-          ? html`<p class="empty">Reading…</p>`
-          : open.events.length === 0
-          ? html`<p class="empty">You recorded none against this pattern.</p>`
-          : this.#eventsTable(open.events)}
       </div>
     `;
   }
@@ -343,8 +283,10 @@ export class ConsoleIndexView extends LitElement {
           <tr>
             <th>pattern</th>
             <th>description</th>
+            <th>owner</th>
             <th>hashtags</th>
             <th>events</th>
+            <th>listing</th>
             <th>score</th>
             <th>created</th>
           </tr>
@@ -360,21 +302,14 @@ export class ConsoleIndexView extends LitElement {
               >
                 <td>${this.#idCell(pattern.patternId)}</td>
                 <td>${pattern.description}</td>
+                <td>${this.#owner(pattern)}</td>
                 <td>${this.#hashtags(pattern.hashtags)}</td>
                 <td>
-                  ${eventBadges(pattern.events, pattern.eventAuthors).map((
-                    badge,
-                  ) =>
-                    html`<span class="badge">
-                    ${badge.eventType} ×${badge.count}
-                    · ${
-                      badge.did === undefined
-                        ? "author unavailable"
-                        : this.#idCell(badge.did, 18)
-                    }
-                  </span>`
+                  ${eventBadges(pattern.events).map((badge) =>
+                    html`<span class="badge">${badge.eventType} ×${badge.count}</span>`
                   )}
                 </td>
+                <td class="muted">${listingLabel(pattern) ?? "—"}</td>
                 <td>
                   ${pattern.score ?? 0}
                   ${pattern.signals?.inherited
@@ -390,7 +325,7 @@ export class ConsoleIndexView extends LitElement {
               ${this.open?.patternId === pattern.patternId
                 ? html`
                   <tr class="index-detail-row">
-                    <td colspan="6">${this.#detail(this.open)}</td>
+                    <td colspan="8">${this.#detail(this.open)}</td>
                   </tr>
                 `
                 : nothing}
@@ -398,38 +333,6 @@ export class ConsoleIndexView extends LitElement {
           )}
         </tbody>
       </table>
-    `;
-  }
-
-  #eventsPane(): TemplateResult {
-    if (this.eventsError !== undefined) {
-      return html`<p class="empty bad">${this.eventsError}</p>`;
-    }
-    const showing = filterEvents(this.events, this.eventFilter);
-    return html`
-      <div class="index-toolbar">
-        <label>
-          filter
-          <input
-            .value=${this.eventFilter}
-            placeholder="any field"
-            @input=${(event: Event) =>
-              this.eventFilter = (event.target as HTMLInputElement).value}
-          />
-        </label>
-        <span class="muted">
-          ${showing.length} of ${this.events.length} shown
-        </span>
-      </div>
-      ${this.events.length === 0
-        ? html`
-          <p class="empty">
-            ${this.loaded
-              ? "This identity has recorded nothing in the index."
-              : "Reading…"}
-          </p>
-        `
-        : this.#eventsTable(showing)}
     `;
   }
 
@@ -512,11 +415,6 @@ export class ConsoleIndexView extends LitElement {
           </button>
         </div>
         ${this.#patternsPane()}
-
-        <div class="run-list-head">
-          <span>Your events</span>
-        </div>
-        ${this.#eventsPane()}
 
         <div class="run-list-head">
           <span>Search</span>
