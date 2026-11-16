@@ -13,16 +13,26 @@ import {
   junitCapableMembers,
   leafFlags,
   leafTask,
+  main,
   memberRecordingArguments,
   memberTestTask,
+  readLeafReport,
   readWorkspaceMembers,
   recordingSpool,
+  type RootTestHost,
+  runRootTestTask,
   runTests,
   testConcurrency,
   testPackage,
 } from "./workspace-tests.ts";
+import { expect } from "@std/expect";
 import * as path from "@std/path";
-import { preloadArgument } from "@commonfabric/test-support/records";
+import {
+  preloadArgument,
+  RECORD_SCHEMA_VERSION,
+  RECORDS_DIR_VARIABLE,
+} from "@commonfabric/test-support/records";
+import type { RunRecording } from "./test-records.ts";
 
 // Write a minimal workspace under `dir`: a root deno.jsonc listing the
 // members, and one directory per package whose `test` task records that it
@@ -936,21 +946,275 @@ Deno.test("every workspace member defines a test task of its own", async () => {
   await assertMemberTestTasksDefined(members, rootUrl);
 });
 
-Deno.test("the root entry point refuses arguments, rather than running the whole suite", async () => {
-  const { code, stderr } = await new Deno.Command(Deno.execPath(), {
-    args: [
-      "run",
-      "-A",
-      path.fromFileUrl(new URL("./test.ts", import.meta.url)),
-      "--filter",
-      "a name",
-    ],
-    stdout: "null",
-    stderr: "piped",
-  }).output();
-  assertEquals(code, 2);
-  assertStringIncludes(
-    new TextDecoder().decode(stderr),
+/** A recording this process owns, with its spool at `dir`. */
+function ownedRecording(dir: string): RunRecording {
+  return {
+    mode: "own",
+    spool: { dir, close() {} },
+    context: {
+      schema: RECORD_SCHEMA_VERSION,
+      line: "context",
+      reportId: "01J00000000000000000000000",
+      repo: "commonfabric/labs",
+      commit: "0".repeat(40),
+      dirty: false,
+      env: "local",
+      os: "darwin",
+      arch: "aarch64",
+      denoVersion: "2.0.0",
+      startedAt: "2026-11-13T00:00:00.000Z",
+    },
+    key: {
+      client_email: "runner@example.com",
+      private_key: "",
+      token_uri: "https://oauth2.googleapis.com/token",
+      cf_username: "runner",
+    },
+    spoolRoot: dir,
+  };
+}
+
+/**
+ * A host for `runRootTestTask()` whose recording starts as `recording` and
+ * whose suite passes or fails as `passes` says, and the order in which the
+ * task used it.
+ */
+function rootTestHost(
+  recording: RunRecording,
+  passes: boolean | Error,
+): { host: RootTestHost; calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    host: {
+      env: { set: (name, value) => calls.push(`set ${name}=${value}`) },
+      pinShuffleSeed: () => calls.push("pin"),
+      startRecording: () => {
+        calls.push("start");
+        return Promise.resolve(recording);
+      },
+      finishRecording: (finished) => {
+        calls.push(`finish ${finished.mode}`);
+        return Promise.resolve();
+      },
+      run: () => {
+        calls.push("run");
+        return passes instanceof Error
+          ? Promise.reject(passes)
+          : Promise.resolve(passes);
+      },
+    },
+  };
+}
+
+Deno.test("runRootTestTask refuses arguments, rather than running the whole suite", async () => {
+  const { host, calls } = rootTestHost({ mode: "off" }, true);
+  const { result, lines } = await capturingOutput(() =>
+    runRootTestTask(["--filter", "a name"], host)
+  );
+  expect(result).toBe(2);
+  expect(lines.join("\n")).toContain(
     "The root `test` task takes no arguments",
   );
+  expect(calls).toEqual([]);
+});
+
+Deno.test("runRootTestTask returns 0 for a passing run and 1 for a failing one", async () => {
+  const passing = rootTestHost({ mode: "off" }, true);
+  expect(await runRootTestTask([], passing.host)).toBe(0);
+  expect(passing.calls).toEqual(["pin", "start", "run", "finish off"]);
+
+  const failing = rootTestHost({ mode: "off" }, false);
+  expect(await runRootTestTask([], failing.host)).toBe(1);
+  expect(failing.calls).toEqual(["pin", "start", "run", "finish off"]);
+});
+
+Deno.test("runRootTestTask points the members at the spool of a run it owns", async () => {
+  const { host, calls } = rootTestHost(ownedRecording("/spool"), true);
+  expect(await runRootTestTask([], host)).toBe(0);
+  expect(calls).toEqual([
+    "pin",
+    "start",
+    `set ${RECORDS_DIR_VARIABLE}=/spool`,
+    "run",
+    "finish own",
+  ]);
+});
+
+Deno.test("runRootTestTask leaves the environment alone for a run it joined", async () => {
+  const { host, calls } = rootTestHost({ mode: "join", dir: "/ci" }, true);
+  expect(await runRootTestTask([], host)).toBe(0);
+  expect(calls).toEqual(["pin", "start", "run", "finish join"]);
+});
+
+Deno.test("runRootTestTask finishes the recording of a run that throws", async () => {
+  const { host, calls } = rootTestHost({ mode: "off" }, new Error("boom"));
+  await expect(runRootTestTask([], host)).rejects.toThrow("boom");
+  expect(calls).toEqual(["pin", "start", "run", "finish off"]);
+});
+
+Deno.test("main refuses a workspace without tasks before initializing anything", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-main-" });
+  try {
+    await makeWorkspace(dir, ["a"]);
+    let initialized = false;
+    await expect(main(dir, () => {
+      initialized = true;
+      return Promise.resolve(true);
+    })).rejects.toThrow("workspace must include tasks");
+    expect(initialized).toBe(false);
+    expect(await ranPackages(dir, ["a"])).toEqual([]);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+// A workspace whose members are `tasks` and `runtime/a`, each of whose test
+// tasks writes a marker when it runs.
+async function makeWorkspaceWithTasks(dir: string): Promise<void> {
+  await makeWorkspace(dir, ["a"]);
+  await Deno.writeTextFile(
+    `${dir}/deno.jsonc`,
+    JSON.stringify({ workspace: ["./tasks", "./runtime/a"] }),
+  );
+  await Deno.mkdir(`${dir}/tasks`);
+  await Deno.writeTextFile(
+    `${dir}/tasks/deno.jsonc`,
+    JSON.stringify({ tasks: { test: "echo ok > ran.txt" } }),
+  );
+}
+
+Deno.test("main runs no member when initializing the database fails", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-main-" });
+  try {
+    await makeWorkspaceWithTasks(dir);
+    const initializedIn: string[] = [];
+    const passed = await main(dir, (cwd) => {
+      initializedIn.push(cwd);
+      return Promise.resolve(false);
+    });
+    expect(passed).toBe(false);
+    expect(initializedIn).toEqual([dir]);
+    expect(await ranPackages(dir, ["a"])).toEqual([]);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("main runs every member once the database is initialized", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-main-" });
+  try {
+    await makeWorkspaceWithTasks(dir);
+    const { result } = await capturingOutput(() =>
+      withEnv(
+        { CF_TEST_RECORDS_DIR: undefined, TEST_CONCURRENCY: "1" },
+        () => main(dir, () => Promise.resolve(true)),
+      )
+    );
+    expect(result).toBe(true);
+    expect(await ranPackages(dir, ["a"])).toEqual(["a"]);
+    await Deno.stat(`${dir}/tasks/ran.txt`);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("readLeafReport reads the records of a member's report", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-report-" });
+  try {
+    const junit = path.join(dir, "a.xml");
+    await Deno.writeTextFile(
+      junit,
+      `<testsuites><testsuite name="./x.test.ts">` +
+        `<testcase name="works" classname="./x.test.ts" time="0.1"/>` +
+        `</testsuite></testsuites>`,
+    );
+    // A spool holding no name map leaves each case the file its class
+    // name gives, as no spool at all does.
+    for (const spool of [undefined, dir]) {
+      const report = await readLeafReport(junit, "a", "./runtime/a", spool);
+      expect(report?.records.map((record) => record.test.n)).toEqual([
+        "works",
+      ]);
+      expect(report?.records[0]?.file).toBe("runtime/a/x.test.ts");
+    }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("readLeafReport returns undefined for a member that wrote no report", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-report-" });
+  try {
+    const { result, lines } = await capturingWarnings(() =>
+      readLeafReport(path.join(dir, "absent.xml"), "a", "./runtime/a", dir)
+    );
+    expect(result).toBeUndefined();
+    expect(lines).toEqual([]);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("readLeafReport warns and returns undefined for a malformed report", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-report-" });
+  try {
+    const junit = path.join(dir, "a.xml");
+    await Deno.writeTextFile(junit, "<testsuites><testsuite");
+    const { result, lines } = await capturingWarnings(() =>
+      readLeafReport(junit, "a", "./runtime/a", undefined)
+    );
+    expect(result).toBeUndefined();
+    expect(lines).toEqual([
+      `test summary: reading ${junit} failed: Error: unterminated tag`,
+    ]);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+// Run `fn` with `console.warn` captured rather than printed, and return the
+// lines alongside `fn`'s result.
+async function capturingWarnings<T>(
+  fn: () => Promise<T>,
+): Promise<{ result: T; lines: string[] }> {
+  const lines: string[] = [];
+  const original = console.warn;
+  console.warn = (...values: unknown[]) => {
+    lines.push(values.map(String).join(" "));
+  };
+  try {
+    return { result: await fn(), lines };
+  } finally {
+    console.warn = original;
+  }
+}
+
+Deno.test("testPackage appends the recording arguments after the report path", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-testpackage-" });
+  try {
+    await Deno.writeTextFile(
+      `${dir}/deno.jsonc`,
+      JSON.stringify({ tasks: { test: "echo" } }),
+    );
+    const log = path.join(dir, "a.log");
+    const { result } = await capturingOutput(() =>
+      testPackage(
+        "./runtime/a",
+        "a",
+        dir,
+        undefined,
+        log,
+        {},
+        "/r/a.xml",
+        ["--preload=/p.ts", "--allow-env"],
+      )
+    );
+    expect(result.success).toBe(true);
+    expect(await Deno.readTextFile(log)).toContain(
+      "--junit-path=/r/a.xml --preload=/p.ts --allow-env",
+    );
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
 });

@@ -21,43 +21,25 @@
  * Usage: check-baselines-append-only.ts [base-ref]   (default: origin/main)
  */
 
+import { type CommandOutput, emit } from "./command-output.ts";
 import { patternPath, PATTERNS_DIR } from "./pattern-files.ts";
+import { type Git, git } from "./repository-files.ts";
 
 const BASELINES_PREFIX = `${PATTERNS_DIR}/baselines/`;
 
-async function git(...args: string[]): Promise<string> {
-  return await gitIn(Deno.cwd(), ...args);
-}
-
-async function gitIn(cwd: string, ...args: string[]): Promise<string> {
-  const { code, stdout, stderr } = await new Deno.Command("git", {
-    args,
-    cwd,
-    stdout: "piped",
-    stderr: "piped",
-  }).output();
-  if (code !== 0) {
-    throw new Error(
-      `git ${args.join(" ")} failed: ${new TextDecoder().decode(stderr)}`,
-    );
-  }
-  return new TextDecoder().decode(stdout);
-}
-
 /**
- * The paths the repository at `root` deleted since `mergeBase`. A file it
- * moved counts as deleted at the path it left where `moves` is `"deleted"`,
- * as a baseline moved out of the store is as gone from it as one removed, and
- * as kept where `moves` is `"kept"`, as a pattern moved elsewhere still
- * exists.
+ * The paths the repository `run` runs git in deleted since `mergeBase`. A
+ * file it moved counts as deleted at the path it left where `moves` is
+ * `"deleted"`, as a baseline moved out of the store is as gone from it as one
+ * removed, and as kept where `moves` is `"kept"`, as a pattern moved
+ * elsewhere still exists.
  */
 export async function deletedSince(
-  root: string,
+  run: Git,
   mergeBase: string,
   moves: "deleted" | "kept",
 ): Promise<string[]> {
-  return (await gitIn(
-    root,
+  return (await run(
     "diff",
     moves === "deleted" ? "--no-renames" : "--find-renames",
     "--diff-filter=D",
@@ -94,52 +76,60 @@ export function unjustifiedDeletions(
   return offenders;
 }
 
-async function main() {
-  const base = Deno.args[0] ?? "origin/main";
+/**
+ * Checks the change from the merge base of `base` and `HEAD` in the
+ * repository `run` runs git in, and returns what to say: exit code 0 where no
+ * baseline was deleted without its pattern, 1 where one was, and 2 where git
+ * finds no merge base.
+ */
+export async function main(
+  base = "origin/main",
+  run: Git = git,
+): Promise<CommandOutput> {
   let mergeBase: string;
   try {
-    mergeBase = (await git("merge-base", base, "HEAD")).trim();
+    mergeBase = (await run("merge-base", base, "HEAD")).trim();
   } catch {
-    console.error(
-      `Could not resolve a merge base against ${base}. This check needs real ` +
-        `history — CI must check out with fetch-depth: 0.`,
-    );
-    Deno.exit(2);
+    return {
+      err: `Could not resolve a merge base against ${base}. This check needs ` +
+        `real history — CI must check out with fetch-depth: 0.`,
+      code: 2,
+    };
   }
 
-  const deleted = await deletedSince(Deno.cwd(), mergeBase, "deleted");
+  const deleted = await deletedSince(run, mergeBase, "deleted");
 
   // A pattern the change moved still exists, so it retires nothing.
   const deletedPatterns = new Set(
-    (await deletedSince(Deno.cwd(), mergeBase, "kept")).filter((path) =>
+    (await deletedSince(run, mergeBase, "kept")).filter((path) =>
       path.endsWith(".ts") || path.endsWith(".tsx")
     ),
   );
 
   const offenders = unjustifiedDeletions(deleted, deletedPatterns);
   if (offenders.length === 0) {
-    console.log("Pattern baselines are append-only against this base.");
-    return;
+    return {
+      out: "Pattern baselines are append-only against this base.",
+      code: 0,
+    };
   }
 
-  console.error(
-    `${offenders.length} pattern baseline(s) deleted without retiring the ` +
+  return {
+    err: [
+      `${offenders.length} pattern baseline(s) deleted without retiring the ` +
       `pattern:\n`,
-  );
-  for (const { path, key } of offenders) {
-    console.error(`  ${path}\n    ${patternPath(key)} still exists.`);
-  }
-  console.error(
-    `\nA baseline records a contract that WAS deployed. Deleting one drops the ` +
-      `proof that pieces pinned to it can still roll forward, which is exactly ` +
-      `how an incompatible change gets laundered past the gate.` +
-      `\n\nIf you are retiring the pattern, delete the pattern file in the same ` +
-      `change. If you are accepting a deliberate break, keep the baseline and ` +
-      `say so in review — do not delete the evidence.`,
-  );
-  Deno.exit(1);
+      ...offenders.map(({ path, key }) =>
+        `  ${path}\n    ${patternPath(key)} still exists.`
+      ),
+      `\nA baseline records a contract that WAS deployed. Deleting one drops ` +
+      `the proof that pieces pinned to it can still roll forward, which is ` +
+      `exactly how an incompatible change gets laundered past the gate.` +
+      `\n\nIf you are retiring the pattern, delete the pattern file in the ` +
+      `same change. If you are accepting a deliberate break, keep the ` +
+      `baseline and say so in review — do not delete the evidence.`,
+    ].join("\n"),
+    code: 1,
+  };
 }
 
-if (import.meta.main) {
-  await main();
-}
+if (import.meta.main) emit(await main(Deno.args[0]));

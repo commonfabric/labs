@@ -570,11 +570,15 @@ export function parseCompactArgs(
 }
 
 /**
- * The access token for writing shards, when one is reachable. Only the
- * compaction workflow has one, and there is no fallback to offer: the
- * compactor's identity exists as no key, and a person's own reporting key
- * is scoped to their submissions/local/<username>/ folder and cannot write
- * a rollup. --plan is how a person sees what a run would do.
+ * The access token for writing to the store, when one is reachable: the
+ * compactor writes shards with it, and the publisher in
+ * `test-selection-publish.ts` creates manifests with it. Only the workflow
+ * running each has one, and there is no fallback to offer: each identity is
+ * federated and pinned to its workflow file and exists as no key, and a
+ * person's own reporting key is scoped to their
+ * submissions/local/<username>/ folder and can write neither. --plan here,
+ * and --dry-run --out for the publisher, is how a person sees what a run
+ * would do.
  */
 export function writeToken(
   env: Environment = Deno.env.get,
@@ -585,33 +589,38 @@ export function writeToken(
     : undefined;
 }
 
-async function main(): Promise<void> {
-  const parsed = parseCompactArgs(Deno.args);
-  if (parsed === undefined) Deno.exit(2);
-  const { days, plan } = parsed;
-
+/**
+ * Runs the compaction a command line asks for over the store `env` names,
+ * and returns the exit status: 2 for a malformed command line, and for a
+ * run that would write with no token to write with.
+ */
+export async function runCompactCommand(
+  args: readonly string[],
+  env: Environment = Deno.env.get,
+  overrides: Pick<CompactOptions, "fetchImpl" | "now"> = {},
+): Promise<number> {
+  const parsed = parseCompactArgs(args);
+  if (parsed === undefined) return 2;
   const options: CompactOptions = {
-    days,
-    plan,
-    bucket: storeBucket(),
-    rawPrefix: ciSubmissionsPrefix(),
+    ...parsed,
+    bucket: storeBucket(env),
+    rawPrefix: ciSubmissionsPrefix(env),
+    ...overrides,
   };
-  if (!plan) {
-    const token = writeToken();
+  if (!parsed.plan) {
+    const token = writeToken(env);
     if (token === undefined) {
       console.error(
         "TEST_RECORDS_GCS_TOKEN is not set. The compactor's identity is " +
           "held by the compaction workflow alone; run with --plan to see " +
           "what would be compacted.",
       );
-      Deno.exit(2);
+      return 2;
     }
     options.token = token;
   }
-
   await compactDays(options);
+  return 0;
 }
 
-if (import.meta.main) {
-  await main();
-}
+if (import.meta.main) Deno.exit(await runCompactCommand(Deno.args));

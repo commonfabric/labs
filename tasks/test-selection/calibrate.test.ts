@@ -1017,6 +1017,15 @@ describe("calibrate", () => {
       expect(fitted.suites.unbatched).toBeUndefined();
     });
 
+    it("fits nothing from a hooks figure whose name names no suite and unit", () => {
+      const batches = [observed({ ran: 40, spent: 92, units: 4 })];
+      const fitted = calibrate({ setup: new Map(), batches }, {
+        "hooks without a unit": { "2026-08-20": samplesOf([500]) },
+      });
+      expect(fitted).toEqual(calibrate({ setup: new Map(), batches }));
+      expect(fitted.suites.s).not.toHaveProperty("unitHooks");
+    });
+
     it("names no hooks in a fit no unit of which has measured any", () => {
       const fitted = calibrate({
         setup: new Map(),

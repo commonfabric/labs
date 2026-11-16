@@ -41,7 +41,6 @@ import {
   githubPatch,
   githubPost,
   REPO,
-  TOKEN,
 } from "./ci-check-lib.ts";
 
 /**
@@ -144,10 +143,17 @@ export async function postCoverageComment(): Promise<void> {
   }
 }
 
-if (import.meta.main) {
-  if (!TOKEN) {
+/**
+ * Runs the poster where `GITHUB_TOKEN`, the credential its requests carry,
+ * is set, and returns the code to exit with.
+ */
+export async function main(): Promise<number> {
+  if (!Deno.env.get("GITHUB_TOKEN")) {
     console.error("GITHUB_TOKEN is required.");
-    Deno.exit(1);
+    return 1;
   }
   await postCoverageComment();
+  return 0;
 }
+
+if (import.meta.main) Deno.exit(await main());

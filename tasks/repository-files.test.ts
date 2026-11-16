@@ -1,7 +1,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 
-import { repositoryFiles } from "./repository-files.ts";
+import { git as gitHere, gitIn, repositoryFiles } from "./repository-files.ts";
 
 /** Runs git in `root`, failing the test when git does. */
 async function git(root: string, ...args: string[]): Promise<void> {
@@ -71,5 +72,39 @@ describe("repositoryFiles()", () => {
     } finally {
       await Deno.remove(root, { recursive: true });
     }
+  });
+});
+
+describe("gitIn()", () => {
+  // These run the real `git` against this checkout, which is the only thing
+  // the runner does.
+
+  const tasks = fromFileUrl(new URL(".", import.meta.url));
+
+  it("returns git's standard output, run in the directory it names", async () => {
+    expect(await gitIn(tasks)("rev-parse", "--show-prefix")).toBe("tasks/\n");
+  });
+
+  it("throws naming the command and the directory where git fails", async () => {
+    // Only the part this file writes is matched, since git words its own
+    // complaint in the machine's language.
+    await expect(
+      gitIn(tasks)("rev-parse", "--verify", "refs/no/such/ref"),
+    ).rejects.toThrow(
+      `\`git rev-parse --verify refs/no/such/ref\` failed in ${tasks}: `,
+    );
+  });
+});
+
+describe("git", () => {
+  it("returns git's standard output", async () => {
+    expect(await gitHere("--version")).toMatch(/^git version /);
+  });
+
+  it("throws naming the command, and no directory, where git fails", async () => {
+    await expect(gitHere("rev-parse", "--verify", "refs/no/such/ref"))
+      .rejects.toThrow(
+        /^`git rev-parse --verify refs\/no\/such\/ref` failed: /,
+      );
   });
 });
