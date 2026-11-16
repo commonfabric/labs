@@ -3826,10 +3826,12 @@ impl<'a> Emitter<'_, '_, 'a> {
                         }
                         Some(JSXAttributeValue::Element(element)) => {
                             let at = element.span.start;
-                            self.build(&format!("@{name}"), at, |emitter, _| {
+                            let built = self.build(&format!("@{name}"), at, |emitter, _| {
                                 let tree = emitter.jsx_element(element);
                                 emitter.constructed(&tree)
-                            })
+                            });
+                            self.facts.built(at, &built);
+                            built
                         }
                         _ => Place::Const,
                     };
@@ -3867,6 +3869,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 let tree = emitter.jsx_children(&element.children);
                 emitter.constructed(&tree)
             });
+            self.facts.built(at, &children);
             fields.insert("children".to_string(), children);
         }
         Place::Record(fields)

@@ -99,6 +99,11 @@ pub(crate) struct Facts {
     bound: HashMap<(usize, u32), Place>,
     inlines: HashMap<(usize, u32), usize>,
     inline_bindings: HashMap<(usize, u32), usize>,
+    /// The values the plan emitter made for a part of the argument of a
+    /// tag that names a pattern: the children written between the tags,
+    /// by the start of the tag, and an attribute written as an element,
+    /// by the start of that element.
+    built: HashMap<(usize, u32), usize>,
     pub uses: HashMap<usize, UseFact>,
     pub handlers: HashMap<usize, HandlerFact>,
     /// For each cone, in the order the cones were made: the collections
@@ -152,6 +157,12 @@ impl Facts {
 
     pub fn leave(&mut self, saved: usize, _result: Option<Place>) {
         self.current = saved;
+    }
+
+    pub fn built(&mut self, at: u32, place: &Place) {
+        if let Place::Value(value, _) = place {
+            self.built.insert((self.current, at), *value);
+        }
     }
 
     pub fn inline_binding(&mut self, start: u32, binding: usize) {
@@ -228,7 +239,73 @@ fn jsx_text(text: &str) -> Option<String> {
             kept.push(line);
         }
     }
-    (!kept.is_empty()).then(|| kept.join(" "))
+    (!kept.is_empty()).then(|| entities(&kept.join(" ")))
+}
+
+/// The character references of JSX text replaced by their characters: a
+/// numeric reference, and the named ones of this table.
+fn entities(text: &str) -> String {
+    const NAMED: &[(&str, &str)] = &[
+        ("amp", "&"),
+        ("lt", "<"),
+        ("gt", ">"),
+        ("quot", "\""),
+        ("apos", "'"),
+        ("nbsp", "\u{a0}"),
+        ("copy", "\u{a9}"),
+        ("middot", "\u{b7}"),
+        ("times", "\u{d7}"),
+        ("ndash", "\u{2013}"),
+        ("mdash", "\u{2014}"),
+        ("lsquo", "\u{2018}"),
+        ("rsquo", "\u{2019}"),
+        ("ldquo", "\u{201c}"),
+        ("rdquo", "\u{201d}"),
+        ("bull", "\u{2022}"),
+        ("hellip", "\u{2026}"),
+        ("larr", "\u{2190}"),
+        ("uarr", "\u{2191}"),
+        ("rarr", "\u{2192}"),
+        ("darr", "\u{2193}"),
+        ("check", "\u{2713}"),
+    ];
+    let mut decoded = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('&') {
+        decoded.push_str(&rest[..start]);
+        rest = &rest[start..];
+        let reference = rest[1..]
+            .find(';')
+            .filter(|end| *end <= 10)
+            .map(|end| &rest[1..=end]);
+        let character = reference.and_then(|name| {
+            if let Some(code) = name.strip_prefix("#x").or_else(|| name.strip_prefix("#X")) {
+                u32::from_str_radix(code, 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .map(String::from)
+            } else if let Some(code) = name.strip_prefix('#') {
+                code.parse().ok().and_then(char::from_u32).map(String::from)
+            } else {
+                NAMED
+                    .iter()
+                    .find(|(known, _)| *known == name)
+                    .map(|(_, character)| (*character).to_string())
+            }
+        });
+        match (reference, character) {
+            (Some(reference), Some(character)) => {
+                decoded.push_str(&character);
+                rest = &rest[reference.len() + 2..];
+            }
+            _ => {
+                decoded.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    decoded.push_str(rest);
+    decoded
 }
 
 struct Generator<'r, 'm, 'a> {
@@ -649,14 +726,14 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
     /// cone being written. `None` where it is the source text with its
     /// parts rewritten.
     fn compute(&mut self, inner: &Expression<'a>, value: usize, want: Want) -> Option<String> {
-        if let Some(code) = self.structure(inner, want) {
-            return Some(code);
-        }
-        let Expression::CallExpression(call) = inner else {
-            return None;
-        };
         // A use of a sandboxed body.
-        if let Some(used) = self.generator.finished.facts.uses.get(&value).cloned() {
+        let used = match inner {
+            Expression::CallExpression(_) => {
+                self.generator.finished.facts.uses.get(&value).cloned()
+            }
+            _ => None,
+        };
+        if let (Some(used), Expression::CallExpression(call)) = (used, inner) {
             let arguments: Vec<&Expression<'a>> = call
                 .arguments
                 .iter()
@@ -699,7 +776,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 format!("$h.invoke({}, {computed})", used.body),
             ));
         }
-        None
+        self.structure(inner, want)
     }
 
     /// The per-element function of an element construct, registered
@@ -711,8 +788,38 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         let Some(function) = call.arguments.first().and_then(FunctionLike::of_argument) else {
             return;
         };
-        // The receiver is evaluated for the cones it registers.
-        self.in_cone(None, |rewriter| rewriter.render(&member.object, Want::Pass));
+        // The receiver is evaluated for the cones it registers. Where it
+        // is an array written in place or a constant, the plan has an
+        // interim output for it (`Collection.source`), which this code
+        // computes.
+        let source = self.generator.plan["collections"][collection]["source"]["output"]
+            .as_u64()
+            .and_then(|output| {
+                self.generator
+                    .finished
+                    .output_of
+                    .iter()
+                    .find(|((_, below), index)| below.is_empty() && **index == output as usize)
+                    .map(|((value, _), _)| *value)
+            })
+            .filter(|value| !self.generator.registered_values.contains(value));
+        let written = matches!(
+            self.place_of(&member.object),
+            None | Some(Place::Record(_) | Place::Const | Place::Unknown)
+        );
+        match source {
+            Some(value) if written => {
+                let cone = Some(self.generator.cone_of(value));
+                let code =
+                    self.in_cone(cone, |rewriter| rewriter.render(&member.object, Want::Pass));
+                self.generator
+                    .hoist(format!("$rt.value({value}, ($h) => ({code}));"));
+                self.generator.registered_values.push(value);
+            }
+            _ => {
+                self.in_cone(None, |rewriter| rewriter.render(&member.object, Want::Pass));
+            }
+        }
         let cone = self
             .generator
             .finished
@@ -1288,6 +1395,27 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                     match attribute {
                         JSXAttributeItem::Attribute(attribute) => {
                             let name = self.text(attribute.name.span()).to_string();
+                            // An attribute written as an element is a
+                            // value of a cone of its own.
+                            if let Some(JSXAttributeValue::Element(written)) = &attribute.value {
+                                let built = self
+                                    .generator
+                                    .finished
+                                    .facts
+                                    .built
+                                    .get(&(context, written.span.start))
+                                    .copied();
+                                if let Some(value) = built {
+                                    let cone = Some(self.generator.cone_of(value));
+                                    let code = self.in_cone(cone, |rewriter| {
+                                        rewriter.jsx_element(written, false)
+                                    });
+                                    self.generator
+                                        .hoist(format!("$rt.value({value}, ($h) => ({code}));"));
+                                    self.generator.registered_values.push(value);
+                                    continue;
+                                }
+                            }
                             let (code, place) = self.attribute_value(attribute);
                             members.push((name, code, place));
                         }
@@ -1300,18 +1428,22 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 }
                 // The children are a value the instance computes, which
                 // the callee reads by its place.
-                let children = self.jsx_children(&element.children);
-                let written = element.children.iter().any(
-                    |child| !matches!(child, JSXChild::Text(text) if text.value.trim().is_empty()),
-                );
-                if written {
-                    let children_fact = self.fact(element.span);
-                    let _ = children_fact;
-                    members.push((
-                        "children".to_string(),
-                        format!("[{}]", children.join(", ")),
-                        Some(Place::Record(BTreeMap::new())),
+                let built = self
+                    .generator
+                    .finished
+                    .facts
+                    .built
+                    .get(&(context, element.span.start))
+                    .copied();
+                if let Some(value) = built {
+                    let cone = Some(self.generator.cone_of(value));
+                    let children =
+                        self.in_cone(cone, |rewriter| rewriter.jsx_children(&element.children));
+                    self.generator.hoist(format!(
+                        "$rt.value({value}, ($h) => ([{}].flat()));",
+                        children.join(", ")
                     ));
+                    self.generator.registered_values.push(value);
                 }
                 let code = self.inline(inline, members);
                 return if child {
@@ -1347,7 +1479,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         match &attribute.value {
             None => ("true".to_string(), None),
             Some(JSXAttributeValue::StringLiteral(literal)) => {
-                (json!(literal.value.as_str()).to_string(), None)
+                (json!(entities(literal.value.as_str())).to_string(), None)
             }
             Some(JSXAttributeValue::ExpressionContainer(container)) => {
                 match container.expression.as_expression() {
@@ -1956,10 +2088,19 @@ pub(crate) fn generate(
             json!({ "kind": kind, "file": path, "start": at })
         })
         .collect();
+    // An interim output at a path below a value: the value, and the path.
+    let mut below: Vec<Value> = finished
+        .output_of
+        .iter()
+        .filter(|((_, path), _)| !path.is_empty())
+        .map(|((value, path), output)| json!({ "output": output, "value": value, "path": path }))
+        .collect();
+    below.sort_by_key(|entry| entry["output"].as_u64());
     json!({
         "modules": texts,
         "main": module,
         "values": values,
+        "outputsBelow": below,
         "coneWithin": cone_within,
         "layouts": layouts,
         "handlers": handlers,

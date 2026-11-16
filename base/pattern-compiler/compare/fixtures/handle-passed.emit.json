@@ -19,6 +19,7 @@
               "source": "const { \"handler\": handler, \"navigateTo\": navigateTo, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Child = pattern(undefined);\nconst join = handler((_event, { mine, other }) => {\n  mine.set(\"joined\");\n  return navigateTo(Child({ mine, other }));\n});\n\n\nconst $default = (pattern(undefined));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ mine: $h.slot(0), other: $h.slot(1) })));\n});"
             }
           ],
+          "outputsBelow": [],
           "states": [],
           "unlistedReads": [],
           "unsupported": [],
@@ -204,6 +205,7 @@
               "source": "const { \"handler\": handler, \"navigateTo\": navigateTo, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Child = pattern(undefined);\nconst join = handler((_event, { mine, other }) => {\n  mine.set(\"joined\");\n  return navigateTo(Child({ mine, other }));\n});\n\n\nconst $default = (pattern(undefined));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ join: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_event, { mine, other }) => {\n  mine.set(\"joined\");\n  return navigateTo(Child({ mine, other }));\n})($e, $s));"
             }
           ],
+          "outputsBelow": [],
           "states": [],
           "unlistedReads": [],
           "unsupported": [],

@@ -61,6 +61,7 @@
               "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst pickAt = handler((_, { at, chosen }) => {\n  chosen.set(at);\n});\nconst clear = handler(\n  (_, { cleared }) => {\n    cleared.set(1);\n  },\n);\nconst $default = (pattern(undefined));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.state(0, ($h) => ((0)));\n$rt.state(1, ($h) => ((0)));\n{\n$rt.element(0, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [$rt.h(\"b\", { \"onClick\": $h.stream(1) }, [$h.slot(7)])])));\n}\n$rt.value(3, ($h) => ($rt.h(\"ul\", {  }, [$h.output(0)])));\n{\n$rt.element(1, ($h) => (($h.slot(8) + (1))));\n}\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(3), numbered: $h.output(6), chosen: $h.slot(4), cleared: $h.slot(6) })));\n});\n$rt.body(0, ($e, $s) => ((_, { at, chosen }) => {\n  chosen.set(at);\n})($e, $s));\n$rt.body(1, ($e, $s) => ((_, { cleared }) => {\n    cleared.set(1);\n  })($e, $s));"
             }
           ],
+          "outputsBelow": [],
           "states": [
             0,
             1

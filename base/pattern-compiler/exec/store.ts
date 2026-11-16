@@ -134,6 +134,12 @@ export class Store {
   clock = 0;
   /** Every write: where, and the clock after it. */
   readonly log: { doc: string; path: readonly string[]; at: number }[] = [];
+  /**
+   * The address each container a read gave was read from. A value read
+   * from a stored address carries the address, invisibly to the code it
+   * is handed to (`execution-and-storage.md` §2.4).
+   */
+  readonly addresses = new WeakMap<object, Ref>();
 
   create(id: string, kind: string, value: unknown): void {
     this.docs.set(id, { kind, value });
@@ -198,9 +204,15 @@ export class Store {
     const id = `${located.ref.doc}\u0000${located.ref.path.join("\u0000")}`;
     if (open.has(id)) return undefined;
     open.add(id);
-    const value = this.#copy(located.value, reads, open);
+    const value = withDefaults(
+      this.#copy(located.value, reads, open),
+      located.ref.schema,
+    );
     open.delete(id);
-    return withDefaults(value, located.ref.schema);
+    if (typeof value === "object" && value !== null) {
+      this.addresses.set(value, located.ref);
+    }
+    return value;
   }
 
   #copy(

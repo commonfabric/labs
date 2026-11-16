@@ -52,6 +52,7 @@
               "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst record = handler((event, { secret, last, log }) => {\n  last.set(event.text + secret);\n  log.push({ text: event.text });\n});\n\nconst $default = (pattern(undefined));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.state(0, ($h) => ((\"\")));\n$rt.state(1, ($h) => (([])));\nreturn $rt.thunk(($h) => (({ last: $h.slot(4), log: $h.slot(5), note: $h.slot(7), record: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { secret, last, log }) => {\n  last.set(event.text + secret);\n  log.push({ text: event.text });\n})($e, $s));"
             }
           ],
+          "outputsBelow": [],
           "states": [
             0,
             1

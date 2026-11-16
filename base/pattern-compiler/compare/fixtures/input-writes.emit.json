@@ -51,6 +51,7 @@
               "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst add = handler((_event, { label, count, items }) => {\n  count.set(count.get() + 1);\n  items.push({ text: label });\n});\n\nconst $default = (pattern(undefined));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ count: $h.slot(4), items: $h.slot(5), add: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_event, { label, count, items }) => {\n  count.set(count.get() + 1);\n  items.push({ text: label });\n})($e, $s));"
             }
           ],
+          "outputsBelow": [],
           "states": [],
           "unlistedReads": [],
           "unsupported": [],

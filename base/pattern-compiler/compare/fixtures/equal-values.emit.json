@@ -37,6 +37,7 @@
               "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst open = handler(\n  (_, { opened }) => {\n    opened.set(true);\n  },\n);\nconst $default = (pattern(undefined));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.state(0, ($h) => ((false)));\n$rt.element(0, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [$h.slot(3), $h.slot(2)])));\n}\n$rt.value(3, ($h) => ($rt.h(\"ul\", {  }, [$h.output(0)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(4) })));\n});\n$rt.body(0, ($e, $s) => ((_, { opened }) => {\n    opened.set(true);\n  })($e, $s));"
             }
           ],
+          "outputsBelow": [],
           "states": [
             0
           ],

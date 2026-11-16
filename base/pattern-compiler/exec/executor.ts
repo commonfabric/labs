@@ -97,6 +97,8 @@ export type Code = {
     scan?: boolean;
     function?: boolean;
   }[];
+  /** The interim outputs at a path below a value. */
+  outputsBelow: { output: number; value: number; path: string[] }[];
   /** For each cone: the collections it is evaluated per element of. */
   coneWithin: number[][];
   /** For each body: where each slot of `Body.reads` sits in its argument. */
@@ -186,6 +188,19 @@ const canonical = (value: unknown): string =>
 
 const addressOf = (ref: Ref): string => `${ref.doc}:${canonical(ref.path)}`;
 
+/** Whether a schema declares a handle at a position below its own. */
+const declaresHandle = (schema: Schema | undefined, depth: number): boolean => {
+  if (typeof schema !== "object" || depth > 6) return false;
+  const below = [
+    ...(schema.items === undefined ? [] : [schema.items]),
+    ...Object.values(schema.properties ?? {}),
+  ];
+  return below.some((member) =>
+    typeof member === "object" &&
+    (member.asCell !== undefined || declaresHandle(member, depth + 1))
+  );
+};
+
 const matchesPath = (pattern: readonly string[], path: readonly string[]) =>
   pattern.length <= path.length &&
   pattern.every((segment, index) =>
@@ -205,16 +220,49 @@ export class Handle {
     /** The `identity` slot of the handle, and the path below its cell. */
     readonly slot: number | undefined,
     readonly below: readonly string[],
+    /**
+     * The schema of the handle's declared type: a position it declares as
+     * a handle is one in what a read through the handle gives.
+     */
+    readonly declared?: Schema,
   ) {}
 
   get(): unknown {
     if (this.target instanceof StreamRef) return { $stream: true };
-    return this.instance.store.read(this.target, this.host?.reads);
+    return this.#typed(this.target, this.declared, this.host?.reads, 0);
   }
 
   sample(): unknown {
     if (this.target instanceof StreamRef) return { $stream: true };
-    return this.instance.store.read(this.target);
+    return this.#typed(this.target, this.declared, undefined, 0);
+  }
+
+  /** What a read gives under a schema that declares handles below it. */
+  #typed(
+    ref: Ref,
+    schema: Schema | undefined,
+    reads: Position[] | undefined,
+    depth: number,
+  ): unknown {
+    const { store } = this.instance;
+    if (!declaresHandle(schema, depth)) return store.read(ref, reads);
+    const located = store.locate(ref, true, reads);
+    const member = (segment: string) => {
+      const below = schemaBelow(schema, segment);
+      const at = located.ref.key(segment);
+      return typeof below === "object" && below.asCell !== undefined
+        ? new Handle(this.instance, at, this.host, undefined, [], below)
+        : this.#typed(at, below, reads, depth + 1);
+    };
+    if (Array.isArray(located.value)) {
+      return located.value.map((_, index) => member(`${index}`));
+    }
+    if (isRecord(located.value)) {
+      return Object.fromEntries(
+        Object.keys(located.value).map((name) => [name, member(name)]),
+      );
+    }
+    return store.read(ref, reads);
   }
 
   key(segment: string | number): Handle {
@@ -225,6 +273,7 @@ export class Handle {
       this.host,
       this.slot,
       [...this.below, `${segment}`],
+      schemaBelow(this.declared, `${segment}`),
     );
   }
 
@@ -234,8 +283,16 @@ export class Handle {
       return this;
     }
     this.instance.written(this);
-    this.instance.store.write(this.target, this.instance.stored(value));
+    this.instance.store.write(
+      this.target,
+      this.instance.detached(this.target, this.instance.stored(value)),
+    );
     return this;
+  }
+
+  increment(by = 1): void {
+    const held = this.get();
+    this.set((typeof held === "number" ? held : 0) + by);
   }
 
   update(members: Record<string, unknown>): Handle {
@@ -260,7 +317,7 @@ export class Handle {
     if (this.target instanceof StreamRef) return;
     const held = this.get();
     if (!Array.isArray(held)) return;
-    const at = held.findIndex((other) => canonical(other) === canonical(member));
+    const at = held.findIndex((other) => this.instance.same(other, member));
     if (at >= 0) this.set(held.filter((_, index) => index !== at));
   }
 
@@ -278,15 +335,14 @@ export class Handle {
     this.set(event);
   }
 
+  removeAll(member: unknown): void {
+    const held = this.get();
+    if (!Array.isArray(held)) return;
+    this.set(held.filter((other) => !this.instance.same(other, member)));
+  }
+
   equals(other: unknown): boolean {
-    if (!(other instanceof Handle)) return false;
-    if (this.target instanceof StreamRef || other.target instanceof StreamRef) {
-      return this.target === other.target;
-    }
-    const mine = this.instance.store.locate(this.target, true).ref;
-    const theirs = this.instance.store.locate(other.target, true).ref;
-    return mine.doc === theirs.doc &&
-      canonical(mine.path) === canonical(theirs.path);
+    return this.instance.same(this, other);
   }
 
   resolveAsCell(): Handle {
@@ -370,6 +426,12 @@ export class Host {
     }
     const value = instance.valueOfOutput.get(index);
     if (value === undefined) {
+      const below = instance.code.outputsBelow.find((entry) =>
+        entry.output === index
+      );
+      if (below !== undefined) {
+        return this.at(this.value(below.value), below.path);
+      }
       throw new Unsupported("an output that no value function computes");
     }
     return this.value(value);
@@ -466,7 +528,7 @@ export class Host {
       const given = observes === "identity"
         ? instance.handleOf(this.slot(slot), this, slot)
         : this.slot(slot);
-      if (instance.gives(observes, this.at(argument, at))) continue;
+      if (instance.gives(observes, argument, at)) continue;
       argument = instance.placed(argument, at, given);
     }
     return instance.returned(run(argument));
@@ -801,19 +863,89 @@ export class Instance {
   /** The handle a body is given for a reference. */
   handleOf(value: unknown, host: Host | undefined, slot?: number): unknown {
     if (value instanceof Ref || value instanceof StreamRef) {
-      return new Handle(this, value, host, slot, []);
+      const declared = slot === undefined
+        ? undefined
+        : this.schemaOf(this.plan.slots[slot].schema);
+      return new Handle(this, value, host, slot, [], declared);
     }
     return value;
   }
 
   /**
-   * Whether an entry of class `observes` leaves what the argument holds
-   * at its path already. A handle stays: the entries of class `value`
-   * below a handle's position are what a read through the handle gives,
-   * and the body is handed the handle. A `shape` or an `enumeration`
-   * entry gives way to what another entry holds there (ES §2.4).
+   * Whether two values a body holds are one: two handles or two values
+   * read from one stored address, and otherwise two equal values.
    */
-  gives(observes: string, held: unknown): boolean {
+  same(a: unknown, b: unknown): boolean {
+    const address = (value: unknown): string | undefined => {
+      if (value instanceof Handle) {
+        return value.target instanceof Ref
+          ? addressOf(this.store.locate(value.target, true).ref)
+          : `stream:${value.target.binding}:${canonical(value.target.keys)}`;
+      }
+      if (value instanceof Ref) {
+        return addressOf(this.store.locate(value, true).ref);
+      }
+      if (typeof value === "object" && value !== null) {
+        const read = this.store.addresses.get(value);
+        return read === undefined ? undefined : addressOf(read);
+      }
+      return undefined;
+    };
+    const [left, right] = [address(a), address(b)];
+    if (left !== undefined && right !== undefined) return left === right;
+    const plain = (value: unknown) =>
+      value instanceof Handle ? value.get() : value;
+    return canonical(plain(a)) === canonical(plain(b));
+  }
+
+  /**
+   * A value about to be stored at `target`, with each link in it that
+   * leads into what the write replaces put as the value stored there now:
+   * a list written back in another order holds its members and not links
+   * to its own positions.
+   */
+  detached(target: Ref, value: unknown): unknown {
+    const at = this.store.locate(target, true).ref;
+    const inside = (link: { doc: string; path: string[] }) =>
+      link.doc === at.doc &&
+      at.path.every((segment, index) => segment === link.path[index]);
+    const copy = (member: unknown): unknown => {
+      if (isLink(member)) {
+        const located = this.store.locate(
+          new Ref(member.$link.doc, member.$link.path),
+          true,
+        );
+        return inside({ doc: located.ref.doc, path: [...located.ref.path] })
+          ? structuredClone(located.value)
+          : member;
+      }
+      if (Array.isArray(member)) return member.map(copy);
+      if (isRecord(member)) {
+        return Object.fromEntries(
+          Object.entries(member).map(([name, inner]) => [name, copy(inner)]),
+        );
+      }
+      return member;
+    };
+    return copy(value);
+  }
+
+  /**
+   * Whether an entry of class `observes` leaves what the argument holds
+   * at its path already. A handle at the path or above it stays: the
+   * entries at and below a handle's position are what a read through the
+   * handle gives, and the body is handed the handle. A `shape` or an
+   * `enumeration` entry gives way to what another entry holds there
+   * (ES §2.4).
+   */
+  gives(observes: string, argument: unknown, at: readonly string[]): boolean {
+    let held = argument;
+    for (const segment of at) {
+      if (held instanceof Handle) return true;
+      held = isRecord(held) || Array.isArray(held)
+        ? (held as Record<string, unknown>)[segment]
+        : undefined;
+    }
     if (held instanceof Handle) return true;
     return observes !== "identity" && observes !== "value" &&
       held !== undefined;
@@ -1273,7 +1405,7 @@ export class Instance {
       const given = read.observes === "identity"
         ? this.handleOf(found, undefined, slot)
         : host.v(found);
-      if (this.gives(read.observes, host.at(state, read.path))) continue;
+      if (this.gives(read.observes, state, read.path)) continue;
       state = this.placed(state, read.path, given);
     }
     const before = [...this.store.docs].map((
@@ -1357,6 +1489,7 @@ const commonfabric = (instance: Instance): unknown => {
   };
   const caused = new Map<string, Handle>();
   const cells = {
+    equals: (a: unknown, b: unknown) => instance.same(a, b),
     of: (value: unknown) => instance.createCell(value),
     // A cell a body makes under a cause is the same cell for the same
     // cause (PL §1.3).
@@ -1389,6 +1522,7 @@ const commonfabric = (instance: Instance): unknown => {
     str: (strings: TemplateStringsArray, ...values: unknown[]) =>
       String.raw({ raw: strings }, ...values),
     toSchema: () => ({}),
+    equals: (a: unknown, b: unknown) => instance.same(a, b),
     // Every cell of an executed instance is in the instance's space.
     spaceOf: () => {
       if (instance.options.space === undefined) {
