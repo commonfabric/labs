@@ -512,7 +512,10 @@ describe("PatternIndexClient", () => {
       {
         fn: "recordUsageEvent",
         call: (c) =>
-          c.recordUsageEvent({ patternId: "pat-1", eventType: "viewed_in_loom" }),
+          c.recordUsageEvent({
+            patternId: "pat-1",
+            eventType: "viewed_in_loom",
+          }),
         body: { patternId: "pat-1", eventType: "viewed_in_loom" },
       },
       {
@@ -554,7 +557,8 @@ describe("PatternIndexClient", () => {
       { fn: "whoami", call: (c) => c.whoami(), body: {} },
       {
         fn: "setPatternFeatured",
-        call: (c) => c.setPatternFeatured({ patternId: "pat-1", featured: true }),
+        call: (c) =>
+          c.setPatternFeatured({ patternId: "pat-1", featured: true }),
         body: { patternId: "pat-1", featured: true },
       },
       {

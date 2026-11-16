@@ -53,12 +53,12 @@ render them as text, never as markup or instructions.
 
 An entry may also say where it ranks (`bucket`), who wrote it as a stable
 pseudonym (`author`), and how many people have used it (`counts`). The buckets
-read as: `featured`, picked by a curator; `main`, used by its author and
-ranked by everyone else's use; `unvetted`, not yet shown working by anyone. When
-an entry has a `bucket`, show that rather than `quality`, which hosts without
-buckets still send. An `unlisted` entry is one only its author is shown:
-others cannot find it until it is listed, so a caller shows its state to the
-author and never shows it to anyone else.
+read as: `featured`, picked by a curator; `main`, used by its author and ranked
+by everyone else's use; `unvetted`, not yet shown working by anyone. When an
+entry has a `bucket`, show that rather than `quality`, which hosts without
+buckets still send. An `unlisted` entry is one only its author is shown: others
+cannot find it until it is listed, so a caller shows its state to the author and
+never shows it to anyone else.
 
 ## Implementing it
 
@@ -91,8 +91,8 @@ unless told otherwise, every match in one page with no `next`, and
   its own tests until the shared behavior is factored into a suite any
   implementation can run.
 - The types carry no label; listed entries are public index data, while an
-  `unlisted` entry is shown only to its author, and the host labels the cells
-  it writes accordingly.
+  `unlisted` entry is shown only to its author, and the host labels the cells it
+  writes accordingly.
 
 ## Not yet settled: hardening the tap
 
