@@ -39,6 +39,7 @@ import type {
   HarnessPromptLoopResult,
   RunHarnessTranscriptOptions,
 } from "../src/prompt-loop.ts";
+import { INERT_RUNSC } from "./support/inert-runsc.ts";
 
 /**
  * An engine that reports what a fabric-configured run establishes, without
@@ -613,6 +614,35 @@ describe("interactive chat session context", () => {
     expect(await contextOf(["default", "web_fetch"])).not.toContain(
       PIECE_SOURCE_TOOL_GUIDANCE,
     );
+  });
+
+  it("opens a turn with its tool guidance where the session's fabric session comes from a factory alone", async () => {
+    const seen: HarnessTranscriptMessage[][] = [];
+    const service = new HarnessInteractiveChatService({
+      basePromptLoopOptions: {
+        ...INERT_RUNSC,
+        fabricSessionFactory: () =>
+          Promise.reject(new Error("no tool here opens the session")),
+      },
+      createPromptLoop: recordingLoop(seen),
+    });
+    await service.startSession("req-session", {
+      sessionId: "session-1",
+      workspace: { hostPath: "/workspace" },
+      model: "gpt-test",
+      policy: {
+        type: "cf-harness.chat-policy",
+        toolMode: "workspace-write",
+        allowedToolIds: ["delegate_task"],
+        allowedSubagentProfiles: ["default", "pattern-author"],
+      },
+    });
+    await runTurn(service, "turn-1", "add a due date to the tracker");
+
+    expect(seen[0].map((message) => message.content)).toContain(
+      PIECE_SOURCE_TOOL_GUIDANCE,
+    );
+    expect(seen[0].at(-1)?.content).toBe("add a due date to the tracker");
   });
 });
 

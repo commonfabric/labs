@@ -2248,6 +2248,7 @@ export class HarnessInteractiveChatService {
     if (
       options.engine === undefined && skillsRoot === undefined &&
       fabricSession === undefined &&
+      options.fabricSessionFactory === undefined &&
       (options.inputCells?.length ?? 0) === 0 &&
       (options.patternRefs?.length ?? 0) === 0
     ) {
