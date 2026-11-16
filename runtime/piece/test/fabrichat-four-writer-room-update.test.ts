@@ -7,8 +7,8 @@
  * it (`fixtures/fabrichat-four-writer-room/`, whose `SOURCE.txt` says where
  * it comes from), and the room is set up from that stored source, as a
  * runtime loading such a room does. It seeds through that program's own
- * handlers, each from its reviewed gesture: five messages, a reaction, and a
- * window. Then the room opens, as a person opening it would, and follows
+ * handlers, each from its reviewed gesture: six messages, one of them a
+ * reply, a reaction, and a window. Then the room opens, as a person opening it would, and follows
  * `system:system/fabrichat/room.tsx`, which this tree's patterns route serves.
  *
  * The release appends the three writers the stored policy lacks after its
@@ -361,6 +361,18 @@ describe("fabrichat-four-writer-room-update", () => {
         ),
       );
     }
+    await send(
+      "sendMessage",
+      trusted(
+        {
+          requestId: "m6",
+          target: { value: "Reply" },
+          replyTo: { message: (await storedMessages())[0], shownIn: "main" },
+        },
+        "ChatSendSurface",
+        "ChatSend",
+      ),
+    );
     const [first] = await storedMessages();
     await send(
       "sendReaction",
@@ -389,6 +401,7 @@ describe("fabrichat-four-writer-room-update", () => {
       "Third",
       "Root",
       "Twice",
+      "Reply",
     ]);
     storedBefore = storedPolicy(
       runtime,
@@ -542,6 +555,42 @@ describe("fabrichat-four-writer-room-update", () => {
       "commitDelete",
       "commitObliterate",
     ];
+
+    /**
+     * The row of a window this tree's room opens that shows `message`: its
+     * place in the window, as the row names it. The link stored there
+     * resolves to the message under the schema the program that sent it
+     * stored it with.
+     */
+    const windowRowOf = async (message: Cell<unknown>) => {
+      const today = (await roomController.get(
+        room.getAsNormalizedFullLink().id,
+      )).getCell();
+      const tx = runtime.edit();
+      today.withTx(tx).key("messages").key("openWindow").send({
+        requestId: "w-rows",
+        windowId: "rows",
+        from: { after: "start" },
+        count: 20,
+      });
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await runtime.idle();
+      const windows = today.key("messages").key("windows").resolveAsCell();
+      const link = windows.getAsNormalizedFullLink();
+      const docOf = (cell: Cell<unknown>) =>
+        cell.resolveAsCell().getAsNormalizedFullLink().id;
+      const row = (windows.getRaw() as { rows: { messages: unknown[] } }).rows
+        .messages.map((_, index) =>
+          runtime.getCellFromLink({
+            ...link,
+            path: ["rows", "messages", String(index)],
+            schema: undefined,
+          })
+        ).find((cell) => docOf(cell) === docOf(message));
+      expect(row).toBeDefined();
+      return row!;
+    };
 
     /**
      * The refusal messages logged while `act` runs, of those naming a write
@@ -714,34 +763,7 @@ describe("fabrichat-four-writer-room-update", () => {
       // act reads the message through the link it was given.
 
       const twice = (await storedMessages())[4];
-      const today = (await roomController.get(
-        room.getAsNormalizedFullLink().id,
-      )).getCell();
-      {
-        const tx = runtime.edit();
-        today.withTx(tx).key("messages").key("openWindow").send({
-          requestId: "w-acts",
-          windowId: "acts",
-          from: { after: "start" },
-          count: 10,
-        });
-        runtime.prepareTxForCommit(tx);
-        expect((await tx.commit().settled).error).toBeUndefined();
-        await runtime.idle();
-      }
-      const windows = today.key("messages").key("windows").resolveAsCell();
-      const rows = (windows.getRaw() as { acts: { messages: unknown[] } })
-        .acts.messages.map((_, index) =>
-          runtime.getCellFromLink({
-            ...windows.getAsNormalizedFullLink(),
-            path: ["acts", "messages", String(index)],
-            schema: undefined,
-          })
-        );
-      const docOf = (cell: Cell<unknown>) =>
-        cell.resolveAsCell().getAsNormalizedFullLink().id;
-      const shown = rows.find((cell) => docOf(cell) === docOf(twice));
-      expect(shown).toBeDefined();
+      const shown = await windowRowOf(twice);
       const refusals = await refusalsDuring(async () => {
         await send(
           "deleteMessage",
@@ -761,6 +783,24 @@ describe("fabrichat-four-writer-room-update", () => {
       expect(await twice.key("body").pull()).toEqual({ deleted: true });
       expect((twice.getRaw() as { authorProfile?: unknown }).authorProfile)
         .toBeUndefined();
+    });
+
+    it("deletes a reply the earlier program stored, named as a row of a window names it, keeping what it replies to", async () => {
+      const reply = (await storedMessages())[5];
+      const shown = await windowRowOf(reply);
+      const refusals = await refusalsDuring(() =>
+        send(
+          "deleteMessage",
+          trusted({ message: shown }, "ChatDeleteSurface", "ChatDelete"),
+        )
+      );
+
+      expect(refusals).toEqual([]);
+      expect(await reply.key("body").pull()).toEqual({ deleted: true });
+      expect(
+        (reply.getRaw() as { replyTo?: { shownIn?: unknown } }).replyTo
+          ?.shownIn,
+      ).toBe("main");
     });
 
     it("writes nothing for a `closeWindow` naming no open window, under a name an object inherits", async () => {
