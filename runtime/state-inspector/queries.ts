@@ -10,7 +10,10 @@ import {
   readAclHeads,
 } from "@commonfabric/memory/v2/acl-heads";
 import { decodeHollowedPayload } from "@commonfabric/memory/v2/compact";
-import { COMPACTION_SESSION_PREFIX } from "@commonfabric/memory/v2/engine";
+import {
+  COMPACTION_SESSION_PREFIX,
+  payloadDigest,
+} from "@commonfabric/memory/v2/engine";
 import { rowLimit } from "./model.ts";
 import { branchReadChain, owningLink } from "./reconstruct.ts";
 import { utf8Compare } from "@commonfabric/text/utf8";
@@ -126,6 +129,13 @@ export interface CommitInfo {
    * `ops` and `reads` are zero because the commit's contents are in the
    * archive the operator took, not here. */
   hollowedBy?: string;
+
+  /**
+   * The payload is a derived commit stored digested
+   * (`docs/specs/memory-v2/02-storage.md`): its operations are in the
+   * revision table, and `ops` is the count its digest names.
+   */
+  digested?: true;
 }
 
 /** List commits, most recent first, optionally filtered by session prefix. */
@@ -148,15 +158,18 @@ export function listCommits(
     let reads = 0;
     let compactionRun: string | undefined;
     let hollowedBy: string | undefined;
+    let digested: true | undefined;
     try {
       // `original` is a ClientCommit, stored either codec-encoded or plain
-      // JSON — unless compaction wrote it: a compaction run's own commit holds
-      // the run's plan, and a hollowed commit holds a marker.
+      // JSON, or a derived commit stored digested — unless compaction wrote
+      // it: a compaction run's own commit holds the run's plan, and a
+      // hollowed commit holds a marker.
       const marker = decodeHollowedPayload(r.original);
       if (marker !== undefined) {
         hollowedBy = marker.runId;
       } else {
-        const parsed = decodeStored(r.original) as {
+        const decoded = decodeStored(r.original);
+        const parsed = decoded as {
           operations?: unknown[];
           reads?: { confirmed?: unknown[]; pending?: unknown[] };
           compaction?: {
@@ -178,7 +191,15 @@ export function listCommits(
         ) {
           compactionRun = parsed.compaction.runId;
         }
-        ops = Array.isArray(parsed.operations) ? parsed.operations.length : 0;
+        // Recognized by shape alone, because this reader opens stores from
+        // before the commit's class was recorded.
+        const digest = payloadDigest(decoded);
+        if (digest !== undefined) digested = true;
+        ops = digest !== undefined
+          ? digest.operations
+          : Array.isArray(parsed.operations)
+          ? parsed.operations.length
+          : 0;
         reads = (parsed.reads?.confirmed?.length ?? 0) +
           (parsed.reads?.pending?.length ?? 0);
       }
@@ -195,6 +216,7 @@ export function listCommits(
       createdAt: r.created_at,
       ...(compactionRun === undefined ? {} : { compactionRun }),
       ...(hollowedBy === undefined ? {} : { hollowedBy }),
+      ...(digested === undefined ? {} : { digested }),
     };
   });
 }
@@ -207,7 +229,8 @@ export function describeCommitPayload(commit: CommitInfo): string {
   if (commit.hollowedBy !== undefined) {
     return `payload hollowed by compaction run ${commit.hollowedBy}`;
   }
-  return `ops=${commit.ops}\treads=${commit.reads}`;
+  const ops = commit.digested ? `${commit.ops} (digest)` : `${commit.ops}`;
+  return `ops=${ops}\treads=${commit.reads}`;
 }
 
 export interface WriteEvent {
