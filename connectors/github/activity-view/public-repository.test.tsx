@@ -38,7 +38,10 @@ export const fetchMocks = [
 const SUMMARY = "The team shipped connector tests.";
 
 export const llmMocks = [
-  { promptIncludes: "Recent commits:\n- Ship connector tests", text: SUMMARY },
+  {
+    when: { lastMessageContains: "Recent commits:\n- Ship connector tests" },
+    text: SUMMARY,
+  },
 ];
 
 export default pattern(() => {
