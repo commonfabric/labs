@@ -831,6 +831,7 @@ export class Host {
         ? instance.handleOf(read, this, slot)
         : read;
       if (instance.gives(observes, argument, at)) continue;
+      if (given === undefined) continue;
       argument = instance.placed(argument, at, given);
     }
     return instance.returned(run(argument));
@@ -2499,6 +2500,10 @@ export class Instance {
         ? this.handleOf(found, undefined, slot)
         : host.v(found);
       if (this.gives(read.observes, state, read.path)) continue;
+      // An entry that yields nothing places nothing: an entry below a
+      // path that is absent does not make a container there (ES §2.4,
+      // "A path the body does not read is absent from the argument").
+      if (given === undefined) continue;
       state = this.placed(state, read.path, given);
     }
     const before = [...this.store.docs].map((

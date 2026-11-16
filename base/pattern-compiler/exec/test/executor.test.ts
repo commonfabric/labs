@@ -413,6 +413,24 @@ describe("an event", () => {
     expect((instance.result() as { last?: string }).last).toBeUndefined();
   });
 
+  it("hands a handler nothing at a state path whose value is nothing, also where the body reads a member below it", async () => {
+    // `fixtures/absent-state.tsx`: the body has an entry at `card` and
+    // one at `card.id`, and `card` is bound to a computed value.
+    const absent = new Instance(await artifactOf("absent-state"), {
+      items: [{ id: "a" }],
+      wanted: "z",
+    });
+    absent.send(0, {});
+    expect((absent.result() as { log: string[] }).log).toEqual(["none"]);
+
+    const present = new Instance(await artifactOf("absent-state"), {
+      items: [{ id: "a" }],
+      wanted: "a",
+    });
+    present.send(0, {});
+    expect((present.result() as { log: string[] }).log).toEqual(["a"]);
+  });
+
   it("reaches the handler a handler sends to", async () => {
     const instance = new Instance(await artifactOf("stream-target"), {
       start: 1,

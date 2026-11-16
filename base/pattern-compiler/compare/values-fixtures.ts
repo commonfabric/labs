@@ -148,6 +148,10 @@ const WRITTEN: Record<string, Written[]> = {
       bonus: 1,
     },
   }],
+  "absent-state": ["z", "a"].map((wanted) => ({
+    argument: { items: [{ id: "a" }], wanted },
+    events: [{ binding: 0, event: {} }],
+  })),
   "callee-default": [true, false].map((given) => ({
     argument: {
       amount: 420,
