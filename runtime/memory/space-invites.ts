@@ -403,9 +403,10 @@ export function buildInviteLink(shell: string, invite: InviteLink): URL {
  * none of `host`, `space`, and `invite`, and any {@link INVITE_LINK_SCHEME}
  * action but `join`, such as the setup reply, `fbrc://setup?…`, or a space
  * link, `fbrc://space?…`. Anything else throws a secret-free
- * {@link SpaceInviteError}: `invalid-link` for a malformed invitation or a
- * scheme URL naming no action, such as `fbrc://JOIN?…`, `fbrc://join/?…` or
- * `fbrc:join?…`; `invalid-link` too for a code given both in a fragment and in
+ * {@link SpaceInviteError}: `invalid-link` for a malformed invitation,
+ * including a malformed `join` URL such as `fbrc://JOIN?…` or
+ * `fbrc://join/?…`, or a scheme URL naming no action, such as `fbrc:join?…`;
+ * `invalid-link` too for a code given both in a fragment and in
  * `options.code`, or in `options.code` beside a `/join` or `/open` invitation.
  * A URL that is not an invitation returns undefined whatever `options.code`
  * holds. A returned `inviter` is the link's unverified claim; see
