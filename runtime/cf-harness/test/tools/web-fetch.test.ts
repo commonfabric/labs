@@ -1071,22 +1071,6 @@ describe("web-fetch", () => {
       expect(expectSuccess(output).rawContent).toBe("hello");
     });
 
-    it("returns what arrived when the connection ends before the declared length", async () => {
-      const { output } = await fetchFromServer(
-        respondWith(
-          head([
-            "HTTP/1.1 200 OK",
-            "Content-Type: text/plain",
-            "Content-Length: 100",
-          ]) + "short",
-        ),
-      );
-
-      const success = expectSuccess(output);
-      expect(success.rawContent).toBe("short");
-      expect(success.rawContentTruncated).toBe(false);
-    });
-
     // A body larger than one 16 KiB read, so that most of it arrives after
     // the read that found the end of the head.
     const LARGE_BODY = "0123456789abcdef".repeat(4096);
@@ -1316,38 +1300,70 @@ describe("web-fetch", () => {
       });
     });
 
-    it("returns `fetch_failed` when the server resets the connection inside the body", async () => {
-      // A server that closes with the rest of the request unread, which
-      // resets the connection rather than ending it.
-      const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
-      const served = (async () => {
-        const conn = await listener.accept();
-        await conn.read(new Uint8Array(1));
-        await conn.write(
-          new TextEncoder().encode(
+    it("returns `fetch_failed` for a body that ends before its Content-Length", async () => {
+      const truncatedHead = head([
+        "HTTP/1.1 200 OK",
+        "Content-Type: text/plain",
+        "Content-Length: 100",
+      ]);
+
+      const truncated = expectError(
+        await invoke({ network: scriptedNetwork([truncatedHead, "partial"]) }, {
+          url: "http://public.example/",
+        }),
+      );
+      const complete = expectSuccess(
+        await invoke({
+          network: scriptedNetwork([
             head([
               "HTTP/1.1 200 OK",
               "Content-Type: text/plain",
-              "Content-Length: 100",
-            ]) + "partial",
-          ),
-        );
-        conn.close();
-      })();
+              "Content-Length: 7",
+            ]),
+            "partial",
+          ]),
+        }, { url: "http://public.example/" }),
+      );
 
-      try {
-        const output = expectError(
-          await invoke({ network: servedNetwork(listener.addr.port) }, {
-            url: "http://public.example/reset",
+      expect(truncated.code).toBe("fetch_failed");
+      expect(truncated.message).toContain(
+        "web_fetch response ended before its Content-Length",
+      );
+      expect(complete.rawContent).toBe("partial");
+    });
+
+    it("returns `fetch_failed` when reading the body fails", async () => {
+      const network: WebFetchNetwork<WebFetchConnection> = {
+        ...scriptedNetwork([]),
+        connect: () =>
+          Promise.resolve({
+            readable: new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    head([
+                      "HTTP/1.1 200 OK",
+                      "Content-Type: text/plain",
+                      "Content-Length: 100",
+                    ]) + "partial",
+                  ),
+                );
+              },
+              pull(controller) {
+                controller.error(new Error("Connection reset by peer"));
+              },
+            }),
+            writable: new WritableStream(),
+            close: () => {},
           }),
-        );
+      };
 
-        expect(output.code).toBe("fetch_failed");
-        expect(output.message).toContain("Connection reset by peer");
-      } finally {
-        await served;
-        listener.close();
-      }
+      const output = expectError(
+        await invoke({ network }, { url: "http://public.example/reset" }),
+      );
+
+      expect(output.code).toBe("fetch_failed");
+      expect(output.message).toContain("Connection reset by peer");
     });
 
     it("returns an empty body for a status that cannot carry one", async () => {

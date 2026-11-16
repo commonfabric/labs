@@ -992,9 +992,9 @@ const createHttpResponseBodyStream = (
           if (buffered.byteLength === 0) {
             const chunk = await readChunk(reader, signal);
             if (chunk === undefined) {
-              close();
-              controller.close();
-              return;
+              throw new Error(
+                "web_fetch response ended before its Content-Length",
+              );
             }
             buffered = chunk;
           }
