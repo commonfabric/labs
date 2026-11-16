@@ -608,6 +608,15 @@ describe("handle-table", () => {
       expect(table.entries[0].ref).toBe(`/of:fid9:${HASH_A}`);
     });
 
+    it("replaces a schemed URI carrying a tagged hash whose tag holds `_`", async () => {
+      const { table, value } = await swapLinksForTokens(
+        createHarnessHandleTable("run-1"),
+        `stored at of:_my_hash_:${HASH_A} today`,
+      );
+      expect(value).toBe(`stored at ${table.entries[0].token} today`);
+      expect(table.entries[0].ref).toBe(`/of:_my_hash_:${HASH_A}`);
+    });
+
     it("consumes an `@space` scope suffix, minting the canonical unsuffixed ref", async () => {
       const { table, value } = await swapLinksForTokens(
         createHarnessHandleTable("run-1"),
