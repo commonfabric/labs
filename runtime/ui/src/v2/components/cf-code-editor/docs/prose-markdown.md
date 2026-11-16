@@ -60,6 +60,13 @@ activation: the cursor position is compared to the element's `from`/`to` span.
 | `` ```lang `` | `FencedCode`, `CodeMark`                                          | Fences hidden, body lines styled                                | `cm-prose-codeblock`     |
 | `code`        | `CodeBlock`                                                       | Lines always styled (no cursor sensitivity)                     | `cm-prose-codeblock`     |
 | GFM tables    | `Table`, `TableHeader`, `TableRow`, `TableDelimiter`, `TableCell` | Pipes hidden, cells and rows styled via line + mark decorations | `cm-prose-table-*`       |
+| `<br>`        | `HTMLTag`                                                         | Replaced with a line break widget                               | `cm-prose-br`            |
+
+Prose mode draws no inline HTML except `<br>` (also spelled `<br/>` or `<br />`,
+in any case), which is how Markdown breaks a line inside a GFM table cell, since
+a cell cannot hold a newline. Every other tag is shown as written. A `<br>` in a
+paragraph uses range-based activation; one in a table follows the table, showing
+its source while the cursor is anywhere in the table.
 
 ## Math
 
@@ -125,8 +132,8 @@ says how to roll it.
 
 ## Widgets
 
-Six `WidgetType` subclasses handle elements that cannot be expressed as simple
-mark/replace decorations:
+Six `WidgetType` subclasses in `prose-markdown.ts` handle elements that cannot
+be expressed as simple mark/replace decorations:
 
 - **`BulletWidget`** — renders a `•` character.
 - **`OrderedListWidget`** — renders the original number text (e.g. `1.`) with
@@ -135,10 +142,11 @@ mark/replace decorations:
 - **`HorizontalRuleWidget`** — renders an `<hr>` element.
 - **`TaskCheckboxWidget`** — renders an `<input type="checkbox">` that toggles
   `[x]`/`[ ]` in the document on click.
+- **`LineBreakWidget`** — renders a `<br>` element inside a `<span>`.
 
-Singletons (`bulletWidget`, `hrWidget`) are used where possible: CodeMirror
-keeps a widget's element when the widget replacing it is the same object, so one
-instance serves every bullet and every rule.
+Singletons (`bulletWidget`, `hrWidget`, `lineBreakWidget`) are used where
+possible: CodeMirror keeps a widget's element when the widget replacing it is
+the same object, so one instance serves every bullet and every rule.
 
 ## Integration with cf-code-editor
 
