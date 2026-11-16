@@ -526,6 +526,59 @@ describe("CFC integrity mint gate", () => {
         });
       });
 
+      it("aborts the transaction when made during a cooperative yield of its preparation", async () => {
+        // Preparation yields a turn between its steps once its slice is
+        // spent, and gives up when the transaction's activity moved in that
+        // turn. A clock that spends the slice at every reading makes the
+        // first step yield, and a callback queued ahead of that turn writes.
+
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = new Runtime({
+          apiUrl: new URL("https://example.com"),
+          storageManager,
+        });
+        const clock = performance as { now: () => number };
+        const now = clock.now;
+        try {
+          const tx = runtime.edit();
+          setCfcImplementationIdentity(tx, BUILTIN);
+          const name = "mint-gate-inner-during-yield";
+          runtime.getCell(signer.did(), name, recordSchema, tx).set({
+            note: "builtin",
+            tag: "builtin",
+          });
+          const address = storageAddress(tx, runtime, name, "tag");
+          let written = false;
+          setTimeout(() => {
+            written = tx.tx.write(address, "chosen").error === undefined;
+          }, 0);
+          let reading = now.call(performance);
+          clock.now = () => (reading += 1000);
+          try {
+            await tx.prepareForCommitCooperatively(
+              new AbortController().signal,
+            );
+          } finally {
+            clock.now = now;
+          }
+
+          expect(written).toBe(true);
+          expect((await tx.commit().settled).error?.name).toBe(
+            "StorageTransactionAborted",
+          );
+          const rtx = runtime.edit();
+          try {
+            expect(runtime.getCell(signer.did(), name, undefined, rtx).getRaw())
+              .toBeUndefined();
+          } finally {
+            rtx.abort();
+          }
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+
       describe("for an operation recorded there with no write", () => {
         // An operation other than a write lands no value of its own: a text
         // change or a mergeable op stands in for the diff of a value written
