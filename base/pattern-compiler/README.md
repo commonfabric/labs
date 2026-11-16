@@ -203,9 +203,20 @@ A path of the argument of a pattern compiled in that the call leaves out is
 bound to the default the callee's argument type declares for it, as a constant:
 the setup function holds it, and the state of a binding that captures it has it
 as `place.constant`. A path the call binds to a slot of the caller reads that
-default where nothing is stored at the slot: expression code reads the slot
-through `$rt.or`, and a use of a body passes `$h.invoke` the default with its
-place in the body's argument.
+default where nothing is stored at the slot. Expression code reads the slot
+through `$rt.or`. For a sandboxed body the entry of `Body.reads` holds the
+default (`ReadInput.default`, ruling Z16), value code passes `$h.invoke` nothing
+for it, and the executor puts it at the entry's place where the slot yields
+nothing and its own place declares no default. Where code of the callee passes
+the path on by reference, value code gives the reference the default
+(`$h.withDefault`), and the stored link holds it in its schema. A read through a
+chain of links reads the default of the last link that declares one, and the
+reader's own where no link does (`Store.locate`). The state entry of a binding
+of the callee whose place is such a slot has the default in a member `default`,
+as the documents assume. The crate gives a reference the default where the value
+code of the callee stores it. Where code of the caller names a path of the
+callee's result, the crate resolves it to the caller's slot at compile time and
+writes a read of that slot with no default, which is a defect of the crate.
 
 A module's text registers a setup function for the pattern (`$rt.setup`) and for
 each pattern compiled into it, and each setup function registers a value

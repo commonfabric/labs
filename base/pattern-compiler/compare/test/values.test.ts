@@ -79,16 +79,36 @@ describe("the values of a fixture", () => {
   });
 
   it("are equal where a pattern compiled in declares a default for a path", async () => {
-    // Ruling Z4: with the caller's slot given, and with nothing stored
-    // there, where both runs read the callee's default.
+    // Rulings Z4 and Z16: with the caller's slot given, and with nothing
+    // stored there, where both runs read the callee's default.
     const rows = await compareFixtures("callee-default");
 
     expect(rows.length).toBe(2);
-    for (const { comparison } of rows) {
-      expect(comparison.notExecuted).toBeUndefined();
-      expect(comparison.differences).toEqual([]);
-      expect(comparison.compared).toBe(4);
-    }
+    const [given, empty] = rows.map(({ comparison }) => comparison);
+    expect(given.notExecuted).toBeUndefined();
+    expect(given.differences).toEqual([]);
+    expect(given.compared).toBe(11);
+    // One value differs where the slot is empty: the path the callee
+    // passes on by reference. A read of today's runtime addressed at the
+    // path gives the callee's default, as the executor's does. The
+    // comparison reads the whole result at once, and today's whole read
+    // drops a default that the schema of a link declares for a member
+    // (the first of the two rows the measurement of ruling Z8 excepts).
+    expect(empty.notExecuted).toBeUndefined();
+    expect(empty.compared).toBe(11);
+    expect(
+      empty.differences.map(({ value, path, runtime, executor }) => ({
+        value,
+        path,
+        runtime,
+        executor,
+      })),
+    ).toEqual([{
+      value: "result/marked",
+      path: "symbol",
+      runtime: "undefined",
+      executor: '"$"',
+    }]);
   });
 
   it("are equal for a map over a filter over a map", async () => {

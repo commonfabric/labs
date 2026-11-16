@@ -546,6 +546,8 @@ describe("a pattern compiled in", () => {
     const instance = new Instance(await artifactOf("callee-default"), {
       amount: 420,
       sign: "€",
+      rows: [],
+      words: [],
     });
 
     const result = instance.result() as Record<string, string>;
@@ -557,10 +559,12 @@ describe("a pattern compiled in", () => {
   it("reads the callee's default where the caller's slot holds nothing", async () => {
     const instance = new Instance(await artifactOf("callee-default"), {
       amount: 420,
+      rows: [],
+      words: [],
     });
 
     // Expression code and a sandboxed body both read the default.
-    expect(instance.result()).toEqual({
+    expect(instance.result()).toMatchObject({
       omitted: "$420",
       omittedSpelled: "$",
       bound: "$420",
@@ -573,6 +577,159 @@ describe("a pattern compiled in", () => {
     expect((instance.result() as { bound: string }).bound).toBe("kr420");
     expect((instance.result() as { boundSpelled: string }).boundSpelled)
       .toBe("k-r");
+  });
+
+  // Ruling Z16.
+  it("holds the callee's default in the entry of `Body.reads`, and value code passes none", async () => {
+    const artifact = await artifactOf("callee-default");
+    const defaults = artifact.plan.bodies.flatMap((body) =>
+      body.reads.flatMap((entry) =>
+        entry.default === undefined ? [] : [entry.default]
+      )
+    );
+
+    // The body of each call that binds the path to a slot of the caller.
+    expect(defaults.length).toBeGreaterThan(0);
+    expect(new Set(defaults)).toEqual(new Set(["$"]));
+    expect(artifact.code.modules[0].source).not.toMatch(
+      /\$h\.invoke\(\d+, [^\n]*\), \[\[/,
+    );
+  });
+
+  it("puts no default where the entry holds none", async () => {
+    const artifact = structuredClone(await artifactOf("callee-default"));
+    for (const body of artifact.plan.bodies) {
+      for (const entry of body.reads) delete entry.default;
+    }
+    const start = () =>
+      new Instance(artifact, { amount: 420, rows: [], words: [] });
+
+    // Expression code has the default as a constant still. The
+    // sandboxed body is handed nothing at the path: `x.symbol.split`
+    // throws, and the result that reads its value is not stored.
+    expect(start).toThrow(TypeError);
+  });
+
+  it("reads the default of the caller's place before the callee's", async () => {
+    const instance = new Instance(await artifactOf("callee-default"), {
+      amount: 420,
+      rows: [],
+      words: [],
+    });
+
+    // `mark` of the caller declares the default `#`.
+    expect(instance.result()).toMatchObject({
+      defaulted: "#420",
+      defaultedSpelled: "#",
+      markedDefaulted: { symbol: "#" },
+    });
+  });
+
+  it("stores a reference with the callee's default where the callee passes the path on", async () => {
+    const instance = new Instance(await artifactOf("callee-default"), {
+      amount: 420,
+      rows: [],
+      words: [],
+    });
+
+    // The result holds a link to the caller's slot, and the link holds
+    // the default the callee declares.
+    type Marked = { marked: { symbol: unknown } };
+    expect(
+      (instance.store.docs.get("result")?.value as Marked).marked.symbol,
+    ).toMatchObject({
+      $link: { doc: "argument", path: ["sign"], schema: { default: "$" } },
+    });
+    expect((instance.result() as Marked).marked.symbol).toBe("$");
+
+    instance.writeArgument(["sign"], "kr");
+
+    expect((instance.result() as Marked).marked.symbol).toBe("kr");
+  });
+
+  it("reads, through a chain of links, the default declared nearest the end", () => {
+    const store = new Store();
+    store.create("d", "argument", {
+      // A link whose schema declares a default, to a link whose schema
+      // declares another, to a place that holds nothing.
+      first: { $link: { doc: "d", path: ["second"], schema: { default: 1 } } },
+      second: { $link: { doc: "d", path: ["empty"], schema: { default: 2 } } },
+      plain: { $link: { doc: "d", path: ["bare"], schema: { default: 1 } } },
+      bare: { $link: { doc: "d", path: ["empty"] } },
+    });
+
+    // The last link that declares one, and the reader's own only where
+    // no link does (ruling Z8).
+    expect(store.read(new Ref("d", ["first"], { default: 0 }))).toBe(2);
+    expect(store.read(new Ref("d", ["plain"], { default: 0 }))).toBe(1);
+    expect(store.read(new Ref("d", ["bare"], { default: 0 }))).toBe(0);
+    expect(store.read(new Ref("d", ["bare"]))).toBe(undefined);
+  });
+
+  it("gives a handler of the callee the default at a state path bound to the caller's empty slot", async () => {
+    const instance = new Instance(await artifactOf("callee-default"), {
+      amount: 420,
+      rows: [],
+      words: [],
+    });
+    const append = instance.plan.bindings.findIndex((binding) =>
+      binding.result !== undefined
+    );
+    expect(instance.plan.bindings[append].state[0].default).toBe("$");
+
+    // `symbol.set(symbol.get() + "!")`: the read gives the default.
+    instance.send(append, {});
+
+    expect(
+      (instance.store.docs.get("argument")?.value as { sign: string }).sign,
+    ).toBe("$!");
+  });
+
+  it("does the same for a callee in an element body, over references", async () => {
+    const instance = new Instance(await artifactOf("callee-default"), {
+      amount: 420,
+      pool: { a: { amount: 1 }, b: { amount: 20, sign: "kr" } },
+      rows: [
+        { $link: { doc: "argument", path: ["pool", "a"] } },
+        { $link: { doc: "argument", path: ["pool", "b"] } },
+      ],
+      words: [],
+    });
+
+    expect((instance.result() as { priced: unknown }).priced).toEqual([
+      { shown: "$1", spelled: "$" },
+      { shown: "kr20", spelled: "k-r" },
+    ]);
+  });
+
+  it("does the same for a callee in an element body, over plain values in place", async () => {
+    const instance = new Instance(await artifactOf("callee-default"), {
+      amount: 420,
+      rows: [{ amount: 1 }, { amount: 20, sign: "kr" }],
+      words: ["x"],
+    });
+
+    expect((instance.result() as { priced: unknown }).priced).toEqual([
+      { shown: "$1", spelled: "$" },
+      { shown: "kr20", spelled: "k-r" },
+    ]);
+    // The path is bound to the caller's slot outside the body.
+    expect((instance.result() as { tagged: unknown }).tagged).toEqual([
+      { word: "x", shown: "$420", spelled: "$" },
+    ]);
+  });
+
+  it("does the same for a callee in an element body, over the result of a `filter`", async () => {
+    const instance = new Instance(await artifactOf("callee-default"), {
+      amount: 420,
+      rows: [{ amount: 1 }, { amount: 20, sign: "kr" }, { amount: 2 }],
+      words: [],
+    });
+
+    expect((instance.result() as { cheap: unknown }).cheap).toEqual([
+      { shown: "$1", spelled: "$" },
+      { shown: "$2", spelled: "$" },
+    ]);
   });
 });
 

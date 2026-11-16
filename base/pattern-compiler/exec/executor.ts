@@ -85,8 +85,12 @@ export type Plan = {
   bodies: {
     kind: string;
     name: string;
-    /** Each slot the body reads, with its place in the argument. */
-    reads: { slot: number; at: string[] }[];
+    /**
+     * Each slot the body reads, with its place in the argument, and for a
+     * body of a pattern compiled in the default the callee declares for
+     * the path the call bound to the slot (PL §1.1, `ReadInput`).
+     */
+    reads: { slot: number; at: string[]; default?: unknown }[];
     computed: { at: string[]; observes: string }[];
     writes: {
       target: { kind: string; slot?: number; cell?: number; path?: string[] };
@@ -123,6 +127,12 @@ export type Plan = {
         stream?: number;
         constant?: unknown;
       };
+      /**
+       * For a binding of a pattern compiled in whose `place` is a slot
+       * the call bound: the default the callee declares for the path
+       * (PL §8, question 110, assumed).
+       */
+      default?: unknown;
     }[];
     result?: string[][];
   }[];
@@ -759,16 +769,24 @@ export class Host {
   }
 
   /**
-   * Runs a sandboxed body of the cone (ES §2.4). `defaults` holds, for a
-   * body of a pattern compiled in, the default the callee declares for a
-   * place of the argument: the body is handed it where the slot placed
-   * there holds nothing (ruling Z4).
+   * A reference with a default for where nothing is stored, and the
+   * default in the place of nothing: a path of the argument of a pattern
+   * compiled in that the callee passes on carries the default the callee
+   * declares for it (ruling Z16).
    */
-  invoke(
-    body: number,
-    computed: unknown,
-    defaults: [string[], unknown][] = [],
-  ): unknown {
+  withDefault(value: unknown, fallback: unknown): unknown {
+    if (value instanceof Ref) return value.withDefault(fallback);
+    return value === undefined ? structuredClone(fallback) : value;
+  }
+
+  /**
+   * Runs a sandboxed body of the cone (ES §2.4). An entry of `Body.reads`
+   * of a body of a pattern compiled in holds the default the callee
+   * declares for the path the call bound to the slot: the body is handed
+   * it at the entry's place where the slot yields nothing and no place
+   * the slot resolves through declares a default of its own (ruling Z16).
+   */
+  invoke(body: number, computed: unknown): unknown {
     const { instance } = this;
     const run = instance.bodies.get(body);
     if (run === undefined) {
@@ -799,21 +817,21 @@ export class Host {
     const layout = [...instance.plan.bodies[body].reads].sort((a, b) =>
       a.at.length - b.at.length
     );
-    for (const { slot, at } of layout) {
+    for (const { slot, at, default: declared } of layout) {
       const star = at.indexOf("*");
       // A slot at `*` stands for each element: the container is given
       // whole by the slot at its own path, where the body lists one.
       if (star >= 0) continue;
       const { observes } = instance.plan.slots[slot];
+      // The slot reads the default of its own place first.
+      const read = declared === undefined
+        ? this.slot(slot)
+        : this.withDefault(this.slot(slot), declared);
       const given = observes === "identity"
-        ? instance.handleOf(this.slot(slot), this, slot)
-        : this.slot(slot);
+        ? instance.handleOf(read, this, slot)
+        : read;
       if (instance.gives(observes, argument, at)) continue;
       argument = instance.placed(argument, at, given);
-    }
-    for (const [at, declared] of defaults) {
-      if (this.at(argument, at) !== undefined) continue;
-      argument = instance.placed(argument, at, structuredClone(declared));
     }
     return instance.returned(run(argument));
   }
@@ -2453,6 +2471,22 @@ export class Instance {
           found = found.withSchema(
             rest.reduce(schemaBelow, this.schemaOf(bound.schema)),
           );
+        }
+        // The default the callee declares for the path, applied when
+        // the state path is resolved (PL §8, question 110, assumed).
+        if (entry.default !== undefined) {
+          const declared = rest.reduce(
+            (below: unknown, segment) =>
+              typeof below === "object" && below !== null
+                ? (below as Record<string, unknown>)[segment]
+                : undefined,
+            entry.default,
+          );
+          if (declared !== undefined) {
+            found = found instanceof Ref
+              ? found.withDefault(declared)
+              : host.withDefault(found, declared);
+          }
         }
       } else if (place.output !== undefined) {
         found = host.at(host.output(place.output), rest);

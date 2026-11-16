@@ -129,6 +129,22 @@ export class Ref {
       ? this
       : new Ref(this.doc, this.path, schema);
   }
+
+  /**
+   * The reference with a default for where nothing is stored, unless its
+   * schema declares one already: the default of the place it names comes
+   * before one a callee declares for a path bound to it
+   * (`plan-and-label-templates.md` §1.1, ruling Z16).
+   */
+  withDefault(fallback: unknown): Ref {
+    if (typeof this.schema === "object" && this.schema.default !== undefined) {
+      return this;
+    }
+    return new Ref(this.doc, this.path, {
+      ...(typeof this.schema === "object" ? this.schema : {}),
+      default: fallback,
+    });
+  }
 }
 
 /** A reference to the stream of a binding, for one key of each element. */

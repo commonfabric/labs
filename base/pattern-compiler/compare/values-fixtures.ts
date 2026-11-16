@@ -149,7 +149,12 @@ const WRITTEN: Record<string, Written[]> = {
     },
   }],
   "callee-default": [true, false].map((given) => ({
-    argument: { amount: 420, ...(given ? { sign: "kr" } : {}) },
+    argument: {
+      amount: 420,
+      ...(given ? { sign: "kr" } : {}),
+      rows: [{ amount: 1 }, { amount: 20, sign: "kr" }, { amount: 2 }],
+      words: ["x"],
+    },
   })),
   "passed": [{ argument: { secret: "s3cret", items: ["a", "b"] } }],
   "side-writes": [{

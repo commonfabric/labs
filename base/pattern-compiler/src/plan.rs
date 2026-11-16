@@ -127,6 +127,51 @@ fn name_schemas(
     schemas
 }
 
+/// The slots of the caller in the argument of a call of a pattern
+/// compiled in, each with the default the schema of the callee's argument
+/// declares at the path the slot is bound to.
+fn slot_defaults(place: &Place, schema: &Value, found: &mut Vec<(Root, Vec<String>, Value)>) {
+    match place {
+        Place::Slot(root, path) => {
+            if let Some(default) = schema.get("default") {
+                found.push((root.clone(), path.clone(), default.clone()));
+            }
+        }
+        Place::Record(fields) => {
+            for (name, member) in fields {
+                if let Some(below) = schema
+                    .get("properties")
+                    .and_then(|properties| properties.get(name))
+                {
+                    slot_defaults(member, below, found);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The default a callee declares for a slot of the caller, or for a path
+/// below one: the default of the nearest listed slot at or above the
+/// path, at the rest of the path.
+pub(crate) fn default_for(
+    listed: &[(Root, Vec<String>, Value)],
+    root: &Root,
+    path: &[String],
+) -> Option<Value> {
+    listed
+        .iter()
+        .filter(|(other, at, _)| other == root && path.starts_with(at))
+        .max_by_key(|(_, at, _)| at.len())
+        .and_then(|(_, at, default)| {
+            let mut found = default;
+            for segment in &path[at.len()..] {
+                found = found.get(segment)?;
+            }
+            Some(found.clone())
+        })
+}
+
 /// One handle of a binding's state that is bound to a computed value
 /// (ruling T3 of 2026-11-14).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -418,6 +463,13 @@ struct Emitter<'r, 'm, 'a> {
     /// argument type declares for the path: the name is bound to that
     /// constant (ruling Z4).
     callee_defaults: HashMap<String, Value>,
+    /// In a pattern compiled in: each slot of the caller that a call
+    /// around the code bound a path of a callee's argument to, with the
+    /// default that callee declares for the path (rulings Z4 and Z16).
+    /// Where two calls on the way bound one slot, the outer one's
+    /// default is listed: its place is nearer the end of the chain a read
+    /// resolves through (ruling Z8).
+    bound_defaults: Vec<(Root, Vec<String>, Value)>,
     /// The properties the call of the pattern about to be compiled in
     /// writes as a literal.
     literal_keys: HashSet<String>,
@@ -1851,6 +1903,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         let literal_keys = std::mem::take(&mut self.literal_keys);
         let mut given: HashSet<String> = HashSet::new();
         let mut defaults: HashMap<String, Value> = HashMap::new();
+        let mut saved_bound = None;
         if let Some(parameter) = function.params().items.first() {
             // The schema of the callee's declared argument: its defaults
             // are what a path the call leaves out is bound to, as a
@@ -1903,6 +1956,21 @@ impl<'a> Emitter<'_, '_, 'a> {
                     }
                 }
             }
+            let mut bound = self.bound_defaults.clone();
+            if let Some(schema) = &schema {
+                let mut found = Vec::new();
+                slot_defaults(&argument, schema, &mut found);
+                for (root, path, default) in found {
+                    if !bound
+                        .iter()
+                        .any(|(other, at, _)| *other == root && *at == path)
+                    {
+                        bound.push((root, path, default));
+                    }
+                }
+            }
+            self.facts.bound_defaults(bound.clone());
+            saved_bound = Some(std::mem::replace(&mut self.bound_defaults, bound));
             if let Some(schema) = schema {
                 self.facts.argument_schema(schema);
             }
@@ -1918,6 +1986,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         };
         self.given_constants = saved_given;
         self.callee_defaults = saved_defaults;
+        if let Some(saved) = saved_bound {
+            self.bound_defaults = saved;
+        }
         self.facts.leave(saved_context, result.clone());
         self.inline_at.pop();
         WRITTEN_IN.set(saved_pattern);
@@ -4929,7 +5000,18 @@ impl<'a> Emitter<'_, '_, 'a> {
             "kind": kind,
             "reads": reads
                 .iter()
-                .map(|(slot, at)| json!({ "slot": slot, "at": at }))
+                .map(|(slot, at)| {
+                    let mut entry = json!({ "slot": slot, "at": at });
+                    // `ReadInput.default`: the default the callee declares
+                    // for the path the call bound to the slot (ruling
+                    // Z16). A handler is one body for all its bindings,
+                    // and its entries have root `binding`.
+                    let (root, path, ..) = &self.slots[*slot];
+                    if let Some(default) = default_for(&self.bound_defaults, root, path) {
+                        entry["default"] = default;
+                    }
+                    entry
+                })
                 .collect::<Vec<Value>>(),
             "computed": computed_inputs,
             "handles": handles,
@@ -5251,6 +5333,12 @@ impl<'a> Emitter<'_, '_, 'a> {
             Place::Slot(root, at) => {
                 let slot = self.slot(root, at, "identity");
                 entry.insert("place".to_string(), json!({ "slot": slot }));
+                // The default the callee declares for the path, where
+                // the place is a slot the call bound (PL §8, question
+                // 110, assumed).
+                if let Some(default) = default_for(&self.bound_defaults, root, at) {
+                    entry.insert("default".to_string(), default);
+                }
                 entry.insert(
                     "template".to_string(),
                     json!({ "op": "slot", "slot": slot }),
@@ -7563,6 +7651,7 @@ pub fn emit_module<'a>(
             inline_at: Vec::new(),
             given_constants: HashSet::new(),
             callee_defaults: HashMap::new(),
+            bound_defaults: Vec::new(),
             literal_keys: HashSet::new(),
             formal_names: Vec::new(),
             tags: Vec::new(),

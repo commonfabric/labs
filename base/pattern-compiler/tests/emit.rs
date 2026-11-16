@@ -543,8 +543,11 @@ export const P = pattern<{ title: string }>(({ title }) => {
 
 #[test]
 fn a_path_bound_to_a_slot_of_the_caller_reads_the_default_of_the_callee() {
-    // Ruling Z4: where nothing is stored at the caller's slot, the cones
-    // of the callee that read the path take the callee's default.
+    // Rulings Z4 and Z16: where nothing is stored at the caller's slot,
+    // the cones of the callee that read the path take the callee's
+    // default. Expression code has it as a constant. For a sandboxed body
+    // the entry of `Body.reads` holds it, and value code passes
+    // `host.invoke` nothing for it.
     let (plan, code) = emitted(
         r#"import { computed, type Default, lift, pattern, UI } from "commonfabric";
 const spell = lift((x: { symbol: string }) => x.symbol.split("").join("-"));
@@ -566,13 +569,61 @@ export const P = pattern<{ amount: number; sign?: string }>(({ amount, sign }) =
         text.contains(&format!("$rt.or($h.v($h.slot({sign})), () => (\"$\"))")),
         "{text}"
     );
-    // A body is handed the default at the place of the slot.
+    // The use of the body passes the computed inputs alone.
     assert!(
-        text.contains(&format!(
-            "$h.invoke(0, ({{ symbol: $h.slot({sign}) }}), [[[\"symbol\"],\"$\"]])"
-        )),
+        text.contains(&format!("$h.invoke(0, ({{ symbol: $h.slot({sign}) }}))")),
         "{text}"
     );
+    // `ReadInput.default` (PL §1.1): the entry of the slot the call bound
+    // has the default the callee declares for the path.
+    assert_eq!(
+        plan["bodies"][0]["reads"],
+        json!([{ "slot": sign, "at": ["symbol"], "default": "$" }])
+    );
+}
+
+/// Ruling Z16, second half: where the callee passes a path of its
+/// argument on by reference, the stored reference carries the default
+/// the callee declares for the path. Value code gives the reference the
+/// default, and the state entry of a binding of the callee whose place is
+/// the caller's slot holds it (PL §8, question 110, assumed). The same
+/// inside an element body, over an array of references, over an array of
+/// plain values in place, and over the result of another per-element
+/// construct: the callee's cones name the caller's slot in each.
+#[test]
+fn a_path_the_callee_passes_on_carries_the_default_of_the_callee() {
+    let (plan, code) = emitted(
+        r#"import { type Default, handler, pattern, Writable } from "commonfabric";
+const mark = handler<unknown, { symbol: Writable<string> }>((_, { symbol }) => {
+  symbol.set(symbol.get() + "!");
+});
+const Price = pattern<{ symbol: Default<string, "$"> }>(({ symbol }) => {
+  return { symbol, mark: mark({ symbol }) };
+});
+export const P = pattern<{ sign?: string }>(({ sign }) => {
+  const price = Price({ symbol: sign });
+  return { symbol: price.symbol, mark: price.mark };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    let sign = slot(&plan, "argument", &["sign"], "identity");
+    assert!(
+        text.contains(&format!("$h.withDefault($h.slot({sign}), \"$\")")),
+        "{text}"
+    );
+    let state = &plan["bindings"][0]["state"][0];
+    assert_eq!(state["path"], json!(["symbol"]));
+    assert_eq!(state["place"], json!({ "slot": sign }));
+    assert_eq!(state["default"], json!("$"));
+    // The handler is one body for all its bindings, and its entries of
+    // root `binding` hold no default.
+    assert!(plan["bodies"][0]["reads"]
+        .as_array()
+        .expect("reads")
+        .iter()
+        .all(|entry| entry.get("default").is_none()));
 }
 
 #[test]

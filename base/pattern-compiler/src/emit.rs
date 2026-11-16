@@ -91,6 +91,10 @@ pub(crate) struct Context {
     /// The schema of the argument the pattern declares, for a pattern
     /// compiled in.
     pub argument_schema: Option<Value>,
+    /// For a pattern compiled in: each slot of the caller that the call
+    /// bound a path of the callee's argument to, with the default the
+    /// callee declares for that path (rulings Z4 and Z16).
+    pub bound_defaults: Vec<(Root, Vec<String>, Value)>,
 }
 
 /// What the value-code emitter reads of the plan emitter's walk.
@@ -119,6 +123,7 @@ impl Facts {
                 start,
                 cone: None,
                 argument_schema: None,
+                bound_defaults: Vec::new(),
             }],
             ..Self::default()
         }
@@ -149,6 +154,7 @@ impl Facts {
             start,
             cone,
             argument_schema: None,
+            bound_defaults: Vec::new(),
         });
         let made = self.contexts.len() - 1;
         self.inlines.insert((saved, at), made);
@@ -158,6 +164,10 @@ impl Facts {
 
     pub fn argument_schema(&mut self, schema: Value) {
         self.contexts[self.current].argument_schema = Some(schema);
+    }
+
+    pub fn bound_defaults(&mut self, defaults: Vec<(Root, Vec<String>, Value)>) {
+        self.contexts[self.current].bound_defaults = defaults;
     }
 
     pub fn leave(&mut self, saved: usize, _result: Option<Place>) {
@@ -330,10 +340,6 @@ struct Generator<'r, 'm, 'a> {
     registered_states: Vec<usize>,
     /// The `reduce` operations whose functions are registered.
     registered_reduces: Vec<usize>,
-    /// For each context of a pattern compiled in: the place a name of
-    /// its parameter is bound to, with the default the callee's argument
-    /// type declares for the path (ruling Z4).
-    defaults: HashMap<usize, Vec<(Place, Value)>>,
     counter: usize,
 }
 
@@ -346,6 +352,10 @@ struct Rewriter<'g, 'r, 'm, 'a> {
     /// The cone the code being written belongs to, by the order the
     /// cones were made.
     cone: Option<usize>,
+    /// Whether the code being written is a computed input of a use of a
+    /// body: the runtime places the callee's default from `Body.reads`,
+    /// and value code passes nothing for it (ruling Z16).
+    to_body: bool,
     edits: Vec<(u32, u32, String)>,
 }
 
@@ -553,33 +563,11 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
     /// its argument that is bound to `place`, in the context being
     /// written.
     fn callee_default(&self, place: &Place) -> Option<Value> {
-        self.generator
-            .defaults
-            .get(&self.context?)?
-            .iter()
-            .find(|(bound, _)| bound == place)
-            .map(|(_, default)| default.clone())
-    }
-
-    /// The places of the slots in what a use of a body is given for one
-    /// input that have a default of the callee, each with its path in
-    /// the body's argument.
-    fn input_defaults(&self, place: &Place, at: &mut Vec<String>, found: &mut Vec<Value>) {
-        match place {
-            Place::Slot(..) => {
-                if let Some(default) = self.callee_default(place) {
-                    found.push(json!([at, default]));
-                }
-            }
-            Place::Record(fields) => {
-                for (name, member) in fields {
-                    at.push(name.clone());
-                    self.input_defaults(member, at, found);
-                    at.pop();
-                }
-            }
-            _ => {}
-        }
+        let Place::Slot(root, path) = place else {
+            return None;
+        };
+        let context = &self.generator.finished.facts.contexts[self.context?];
+        crate::plan::default_for(&context.bound_defaults, root, path)
     }
 
     /// The code of a place that has one without its expression.
@@ -593,6 +581,11 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 // there, a read gives the callee's default (ruling Z4).
                 match (want, self.callee_default(place)) {
                     (Want::Use, Some(default)) => format!("$rt.or({code}, () => ({default}))"),
+                    // Passed on, the reference carries the callee's
+                    // declared default (ruling Z16).
+                    (Want::Pass, Some(default)) if !self.to_body => {
+                        format!("$h.withDefault({code}, {default})")
+                    }
                     _ => code,
                 }
             }
@@ -859,6 +852,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
             self.body_function(&used);
             let mut members: Vec<String> = Vec::new();
             let mut whole: Option<String> = None;
+            let saved_to_body = std::mem::replace(&mut self.to_body, true);
             for (name, place) in &used.inputs {
                 let formal = used.formals.iter().position(|formal| formal == name);
                 let written = formal.and_then(|index| arguments.get(index).copied());
@@ -894,28 +888,15 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                     }
                 }
             }
+            self.to_body = saved_to_body;
             let computed = match (used.kind, whole) {
                 ("lift", Some(whole)) => whole,
                 ("lift", None) => "undefined".to_string(),
                 _ => format!("{{ {} }}", members.join(", ")),
             };
-            // The defaults of the callee for the slots the runtime
-            // places in the argument, by their place there (ruling Z4).
-            let mut defaults: Vec<Value> = Vec::new();
-            for (name, place) in &used.inputs {
-                let mut at: Vec<String> = match used.kind {
-                    "lift" => Vec::new(),
-                    _ => vec![name.clone()],
-                };
-                self.input_defaults(place, &mut at, &mut defaults);
-            }
-            let defaults = match defaults.is_empty() {
-                true => String::new(),
-                false => format!(", {}", json!(defaults)),
-            };
             return Some(Self::wanted(
                 want,
-                format!("$h.invoke({}, {computed}{defaults})", used.body),
+                format!("$h.invoke({}, {computed})", used.body),
             ));
         }
         self.structure(inner, want)
@@ -1545,13 +1526,6 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                         schema.get("default").cloned()
                     })
                     .flatten();
-                if let (Some(declared), Some(place)) = (&declared, &place) {
-                    self.generator
-                        .defaults
-                        .entry(context)
-                        .or_default()
-                        .push((place.clone(), declared.clone()));
-                }
                 let read = match declared {
                     Some(declared) => format!("$rt.or({read}, () => ({declared}))"),
                     None => read,
@@ -2333,7 +2307,6 @@ pub(crate) fn generate(
         registered_elements: Vec::new(),
         registered_states: Vec::new(),
         registered_reduces: Vec::new(),
-        defaults: HashMap::new(),
         counter: 0,
     };
     let mut rewriter = Rewriter {
@@ -2341,6 +2314,7 @@ pub(crate) fn generate(
         module,
         context: None,
         cone: None,
+        to_body: false,
         edits: Vec::new(),
     };
     rewriter.generator.setups.insert(0);
