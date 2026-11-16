@@ -13,6 +13,7 @@ import {
   cellRuntime,
   isCell,
   parseLink,
+  PATTERN_COVERAGE_INTEGRATION_TEST_NAME,
   PatternCoverageCollector,
   profileOwnership,
   Runtime,
@@ -295,7 +296,7 @@ describe("personalized book invitation", () => {
             coverageDir,
             "recommend-a-book-integration.pattern-coverage.lcov",
           ),
-          { root: ROOT, testName: "recommend-a-book integration" },
+          { root: ROOT, testName: PATTERN_COVERAGE_INTEGRATION_TEST_NAME },
         );
       }
       await runtime.dispose();

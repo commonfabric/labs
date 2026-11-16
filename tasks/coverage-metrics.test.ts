@@ -456,7 +456,7 @@ Deno.test("integration pattern coverage feeds the debt metric", async () => {
 
     // A record from the integration stream is scored like any other: its
     // covered lines leave the debt and its unhit lines stay in it. Nothing
-    // discriminates on the test name, so a line only an end-to-end flow
+    // tells it apart from the unit stream, so a line only an end-to-end flow
     // exercises lowers the gated number.
     assertEquals(
       await metricFor([
@@ -468,6 +468,71 @@ Deno.test("integration pattern coverage feeds the debt metric", async () => {
       ].join("\n")),
       1,
     );
+  } finally {
+    await Deno.remove(rootDir, { recursive: true });
+  }
+});
+
+Deno.test("a statement Deno's coverage counts on fewer lines than the pattern instrumentation is charged by Deno's lines", async () => {
+  // Lines 3 to 5 are one statement. Deno's coverage names lines 3 and 4 of
+  // it and the instrumentation names all three. The pattern tests never
+  // reach it, so the instrumentation's record has it unrun.
+  const rootDir = await Deno.makeTempDir({ prefix: "coverage-join-test-" });
+  try {
+    const sourcePath = path.join(rootDir, "patterns/showcase/model.ts");
+    await Deno.mkdir(path.dirname(sourcePath), { recursive: true });
+    await Deno.writeTextFile(
+      sourcePath,
+      [
+        "export function check(n: number): void {",
+        "  if (n < 0) {",
+        "    throw new RangeError(",
+        "      `bad ${n}`,",
+        "    );",
+        "  }",
+        "}",
+      ].join("\n"),
+    );
+    const report = (throwHits: number) =>
+      [
+        "TN:pattern-runtime",
+        `SF:${sourcePath}`,
+        "DA:1,1",
+        "DA:2,1",
+        "DA:3,0",
+        "DA:4,0",
+        "DA:5,0",
+        "DA:6,1",
+        "DA:7,1",
+        "end_of_record",
+        `SF:${sourcePath}`,
+        "DA:1,1",
+        "DA:2,2",
+        `DA:3,${throwHits}`,
+        `DA:4,${throwHits}`,
+        "DA:6,1",
+        "DA:7,1",
+        "end_of_record",
+      ].join("\n");
+    const groupDebt = async (lcov: string) =>
+      (await collectCoverageDebtMetricsFromLcov({ rootDir, lcov })).find(
+        (metric) => metric.name === "coverage-debt: patterns uncovered lines",
+      )?.uncoveredLines;
+    const setDebt = async (lcov: string) =>
+      (await collectMeasuredSetDebt({
+        rootDir,
+        lcov,
+        member: "patterns",
+        members: ["patterns"],
+      })).uncoveredLines;
+
+    // The Deno tests ran the statement, so no line of it is charged.
+    expect(await groupDebt(report(1))).toBe(0);
+    expect(await setDebt(report(1))).toBe(0);
+
+    // No test ran it, so the lines Deno names for it are charged.
+    expect(await groupDebt(report(0))).toBe(2);
+    expect(await setDebt(report(0))).toBe(2);
   } finally {
     await Deno.remove(rootDir, { recursive: true });
   }

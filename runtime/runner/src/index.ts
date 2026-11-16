@@ -185,6 +185,7 @@ export {
 } from "./harness/index.ts";
 export {
   PATTERN_COVERAGE_INTEGRATION_TEST_NAME,
+  PATTERN_COVERAGE_MULTI_RUNTIME_TEST_NAME,
   PATTERN_COVERAGE_TEST_NAME,
   PatternCoverageCollector,
   type PatternCoverageData,
