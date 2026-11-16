@@ -547,11 +547,21 @@ whose argument holds the index has that argument path written again, as
 for any input that changed. A handler whose state holds the index is
 given the position its element has when the event arrives.
 
+Three things that derive from the index do not follow it in that way. A
+state cell declared with a value from the index, such as `cell(index)`,
+keeps what it holds when its element moves: the declared value is
+written when the cell is first created and not again. A cell or a child
+that a function body written in the callback makes under an explicit
+cause that holds the index is named by the cause, so after a move the
+cause names another cell or child. A binding that such a function body
+makes and that copies the index is a stream named by the copied value,
+so a move names another stream (`plan-and-label-templates.md` §1.3).
+
 What the index costs is those evaluations and a label. Inserting at the
 front of a list of a thousand elements evaluates the nodes that read the
 index for a thousand keys, where a callback without the index evaluates
 its body for one. A node that reads the index carries the label of the
-collection's membership and order ("Labels in a callback", below). The
+collection's own array ("Labels in a callback", below). The
 compiler reports the use as a hint (`collection:index-read`). A callback
 that declares the index and does not use it has neither cost.
 
@@ -599,6 +609,10 @@ construct is a pattern for the label rules, and labels flow through it per
 value. The element has the label of its own slot of the collection and of
 what that slot holds. The index has a label only for a node that reads
 it, and the whole collection only where the body captures it by name.
+The label of the index is the label of the collection's own array: its
+length and which link each position holds. It holds nothing of what the
+links point to, and it is the label of the whole array, not of the
+positions up to the element's own (`plan-and-label-templates.md` §2.2).
 Each captured value has its own label. A node of the body, such as a
 `computed`, a handler, or the argument of a child, takes the labels of
 what it reads and closes over, and nothing of what another node of the
@@ -3564,7 +3578,7 @@ none of the other eight.
 | `collection:reduce-callback` | error | A `reduce` in tier R whose callback has a block body | Write the step as one expression, `(sum, donut) => sum + donut.price`. A step that needs statements is a loop inside `computed(() => ...)` | new |
 | `collection:reduce-initial` | error | A `reduce` in tier R without an initial value | Pass the initial value as the second argument | new |
 | `collection:reduce-accumulator` | error | A `reduce` in tier R whose accumulator type is a code type, such as a `Map`, a `Set`, or a function | Accumulate into an object, an array, or a primitive. To fold into a `Map`, write the loop inside `computed(() => ...)` and return data | new |
-| `collection:index-read` | hint | A per-element callback uses its index parameter, so the nodes that read it are evaluated again for every element whose position changes, and carry the label of the collection's membership and order (§4.4.1) | Drop the index if the element can supply what it was used for, such as a stable identifier in place of `key={index}` | new |
+| `collection:index-read` | hint | A per-element callback uses its index parameter, so the nodes that read it are evaluated again for every element whose position changes, and carry the label of the collection's own array, its length and which link each position holds (§4.4.1) | Drop the index if the element can supply what it was used for, such as a stable identifier in place of `key={index}` | new |
 | `cell:unsupported-method` | error | A method of the runtime's cell object that the API does not declare (§4.7), such as `asSchema` or `getAsNormalizedFullLink`; also `setSchema`, which the API declares as deprecated. In every tier | The declared method that does the job, or a declared type in place of a re-typing ([§12.4](#124-replace-the-re-typing-overloads-with-declared-types)) | new |
 | `cell:collection-method-in-function` | error | `map`, `filter`, or another collection method of §4.7 called on a cell handle in tier F. The compiler does not rewrite the call | One of two corrections. To keep the result reactive, wrap the expression in an inline `pattern(...)` and instantiate it: `pattern(() => cell.map(...))({})`. To process the values the cell holds when the body runs, read first: `cell.get().map(...)`. For an aggregate or an index method (`count`, `sum`, `min`, `max`, `minBy`, `maxBy`, `groupBy`, `keyBy`), which a JavaScript array does not have, the second correction is `get()` followed by a loop or a JavaScript `reduce` | new |
 | `cell:cause-not-literal` | error | In tier R, the argument of `X.for(cause)` on a cell constructor, or of `h.for(cause)` on a handle, is not a string literal (§4.7) | Write a string literal, which names the cell in place of the variable's name: `Writable.for<number>("count")`. For a cell per element, declare the cell in the body of the collection callback, where the element's key is part of its identifier. A cause computed from data is legal only in a function body | new |

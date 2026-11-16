@@ -254,7 +254,13 @@ observation class (value, shape, enumeration, identity, or label metadata).
   that closes over the element alone writes under the event and the
   element, also where another node of the body reads the index. Nothing
   of another element, and nothing of the collection's length or order,
-  reaches a node that reads neither the index nor the collection. This is
+  reaches a node that reads neither the index nor the collection. The
+  label of the index is the label of the collection's own array: its
+  length and which link each position holds. It holds nothing of what
+  the links point to, and it is the label of the whole array, not of
+  the positions up to the element's own
+  ([plan format and label templates](plan-and-label-templates.md),
+  §2.2). This is
   tighter than the runtime of today, which stores one join of the `map`
   coordinator's transaction on every path of an element's argument
   document ([plan format and label templates](plan-and-label-templates.md),
@@ -426,7 +432,12 @@ and, inside the body of an element construct, one element key.
   that moves keeps what was evaluated for its key, and its state cells,
   streams, effects, and children. The index is a slot given to the nodes
   of the body that read it, so a move evaluates those nodes alone, and
-  reordering a list recomputes nothing else. A key derived from a value
+  reordering a list recomputes nothing else. A state cell declared with
+  a value from the index keeps what it holds when its element moves. A
+  cell or a child that a function body makes under an explicit cause
+  that holds the index is named by the cause, and a binding of a
+  function body that copies the index is a stream named by the copied
+  value, so a move names another. A key derived from a value
   is salted with a secret of the space before it enters a document
   identifier, so that an identifier does not reveal the value
   ([plan format and label templates](plan-and-label-templates.md), §1.3).
@@ -1058,21 +1069,15 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   authored function one of them or the reactive tier calls, and not a
   `handler`, an `action`, or an inline event handler
   ([language subset](language-subset.md), §13, question 26).
-- **Element bodies and equal elements.** The rulings leave five things
+- **Element bodies and equal elements.** The rulings leave three things
   open ([plan format and label templates](plan-and-label-templates.md),
-  §8, questions 36, 90, 91, 92, and 93). Which state an occurrence has
+  §8, questions 36, 90, and 91). Which state an occurrence has
   depends on which equal elements stand before it, and a reader of the
-  row can see that: assumed accepted. What becomes of state and identity
-  that the author derives from the index when an element moves: assumed
-  that a state cell keeps what it holds, and that a cell or a child made
-  under an explicit cause that holds the index is named by the cause, so
-  that a move names another. Whether the label of the index is narrowed
-  to the elements before the position: assumed not, so the index has the
-  label of the whole membership the collection iterates. Whether a
-  binding that a `lift` or a `computed` written in an element body makes
-  has a stream per occurrence: assumed not, as a binding made in a
-  function body is named by what it holds. And whether an element of a
-  `filter` result keeps the key it has in the source: assumed.
+  row can see that: assumed accepted. Whether a binding that a `lift`
+  or a `computed` written in an element body makes has a stream per
+  occurrence: assumed not, as a binding made in a function body is
+  named by what it holds. And whether an element of a `filter` result
+  keeps the key it has in the source: assumed.
 - **An explicit cause in a handler.** A later event that instantiates
   under a cause an earlier event gave creates nothing. Whether it writes
   the argument it passes is open. *Assumed:* it does not

@@ -2138,7 +2138,10 @@ The position is in no key, and the analysis records nothing in the
 §1.1 and §1.3). A body written in an element body that is given the
 index lists the slot of root `index` that names the collection in
 `Body.reads`, as it lists any other slot the runtime materializes into
-its argument, and is evaluated again for an element that moves. A site
+its argument, and is evaluated again for an element that moves. The
+label of that slot is the label of the collection's own array, its
+length and which link each position holds, and nothing of what the
+links point to (`plan-and-label-templates.md` §2.2). A site
 in a `handler` or an `action` is identified by the handling or by a tag,
 and by no element key.
 
