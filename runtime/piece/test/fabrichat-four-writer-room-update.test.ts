@@ -204,6 +204,7 @@ describe("fabrichat-four-writer-room-update", () => {
   let releasedIdentity: string;
   let storedBefore: { writer: string; module: unknown }[];
   let windowsBefore: unknown;
+  let staleWindow: readonly Cell<unknown>[];
   let failuresBefore: Record<string, number>;
   let failuresAfter: Record<string, number>;
 
@@ -396,6 +397,12 @@ describe("fabrichat-four-writer-room-update", () => {
       "messages/*",
     );
     windowsBefore = windowsDocument();
+    // The messages of the window the earlier program wrote, as a client
+    // holding that window names them: each link resolves to its message under
+    // the schema the earlier program stored it with.
+    staleWindow = await room.key("messages").key("windows").key("main").key(
+      "messages",
+    ).asSchema<Cell<unknown>[]>(asCells).pull();
 
     // The release: the room opens as a person opening it would, follows its
     // origin to this tree's room, and waits for the running room to swap.
@@ -706,21 +713,16 @@ describe("fabrichat-four-writer-room-update", () => {
       ).toEqual([{ deleted: true }, "In the thread"]);
     });
 
-    it("obliterates a message the earlier program stored that its author deleted, dropping the author", async () => {
-      // Each act names the message as a row of the room does, by the link
-      // the room's latest messages hold, which resolves to the message
-      // under the schema the earlier program sent it with.
+    it("obliterates a message the earlier program stored that its author deleted, named as its window names it, dropping the author", async () => {
+      // A client holding the window the earlier program wrote names the
+      // message by that window's link, which resolves to it under the schema
+      // the earlier program stored it with. Its tombstone doesn't fit that
+      // schema, so the act reads the message through the link it was given.
 
       const twice = (await storedMessages())[4];
       const docOf = (cell: Cell<unknown>) =>
         cell.resolveAsCell().getAsNormalizedFullLink().id;
-      const today = (await roomController.get(
-        room.getAsNormalizedFullLink().id,
-      )).getCell();
-      const shown = (await today.key("messages").key("latest").key("messages")
-        .asSchema<Cell<unknown>[]>(asCells).pull()).find((cell) =>
-          docOf(cell) === docOf(twice)
-        );
+      const shown = staleWindow.find((cell) => docOf(cell) === docOf(twice));
       expect(shown).toBeDefined();
       const refusals = await refusalsDuring(async () => {
         await send(

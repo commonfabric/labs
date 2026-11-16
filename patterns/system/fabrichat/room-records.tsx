@@ -2221,11 +2221,9 @@ export const commitSetThreadTitle = handler<
   }
   const named = event?.root ?? composer?.get()?.thread;
   const target = namesMessage(named) ? named?.resolveAsCell() : undefined;
-  // The root is read through `named`, under this act's own schema for it,
-  // as `messageInRoom()` reads a message.
   if (
     target === undefined || !isInRoomOf(messages, target) ||
-    namesMessage(named?.get()?.replyTo?.thread)
+    namesMessage(target.get()?.replyTo?.thread)
   ) {
     refuse("not-a-root", "That message can't start a thread here.");
     return;
