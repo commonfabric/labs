@@ -40,6 +40,7 @@ import {
   githubGet,
   githubPatch,
   githubPost,
+  githubToken,
   REPO,
 } from "./ci-check-lib.ts";
 
@@ -148,7 +149,7 @@ export async function postCoverageComment(): Promise<void> {
  * is set, and returns the code to exit with.
  */
 export async function main(): Promise<number> {
-  if (!Deno.env.get("GITHUB_TOKEN")) {
+  if (!githubToken()) {
     console.error("GITHUB_TOKEN is required.");
     return 1;
   }

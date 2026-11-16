@@ -22,6 +22,9 @@ interface Run {
   errors: string[];
   warnings: string[];
 
+  /** The `Authorization` header of each request the run made, in order. */
+  authorizations: (string | null)[];
+
   /** What the run's entry point returned. */
   returned: number | void;
 }
@@ -72,6 +75,7 @@ async function run(
     logged: [],
     errors: [],
     warnings: [],
+    authorizations: [],
     returned: undefined,
   };
   const originals = {
@@ -87,6 +91,7 @@ async function run(
   globalThis.fetch = (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     const method = init?.method ?? "GET";
+    result.authorizations.push(new Headers(init?.headers).get("authorization"));
     if (method !== "GET") {
       result.writes.push({
         method,
@@ -287,10 +292,15 @@ describe("postCoverageComment()", () => {
 
 describe("main()", () => {
   it("posts the comment and returns zero where `GITHUB_TOKEN` is set", async () => {
-    const { writes, returned } = await run(JSON.stringify(regressed), {
-      act: main,
-    });
+    // Every request carries the token the check read.
+
+    const { writes, authorizations, returned } = await run(
+      JSON.stringify(regressed),
+      { token: "the token", act: main },
+    );
     expect(returned).toBe(0);
+    expect(authorizations.length).toBeGreaterThan(0);
+    expect(new Set(authorizations)).toEqual(new Set(["Bearer the token"]));
     expect(writes).toEqual([
       { method: "POST", url: COMMENTS_URL, body: regressed.body },
     ]);

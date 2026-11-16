@@ -74,10 +74,10 @@ import {
   githubGet,
   githubPatch,
   githubPost,
+  githubToken,
   isNotFound,
   type IssueComment,
   REPO,
-  TOKEN,
   WORKFLOW_FILE,
   type WorkflowRun,
 } from "./ci-check-lib.ts";
@@ -943,7 +943,7 @@ export async function main(
  */
 export async function runReporter(
   args: readonly string[],
-  token: string | undefined = TOKEN,
+  token: string | undefined = githubToken(),
   deps: ReportDeps = {},
 ): Promise<number> {
   if (!token) {
