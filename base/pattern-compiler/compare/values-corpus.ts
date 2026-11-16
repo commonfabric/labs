@@ -308,6 +308,8 @@ const report = async (file: string, verbose: boolean) => {
   for (
     const name of [
       "evaluations",
+      "elementEvaluations",
+      "assemblies",
       "slotsNotListed",
       "readsWithoutSlot",
       "outputsWithoutEdge",

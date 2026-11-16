@@ -140,14 +140,31 @@ class Thunk {
 type Element = {
   key: string;
   index: number;
-  /** Where the element was read from, or the value where it has no place. */
-  source: Ref | { value: unknown };
+  /**
+   * Where the element is read from; or its value, where it has no place;
+   * or, for an element of the result of a per-element construct, the
+   * result of that construct's body for the element's key, and a path
+   * below it.
+   */
+  source: Ref | { value: unknown } | { entry: Lazy; at: string[] };
+  /**
+   * For a plain value stored in place: the value, which the key is formed
+   * from. A cone of the element body reads it, and not the position,
+   * which a move changes (ES §2.6, "A moved element").
+   */
+  held?: { value: unknown };
 };
 
 type Context = ReadonlyMap<number, Element>;
 
-/** An entry an evaluation used, and when that entry had last changed. */
-type Dependency = { changedAt: () => number; seen: number };
+/** A memo entry, brought up to date for the element keys of a context. */
+type Lazy = (context: Context) => Entry;
+
+/**
+ * Something an evaluation used of another entry, and what it was then:
+ * when the entry had last changed, or the value at a path of it.
+ */
+type Dependency = { stamp: (context: Context) => unknown; seen: unknown };
 
 type Entry = {
   value: unknown;
@@ -155,8 +172,11 @@ type Entry = {
   reads: Position[];
   dependencies: Dependency[];
   indexes: Map<number, number>;
-  /** The address each element slot it read was bound to. */
-  bound: Map<number, string>;
+  /**
+   * For the assembled result of a `map`, a `filter` or a `flatMap`: its
+   * elements, each with the key of the element it came from.
+   */
+  members?: Element[];
   evaluatedAt: number;
   changedAt: number;
 };
@@ -166,6 +186,10 @@ export type Counts = {
   /** Evaluations of a value function, of a per-element function, and of
    * the assembly of a collection. */
   evaluations: number;
+  /** Of those, the evaluations of a cone instance of an element body. */
+  elementEvaluations: number;
+  /** Of those, the assemblies of a collection, which no cone computes. */
+  assemblies: number;
   /** Reads of a slot that the cone of the reading code does not list. */
   slotsNotListed: number;
   /** Reads by root and path, where the value code names no slot. */
@@ -409,13 +433,21 @@ export class Host {
   readonly reads: Position[] = [];
   readonly dependencies: Dependency[] = [];
   readonly indexes = new Map<number, number>();
-  readonly bound = new Map<number, string>();
+  /** The elements of the collection being assembled, with their keys. */
+  members: Element[] | undefined;
 
   constructor(
     readonly instance: Instance,
     readonly context: Context,
     /** The cone of the code being evaluated, where it belongs to one. */
     readonly cone: number | undefined,
+    /**
+     * Whether an element that is a plain value stored in place is given
+     * as its position: a handler writes through it, and the element table
+     * of a collection inside it is read from it. A cone is given the
+     * value.
+     */
+    readonly positions = false,
   ) {}
 
   /** The value of a slot, or its reference for an `identity` slot. */
@@ -434,7 +466,7 @@ export class Host {
       ? slot.path.slice(0, -1)
       : slot.path;
     const found = this.at(
-      instance.rootOf(slot.root, this),
+      instance.rootOf(slot.root, this, [...path, ...rest]),
       [...path, ...rest],
     );
     // Where nothing is stored, a slot reads as the default of the place
@@ -476,7 +508,7 @@ export class Host {
       instance.counts.outputsWithoutEdge += 1;
     }
     if (output.collection !== undefined) {
-      return this.depend(instance.assembled(output.collection, this.context));
+      return this.depend(instance.assembled(output.collection));
     }
     const value = instance.valueOfOutput.get(index);
     if (value === undefined) {
@@ -493,16 +525,34 @@ export class Host {
 
   /** The value a value function computes, by the value's number. */
   value(value: number): unknown {
-    return this.depend(this.instance.evaluated(value, this.context));
+    return this.depend(this.instance.evaluated(value));
   }
 
-  depend(entry: () => Entry): unknown {
-    const used = entry();
-    this.dependencies.push({
-      changedAt: () => entry().changedAt,
-      seen: used.changedAt,
-    });
-    return used.value;
+  /**
+   * The value of another entry, which this evaluation then depends on:
+   * on any change of it, or with `path` on a change of what it holds at
+   * that path.
+   */
+  depend(entry: Lazy, path?: readonly string[]): unknown {
+    return this.dependEntry(entry, path).value;
+  }
+
+  dependEntry(entry: Lazy, path?: readonly string[]): Entry {
+    const used = entry(this.context);
+    if (path === undefined) {
+      this.dependencies.push({
+        stamp: (context) => entry(context).changedAt,
+        seen: used.changedAt,
+      });
+    } else {
+      const held = (from: Entry) =>
+        canonical(this.instance.stored(this.at(from.value, path)));
+      this.dependencies.push({
+        stamp: (context) => held(entry(context)),
+        seen: held(used),
+      });
+    }
+    return used;
   }
 
   /** The stream of a binding, for the element keys of this evaluation. */
@@ -656,6 +706,8 @@ export class Instance {
   readonly code: Code;
   readonly counts: Counts = {
     evaluations: 0,
+    elementEvaluations: 0,
+    assemblies: 0,
     slotsNotListed: 0,
     readsWithoutSlot: 0,
     outputsWithoutEdge: 0,
@@ -855,8 +907,14 @@ export class Instance {
     );
   }
 
-  /** What a slot root is bound to in an evaluation. */
-  rootOf(root: Root, host: Host): unknown {
+  /**
+   * What a slot root is bound to in an evaluation. `path` is the path
+   * the reader reads below the root: an element of the result of a
+   * per-element construct is read from the result of that construct's
+   * body for the element's key, and the reader depends on that path of
+   * it alone.
+   */
+  rootOf(root: Root, host: Host, path: readonly string[] = []): unknown {
     switch (root.kind) {
       case "argument":
         return new Ref("argument", []);
@@ -867,11 +925,18 @@ export class Instance {
         if (element === undefined) {
           throw new Unsupported("an element slot read outside its collection");
         }
-        if (element.source instanceof Ref) {
-          host.bound.set(root.collection ?? -1, addressOf(element.source));
-          return element.source;
+        const { source, held } = element;
+        if (source instanceof Ref) {
+          // A plain value stored in place: a cone reads the value the
+          // key is formed from, so a move evaluates nothing, and what
+          // passes the element on stores the value (ES §2.6).
+          return held !== undefined && !host.positions ? held.value : source;
         }
-        return element.source.value;
+        if ("entry" in source) {
+          const upstream = host.depend(source.entry, [...source.at, ...path]);
+          return host.at(upstream, source.at);
+        }
+        return source.value;
       }
       case "index": {
         const element = host.context.get(root.collection ?? -1);
@@ -1113,15 +1178,31 @@ export class Instance {
       .join("\u0001");
   }
 
+  /** The entry of a computation that has not been evaluated. */
+  #none(): Entry {
+    return {
+      value: undefined,
+      stored: "undefined",
+      reads: [],
+      dependencies: [],
+      indexes: new Map(),
+      evaluatedAt: this.store.clock,
+      changedAt: this.store.clock,
+    };
+  }
+
   /**
    * The memo entry of a computation, evaluated where it is not current: a
    * position it read was written since, an entry it used changed since,
-   * or an index it read is another one now (ES §2.6).
+   * or an index it read is another one now (ES §2.6). `kind` says what
+   * is evaluated: a cone instance of an element body, the assembly of a
+   * collection, or another value.
    */
   #ensure(
     key: string,
     context: Context,
     cone: number | undefined,
+    kind: "element" | "assembly" | "value",
     compute: (host: Host) => unknown,
   ): Entry {
     const held = this.#memo.get(key);
@@ -1129,19 +1210,11 @@ export class Instance {
     if (this.#open.has(key)) {
       // A pull that reaches an evaluation in progress gets what it last
       // had (ES §2.7, "Detection").
-      return held ?? {
-        value: undefined,
-        stored: "undefined",
-        reads: [],
-        dependencies: [],
-        indexes: new Map(),
-        bound: new Map(),
-        evaluatedAt: this.store.clock,
-        changedAt: this.store.clock,
-      };
+      return held ?? this.#none();
     }
     this.#open.add(key);
-    const host = new Host(this, context, cone);
+    // The assembly of a collection reads the positions of its elements.
+    const host = new Host(this, context, cone, kind === "assembly");
     const evaluatedAt = this.store.clock;
     let value: unknown;
     try {
@@ -1150,6 +1223,8 @@ export class Instance {
       this.#open.delete(key);
     }
     this.counts.evaluations += 1;
+    if (kind === "element") this.counts.elementEvaluations += 1;
+    if (kind === "assembly") this.counts.assemblies += 1;
     const stored = canonical(this.stored(value));
     const changed = held === undefined || held.stored !== stored;
     // A body that wrote a position it read is not evaluated again on
@@ -1163,7 +1238,7 @@ export class Instance {
       reads: host.reads,
       dependencies: host.dependencies,
       indexes: host.indexes,
-      bound: host.bound,
+      members: host.members,
       evaluatedAt: ownWrite ? this.store.clock : evaluatedAt,
       changedAt: changed ? this.store.clock : held.changedAt,
     };
@@ -1175,85 +1250,142 @@ export class Instance {
     for (const [collection, index] of entry.indexes) {
       if (context.get(collection)?.index !== index) return false;
     }
-    // A key that moved is bound to another address, and what passes the
-    // element on by reference holds that address.
-    for (const [collection, address] of entry.bound) {
-      const source = context.get(collection)?.source;
-      if (!(source instanceof Ref) || addressOf(source) !== address) {
-        return false;
-      }
-    }
+    // A key that moved keeps its entries: nothing of an element is
+    // evaluated on a move but what read the index (ES §2.6).
     if (this.store.changedSince(entry.evaluatedAt, entry.reads)) return false;
     return entry.dependencies.every((dependency) =>
-      dependency.changedAt() === dependency.seen
+      dependency.stamp(context) === dependency.seen
     );
   }
 
   /** The entry of a value function, for the element keys of a context. */
-  evaluated(value: number, context: Context): () => Entry {
+  evaluated(value: number): Lazy {
     const run = this.#values.get(value);
     if (run === undefined) {
       throw new Unsupported("a value that has no value function");
     }
     const { cone } = this.code.values[value];
     const within = this.code.coneWithin[cone] ?? [];
-    const key = `v${value}|${this.#contextKey(within, context)}`;
-    return () => this.#ensure(key, context, cone, run);
+    return (context) =>
+      this.#ensure(
+        `v${value}|${this.#contextKey(within, context)}`,
+        context,
+        cone,
+        within.length > 0 ? "element" : "value",
+        run,
+      );
+  }
+
+  /** The `element` steps around a collection, outermost first. */
+  #outerOf(collection: number): number[] {
+    return this.plan.collections[collection].within.flatMap((step) =>
+      step.element === undefined ? [] : [step.element]
+    );
+  }
+
+  /**
+   * The entry of the body of an element construct for one element key.
+   * The element is the one the table of the collection holds under the
+   * key now, so an entry that depends on this one is checked against the
+   * position the key has now.
+   */
+  #perElement(collection: number, key: string): Lazy {
+    const outer = this.#outerOf(collection);
+    const cone = this.code.values.find((value) =>
+      value.collection === collection
+    )?.cone;
+    return (context) => {
+      const around = this.#contextKey(outer, context);
+      const name = `e${collection}|${around}|${key}`;
+      const element = this.#tables.get(`a${collection}|${around}`)?.find((
+        member,
+      ) => member.key === key);
+      const run = this.#elements.get(collection);
+      if (element === undefined || run === undefined) {
+        return this.#memo.get(name) ?? this.#none();
+      }
+      const inner = new Map<number, Element>();
+      for (const step of outer) {
+        const bound = context.get(step);
+        if (bound !== undefined) inner.set(step, bound);
+      }
+      inner.set(collection, element);
+      this.#declare(inner);
+      return this.#ensure(name, inner, cone, "element", run);
+    };
   }
 
   /**
    * The assembled result of an element construct (ES §2.5): the element
    * table, the body's function once per key, and the structural step.
+   * The entry holds the elements of the result with their keys: an
+   * element of the result of a `map`, a `filter` or a `flatMap` has the
+   * key of the element it came from (PL §1.3, "Derived collections carry
+   * their elements' keys").
    */
-  assembled(collection: number, context: Context): () => Entry {
+  assembled(collection: number): Lazy {
     const record = this.plan.collections[collection];
-    const outer = record.within.flatMap((step) =>
-      step.element === undefined ? [] : [step.element]
-    );
-    const key = `a${collection}|${this.#contextKey(outer, context)}`;
-    const cone = this.code.values.find((value) =>
-      value.collection === collection
-    )?.cone;
-    return () =>
-      this.#ensure(key, context, undefined, (host) => {
+    const outer = this.#outerOf(collection);
+    return (context) => {
+      const key = `a${collection}|${this.#contextKey(outer, context)}`;
+      return this.#ensure(key, context, undefined, "assembly", (host) => {
         const elements = this.#table(collection, host);
         this.#tables.set(key, elements);
-        const run = this.#elements.get(collection);
-        if (run === undefined) {
+        if (!this.#elements.has(collection)) {
           throw new Unsupported("an element construct that has no function");
         }
-        const results = elements.map((element) => {
-          const inner = new Map<number, Element>();
-          for (const step of outer) {
-            const bound = context.get(step);
-            if (bound !== undefined) inner.set(step, bound);
-          }
-          inner.set(collection, element);
-          this.#declare(inner);
-          const entry = () =>
-            this.#ensure(
-              `e${collection}|${
-                this.#contextKey(outer, context)
-              }|${element.key}`,
-              inner,
-              cone,
-              run,
-            );
-          return host.depend(entry);
-        });
-        const given = (element: Element) =>
-          element.source instanceof Ref ? element.source : element.source.value;
+        const results = elements.map((element) =>
+          host.depend(this.#perElement(collection, element.key))
+        );
+        // What the result holds for an element it passes on: the value
+        // of a plain value stored in place, and otherwise what the
+        // element is, a reference included.
+        const given = ({ source, held }: Element) =>
+          held !== undefined
+            ? held.value
+            : source instanceof Ref
+            ? source
+            : "entry" in source
+            ? host.at(host.depend(source.entry, source.at), source.at)
+            : source.value;
         const holds = (index: number) => Boolean(host.v(results[index]));
+        const numbered = (members: Omit<Element, "index">[]) =>
+          members.map((member, index) => ({ ...member, index }));
         switch (record.construct) {
           case "map":
+            host.members = numbered(elements.map(({ key }) => ({
+              key,
+              source: { entry: this.#perElement(collection, key), at: [] },
+            })));
             return results;
-          case "filter":
-            return elements.filter((_, index) => holds(index)).map(given);
-          case "flatMap":
-            return results.flatMap((result) => {
+          case "filter": {
+            const kept = elements.filter((_, index) => holds(index));
+            host.members = numbered(kept);
+            return kept.map(given);
+          }
+          case "flatMap": {
+            const members: Omit<Element, "index">[] = [];
+            const flat = results.flatMap((result, index) => {
               const segment = host.v(result);
-              return Array.isArray(segment) ? segment : [segment];
+              const { key } = elements[index];
+              const entry = this.#perElement(collection, key);
+              if (!Array.isArray(segment)) {
+                members.push({ key: `${key}/0`, source: { entry, at: [] } });
+                return [segment];
+              }
+              // The key of the source element with the position in its
+              // segment (PL §1.3, assumed there under question 101).
+              segment.forEach((_, position) =>
+                members.push({
+                  key: `${key}/${position}`,
+                  source: { entry, at: [`${position}`] },
+                })
+              );
+              return segment;
             });
+            host.members = numbered(members);
+            return flat;
+          }
           case "some":
             return elements.some((_, index) => holds(index));
           case "every":
@@ -1270,13 +1402,16 @@ export class Instance {
             );
         }
       });
+    };
   }
 
   /**
-   * The elements of what a collection iterates, each with its key: the
-   * identity of the cell where the position holds a link, the value where
-   * it holds one, and the count of the earlier positions with the same
-   * element part. The position is in no key (PL §1.3).
+   * The elements of what a collection iterates, each with its key. An
+   * element of the result of another construct has the key that result
+   * gives it. Otherwise the key is the identity of the cell where the
+   * position holds a link, the value where it holds one, and the count
+   * of the earlier positions with the same element part. The position is
+   * in no key (PL §1.3).
    */
   #table(collection: number, host: Host): Element[] {
     const { source } = this.plan.collections[collection];
@@ -1301,10 +1436,17 @@ export class Instance {
           member instanceof Ref ? member : { value: member }
         );
       }
+    } else if (source.collection !== undefined) {
+      const upstream = host.dependEntry(this.assembled(source.collection));
+      if (upstream.members !== undefined) {
+        return upstream.members.map((member, index) => ({ ...member, index }));
+      }
+      const held = upstream.value;
+      members = (Array.isArray(held) ? held : []).map((member) =>
+        member instanceof Ref ? member : { value: member }
+      );
     } else {
-      const held = source.collection !== undefined
-        ? host.depend(this.assembled(source.collection, host.context))
-        : source.output !== undefined
+      const held = source.output !== undefined
         ? host.output(source.output)
         : undefined;
       const array = held instanceof Ref
@@ -1323,18 +1465,26 @@ export class Instance {
       const linked = member instanceof Ref &&
         !(source.slot !== undefined &&
           this.#inPlace(member, source.slot, host));
+      const value = linked
+        ? undefined
+        : member instanceof Ref
+        ? this.store.read(member)
+        : host.v(member.value);
       const part = linked
         ? `cell:${member.doc}:${canonical(member.path)}`
-        : `value:${
-          canonical(
-            member instanceof Ref ? this.store.read(member) : host.v(
-              member.value,
-            ),
-          )
-        }`;
+        : `value:${canonical(value)}`;
       const count = seen.get(part) ?? 0;
       seen.set(part, count + 1);
-      return { key: `${part}#${count}`, index, source: member };
+      return {
+        key: `${part}#${count}`,
+        index,
+        source: member,
+        // A copy that carries no address: what a cone stores of it is
+        // the value, and no link to the position.
+        ...(member instanceof Ref && !linked
+          ? { held: { value: structuredClone(value) } }
+          : {}),
+      };
     });
   }
 
@@ -1381,21 +1531,22 @@ export class Instance {
           this.plan.bodies[body].writes.length > 0 ||
           this.plan.bodies[body].envelopes.length > 0
         );
-        if (writes) this.evaluated(index, none)();
+        if (writes) this.evaluated(index)(none);
       });
       this.plan.outputs.forEach((output, index) => {
         if (!output.kept || output.path.includes("*")) return;
         const value = this.valueOfOutput.get(index);
         if (output.collection !== undefined) {
-          this.assembled(output.collection, none)();
+          this.assembled(output.collection)(none);
         } else if (value !== undefined && this.#values.has(value)) {
-          this.evaluated(value, none)();
+          this.evaluated(value)(none);
         }
       });
       const entry = this.#ensure(
         "result",
         none,
         undefined,
+        "value",
         (host) => result.evaluate(host),
       );
       this.store.write(new Ref("result", []), this.stored(entry.value));
@@ -1635,7 +1786,9 @@ export class Instance {
     if (body === undefined || run === undefined) {
       return { binding, committed: false, error: "the handler has no body" };
     }
-    const host = new Host(this, context, undefined);
+    // A handler is given an element that is a plain value stored in place
+    // as its position, which it can write through.
+    const host = new Host(this, context, undefined, true);
     // The state: each slot of the body with root `binding`, resolved to
     // the place the binding's state entry names (PL §1.1).
     let state: unknown = {};

@@ -39,6 +39,16 @@ const WRITTEN: Record<string, Written[]> = {
   "defaulted": [true, false].map((given) => ({
     argument: { profile: { name: "ada", ...(given ? { nick: "a" } : {}) } },
   })),
+  "chain": [{
+    argument: {
+      items: [
+        { title: "a", done: false },
+        { title: "b", done: true },
+        { title: "c", done: false },
+      ],
+      tags: ["x", "skip", "y"],
+    },
+  }],
   "callee-default": [true, false].map((given) => ({
     argument: { amount: 420, ...(given ? { sign: "kr" } : {}) },
   })),

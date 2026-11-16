@@ -239,6 +239,7 @@ describe("an element construct", () => {
       tags: ["a", "b"],
     });
     instance.send(0, {}, [1]);
+    const before = instance.counts.elementEvaluations;
 
     instance.writeArgument(["tags"], ["b", "a"]);
 
@@ -247,6 +248,9 @@ describe("an element construct", () => {
       ["b", true],
       ["a", false],
     ]);
+    // The results of a key move with it, and nothing is evaluated for
+    // the element (ruling Z6).
+    expect(instance.counts.elementEvaluations).toBe(before);
     // One cell per key, and a document for the one the event wrote.
     expect(instance.stateCells().length).toBe(2);
     expect(instance.documents()["state cell"]).toBe(1);
@@ -261,7 +265,7 @@ describe("an element construct", () => {
       2,
       3,
     ]);
-    const before = instance.counts.evaluations;
+    const before = { ...instance.counts };
 
     // The last element stays at its position.
     instance.writeArgument(["items"], [
@@ -281,11 +285,24 @@ describe("an element construct", () => {
         (row.children[0] as ViewNode).children
       ),
     ).toEqual([["b"], ["a"], ["c"]]);
-    // Evaluated again: the two assemblies, the tree and the result, and
-    // for each of the two moved keys the function that reads the index
-    // and the function that reads the element at its new position. No
-    // function of the key that did not move is.
-    expect(instance.counts.evaluations - before).toBe(8);
+    // Evaluated again for an element: the function that reads the index,
+    // for each of the two moved keys. The function that reads the element
+    // is not, for no key: its result moves with the key (ruling Z6).
+    expect(instance.counts.elementEvaluations - before.elementEvaluations)
+      .toBe(2);
+    // The runtime's own steps: the two collections are assembled again.
+    expect(instance.counts.assemblies - before.assemblies).toBe(2);
+  });
+
+  it("stores the value where a cone passes on an element that is a plain value", async () => {
+    const instance = new Instance(await artifactOf("equal-values"), {
+      tags: ["a", "b"],
+    });
+
+    // No row holds a link to a position of the array.
+    const stored = JSON.stringify(instance.store.docs.get("result")?.value);
+    expect(stored).not.toContain('"path":["tags"');
+    expect(stored).toContain('"children":["a",');
   });
 
   it("gives a handler bound in the body the index its element has at the event", async () => {
@@ -331,5 +348,89 @@ describe("a pattern compiled in", () => {
     expect((instance.result() as { bound: string }).bound).toBe("kr420");
     expect((instance.result() as { boundSpelled: string }).boundSpelled)
       .toBe("k-r");
+  });
+});
+
+// Ruling Z6 on `fixtures/chain.tsx`: a `map` over a `filter` over a `map`.
+// An element of the result of a per-element construct has the key of the
+// upstream element it came from.
+describe("a chain of element constructs", () => {
+  const link = (name: string) => ({
+    $link: { doc: "argument", path: ["pool", name] },
+  });
+  // The elements of `items` are references to cells, and those of `tags`
+  // are plain values stored in place.
+  const argument = () => ({
+    pool: {
+      a: { title: "a", done: false },
+      b: { title: "b", done: true },
+      c: { title: "c", done: false },
+    },
+    items: [link("a"), link("b"), link("c")],
+    tags: ["x", "skip", "y"],
+  });
+  type Chains = { open: string[]; loud: string[] };
+
+  it("computes the chain over references and over plain values", async () => {
+    const instance = new Instance(await artifactOf("chain"), argument());
+
+    expect(instance.result()).toEqual({
+      open: ["a!?", "c!?"],
+      loud: ["x!?", "y!?"],
+    });
+    // Three bodies for each of three elements of `items`, less the last
+    // body for the element the filter drops, and the same for `tags`.
+    expect(instance.counts.elementEvaluations).toBe(16);
+  });
+
+  it("evaluates, for a change behind one reference, that element's cone instances alone", async () => {
+    const instance = new Instance(await artifactOf("chain"), argument());
+    const before = instance.counts.elementEvaluations;
+
+    instance.writeArgument(["pool", "a", "title"], "z");
+
+    expect((instance.result() as Chains).open).toEqual(["z!?", "c!?"]);
+    // The first `map` and the last, for the key of `a`. The predicate of
+    // the `filter` read `done`, which did not change.
+    expect(instance.counts.elementEvaluations - before).toBe(2);
+  });
+
+  it("evaluates the predicate alone where the element leaves the result", async () => {
+    const instance = new Instance(await artifactOf("chain"), argument());
+    const before = instance.counts.elementEvaluations;
+
+    instance.writeArgument(["pool", "a", "done"], true);
+
+    expect((instance.result() as Chains).open).toEqual(["c!?"]);
+    expect(instance.counts.elementEvaluations - before).toBe(1);
+  });
+
+  it("evaluates, for a plain value that changed in place, the new key down the chain", async () => {
+    const instance = new Instance(await artifactOf("chain"), argument());
+    const before = instance.counts.elementEvaluations;
+
+    instance.writeArgument(["tags"], ["w", "skip", "y"]);
+
+    expect((instance.result() as Chains).loud).toEqual(["w!?", "y!?"]);
+    // The old key leaves and a new key enters: one cone instance in each
+    // of the three bodies, and none for `skip` or `y`.
+    expect(instance.counts.elementEvaluations - before).toBe(3);
+  });
+
+  it("evaluates nothing for an element when the elements move", async () => {
+    const instance = new Instance(await artifactOf("chain"), argument());
+    const before = { ...instance.counts };
+
+    instance.writeArgument(["items"], [link("c"), link("b"), link("a")]);
+    instance.writeArgument(["tags"], ["y", "skip", "x"]);
+
+    expect(instance.result()).toEqual({
+      open: ["c!?", "a!?"],
+      loud: ["y!?", "x!?"],
+    });
+    expect(instance.counts.elementEvaluations - before.elementEvaluations)
+      .toBe(0);
+    // Each of the six collections is assembled again, once.
+    expect(instance.counts.assemblies - before.assemblies).toBe(6);
   });
 });

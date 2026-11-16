@@ -90,4 +90,13 @@ describe("the values of a fixture", () => {
       expect(comparison.compared).toBe(4);
     }
   });
+
+  it("are equal for a map over a filter over a map", async () => {
+    // Ruling Z6: over records and over plain values.
+    const [{ comparison }] = await compareFixtures("chain");
+
+    expect(comparison.notExecuted).toBeUndefined();
+    expect(comparison.differences).toEqual([]);
+    expect(comparison.compared).toBe(2);
+  });
 });

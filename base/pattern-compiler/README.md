@@ -233,6 +233,16 @@ deno run -A base/pattern-compiler/exec/run.ts artifact.json argument.json
 deno test -A base/pattern-compiler/exec/test/
 ```
 
+The executor keys an element of the result of a `map`, a `filter` or a `flatMap`
+by the key of the element it came from, so a change of one element evaluates
+that element's cone instances down a chain of constructs and no other element's.
+When elements move it evaluates nothing for them but what read the index: the
+entries of a key stay with the key. A cone reads an element that is a plain
+value stored in place as the value its key is formed from, and what passes such
+an element on stores the value. `Instance.counts` has the evaluations of cone
+instances of an element body (`elementEvaluations`) and the assemblies of a
+collection (`assemblies`) apart.
+
 `compare/values.ts` compares the values the executor computes with those of
 today's runtime: the members of the result and the state cells of the pattern's
 own body, after the instance settled and after each event.
