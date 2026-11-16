@@ -95,10 +95,12 @@ next.
   219 are equal, 15 tighter, and none looser. Of the 15 tighter, 10
   have a label an earlier event of the scenario left on the shape of
   the target. In 4, of `examples/map-demo/map-demo.tsx`, a handler of
-  an element body writes a cell it captured, and the runtime's join
-  holds the clauses of the list the element is of, which the handler's
-  transaction reads with the element's arguments; the template has
-  none of them (question 132). In 1 the runtime stored a link with no
+  an element body writes a cell it captured, and the stored label
+  holds the join of the `map` coordinator's transaction, which is on
+  every path of the element's argument document and holds the labels
+  of the list's own document (prototype note 261); the template has
+  none of it, by the ruling that labels flow per value through the
+  callback of a per-element construct. In 1 the runtime stored a link with no
   atom where the template mints the body's.
   151 write edges are of a write the run did not make; a sample of 40
   found a write of an equal value, a branch not taken on the generated
@@ -311,6 +313,20 @@ is relitigated.
   nothing of the label of its cell to what the body writes. The label
   stays at the cell, as it does for a handle to a cell the body
   created, and reaches only a reader that follows the handle.
+- The callback of a per-element construct is a pattern, and labels
+  flow through it per value. Each thing the body is given has its own
+  label: the element has the label of its own slot of the collection
+  and of what that slot holds, the index and the whole collection
+  have theirs only where the callback declares them, and each
+  captured value has its own. A node of the body takes the labels of
+  what it reads and closes over, and nothing of what another node of
+  the same body reads. So a handler that closes over the element alone
+  writes under the event and the element, also where another node of
+  the body reads the index. Nothing of another element, and nothing
+  of the collection's length or order, reaches a node that reads
+  neither the index nor the collection. This is tighter than the
+  runtime of today, which stores one join of the `map` coordinator's
+  transaction on every path of an element's argument document.
 - `elementById` yields a handle of the element type or `undefined`,
   because the record for a key may never have been written or may have
   been cleared.
@@ -913,17 +929,6 @@ as an assumption.
     position in the source, with the label the source collection's
     declaration gives the element. No record of the plan holds that
     declared label.
-132. **What a handler of an element body takes from the list** (PL has
-    no question yet; prototype note 257). Today such a handler's
-    transaction reads the element's arguments, whose stored label
-    holds every clause the `map` run read, so `zoom.set(14)` in an
-    element of `stops` is written under the clauses of `stops`. The
-    template has the event, the handles the body holds, and what the
-    body reads, and so none of those clauses where the body reads
-    nothing of the element. *Assumed:* the template stands, tighter
-    than today: that the element exists is in the label of the
-    position its stream is stored at, not in what its handler writes.
-
 ## Open, and not needing the owner
 
 - **The pattern closure's remaining gaps** (K12): which output or argument
