@@ -151,6 +151,45 @@ export type Scenario = {
   selected?: Record<number, number>;
   /** Events to send, in order, each to the stream of a binding. */
   events?: { binding: number; event: unknown }[];
+  /** What to call at each point of the run (`compare/cost.ts`). */
+  probe?: Probe;
+};
+
+/** A point of a run that a probe is called at. */
+export type ProbePoint =
+  /** The runtime exists and nothing was compiled or written. */
+  | "created"
+  /** The program's files were read and its imports resolved. */
+  | "resolved"
+  /** The pattern is compiled and evaluated, and nothing was written. */
+  | "compiled"
+  /** The instance was started and every kept output was read. */
+  | "settled"
+  /** An event is about to be sent. */
+  | "before event"
+  /** The event's outcome is known and the result was read again. */
+  | "after event";
+
+/**
+ * A measurement of a run. The harness awaits `at` at each point and does
+ * nothing else with it, so what a probe counts between two points is what
+ * the run did between them.
+ */
+export type Probe = {
+  at: (
+    point: ProbePoint,
+    context: {
+      runtime: Runtime;
+      storageManager: ReturnType<typeof StorageManager.emulate>;
+      space: string;
+      /** From `compiled` on: the identifier of the result document. */
+      result?: string;
+      /** For the points of an event: the index of its binding. */
+      binding?: number;
+      /** For `after event`: whether the event was committed. */
+      outcome?: EventOutcome["outcome"];
+    },
+  ) => void | Promise<void>;
 };
 
 /** One row of the comparison: an output path of one run. */
@@ -561,7 +600,20 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
     storageManager,
     cfcFlowLabels: "persist",
   });
+  let resultId: string | undefined;
+  const probe = (
+    point: ProbePoint,
+    detail: { binding?: number; outcome?: EventOutcome["outcome"] } = {},
+  ) =>
+    scenario.probe?.at(point, {
+      runtime,
+      storageManager,
+      space,
+      ...(resultId === undefined ? {} : { result: resultId }),
+      ...detail,
+    });
   try {
+    await probe("created");
     const program = "files" in scenario.program
       ? scenario.program
       : await resolveLocalProgram(
@@ -572,10 +624,18 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           mainExport: scenario.program.export,
         },
       );
+    await probe("resolved");
     const compiled = await runtime.patternManager.compilePattern(
       program,
       { space },
     );
+    if (scenario.probe !== undefined) {
+      // The compile stores its cache in the space. A probe counts those
+      // documents apart from the documents of the instance.
+      await runtime.patternManager.flushCompileCacheWrites();
+      await storageManager.synced();
+    }
+    await probe("compiled");
     const start = runtime.edit();
     // The documents the scenario makes, by identifier.
     const documents = new Map<string, string>();
@@ -604,6 +664,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       start,
     );
     documents.set(result.getAsNormalizedFullLink().id, "the result");
+    resultId = result.getAsNormalizedFullLink().id;
     runtime.run(start, compiled, given, result);
     runtime.prepareTxForCommit(start);
     const { error } = await start.commit().settled;
@@ -628,6 +689,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
     }
     await runtime.idle();
     await storageManager.synced();
+    await probe("settled");
 
     const skipped: Skipped[] = [];
     const missing: Missing[] = [];
@@ -2226,6 +2288,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       // event's final outcome, also for an event it drops before a
       // handler runs.
       const settled = Promise.withResolvers<EventOutcome>();
+      await probe("before event", { binding });
       sendEvent(stream, event as never, (tx) => {
         const status = tx.status();
         const handler = record?.name ?? "";
@@ -2311,6 +2374,8 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         }`.split("\n")[0].slice(0, 160);
       }
       await runtime.idle();
+      if (scenario.probe !== undefined) await storageManager.synced();
+      await probe("after event", { binding, outcome: outcome.outcome });
       await reading((within) => {
         const after = within.writeTargets(binding, elements, found.path);
         after.forEach((target, index) => {

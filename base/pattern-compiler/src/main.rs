@@ -30,6 +30,11 @@ commands:
       emitted with no unsupported construct, and those constructs by kind.
   bodies <file>...
       Print the bodies of the given modules as JSON.
+  time <patterns directory> <manifest> [--iterations=<n>] [--plans]
+      For each entry of the manifest, a JSON array of a module and the
+      files of its program, print the wall time of each of n runs from the
+      source text of the files to the JSON text of their plans. With
+      --plans, print the plans in the place of the times.
   types <file>...
       Print, for the given modules, how many written types were evaluated,
       how many receivers and collections have a declared type, and each
@@ -57,6 +62,7 @@ fn main() -> ExitCode {
         Some("footprint") if !operands.is_empty() => footprint(&operands),
         Some("plan") if !operands.is_empty() => plan(&operands, &flags),
         Some("types") if !operands.is_empty() => types(&operands, &flags),
+        Some("time") if operands.len() == 2 => time(operands[0], operands[1], &flags),
         Some("corpus") if operands.len() == 1 => corpus_report(operands[0], &flags),
         _ => {
             eprint!("{USAGE}");
@@ -178,7 +184,45 @@ fn plan(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
     };
     let analysis = analyze(&files);
     if !corpus || flags.contains(&"--json") {
-        let modules: Vec<serde_json::Value> = analysis
+        let modules = plans_json(&analysis, corpus);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&modules).unwrap_or_default()
+        );
+        return Ok(parsed(&analysis));
+    }
+    if flags.contains(&"--sites") {
+        // Each unsupported construct of an accepted module: the kind, the
+        // file and line, and the start of its text.
+        for module in analysis.modules.iter().filter(|module| module.accepted()) {
+            let Some(file) = files.iter().find(|file| file.path == module.path) else {
+                continue;
+            };
+            for plan in &module.plans {
+                for (kind, start) in &plan.unsupported {
+                    let start = (*start as usize).min(file.text.len());
+                    let line = file.text[..start].matches('\n').count() + 1;
+                    let text: String = file.text[start..]
+                        .chars()
+                        .take(70)
+                        .map(|ch| if ch == '\n' { ' ' } else { ch })
+                        .collect();
+                    println!("{kind}\t{}:{line}\t{text}", module.path);
+                }
+            }
+        }
+        return Ok(parsed(&analysis));
+    }
+    let summary = pattern_compiler::plan::corpus_summary(&analysis);
+    print!("{summary}");
+    Ok(parsed(&analysis))
+}
+
+/// The plans of an analysis as the `plan` command prints them: one record
+/// per module, and with `accepted_only` per accepted module.
+fn plans_json(analysis: &ProgramAnalysis, accepted_only: bool) -> Vec<serde_json::Value> {
+    let corpus = accepted_only;
+    analysis
             .modules
             .iter()
             .filter(|module| !corpus || module.accepted())
@@ -214,38 +258,81 @@ fn plan(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
                     .collect();
                 serde_json::json!({ "module": module.path, "patterns": patterns })
             })
-            .collect();
+            .collect()
+}
+
+/// Times the front end and the emission of the plans for each entry of a
+/// manifest: a JSON array of `{ "module": path, "files": [path, ...] }`,
+/// each path written from the patterns directory with a leading slash. An
+/// entry's files are read once and then analyzed as one program
+/// `--iterations=<n>` times (20 where the flag is absent), each time from
+/// the source text to the JSON text of the plans of every module of the
+/// entry. Prints one JSON line per entry, with the wall time of each
+/// iteration in nanoseconds, and with `--plans` the plans in the place of
+/// the times.
+fn time(root: &str, manifest: &str, flags: &[&str]) -> std::io::Result<bool> {
+    let iterations: usize = flags
+        .iter()
+        .find_map(|flag| flag.strip_prefix("--iterations="))
+        .and_then(|count| count.parse().ok())
+        .unwrap_or(20);
+    let entries: Vec<serde_json::Value> =
+        serde_json::from_str(&std::fs::read_to_string(manifest)?).map_err(std::io::Error::other)?;
+    for entry in &entries {
+        let paths: Vec<&str> = entry["files"]
+            .as_array()
+            .map(|files| files.iter().filter_map(|file| file.as_str()).collect())
+            .unwrap_or_default();
+        let reading = std::time::Instant::now();
+        let files = paths
+            .iter()
+            .map(|path| {
+                Ok(SourceFile {
+                    path: (*path).to_string(),
+                    text: std::fs::read_to_string(format!("{root}{path}"))?,
+                })
+            })
+            .collect::<std::io::Result<Vec<SourceFile>>>()?;
+        let read_nanoseconds = reading.elapsed().as_nanos() as u64;
+        let mut nanoseconds = Vec::with_capacity(iterations);
+        let mut plan_bytes = 0;
+        let mut patterns = 0;
+        let mut emitted = Vec::new();
+        for _ in 0..iterations {
+            let started = std::time::Instant::now();
+            let analysis = analyze(&files);
+            let plans = plans_json(&analysis, false);
+            let text = serde_json::to_string(&plans).map_err(std::io::Error::other)?;
+            nanoseconds.push(started.elapsed().as_nanos() as u64);
+            plan_bytes = text.len();
+            patterns = analysis
+                .modules
+                .iter()
+                .map(|module| module.plans.len())
+                .sum();
+            emitted = plans;
+        }
+        if flags.contains(&"--plans") {
+            println!(
+                "{}",
+                serde_json::json!({ "module": entry["module"], "plans": emitted })
+            );
+            continue;
+        }
         println!(
             "{}",
-            serde_json::to_string_pretty(&modules).unwrap_or_default()
+            serde_json::json!({
+                "module": entry["module"],
+                "files": files.len(),
+                "sourceBytes": files.iter().map(|file| file.text.len()).sum::<usize>(),
+                "readNanoseconds": read_nanoseconds,
+                "nanoseconds": nanoseconds,
+                "planBytes": plan_bytes,
+                "patterns": patterns,
+            })
         );
-        return Ok(parsed(&analysis));
     }
-    if flags.contains(&"--sites") {
-        // Each unsupported construct of an accepted module: the kind, the
-        // file and line, and the start of its text.
-        for module in analysis.modules.iter().filter(|module| module.accepted()) {
-            let Some(file) = files.iter().find(|file| file.path == module.path) else {
-                continue;
-            };
-            for plan in &module.plans {
-                for (kind, start) in &plan.unsupported {
-                    let start = (*start as usize).min(file.text.len());
-                    let line = file.text[..start].matches('\n').count() + 1;
-                    let text: String = file.text[start..]
-                        .chars()
-                        .take(70)
-                        .map(|ch| if ch == '\n' { ' ' } else { ch })
-                        .collect();
-                    println!("{kind}\t{}:{line}\t{text}", module.path);
-                }
-            }
-        }
-        return Ok(parsed(&analysis));
-    }
-    let summary = pattern_compiler::plan::corpus_summary(&analysis);
-    print!("{summary}");
-    Ok(parsed(&analysis))
+    Ok(true)
 }
 
 fn types(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
