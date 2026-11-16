@@ -1876,7 +1876,9 @@ const writeIsRuntimeInitialization = (
  * claim its sources too. The index is built once per transaction for the
  * inputs recorded so far and rebuilt when more are recorded, so a check at
  * one of a commit's many written paths reads the inputs about that document
- * rather than every input the transaction holds.
+ * rather than every input the transaction holds. It is keyed by the array of
+ * inputs, so it goes with that array when a settled transaction releases its
+ * preparation records.
  */
 const writePolicyInputsForDocument = (
   tx: IExtendedStorageTransaction,
@@ -1887,7 +1889,7 @@ const writePolicyInputsForDocument = (
   },
 ): readonly WritePolicyInput[] => {
   const inputs = tx.getCfcState().writePolicyInputs;
-  let indexed = writePolicyInputIndexes.get(tx);
+  let indexed = writePolicyInputIndexes.get(inputs);
   if (indexed === undefined || indexed.length !== inputs.length) {
     const byDocument = new Map<string, WritePolicyInput[]>();
     const add = (
@@ -1908,13 +1910,13 @@ const writePolicyInputsForDocument = (
       }
     }
     indexed = { length: inputs.length, byDocument };
-    writePolicyInputIndexes.set(tx, indexed);
+    writePolicyInputIndexes.set(inputs, indexed);
   }
   return indexed.byDocument.get(cfcDocumentKey(target)) ?? [];
 };
 
 const writePolicyInputIndexes = new WeakMap<
-  IExtendedStorageTransaction,
+  readonly WritePolicyInput[],
   { length: number; byDocument: Map<string, WritePolicyInput[]> }
 >();
 
