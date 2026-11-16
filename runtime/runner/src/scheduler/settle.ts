@@ -596,26 +596,22 @@ function maybeApplyBudgetBackoff(
     reason,
     passScopedDemand,
   });
-  if (plan.actions.length === 0) {
+  // The plan names a wake time exactly when it defers an action.
+  const { backoffUntil } = plan;
+  if (backoffUntil === undefined) {
     return { applied: false, actionCount: 0, actions: [] };
   }
 
   logger.debug("schedule-backoff", () => [
     `[BACKOFF] ${reason}: deferred ${plan.actions.length} action(s)`,
-    ...(plan.backoffUntil !== undefined
-      ? [
-        `wake in ${
-          Math.max(0, Math.round(plan.backoffUntil - performance.now()))
-        }ms`,
-      ]
-      : []),
+    `wake in ${Math.max(0, Math.round(backoffUntil - performance.now()))}ms`,
   ]);
 
   return {
     applied: true,
     actionCount: plan.actions.length,
     actions: plan.actions,
-    backoffUntil: plan.backoffUntil,
+    backoffUntil,
   };
 }
 

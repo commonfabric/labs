@@ -221,7 +221,6 @@ import {
   isUiInputBlindWriteTx,
   markLazyMaterializationTx,
   noteSchemaRefusalTx,
-  reactivityLogFromActivities,
   takeSchemaRefusalTx,
   unmarkLazyMaterializationTx,
 } from "./reactivity-log.ts";
@@ -231,7 +230,6 @@ import {
   TransactionCompleteError,
 } from "./transaction-errors.ts";
 import {
-  getDirectTransactionReactivityLog,
   getTransactionReadActivities,
   getTransactionWriteAttempts,
   getTransactionWriteDetails,
@@ -3624,20 +3622,21 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     space: MemorySpace,
     name: string,
     authorization: RuntimeWritePolicyAuthorization,
-  ): void {
+  ): string {
     if (!runtimeWritePolicyAuthorized(authorization)) {
       throw new Error(
         "ensureRuntimeSecret() requires the runtime's authorization",
       );
     }
     this.#assertWritable("ensureRuntimeSecret()");
-    if (readRuntimeSecret(this, space, name) !== undefined) return;
+    const stored = readRuntimeSecret(this, space, name);
+    if (stored !== undefined) return stored;
     const link = runtimeSecretLink(space, name);
+    const secret = toUnpaddedBase64url(
+      crypto.getRandomValues(new Uint8Array(32)),
+    );
     this.#runPrivilegedSystemWrite(() => {
-      this.writeValueOrThrow(
-        link,
-        toUnpaddedBase64url(crypto.getRandomValues(new Uint8Array(32))),
-      );
+      this.writeValueOrThrow(link, secret);
     });
     // The label arrives the way a schema-declared one does on any write, so
     // the secret carries it from the commit that creates it.
@@ -3659,6 +3658,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     } finally {
       assignCfcImplementationIdentity(this, identity);
     }
+    return secret;
   }
 
   /**
@@ -4033,8 +4033,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   getReactivityLog(): TransactionReactivityLog {
-    return getDirectTransactionReactivityLog(this.tx) ??
-      reactivityLogFromActivities(this.tx.journal.activity());
+    return this.tx.getReactivityLog();
   }
 
   addCommitPrecondition(
@@ -5139,8 +5138,8 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     space: MemorySpace,
     name: string,
     authorization: RuntimeWritePolicyAuthorization,
-  ): void {
-    this.#wrapped.ensureRuntimeSecret(space, name, authorization);
+  ): string {
+    return this.#wrapped.ensureRuntimeSecret(space, name, authorization);
   }
 
   setCfcPolicyEvaluationMode(mode: CfcPolicyEvaluationMode): void {
@@ -5472,8 +5471,7 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
   }
 
   getReactivityLog(): TransactionReactivityLog {
-    return this.#wrapped.getReactivityLog?.() ??
-      reactivityLogFromActivities(this.#wrapped.journal.activity());
+    return this.#wrapped.getReactivityLog();
   }
 
   addCommitPrecondition(
@@ -5518,20 +5516,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     link: NormalizedFullLink,
     changes: readonly TextChange[],
   ): string {
-    if (!this.#wrapped.recordTextChanges) {
-      throw new Error(
-        "storage transaction does not support recordTextChanges()",
-      );
-    }
     return this.#wrapped.recordTextChanges(link, changes);
   }
 
   recordSqliteWrite(space: MemorySpace, op: SqliteOperation): void {
-    if (!this.#wrapped.recordSqliteWrite) {
-      throw new Error(
-        "storage transaction does not support recordSqliteWrite()",
-      );
-    }
     this.#wrapped.recordSqliteWrite(space, op);
   }
 

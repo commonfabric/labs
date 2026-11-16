@@ -514,41 +514,29 @@ function createViewProxy<T>(
   // proxy is here on purpose and something has to preserve type identity
   // without losing member resolution.
 
-  // Stored objects are deep-frozen during storage normalization
-  // (fabricFromConvertibleJsValue). A frozen proxy target would force every
+  // The proxy target is an unfrozen empty stub, never the value. Stored values
+  // are deep-frozen during storage normalization
+  // (fabricFromConvertibleJsValue), and a frozen target would force every
   // property access through the invariant guard (ECMAScript 10.5.8: a [[Get]]
   // trap on a non-configurable, non-writable data property must return the
-  // target's own value), bypassing the get trap's link resolution entirely.
+  // target's own value), bypassing the get trap's link resolution. The get trap
+  // reads live data from the transaction, never from the target.
   //
-  // Fix: use an unfrozen empty stub as the proxy target. The stub's contents
-  // are irrelevant -- the get trap always reads live data from the transaction,
-  // never from the target. The stub only needs to:
-  //   1. Be unfrozen, so all properties are configurable (no invariant
-  //      conflicts).
-  //   2. Match the value's type: [] for arrays (so Array.isArray checks on the
-  //      proxy target work) and {} for objects.
-  //   3. For arrays, match the length (getOwnPropertyDescriptor returns the
-  //      target's non-configurable length property, so it must be correct).
+  // The stub matches the value's kind: [] for an array, so `Array.isArray` on
+  // the proxy answers correctly, and {} otherwise. That kind is the one thing
+  // about the value the view cannot follow, since the JS spec offers no trap
+  // for `Array.isArray`. So the view is bound to the kind it was built over,
+  // and `currentValue()` below refuses once the document holds another. The
+  // cache key carries the kind, so a document that changes kind is served a
+  // fresh view on its next read.
   //
-  // Sparse arrays (new Array(n)) are used for array stubs -- JS engines
-  // represent these as holey arrays with no element allocation until writes,
-  // and we never write to the stub.
-  //
-  // The kind of the stub is the one thing about the value that the view
-  // cannot follow: `Array.isArray` on a proxy answers for its target, and the
-  // JS spec offers no trap for it. So the view is bound to the kind it was
-  // built over, and `currentValue()` below refuses once the document holds
-  // another. The cache key carries the kind, so a document that changes kind
-  // is served a fresh view on its next read.
-  //
-  // An instance takes the stub whether or not it is frozen. Its view reports
-  // no own keys (the `ownKeys` trap below), and a target carrying the
-  // instance's own non-configurable freeze shield would make that report
+  // The only non-configurable property the stub holds is an array stub's
+  // `length`, which is writable, so the traps report the live length in its
+  // place. An instance's view reports no own keys (the `ownKeys` trap below);
+  // a target carrying the instance's own non-configurable freeze shield would
   // break the invariant that a proxy list every non-configurable key of its
-  // target. Storage freezes what it holds, so this does not rest on it.
-  const proxyTarget = Object.isFrozen(value) || value instanceof FabricInstance
-    ? (Array.isArray(value) ? new Array(value.length) : {})
-    : value;
+  // target.
+  const proxyTarget = Array.isArray(value) ? [] : {};
   const boundKind = viewKindOf(value)!;
 
   // The value the document holds now, read through the transaction, with the
@@ -650,7 +638,7 @@ function createViewProxy<T>(
   if (existingProxy) return remember(existingProxy);
 
   const proxy = new Proxy(proxyTarget as object, {
-    get: (target, prop, receiver) =>
+    get: (_target, prop) =>
       atEpoch(() => {
         // Promise adoption probes `then` on every value it receives, so a view
         // that refuses the probe cannot cross a promise boundary at all — and a
@@ -679,17 +667,8 @@ function createViewProxy<T>(
           const accessTx = readTx();
           if (readStatsActive) recordProxyAccess(accessTx);
           // Read the array fully (not SHAPE_READ) so `length` tracks element
-          // add/remove; the kind was checked above at the same instant. This
-          // comes ahead of the invariant guard below: `length` is the array
-          // stub's one non-configurable property, and the stub's is stale.
+          // add/remove; the kind was checked above at the same instant.
           return (accessTx.readValueOrThrow(link) as unknown[]).length;
-        }
-
-        // When encountering a frozen property, we just return the value to
-        // maintain proxy invariants.
-        const descriptor = Object.getOwnPropertyDescriptor(target, prop);
-        if (descriptor?.configurable === false) {
-          return Reflect.get(target, prop, receiver);
         }
 
         if (typeof prop === "symbol") {
@@ -925,7 +904,7 @@ function createViewProxy<T>(
         }
         return keys;
       }),
-    getOwnPropertyDescriptor: (target, prop) =>
+    getOwnPropertyDescriptor: (_target, prop) =>
       atEpoch(() => {
         if (boundKind === "array" && prop === "length") {
           const accessTx = readTx();
@@ -944,14 +923,6 @@ function createViewProxy<T>(
         if (boundKind === "FabricInstance") {
           verifyKind();
           return undefined;
-        }
-
-        // For properties that exist on the original target (e.g. array `length`),
-        // delegate to the target to satisfy proxy invariants for non-configurable
-        // properties.
-        const targetDesc = Object.getOwnPropertyDescriptor(target, prop);
-        if (targetDesc && !targetDesc.configurable) {
-          return targetDesc;
         }
         if (typeof prop === "symbol") {
           verifyKind();
@@ -1014,8 +985,7 @@ function createViewProxy<T>(
       }),
     // A query-result proxy is a live, transaction-backed view: reads resolve
     // through the get trap on every access. Structural mutations (freeze, seal,
-    // defineProperty, delete) cannot be honored without either corrupting the
-    // backing store (when the proxy fronts the live value) or defeating live
+    // defineProperty, delete) cannot be honored without defeating live
     // resolution (a non-configurable target property forces [[Get]] to return
     // the target's own value, bypassing the trap). So we refuse them outright;
     // callers that need an immutable/structurally-edited form must snapshot the

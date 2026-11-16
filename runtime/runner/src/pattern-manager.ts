@@ -82,7 +82,7 @@ import type { MemorySpace, Runtime, ServerRunInfo } from "./runtime.ts";
 import type { PatternManagerSizes } from "./runtime-sizes.ts";
 
 import {
-  isFabricImportSpecifier,
+  type FabricRef,
   parseFabricRef,
   pinnedIdentity,
 } from "./sandbox/fabric-import-specifier.ts";
@@ -345,7 +345,12 @@ export function sourceCfcMetadataProhibitsCrossSpaceCopy(
   }) ?? false;
 }
 
-function throwableStorageError(error: CommitError): Error {
+/**
+ * Returns `error` as a throwable `Error`: the error itself when it is one, and
+ * otherwise a new `Error` carrying its `message` and `name`, with `error` as
+ * its `cause`. Exported for testing.
+ */
+export function throwableStorageError(error: CommitError): Error {
   if (error instanceof Error) return error;
   return Object.assign(new Error(error.message), {
     name: error.name,
@@ -458,9 +463,9 @@ function cacheEntriesIncludePatternCoverage(
  * data that predates that guard.
  *
  * Parsing needs the compiler stack, which the caller loads when some module
- * carries no attested list.
+ * carries no attested list. Exported for testing.
  */
-function fabricImportRefsFromSource(
+export function fabricImportRefsFromSource(
   doc: SourceDoc,
   attestedImports: readonly string[] | undefined,
 ): CacheableModule["imports"] {
@@ -472,8 +477,12 @@ function fabricImportRefsFromSource(
   const refs: CacheableModule["imports"] = [];
   const seen = new Set<string>();
   for (const specifier of specifiers) {
-    if (!isFabricImportSpecifier(specifier)) continue;
-    const ref = parseFabricRef(specifier);
+    let ref: FabricRef | undefined;
+    try {
+      ref = parseFabricRef(specifier);
+    } catch {
+      continue;
+    }
     if (ref === undefined) continue;
     const targetIdentity = pinnedIdentity(ref);
     if (targetIdentity === undefined) continue;
@@ -485,7 +494,11 @@ function fabricImportRefsFromSource(
   return refs;
 }
 
-function uniqueCacheableImports(
+/**
+ * Returns `imports` without repeats: the first of each specifier and target
+ * pair, in order. Exported for testing.
+ */
+export function uniqueCacheableImports(
   imports: CacheableModule["imports"],
 ): CacheableModule["imports"] {
   const seen = new Set<string>();
@@ -2303,9 +2316,6 @@ export class PatternManager {
     const fabricDependencies = new Set<string>();
     for (const [identity, doc] of sourceDocs) {
       const compiled = compiledDocs?.get(identity);
-      if (runtimeVersion !== undefined && !compiled) {
-        throw new Error(`compiled doc missing for ${identity}`);
-      }
       const fabricImports = compiled?.kind === "data"
         ? []
         : fabricImportRefsFromSource(doc, compiled?.sourceImports);
@@ -4213,9 +4223,6 @@ export class PatternManager {
   ): Pattern {
     this.registerEvaluatedModules(result);
     const { main } = result;
-    if (!main) {
-      throw new Error("Pattern compilation produced no exports.");
-    }
     // Usually an authored export, but a map/filter/flatMap `op` reloads by a
     // transformer HOIST symbol (`__cfReg`, e.g. `__cfPattern_1`) that is not an
     // export — `registerEvaluatedModules` above indexed it, so resolve it there.
@@ -4639,14 +4646,10 @@ export class PatternManager {
     this.#compileCacheWrites.delete(write);
     this.#pendingCacheWriteBacks.delete(write);
     for (const identity of identities) {
-      const spaces = this.#closurePersistsInFlight.get(identity);
-      const count = spaces?.get(space);
-      if (spaces === undefined || count === undefined) continue;
-      if (count > 1) {
-        spaces.set(space, count - 1);
-        continue;
-      }
-      spaces.delete(space);
+      const spaces = this.#closurePersistsInFlight.get(identity) ?? new Map();
+      const count = (spaces.get(space) ?? 1) - 1;
+      if (count > 0) spaces.set(space, count);
+      else spaces.delete(space);
       if (spaces.size === 0) this.#closurePersistsInFlight.delete(identity);
     }
     this.#runtime.telemetry.submit({
@@ -5000,9 +5003,6 @@ export class PatternManager {
   ): Pattern {
     this.registerEvaluatedModules(result);
     const { main } = result;
-    if (!main) {
-      throw new Error("Pattern compilation produced no exports.");
-    }
     const exportName = program.mainExport ?? "default";
     if (!(exportName in main)) {
       throw new Error(
@@ -5231,9 +5231,8 @@ export class PatternManager {
     } finally {
       readTx.abort?.("get-pattern-source-files read complete");
     }
-    if (sourceDocs === undefined) return undefined;
-    const entry = sourceDocs.get(entryIdentity);
-    if (entry === undefined) return undefined;
+    const entry = sourceDocs?.get(entryIdentity);
+    if (sourceDocs === undefined || entry === undefined) return undefined;
     const sourceRoots = sourcePackagePaths(
       entry,
       sourceDocs,

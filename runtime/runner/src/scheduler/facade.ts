@@ -145,6 +145,7 @@ import { NodeRegistry, type SchedulerNode } from "./node-record.ts";
 import {
   resolveRegistrationSurface,
   resubscribePullSchedulerAction,
+  type SchedulerResubscribeOptions,
   type SchedulerSubscribeActionState,
   type SchedulerSubscriptionState,
   type SchedulerUnsubscribeActionState,
@@ -984,16 +985,22 @@ export class Scheduler {
   resubscribe(
     action: Action,
     log: ReactivityLog,
-    options: {
-      isEffect?: boolean;
-      changeGroup?: ChangeGroup;
-    } = {},
+    options: SchedulerResubscribeOptions = {},
   ): void {
+    this.#resubscribe(action, log, options);
+  }
+
+  /** Like {@link resubscribe}, except that it returns the action's node. */
+  #resubscribe(
+    action: Action,
+    log: ReactivityLog,
+    options: SchedulerResubscribeOptions = {},
+  ): SchedulerNode {
     const record = this.#nodes.get(action);
     const wasLiveBeforeRootRegistration = record !== undefined &&
       isLive(this.#dependencyGraphState, record);
     this.#updateMaterializerRegistration(action);
-    resubscribePullSchedulerAction(
+    return resubscribePullSchedulerAction(
       this.#subscribeActionState,
       action,
       log,
@@ -1588,7 +1595,6 @@ export class Scheduler {
       this.#nodes.demandedWriters.delete(action);
       this.#demandRootCounters.leaves += 1;
     }
-    if (record === undefined) return;
     notifyNodeLivenessChange(this.#dependencyGraphState, action, wasLive);
     if (
       shouldBeRoot && this.#isLiveAction(action) &&
@@ -1675,12 +1681,11 @@ export class Scheduler {
     if (writers === undefined || writers.size === 0) return 0;
     let rearmed = 0;
     for (const writer of writers) {
-      const record = this.#nodes.get(writer);
-      if (record === undefined) continue;
-      if (record.fanOut === undefined) continue;
-      const pairKey = keyAtRatchet(record.fanOut, demander);
+      const fanOut = this.#nodes.get(writer)?.fanOut;
+      if (fanOut === undefined) continue;
+      const pairKey = keyAtRatchet(fanOut, demander);
       if (pairKey === undefined) continue;
-      if (record.fanOut.clean.has(pairKey)) continue;
+      if (fanOut.clean.has(pairKey)) continue;
       this.#markActionInvalid(writer, undefined, { fanOutInstances: "keep" });
       this.#pending.add(writer);
       rearmed += 1;
@@ -2918,9 +2923,6 @@ export class Scheduler {
         this.#eventQueue[0] === head
       ) break;
       if (--remaining <= 0 || this.#eventQueue.length === 0) break;
-      // The handler's run has to have landed before the next preflight
-      // reads what it wrote.
-      if (this.runningPromise) await this.runningPromise;
     }
     return {
       eventBlockingDeps,
@@ -3627,9 +3629,7 @@ export class Scheduler {
       ],
       writes: previous?.writes ?? [],
     };
-    this.resubscribe(action, log);
-    const record = this.#nodes.get(action);
-    if (record === undefined) return;
+    const record = this.#resubscribe(action, log);
     const cancels: (() => void)[] = [];
     for (const space of new Set(log.reads.map((read) => read.space))) {
       const replica = this.runtime.storageManager.open(space).replica;
@@ -3969,14 +3969,18 @@ export class Scheduler {
     const history = this.#headEventLoadParkHistory;
     if (!history || history.eventId !== event.id) return [...keys];
     return keys.filter((key) => {
-      const currentGeneration =
-        this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0;
+      const currentGeneration = this.#pendingLoadGeneration(key);
       const settledGeneration = history.generations.get(key);
       if (settledGeneration === undefined) return true;
       if (settledGeneration === currentGeneration) return false;
       return this.#preflightPendingLoadGenerations.get(key) ===
         currentGeneration;
     });
+  }
+
+  /** The generation of `key`'s pending load, or 0 when none is pending. */
+  #pendingLoadGeneration(key: string): number {
+    return this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0;
   }
 
   #capturePendingLoadGenerations(): void {
@@ -3988,22 +3992,23 @@ export class Scheduler {
       const key = entityKey(address, this.runtime.scopeKeyIdentity);
       this.#preflightPendingLoadGenerations.set(
         key,
-        this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0,
+        this.#pendingLoadGeneration(key),
       );
     }
   }
 
+  /**
+   * Parks `event`, the head, on the loads of `keys`. The event is not parked
+   * already: a parked event neither passes its preflight nor runs, and those
+   * are the only places that park one.
+   */
   #parkHeadEventForLoads(
     event: QueuedEvent,
     keys: readonly string[],
     withdrawal?: LoadingReadWithdrawal,
   ): void {
-    if (this.#headEventLoadPark?.eventId === event.id) return;
     const generations = new Map(
-      keys.map((key) => [
-        key,
-        this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0,
-      ]),
+      keys.map((key) => [key, this.#pendingLoadGeneration(key)]),
     );
     logger.debug("event-load-park", () => [
       `event ${event.id} parks on ${keys.length} loading document(s)`,
@@ -4363,10 +4368,6 @@ export class Scheduler {
   #markNodeHasRun(action: Action): void {
     const record = this.#nodes.get(action);
     if (!record) return;
-
-    if (record.status === "never-ran") {
-      this.#nodes.setStatus(action, "clean");
-    }
 
     if (
       record.provisionalDemand &&

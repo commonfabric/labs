@@ -3757,9 +3757,8 @@ export class WaveAccumulator
     droppedPatches: ReadonlyMap<string, ReadonlySet<PatchOp>>,
   ): DroppedSealedWrites {
     const dropped = new Map<number, "operation" | ReadonlySet<number>>();
-    const home = this.#homeSealed(contribution);
-    if (home === undefined) return dropped;
-    for (const [index, operation] of home.sealed.commit.operations.entries()) {
+    const { operations } = this.#homeCommit(contribution);
+    for (const [index, operation] of operations.entries()) {
       if (operation.op === "sqlite") continue;
       const key = docInstanceKey(
         operation.id,

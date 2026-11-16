@@ -90,7 +90,7 @@ describe("scheduler-empty-reactive-reads", () => {
           expect((await update.commit().settled).error).toBeUndefined();
         }
 
-        const reads = tx.tx.getReactivityLog!().reads;
+        const reads = tx.tx.getReactivityLog().reads;
         expect(reads.length).toBeGreaterThan(0);
         const result = await tx.commit().settled;
         if (stale) {
@@ -98,7 +98,7 @@ describe("scheduler-empty-reactive-reads", () => {
             name: "StorageTransactionInconsistent",
             emptyReactiveCommit: true,
           });
-          expect(tx.tx.getReactivityLog!().reads).toEqual(reads);
+          expect(tx.tx.getReactivityLog().reads).toEqual(reads);
         } else {
           expect(result.error).toBeUndefined();
         }

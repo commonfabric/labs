@@ -269,7 +269,6 @@ export const MANIFEST: readonly ManifestRow[] = [
     relation: "missing",
     decidedToday: [
       { file: "cfc/consumed-label.ts", symbol: "joinLabels" },
-      { file: PREPARE, symbol: "mergeLabels" },
       { file: "cfc/label-view-core.ts", symbol: "mergeLabel" },
       {
         file: "cfc/observation.ts",
@@ -278,7 +277,7 @@ export const MANIFEST: readonly ManifestRow[] = [
       { file: "cfc/access-integrity.ts", symbol: "joinLocationIntegrity" },
     ],
     note: "each concatenates and deduplicates confidentiality clauses; the " +
-      "integrity side is a plain union in `prepare.ts`, the class-aware " +
+      "integrity side is a plain union in `joinLabels`, the class-aware " +
       "meet of hereditary atoms is inside `deriveFlowJoin`, and " +
       "`joinLocationIntegrity` is the class-aware join of the locations a " +
       "release gate's access consumed, counting two observations of one " +
