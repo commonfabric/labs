@@ -1950,6 +1950,10 @@ over the result of another per-element construct.
   made for the key and evaluated. A state cell of the key reads what
   it held, an operation of the key finds its state, and a binding of
   the key has the stream it had, because each is named from the key.
+  Over an array of plain values in place the key is formed from the
+  value. A value that is removed and written back finds the cells it
+  had, and a value that was edited is another key and finds none
+  (`plan-and-label-templates.md` §8, question 112).
 - **As today.** The runtime of today names the result cell of an
   element from the result container and the key
   (`listElementResultCell` in

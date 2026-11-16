@@ -1475,6 +1475,20 @@ passed on without a read adds none. What a read through it is, of a
 path of the result that a cone of the instance computes, has no record
 and is open (section 8, question 108).
 
+A handler binding of the reactive tier can capture the name, and its
+state path then resolves to the result cell. `Binding.state.place`
+names a slot, an output, a stream, or a constant, and the result cell
+is none of the four. *Assumed* (section 8, question 120): the entry
+holds, in the place of `place`, a mark that the path is the result
+cell, and at dispatch the runtime hands the handler a reference to the
+result cell at that path, as it supplies one to value code. No record
+defines the form of the mark. The prototype's plans hold no `place`
+for such an entry, and its executor hands the handler nothing there.
+The rule is the same for a binding in an element body over an array
+of references, over an array of plain values in place, and over the
+result of another per-element construct, where the name is that of
+the enclosing pattern and the result cell that of its instance.
+
 **The order of `Binding.result`.** The paths are in source order: the
 order in which the positions that hold the stream are written in the
 source of the pattern. The members of an object literal are in the order
@@ -11895,7 +11909,15 @@ this document made.
      hold the same key, such as an equal value added after a removal,
      because the reference holds nothing but the collection, the key
      and the path. The alternative ends a reference when its key
-     leaves, which needs a mark of the removal in the collection. The
+     leaves, which needs a mark of the removal in the collection.
+     Open with it, over the result of another per-element construct:
+     the address of a collection that is the assembled result of a
+     `map` or a `flatMap` whose body computes its values, where the
+     output that holds the result is interim and nothing is stored
+     at an address. *Assumed:* the reference names the output by its
+     instance and its index in the plan, and a read through it reads
+     the output as a cone reads another cone's output. The
+     prototype's executor passes such an element on as its value. The
      case is an array of plain values in place, and the result of
      another per-element construct where the upstream position holds
      a value; nothing is open over an array of references.
@@ -12029,3 +12051,14 @@ this document made.
      an element body over an array of references, over an array of
      plain values in place, and over the result of another
      per-element construct.
+120. **What `Binding.state.place` holds for a state path bound to the
+     name of `[SELF]`** (for the project owner). By ruling the name is
+     a reference to the result cell of the instance. A handler binding
+     of the reactive tier can capture it, and `place` names a slot, an
+     output, a stream, or a constant (section 1.1). *Assumed:* the
+     entry holds a mark that the path is the result cell, in a form
+     that no record defines, and the runtime hands the handler a
+     reference to the result cell. The alternative gives the plan a
+     slot root for the result of the instance, which a `place` and a
+     template could then name. The same for a binding in an element
+     body in each of the three cases of a per-element source.
