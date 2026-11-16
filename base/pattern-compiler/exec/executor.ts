@@ -739,6 +739,8 @@ export class Instance {
     };
     return {
       nohost: none,
+      // What `[SELF]` of the pattern's parameter names: the result.
+      self: new Ref("result", []),
       setups: this.#setups,
       external: (specifier: string) => instance.#external(specifier),
       module: (index: number) => instance.#module(index),

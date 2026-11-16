@@ -573,3 +573,18 @@ export const P = pattern<{ amount: number; sign?: string }>(({ amount, sign }) =
         "{text}"
     );
 }
+
+#[test]
+fn the_name_bound_to_self_is_a_reference_to_the_result() {
+    let (_, code) = emitted(
+        r#"import { computed, equals, pattern, SELF, Writable } from "commonfabric";
+type Piece = Writable<{ title: string }>;
+export const P = pattern<{ pieces: Piece[] }>(({ pieces, [SELF]: self }) => {
+  const others = computed(() => pieces.filter((piece: Piece) => !equals(piece, self)));
+  return { others };
+});
+"#,
+        "P",
+    );
+    assert!(source(&code).contains("const self = $rt.self;"));
+}

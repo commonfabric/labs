@@ -1278,6 +1278,28 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                     if let Some(parameter) = function.params().items.first() {
                         rewriter.bind_names(&parameter.pattern, "$arg", &mut Vec::new(), None);
                     }
+                } else if let Some(BindingPattern::ObjectPattern(object)) = function
+                    .params()
+                    .items
+                    .first()
+                    .map(|parameter| &parameter.pattern)
+                {
+                    // `[SELF]: name` binds a reference to the instance's
+                    // own result.
+                    for property in &object.properties {
+                        let own = property.computed
+                            && matches!(
+                                property.key.as_expression().map(|key| unwrap(key)),
+                                Some(Expression::Identifier(key)) if key.name == "SELF"
+                            );
+                        if let (true, BindingPattern::BindingIdentifier(identifier)) =
+                            (own, &property.value)
+                        {
+                            rewriter
+                                .generator
+                                .hoist(format!("const {} = $rt.self;", identifier.name));
+                        }
+                    }
                 }
                 match function.expression_body() {
                     Some(expression) => rewriter.render(expression, Want::Pass),
