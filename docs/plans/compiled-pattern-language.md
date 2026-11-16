@@ -401,10 +401,11 @@ is relitigated.
   holds a reference, and by its value otherwise. In both cases the key
   also holds the count of earlier occurrences of the same identity or
   value in the collection, so two equal elements have two keys.
-  Position alone is not in the key, so moving an element recomputes
-  nothing in almost all cases. The index joins the key only when the
-  callback uses it. A value-derived key is salted with a secret of the
-  space.
+  The position is never in the key, also where the callback uses the
+  index. The index is given to the nodes of the body that read it, so
+  a move evaluates those nodes alone, and the state, streams, and
+  children of the body stay with their element. A value-derived key
+  is salted with a secret of the space.
 - Everything an element body holds is per element key, and so per
   occurrence: its state cells, its streams, its effects, and its
   children. Equal elements share nothing. A body with no state of its
@@ -930,17 +931,6 @@ as an assumption.
     is not compared, and in the compiled path the evaluation that
     reads the slot fails as a body that throws does.
 
-135. **How far the index reaches in a body that uses it** (PL
-    question 89). One ruling has the index join the element key when
-    the callback uses it. Another has labels flow per value, so a node
-    that does not read the index takes nothing of the collection's
-    order. The labels agree with both. With the position in the key, a
-    move evaluates the whole body of the moved element again and gives
-    it new state, also for nodes that do not read the index.
-    *Assumed:* the position joins the key of the whole body. The
-    alternative keeps the position out of the key and gives the index
-    to the nodes that read it, so a move evaluates those nodes alone
-    and state stays with its element.
 136. **A binding that a computation in an element body makes** (PL
     question 90). A binding made in a function body is named by what
     it holds and by no place, and everything an element body holds is
