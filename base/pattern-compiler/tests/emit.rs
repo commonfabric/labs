@@ -748,3 +748,32 @@ export const P = pattern<{ items: Item[]; amounts: number[]; bonus: number }>(
     assert!(text.contains("$rt.reduce(1, "), "{text}");
     assert_eq!(code["reduces"], json!([0, 1]));
 }
+
+/// `equals` compares what its operands name (PL §3.16; §1.3, "A plain
+/// value in place has an identity"), so value code passes each operand
+/// as the reference it is and reads the value of neither. The code is
+/// the same over an array of references and over an array of plain
+/// values in place: the plan does not say which `items` holds.
+#[test]
+fn equals_is_given_its_operands_as_references() {
+    let (plan, code) = emitted(
+        r#"import { equals, pattern, Writable } from "commonfabric";
+interface Item { title: string }
+export const P = pattern<{ items: Item[]; selected: Writable<Item | null> }>(
+  ({ items, selected }) => {
+    return {
+      rows: items.map((item) => ({ title: item.title, isSelected: equals(selected, item) })),
+    };
+  },
+);
+"#,
+        "P",
+    );
+    let text = source(&code);
+    let selected = slot(&plan, "argument", &["selected"], "identity");
+    let item = slot(&plan, "element", &[], "identity");
+    assert!(
+        text.contains(&format!("$h.equals($h.slot({selected}), $h.slot({item}))")),
+        "{text}"
+    );
+}

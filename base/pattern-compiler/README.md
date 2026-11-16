@@ -371,7 +371,8 @@ not give, and what the comparison found. Notes 307 on say what the rulings of
 undetermined, and the figures of the comparison after them. Notes 325 on do the
 same for the rulings on `Cone.within` and on who places a stream, and for
 `reduce`, the record of a key of a list, and the keys of the result of a
-`flatMap`.
+`flatMap`. Notes 344 on have what today's runtime stores when a record gets into
+a list, and rulings Z12 to Z17.
 
 ## The parser
 

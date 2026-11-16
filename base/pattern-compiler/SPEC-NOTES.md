@@ -4340,3 +4340,336 @@ of another per-element construct.
      note 342 are not examined. No fresh run of today's runtime over the corpus
      was made: `again` uses the values of the earlier run, and the change to the
      harness (note 334) is exercised by the fixtures alone.
+
+## What today's runtime stores for a record in a list, and rulings Z12 to Z17
+
+Notes 344 to 366 are about a measurement of today's runtime and about the
+owner's rulings Z12 to Z17 of 2026-11-16. Each note says what the crate and the
+executor do, which statement of an earlier note it replaces, and what a ruling
+leaves undetermined. A note that ends with **Needs a ruling** names something
+the owner has to decide. Every statement about a per-element construct says
+which case it is about: an array of references, an array of plain values in
+place, or the result of another per-element construct.
+
+344. **What today's runtime stores when a record gets into a list.** Measured
+     with the runner alone (scratchpad
+     `cpp/probe26/list-record-storage.test.ts`, 12 tests):
+
+     | How the element is written                            | What the list stores                  | The key `map` gives the element                | A reference to `item.position` stored elsewhere, after the element is removed |
+     | ----------------------------------------------------- | ------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------- |
+     | `items.push({ ... })` in a handler                    | A link to a document of the record's  | The record's document, with no path            | Reads the record's value still: the document stays                            |
+     | `items.set([...items.get(), { ... }])` in a handler   | The same for the new record           | The same                                       | The same                                                                      |
+     | A record of the argument the instance is created with | The record, in the argument document  | The argument document and the path `items/<n>` | Reads the element that moved to the position, and nothing once none is there  |
+     | A record of a `Default` of the argument               | The record, written into the argument | The same, by position                          | The same                                                                      |
+     | A string, however it is written                       | The string, in the list               | The list's document and the position           | Reads the string that moved to the position                                   |
+
+     `Cell.set` and `Cell.pushAll` (`runtime/runner/src/cell.ts`) call
+     `diffAndUpdate` and `diffAndAppend` with `frameAnchorIds(frame)`, and
+     `normalizeAndDiff` then gives a plain object that sits in an array a
+     document of its own through `anchorValueAsEntity`
+     (`runtime/runner/src/data-updating.ts`). The document's id is
+     `createRef({ id }, { parent, path, context })` over the counter of the
+     writing frame, the list's document, the path of the list, and the frame's
+     cause: it is formed from where and by which run the record was written, and
+     two pushes of equal records make two documents. A record the list held
+     stays as it was: in place, or the link it was. `Runner.#updateArgument`
+     (`runtime/runner/src/runner.ts`) writes the argument with no source of
+     anchor ids, so its records stay in place. `listElementKeys`
+     (`runtime/runner/src/builtins/list-element-keys.ts`) keys a slot by the
+     link it resolves to (`cellIdentityKey` in
+     `runtime/runner/src/builtins/scope-policy.ts`), which for a value in place
+     is the position. A schema read of a record in place gives it a `snapshot:`
+     address (`arrayItemUsesValueIdentity` in `runtime/runner/src/traverse.ts`),
+     and a cell set to such a value holds a copy. So the sentence "a record that
+     a handler writes into a list is a cell of its own" holds as worded. "An
+     element that is a record is a cell of its own" (PL §1.3, ES §2.6, notes 316
+     and 323) does not hold for a record of the argument or of a default:
+     today's runtime keys it by position, and a reference to it reads whatever
+     stands at the position.
+345. **The executor stores what today's runtime stores** (replaces the class of
+     two rows of note 323). `Handle.set`, `Handle.push` and `Handle.addUnique`
+     put each record that sits in an array of the written value into a document
+     of its own and store a link (`Instance.anchored` in `exec/executor.ts`).
+     The list is then an array of references, and rulings Z6 and Z12 do not
+     concern it. `fixtures/list-records.tsx` has 84 of 84 values equal to
+     today's. Over the corpus the 4 values of `examples/map-demo/map-demo.tsx`
+     and the 1 of `dev/gideon-tests/test-cell-equals.tsx` are equal now: both
+     modules fill their list with `push`, so their elements are cells in today's
+     runtime and in the executor, and the two rows of note 323 classed "design
+     gap" were a defect of the prototype. 64 such documents exist after the
+     corpus scenarios. Four limits are the prototype's. The identifier is a
+     counter, not the `createRef` of today. A `set` of a record at a position of
+     an array, as `items.key(0).set({ ... })`, stores it in place. A cell a body
+     creates with an array of records keeps them in place. And the executor does
+     not write a default of the argument into the argument document, where
+     today's runtime does.
+346. **Z12: the reference by key in the executor** (replaces note 316 and the
+     second half of note 313). The case is an array of plain values in place. A
+     reference to an element is a `Ref` whose path has, at the array, a segment
+     that holds the key (`keySegment` in `exec/store.ts`), and the path below
+     the element follows: the form PL §1.3 assumes under question 113, "a link
+     whose target is the address of the collection, with the key in the place of
+     a position". `Store.locate` finds the position that holds the key at each
+     read and each write. The element table gives every reader that reference
+     (`Instance.#stored`): a cone, a handler bound in the body, and the assembly
+     of a `filter`, which passes the element of its source on. What passes the
+     element or a member on stores the link with the key. A read through it
+     records no position: it records the reference and the value read, and it is
+     stale when a read gives another value (`Position.keyed`,
+     `Store.changedSince`), so a move evaluates nothing
+     (`exec/test/executor.test.ts`, "an element that is a plain value in
+     place"). Over an array of references the element is the link to its cell as
+     before, and each test has that case beside it. Over the result of another
+     per-element construct, an element a `filter` passes on is the reference of
+     the source. An element of a `map` or `flatMap` result whose body computes a
+     value is passed on as that value: PL names "the assembled result, as the
+     output that holds it" as the collection, and the executor stores no
+     assembled result at an address of its own. The key holds the value with no
+     salt (note 293). An element that holds a link to an element of its own
+     array is keyed by that reference, with no key resolved.
+347. **Z12: a write that changes the value, as the documents assume** (PL §8,
+     question 112). The case is an array of plain values in place. The reference
+     keeps the key it was made with. `fixtures/value-identity.tsx` shows the
+     consequence in three handlers of a row:
+     - `stop.key("done").set(true)`: the event commits. The position holds
+       another key, the cone instances of that key are evaluated, and the row
+       holds the reference with the new key. The state cell `open` of the row is
+       that of the new key and reads its first value, `false`, where the row had
+       set it to `true`: the cell of the old key keeps its document and nothing
+       reads it. A cell that held the element, `selected`, reads as nothing, and
+       `equals(selected, stop)` is false in every row.
+     - `stop.key("done").set(true)` and then `stop.key("title").set(...)`: the
+       second write finds no position that holds the key, and the event is
+       rejected with both writes.
+     - `stop.update({ done: true, title: ... })`: the executor resolves the key
+       once and writes both members, and the event commits. Whether `update` is
+       one write is not in the documents.
+
+     Over an array of references the same two writes commit and the row keeps
+     its state. No event of the corpus run is refused for a missing key. **Needs
+     a ruling**: question 112 as the documents put it, with these consequences:
+     a row loses its state cells on every write to its element, a cell that
+     holds the element loses it, and a handler that writes two members one after
+     the other is rejected.
+348. **Z12: a function body that read the array through a handle** (PL §8,
+     question 115, first half, assumed). The case is an array of plain values in
+     place. A container that a read of a stored array gives carries the
+     reference by key (`Store.#copy`), so `selected.set(items.get()[i])` stores
+     it. One module of the corpus shows what follows where a handler moves
+     values between two arrays: `showcase/card-piles/main.tsx` reads two piles,
+     shuffles the cards and sets both piles. The first pile then holds
+     references by key into the second, the second is set next, with references
+     into the first, and neither key is held any more: the cards that changed
+     piles read as nothing. Today's runtime stores copies there. 6 or 9 of the
+     module's 28 values differ, or none, by what `Math.random` draws. Before,
+     the executor stored a link to the position, which read whatever card stood
+     there, and the scenario's cards are all equal. ES §2.4 assumes under
+     question 84 that a reference into what a write replaces is stored as the
+     value, which covers one array and not two. **Needs a ruling**: whether a
+     function body that reads a plain value in place and writes it elsewhere
+     stores a reference by key or a copy.
+349. **Z12: a handle that names a position is not equal to a reference by key**
+     (PL §8, question 115, second half, assumed). The case is an array of plain
+     values in place. In `dev/gideon-tests/test-handler-capture-key-equals.tsx`
+     a handler of a row finds its element with
+     `inboxItems.key(i).equals(inboxItem)`. The handle of `key(i)` names the
+     position, the row's element is a reference by key, and the two are not
+     equal, so the handler removes nothing: 2 values differ. Today's runtime
+     finds the element, since both are the position there. Over an array of
+     references both resolve to the cell and are equal. **Needs a ruling**:
+     whether `items.key(i)` is equal to the reference by key of the element that
+     stands at `i`.
+350. **Z12: `equals` in value code.** The emitter wrote `equals` with the value
+     of each operand, and two equal plain values were one. It now writes
+     `$h.equals(a, b)` with each operand as the reference it is
+     (`Rewriter::call` in `src/emit.rs`; 18 calls in the corpus), and the host
+     resolves the links each holds and compares what they name, with no key
+     resolved to a position (`Host.equals`, `Store.locate` with `names`). The
+     evaluation depends on the links it crossed. `ConeHost` of ES §2.2 has no
+     member for it: the documents should say how value code compares two
+     references. Today's compiler refuses a string operand of `equals`, so the
+     fixture compares records with `equals` and tells two equal strings apart by
+     a stored reference to one of them.
+351. **A reference stand-in at a position of a handler's state** (ES §2.4). The
+     executor handed a body a handle at every `identity` entry, and
+     `stop.position` of a handler whose state declares `stop: Stop` was nothing.
+     It now hands a stand-in that carries the reference where the slot's schema
+     declares no handle, and places the entries below it. It does so for a slot
+     of root `binding` alone. The schema of a slot of a `lift` or a `computed`
+     is that of the place the caller bound, which for a body of a pattern
+     compiled in is the caller's type and not the body's: in
+     `dev/gideon-tests/test-pattern-composition-shared-cells.tsx` the caller
+     declares a plain array and the callee's body calls `items.get()`. The
+     documents should say which record tells the runtime that a position of a
+     body's argument is of handle type.
+352. **Z12 leaves note 326 open.** The executor still keeps the state cells of a
+     key that left its collection. With a key formed from the value, a value
+     that is written back finds the cell it had, and a value that was edited
+     finds none (note 347).
+353. **Z13: the mark in the plan** (replaces the request of note 315).
+     `Output.passesCollection` names the record of the collection. The crate
+     marks a promoted `computed` whose expression is the assembled result of a
+     `map`, a `filter` or a `flatMap`, or a marked output (`Computed.passes` in
+     `src/plan.rs`; `tests/plan.rs`,
+     `an_output_that_passes_a_derived_collection_on_is_marked_with_the_collection`).
+     An output that is the result under one selection only has no mark, as PL
+     assumes under question 111. The corpus plans have 27 marked outputs in 15
+     modules. Two limits are the prototype's: a `computed` with a block body
+     that returns the result, and a result path of a sandboxed body that passes
+     its input on, have no mark. The mark is the same whether the upstream
+     source holds references or plain values in place, since the plan does not
+     say which.
+354. **Z13 in the executor.** A construct whose `source` is a marked output
+     takes the element table of the marked collection (`Instance.#table`), and
+     checks that the output holds the array that was assembled. The map from an
+     array to its elements that the executor kept beside the plan is gone.
+     `fixtures/passes-collection.tsx` has the case over references, where the
+     keys are those of the cells with or without the mark, and over plain values
+     in place, where a `filter` that drops the first of two equal values leaves
+     the second with the count it has in the source, and without the mark the
+     count is lost. No value of the corpus changed.
+355. **Z14: nothing changed in the executor** (replaces the request of note
+     311). `fixtures/state-below.tsx` has a write of one member and a `push`
+     below the root of a cell that has no document, in the pattern's body and in
+     an element body over references, over plain values in place, and over the
+     result of a `filter`: 54 of 54 values equal today's. The executor
+     instantiates no label, so the label of the members taken from the default
+     is not exercised. One case the ruling does not name: a `push` through a
+     handle to a path of the argument at which nothing is stored and whose
+     schema declares a default array. The executor starts from the empty array
+     there, by a reading of its code and with no test. Today's runtime has
+     written the default into the argument document by then (note 344). **Needs
+     a ruling**: whether a write below a place that holds nothing and is no
+     state cell starts from the default of the place.
+356. **Z15: a computed first value is a value** (replaces the first request of
+     note 312). The emitter wrote a read of the slot's value already, and the
+     executor now resolves a reference a value function returns before it stores
+     (`Instance.stateCell`). `fixtures/state-first.tsx` gives a cell an input
+     whole and the cell of a row its element: over references the cell holds the
+     value behind the link, over plain values in place the value and no
+     reference by key, and a write below the root of the cell leaves the input.
+     A member of handle type is stored as a value too, where ES §4.1 assumes a
+     link under question 87: a limit of the prototype. The fixture is not
+     compared with today's runtime (note 312).
+357. **Z16: `ReadInput.default`** (replaces the first request of note 309). An
+     entry of `Body.reads` of a body of a pattern compiled in has `default`
+     where its slot is at or below a slot of the caller that the call bound a
+     path of the callee's argument to, and the callee declares a default for the
+     path (`slot_defaults` and `default_for` in `src/plan.rs`): 51 entries in 9
+     modules of the corpus. Value code passes `$h.invoke` the computed inputs
+     alone. The executor applies the slot's own schema first and the entry's
+     default where the slot still yields nothing (`Host.invoke`). The record is
+     the same for a callee in an element body over references, over plain values
+     in place, and over the result of a `filter`
+     (`fixtures/callee-default.tsx`). One thing the ruling does not name: where
+     a callee calls another and both bind one slot of the outer caller, the
+     crate lists the outer callee's default, since its place is nearer the end
+     of the chain a read resolves through (ruling Z8). The documents should
+     state it.
+358. **Z16: a reference the callee passes on** (replaces the second request of
+     note 309). Value code of the callee wraps the reference in
+     `$h.withDefault(reference, default)`, 42 times in the corpus, and the
+     stored link holds the default in its schema unless the schema of the
+     caller's place declares one. `Store.locate` reads, through a chain of
+     links, the default of the last link that declares one, and the reader's own
+     where none does (`exec/test/executor.test.ts`, "reads, through a chain of
+     links, the default declared nearest the end"). The crate does this where
+     value code of the callee stores the reference. Where code of the caller
+     names a path of the callee's result, as `price.symbol`, the crate resolves
+     the name to the caller's slot at compile time and writes a read of that
+     slot with no default: a defect of the crate. Behind it is a gap of the
+     plan. The ruling has "the link holds the schema that the callee declares
+     for the path", and no record gives a runtime that schema for a reference an
+     output passes on: the slot has the schema of the caller's place. **Needs a
+     ruling**: which record holds the default, or the schema, that a stored
+     reference to a path bound by a call carries.
+359. **Z16: the state of a binding of the callee** (PL §8, question 110,
+     assumed). The entry of `Binding.state` whose `place` is a slot the call
+     bound has `default`, 78 entries in the corpus, and the executor applies it
+     when it resolves the path at dispatch: a handler of the callee that reads
+     the path through its handle reads `"$"` where the caller's slot is empty,
+     and its write lands in the caller's slot.
+360. **Z16 against today's runtime.** One of the 22 values of
+     `fixtures/callee-default.tsx` differs: `marked.symbol`, the path the callee
+     passes on, where the caller's slot is empty. A read of today's runtime
+     addressed at the path gives the callee's default, as the executor's does,
+     and a read of the whole result gives nothing there, with the result schema
+     or with none (scratchpad `cpp/probe26/callee-default-read.test.ts`). The
+     comparison reads the whole result. It is the first of the two rows that the
+     measurement of ruling Z8 excepts, and today's runtime, not the design.
+361. **Z17: the name bound to `[SELF]`** (PL §8, question 108). Value code has
+     the name as a reference to the result document (`$rt.self`), and where it
+     is placed the executor stores a link to the result, in the pattern's body
+     and in an element body over references and over plain values in place
+     (`fixtures/self.tsx`). Two things are undetermined. The state entry of a
+     binding that captures the name has no `place`, since no slot root and no
+     record names the result, and the executor hands the handler nothing for it.
+     **Needs a ruling**: what `Binding.state.place` holds for a state path bound
+     to the name. And a read of the whole result follows the reference into the
+     result again: the executor's read gives nothing at the second level,
+     today's read gives the result again at each level, and one value of
+     `dev/test/input-self/subjects.tsx` differs for it, as question 108 has.
+362. **A defect of the executor behind the 5 values of `person-workbench`**
+     (replaces the last part of note 342). A handler whose body has an entry at
+     a state path and one at a member below it was handed a record with the
+     member, also where the path was bound to a value that is nothing. The
+     executor now places nothing for an entry that yields nothing
+     (`fixtures/absent-state.tsx`, 12 of 12 values equal to today's), and the 5
+     values are equal.
+363. **The other differences earlier notes left unexplained.**
+
+     | Module                               | Values | Class                               | Cause                                                                                                                                                                      |
+     | ------------------------------------ | -----: | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+     | `product/primitives/demo/atoms-demo` |     11 | Prototype defect, and note 298      | A handler of a pattern compiled in sorts `rows`, which the call writes as a literal. The crate holds `null` for each constant of it (note 287), and the handler ends early |
+     | `product/primitives/demo/atoms-demo` |      4 | Prototype defect                    | What four events that are not handled leave: `step`, `min` and `items` are constants the crate holds as `null`, where the handler expects a handle                         |
+     | `system/agent-run/agent-run`         |      4 | The scenario, not verified by a run | The generator gives `run` no value for four required members of type `unknown`, and today's read of `run` under its schema gives nothing                                   |
+     | `dev/catalog/catalog`                |      2 | Prototype defect, not verified      | As note 323                                                                                                                                                                |
+     | `examples/cfc-spec-gallery`          |      1 | Prototype defect, not verified      | As note 323                                                                                                                                                                |
+
+     With the crate's constants right, the first row would still differ: the
+     handler writes through a handle to a constant of the call, which the
+     compiled path refuses (note 298), and today's runtime writes the callee's
+     argument document. The rows of `agent-run`, `catalog` and
+     `cfc-spec-gallery` rest on a reading of the source and of the two values.
+364. **The fixtures.**
+     `deno run -A --no-check base/pattern-compiler/compare/values-fixtures.ts`
+     runs 32 of the 36 fixtures, 39 runs in all, and 489 of 490 compared values
+     are equal, where note 342 had 33 runs and 280 values. The added runs are
+     `list-records` (84 values), `value-identity` (44), `passes-collection` (2),
+     `state-below` (54) and two of `absent-state` (12), and `callee-default` has
+     22 values where it had 8. The one value that differs is that of note 360.
+     `self` is not compared, beside the three of note 321.
+365. **The corpus.** The figures are of `values-corpus.ts again` on the values
+     of today's runtime that the run of note 322 read.
+
+     |                                               |  Note 342 |            Now |
+     | --------------------------------------------- | --------: | -------------: |
+     | Modules run by today's runtime                |       215 |            215 |
+     | Executed                                      |       194 |            194 |
+     | Every value equal and every event handled     |       167 |     168 or 169 |
+     | Values compared                               |     4,735 |          4,735 |
+     | Values equal                                  |     4,642 | 4,641 to 4,650 |
+     | Values that differ                            |        93 |       85 to 94 |
+     | Modules with a difference                     |        24 |       22 or 23 |
+     | Committed events the executor does not handle | 15 of 293 |      15 of 293 |
+     | Documents the executor stored                 |       535 |            598 |
+
+     The range is `card-piles` alone (note 348): 0, 6 or 9 of its values differ
+     from one run to the next. Without it 85 values differ in 22 modules.
+     Against note 342: 10 values are equal that differed (`map-demo` 4 and
+     `test-cell-equals` 1, note 345; `person-workbench` 5, note 362), and 2
+     differ that were equal (`test-handler-capture-key-equals`, note 349). No
+     other value changed. The 63 documents more are the 64 documents of a record
+     a handler wrote into a list, less one record of a key. Rulings Z13 to Z17
+     changed no value of the corpus.
+366. **Rules of the task not kept, and what is not verified.** The fixture of
+     note 345 was red before the change, and its unit tests were written with
+     the change. The tests of ruling Z12 were written after the store and before
+     the executor was complete, and they found the defect of note 351. The unit
+     tests of ruling Z13 in the executor were written with the change, and the
+     test that removes the mark shows what the mark decides. The tests of
+     rulings Z14 and Z17 describe what the executor did and changed no code. The
+     test of the emitter's `$h.equals` in `tests/emit.rs` was written after the
+     code. The counts of evaluations over the corpus differ by a few from those
+     of the run of note 342 before any change of this round, which was not
+     examined. No fresh run of today's runtime over the corpus was made.
