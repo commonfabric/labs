@@ -109,9 +109,6 @@ pub(crate) struct Facts {
     built: HashMap<(usize, u32), usize>,
     pub uses: HashMap<usize, UseFact>,
     pub handlers: HashMap<usize, HandlerFact>,
-    /// For each cone, in the order the cones were made: the collections
-    /// of the element bodies it is written in, outermost first.
-    pub cone_within: Vec<Vec<usize>>,
 }
 
 impl Facts {
@@ -2328,15 +2325,6 @@ pub(crate) fn generate(
             Value::Object(entry)
         })
         .collect();
-    // `Plan.cones` in its own order: the collections each cone is
-    // evaluated per element of.
-    let mut cone_within: Vec<Value> = vec![json!([]); position.len()];
-    for (made, within) in finished.facts.cone_within.iter().enumerate() {
-        if let Some(index) = position.get(made) {
-            cone_within[*index] = json!(within);
-        }
-    }
-
     let handlers: BTreeMap<String, Value> = finished
         .facts
         .handlers
@@ -2371,8 +2359,6 @@ pub(crate) fn generate(
         "main": module,
         "values": values,
         "outputsBelow": below,
-        "coneWithin": cone_within,
-
         "handlers": handlers,
         "elements": generator.registered_elements,
         "states": generator.registered_states,

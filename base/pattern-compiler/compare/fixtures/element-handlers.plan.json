@@ -125,6 +125,7 @@
               "slots": [
                 3
               ],
+              "within": [],
               "writes": []
             }
           ],
@@ -591,6 +592,11 @@
               "picks": [],
               "selectors": [],
               "slots": [],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
               "writes": []
             },
             {
@@ -605,6 +611,14 @@
               "slots": [
                 10
               ],
+              "within": [
+                {
+                  "element": 1
+                },
+                {
+                  "site": "Row"
+                }
+              ],
               "writes": []
             },
             {
@@ -617,6 +631,11 @@
               "picks": [],
               "selectors": [],
               "slots": [],
+              "within": [
+                {
+                  "element": 1
+                }
+              ],
               "writes": []
             },
             {
@@ -631,6 +650,7 @@
               "slots": [
                 0
               ],
+              "within": [],
               "writes": []
             },
             {
@@ -645,6 +665,7 @@
               "slots": [
                 0
               ],
+              "within": [],
               "writes": []
             }
           ],

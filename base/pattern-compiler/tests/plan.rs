@@ -3608,3 +3608,131 @@ export const P = pattern<{ items: Item[]; show: boolean; chosen: Writable<string
         )]
     );
 }
+
+/// The `within` of the cones of `plan` whose `entry` is `entry`, as text.
+fn cone_within(plan: &Value, entry: &str) -> Vec<String> {
+    plan["cones"]
+        .as_array()
+        .expect("cones")
+        .iter()
+        .filter(|cone| cone["entry"] == entry)
+        .map(|cone| cone["within"].to_string())
+        .collect()
+}
+
+/// Ruling Z10 (PL §1.4, "The `within` of a cone"): "`Cone.within` lists
+/// the collections of the element bodies the cone is written in,
+/// outermost first, as its `element` steps", and "a cone of an element
+/// body that lists no slot of root `element` or `index` has an instance
+/// per key all the same". The record is the same for the three kinds of
+/// source: the plan does not say whether the elements of `items` are
+/// references or plain values stored in place (`tags` holds plain values
+/// by its type), and `loud` is over the result of another per-element
+/// construct.
+#[test]
+fn a_cone_lists_the_collections_it_is_written_in() {
+    let plan = plan_of(
+        &program(
+            r#"import { pattern } from "commonfabric";
+interface Item { title: string }
+interface Group { items: Item[] }
+export const P = pattern<{ items: Item[]; tags: string[]; groups: Group[]; note: string }>(
+  ({ items, tags, groups, note }) => {
+    const shown = note + "!";
+    const rows = items.map((item) => {
+      const fixed = note + "?";
+      return item.title + fixed;
+    });
+    const marks = tags.map((tag) => {
+      const fixed = note + "?";
+      return tag + fixed;
+    });
+    const loud = tags.filter((tag) => tag !== note).map((tag) => {
+      const fixed = note + "?";
+      return tag + fixed;
+    });
+    const nested = groups.map((group) => group.items.map((item) => {
+      const fixed = note + "?";
+      return item.title + fixed;
+    }));
+    return { shown, rows, marks, loud, nested };
+  },
+);
+"#,
+        ),
+        "P",
+    );
+    let collection = |construct: &str, nth: usize| -> usize {
+        plan["collections"]
+            .as_array()
+            .expect("collections")
+            .iter()
+            .enumerate()
+            .filter(|(_, record)| record["construct"] == construct)
+            .nth(nth)
+            .expect("the collection")
+            .0
+    };
+    let step = |collection: usize| json!([{ "element": collection }]).to_string();
+    // A cone of the pattern body has the empty list.
+    assert_eq!(cone_within(&plan, "shown"), vec!["[]".to_string()]);
+    // `fixed` reads no element and no index slot, in each of the four
+    // bodies, and its cone names the body's collection all the same.
+    let fixed = cone_within(&plan, "fixed");
+    let (rows, marks, loud) = (
+        collection("map", 0),
+        collection("map", 1),
+        collection("map", 2),
+    );
+    let (outer, inner) = (collection("map", 3), collection("map", 4));
+    assert_eq!(
+        fixed,
+        vec![
+            step(rows),
+            step(marks),
+            step(loud),
+            json!([{ "element": outer }, { "element": inner }]).to_string(),
+        ]
+    );
+    for cone in plan["cones"].as_array().expect("cones") {
+        if cone["entry"] != "fixed" {
+            continue;
+        }
+        let reads_element = cone["slots"].as_array().expect("slots").iter().any(|slot| {
+            let kind = &plan["slots"][slot.as_u64().expect("a slot") as usize]["root"]["kind"];
+            kind == "element" || kind == "index"
+        });
+        assert!(!reads_element, "{cone}");
+    }
+    // The cone of the predicate of the `filter` names the `filter`.
+    let filter = collection("filter", 0);
+    assert!(plan["cones"]
+        .as_array()
+        .expect("cones")
+        .iter()
+        .any(|cone| cone["within"] == json!([{ "element": filter }])));
+    // Every cone has the member.
+    assert!(plan["cones"]
+        .as_array()
+        .expect("cones")
+        .iter()
+        .all(|cone| cone["within"].is_array()));
+}
+
+/// PL §1.4, assumed there under question 98: the member "also has a
+/// `site` step for each pattern compiled in that the code is written in".
+#[test]
+fn a_cone_of_a_pattern_compiled_in_has_the_site_step() {
+    let plan = plan_of(&program(TAGS), "Room");
+    let row = collection_named(&plan, "map");
+    let collection = plan["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .position(|other| other == row)
+        .expect("the collection");
+    assert_eq!(
+        cone_within(&plan, "shout"),
+        vec![json!([{ "element": collection }, { "site": "Row" }]).to_string()]
+    );
+}

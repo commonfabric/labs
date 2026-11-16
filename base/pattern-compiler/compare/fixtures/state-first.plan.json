@@ -203,6 +203,7 @@
               "slots": [
                 0
               ],
+              "within": [],
               "writes": [
                 {
                   "constraints": [],
@@ -229,6 +230,11 @@
               "selectors": [],
               "slots": [
                 2
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
               ],
               "writes": [
                 {
@@ -258,6 +264,11 @@
                 3,
                 4
               ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
               "writes": []
             },
             {
@@ -272,6 +283,7 @@
               "slots": [
                 7
               ],
+              "within": [],
               "writes": []
             },
             {
@@ -286,6 +298,7 @@
               "slots": [
                 11
               ],
+              "within": [],
               "writes": []
             },
             {
@@ -300,6 +313,7 @@
               "slots": [
                 10
               ],
+              "within": [],
               "writes": []
             }
           ],

@@ -261,7 +261,8 @@ export const P = pattern<{ items: Item[] }>(({ items }) => {
         "{text}"
     );
     // The cone of the body is evaluated per element of collection 0, and
-    // the plan's `Cone` record does not say so.
+    // the plan's `Cone` record says so (ruling Z10): the artifact holds
+    // nothing beside the plan for it.
     let cone = plan["outputs"]
         .as_array()
         .expect("outputs")
@@ -270,8 +271,8 @@ export const P = pattern<{ items: Item[] }>(({ items }) => {
         .expect("the assembled output")["cone"]
         .as_u64()
         .expect("a cone") as usize;
-    assert_eq!(code["coneWithin"][cone], json!([0]));
-    assert!(plan["cones"][cone].get("within").is_none());
+    assert_eq!(plan["cones"][cone]["within"], json!([{ "element": 0 }]));
+    assert!(code.get("coneWithin").is_none());
 }
 
 #[test]

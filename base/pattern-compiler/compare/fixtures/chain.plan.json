@@ -158,6 +158,11 @@
                 1,
                 2
               ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
               "writes": []
             },
             {
@@ -173,6 +178,11 @@
                 3,
                 4
               ],
+              "within": [
+                {
+                  "element": 1
+                }
+              ],
               "writes": []
             },
             {
@@ -187,6 +197,11 @@
               "slots": [
                 5
               ],
+              "within": [
+                {
+                  "element": 2
+                }
+              ],
               "writes": []
             },
             {
@@ -200,6 +215,11 @@
               "selectors": [],
               "slots": [
                 7
+              ],
+              "within": [
+                {
+                  "element": 3
+                }
               ],
               "writes": []
             },
@@ -216,6 +236,11 @@
                 8,
                 9
               ],
+              "within": [
+                {
+                  "element": 4
+                }
+              ],
               "writes": []
             },
             {
@@ -229,6 +254,11 @@
               "selectors": [],
               "slots": [
                 10
+              ],
+              "within": [
+                {
+                  "element": 5
+                }
               ],
               "writes": []
             }

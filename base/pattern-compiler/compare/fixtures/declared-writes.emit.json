@@ -4,7 +4,6 @@
     "patterns": [
       {
         "code": {
-          "coneWithin": [],
           "elements": [],
           "handlers": {
             "0": {

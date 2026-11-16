@@ -120,6 +120,11 @@
                 2,
                 3
               ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
               "writes": []
             },
             {
@@ -132,6 +137,7 @@
               "picks": [],
               "selectors": [],
               "slots": [],
+              "within": [],
               "writes": []
             }
           ],

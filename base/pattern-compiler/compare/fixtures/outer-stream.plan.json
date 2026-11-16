@@ -153,6 +153,11 @@
               "slots": [
                 6
               ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
               "writes": []
             },
             {
@@ -169,6 +174,7 @@
               "slots": [
                 4
               ],
+              "within": [],
               "writes": []
             },
             {
@@ -183,6 +189,7 @@
               "slots": [
                 3
               ],
+              "within": [],
               "writes": []
             }
           ],

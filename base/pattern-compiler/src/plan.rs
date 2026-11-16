@@ -283,6 +283,10 @@ struct Computed {
 struct ConeOut {
     entry: String,
     at: u32,
+    /// Where the cone's code is written (`Cone.within`, ruling Z10): the
+    /// `element` step of each element body around it, outermost first,
+    /// and the `site` step of each pattern compiled in.
+    within: Vec<Value>,
     slots: BTreeSet<usize>,
     bodies: Vec<usize>,
     writes: Vec<Value>,
@@ -904,6 +908,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 self.cones.push(ConeOut {
                     entry: written_at(name).to_string(),
                     at,
+                    within: self.within.clone(),
                     slots: BTreeSet::new(),
                     bodies: Vec::new(),
                     writes: Vec::new(),
@@ -913,13 +918,6 @@ impl<'a> Emitter<'_, '_, 'a> {
                     views: BTreeMap::new(),
                 });
                 let cone = self.cones.len() - 1;
-                self.facts.cone_within.push(
-                    self.within
-                        .iter()
-                        .filter_map(|step| step.get("element").and_then(Value::as_u64))
-                        .map(|collection| collection as usize)
-                        .collect(),
-                );
                 self.cone = Some(cone);
                 (cone, true)
             }
@@ -6241,6 +6239,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 let mut record = json!({
                     "entry": cone.entry,
                     "at": { "file": file, "start": cone.at },
+                    "within": cone.within,
                     "slots": cone.slots.iter().collect::<Vec<_>>(),
                     "bodies": cone.bodies,
                     "selectors": cone.selectors,

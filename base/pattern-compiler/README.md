@@ -177,18 +177,23 @@ host object of `execution-and-storage.md` §2.2.
 
 The artifact's `code` has these members.
 
-| Member         | Holds                                                                                                                             |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `modules`      | One JavaScript text per module: the module's own code of module scope, then a registration for each function the plan needs of it |
-| `values`       | For each value a cone computes: its cone, its entry of `Plan.outputs`, and whether it has a value function                        |
-| `outputsBelow` | The interim outputs at a path below a value                                                                                       |
-| `coneWithin`   | For each cone: the collections whose element bodies it is written in                                                              |
+| Member                | Holds                                                                                                                             |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `modules`             | One JavaScript text per module: the module's own code of module scope, then a registration for each function the plan needs of it |
+| `values`              | For each value a cone computes: its cone, its entry of `Plan.outputs`, and whether it has a value function                        |
+| `outputsBelow`        | The interim outputs at a path below a value                                                                                       |
+| `handlers`            | For each handler body: whether its state is its second parameter or what it captures                                              |
+| `unlistedReads`       | The reads the value code makes of a place that no slot of its cone names                                                          |
+| `valuesWithoutOutput` | The values the code refers to that have no entry of `Plan.outputs`                                                                |
+| `unsupported`         | The constructs the emitter writes no code for                                                                                     |
 
-| `handlers` | For each handler body: whether its state is its second parameter
-or what it captures | | `unlistedReads` | The reads the value code makes of a
-place that no slot of its cone names | | `valuesWithoutOutput` | The values the
-code refers to that have no entry of `Plan.outputs` | | `unsupported` | The
-constructs the emitter writes no code for |
+A cone's record in the plan has `within` (PL §1.4, "The `within` of a cone"):
+the `element` step of each element body the cone's code is written in, outermost
+first, and the `site` step of each pattern compiled in around it. The executor
+takes from the `element` steps which instances of a cone exist and under which
+keys what an instance holds is kept. That is the same for a collection over an
+array of references, over an array of plain values in place, and over the result
+of another per-element construct.
 
 An entry of `Body.reads` of the plan holds the slot and the path in the body's
 argument at which the slot's value is placed (PL §1.1, `ReadInput`), and the

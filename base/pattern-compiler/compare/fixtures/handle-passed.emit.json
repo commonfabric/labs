@@ -4,10 +4,6 @@
     "patterns": [
       {
         "code": {
-          "coneWithin": [
-            [],
-            []
-          ],
           "elements": [],
           "handlers": {},
           "main": 0,
@@ -48,6 +44,7 @@
               "slots": [
                 0
               ],
+              "within": [],
               "writes": []
             },
             {
@@ -62,6 +59,7 @@
               "slots": [
                 1
               ],
+              "within": [],
               "writes": []
             }
           ],
@@ -172,7 +170,6 @@
       },
       {
         "code": {
-          "coneWithin": [],
           "elements": [],
           "handlers": {
             "0": {

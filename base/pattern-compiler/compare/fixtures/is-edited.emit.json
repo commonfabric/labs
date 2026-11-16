@@ -4,9 +4,6 @@
     "patterns": [
       {
         "code": {
-          "coneWithin": [
-            []
-          ],
           "elements": [],
           "handlers": {},
           "main": 0,
@@ -66,6 +63,7 @@
                 1,
                 2
               ],
+              "within": [],
               "writes": []
             }
           ],

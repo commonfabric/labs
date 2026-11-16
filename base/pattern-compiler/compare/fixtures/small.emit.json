@@ -4,23 +4,6 @@
     "patterns": [
       {
         "code": {
-          "coneWithin": [
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [
-              0
-            ],
-            [
-              1
-            ],
-            [],
-            []
-          ],
           "elements": [
             0,
             1
@@ -156,6 +139,7 @@
               "slots": [
                 0
               ],
+              "within": [],
               "writes": []
             },
             {
@@ -168,6 +152,7 @@
               "picks": [],
               "selectors": [],
               "slots": [],
+              "within": [],
               "writes": []
             },
             {
@@ -182,6 +167,7 @@
               "slots": [
                 1
               ],
+              "within": [],
               "writes": []
             },
             {
@@ -200,6 +186,7 @@
                 3,
                 4
               ],
+              "within": [],
               "writes": []
             },
             {
@@ -218,6 +205,7 @@
                 3,
                 4
               ],
+              "within": [],
               "writes": []
             },
             {
@@ -233,6 +221,7 @@
                 0,
                 1
               ],
+              "within": [],
               "writes": []
             },
             {
@@ -247,6 +236,7 @@
               "slots": [
                 5
               ],
+              "within": [],
               "writes": []
             },
             {
@@ -260,6 +250,11 @@
               "selectors": [],
               "slots": [
                 6
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
               ],
               "writes": []
             },
@@ -275,6 +270,11 @@
               "slots": [
                 7
               ],
+              "within": [
+                {
+                  "element": 1
+                }
+              ],
               "writes": []
             },
             {
@@ -289,6 +289,7 @@
               "slots": [
                 4
               ],
+              "within": [],
               "writes": []
             },
             {
@@ -303,6 +304,7 @@
               "slots": [
                 3
               ],
+              "within": [],
               "writes": []
             }
           ],

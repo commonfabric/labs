@@ -49,6 +49,13 @@ const WRITTEN: Record<string, Written[]> = {
       tags: ["x", "skip", "y"],
     },
   }],
+  "within": [{
+    argument: {
+      items: [{ title: "a" }, { title: "b" }],
+      tags: ["x", "skip", "y"],
+      note: "n",
+    },
+  }],
   "callee-default": [true, false].map((given) => ({
     argument: { amount: 420, ...(given ? { sign: "kr" } : {}) },
   })),

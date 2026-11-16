@@ -4,13 +4,6 @@
     "patterns": [
       {
         "code": {
-          "coneWithin": [
-            [
-              0
-            ],
-            [],
-            []
-          ],
           "elements": [
             0
           ],
@@ -190,6 +183,11 @@
               "picks": [],
               "selectors": [],
               "slots": [],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
               "writes": []
             },
             {
@@ -202,6 +200,7 @@
               "picks": [],
               "selectors": [],
               "slots": [],
+              "within": [],
               "writes": []
             },
             {
@@ -216,6 +215,7 @@
               "slots": [
                 4
               ],
+              "within": [],
               "writes": []
             }
           ],

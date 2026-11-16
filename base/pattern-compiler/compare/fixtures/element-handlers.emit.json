@@ -4,9 +4,6 @@
     "patterns": [
       {
         "code": {
-          "coneWithin": [
-            []
-          ],
           "elements": [],
           "handlers": {
             "0": {
@@ -157,6 +154,7 @@
               "slots": [
                 3
               ],
+              "within": [],
               "writes": []
             }
           ],
@@ -338,19 +336,6 @@
       },
       {
         "code": {
-          "coneWithin": [
-            [
-              0
-            ],
-            [
-              1
-            ],
-            [
-              1
-            ],
-            [],
-            []
-          ],
           "elements": [
             0,
             1
@@ -699,6 +684,11 @@
               "picks": [],
               "selectors": [],
               "slots": [],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
               "writes": []
             },
             {
@@ -713,6 +703,14 @@
               "slots": [
                 10
               ],
+              "within": [
+                {
+                  "element": 1
+                },
+                {
+                  "site": "Row"
+                }
+              ],
               "writes": []
             },
             {
@@ -725,6 +723,11 @@
               "picks": [],
               "selectors": [],
               "slots": [],
+              "within": [
+                {
+                  "element": 1
+                }
+              ],
               "writes": []
             },
             {
@@ -739,6 +742,7 @@
               "slots": [
                 0
               ],
+              "within": [],
               "writes": []
             },
             {
@@ -753,6 +757,7 @@
               "slots": [
                 0
               ],
+              "within": [],
               "writes": []
             }
           ],

@@ -4,17 +4,6 @@
     "patterns": [
       {
         "code": {
-          "coneWithin": [
-            [
-              0
-            ],
-            [],
-            [
-              1
-            ],
-            [],
-            []
-          ],
           "elements": [
             0,
             1
@@ -301,6 +290,11 @@
               "slots": [
                 7
               ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
               "writes": []
             },
             {
@@ -313,6 +307,7 @@
               "picks": [],
               "selectors": [],
               "slots": [],
+              "within": [],
               "writes": []
             },
             {
@@ -326,6 +321,11 @@
               "selectors": [],
               "slots": [
                 8
+              ],
+              "within": [
+                {
+                  "element": 1
+                }
               ],
               "writes": []
             },
@@ -341,6 +341,7 @@
               "slots": [
                 4
               ],
+              "within": [],
               "writes": []
             },
             {
@@ -355,6 +356,7 @@
               "slots": [
                 6
               ],
+              "within": [],
               "writes": []
             }
           ],

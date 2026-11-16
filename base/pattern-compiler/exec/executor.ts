@@ -39,6 +39,14 @@ export type Plan = {
   slots: { root: Root; path: string[]; observes: string; schema?: string }[];
   cones: {
     entry: string;
+    /**
+     * Where the cone's code is written (ruling Z10): the `element` step
+     * of each element body around it, outermost first, and the `site`
+     * step of each pattern compiled in. An instance of the cone exists
+     * for each combination of keys of the collections the `element`
+     * steps name, and what the instance holds is kept under those keys.
+     */
+    within: { element?: number; site?: string }[];
     slots: number[];
     bodies: number[];
     /**
@@ -116,9 +124,6 @@ export type Code = {
   }[];
   /** The interim outputs at a path below a value. */
   outputsBelow: { output: number; value: number; path: string[] }[];
-  /** For each cone: the collections it is evaluated per element of. */
-  coneWithin: number[][];
-
   handlers: Record<string, { named: boolean; captures: string[] }>;
   unlistedReads: unknown[];
   valuesWithoutOutput: number[];
@@ -781,6 +786,13 @@ export class Instance {
   readonly #memo = new Map<string, Entry>();
   readonly #open = new Set<string>();
   readonly #checking = new Set<string>();
+  /** Each memo entry's cone and the element keys it is kept under. */
+  readonly #kept = new Map<
+    string,
+    { cone: number | undefined; keys: string[] }
+  >();
+  /** The memo entries kept under one key of one collection. */
+  readonly #underKey = new Map<string, Set<string>>();
   /** The element table of each collection, by the keys around it. */
   readonly #tables = new Map<string, Element[]>();
   /** The elements of an assembled result, with their keys, by the array. */
@@ -902,7 +914,7 @@ export class Instance {
    */
   #contextsOf(cone: number, context: Context): Context[] {
     let found: Context[] = [context];
-    for (const collection of this.code.coneWithin[cone] ?? []) {
+    for (const collection of this.collectionsOf(cone)) {
       found = found.flatMap((known) => {
         if (known.has(collection)) return [known];
         const around = this.#contextKey(this.#outerOf(collection), known);
@@ -1357,6 +1369,7 @@ export class Instance {
     cone: number | undefined,
     kind: "element" | "assembly" | "value",
     compute: (host: Host) => unknown,
+    within: readonly number[] = [],
   ): Entry {
     const held = this.#memo.get(key);
     if (held !== undefined && !held.pending) {
@@ -1431,7 +1444,77 @@ export class Instance {
       changedAt: changed ? this.store.clock : held.changedAt,
     };
     this.#memo.set(key, entry);
+    this.#keep(key, cone, within, context);
     return entry;
+  }
+
+  /**
+   * Records under which element keys an entry is kept: the keys of the
+   * collections `within` names. The entry is dropped with each of them.
+   */
+  #keep(
+    key: string,
+    cone: number | undefined,
+    within: readonly number[],
+    context: Context,
+  ): void {
+    if (this.#kept.has(key)) return;
+    this.#kept.set(key, {
+      cone,
+      keys: within.map((collection) => context.get(collection)?.key ?? "?"),
+    });
+    for (const collection of within) {
+      const id = this.#keyId(
+        collection,
+        this.#contextKey(this.#outerOf(collection), context),
+        context.get(collection)?.key ?? "?",
+      );
+      const under = this.#underKey.get(id) ?? new Set();
+      under.add(key);
+      this.#underKey.set(id, under);
+    }
+  }
+
+  #keyId(collection: number, around: string, key: string): string {
+    return `${collection}|${around}|${key}`;
+  }
+
+  /**
+   * Drops what is kept under an element key that left its collection:
+   * the instances of every cone whose `within` names the collection, and
+   * the element tables and assemblies of the collections inside it
+   * (ES §2.5, "Which cones are the body's").
+   */
+  #drop(collection: number, around: string, key: string): void {
+    const id = this.#keyId(collection, around, key);
+    for (const entry of this.#underKey.get(id) ?? []) {
+      this.#memo.delete(entry);
+      this.#kept.delete(entry);
+      this.#tables.delete(entry);
+    }
+    this.#underKey.delete(id);
+  }
+
+  /**
+   * The collections a cone has an instance per element key of: the
+   * `element` steps of `Cone.within`, outermost first (ruling Z10).
+   */
+  collectionsOf(cone: number): number[] {
+    return this.plan.cones[cone].within.flatMap((step) =>
+      step.element === undefined ? [] : [step.element]
+    );
+  }
+
+  /**
+   * The instances of a cone that exist: the element keys of each, one
+   * key per `element` step of `Cone.within`.
+   */
+  coneInstances(cone: number): string[][] {
+    const found = new Map<string, string[]>();
+    for (const kept of this.#kept.values()) {
+      if (kept.cone === cone) found.set(canonical(kept.keys), kept.keys);
+    }
+    return [...found.values()];
   }
 
   #current(entry: Entry, context: Context): boolean {
@@ -1456,7 +1539,7 @@ export class Instance {
       throw new Unsupported("a value that has no value function");
     }
     const { cone } = this.code.values[value];
-    const within = this.code.coneWithin[cone] ?? [];
+    const within = this.collectionsOf(cone);
     const materializer = this.plan.cones[cone].sideWrites === "materializer";
     return (context) => {
       const key = `v${value}|${this.#contextKey(within, context)}`;
@@ -1473,6 +1556,7 @@ export class Instance {
         cone,
         within.length > 0 ? "element" : "value",
         run,
+        within,
       );
     };
   }
@@ -1512,7 +1596,10 @@ export class Instance {
       }
       inner.set(collection, element);
       this.#declare(inner);
-      return this.#ensure(name, inner, cone, "element", run);
+      return this.#ensure(name, inner, cone, "element", run, [
+        ...outer,
+        collection,
+      ]);
     };
   }
 
@@ -1529,8 +1616,17 @@ export class Instance {
     const outer = this.#outerOf(collection);
     return (context) => {
       const key = `a${collection}|${this.#contextKey(outer, context)}`;
+      const around = this.#contextKey(outer, context);
       return this.#ensure(key, context, undefined, "assembly", (host) => {
         const elements = this.#table(collection, host);
+        // The instances of a key that left the collection are dropped,
+        // and those of a key that entered are made when they are first
+        // evaluated (ruling Z10).
+        for (const { key: left } of this.#tables.get(key) ?? []) {
+          if (!elements.some((element) => element.key === left)) {
+            this.#drop(collection, around, left);
+          }
+        }
         this.#tables.set(key, elements);
         if (!this.#elements.has(collection)) {
           throw new Unsupported("an element construct that has no function");
@@ -1602,7 +1698,7 @@ export class Instance {
               `an element construct \`${record.construct}\``,
             );
         }
-      });
+      }, outer);
     };
   }
 

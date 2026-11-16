@@ -273,6 +273,7 @@
               "slots": [
                 2
               ],
+              "within": [],
               "writes": []
             },
             {
@@ -287,6 +288,7 @@
               "slots": [
                 3
               ],
+              "within": [],
               "writes": []
             }
           ],

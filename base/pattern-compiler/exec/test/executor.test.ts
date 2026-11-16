@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { type Artifact, Instance } from "../executor.ts";
+import { Ref, Store } from "../store.ts";
 
 // The executor of `execution-and-storage.md` (ES) on the artifacts of the
 // fixtures of the comparison: `compare/fixtures/<name>.emit.json` is the
@@ -435,6 +436,135 @@ describe("a chain of element constructs", () => {
   });
 });
 
+// Ruling Z10 on `fixtures/within.tsx`: the executor takes which instances
+// of a cone exist, and where what an instance holds is kept, from the
+// `element` steps of `Cone.within`. Each callback of the fixture declares
+// `fixed`, whose cone lists no slot of root `element` or `index`.
+describe("the `within` of a cone", () => {
+  const link = (name: string) => ({
+    $link: { doc: "argument", path: ["pool", name] },
+  });
+  // The elements of `items` are references to cells. Those of `tags` are
+  // plain values stored in place, and `loud` is over the result of a
+  // `filter` of them.
+  const argument = () => ({
+    pool: { a: { title: "a" }, b: { title: "b" } },
+    items: [link("a"), link("b")],
+    tags: ["x", "skip", "y"],
+    note: "n",
+  });
+  const cones = (artifact: Artifact, entry: string) =>
+    artifact.plan.cones.flatMap((cone, index) =>
+      cone.entry === entry ? [index] : []
+    );
+
+  it("is in the plan, and the artifact holds no list beside it", async () => {
+    const artifact = await artifactOf("within");
+
+    expect("coneWithin" in artifact.code).toBe(false);
+    expect(
+      cones(artifact, "fixed").map((cone) => artifact.plan.cones[cone].within),
+    ).toEqual([[{ element: 0 }], [{ element: 1 }], [{ element: 3 }]]);
+  });
+
+  it("gives a cone that reads no element an instance per key over references", async () => {
+    const artifact = await artifactOf("within");
+    const instance = new Instance(artifact, argument());
+    const [fixed] = cones(artifact, "fixed");
+
+    expect((instance.result() as { rows: string[] }).rows).toEqual([
+      "an?",
+      "bn?",
+    ]);
+    expect(instance.coneInstances(fixed)).toEqual([
+      ['cell:argument:["pool","a"]#0'],
+      ['cell:argument:["pool","b"]#0'],
+    ]);
+  });
+
+  it("gives such a cone an instance per key over plain values in place", async () => {
+    const artifact = await artifactOf("within");
+    const instance = new Instance(artifact, argument());
+    const [, fixed] = cones(artifact, "fixed");
+
+    expect((instance.result() as { marks: string[] }).marks).toEqual([
+      "xn?",
+      "skipn?",
+      "yn?",
+    ]);
+    expect(instance.coneInstances(fixed)).toEqual([
+      ['value:"x"#0'],
+      ['value:"skip"#0'],
+      ['value:"y"#0'],
+    ]);
+  });
+
+  it("gives such a cone an instance per key over the result of a `filter`", async () => {
+    const artifact = await artifactOf("within");
+    const instance = new Instance(artifact, argument());
+    const [, , fixed] = cones(artifact, "fixed");
+
+    expect((instance.result() as { loud: string[] }).loud).toEqual([
+      "xn?",
+      "yn?",
+    ]);
+    // The keys are those of the elements the `filter` kept.
+    expect(instance.coneInstances(fixed)).toEqual([
+      ['value:"x"#0'],
+      ['value:"y"#0'],
+    ]);
+  });
+
+  it("evaluates every instance of such a cone when what it reads changes", async () => {
+    const artifact = await artifactOf("within");
+    const instance = new Instance(artifact, argument());
+    // Two cones for each of 2, 3 and 2 keys, and the predicate for 3.
+    expect(instance.counts.elementEvaluations).toBe(17);
+    const before = instance.counts.elementEvaluations;
+
+    instance.writeArgument(["note"], "m");
+
+    expect(instance.result()).toEqual({
+      rows: ["am?", "bm?"],
+      marks: ["xm?", "skipm?", "ym?"],
+      loud: ["xm?", "ym?"],
+    });
+    // `fixed` once per key, and the cone that reads it once per key.
+    expect(instance.counts.elementEvaluations - before).toBe(14);
+  });
+
+  it("makes the instances of a key when the key is added, and drops them when it is removed", async () => {
+    const artifact = await artifactOf("within");
+    const instance = new Instance(artifact, argument());
+    const [rows, marks, loud] = cones(artifact, "fixed");
+    const before = instance.counts.elementEvaluations;
+
+    instance.writeArgument(["items"], [link("b")]);
+    instance.writeArgument(["tags"], ["skip", "y", "z"]);
+
+    expect(instance.coneInstances(rows)).toEqual([
+      ['cell:argument:["pool","b"]#0'],
+    ]);
+    expect(instance.coneInstances(marks)).toEqual([
+      ['value:"skip"#0'],
+      ['value:"y"#0'],
+      ['value:"z"#0'],
+    ]);
+    expect(instance.coneInstances(loud)).toEqual([
+      ['value:"y"#0'],
+      ['value:"z"#0'],
+    ]);
+    // For the key `z`: two cones of `marks`, the predicate, and two cones
+    // of `loud`. Nothing is evaluated for a key that stayed or left.
+    expect(instance.counts.elementEvaluations - before).toBe(5);
+
+    // A key that comes back has new instances, which are evaluated.
+    instance.writeArgument(["tags"], ["skip", "y", "z", "x"]);
+
+    expect(instance.counts.elementEvaluations - before).toBe(10);
+  });
+});
+
 // Ruling Z7 on `fixtures/side-writes.tsx`: a cone with side-writes is of
 // one of two kinds, which `Cone.sideWrites` holds.
 describe("a cone with side-writes", () => {
@@ -527,11 +657,10 @@ describe("a cone with side-writes", () => {
 });
 
 describe("a value read under a schema", () => {
-  it("keeps the address of a member, so a handler finds it again", async () => {
+  it("keeps the address of a member, so a handler finds it again", () => {
     // The handler of `fixtures/element-resolved.tsx` and the like read a
     // list through a handle whose schema describes the members. A member
     // read that way is the stored one: `equals` and `remove` find it.
-    const { Ref, Store } = await import("../store.ts");
     const store = new Store();
     store.create("d", "argument", { items: [{ title: "a" }, { title: "b" }] });
     const schema = {
