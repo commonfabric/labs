@@ -10,6 +10,7 @@ import {
   PatternIndexError,
 } from "@commonfabric/pattern-index/client";
 import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
+import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
 
 const signer = await Identity.fromPassphrase("cf-harness pattern-index client");
 
@@ -668,5 +669,47 @@ describe("PatternIndexClient", () => {
     ]);
     await client.whoami();
     expect(Object.hasOwn(JSON.parse(plain[0].body), "proofs")).toBe(false);
+  });
+  it("snapshots its chain, and refuses one longer than the index accepts", async () => {
+    const { fetchFn, requests } = recordingFetch([
+      jsonResponse({ handle: "quiet-fox", role: "user" }),
+    ]);
+    const proofs = ["root-link"];
+    const client = new PatternIndexClient({
+      baseUrl: "https://index.test/api",
+      fetchFn,
+      signer,
+      proofs,
+    });
+    proofs.push("added-later");
+    await client.whoami();
+    expect(JSON.parse(requests[0].body)).toEqual({ proofs: ["root-link"] });
+
+    const links = (n: number) => Array.from({ length: n }, (_, i) => `l${i}`);
+    expect(() =>
+      new PatternIndexClient({
+        baseUrl: "https://index.test/api",
+        fetchFn,
+        signer,
+        proofs: links(MAX_PROOF_CHAIN_LENGTH),
+      })
+    ).not.toThrow();
+    expect(() =>
+      new PatternIndexClient({
+        baseUrl: "https://index.test/api",
+        fetchFn,
+        signer,
+        proofs: links(MAX_PROOF_CHAIN_LENGTH + 1),
+      })
+    ).toThrow(`longer than ${MAX_PROOF_CHAIN_LENGTH} links`);
+  });
+  it("needs a reason to hide, and none to show again", () => {
+    const { client } = createClient([]);
+    const typesOnly = () => {
+      // @ts-expect-error: hiding without a reason is refused by the index
+      client.setPatternHidden({ patternId: "pat-1", hidden: true });
+      client.setPatternHidden({ patternId: "pat-1", hidden: false });
+    };
+    expect(typeof typesOnly).toBe("function");
   });
 });

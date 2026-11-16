@@ -15,6 +15,7 @@ import {
   signFirstPartyHttpRequest,
 } from "@commonfabric/runner/toolshed-http-auth";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
 import type { PatternIndexFetch } from "./http-fetch.ts";
 
 /** Own and publication-bounded inherited evidence computed by the index. */
@@ -643,14 +644,13 @@ export interface PatternIndexAdmitKeyRequest {
   did: string;
 }
 
-/** An admin hides a pattern from discovery, or shows it again. */
-export interface PatternIndexSetHiddenRequest {
-  patternId: string;
-  hidden: boolean;
-
-  /** Required when hiding. Showing again never lists a pattern its gates hold. */
-  reason?: string;
-}
+/**
+ * An admin hides a pattern from discovery, with the reason the record keeps,
+ * or shows it again. Showing again never lists a pattern its gates hold.
+ */
+export type PatternIndexSetHiddenRequest =
+  | { patternId: string; hidden: true; reason: string }
+  | { patternId: string; hidden: false; reason?: undefined };
 
 /** The pattern's listing after the change; `changed` is false when it already was so. */
 export interface PatternIndexSetHiddenResponse {
@@ -780,7 +780,14 @@ export class PatternIndexClient {
     this.#fetchFn = options.fetchFn ?? ((input, init) => fetch(input, init));
     this.#signer = options.signer;
     if (options.proofs !== undefined) {
-      this.#proofs = options.proofs;
+      // The index refuses a longer chain on every call; say so once, here.
+      if (options.proofs.length > MAX_PROOF_CHAIN_LENGTH) {
+        throw new Error(
+          `pattern index proofs: the chain is longer than ${MAX_PROOF_CHAIN_LENGTH} links`,
+        );
+      }
+      // A copy, so the caller's later edits never change what is sent.
+      this.#proofs = [...options.proofs];
     }
   }
 
