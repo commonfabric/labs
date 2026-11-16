@@ -510,7 +510,7 @@ describe("cfc-write-policy-any-of", () => {
         });
       });
 
-      it("commits a write omitting an unstamped member, which stays unstamped and admits no writer", async () => {
+      it("commits a write omitting an unstamped alternative, which stays unstamped and admits no writer", async () => {
         await withFixture(async (f) => {
           expect(await f.write("send", "Send", { schema: unstamped }))
             .toBeUndefined();

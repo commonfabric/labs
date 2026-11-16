@@ -7,7 +7,7 @@
  * it (`fixtures/fabrichat-four-writer-room/`, whose `SOURCE.txt` says where
  * it comes from), and the room is set up from that stored source, as a
  * runtime loading such a room does. It seeds through that program's own
- * handlers, each from its reviewed gesture: two messages, a reaction, and a
+ * handlers, each from its reviewed gesture: five messages, a reaction, and a
  * window. Then the room opens, as a person opening it would, and follows
  * `system:system/fabrichat/room.tsx`, which this tree's patterns route serves.
  *
@@ -204,7 +204,6 @@ describe("fabrichat-four-writer-room-update", () => {
   let releasedIdentity: string;
   let storedBefore: { writer: string; module: unknown }[];
   let windowsBefore: unknown;
-  let staleWindow: readonly Cell<unknown>[];
   let failuresBefore: Record<string, number>;
   let failuresAfter: Record<string, number>;
 
@@ -372,13 +371,11 @@ describe("fabrichat-four-writer-room-update", () => {
       ),
     );
     await room.key("messages").key("openWindow").pull();
-    // Two windows: `main`, which a case sets again through this tree's
-    // room, and `kept`, which no case touches.
-    for (const [requestId, windowId] of [["w1", "main"], ["k1", "kept"]]) {
+    {
       const tx = runtime.edit();
       room.withTx(tx).key("messages").key("openWindow").send({
-        requestId,
-        windowId,
+        requestId: "w1",
+        windowId: "main",
         from: { before: "end" },
         count: 5,
       });
@@ -399,23 +396,6 @@ describe("fabrichat-four-writer-room-update", () => {
       "messages/*",
     );
     windowsBefore = windowsDocument();
-    // The messages of the `kept` window the earlier program wrote, as a row
-    // a client shows of that window names each: by its place in the window,
-    // whose stored link resolves to it under the schema the earlier program
-    // stored it with.
-    {
-      const windows = room.key("messages").key("windows").resolveAsCell()
-        .getAsNormalizedFullLink();
-      const stored = room.key("messages").key("windows").resolveAsCell()
-        .getRaw() as { kept: { messages: unknown[] } };
-      staleWindow = stored.kept.messages.map((_, index) =>
-        runtime.getCellFromLink({
-          ...windows,
-          path: ["kept", "messages", String(index)],
-          schema: undefined,
-        })
-      );
-    }
 
     // The release: the room opens as a person opening it would, follows its
     // origin to this tree's room, and waits for the running room to swap.
@@ -726,16 +706,41 @@ describe("fabrichat-four-writer-room-update", () => {
       ).toEqual([{ deleted: true }, "In the thread"]);
     });
 
-    it("obliterates a message the earlier program stored that its author deleted, named as its window names it, dropping the author", async () => {
-      // A client holding the window the earlier program wrote names the
-      // message by that window's link, which resolves to it under the schema
-      // the earlier program stored it with. Its tombstone doesn't fit that
-      // schema, so the act reads the message through the link it was given.
+    it("obliterates a message the earlier program stored that its author deleted, named as a row of a window names it, dropping the author", async () => {
+      // A row of a window names its message by its place in the window,
+      // whose stored link resolves to it under the schema the earlier program
+      // stored it with, in a window this tree's room opens as in one the
+      // earlier program did. Its tombstone doesn't fit that schema, so the
+      // act reads the message through the link it was given.
 
       const twice = (await storedMessages())[4];
+      const today = (await roomController.get(
+        room.getAsNormalizedFullLink().id,
+      )).getCell();
+      {
+        const tx = runtime.edit();
+        today.withTx(tx).key("messages").key("openWindow").send({
+          requestId: "w-acts",
+          windowId: "acts",
+          from: { after: "start" },
+          count: 10,
+        });
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+      }
+      const windows = today.key("messages").key("windows").resolveAsCell();
+      const rows = (windows.getRaw() as { acts: { messages: unknown[] } })
+        .acts.messages.map((_, index) =>
+          runtime.getCellFromLink({
+            ...windows.getAsNormalizedFullLink(),
+            path: ["acts", "messages", String(index)],
+            schema: undefined,
+          })
+        );
       const docOf = (cell: Cell<unknown>) =>
         cell.resolveAsCell().getAsNormalizedFullLink().id;
-      const shown = staleWindow.find((cell) => docOf(cell) === docOf(twice));
+      const shown = rows.find((cell) => docOf(cell) === docOf(twice));
       expect(shown).toBeDefined();
       const refusals = await refusalsDuring(async () => {
         await send(
