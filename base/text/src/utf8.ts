@@ -15,9 +15,26 @@ const decoder = new TextDecoder();
 
 /**
  * `WeakMap` cache from frozen objects whose keys needed sorting to their
- * sorted keys. Used by `utf8SortedKeysOf()`.
+ * sorted keys. Used by `utf8SortedKeysOf()`. Objects whose keys arrived in the
+ * same order hold the same array, which `sharedSortedKeysOf()` supplies.
  */
 const sortedKeyCache = new WeakMap<object, readonly string[]>();
+
+/**
+ * The sorted keys of each order of keys a cached object arrived with, by that
+ * order, so that every object of one shape holds one array and not a copy of
+ * its own. An entry is held weakly: `sortedKeyCache` keeps an array alive for
+ * as long as an object it was returned for lives, and `forgetSortedKeys`
+ * drops the entry once no such object is left.
+ */
+const sharedSortedKeys = new Map<string, WeakRef<readonly string[]>>();
+
+/** Drops the `sharedSortedKeys` entry of an order whose array was collected. */
+const forgetSortedKeys = new FinalizationRegistry<string>((order) => {
+  if (sharedSortedKeys.get(order)?.deref() === undefined) {
+    sharedSortedKeys.delete(order);
+  }
+});
 
 /** Helper for `utf8Compare()`: Is the given character code a surrogate? */
 function isSurrogateCharCode(c: number) {
@@ -116,10 +133,31 @@ export function utf8Compare(a: string, b: string): number {
 }
 
 /**
+ * Returns the sorted form of `keys` as a frozen array, the same array for
+ * every call given keys in that same order. A call that finds no array for the
+ * order sorts `keys` in place and keeps it as that array.
+ */
+function sharedSortedKeysOf(keys: string[]): readonly string[] {
+  // `JSON.stringify()` quotes and escapes each key, so two different orders
+  // never produce the same text.
+  const order = JSON.stringify(keys);
+  const shared = sharedSortedKeys.get(order)?.deref();
+  if (shared !== undefined) {
+    return shared;
+  }
+
+  const sorted = Object.freeze(keys.sort(utf8Compare));
+  sharedSortedKeys.set(order, new WeakRef(sorted));
+  forgetSortedKeys.register(sorted, order);
+  return sorted;
+}
+
+/**
  * Produces an array containing the ordered keys of the given object, in UTF-8
  * sort order. If the given object is frozen and its keys needed sorting, the
- * result is frozen and cached, and later calls return the same array.
- * Otherwise the result is a new array.
+ * result is frozen and cached, and later calls return the same array. Frozen
+ * objects whose keys arrive in the same order as each other are given the same
+ * array. Otherwise the result is a new array.
  */
 export function utf8SortedKeysOf(value: object): readonly string[] {
   const cached = sortedKeyCache.get(value);
@@ -133,15 +171,17 @@ export function utf8SortedKeysOf(value: object): readonly string[] {
   const keys = Object.keys(value);
   for (let at = 1; at < keys.length; at++) {
     if (utf8Compare(keys[at - 1]!, keys[at]!) > 0) {
+      if (!Object.isFrozen(value)) {
+        return keys.sort(utf8Compare);
+      }
+
       // An entry lives as long as its object does, so one is kept only where
       // it saves a sort. Reading keys already in order again takes one
       // `Object.keys()` call and the check above, which costs less than
-      // holding a copy of them for the object's whole life.
-      keys.sort(utf8Compare);
-      if (Object.isFrozen(value)) {
-        sortedKeyCache.set(value, Object.freeze(keys));
-      }
-      return keys;
+      // holding an entry for the object's whole life.
+      const sorted = sharedSortedKeysOf(keys);
+      sortedKeyCache.set(value, sorted);
+      return sorted;
     }
   }
 
