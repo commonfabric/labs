@@ -9,10 +9,10 @@ import type {
 import { isBuilderSourceSitesV1 } from "@commonfabric/ts-transformers/runtime-contract";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { pathsOverlap } from "@commonfabric/memory/v2/path";
 
 import type { JSONSchema } from "../builder/types.ts";
 import { type Cell, isCell } from "../cell.ts";
-import { concretePathsOverlap } from "../cfc/canonical.ts";
 import { readStoredCfcMetadata } from "../cfc/metadata.ts";
 import { validateCfcPolicyArtifactManifest } from "../cfc/policy.ts";
 import {
@@ -1739,7 +1739,7 @@ function writtenByAnotherIdentity(
   const scope = normalizeCellScope(link.scope);
   return tx.getCfcState().nonBuiltinWrites.some((write) =>
     write.space === link.space && write.id === link.id &&
-    write.scope === scope && concretePathsOverlap(write.path, path)
+    write.scope === scope && pathsOverlap(write.path, path)
   );
 }
 

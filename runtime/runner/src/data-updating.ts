@@ -5,6 +5,7 @@ import {
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
 import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import { pathsOverlap } from "@commonfabric/memory/v2/path";
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import {
   assertValidFabricValueLayer,
@@ -35,10 +36,7 @@ import {
   recordWriteDestinationPolicyInput,
 } from "./cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";
-import {
-  canonicalizeLogicalPath,
-  concretePathsOverlap,
-} from "./cfc/canonical.ts";
+import { canonicalizeLogicalPath } from "./cfc/canonical.ts";
 import {
   type CfcLabelView,
   cloneCfcLabelView,
@@ -351,7 +349,7 @@ const hasPendingSchemaPolicyInput = (
 ): boolean => {
   const targetPath = canonicalizeLogicalPath(target.path);
   return tx.getCfcSchemaPolicyInputs(target.space, target.id).some((input) =>
-    concretePathsOverlap(
+    pathsOverlap(
       canonicalizeLogicalPath(input.target.path),
       targetPath,
     ) &&

@@ -14,6 +14,7 @@ import {
   valueEqualByWalk,
 } from "@commonfabric/data-model";
 import { type ACL, aclDocId, aclOwner, isACL } from "@commonfabric/memory/acl";
+import { pathsOverlap } from "@commonfabric/memory/v2/path";
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { getLogger } from "@commonfabric/logger";
@@ -107,7 +108,6 @@ import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
-import { concretePathsOverlap } from "./cfc/canonical.ts";
 import {
   recordNewDocumentProtectedDefaults,
   recordNewProtectedDefaults,
@@ -13573,9 +13573,7 @@ export class Runner {
 
     const shouldCollectPath = (path: readonly string[]): boolean =>
       !writeInputPaths || writeInputPaths.length === 0 ||
-      writeInputPaths.some((writePath) =>
-        concretePathsOverlap(path, writePath)
-      );
+      writeInputPaths.some((writePath) => pathsOverlap(path, writePath));
 
     const visit = (
       schema: unknown,
