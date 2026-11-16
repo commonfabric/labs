@@ -5,6 +5,8 @@
 // (`watchSetPartsV1`, section 4.3.5).
 
 import { assert, assertEquals, assertExists, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import { Server } from "../v2/server.ts";
 import {
   connect,
@@ -159,6 +161,17 @@ Deno.test("an entry larger than a part goes alone, and a lone entry is not split
     lone,
   ]);
   assertEquals(halveSyncPart(lone, SESSION), undefined);
+});
+
+describe("halveSyncPart()", () => {
+  it("returns `undefined` for a message that carries no sync", () => {
+    const response: ServerMessage = {
+      type: "response",
+      requestId: "req:1",
+      ok: { serverSeq: 40 },
+    };
+    expect(halveSyncPart(response, SESSION)).toBeUndefined();
+  });
 });
 
 Deno.test("a halved part keeps its place in the sequence", () => {

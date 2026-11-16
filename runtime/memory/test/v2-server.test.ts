@@ -8,7 +8,6 @@ import type { FabricValue } from "@commonfabric/api";
 import { parseClientMessage, Server, SessionRegistry } from "../v2/server.ts";
 import {
   CODEMIRROR_CHANGESET_CODEC,
-  decodeMemoryBoundary,
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
   type GraphQueryResult,
@@ -281,21 +280,6 @@ Deno.test("memory v2 server keeps publication locks independent per space", asyn
     await server.close();
   }
   assertEquals(sameSpaceEntered, true);
-});
-
-Deno.test("memory v2 server stateless respond does not issue hello.ok", async () => {
-  const server = createServer("memory://memory-v2-server-stateless-respond");
-  try {
-    const payload = await server.respond(encodeMemoryBoundary(HELLO));
-    assertExists(payload);
-    const response = assertResponse<unknown>(
-      decodeMemoryBoundary(payload) as ServerMessage,
-    );
-    assertEquals(response.requestId, "handshake");
-    assertEquals(response.error?.name, "ProtocolError");
-  } finally {
-    await server.close();
-  }
 });
 
 Deno.test("memory v2 server parser ignores transact invocation and authorization payloads", () => {

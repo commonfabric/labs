@@ -3184,6 +3184,62 @@ export const compatibleMemoryProtocolFlags = (
   right: MemoryProtocolFlags,
 ): boolean => left.modernCellRep === right.modernCellRep;
 
+/** The members of `MemoryProtocolFlags` that hold a boolean. */
+type BooleanMemoryProtocolFlag = {
+  [K in keyof MemoryProtocolFlags]-?: NonNullable<
+    MemoryProtocolFlags[K]
+  > extends boolean ? K : never;
+}[keyof MemoryProtocolFlags];
+
+/**
+ * Every boolean flag, for `parseMemoryProtocolFlags()` to refuse a peer that
+ * advertises one as anything but a boolean. The type requires every boolean
+ * member of `MemoryProtocolFlags` here, and nothing else.
+ */
+const BOOLEAN_MEMORY_PROTOCOL_FLAGS: Record<BooleanMemoryProtocolFlag, true> = {
+  routedAuthV1: true,
+  routedCompressionV1: true,
+  genesisRoot: true,
+  spaceKind: true,
+  serverExecution: true,
+  stableExpressionResultIds: true,
+  commitPreconditions: true,
+  applyOp: true,
+  sqliteQueryReader: true,
+  modernCellRep: true,
+  syncSchemaTableV2: true,
+  syncLabelTableV1: true,
+  commitLabelTableV1: true,
+  messageCompressionV1: true,
+  sqliteCommitRowLabelEval: true,
+  pendingReadStacks: true,
+  verdictCatchUpMarkers: true,
+  entityIdListing: true,
+  entityIdPagination: true,
+  entityIdLookup: true,
+  viewScopedReplicationV1: true,
+  sessionReadCeiling: true,
+  sessionHoldings: true,
+  presenceV1: true,
+  sessionClose: true,
+  connectionAuth: true,
+  sessionOpenProofs: true,
+  admissionNotice: true,
+  elidedVerdicts: true,
+  sessionReportV1: true,
+  patternLifecycle: true,
+  patternLifecycleOrigins: true,
+  patternLifecycleScopes: true,
+  servedRequests: true,
+  spaceInvites: true,
+  instanceNameMark: true,
+  syncCrossingsV1: true,
+  watchRemoveV1: true,
+  syncPartsV1: true,
+  syncCidReferencesV1: true,
+  watchSetPartsV1: true,
+};
+
 /**
  * Parses and normalizes incoming wire-protocol flags. Returns `null` if the
  * input is not a recognizable flags object.
@@ -3194,51 +3250,11 @@ export const parseMemoryProtocolFlags = (
   if (!isPlainObject(value)) {
     return null;
   }
-  if (
-    value.routedAuthV1 !== undefined && typeof value.routedAuthV1 !== "boolean"
-  ) {
-    return null;
+  for (const name of Object.keys(BOOLEAN_MEMORY_PROTOCOL_FLAGS)) {
+    if (value[name] !== undefined && typeof value[name] !== "boolean") {
+      return null;
+    }
   }
-  if (
-    value.routedCompressionV1 !== undefined &&
-    typeof value.routedCompressionV1 !== "boolean"
-  ) {
-    return null;
-  }
-
-  const genesisRoot = value.genesisRoot;
-  if (genesisRoot !== undefined && typeof genesisRoot !== "boolean") {
-    return null;
-  }
-  const spaceKind = value.spaceKind;
-  if (spaceKind !== undefined && typeof spaceKind !== "boolean") {
-    return null;
-  }
-  const serverExecution = value.serverExecution;
-  if (serverExecution !== undefined && typeof serverExecution !== "boolean") {
-    return null;
-  }
-  const stableExpressionResultIds = value.stableExpressionResultIds;
-  if (
-    stableExpressionResultIds !== undefined &&
-    typeof stableExpressionResultIds !== "boolean"
-  ) {
-    return null;
-  }
-
-  const commitPreconditions = value.commitPreconditions;
-  if (
-    commitPreconditions !== undefined &&
-    typeof commitPreconditions !== "boolean"
-  ) {
-    return null;
-  }
-
-  const applyOp = value.applyOp;
-  if (applyOp !== undefined && typeof applyOp !== "boolean") {
-    return null;
-  }
-
   const operationCodecs = value.operationCodecs;
   if (
     operationCodecs !== undefined &&
@@ -3250,315 +3266,96 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
-  const sqliteQueryReader = value.sqliteQueryReader;
-  if (
-    sqliteQueryReader !== undefined && typeof sqliteQueryReader !== "boolean"
-  ) {
-    return null;
-  }
-
-  const modernCellRep = value.modernCellRep;
-  if (
-    modernCellRep !== undefined &&
-    typeof modernCellRep !== "boolean"
-  ) {
-    return null;
-  }
-
-  const syncSchemaTableV2 = value.syncSchemaTableV2;
-  if (
-    syncSchemaTableV2 !== undefined &&
-    typeof syncSchemaTableV2 !== "boolean"
-  ) {
-    return null;
-  }
-
-  const syncLabelTableV1 = value.syncLabelTableV1;
-  if (
-    syncLabelTableV1 !== undefined && typeof syncLabelTableV1 !== "boolean"
-  ) {
-    return null;
-  }
-
-  const commitLabelTableV1 = value.commitLabelTableV1;
-  if (
-    commitLabelTableV1 !== undefined && typeof commitLabelTableV1 !== "boolean"
-  ) {
-    return null;
-  }
-
-  const messageCompressionV1 = value.messageCompressionV1;
-  if (
-    messageCompressionV1 !== undefined &&
-    typeof messageCompressionV1 !== "boolean"
-  ) {
-    return null;
-  }
-
-  const sqliteCommitRowLabelEval = value.sqliteCommitRowLabelEval;
-  if (
-    sqliteCommitRowLabelEval !== undefined &&
-    typeof sqliteCommitRowLabelEval !== "boolean"
-  ) {
-    return null;
-  }
-
-  const pendingReadStacks = value.pendingReadStacks;
-  if (
-    pendingReadStacks !== undefined &&
-    typeof pendingReadStacks !== "boolean"
-  ) {
-    return null;
-  }
-
-  const verdictCatchUpMarkers = value.verdictCatchUpMarkers;
-  if (
-    verdictCatchUpMarkers !== undefined &&
-    typeof verdictCatchUpMarkers !== "boolean"
-  ) {
-    return null;
-  }
-
-  const entityIdListing = value.entityIdListing;
-  if (
-    entityIdListing !== undefined &&
-    typeof entityIdListing !== "boolean"
-  ) {
-    return null;
-  }
-
-  const entityIdPagination = value.entityIdPagination;
-  if (
-    entityIdPagination !== undefined &&
-    typeof entityIdPagination !== "boolean"
-  ) {
-    return null;
-  }
-
-  const entityIdLookup = value.entityIdLookup;
-  if (
-    entityIdLookup !== undefined &&
-    typeof entityIdLookup !== "boolean"
-  ) {
-    return null;
-  }
-
-  const viewScopedReplicationV1 = value.viewScopedReplicationV1;
-  if (
-    viewScopedReplicationV1 !== undefined &&
-    typeof viewScopedReplicationV1 !== "boolean"
-  ) {
-    return null;
-  }
-
-  const sessionReadCeiling = value.sessionReadCeiling;
-  if (
-    sessionReadCeiling !== undefined &&
-    typeof sessionReadCeiling !== "boolean"
-  ) {
-    return null;
-  }
-
-  const sessionHoldings = value.sessionHoldings;
-  if (
-    sessionHoldings !== undefined &&
-    typeof sessionHoldings !== "boolean"
-  ) {
-    return null;
-  }
-
-  const presenceV1 = value.presenceV1;
-  if (presenceV1 !== undefined && typeof presenceV1 !== "boolean") {
-    return null;
-  }
-
-  const sessionClose = value.sessionClose;
-  if (sessionClose !== undefined && typeof sessionClose !== "boolean") {
-    return null;
-  }
-
-  const connectionAuth = value.connectionAuth;
-  if (connectionAuth !== undefined && typeof connectionAuth !== "boolean") {
-    return null;
-  }
-
-  const sessionOpenProofs = value.sessionOpenProofs;
-  if (
-    sessionOpenProofs !== undefined && typeof sessionOpenProofs !== "boolean"
-  ) {
-    return null;
-  }
-
-  const admissionNotice = value.admissionNotice;
-  if (admissionNotice !== undefined && typeof admissionNotice !== "boolean") {
-    return null;
-  }
-  const elidedVerdicts = value.elidedVerdicts;
-  if (elidedVerdicts !== undefined && typeof elidedVerdicts !== "boolean") {
-    return null;
-  }
-
-  const sessionReportV1 = value.sessionReportV1;
-  if (sessionReportV1 !== undefined && typeof sessionReportV1 !== "boolean") {
-    return null;
-  }
-
-  const patternLifecycle = value.patternLifecycle;
-  if (
-    patternLifecycle !== undefined && typeof patternLifecycle !== "boolean"
-  ) {
-    return null;
-  }
-
-  const patternLifecycleOrigins = value.patternLifecycleOrigins;
-  if (
-    patternLifecycleOrigins !== undefined &&
-    typeof patternLifecycleOrigins !== "boolean"
-  ) {
-    return null;
-  }
-
-  const patternLifecycleScopes = value.patternLifecycleScopes;
-  if (
-    patternLifecycleScopes !== undefined &&
-    typeof patternLifecycleScopes !== "boolean"
-  ) {
-    return null;
-  }
-
-  const servedRequests = value.servedRequests;
-  if (servedRequests !== undefined && typeof servedRequests !== "boolean") {
-    return null;
-  }
-
-  const spaceInvites = value.spaceInvites;
-  if (spaceInvites !== undefined && typeof spaceInvites !== "boolean") {
-    return null;
-  }
-
-  const instanceNameMark = value.instanceNameMark;
-  if (
-    instanceNameMark !== undefined && typeof instanceNameMark !== "boolean"
-  ) {
-    return null;
-  }
-
-  const syncCrossingsV1 = value.syncCrossingsV1;
-  if (syncCrossingsV1 !== undefined && typeof syncCrossingsV1 !== "boolean") {
-    return null;
-  }
-
-  const watchRemoveV1 = value.watchRemoveV1;
-  if (watchRemoveV1 !== undefined && typeof watchRemoveV1 !== "boolean") {
-    return null;
-  }
-
-  const syncPartsV1 = value.syncPartsV1;
-  if (syncPartsV1 !== undefined && typeof syncPartsV1 !== "boolean") {
-    return null;
-  }
-
-  const syncCidReferencesV1 = value.syncCidReferencesV1;
-  if (
-    syncCidReferencesV1 !== undefined &&
-    typeof syncCidReferencesV1 !== "boolean"
-  ) {
-    return null;
-  }
-
-  const watchSetPartsV1 = value.watchSetPartsV1;
-  if (watchSetPartsV1 !== undefined && typeof watchSetPartsV1 !== "boolean") {
-    return null;
-  }
-
   return {
-    modernCellRep: modernCellRep === true,
+    modernCellRep: value.modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
-    spaceKind: spaceKind === true,
-    ...(serverExecution === undefined ? {} : { serverExecution }),
-    stableExpressionResultIds: stableExpressionResultIds === true,
-    commitPreconditions: commitPreconditions === true,
-    applyOp: applyOp === true,
+    spaceKind: value.spaceKind === true,
+    ...(typeof value.serverExecution === "boolean"
+      ? { serverExecution: value.serverExecution }
+      : {}),
+    stableExpressionResultIds: value.stableExpressionResultIds === true,
+    commitPreconditions: value.commitPreconditions === true,
+    applyOp: value.applyOp === true,
     ...(operationCodecs === undefined
       ? {}
       : { operationCodecs: [...operationCodecs].sort() as string[] }),
-    syncSchemaTableV2: syncSchemaTableV2 === true,
-    syncLabelTableV1: syncLabelTableV1 === true,
-    commitLabelTableV1: commitLabelTableV1 === true,
-    messageCompressionV1: messageCompressionV1 === true,
+    syncSchemaTableV2: value.syncSchemaTableV2 === true,
+    syncLabelTableV1: value.syncLabelTableV1 === true,
+    commitLabelTableV1: value.commitLabelTableV1 === true,
+    messageCompressionV1: value.messageCompressionV1 === true,
     // Absent (an older peer) parses to false: the capability must be
     // POSITIVELY advertised for the runner to relax its write gate.
-    sqliteCommitRowLabelEval: sqliteCommitRowLabelEval === true,
-    sqliteQueryReader: sqliteQueryReader === true,
+    sqliteCommitRowLabelEval: value.sqliteCommitRowLabelEval === true,
+    sqliteQueryReader: value.sqliteQueryReader === true,
     // Absent (an older server) parses to false: clients scalarize pending
     // reads to top-of-stack unless the array capability is advertised.
-    pendingReadStacks: pendingReadStacks === true,
+    pendingReadStacks: value.pendingReadStacks === true,
     // Absent (an older server that stamps markers only for conflicts)
     // parses to false: clients apply verdicts immediately instead of
     // parking them on marker coverage.
-    verdictCatchUpMarkers: verdictCatchUpMarkers === true,
-    entityIdListing: entityIdListing === true,
-    entityIdPagination: entityIdPagination === true,
-    entityIdLookup: entityIdLookup === true,
+    verdictCatchUpMarkers: value.verdictCatchUpMarkers === true,
+    entityIdListing: value.entityIdListing === true,
+    entityIdPagination: value.entityIdPagination === true,
+    entityIdLookup: value.entityIdLookup === true,
     // Absent (an older server) parses to false: a provider-less session
     // declares nothing and reconnects on the declaration-less paths; a
     // provider-bearing one terminates at restore (see the flag's doc).
-    sessionHoldings: sessionHoldings === true,
-    viewScopedReplicationV1: viewScopedReplicationV1 === true,
+    sessionHoldings: value.sessionHoldings === true,
+    viewScopedReplicationV1: value.viewScopedReplicationV1 === true,
     // Absent (an older server) parses to false: a client carrying a read
     // ceiling refuses such a server rather than reading unbounded.
-    sessionReadCeiling: sessionReadCeiling === true,
+    sessionReadCeiling: value.sessionReadCeiling === true,
     // Absent (an older server) parses to false: a client then refuses to
     // join a presence room rather than send a message the server would
     // refuse.
-    presenceV1: presenceV1 === true,
+    presenceV1: value.presenceV1 === true,
     // Absent (an older server) parses to false: a client then leaves a
     // session it closes attached until the connection closes.
-    sessionClose: sessionClose === true,
+    sessionClose: value.sessionClose === true,
     // Absent parses to false: a client then signs each `session.open`.
-    connectionAuth: connectionAuth === true,
+    connectionAuth: value.connectionAuth === true,
     // Absent parses to false: a client then presents no proof chain.
-    sessionOpenProofs: sessionOpenProofs === true,
+    sessionOpenProofs: value.sessionOpenProofs === true,
     // Absent (an older peer) parses to false: a server then sends that
     // client no `session/admissible`.
-    admissionNotice: admissionNotice === true,
+    admissionNotice: value.admissionNotice === true,
     // Absent (an older client) parses to false: the server then holds that
     // session's commits to both conditions of the identity proof.
-    elidedVerdicts: elidedVerdicts === true,
+    elidedVerdicts: value.elidedVerdicts === true,
     // Absent (an older server) parses to false: a client then sends no
     // `session.report`.
-    sessionReportV1: sessionReportV1 === true,
+    sessionReportV1: value.sessionReportV1 === true,
     // Absent (an older server) parses to false: a client then sends no
     // `pattern.lifecycle` or `space.invite`.
-    patternLifecycle: patternLifecycle === true,
+    patternLifecycle: value.patternLifecycle === true,
     // Absent (an older server) parses to false: a serving process then
     // treats the owner as unavailable.
-    servedRequests: servedRequests === true,
-    spaceInvites: spaceInvites === true,
+    servedRequests: value.servedRequests === true,
+    spaceInvites: value.spaceInvites === true,
     // Absent (an older server) parses to false: the server records no mark
     // and admits a declaring session's commits without one.
-    instanceNameMark: instanceNameMark === true,
+    instanceNameMark: value.instanceNameMark === true,
     // Absent (an older server) parses to false: a client then sends neither
     // `follow` nor a `setsrc` origin.
-    patternLifecycleOrigins: patternLifecycleOrigins === true,
+    patternLifecycleOrigins: value.patternLifecycleOrigins === true,
     // Absent (an older server) parses to false: a client then sends no
     // scoped `setsrc` or `follow`.
-    patternLifecycleScopes: patternLifecycleScopes === true,
+    patternLifecycleScopes: value.patternLifecycleScopes === true,
     // Absent (an older server) parses to false: a client then finds the
     // links out of a space by reading what it synced.
-    syncCrossingsV1: syncCrossingsV1 === true,
+    syncCrossingsV1: value.syncCrossingsV1 === true,
     // Absent (an older server) parses to false: a client then replaces the
     // whole watch set to remove a watch.
-    watchRemoveV1: watchRemoveV1 === true,
+    watchRemoveV1: value.watchRemoveV1 === true,
     // Absent (an older peer) parses to false: a server then sends that
     // client every sync whole.
-    syncPartsV1: syncPartsV1 === true,
+    syncPartsV1: value.syncPartsV1 === true,
     // Absent (an older peer) parses to false: a server then sends that
     // client every schema document with its body.
-    syncCidReferencesV1: syncCidReferencesV1 === true,
+    syncCidReferencesV1: value.syncCidReferencesV1 === true,
     // Absent (an older server) parses to false: a client then sends every
     // watch set whole.
-    watchSetPartsV1: watchSetPartsV1 === true,
+    watchSetPartsV1: value.watchSetPartsV1 === true,
     routedAuthV1: value.routedAuthV1 === true,
     routedCompressionV1: value.routedCompressionV1 === true,
   };

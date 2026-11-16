@@ -5692,7 +5692,9 @@ export class SpaceServer implements TransactionSealDestination {
           } as never,
           {
             entries: instance.remainingEntries,
-            acks: instance.remainingAcks,
+            // An acked entry is retired with its mark, and every other
+            // mark is stale, so retirement leaves no mark.
+            acks: {},
           } as never,
         );
         tx.commit().settled.then(({ error }) => {
