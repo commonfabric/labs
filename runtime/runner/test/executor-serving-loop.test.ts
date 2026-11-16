@@ -486,10 +486,12 @@ describe("stage F serving loop", () => {
   /**
    * Serves the row pattern over a file store, closes the memory server,
    * leaves the store's `scheduler_basis` table holding what `seedBasis`
-   * writes, commits an input while nothing serves the space, and checks
-   * that a fresh host serving a viewer recovers it. The rows play no part
-   * in that recovery: a fresh serving runtime starts every computation it
-   * materializes as not yet run (serving-loop.md §6). Returns the store.
+   * writes, reopens the store, which deletes those rows, writes them again
+   * through the reopened engine, commits an input while nothing serves the
+   * space, and checks that a fresh host serving a viewer recovers it. The
+   * rows play no part in that recovery: a fresh serving runtime starts
+   * every computation it materializes as not yet run (serving-loop.md §6).
+   * Returns the store.
    */
   const recoverAfterRestart = async (
     seedBasis: (raw: Database, inputId: string) => void,
@@ -567,6 +569,14 @@ describe("stage F serving loop", () => {
       server = newSharedServer({ subscriptionRefreshDelayMs: 0, store });
       openClient();
       engine = await server.engineForSpace(space);
+      // Opening the store deleted whatever rows it held. The same rows go
+      // back in through the engine's own connection, so the next tenure
+      // activates over them.
+      expect(
+        engine.database.prepare(`SELECT count(*) AS n FROM scheduler_basis`)
+          .get(),
+      ).toEqual({ n: 0 });
+      seedBasis(engine.database, inputId);
       const reopened = clientRuntime.getCell<Row>(space, "row-input-0");
       await reopened.sync();
       const offline = clientRuntime.edit();

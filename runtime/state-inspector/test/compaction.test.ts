@@ -128,6 +128,8 @@ async function withCompacted(
     interruptAfterAudit?: boolean;
     /** Between the two runs of `twice`, tombstone the ACL document. */
     tombstoneBetween?: boolean;
+    /** Give the store the `scheduler_basis` rows an earlier build wrote. */
+    basisRows?: boolean;
   } = {},
 ): Promise<void> {
   const dir = await Deno.makeTempDir({ prefix: "compaction-verify-" });
@@ -136,6 +138,17 @@ async function withCompacted(
     const backup = `${dir}/backup.sqlite`;
     const result = `${dir}/result.sqlite`;
     await buildStore(store, options.withAcl ?? true, options.deleteAcl);
+    if (options.basisRows) {
+      const db = new Database(store);
+      db.exec(
+        `INSERT INTO scheduler_basis
+           (branch, action, action_scope_key, entity_space, entity,
+            entity_scope_key, seq)
+         VALUES ('', 'older-build/a', 'space', '${SPACE}', 'of:topic', 'space', 1),
+                ('', 'older-build/b', 'space', '${SPACE}', 'computed:a', 'space', 2)`,
+      );
+      db.close();
+    }
     await Deno.copyFile(store, backup);
     const first = {
       store,
@@ -263,6 +276,45 @@ Deno.test("verifyCompaction passes on the run's own output, in full and sampled"
       ),
     );
   });
+});
+
+Deno.test("verifyCompaction passes over a store holding scheduler_basis rows, which the engine's open empties", async () => {
+  await withCompacted(async ({ backup, result, dir }) => {
+    const rows = (path: string) => {
+      const db = new Database(path, { readonly: true });
+      try {
+        return db.prepare(`SELECT count(*) AS n FROM scheduler_basis`).get<
+          { n: number }
+        >()!.n;
+      } finally {
+        db.close();
+      }
+    };
+    assertEquals(rows(backup), 2);
+    assertEquals(rows(result), 0);
+    const verification = verifyCompaction({ result, against: backup });
+    assertEquals(failing(verification), []);
+    assert(
+      verification.checks.find((check) =>
+        check.name === "tables outside the history are untouched"
+      )!.detail.includes("scheduler_basis emptied by the engine's open"),
+    );
+
+    // Rows the backup does not hold are still a difference.
+    const copy = `${dir}/tampered.sqlite`;
+    await Deno.copyFile(result, copy);
+    const db = new Database(copy);
+    db.exec(
+      `INSERT INTO scheduler_basis
+         (branch, action, action_scope_key, entity_space, entity,
+          entity_scope_key, seq)
+       VALUES ('', 'other', 'space', '${SPACE}', 'of:topic', 'space', 1)`,
+    );
+    db.close();
+    assertEquals(failing(verifyCompaction({ result: copy, against: backup })), [
+      "tables outside the history are untouched",
+    ]);
+  }, { basisRows: true });
 });
 
 Deno.test("verifyCompaction passes when the space has no ACL document", async () => {

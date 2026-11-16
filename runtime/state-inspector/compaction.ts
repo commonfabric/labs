@@ -79,6 +79,11 @@ const ACL_ID_PATTERN = "of:did:%";
 /** The tables the history checks cover one by one; every other table is
  * held to the backup whole (I7). */
 const HISTORY_TABLES = new Set(["commit", "revision", "snapshot", "head"]);
+/** The tables opening a store through the engine empties
+ * (`migrateSchedulerObservationTablesToBasis` in memory v2's engine). A run
+ * opens its copy that way, so the result holds each either as the backup
+ * does or empty. */
+const EMPTIED_AT_OPEN = new Set(["scheduler_basis"]);
 const OP_TABLES = [
   "op_field_epoch",
   "op_submission",
@@ -852,7 +857,8 @@ export function verifyCompaction(
 
     // I7: everything that is not revision history is untouched — the schema,
     // and every table but the four the checks above take apart, row for row
-    // with multiplicity. Pattern-created tables are among them.
+    // with multiplicity, except that a table the engine's open empties may
+    // come back empty. Pattern-created tables are among them.
     const schemaDiff = count(
       main,
       `SELECT count(*) AS n FROM (
@@ -879,6 +885,7 @@ export function verifyCompaction(
        WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`,
     ).map((row) => row.name).filter((name) => !HISTORY_TABLES.has(name));
     const tableDiffs: string[] = [];
+    const emptied: string[] = [];
     for (const table of otherTables) {
       const inMain = main.get(
         `SELECT 1 FROM main.sqlite_master WHERE type = 'table' AND name = ?`,
@@ -886,6 +893,16 @@ export function verifyCompaction(
       ) !== undefined;
       if (!inMain) {
         tableDiffs.push(`${table} missing from the result`);
+        continue;
+      }
+      const quoted = `"${table.replace(/"/g, '""')}"`;
+      if (
+        EMPTIED_AT_OPEN.has(table) &&
+        main.get(`SELECT 1 FROM main.${quoted} LIMIT 1`) === undefined
+      ) {
+        if (main.get(`SELECT 1 FROM against.${quoted} LIMIT 1`)) {
+          emptied.push(table);
+        }
         continue;
       }
       // Each value is compared under BINARY collation beside its storage
@@ -905,7 +922,6 @@ export function verifyCompaction(
           `${column} COLLATE BINARY`,
         ]);
       const list = columns.join(", ");
-      const quoted = `"${table.replace(/"/g, '""')}"`;
       const grouped = (schema: string) =>
         `SELECT ${list}, count(*) AS n FROM ${schema}.${quoted} GROUP BY ${list}`;
       const diff = count(
@@ -925,6 +941,9 @@ export function verifyCompaction(
       "tables outside the history are untouched",
       tableDiffs.length === 0,
       `${n(otherTables.length)} table(s) compared` +
+        (emptied.length === 0
+          ? ""
+          : `; ${emptied.join(", ")} emptied by the engine's open`) +
         (tableDiffs.length === 0 ? "" : `; ${tableDiffs.join("; ")}`),
     );
 

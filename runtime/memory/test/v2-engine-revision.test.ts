@@ -1,7 +1,15 @@
 import { assertEquals, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
-import { applyCommit, close, open, ProtocolError, read } from "../v2/engine.ts";
+import {
+  applyCommit,
+  close,
+  dataVersion,
+  open,
+  ProtocolError,
+  read,
+} from "../v2/engine.ts";
 
 const createEngine = async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
@@ -48,12 +56,11 @@ Deno.test("memory v2 engine bootstraps the revision schema", async () => {
   }
 });
 
-Deno.test("memory v2 engine drops the observation tables and never backfills scheduler_basis", async () => {
-  // Server-execution v2 Phase 1 stage C.2 (serving-loop.md §3b): a store that
-  // carries any of the SEVEN observation-era tables — scheduler_context_floor
-  // included, the one main's old CORE_SCHEDULER_TABLES constant omitted (D6) —
-  // has them dropped at open, and scheduler_basis starts EMPTY (D10: rows are
-  // never migrated; a warm start is lost once, by design).
+Deno.test("memory v2 engine drops the observation tables", async () => {
+  // serving-loop.md §3b: a store that carries any of the SEVEN
+  // observation-era tables — scheduler_context_floor included, the one
+  // main's old CORE_SCHEDULER_TABLES constant omitted (D6) — has them
+  // dropped at open, and nothing of theirs reaches scheduler_basis.
   const { engine, path } = await createEngine();
   close(engine);
   try {
@@ -93,6 +100,91 @@ Deno.test("memory v2 engine drops the observation tables and never backfills sch
       close(reopened);
     }
   } finally {
+    await Deno.remove(path);
+  }
+});
+
+Deno.test("memory v2 engine deletes the scheduler_basis rows a store holds when it opens, and keeps its documents and commits", async () => {
+  const { engine, path } = await createEngine();
+  const storeRows = (database: Database) => ({
+    head: database.prepare(`SELECT * FROM head ORDER BY id, scope_key`).all(),
+    commit: database.prepare(`SELECT * FROM "commit" ORDER BY seq`).all(),
+  });
+  try {
+    applyCommit(engine, {
+      sessionId: "session:test",
+      invocation: {
+        iss: "did:key:test",
+        aud: "did:key:service",
+        cmd: "/memory/transact",
+        sub: "did:key:space",
+      },
+      authorization: { proof: "ok" },
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: "of:doc:1",
+          value: { value: { hello: "world" } },
+        }],
+      },
+    });
+    const insert = engine.database.prepare(
+      `INSERT INTO scheduler_basis
+         (branch, action, action_scope_key, entity_space, entity,
+          entity_scope_key, seq)
+       VALUES ('', :action, 'space', 'did:key:space', 'of:doc:1', 'space', 1)`,
+    );
+    insert.run({ action: "older-build/a" });
+    insert.run({ action: "older-build/b" });
+    const before = storeRows(engine.database);
+    expect(before.head.length).toBeGreaterThan(0);
+    expect(before.commit.length).toBeGreaterThan(0);
+    close(engine);
+
+    const reopened = await open({ url: toFileUrl(path) });
+    try {
+      expect(
+        reopened.database.prepare(
+          `SELECT count(*) AS n FROM scheduler_basis`,
+        ).get(),
+      ).toEqual({ n: 0 });
+      expect(
+        reopened.database.prepare(
+          `SELECT name FROM sqlite_schema
+           WHERE name IN ('scheduler_basis', 'idx_scheduler_basis_entity')
+           ORDER BY name`,
+        ).all(),
+      ).toEqual([
+        { name: "idx_scheduler_basis_entity" },
+        { name: "scheduler_basis" },
+      ]);
+      expect(storeRows(reopened.database)).toEqual(before);
+      expect(read(reopened, { id: "of:doc:1" })).toEqual({
+        value: { hello: "world" },
+      });
+    } finally {
+      close(reopened);
+    }
+  } finally {
+    await Deno.remove(path);
+  }
+});
+
+Deno.test("memory v2 engine opening a store that holds no scheduler_basis rows commits nothing another connection sees", async () => {
+  // Engine.dataVersion readers, the memory server's capability cache among
+  // them, take a moved reading as another connection's commit.
+  const { engine, path } = await createEngine();
+  try {
+    const before = dataVersion(engine);
+    const second = await open({ url: toFileUrl(path) });
+    close(second);
+    const third = await open({ url: toFileUrl(path) });
+    close(third);
+    expect(dataVersion(engine)).toBe(before);
+  } finally {
+    close(engine);
     await Deno.remove(path);
   }
 });

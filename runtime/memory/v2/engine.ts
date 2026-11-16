@@ -430,11 +430,15 @@ CREATE TABLE IF NOT EXISTS execution_lease (
   expires_at  INTEGER NOT NULL
 );
 
--- Unused (docs/specs/server-side-execution/serving-loop.md §3b): nothing
--- reads or writes this table or its index. Processes of earlier builds
--- write one row per document each serving run read, inside the wave's
--- derived store transaction. The statement below is the schema text stores
--- already hold, column comments included, so it is kept as it stands.
+-- Kept empty (docs/specs/server-side-execution/serving-loop.md §3b): no
+-- serving or recovery code reads this table or its index, and nothing writes
+-- rows to it. Processes of earlier builds write one row per document each
+-- serving run read; opening a store deletes them
+-- (migrateSchedulerObservationTablesToBasis), and the state inspector
+-- reports how many a store holds. The statement below is the schema text
+-- stores already hold, so it is kept as it stands, and its column comments
+-- describe the rows earlier builds write. TODO(willkelly): Drop the table
+-- and its index once no deployed process writes rows.
 CREATE TABLE IF NOT EXISTS scheduler_basis (
   branch           TEXT    NOT NULL, -- engine-v3 branch, as on every table
   action           TEXT    NOT NULL, -- durable action identity/fingerprint;
@@ -2269,15 +2273,18 @@ WHERE substr(payload, 1, 5) <> 'fvj1:'
   }).immediate();
 };
 
-// Server-execution v2 Phase 1 stage C.2: the observation-payload tables are
-// REPLACED by the scheduler_basis index (serving-loop.md §3b). The drop list
-// is §3b's SEVEN tables, deliberately not a constant enumerating six (D6 —
+// The store keeps no scheduler state (serving-loop.md §3b), so opening one
+// drops the observation-payload tables and deletes the rows `scheduler_basis`
+// holds, in the one write transaction every open takes here. The drop list is
+// §3b's SEVEN tables, deliberately not a constant enumerating six (D6 —
 // scheduler_context_floor was created and dropped through separate statements
 // and is easy to leave behind). Satellites drop before the scheduler_
 // observation spine they FK into; scheduler_basis itself is created by INIT.
-// NO BACKFILL (D10): rows keyed by process_generation history cannot be
-// reinterpreted as overwrite-in-place basis state, and the table starts
-// empty, which costs nothing: no code reads it (serving-loop.md §6).
+// The delete runs only when a row exists: SQLite rewrites the root pages of
+// an empty table it is told to clear, so an unguarded delete would commit a
+// write at every open and move `PRAGMA data_version` for every other
+// connection to the store, which is what `Engine.dataVersion` readers take
+// as another connection's commit.
 const migrateSchedulerObservationTablesToBasis = (database: Database): void => {
   database.transaction(() => {
     database.exec(`
@@ -2289,6 +2296,9 @@ const migrateSchedulerObservationTablesToBasis = (database: Database): void => {
       DROP TABLE IF EXISTS scheduler_observation;
       DROP TABLE IF EXISTS scheduler_context_floor;
     `);
+    if (database.prepare(`SELECT 1 FROM scheduler_basis LIMIT 1`).get()) {
+      database.exec(`DELETE FROM scheduler_basis`);
+    }
   }).immediate();
 };
 
