@@ -510,6 +510,17 @@ describe("PatternIndexClient", () => {
       body: Record<string, unknown>;
     }> = [
       {
+        fn: "recordUsageEvent",
+        call: (c) =>
+          c.recordUsageEvent({ patternId: "pat-1", eventType: "viewed_in_loom" }),
+        body: { patternId: "pat-1", eventType: "viewed_in_loom" },
+      },
+      {
+        fn: "regarden",
+        call: (c) => c.regarden({ patternId: "pat-1", gardener: "privacy" }),
+        body: { patternId: "pat-1", gardener: "privacy" },
+      },
+      {
         fn: "requestListing",
         call: (c) => c.requestListing({ patternId: "pat-1" }),
         body: { patternId: "pat-1" },
@@ -565,5 +576,31 @@ describe("PatternIndexClient", () => {
       expect(requests[0].method).toBe("POST");
       expect(JSON.parse(requests[0].body)).toEqual(body);
     }
+  });
+  it("carries a limit refusal's reset time, and none when the index gives none", async () => {
+    const { client } = createClient([
+      jsonResponse(
+        { error: "daily cap reached", resetsAt: "2026-11-16T00:00:00Z" },
+        429,
+      ),
+      jsonResponse({ error: "not found" }, 404),
+    ]);
+    const capped = await client.requestListing({ patternId: "pat-1" })
+      .then(() => undefined, (thrown: unknown) => thrown);
+    expect(capped).toBeInstanceOf(PatternIndexError);
+    expect((capped as PatternIndexError).status).toBe(429);
+    expect((capped as PatternIndexError).retryAt).toBe("2026-11-16T00:00:00Z");
+    const missing = await client.requestListing({ patternId: "pat-2" })
+      .then(() => undefined, (thrown: unknown) => thrown);
+    expect((missing as PatternIndexError).retryAt).toBeUndefined();
+  });
+  it("keeps usage events out of the call a harness run reports through", async () => {
+    const { client, requests } = createClient([jsonResponse({ ok: true })]);
+    await client.recordEvent({
+      patternId: "pat-1",
+      // @ts-expect-error: a person's use is reported only through recordUsageEvent
+      eventType: "viewed_in_loom",
+    });
+    expect(requests[0].url).toBe("https://index.test/api/recordEvent");
   });
 });

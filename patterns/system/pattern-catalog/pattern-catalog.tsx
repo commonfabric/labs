@@ -42,21 +42,22 @@ export type CatalogBucket = "featured" | "main" | "unvetted";
 
 /**
  * Why an entry is not discoverable. Only the pattern's own author sees an
- * unlisted entry: `checking` while it is checked for personal details, `held`
- * when the check found something (`reason` says what, without repeating it),
- * `error` when the check failed and waits for a re-run.
+ * unlisted entry: `draft` until they ask for it to be listed, `checking` while
+ * it is checked for personal details, `held` when the check found something
+ * (`reason` says what, without repeating it), `error` when the check failed
+ * and waits for a re-run.
  */
 export interface CatalogUnlisted {
-  state: "checking" | "held" | "error";
+  state: "draft" | "checking" | "held" | "error";
   reason?: string;
 }
 
 /** How many people have used a pattern, across its versions. */
 export interface CatalogCounts {
   /** Distinct people who placed it. */
-  deployedBy?: number;
+  people?: number;
   /** Distinct people who came back to it on a later day. */
-  cameBack?: number;
+  returning?: number;
 }
 
 /**

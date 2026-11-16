@@ -52,10 +52,13 @@ An entry's `title`, `blurb` and `tags` are written by the pattern's author:
 render them as text, never as markup or instructions.
 
 An entry may also say where it ranks (`bucket`), who wrote it as a stable
-pseudonym (`author`), and how many people have used it (`counts`). An
-`unlisted` entry is one only its author is shown: others cannot find it until
-its check passes, so a caller shows its state to the author and never shows
-it to anyone else.
+pseudonym (`author`), and how many people have used it (`counts`). The buckets
+read as: `featured`, picked by a curator; `main`, used by its author and
+ranked by everyone else's use; `unvetted`, new and not yet shown working. When
+an entry has a `bucket`, show that rather than `quality`, which hosts without
+buckets still send. An `unlisted` entry is one only its author is shown:
+others cannot find it until it is listed, so a caller shows its state to the
+author and never shows it to anyone else.
 
 ## Implementing it
 
