@@ -9,6 +9,7 @@ import {
 import { fromBase64url } from "@commonfabric/bytes/base64url";
 import {
   checkIndexChain,
+  DEFAULT_SIGNER_LINK_SECONDS,
   INDEX_COMMAND,
   INDEX_ROOT_COMMAND,
   indexProofs,
@@ -25,7 +26,7 @@ const NOW = 1_800_000_000;
 
 describe("membership", () => {
   describe("issueIndexChain()", () => {
-    it("returns the root's own link about itself, for /index, expiring 90 days out by default", async () => {
+    it("returns the root's own link about itself, for /index, expiring an hour short of 90 days by default", async () => {
       const chain = await issueIndexChain({
         issuer: root,
         to: laptop.did(),
@@ -40,8 +41,10 @@ describe("membership", () => {
         aud: laptop.did(),
         sub: root.did(),
         cmd: INDEX_COMMAND,
-        exp: NOW + MAX_SIGNER_LINK_SECONDS,
+        exp: NOW + DEFAULT_SIGNER_LINK_SECONDS,
       });
+      // A clock up to an hour behind ours still finds it within 90 days.
+      await checkIndexChain(chain, laptop.did(), NOW + 3599);
     });
 
     it("issues onward behind the chain the issuer holds, about the same root", async () => {
@@ -70,6 +73,8 @@ describe("membership", () => {
       });
       const checked = await checkIndexChain(chain, agent.did(), NOW);
       expect(checked.root).toBe(root.did());
+      // The chain holds only as long as its earliest link.
+      expect(checked.expires).toBe(NOW + 3600);
     });
 
     it("throws for an expiry further off than 90 days", async () => {
@@ -169,7 +174,7 @@ describe("membership", () => {
         aud: laptop.did(),
         sub: root.did(),
         cmd: INDEX_ROOT_COMMAND,
-        exp: NOW + MAX_SIGNER_LINK_SECONDS,
+        exp: NOW + DEFAULT_SIGNER_LINK_SECONDS,
       });
     });
   });
@@ -200,7 +205,8 @@ describe("membership", () => {
         nowSeconds: NOW,
       });
       const checked = await checkIndexChain(chain, agent.did(), NOW);
-      expect(checked.signerLinkExpires).toBe(NOW + MAX_SIGNER_LINK_SECONDS);
+      expect(checked.signerLinkExpires).toBe(NOW + DEFAULT_SIGNER_LINK_SECONDS);
+      expect(checked.expires).toBe(NOW + DEFAULT_SIGNER_LINK_SECONDS);
     });
 
     it("throws for a link whose command is broader than /index", async () => {

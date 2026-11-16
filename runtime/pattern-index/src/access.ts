@@ -94,7 +94,13 @@ export async function chainForSigner(
     held: [],
     nowSeconds,
   });
-  await store.recordChain(signer.did(), chain);
+  try {
+    await store.recordChain(signer.did(), chain);
+  } catch {
+    // A store this process may not write (a read-only grant, a full disk)
+    // costs only the renewal's persistence: the chain issued now is valid
+    // and is presented anyway.
+  }
   return chain;
 }
 

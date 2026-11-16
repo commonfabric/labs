@@ -47,6 +47,13 @@ export const MAX_INDEX_CHAIN_LENGTH = 8;
 /** How long the link to the signing key may hold: 90 days. */
 export const MAX_SIGNER_LINK_SECONDS = 90 * 24 * 60 * 60;
 
+/**
+ * How long a link to a signing key is issued for by default: an hour short
+ * of the most the index accepts, so a clock running ahead of the index's
+ * does not make a link issued this moment one it refuses.
+ */
+export const DEFAULT_SIGNER_LINK_SECONDS = MAX_SIGNER_LINK_SECONDS - 60 * 60;
+
 const nowInSeconds = (): number => Math.floor(Date.now() / 1000);
 
 export interface IssueIndexChainOptions {
@@ -63,8 +70,8 @@ export interface IssueIndexChainOptions {
   held: readonly Uint8Array[];
 
   /**
-   * When the new link stops holding, in unix seconds. Defaults to the
-   * longest the index accepts, {@link MAX_SIGNER_LINK_SECONDS} from now.
+   * When the new link stops holding, in unix seconds. Defaults to
+   * {@link DEFAULT_SIGNER_LINK_SECONDS} from now.
    */
   expiresAt?: number;
 
@@ -87,7 +94,7 @@ export async function issueIndexChain(
 ): Promise<Uint8Array[]> {
   const { issuer, to, held } = options;
   const now = options.nowSeconds ?? nowInSeconds();
-  const expiresAt = options.expiresAt ?? now + MAX_SIGNER_LINK_SECONDS;
+  const expiresAt = options.expiresAt ?? now + DEFAULT_SIGNER_LINK_SECONDS;
   checkAudience(issuer, to);
   checkSignerExpiry(expiresAt, now);
   if (held.length >= MAX_INDEX_CHAIN_LENGTH) {
@@ -121,7 +128,7 @@ export interface IssueRootMoveOptions {
   /** The key that becomes the root; it signs the `moveRoot` call. */
   to: DIDKey;
 
-  /** Defaults to {@link MAX_SIGNER_LINK_SECONDS} from now, the most accepted. */
+  /** Defaults to {@link DEFAULT_SIGNER_LINK_SECONDS} from now. */
   expiresAt?: number;
 
   nowSeconds?: number;
@@ -138,7 +145,7 @@ export async function issueRootMove(
   options: IssueRootMoveOptions,
 ): Promise<Delegation> {
   const now = options.nowSeconds ?? nowInSeconds();
-  const expiresAt = options.expiresAt ?? now + MAX_SIGNER_LINK_SECONDS;
+  const expiresAt = options.expiresAt ?? now + DEFAULT_SIGNER_LINK_SECONDS;
   checkAudience(options.root, options.to);
   checkSignerExpiry(expiresAt, now);
   return await issueDelegation(options.root, {
@@ -160,6 +167,9 @@ export interface CheckedIndexChain {
 
   /** When the link to the signer stops holding, in unix seconds. */
   signerLinkExpires: number | null;
+
+  /** When the whole chain stops holding: its earliest expiry, or `null`. */
+  expires: number | null;
 }
 
 /**
@@ -247,7 +257,17 @@ async function checkIndexChainLinks(
       "the link to the signing key does not expire within 90 days",
     );
   }
-  return { root, links, signerLinkExpires: signerLink.exp };
+  const expiries = links.flatMap(({ payload }) =>
+    payload.exp === null ? [] : [payload.exp]
+  );
+  return {
+    root,
+    links,
+    signerLinkExpires: signerLink.exp,
+    expires: expiries.length === 0
+      ? null
+      : expiries.reduce((a, b) => Math.min(a, b)),
+  };
 }
 
 /** A chain as the client's `proofs`: each link in unpadded base64url. */

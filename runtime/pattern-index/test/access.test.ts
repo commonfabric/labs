@@ -7,8 +7,8 @@ import {
 } from "@commonfabric/identity";
 import {
   checkIndexChain,
+  DEFAULT_SIGNER_LINK_SECONDS,
   issueIndexChain,
-  MAX_SIGNER_LINK_SECONDS,
 } from "../src/membership.ts";
 import { chainForSigner, resolvePatternIndexUrl } from "../src/access.ts";
 import {
@@ -100,6 +100,23 @@ describe("access", () => {
       expect(whoami.body.proofs).toHaveLength(1);
     });
 
+    it("records the membership of a kept root whose redemption landed unanswered, redeeming nothing", async () => {
+      const root = await store.createRootKey();
+      const index = new FakePatternIndex();
+      index.admit(root.did(), "p-5");
+      const result = await joinPatternIndex({
+        baseUrl: BASE,
+        signer: cfKey,
+        store,
+        fetchFn: index.fetchFn,
+        invite: parseInviteLink(LINK),
+      });
+      expect(result).toMatchObject({ handle: "p-5", root: root.did() });
+      expect(index.calls.some((call) => call.fn === "redeemInvite")).toBe(
+        false,
+      );
+    });
+
     it("redeems nothing on a second run, so the invite is not spent twice", async () => {
       const index = new FakePatternIndex({ invites: { inv1: "secret-code" } });
       const options = {
@@ -151,7 +168,7 @@ describe("access", () => {
       await store.recordChain(cfKey.did(), old);
       const chain = await chainForSigner(store, cfKey, NOW);
       const checked = await checkIndexChain(chain!, cfKey.did(), NOW);
-      expect(checked.signerLinkExpires).toBe(NOW + MAX_SIGNER_LINK_SECONDS);
+      expect(checked.signerLinkExpires).toBe(NOW + DEFAULT_SIGNER_LINK_SECONDS);
       expect(await store.chainFor(cfKey.did())).toEqual(chain);
     });
 

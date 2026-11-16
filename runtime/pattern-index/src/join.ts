@@ -104,15 +104,23 @@ export async function joinPatternIndex(
   const existing = await store.membership();
   let joined = false;
   if (existing === undefined) {
-    const root = await store.rootKey() ?? await store.createRootKey();
+    const kept = await store.rootKey();
+    const root = kept ?? await store.createRootKey();
     const asRoot = new PatternIndexClient({
       baseUrl: options.baseUrl,
       signer: root,
       ...(options.fetchFn === undefined ? {} : { fetchFn: options.fetchFn }),
     });
-    let member: PatternIndexMember;
+    let member: PatternIndexMember | undefined;
+    if (kept !== undefined) {
+      // A root kept without a membership is one whose redemption may have
+      // landed without its answer arriving. Asking first keeps a second
+      // redemption from being refused as already used, which would leave
+      // the key a member nobody here could record.
+      member = await asRoot.whoami().catch(() => undefined);
+    }
     try {
-      member = await asRoot.redeemInvite(options.invite);
+      member ??= await asRoot.redeemInvite(options.invite);
     } catch (error) {
       throw new JoinError(
         redeemStatus(error),
