@@ -900,3 +900,82 @@ Deno.bench(
     await cleanup(runtime, storageManager, tx);
   },
 );
+
+/** The address of member `index` of the collection the readership benchmarks read. */
+function collectionMember(index: number): IMemorySpaceAddress {
+  return {
+    space,
+    scope: "space",
+    id: "test:collection",
+    path: ["value", `member-${String(index).padStart(4, "0")}`],
+  };
+}
+
+Deno.bench(
+  "Scheduler - subscribe and unsubscribe 2,000 readers of one collection's members",
+  { group: "scheduler-ops" },
+  async (b) => {
+    // One reader per member of one document, the readership a list that
+    // renders a row per member gives that list's document.
+
+    const { runtime, storageManager, tx } = setup();
+    const actions: Action[] = Array.from({ length: 2000 }, () => () => {});
+    const logs = actions.map((_, i) => ({
+      reads: [collectionMember(i)],
+      shallowReads: [],
+      writes: [{
+        space,
+        scope: "space" as const,
+        id: `test:row-${i}` as const,
+        path: ["value"],
+      }],
+    }));
+
+    b.start();
+    for (let i = 0; i < actions.length; i++) {
+      runtime.scheduler.subscribe(actions[i]!, logs[i]!, {});
+    }
+    for (const action of actions) runtime.scheduler.unsubscribe(action);
+    b.end();
+    await cleanup(runtime, storageManager, tx);
+  },
+);
+
+Deno.bench(
+  "Scheduler - resubscribe beside one reader of 2,000 members",
+  { group: "scheduler-ops" },
+  async (b) => {
+    // One action reads every member, as a list's renderer does, and seven
+    // small computations of the same document resubscribe again and again
+    // beside it, as the computations of a list's count do.
+
+    const { runtime, storageManager, tx } = setup();
+    const noWrites: IMemorySpaceAddress[] = [];
+    const whole: Action = () => {};
+    runtime.scheduler.subscribe(whole, {
+      reads: Array.from({ length: 2000 }, (_, i) => collectionMember(i)),
+      shallowReads: [],
+      writes: noWrites,
+    }, {});
+    const field = (name: string): IMemorySpaceAddress => ({
+      space,
+      scope: "space",
+      id: "test:collection",
+      path: ["value", name],
+    });
+    const count = { reads: [field("count")], shallowReads: [], writes: [] };
+    const other = { reads: [field("zcount")], shallowReads: [], writes: [] };
+    const small: Action[] = Array.from({ length: 7 }, () => () => {});
+    for (const action of small) runtime.scheduler.subscribe(action, count, {});
+
+    b.start();
+    for (let k = 0; k < 2000; k++) {
+      runtime.scheduler.resubscribe(small[k % 7]!, k % 2 === 0 ? other : count);
+    }
+    b.end();
+    for (const action of [whole, ...small]) {
+      runtime.scheduler.unsubscribe(action);
+    }
+    await cleanup(runtime, storageManager, tx);
+  },
+);
