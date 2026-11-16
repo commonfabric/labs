@@ -1965,6 +1965,90 @@ describe("an output that passes a derived collection on", () => {
   });
 });
 
+// Ruling Z17: the name a pattern binds to `[SELF]` is a reference to the
+// result cell of the instance. `fixtures/self.tsx` places it at a path of
+// the result, in a row over `items` and in a row over `tags`.
+describe("the name bound to `[SELF]`", () => {
+  const toResult = { $link: { doc: "result", path: [] } };
+  const link = (name: string) => ({
+    $link: { doc: "argument", path: ["pool", name] },
+  });
+  type Stored = {
+    other: unknown;
+    rows: { owner: unknown }[];
+    words: { owner: unknown }[];
+  };
+  const stored = (instance: Instance) =>
+    instance.store.docs.get("result")?.value as Stored;
+
+  it("is stored as a link to the result document where value code places it", async () => {
+    const instance = new Instance(await artifactOf("self"), {
+      title: "t",
+      items: [],
+      tags: [],
+    });
+
+    expect(stored(instance).other).toEqual(toResult);
+    // A read through the reference at a path reads that path of the
+    // result.
+    expect(instance.store.read(new Ref("result", ["other", "title"]))).toBe(
+      "t",
+    );
+    instance.writeArgument(["title"], "u");
+    expect(instance.store.read(new Ref("result", ["other", "title"]))).toBe(
+      "u",
+    );
+  });
+
+  it("is the same reference in an element body, over references", async () => {
+    const instance = new Instance(await artifactOf("self"), {
+      title: "t",
+      pool: { a: { title: "a" }, b: { title: "b" } },
+      items: [link("a"), link("b")],
+      tags: [],
+    });
+
+    expect(stored(instance).rows.map((row) => row.owner)).toEqual([
+      toResult,
+      toResult,
+    ]);
+  });
+
+  it("is the same reference in an element body, over plain values in place", async () => {
+    const instance = new Instance(await artifactOf("self"), {
+      title: "t",
+      items: [],
+      tags: ["x", "y"],
+    });
+
+    expect(stored(instance).words.map((word) => word.owner)).toEqual([
+      toResult,
+      toResult,
+    ]);
+  });
+
+  it("has no place in the state of a binding, so a handler is handed nothing for it", async () => {
+    const instance = new Instance(await artifactOf("self"), {
+      title: "t",
+      items: [],
+      tags: [],
+    });
+    const keep = instance.plan.bindings.findIndex((binding) =>
+      binding.name === "keep"
+    );
+    const entry = instance.plan.bindings[keep].state.find(({ path }) =>
+      path[0] === "self"
+    );
+
+    // No record of the plan holds the name (PL §1.1), and
+    // `Binding.state.place` has no form for the result of the instance.
+    expect(entry?.place).toBe(undefined);
+    // `kept.set(self)` stores what the handler was handed: nothing.
+    instance.send(keep, {});
+    expect((instance.result() as { kept: unknown }).kept).toBe(undefined);
+  });
+});
+
 describe("a record a handler writes into a list", () => {
   // `fixtures/list-records.tsx`: `stops` is a list of records and `names`
   // a list of strings, both state cells, and the handler of a row stores

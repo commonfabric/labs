@@ -226,6 +226,13 @@ not a constant (`$rt.state`), and the function of a handler written in place
 (`$rt.handler`). The function of a sandboxed body is registered in the module it
 is written in (`$rt.body`).
 
+The name a pattern binds to `[SELF]` is, in value code, a reference to the
+result cell of the instance (`$rt.self`, ruling Z17): where value code places it
+in a value the executor stores a link to the result document, in the pattern's
+body and in an element body alike (`compare/fixtures/self.tsx`). The state entry
+of a binding that captures the name has no `place`, and the executor hands the
+handler nothing for it.
+
 A `reduce` in the reactive tier registers two functions where it is written
 (`$rt.reduce`): that of its initial value, in the cone the `reduce` is written
 in, and that of its step, which reads the accumulator as the slot of root
