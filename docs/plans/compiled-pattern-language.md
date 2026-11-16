@@ -122,8 +122,8 @@ next.
   conditional rendered nothing.
   The crate accepts 333 modules and reports 389 errors. It does not
   yet emit `$defs` for a recursive type. The crate's `SPEC-NOTES.md`
-  lists the places where it found the documents ambiguous; notes 252
-  to 260 are not yet written into the documents.
+  lists the places where it found the documents ambiguous; its notes
+  through 261 are written into the documents.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -921,14 +921,40 @@ as an assumption.
     collection, so no reader finds its stream from the plan. The
     alternatives name the position of the member, or write `*` and
     have a reader try each position.
-131. **The label of the handle of an element in the compiled path**
-    (PL question 85). Today it is read at the argument document of the
-    element's instance, which the compiled path does not have.
-    *Assumed:* where the body resolves, reads through, or writes
-    through the handle, its label is that of the links at the
-    position in the source, with the label the source collection's
-    declaration gives the element. No record of the plan holds that
-    declared label.
+131. **The declared label of an element's handle in the compiled
+    path** (PL question 85). By ruling the handle of an element is
+    read at the element's position in the source collection. Not
+    settled: whether a handle the body resolves, reads through, or
+    writes through also carries the label that the declaration of the
+    source collection gives the element, which the `link` entry at
+    `element` of the argument document holds today. *Assumed:* it
+    does, which is equal to today for `askToRetire` of
+    `patterns/system/profile-picker/profile-picker.tsx`. No record of
+    the plan holds that declared label.
+132. **Per-value flow and the join over the positions that hold one
+    key** (PL question 86). Two rulings differ in one case. What is
+    stored once per element key carries the join over the positions
+    that hold the key. The element has the label of its own slot, and
+    nothing of another element reaches a node that reads neither the
+    index nor the collection. Where two positions hold one key (equal
+    plain values with no position in the key, or links to one cell)
+    and resolve to different labels, the first gives a handler that
+    closes over the element alone the labels of both positions, and
+    the second the label of one. *Assumed:* the first stands at these
+    positions and the second holds everywhere else. The alternatives:
+    read "element" in the second ruling as the element key; or end
+    the exception, which needs a stream and everything else stored
+    once to be stored per position.
+133. **A written path that holds a link, for a write edge with no
+    reference** (PL question 87). *Assumed:* the row is not compared
+    where the run stored a link at the written path, and is counted
+    apart. Not stated: whether one write can have an edge with a
+    reference and an edge without, as the prototype emits.
+134. **A label the runtime fails to read, and a slot whose path
+    crosses a cycle of links** (PL question 88). *Assumed:* the row
+    is not compared, and in the compiled path the evaluation that
+    reads the slot fails as a body that throws does.
+
 ## Open, and not needing the owner
 
 - **The pattern closure's remaining gaps** (K12): which output or argument
