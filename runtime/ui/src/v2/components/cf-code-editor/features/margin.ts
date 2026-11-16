@@ -116,27 +116,94 @@ export interface MarginElements {
   margin: HTMLElement;
 }
 
-/** An element of the margin, as it lies in the column before it is moved. */
-interface FlowBox {
-  element: HTMLElement;
+/** An element of the margin, as the column lays it out before it is moved. */
+export interface MarginBox<E> {
+  element: E;
 
-  /** How far below the margin's top the column puts the element. */
+  /** How far below the margin's top the column puts the element's top. */
   top: number;
 
+  /** How far below the margin's top the column puts the element's bottom. */
   bottom: number;
+
+  /** The anchor the element names, or `null` where it names none. */
+  anchor: string | null;
 }
 
-/** A run of elements that moves as one, by `shift`. */
-interface MovedRun {
-  elements: HTMLElement[];
+/** A run of elements that moves as one, `shift` pixels down. */
+export interface MarginRun<E> {
+  elements: E[];
   shift: number;
+}
+
+/** Where {@link arrangeMargin} moves the margin's elements. */
+export interface MarginArrangement<E> {
+  /** How far down the margin the lowest element reaches. */
+  height: number;
+
+  runs: MarginRun<E>[];
+}
+
+/**
+ * Moves the elements in `boxes` beside their anchors, as
+ * {@link placeMarginGroups} places them. An element naming an anchor starts a
+ * run, and the elements the column puts after it that name none join it. The
+ * elements before the first run stay where the column puts them, as does a
+ * run with no height: each is in a run whose `shift` is `0`.
+ * `anchorTopOf(anchor)` is how far below the margin's top the text at
+ * `anchor` is drawn, or `undefined` for an anchor the field does not hold, and
+ * `active` holds the anchors where an active highlight starts.
+ */
+export function arrangeMargin<E>(
+  boxes: readonly MarginBox<E>[],
+  anchorTopOf: (anchor: string) => number | undefined,
+  active: ReadonlySet<string>,
+  gap: number,
+): MarginArrangement<E> {
+  // A stable sort, so elements the column stacks at one place keep the
+  // document's order.
+  const sorted = [...boxes].sort((a, b) => a.top - b.top);
+  const leading: E[] = [];
+  let leadingBottom = 0;
+  const runs: { elements: E[]; top: number; bottom: number }[] = [];
+  const groups: MarginGroup[] = [];
+  for (const { element, top, bottom, anchor } of sorted) {
+    const run = runs.at(-1);
+    if (anchor) {
+      runs.push({ elements: [element], top, bottom });
+      groups.push({
+        anchorTop: anchorTopOf(anchor),
+        height: 0,
+        active: active.has(anchor),
+      });
+    } else if (run === undefined) {
+      leading.push(element);
+      leadingBottom = Math.max(leadingBottom, bottom);
+    } else {
+      run.elements.push(element);
+      run.bottom = Math.max(run.bottom, bottom);
+    }
+  }
+  runs.forEach((run, at) => groups[at].height = run.bottom - run.top);
+
+  const { tops, height } = placeMarginGroups(groups, leadingBottom, gap);
+  return {
+    height,
+    runs: [
+      { elements: leading, shift: 0 },
+      ...runs.map(({ elements, top }, at) => ({
+        elements,
+        shift: groups[at].height > 0 ? tops[at] - top : 0,
+      })),
+    ],
+  };
 }
 
 /** What {@link MarginLayout} measures, and then writes. */
 interface MarginMeasure {
   /** The margin's height, or `undefined` where it is left to the column. */
   height: number | undefined;
-  runs: MovedRun[];
+  runs: MarginRun<HTMLElement>[];
 }
 
 /**
@@ -171,7 +238,7 @@ function shiftOf(element: HTMLElement): number {
 class MarginLayout implements PluginValue {
   #view: EditorView;
   #elements: MarginElements;
-  #sized = new Set<Element>();
+  #sized = new Set<HTMLElement>();
   #children: MutationObserver;
   #sizes: ResizeObserver;
   #onScroll = () => this.#schedule();
@@ -181,12 +248,11 @@ class MarginLayout implements PluginValue {
     this.#elements = elements;
     const { host, margin } = elements;
     // A host that sets an element's `style` attribute replaces the
-    // `translate` this writes there, and can change its `order` or
-    // `display`, so each such change places the elements again.
-    this.#children = new MutationObserver((records) => {
-      if (records.some(({ type }) => type === "childList")) this.#sync();
-      this.#schedule();
-    });
+    // `translate` this writes there, and can change its `order` or its
+    // `display`, which can make a child `display: contents` or stop it
+    // being so and change which elements the margin holds. So each change
+    // takes stock of the elements again and places them.
+    this.#children = new MutationObserver(() => this.#sync());
     this.#children.observe(host, {
       childList: true,
       attributes: true,
@@ -221,14 +287,18 @@ class MarginLayout implements PluginValue {
     this.#elements.layout.classList.remove("has-margin");
   }
 
-  /** Watches the size of each element the margin holds, and only those. */
+  /**
+   * Watches the size of each element the margin holds, and only those, and
+   * takes its `translate` from an element that has left the margin.
+   */
   #sync(): void {
     const { host, layout } = this.#elements;
-    const elements = new Set<Element>(marginElements(host));
+    const elements = new Set(marginElements(host));
     for (const element of this.#sized) {
       if (elements.has(element)) continue;
       this.#sizes.unobserve(element);
       this.#sized.delete(element);
+      element.style.removeProperty("translate");
     }
     for (const element of elements) {
       if (this.#sized.has(element)) continue;
@@ -249,10 +319,9 @@ class MarginLayout implements PluginValue {
   }
 
   /**
-   * Reads where the column puts each shown element, and how far each run of
-   * them moves. An element naming an anchor starts a run, and the elements
-   * the column puts after it that name none join it. The elements before
-   * the first run stay where the column puts them.
+   * Reads where the column puts each shown element, and how far
+   * {@link arrangeMargin} moves each run of them. A hidden element stays
+   * where it is.
    */
   #measure(): MarginMeasure {
     const view = this.#view;
@@ -264,7 +333,7 @@ class MarginLayout implements PluginValue {
       return { height: undefined, runs: [{ elements, shift: 0 }] };
     }
 
-    const boxes: FlowBox[] = [];
+    const boxes: MarginBox<HTMLElement>[] = [];
     const hidden: HTMLElement[] = [];
     for (const element of elements) {
       if (element.getClientRects().length === 0) {
@@ -273,50 +342,25 @@ class MarginLayout implements PluginValue {
       }
       const box = element.getBoundingClientRect();
       const top = box.top - marginBox.top - shiftOf(element);
-      boxes.push({ element, top, bottom: top + box.height });
+      boxes.push({
+        element,
+        top,
+        bottom: top + box.height,
+        anchor: element.getAttribute(MARGIN_ANCHOR_ATTRIBUTE),
+      });
     }
-    // A stable sort, so elements the column stacks at one place keep the
-    // document's order.
-    boxes.sort((a, b) => a.top - b.top);
 
     const anchors = highlightAnchors(view.state);
-    const active = activeHighlightAnchors(view.state);
-    let leading = 0;
-    const groups: MarginGroup[] = [];
-    const runs: (FlowBox & { elements: HTMLElement[] })[] = [];
-    for (const box of boxes) {
-      const anchor = box.element.getAttribute(MARGIN_ANCHOR_ATTRIBUTE);
-      const run = runs.at(-1);
-      if (anchor) {
-        groups.push({
-          anchorTop: Object.hasOwn(anchors, anchor)
-            ? this.#textTop(anchors[anchor]) - marginBox.top
-            : undefined,
-          height: 0,
-          active: active.has(anchor),
-        });
-        runs.push({ ...box, elements: [box.element] });
-      } else if (run === undefined) {
-        leading = Math.max(leading, box.bottom);
-      } else {
-        run.bottom = Math.max(run.bottom, box.bottom);
-        run.elements.push(box.element);
-      }
-    }
-    runs.forEach((run, at) => groups[at].height = run.bottom - run.top);
-
-    const gap = Number.parseFloat(getComputedStyle(margin).rowGap) || 0;
-    const { tops, height } = placeMarginGroups(groups, leading, gap);
-    return {
-      height,
-      runs: [
-        { elements: hidden, shift: 0 },
-        ...runs.map(({ elements, top }, at) => ({
-          elements,
-          shift: tops[at] - top,
-        })),
-      ],
-    };
+    const { height, runs } = arrangeMargin(
+      boxes,
+      (anchor) =>
+        Object.hasOwn(anchors, anchor)
+          ? this.#textTop(anchors[anchor]) - marginBox.top
+          : undefined,
+      activeHighlightAnchors(view.state),
+      Number.parseFloat(getComputedStyle(margin).rowGap) || 0,
+    );
+    return { height, runs: [{ elements: hidden, shift: 0 }, ...runs] };
   }
 
   /**

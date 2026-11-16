@@ -34,10 +34,11 @@ the field's text that Memory moves through every edit.
   moves with it. The children before the first that names an anchor stay at the
   top of the margin, so a header goes first.
 - Children are kept `--cf-code-editor-margin-gap` apart, `0.5rem` unless the
-  host sets it. Where two would come closer, the lower one moves down. Where an
-  anchor is the start of a highlight whose `kind` is `active`, the child naming
-  it keeps its place beside its text and the children above it move up to make
-  way, as far as the children at the top leave room.
+  host sets it. Where two would come closer, the lower one moves down. The first
+  child in the column whose anchor is the start of a highlight whose `kind` is
+  `active` keeps its place beside its text, and the children above it move up to
+  make way, as far as the children at the top leave room. Any later such child
+  is placed as the others are.
 - A child naming an anchor the field does not hold, such as one not yet written
   or one since removed, sits after the children whose anchors it holds.
 - With no element child, the editor draws no margin and its text takes the full
@@ -69,5 +70,6 @@ anchor lies outside the part of the document CodeMirror has drawn, the margin
 places it at the top of its line, by the heights CodeMirror estimates for the
 lines above it.
 
-`features/margin.ts` holds the arrangement; `placeMarginGroups()` there is the
-placement on its own, free of the page.
+`features/margin.ts` holds the arrangement. `arrangeMargin()` there turns where
+the column puts each child into how far each run moves, and
+`placeMarginGroups()` is the placement on its own; neither reads the page.
