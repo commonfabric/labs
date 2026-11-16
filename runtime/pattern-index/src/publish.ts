@@ -187,7 +187,7 @@ export const compileProgram = async (
   program: RuntimeProgram,
   getClient?: PatternIndexClientFactory,
 ): Promise<CompiledPattern> => {
-  if (patternIndexDependencies(program.files).length > 0) {
+  if (patternIndexDependencies(sourceFiles(program)).length > 0) {
     await composeProgram({
       runtime: runtime as Runtime,
       space,
@@ -244,6 +244,14 @@ export const publishRequestFor = (
     ...(fields.program.mainExport !== undefined
       ? { mainExport: fields.program.mainExport }
       : {}),
+    // Test roots and data files are part of the package a deploy compiles,
+    // and of the id; a program fetched without them reads no data.
+    ...(fields.program.sourceRoots !== undefined
+      ? { sourceRoots: [...fields.program.sourceRoots] }
+      : {}),
+    ...(fields.program.dataFiles !== undefined
+      ? { dataFiles: [...fields.program.dataFiles] }
+      : {}),
   },
   description: fields.description,
   hashtags: fields.hashtags,
@@ -260,5 +268,11 @@ export const publishRequestFor = (
   ...(fields.remixedFrom !== undefined
     ? { remixedFrom: fields.remixedFrom }
     : {}),
-  dependencies: patternIndexDependencies(fields.program.files),
+  dependencies: patternIndexDependencies(sourceFiles(fields.program)),
 });
+
+/** The program's source files: everything but its data files, never parsed. */
+const sourceFiles = (program: RuntimeProgram): RuntimeProgram["files"] => {
+  const data = new Set(program.dataFiles ?? []);
+  return program.files.filter((file) => !data.has(file.name));
+};

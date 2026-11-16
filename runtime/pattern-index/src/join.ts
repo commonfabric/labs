@@ -81,8 +81,15 @@ export interface JoinResult {
   /** False when this machine was already a member and only renewed its chain. */
   joined: boolean;
 
-  /** Where the root key and chains are kept. */
+  /** Where the membership record and chains are kept. */
   storeDir: string;
+
+  /**
+   * Whether the root key itself is kept in `storeDir`, so backing that
+   * directory up keeps the membership. False where this machine holds only
+   * a chain from a root kept elsewhere, or where the root is the signer.
+   */
+  rootKeptHere: boolean;
 }
 
 export interface JoinOptions extends PatternIndexAccessOptions {
@@ -159,6 +166,7 @@ export async function joinPatternIndex(
     signer: options.signer.did(),
     joined,
     storeDir: store.dir,
+    rootKeptHere: (await store.rootKey())?.did() === recorded.root,
   };
 }
 
@@ -247,6 +255,7 @@ export async function adoptIndexChain(
     signer: options.signer.did(),
     joined: recorded === undefined,
     storeDir: store.dir,
+    rootKeptHere: false,
   };
 }
 
@@ -292,17 +301,27 @@ export async function moveMembershipRoot(
     signer: options.signer,
     ...(options.fetchFn === undefined ? {} : { fetchFn: options.fetchFn }),
   });
-  let member: PatternIndexMember;
+  let member: PatternIndexMember | undefined;
   try {
     member = await client.moveRoot({
       rootDelegation: toUnpaddedBase64url(options.rootDelegation),
     });
   } catch (error) {
-    throw new JoinError(
-      redeemStatus(error),
-      `The index refused the move: ${describeFailure(error)}`,
-    );
+    // A move that landed without its answer arriving has spent its
+    // delegation, so a rerun is refused; the signer already being a root
+    // is what says it landed. A 409 means the signer roots someone else.
+    const status = (error as { status?: unknown }).status;
+    if (status !== 409) {
+      member = await client.whoami().catch(() => undefined);
+    }
+    if (member === undefined) {
+      throw new JoinError(
+        redeemStatus(error),
+        `The index refused the move: ${describeFailure(error)}`,
+      );
+    }
   }
+
   await store.recordMembership({
     handle: member.handle,
     role: member.role,
@@ -315,5 +334,6 @@ export async function moveMembershipRoot(
     signer: options.signer.did(),
     joined: false,
     storeDir: store.dir,
+    rootKeptHere: false,
   };
 }

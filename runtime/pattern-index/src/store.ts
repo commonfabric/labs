@@ -116,6 +116,7 @@ export class PatternIndexStore {
 
   /** The index-only root key, or `undefined` when none was made here. */
   async rootKey(): Promise<Identity<DIDKey> | undefined> {
+    await this.#checkPrivate();
     let pkcs8: Uint8Array;
     try {
       pkcs8 = await Deno.readFile(join(this.#dir, ROOT_KEY));
@@ -150,7 +151,11 @@ export class PatternIndexStore {
     return { handle: file.handle, role: file.role, root: file.root };
   }
 
-  /** Records the membership a join answered, keeping any chains held. */
+  /**
+   * Records the membership a join answered, keeping the chains held when the
+   * root is unchanged. A new root drops them: chains from the old one no
+   * longer reach the member.
+   */
   async recordMembership(record: IndexMembershipRecord): Promise<void> {
     const file = await this.#readMembership();
     await this.#writeJson(
@@ -158,7 +163,9 @@ export class PatternIndexStore {
       {
         format: MEMBERSHIP_FORMAT,
         ...record,
-        chains: file?.chains ?? {},
+        chains: file !== undefined && file.root === record.root
+          ? file.chains
+          : {},
       } satisfies MembershipFile,
     );
   }
@@ -294,6 +301,7 @@ export class PatternIndexStore {
   }
 
   async #readJson(name: string): Promise<unknown> {
+    await this.#checkPrivate();
     let text: string;
     try {
       text = await Deno.readTextFile(join(this.#dir, name));
@@ -322,5 +330,29 @@ export class PatternIndexStore {
 
   async #ensureDir(): Promise<void> {
     await Deno.mkdir(this.#dir, { recursive: true, mode: 0o700 });
+    await this.#checkPrivate();
+  }
+
+  /**
+   * Refuses a store directory that is a symbolic link or that anyone but
+   * the user can read or write: it holds the key the membership is rooted
+   * at. A directory that does not exist yet has nothing to refuse.
+   */
+  async #checkPrivate(): Promise<void> {
+    let info: Deno.FileInfo;
+    try {
+      info = await Deno.lstat(this.#dir);
+    } catch (error) {
+      if (isNotFound(error)) return;
+      throw error;
+    }
+    if (
+      info.isSymlink || !info.isDirectory ||
+      (info.mode !== null && (info.mode & 0o077) !== 0)
+    ) {
+      throw new Error(
+        `${this.#dir} must be a directory only you can read (mode 0700), not a symbolic link`,
+      );
+    }
   }
 }

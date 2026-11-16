@@ -19,7 +19,7 @@
  * identity acts as (with `signer`), `op: admit {did}` admits a key (admins),
  * and `op: join {link}` or `op: join {chain}` (a chain file's text, one
  * chain) joins the index exactly as `cf index join` does, answering
- * `{handle, role, root, signer, joined, storeDir}`; a join needs
+ * `{handle, role, root, signer, joined, storeDir, rootKeptHere}`; a join needs
  * `--membership-store`. A refused join answers the index's status, or 400
  * for a link or chain that is not one and 409 for a conflicting membership.
  *
@@ -81,6 +81,13 @@ const join = async (
       ok: false,
       status: 400,
       error: "join needs --membership-store, where the membership is kept",
+    };
+  }
+  if (body.link !== undefined && body.chain !== undefined) {
+    return {
+      ok: false,
+      status: 400,
+      error: "join takes a link or a chain, not both",
     };
   }
   if (typeof body.link === "string") {

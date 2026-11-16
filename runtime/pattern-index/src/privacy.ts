@@ -427,7 +427,6 @@ export const runPrivacyCheck = async <C>(options: {
       reasons.push(`rewrite ${attempt}: did not compile`);
       continue;
     }
-    for (const change of rewrite.changes) changes.push(change);
     let checked: PrivacyVerdict;
     try {
       checked = await checkPrivacy(gardener, next.input, generate);
@@ -436,6 +435,9 @@ export const runPrivacyCheck = async <C>(options: {
       reasons.push(`rewrite ${attempt}: its check gave no valid answer`);
       continue;
     }
+    // Counted only once the rewrite is the version carried forward, so the
+    // account describes the files a `rewritten` outcome returns.
+    for (const change of rewrite.changes) changes.push(change);
     if (checked.passed) {
       return {
         status: "rewritten",

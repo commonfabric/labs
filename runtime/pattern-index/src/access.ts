@@ -35,6 +35,13 @@ export const resolvePatternIndexUrl = (
   if (url === null || (url.protocol !== "https:" && url.protocol !== "http:")) {
     throw new Error(`The pattern index URL must be http(s): ${chosen}`);
   }
+  // The client appends a function name to the base's path, and the store is
+  // kept per host, so a query or fragment could only misaddress both.
+  if (url.search !== "" || url.hash !== "") {
+    throw new Error(
+      `The pattern index URL must not carry a query or fragment: ${chosen}`,
+    );
+  }
   return chosen;
 };
 
@@ -73,8 +80,8 @@ export async function chainForSigner(
       const checked = await checkIndexChain(held, signer.did(), nowSeconds);
       if (
         checked.root === membership.root &&
-        checked.signerLinkExpires !== null &&
-        checked.signerLinkExpires - nowSeconds > RENEW_WITHIN_SECONDS
+        checked.expires !== null &&
+        checked.expires - nowSeconds > RENEW_WITHIN_SECONDS
       ) {
         return held;
       }

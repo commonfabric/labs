@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { join } from "@std/path";
 import {
   decodeDelegation,
   Identity,
@@ -212,6 +213,25 @@ describe("access", () => {
       expect(result).toMatchObject({ handle: "p-3", root: cfKey.did() });
       expect((await store.membership())!.root).toBe(cfKey.did());
       expect(await chainForSigner(store, cfKey, NOW)).toBeUndefined();
+    });
+
+    it("finishes on a rerun a move that landed without its answer arriving", async () => {
+      const oldRoot = await Identity.fromPassphrase("access move old root");
+      const index = new FakePatternIndex();
+      index.admit(oldRoot.did(), "p-3");
+      const move = await issueRootMove({ root: oldRoot, to: cfKey.did() });
+      const options = {
+        baseUrl: BASE,
+        signer: cfKey,
+        store,
+        fetchFn: index.fetchFn,
+        rootDelegation: move.bytes,
+      };
+      await moveMembershipRoot(options);
+      await Deno.remove(join(dir, "membership.json"));
+      const again = await moveMembershipRoot(options);
+      expect(again.handle).toBe("p-3");
+      expect((await store.membership())!.root).toBe(cfKey.did());
     });
 
     it("throws for an /index delegation, which never moves a root", async () => {

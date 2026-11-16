@@ -378,6 +378,23 @@ describe("cli", () => {
     expect(output.stdout + output.stderr).not.toContain("the-code");
   });
 
+  it("returns 400 for a join given both a link and a chain, calling nothing", async () => {
+    const output = await callHelper(
+      directory,
+      baseUrl,
+      {
+        op: "join",
+        link: "https://fbrc.social/index-join?invite=inv1#code=the-code",
+        chain: "{}",
+      },
+      `${directory}/identity.key`,
+      `${directory}/stores`,
+    );
+
+    expect(JSON.parse(output.stdout)).toMatchObject({ ok: false, status: 400 });
+    expect(calls).toEqual([]);
+  });
+
   it("returns 400 for a join without a membership store, calling nothing", async () => {
     const output = await callHelper(directory, baseUrl, {
       op: "join",

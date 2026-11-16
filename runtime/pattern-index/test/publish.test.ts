@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { patternDocMetadata } from "../src/publish.ts";
+import { patternDocMetadata, publishRequestFor } from "../src/publish.ts";
 
 const DOC = `/**
  * Counts things.
@@ -41,6 +41,39 @@ describe("publish", () => {
         hashtags: [],
         keywords: [],
       });
+    });
+  });
+
+  describe("publishRequestFor()", () => {
+    const fields = {
+      patternId: "id",
+      description: "d",
+      hashtags: [],
+      keywords: [],
+      program: {
+        main: "/main.tsx",
+        files: [
+          { name: "/main.tsx", contents: "export default 1;" },
+          { name: "/main.test.tsx", contents: "export default 2;" },
+          {
+            name: "/data/notes.txt",
+            contents: 'import X from "cf:pattern:not-a-dependency";',
+          },
+        ],
+        sourceRoots: ["/main.test.tsx"],
+        dataFiles: ["/data/notes.txt"],
+      },
+    };
+
+    it("returns the program's test roots and data files with it", () => {
+      expect(publishRequestFor(fields).program).toMatchObject({
+        sourceRoots: ["/main.test.tsx"],
+        dataFiles: ["/data/notes.txt"],
+      });
+    });
+
+    it("returns no dependency a data file's text names", () => {
+      expect(publishRequestFor(fields).dependencies).toEqual([]);
     });
   });
 });
