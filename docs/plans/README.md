@@ -34,10 +34,11 @@ a record: archive it to `docs/history/plans/` following the procedure in
 - [A slow action and the spaces behind it](slow-action-resilience.md) bounds
   what one long action costs the spaces that share its serving worker: each
   action's cost on the health route, a shared buffer through which the main
-  thread sees which action a silent worker is in and asks it to stop, a
-  suspended state for a stopped derivation in place of ending the worker, and
-  a lane where a derivation too slow to serve is computed off the serving
-  thread, which waits on a ruling on the lease.
+  thread sees which action a silent worker is in and asks it to stop, a worker
+  of its own for a space whose action holds a shared one, and a hard limit of
+  three minutes on any run, past which the action is failed loudly and the
+  rest of its piece keeps running. Computing a slow derivation off the serving
+  thread is deferred, and waits on a ruling on the lease.
 - [The serving loop off the request thread](serving-loop-worker.md) moves the
   server-execution host into a Web Worker of the toolshed process: the worker
   reads the store on its own SQLite connections, sends wave commits and

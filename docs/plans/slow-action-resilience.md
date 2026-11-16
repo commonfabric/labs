@@ -1,8 +1,10 @@
 # A slow action and the spaces behind it
 
-Status: Proposed. Nothing here is built. Stages 0 to 2 observe and change no
-behavior. Stage 3 changes what can end an action's run, stage 4 adds a state
-an action can be in, and stage 5 needs a ruling on the lease before any code.
+Status: Proposed. Nothing here is built. The first run is stages 0 to 4, as
+the owner scoped it on 2026-11-16: isolate a space whose action holds a shared
+worker, and fail an action loudly once a run of it has held a thread for three
+minutes. Computing a slow derivation off the serving thread is deferred, under
+"Later".
 
 A serving worker runs one action at a time, and an action runs to its end once
 it starts. An action that takes a minute holds its worker for a minute. Every
@@ -10,13 +12,11 @@ space placed on that worker waits behind it, and at the watchdog's limit the
 worker is ended and the same action starts again on its successor. This plan
 makes each action's cost visible where an operator and an authoring agent can
 read it, lets the main thread see which action a silent worker is in and ask
-it to stop without ending the worker, and gives a stopped derivation somewhere
-to finish that is not the thread its space is served on.
+it to stop without ending the worker, moves a space with such an action onto a
+worker of its own, and bounds what any one run may take.
 
-Blocking a pattern this slow is the last step of this plan and not the first.
-A board that people already rely on should lose the freshness of one derived
-value before it loses the piece, and should lose the piece before it takes
-other spaces with it.
+A slow pattern costs its own space first. It reaches no other space, and only
+the part of it that passes the hard limit stops working.
 
 ## What prompted it
 
@@ -141,8 +141,8 @@ Nothing below should be sized from a suspicion.
   one worker with read accounting on: wall time, distinct documents and link
   resolutions for each of the board's actions on a cold start and on one
   comment to one Topic. Take a CPU profile of the slowest, to separate reading
-  and decoding documents from the work done over them. Stage 5 depends on that
-  split.
+  and decoding documents from the work done over them. The steps under
+  "Later" depend on that split.
 
 - Which thread the minute was spent on. By default a serving runtime's
   document reads arrive through its home session, and the memory server's
@@ -251,9 +251,10 @@ What this stage changes:
   the stage 1 table.
 - The pool remembers that action for the space. Stage 4 uses it.
 
-The check interval is 10 s today, sized for a limit of a minute. Stage 3 needs
-a finer one. It stays one timer for the pool, justified as the watchdog's is:
-a thread that has stopped cannot report that it has stopped.
+The check interval is 10 s today, sized for a limit of a minute. Stage 4's
+sharing limit needs a finer one, and 1 s is the proposal. It stays one timer
+for the pool, justified as the watchdog's is: a thread that has stopped cannot
+report that it has stopped.
 
 Exit: with a fixture action that never returns, the route names it while it
 runs and the kill names it afterwards; the watchdog's existing tests pass
@@ -268,20 +269,17 @@ that arrives as the run ends cannot end the next one.
 **Where the worker looks.** At the sites that already test
 `readStatsActive`, which include reads a cache serves without touching
 storage, and at cell writes: one `Atomics.load` and a comparison. A run that
-reads thousands of documents passes thousands of these.
-The worker also holds each run to a limit of its own, tested at the same sites
-every so many reads, so a run is bounded even when the main thread is busy.
-The main thread's stop is for what only the pool knows: another space's
-commits waiting on this worker, a lifecycle verb waiting on this space, or a
-closing process.
+reads thousands of documents passes thousands of these. At the same sites,
+every so many reads, the worker tests the run against the hard limit on a
+clock of its own, so that limit holds even when the main thread is busy.
 
 **What a stop does.** The site aborts the run's transaction and throws a
 signal of the kind `RetryImmediately` is. The scheduler handles it beside
-that one in `finalizeSchedulerAction`: it records the stop in the stage 1
-table and puts the action in the state stage 4 describes, and it does not
-queue the action again. The abort is what makes this safe. A throw the
-scheduler does not know is logged and the run's staged writes are committed,
-so a stop that was only a throw would commit half of a board.
+that one in `finalizeSchedulerAction`, and what it does next depends on which
+limit the run passed, which stage 4 sets out. The abort is what makes this
+safe. A throw the scheduler does not know is logged and the run's staged
+writes are committed, so a stop that was only a throw would commit half of a
+board.
 
 **A stop the body cannot keep.** Pattern code may catch what a read throws,
 and nothing stops it catching `RetryImmediately` today. Because the stop
@@ -293,83 +291,125 @@ transaction's state, whatever the body returned.
 **What a stop does not reach.** A body that loops over plain values calls into
 the runtime nowhere. The compiler could add a test inside loop bodies, as
 `PatternCoverageTransformer` adds its hit counters for a coverage run. This
-plan does not, until stage 0 or stage 1 shows such a loop in a real pattern:
-the watchdog still ends that worker, and after stage 2 it says which action
-it was.
+plan does not, until stage 0 or stage 1 shows such a loop in a real pattern.
+A run that does not end within some checks of a stop is ended with its
+worker, and stage 4 treats it as it treats a run that did stop.
 
-**Derivations only, at first.** A stopped derivation loses nothing: its inputs
-are still there. A stopped event handler has consumed an event, and events are
-intent
-([`events.md`](../specs/server-side-execution/events.md)). Handlers keep
-running to their end until the open question below is decided. The beacon
-names a slow handler all the same.
+Exit: a fixture action that reads without end is stopped, its worker is not
+ended and `lease.lost` does not move. A body that catches the throw commits
+nothing. A run that is not asked to stop is byte-identical to today's.
 
-**When the pool asks.** Two thresholds, both counted in the pool's checks and
-both set from stage 0 and stage 1 data:
+### 4. Isolating a space, and the hard limit
 
-- a run is asked to stop once it has run for the shorter one while another
-  space placed on its worker has work waiting;
-- a run is asked to stop at the longer one whatever else is waiting, and that
-  one is well under the watchdog's limit.
+Two limits, each counted on the stretch a body holds the thread (`epoch`).
 
-A run that does not end within some checks of the request is in a loop the
-sites do not reach, and the watchdog's kill follows as it does today.
+| Limit   | Value                   | Applies to                             |
+| ------- | ----------------------- | -------------------------------------- |
+| Sharing | 10 s, set from stage 0  | a run on a worker other spaces wait on |
+| Hard    | 3 minutes, as ruled     | every run on every worker              |
 
-Exit: on a pool of one worker serving two spaces, a fixture action that reads
-without end in one space is stopped, the worker is not ended, `lease.lost`
-does not move, and an event in the other space commits within the shorter
-threshold plus a check. A body that catches the throw commits nothing. An
-action under the thresholds is never asked to stop.
+**The sharing limit isolates the space.** While a run is live, the pool knows
+whether it has routed anything to that worker for another space: a commit, a
+session or demand change, a lifecycle verb. Once it has, and the run has
+passed the sharing limit, the pool asks the run to stop. The stopped action
+is not failed. Its space is placed again on a worker of its own, past
+`maxWorkers` if need be, and no other space joins that worker, as the heap
+limit's rule does for spaces that shared a worker. The action runs again
+there from the start. The cost is one lost run of at most the sharing limit,
+and the other spaces wait no longer than that limit plus a check.
 
-### 4. What a stopped action becomes
+Moving the other spaces away and letting the run finish would lose nothing,
+but a worker that is inside an action cannot release the leases of its other
+spaces, and a pool that released them for it would have that worker serve
+spaces whose leases it no longer holds. Stopping the run needs neither.
 
-A stopped derivation is **suspended**, a state the scheduler does not have
-today: it is not run when its inputs change. Its outputs keep the values of
-its last committed run. If it
-never completed a run they are absent, which readers already handle for a
-document that has not arrived.
+A space that was already alone on its worker stays there, and once one of its
+runs passes the sharing limit that worker takes no other space.
 
-- **The reader can tell.** The health route lists a space's suspended actions
-  with the stage 1 fields and the reason. A piece's own readers need the same
-  fact closer to the value: a record on the piece that `cf` and the shell
-  read, so that a board whose backlinks have stopped updating says so. Its
-  shape is an open question.
-- **A kill suspends too.** When the watchdog ends a worker and stage 2 names
-  the action, the successor starts with that action suspended. This is the
-  heap limit's reasoning applied to time, and it is what ends the loop under
-  "Why one action reaches other spaces".
-- **A space that keeps being stopped gets a worker of its own**, past
-  `maxWorkers` if need be, as spaces that shared a worker ended at its heap
-  limit do. How many such workers a process allows is bounded by memory
-  (Topic 3060).
-- **What resumes it.** A source update to the piece, since that is what can
-  change the program. An operator's request. And, without either, the lane in
-  stage 5, or until that exists a retry when the worker is otherwise idle
-  under an allowance that doubles with each stop, as the flush deadline's
-  does.
+**An isolated space stays isolated** until the process ends or a source update
+changes a piece in it. How many workers a process may hold for isolated
+spaces is a bound of its own, since each costs what any worker costs; past
+it, an isolated space joins the isolated worker with the fewest spaces, and
+slow spaces then wait on one another and on nothing else.
 
-One step belongs before suspension. An action that completes, but slowly, and
-runs again on every write to its space, costs more through its reruns than
-through any one run. Such an action's next run is held until the space has
-gone some multiple of the last run's cost since that run began, so that it
-takes a bounded share of its worker. The remote-echo breaker already defers a
-re-run for another reason, and its deferral is the mechanism to extend.
+**The watchdog steps back while a run is live.** Its 60 s of silence ends a
+worker whose thread is in no run, as today. A worker inside a run is held to
+the two limits above and not to the watchdog's, so an isolated space's
+two-minute action is no longer ended at one.
 
-Exit: after a kill that names an action, the successor serves the space with
-that action suspended and is not ended again. A suspended action's outputs
-read as its last committed values, and the route and the piece's record say
-they are stale.
+**The hard limit fails the action.** A run that holds a thread for three
+minutes is stopped, on any worker, isolated or not. Its action is **failed**,
+a state the scheduler does not have today:
 
-### 5. A lane for derivations too slow to serve
+- It is not run again when its inputs change. Its outputs keep the values of
+  its last committed run, and are absent if it never completed one, which
+  readers already handle for a document that has not arrived.
+- Everything else in the piece and the space runs as before.
+- The failure is loud. An error-level log line and a counter carry the stage
+  1 fields: the piece, the source location, the documents read, how long the
+  run held the thread. The health route lists the space's failed actions.
+  And the piece itself says so, where its users are. For a handler that
+  surface exists: `events.md` §5 has a handler that throws commit no
+  consequences and write the handler-error surface as the derived commit for
+  its event, with the watermark advanced past it, and a handler stopped at
+  the hard limit is such a throw. For a derivation nothing reaches a client
+  today, since the serving runtime wires no error handler, and what this
+  stage writes is the first open question below.
+- A source update to the piece clears the failure, since that is what can
+  change the program, and so does an operator's request. Nothing else does.
+  An action that fails after three minutes would fail again after three more.
 
-Stage 4 keeps a space responsive at the price of one derived value that no
-longer updates. This stage is how that value keeps updating.
+**A run that cannot be stopped.** When a stop is not honored the worker is
+ended, and the pool applies the same outcome on the successor from what the
+beacon named: the space isolated if the run had passed the sharing limit, the
+action failed if it had passed the hard limit. A failed handler's pending
+events take the error as their consequence without the handler running. This
+is the heap limit's reasoning applied to time, and it is what ends the loop
+under "Why one action reaches other spaces".
 
-A suspended derivation runs on a helper worker that holds no lease. The helper
-opens the space's store on a connection of its own, reads every document as
-of one sequence number S (`Engine.readState` takes a `seq`), and runs the
-action's body against that snapshot under limits far longer than the serving
-thread's. It commits nothing. Its result, the writes it would make, the reads
+Exit:
+
+- On a pool of one worker serving two spaces, a fixture derivation slower than
+  the sharing limit in one space is stopped once the other space has work
+  routed, the other space's event commits within the sharing limit plus a
+  check, and the slow space is served from a worker of its own where the
+  derivation completes.
+- A fixture derivation slower than the hard limit is failed once. Its output
+  keeps its last committed value, the route and the log name it, the rest of
+  its piece keeps updating, and it is not run again when its inputs change.
+- A handler stopped at the hard limit leaves `events.md` §5's error as its
+  event's consequence, and the stream's later events run.
+- With a fixture body that loops over plain values, the worker is ended once
+  and the successor serves the space with the action failed.
+- A run under both limits is never stopped, and a space none of whose runs
+  passed the sharing limit is never isolated.
+
+## Later
+
+Not part of the first run. Each waits on what stages 0 and 1 measure.
+
+### A hold on reruns
+
+An action that completes, but slowly, and runs again on every write to its
+space, costs more through its reruns than through any one run. After stage 4
+that cost falls on its own space alone. If stage 1's count of input-driven
+runs shows spaces that are busy with one action most of the time, such an
+action's next run can be held until the space has gone some multiple of the
+last run's cost since that run began, so that it takes a bounded share of its
+worker. The remote-echo breaker already defers a re-run for another reason,
+and its deferral is the mechanism to extend.
+
+### A lane for derivations too slow to serve
+
+Stage 4 leaves a failed derivation's value where its last committed run put
+it, and leaves an isolated space waiting on its own slow action. A lane is
+how that value could keep updating and that space keep its latency.
+
+A derivation past a limit runs on a helper worker that holds no lease. The
+helper opens the space's store on a connection of its own, reads every
+document as of one sequence number S (`Engine.readState` takes a `seq`), and
+runs the action's body against that snapshot under limits far longer than the
+serving thread's. It commits nothing. Its result, the writes it would make, the reads
 it made and S, crosses to the space's serving worker as data. That worker,
 which holds the lease, commits it the way it commits an effect's completion
 (`serving-loop.md` §4, `markEffectCompletion`): a derived-class commit of its
@@ -415,8 +455,8 @@ What has to be decided before this is built:
 - **Only derivations with no effects.** An action that dispatches a network
   effect or writes through the outbox stays on the serving thread.
 - **Cost.** A helper is another isolate with the pattern's module graph and
-  whatever the action reads. One helper for the process, started when
-  something is suspended and closed when nothing is, is the starting point.
+  whatever the action reads. One helper for the process, started when a
+  derivation needs it and closed when none does, is the starting point.
 
 If stage 0's profile shows that most of the slow action's time is reading and
 decoding documents, a smaller step may cover most of the gain: the previous
@@ -430,16 +470,10 @@ space's events keep their latency, the derivation's output reaches a value
 derived at a sequence number no older than one run behind the head, and a
 handler that reads it never decides from a value older than its own event.
 
-### 6. Refusing a pattern
+### Refusing a pattern earlier
 
-With the stages above an action passes through four states as its measured
-cost rises: it runs as it does today; its reruns are held to a share of its
-worker; it is suspended and, once stage 5 exists, derived in the lane; and
-last, if the lane's limits end it too, it is refused with the stage 1 entry as
-the error an author or an authoring agent acts on.
-
-Two refusals can come earlier than deployment and belong to other plans as
-much as this one:
+Stage 4's failure is a refusal of one action at run time. Two refusals can
+come before deployment, and belong to other plans as much as this one:
 
 - a pattern-test budget that runs a fixture at two sizes and fails when the
   reads of one edit grow with the size, which catches a derivation that reads
@@ -450,21 +484,24 @@ much as this one:
 
 ## Open questions
 
-1. **Is a helper within the single-deriver rule?** Stage 5 waits on this.
-2. **May a handler be stopped?** If so, what becomes of its event: queued
-   again behind a longer limit, or failed where its sender reads the failure.
-3. **Where does a piece record that one of its values is stale?** A document
-   the runtime writes on the piece, a field on its result, or nothing beyond
-   the health route.
-4. **Does the suspended set outlive the process?** Held by the pool it is lost
-   at a restart, and the first run after one is stopped or ended again before
-   the pool knows.
+1. **Where does a piece say that one of its derivations has failed?** A
+   document the runtime writes on the piece, in the shape the handler-error
+   surface has, is the proposal. The shell and `cf` would read it.
+2. **Does the failed set outlive the process?** Held by the pool it is lost at
+   a restart, and the first run after one holds a thread for three minutes
+   again before it fails again. Rapids deploys on every green `main`, so
+   there that is three minutes of one space on every deploy.
+3. **The sharing limit's value**, and whether it should wait for another
+   space's work or apply to every shared worker.
+4. **How many workers may isolated spaces hold?** Topic 3060 has the cost of
+   one.
 5. **Wall time or CPU time?** A synchronous body's wall time on its own thread
-   is close to its CPU time unless the machine is short of cores, which
-   Estuary's host metrics can say. `scheduled-work-in-the-server.md` §3.2
-   names the trap for bodies that suspend.
-6. **How fine is the pool's check?** Stage 3's shorter threshold cannot be
-   finer than the check interval.
+   is close to its CPU time unless the machine is short of cores, which the
+   host's metrics can say. `scheduled-work-in-the-server.md` §3.2 names the
+   trap for bodies that suspend, which is why the limits count only the
+   stretch a body holds the thread.
+6. **Is a helper within the single-deriver rule?** The lane under "Later"
+   waits on this, and the first run does not.
 
 ## Not in this plan
 
@@ -481,17 +518,17 @@ much as this one:
 
 ## Acceptance
 
-One fixture carries the plan: a board-shaped pattern with one derivation whose
-cost a test sets, served beside a second space on a pool of one worker.
+One fixture carries the first run: a board-shaped pattern with one derivation
+whose cost a test sets, served beside a second space on a pool of one worker.
+Stage 4's exit lists what it has to show. Beyond that:
 
-- While the slow derivation runs, `/api/health/stats` names it, its piece and
-  how long it has run.
-- The second space's event commits within the stage 3 threshold plus a check.
-- No worker is ended and `lease.lost` does not move.
-- The slow derivation's output reads as stale and, with stage 5, reaches a
-  value no older than one run behind the head.
-- A derivation under the thresholds is never held, stopped or suspended, and
-  its output is byte-identical to today's.
+- While a slow run is live, `/api/health/stats` names its action, its piece
+  and how long it has held the thread.
+- No worker is ended for a run that honors a stop, and `lease.lost` does not
+  move.
+- On the copy of the board on Rapids, a cold start and a comment leave every
+  other space's round trip within the sharing limit plus a check.
 
-The thresholds are counted in the pool's checks, so the tests drive the checks
-and read no clock.
+The sharing limit is counted in the pool's checks, so its tests drive the
+checks and read no clock. The hard limit is tested on the worker's clock,
+which the tests supply.
