@@ -590,8 +590,11 @@ reuse one outcome for both.
 
 Equal elements are told apart by their order alone. Where two equal
 values stand in a list and the first is removed, the one that remains is
-the first occurrence and has the state of the first occurrence. The state
-dropped is that of the last occurrence. An author who needs state that
+the first occurrence and has the state of the first occurrence. The key
+that left is that of the last occurrence. By ruling a removal deletes
+nothing stored under a key, over references and over plain values alike,
+so a second equal value that is added later reads the state that the
+last occurrence had. An author who needs state that
 stays with one of two equal records gives the records something that
 distinguishes them.
 

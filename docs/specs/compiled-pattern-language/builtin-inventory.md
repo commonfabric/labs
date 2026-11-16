@@ -586,14 +586,25 @@ the element is keyed by the identity of that cell.
   and share nothing.
 - *Equal elements are told apart by their order.* Where two equal values
   stand in a collection and the first is removed, the one that remains
-  is occurrence 0 and has the state of the first occurrence. The state
-  dropped is that of the last occurrence. A move that changes the order
-  of two equal elements changes no key.
+  is occurrence 0 and has the state of the first occurrence. The key
+  that left is that of the last occurrence. A move that changes the
+  order of two equal elements changes no key.
+- *A key that left keeps what is stored under it.* By ruling the
+  removal of an element drops the cone instances of its key and
+  deletes no state cell and no operation state of the key. An element
+  that returns under the same key reads what its state cells held, as
+  an element of today finds the result cell that is named from its key
+  (`listElementResultCell` in `builtins/list-coordinator-plan.ts`).
+  The rule is the same over an array of references, over an array of
+  plain values in place, and over the result of another per-element
+  construct. Nothing in the design reclaims that storage
+  (`execution-and-storage.md` §2.6).
 - *A link to a plain value is keyed by the link's target.* Two cells that
   hold equal values are two elements. When the value behind the link
   changes, the cone is dirtied and the key, and with it the state, stays.
-- *A plain value edited in place is a new element.* Its old cone and state
-  are released.
+- *A plain value edited in place is a new element.* The cone instances
+  of its old key are dropped, and what is stored under the old key
+  stays, as for a removal.
 - *A reference to a plain value in place follows the element.* Over an
   array of plain values in place, `equals` finds two references to one
   element equal: they name the same collection, key and path. A member

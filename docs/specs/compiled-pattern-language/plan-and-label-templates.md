@@ -1976,8 +1976,8 @@ arises over an array of references.
   *Assumed* (section 8, question 112): the reference holds the key it
   was made with and is not carried to the new key. After such a write
   it reads as nothing, the row of the new key is evaluated and holds
-  the reference with the new key, and the state cells, streams and
-  children of the old key go as for any edit in place. A second write
+  the reference with the new key, and the old key has left the
+  collection as for any edit in place. A second write
   through the same reference in one run of a body finds no position.
   *Assumed* as well: a write through a reference whose key no position
   holds is refused, as a write through a handle to a value the
@@ -2197,8 +2197,23 @@ are told apart by their order alone. A move that changes the order of
 two of them changes no key: the first of them in the new order is
 occurrence 0 and has the state of occurrence 0. Where two equal values
 stand in a collection and the first is removed, the one that remains
-becomes occurrence 0 and has the state of the first occurrence, and the
-state dropped is that of the last occurrence.
+becomes occurrence 0 and has the state of the first occurrence. The
+key that left is that of the last occurrence.
+
+**A key that left its collection.** By ruling the removal of an element
+deletes nothing that is stored under its key. The cone instances of the
+key are dropped. Its state cells and the state of its operations stay
+stored, and an element that returns under the same key reads what its
+state cells held, because what a body holds is named from the key. The
+rule is the same in the three cases: the key returns when a link that
+resolves to the same address stands in an array of references again,
+when the same value with the same occurrence count stands in an array
+of plain values in place again, and when the upstream key returns in
+the result of another per-element construct. The labels of what stays
+stored are those of section 2.6, unchanged by the removal. Reclaiming
+the storage would be a separate mechanism, which this design does not
+have. `execution-and-storage.md` §2.6 has what is dropped and what
+stays, and its question 33 what is assumed for a child of the body.
 
 Keeping the identifiers of per-element state that is already stored is
 not a goal. The runtime of today forms a key from the identity of the

@@ -489,6 +489,13 @@ which element keys what they hold is kept
   stand in a collection and the first is removed, the state that remains
   is that of the first occurrence
   ([language subset](language-subset.md), §4.4.1).
+- The removal of an element drops the cone instances of its key and
+  deletes nothing that is stored under the key. An element that
+  returns under the same key reads what its state cells held, over an
+  array of references, over an array of plain values in place, and
+  over the result of another per-element construct alike. Nothing in
+  the design reclaims that storage
+  ([execution and storage](execution-and-storage.md), §2.6).
 - A change to one element dirties that element's cones. A membership change
   dirties the container.
 

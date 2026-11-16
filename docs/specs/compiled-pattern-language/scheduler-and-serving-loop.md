@@ -1732,7 +1732,13 @@ registration that a start makes today.
 - **When a row is deleted.** When its element key leaves the collection,
   and when its instance is torn down (section 2.7) or retired. A source
   update deletes no row: a stream identifier holds no compiled identity,
-  so the row still names the stream.
+  so the row still names the stream. The row is an index entry of the
+  scheduler and nothing stored under the key. By ruling the removal of
+  an element deletes no state cell and no operation state of its key
+  (`execution-and-storage.md` §2.6), in each of the three cases of a
+  per-element source. A key that returns has the same stream
+  identifier, and the evaluation that adds the key writes the row
+  again.
 - **What it is.** Identifiers only, overwritten in place, written inside the
   wave's store transaction or a setup transaction's, never pushed to a client,
   and never read at admission. Those are the properties of a basis row. Only

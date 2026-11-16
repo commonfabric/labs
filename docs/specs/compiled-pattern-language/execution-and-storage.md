@@ -1671,11 +1671,12 @@ The runtime evaluates a `map` over the collection as follows.
 5. For each key in the table that no position holds any more, drop its cone
    instances and its memo entries, and tear down the instances their
    evaluations made (section 2.8) and the children the body has under the
-   key. State cells and operation state declared under the key are not
-   deleted by this step (section 9.6), in each of the three cases of a
-   source. A key that returns has new cone instances, which are evaluated,
-   and *assumed* (section 11, question 33) it reads what its state cells
-   held before.
+   key. By ruling the removal deletes nothing that is stored under the
+   key: the state cells and the operation state declared under it stay
+   stored, in each of the three cases of a source. A key that returns
+   has new cone instances, which are evaluated, and they read what the
+   state cells of the key held before ("A key that left its
+   collection", section 2.6).
 6. Assemble the result: position `i` receives the outputs of the cone
    instances of the key at position `i`. A hole stays a hole.
 
@@ -1739,7 +1740,9 @@ declares is a state cell of the body, per key as any other
   equal values stand in the collection and the first is removed, the
   one that remains becomes occurrence 0 and has the child and the state
   of the first occurrence. The key that left is that of the last
-  occurrence, and its child is the one torn down.
+  occurrence, and its child is the one torn down. The state cells and
+  the operation state that the body declares under that key stay
+  stored, by ruling (section 2.6).
 - **A plain value edited in place** is another key at the same position:
   the child of the earlier value is torn down and a child is set up for
   the new one. In the runtime of today the key of a value stored in
@@ -1757,7 +1760,10 @@ declares is a state cell of the body, per key as any other
 - **A key that returns.** A child set up under a key that was held
   before, such as a value that was removed and is added again, is made
   again under the identity of the one that was torn down, with the
-  outcome section 2.8 gives ("Made again").
+  outcome section 2.8 gives ("Made again"). The state cells and the
+  operation state that the body itself declares under the key are read
+  again by ruling. What the child finds of its own state is *assumed*
+  (section 11, question 33).
 
 An author who needs a child to stay with a record across an edit of the
 record makes the elements cells: a position that holds a link keeps its
@@ -1771,7 +1777,7 @@ element part when the value behind the link changes.
 | A captured outer value changes | Every element's cone instances that read it | All of them | The changed kept paths |
 | A child of a captured outer output changes, and the body reaches that output only through a `pick` | The cone instances whose `pick` chose that child (section 3.3) | Those | Their changed kept paths |
 | An element is appended or inserted | The collection's membership; no existing element's cone | The new key's cone instances | The new positions; for an insertion, the positions after it move in the stored array (section 4.2) |
-| An element is removed | The collection's membership | Nothing | The stored array loses the position, and a part document of the row is deleted (section 4.10) |
+| An element is removed | The collection's membership | Nothing. The cone instances of the key are dropped | The stored array loses the position, and a part document of the row is deleted (section 4.10). Nothing stored under the key is deleted (below, "A key that left its collection") |
 | Elements are reordered | The collection's membership | Nothing, unless a cone of the body reads the index. The runtime moves what each key holds (below) | The stored array is rewritten in the new order: the storage links of rows that are parts, and the values of rows stored in place. Label entries only where the label at a position changed |
 | A cone of the body reads the index and an element moves | The cone instances of the moved keys that list the slot of root `index`. No key changes, and state cells, streams, operation state and children stay | Those cone instances | Their changed kept paths |
 | The value behind a linked element changes | That element's cone instances; the key is unchanged | That element | Its changed kept paths |
@@ -1793,6 +1799,51 @@ cone instances that list the slot of root `index`. Evaluating the
 element's cone instances again is permitted, and moving is preferred.
 The state cells, streams, operation state and children of the key are
 named by the key and do not move.
+
+**A key that left its collection.** By ruling the removal of an element
+deletes nothing that is stored under its key. The rule is the same over
+an array of references, over an array of plain values in place, and
+over the result of another per-element construct.
+
+- **What is dropped.** The cone instances of the key and their memo
+  entries (section 2.5, step 5). The stored outputs of those cone
+  instances go with them: the position leaves the stored array, and a
+  part document of the row is deleted in the same transaction (section
+  4.10). A part document holds kept paths of the row, which the cone
+  instances of a key that returns compute again. It holds no state
+  cell and no operation state, so its deletion deletes nothing that
+  the ruling keeps.
+- **What stays.** The state cells that the body declares under the key,
+  and the state of the operations declared under it, the settled
+  result of an effect included. Their documents are named from the
+  enclosing instance and the key (section 5.2), and the removal writes
+  none of them. They are not retired documents, and the rule of
+  section 9.6 does not delete them.
+- **A key that returns.** The key returns when a link that resolves to
+  the same address stands in an array of references again, when the
+  same value stands in an array of plain values in place again, with
+  the same occurrence count, and when the upstream key returns in the
+  result of another per-element construct, as where an element leaves
+  the result of a `filter` and enters it again. New cone instances are
+  made for the key and evaluated. A state cell of the key reads what
+  it held, an operation of the key finds its state, and a binding of
+  the key has the stream it had, because each is named from the key.
+- **As today.** The runtime of today names the result cell of an
+  element from the result container and the key
+  (`listElementResultCell` in
+  `runtime/runner/src/builtins/list-coordinator-plan.ts`) and deletes
+  no document of an element that was removed (`releaseChild` in
+  `runtime/runner/src/runner.ts`), so an element that returns finds
+  its old values. Over an array of plain values in place today's key
+  holds the position (`plan-and-label-templates.md` §1.3), so what
+  returns there today is a position, and under this design a value.
+- **Reclaiming the storage** would be a separate mechanism. This design
+  has none: the state under a key that does not return stays stored.
+
+The ruling names the state cells and the operation state under the
+key. A child of the body under the key is torn down (section 2.5,
+"Children of an element body"), and what becomes of its documents is
+*assumed* (section 11, question 33).
 
 For an element that is a plain value stored in place, the place the
 element is read from is its position in the collection's document. A
@@ -2096,11 +2147,13 @@ at a `BodyCall` site of kind `instantiate`.
   it.
 - **Made again.** An evaluation that makes an instance under the identity
   of one that was torn down clears the mark and sets the instance up
-  again. *Assumed:* it finds the state cells and operation state stored
-  under that identity, where they were not deleted yet, as an element
-  whose key returns to its collection does (section 11, question 33). An
-  author who needs a new instance writes a `.for(cause)` whose cause
-  differs.
+  again. *Assumed* (section 11, question 33): it finds the state cells
+  and operation state stored under that identity, where they were not
+  deleted yet. For the state that an element body itself declares
+  under a key the ruling of section 2.6 holds instead ("A key that
+  left its collection"): it is not deleted, and a key that returns
+  reads it. An author who needs a new instance writes a `.for(cause)`
+  whose cause differs.
 - **What the memo holds.** The memo entry of the making cone instance
   records, per site, the result cells its last evaluation made and the
   compiled pattern of each (`MemoEntry.made`, section 3.1). A cone instance
@@ -3342,7 +3395,10 @@ whose write changed its size.
   §5.5 lists that with the residual channels.
 - **A removed row.** When a key leaves a kept collection, the transaction
   removes the position from the array and deletes the row's part document,
-  with the part documents below it.
+  with the part documents below it. A part document holds kept paths
+  of the result and nothing that is stored under the key, so this
+  agrees with the ruling that a removal deletes no state cell and no
+  operation state of the key (section 2.6).
 
 **How the labels of a part relate to the templates of the outputs.** A part
 document has no label as a whole, and its storage link carries none. Each
@@ -3860,7 +3916,8 @@ the salted one (section 5.3), and the state of one key is labeled by the
 table of §2.6 there, instantiated for that element. A change to one
 element then writes that element's state document and no other, a
 document is created when its key is first evaluated, and the state of a
-key that left its collection is retired by itself (section 9.6). No
+key that left its collection stays stored by itself, by ruling (section
+2.6). No
 document holds the state of several keys of the enclosing collection, so
 there is no key set that would need the collection's membership label.
 The cost is that the number of documents grows with the number of
@@ -4711,12 +4768,20 @@ names it (section 4.10).
 decision (open question 3).
 
 The same rule applies after migration to documents that go out of use
-without a migration: the state of an element whose key left its collection,
-the state cells of a replaced child that the new child does not declare
-(section 4.6), and the documents of an instance that a computation no
-longer makes (section 2.8). Today such documents are released and never
-deleted
+without a migration: the state cells of a replaced child that the new
+child does not declare (section 4.6), and the documents of an instance
+that a computation no longer makes (section 2.8). Today such documents
+are released and never deleted
 (`builtin-inventory.md`, the entry for `map`).
+
+The rule does not apply to what is stored under an element key that
+left its collection. By ruling the removal of an element deletes no
+state cell and no operation state of its key, in each of the three
+cases of a source, and such a document is not a retired document
+(section 2.6, "A key that left its collection"). Reclaiming that
+storage would be a separate mechanism, which this design does not
+have. For the documents of a child of an element body whose key left,
+this section's rule is *assumed* (section 11, question 33).
 
 ### 9.7 What a reader on an older client sees
 
@@ -5099,34 +5164,33 @@ computation makes:
     (section 2.8). The identity is ruled. With an ordinal as the identity,
     a list that shrinks and grows makes instance number 2 again for
     another item, and a child of an element body is made again when a
-    value that was removed is added again (section 2.5). For an element
-    body that is the same in the three cases of a source: the key
-    returns when the same value stands in an array of plain values in
-    place again, when a link that resolves to the same address stands
-    in an array of references again, and when the upstream key returns
-    in the result of another per-element construct.
-    *Assumed:* the
-    new instance finds the state cells and operation state stored under
-    that identity where they were not deleted yet, as an element whose key
-    returns does, and an author who needs otherwise writes `.for(cause)`.
-    The same is assumed for a state cell and for operation state that an
-    element body declares: step 5 of section 2.5 drops the cone instances
-    of a key that left and deletes nothing stored under it, so a key that
-    returns reads what its state cell held, until section 9.6 deletes the
-    document. Over an array of plain values in place that is a value that
-    is removed and written again, over an array of references a cell that
-    leaves the list and enters it again, and over the result of another
-    per-element construct an upstream key that returns, as where an element
-    leaves the result of a `filter` and enters it again. The prototype's
-    executor does this in the three cases.
-    The alternative deletes a torn-down instance's documents, and what is
-    stored under an element key, in the transaction that tears the instance
-    down or in which the key leaves its collection, which needs them to be
-    listed. A second
-    consequence of the ruling is stated here so that it is accepted
-    knowingly: a link to a torn-down instance that another document holds
-    reads the values last stored, and nothing marks them as such for a
-    reader that does not load the instance.
+    value that was removed is added again (section 2.5). Not open, by
+    ruling: the removal of an element deletes nothing stored under its
+    key, so the state cells and the operation state that an element
+    body declares stay stored, and a key that returns reads what its
+    state cells held (section 2.6, "A key that left its collection").
+    That is the same in the three cases of a source: over an array of
+    plain values in place a value that is removed and written again,
+    over an array of references a cell that leaves the list and enters
+    it again, and over the result of another per-element construct an
+    upstream key that returns. The prototype's executor does this in
+    the three cases. The ruling does not speak of an instance.
+    *Assumed:* an instance made again finds the state cells and
+    operation state stored under its identity where they were not
+    deleted yet, the documents of a torn-down instance are retired and
+    deleted under section 9.6, and an author who needs a new instance
+    writes `.for(cause)`. That is assumed for an instance a `lift` or a
+    `computed` makes, which is not about a per-element construct, and
+    for a child of an element body whose key left, in each of the three
+    cases. The alternatives: delete a torn-down instance's documents
+    in the transaction that tears it down, which needs them to be
+    listed; or, for a child of an element body, keep its documents as
+    the ruling keeps the state cells of the body, so that a child made
+    again under a key that returns always finds its state. A second
+    consequence of the ruling on identity is stated here so that it is
+    accepted knowingly: a link to a torn-down instance that another
+    document holds reads the values last stored, and nothing marks them
+    as such for a reader that does not load the instance.
 34. **A cone instance that failed on a time or memory budget** (section
     1.7). The ruling covers a failure at the bound of ten. *Assumed:* the
     same holds for a budget failure: the cone instance is not evaluated

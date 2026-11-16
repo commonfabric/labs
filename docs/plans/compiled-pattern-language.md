@@ -1531,6 +1531,15 @@ is relitigated.
   holds, its stored results included, to the new position. It evaluates
   nothing for the element except the nodes that read the index.
   Evaluating again is permitted, and moving is preferred.
+- The removal of an element deletes nothing that is stored under its
+  key. The cone instances of the key are dropped. Its state cells and
+  its operation state stay stored, and an element that returns under
+  the same key reads what its state cells held. That is as today, where
+  the cells of an element are named from the key and an element that
+  returns finds its old values. The rule is the same over an array of
+  references, over an array of plain values in place, and over the
+  result of another per-element construct. Reclaiming the storage
+  would be a separate mechanism, and this design has none.
 - An element that is a plain value in place is named by its collection
   and its key, and a reference to it or to a member of it resolves to
   the current position at each read and write. So `equals`, two-way
@@ -1731,20 +1740,25 @@ assumption.
     at most 65,536; the properties of a rendered node stay with the node.
     The numbers are placeholders for stage 4 to measure.
 42. **An instance made again under the identity of one torn down** (ES
-    §2.8, question 33). *Assumed:* it finds the stored state where that
-    is not yet deleted, as an element whose key returns does. A link to a
-    torn-down instance held elsewhere reads the last stored values. For
-    a child of an element body this holds over an array of references,
-    an array of plain values in place, and the result of another
-    per-element construct alike: the key returns when the same resolved
-    address, the same value, or the same upstream key stands in the
-    collection again. The same is assumed for a state cell and for
-    operation state declared in an element body, in each of the three
-    cases: the removal of a key drops its cone instances and deletes
-    nothing stored under it, so a key that returns reads what its state
-    cell held. The prototype's executor does this. The alternative
-    deletes what is stored under a key in the transaction in which the
-    key leaves its collection.
+    §2.8, question 33). By ruling the removal of an element deletes
+    nothing stored under its key, and an element that returns under the
+    same key reads what its state cells held ([Decided](#decided)). The
+    ruling is on the state cells and the operation state that an
+    element body declares, over an array of references, an array of
+    plain values in place, and the result of another per-element
+    construct alike. It does not speak of an instance. *Assumed:* an
+    instance made again under the identity of one torn down finds the
+    stored state where that is not yet deleted, and the documents of a
+    torn-down instance are deleted after the retention period of ES
+    §9.6. A link to a torn-down instance held elsewhere reads the last
+    stored values. That covers an instance that a `lift` or a
+    `computed` makes, which is not about a per-element construct, and a
+    child of an element body, in each of the three cases: the key
+    returns when the same resolved address, the same value, or the same
+    upstream key stands in the collection again. The alternative for
+    the child of an element body keeps its documents as the state cells
+    of the body are kept, so that a child made again always finds its
+    state.
 43. **A failed evaluation of a computation that makes instances** (PL
     §3.14). *Assumed:* the instances of the last evaluation stay, and
     their arguments take the error state.
