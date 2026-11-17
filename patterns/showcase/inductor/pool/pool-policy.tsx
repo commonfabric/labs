@@ -24,7 +24,6 @@ import {
   currentPrincipal,
   handler,
   lift,
-  linksOf,
   principalOf,
   type Writable,
   type WriteAuthorizedBy,
@@ -294,12 +293,12 @@ export const submitContribution = handler<ContributionEvent, SubmitState>(
         jitter: seal.jitter,
       },
     };
-    // A replacement drops the old entry and appends the new one rather than
+    // A replacement removes the old entry and appends the new one rather than
     // setting the slot in place: after an in-place set, the slot's
-    // `authored-by` reads as no one (README.md, "CFC snags").
-    if (mine >= 0) {
-      const kept = (linksOf(contributions) ?? []).filter((_, i) => i !== mine);
-      contributions.set([...kept, contribution]);
-    } else contributions.push(contribution);
+    // `authored-by` reads as no one (README.md, "CFC snags"). It does not
+    // rebuild the list either, which would copy every other entry's
+    // reference into a new slot.
+    if (mine >= 0) contributions.removeByValue(contributions.key(mine));
+    contributions.push(contribution);
   },
 );
