@@ -10,7 +10,8 @@
  * the repository from the directory it runs in. Git can export some of them to
  * the pager it starts: it exports `GIT_DIR` for a linked worktree, for
  * instance, and with `GIT_DIR` and no `GIT_WORK_TREE`, git takes the
- * directory it runs in as the top of that repository's working tree. */
+ * directory it runs in as the top of that repository's working tree. Throws
+ * git's message when git cannot list them. */
 export function repositoryIndependentEnv(
   env: Readonly<Record<string, string>>,
 ): Record<string, string> {
@@ -24,12 +25,12 @@ export function repositoryIndependentEnv(
  * made from `env`, the environment this process started with in the
  * directory `start`. When git finds the same repository and working tree from
  * `start` without the variables that tie it to one, as it does for a linked
- * worktree, the
- * result leaves them out, as {@link repositoryIndependentEnv} does, so that
- * git finds each directory's own repository. When it finds another or none,
- * as for a repository named with `--git-dir` and `--work-tree`, the result
- * names the repository `env` names, by absolute paths, which hold wherever
- * git runs. */
+ * worktree, the result leaves them out, as {@link repositoryIndependentEnv}
+ * does, so that git finds each directory's own repository. When it finds
+ * another or none, as for a repository named with `--git-dir` and
+ * `--work-tree`, the result names the repository `env` names, by absolute
+ * paths, which hold wherever git runs. Rejects with git's message when git
+ * cannot list the variables. */
 export async function repositoryEnv(
   env: Readonly<Record<string, string>>,
   start: string,
@@ -69,17 +70,25 @@ function gitCommand(
     clearEnv: true,
     stdin: "null",
     stdout: "piped",
-    stderr: "null",
+    stderr: "piped",
   });
 }
 
 /** `env` without the variables named on the lines `listed` wrote, apart from
- * those that carry configuration. */
+ * those that carry configuration. Throws git's message when `listed` failed. */
 function withoutLocalVariables(
   env: Readonly<Record<string, string>>,
   listed: Deno.CommandOutput,
 ): Record<string, string> {
-  const local = new Set(new TextDecoder().decode(listed.stdout).split("\n"));
+  const decoder = new TextDecoder();
+  if (!listed.success) {
+    throw new Error(
+      `git rev-parse --local-env-vars failed: ${
+        decoder.decode(listed.stderr).trim()
+      }`,
+    );
+  }
+  const local = new Set(decoder.decode(listed.stdout).split("\n"));
   return Object.fromEntries(
     Object.entries(env).filter(([name]) =>
       !local.has(name) || name.startsWith("GIT_CONFIG")
