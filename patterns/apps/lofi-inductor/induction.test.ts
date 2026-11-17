@@ -37,8 +37,7 @@ const item = (id: string, subject: string): Item => ({
 
 const answered = (id: string, label: boolean): HifiState => ({
   id,
-  pending: false,
-  result: { label, reasoning: "because" },
+  answer: { pending: false, result: { label, reasoning: "because" } },
 });
 
 // With 30% held out, mail-6, mail-7, mail-12, and mail-13 are held out and
@@ -92,7 +91,7 @@ describe("gradeItems", () => {
     answered("mail-1", true),
     answered("mail-2", false),
     answered("mail-3", true),
-    { id: "mail-4", pending: true },
+    { id: "mail-4", answer: { pending: true } },
   ];
 
   it("marks a surprise only where a hi-fi label disagrees", () => {
@@ -110,8 +109,8 @@ describe("gradeItems", () => {
     const rows = gradeItems(
       items.slice(0, 2),
       [
-        { id: "mail-1", pending: false, error: "down" },
-        { id: "mail-2", pending: false, result: { label: "yes" } },
+        { id: "mail-1", answer: { pending: false, error: "down" } },
+        { id: "mail-2", answer: { pending: false, result: { label: "yes" } } },
       ],
       [],
       30,

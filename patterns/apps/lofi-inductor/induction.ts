@@ -36,12 +36,14 @@ export interface HifiAnswer {
   reasoning: string;
 }
 
-/** The parts of one item's hi-fi call that grading reads. */
+/** One item's hi-fi call, as far as grading reads it. */
 export interface HifiState {
   id: string;
-  pending: boolean;
-  error?: unknown;
-  result?: Partial<Record<keyof HifiAnswer, unknown>> | undefined;
+  answer: {
+    pending: boolean;
+    error?: unknown;
+    result?: Partial<Record<keyof HifiAnswer, unknown>> | undefined;
+  };
 }
 
 /** Which side of the graded set an item is on. Stable: a hash of its id. */
@@ -189,9 +191,10 @@ export function labelWith(
 
 /** The hi-fi label in `state`, or null while there is no usable one. */
 function hifiLabel(state: HifiState | undefined): boolean | null {
-  if (!state || state.pending || state.error) return null;
-  const answer = state.result?.label;
-  return typeof answer === "boolean" ? answer : null;
+  const answer = state?.answer;
+  if (!answer || answer.pending || answer.error) return null;
+  const label = answer.result?.label;
+  return typeof label === "boolean" ? label : null;
 }
 
 /**
