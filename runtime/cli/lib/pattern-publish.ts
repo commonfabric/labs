@@ -319,9 +319,7 @@ export async function publishPatternFromDisk(
   let published = original;
   let publishedMeta = meta;
   const slot = options.slot;
-  const lineage = slot === undefined
-    ? {}
-    : { slot, origin: "self" as const, keepPrivate: true };
+  const lineage = slot === undefined ? {} : { slot, origin: "self" as const };
   // The index takes a remix credit beside a slot only on the version that
   // starts the slot's lineage, so it is owed until one is sent.
   let creditOwed = slot === undefined ||

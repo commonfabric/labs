@@ -249,8 +249,10 @@ describe("pattern-publish", () => {
       });
       expect(await Deno.readTextFile(entry)).toBe(GENERALIZED);
       const publishes = index.calls.filter((c) => c.fn === "publishPattern");
+      // No version is marked keepPrivate: a publish never shares by itself,
+      // and the mark would keep a deployed head from ever sharing.
       expect(publishes.map((c) => [c.body.patternId, c.body.keepPrivate]))
-        .toEqual([["id-original", true], ["id-generalized", undefined]]);
+        .toEqual([["id-original", undefined], ["id-generalized", undefined]]);
       expect(publishes.every((c) => c.body.slot === "cf-path:abc")).toBe(true);
       expect(publishes.every((c) => c.body.origin === "self")).toBe(true);
       expect(report.version).toBe(2);
