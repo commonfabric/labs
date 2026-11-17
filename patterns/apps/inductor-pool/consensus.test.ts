@@ -296,6 +296,16 @@ describe("canonicalSet", () => {
     expect(() => canonicalSet(tooMany)).toThrow(`at most ${MAX_RULES}`);
     expect(canonicalSet(tooMany.slice(0, MAX_RULES))).toHaveLength(MAX_RULES);
   });
+
+  it("refuses a set whose rules together could backtrack too long", () => {
+    const costly = Array.from({ length: 5 }, (_, i) => ({
+      field: "subject",
+      pattern: `\\s{0,88}\\s{0,88}${String.fromCharCode(97 + i)}`,
+      predicts: true,
+    }));
+    expect(() => canonicalSet(costly)).toThrow("Refused the set");
+    expect(canonicalSet(costly.slice(0, 4))).toHaveLength(4);
+  });
 });
 
 describe("tallyAll", () => {

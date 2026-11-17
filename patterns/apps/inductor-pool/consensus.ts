@@ -10,7 +10,12 @@
  * the modules it imports.
  */
 
-import { type CanonicalRule, checkRule, MAX_RULES } from "./rule-grammar.ts";
+import {
+  type CanonicalRule,
+  checkRule,
+  MAX_RULES,
+  ruleSetCostRefusal,
+} from "./rule-grammar.ts";
 
 export type { CanonicalRule } from "./rule-grammar.ts";
 
@@ -488,7 +493,8 @@ export function mintSeal(
 /**
  * `drafts` as one contribution's rule set: at most `MAX_RULES`, each checked
  * against the grammar, which refuses a pattern that could backtrack past its
- * budget, and put in canonical form, a rule given twice kept once. A rule out of
+ * budget, and put in canonical form, a rule given twice kept once; a set whose
+ * rules together could backtrack past the set's budget is refused. A rule out of
  * grammar refuses the whole set, so a contributor learns their set was not
  * taken rather than having part of it silently dropped.
  */
@@ -506,7 +512,10 @@ export function canonicalSet(drafts: unknown): CanonicalRule[] {
     const identity = ruleIdentity(checked.rule);
     if (!rules.has(identity)) rules.set(identity, checked.rule);
   }
-  return [...rules.values()];
+  const kept = [...rules.values()];
+  const tooCostly = ruleSetCostRefusal(kept);
+  if (tooCostly !== null) throw new Error(`Refused the set: ${tooCostly}.`);
+  return kept;
 }
 
 /**

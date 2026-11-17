@@ -90,15 +90,23 @@ export const MAX_RULES = 20;
 export const MAX_TESTED_LENGTH = 1000;
 
 /**
- * The most ways one alternative of a pattern may match a single span, as
- * `backtrackCost` counts them, with an unbounded quantifier counting as
- * `MAX_TESTED_LENGTH` ways. `RegExp.test` tries the pattern at every start
- * position, so its work is at most about this times the tested length:
- * eight million steps, a few milliseconds per rule and field, measured. One
- * unbounded quantifier with up to eight ways around it fits (`invoice.*due`,
- * `.*bills?`); two do not (`.*.*!` takes seconds on a thousand characters).
+ * The most ways a pattern, all its top-level alternatives together, may match
+ * a single span, as `backtrackCost` counts them, with an unbounded quantifier
+ * counting as `MAX_TESTED_LENGTH` ways. `RegExp.test` tries every alternative
+ * at every start position, so its work is at most about this times the tested
+ * length: eight million steps, about fifteen milliseconds per rule and field
+ * at worst, measured. One unbounded quantifier with up to eight ways around it
+ * fits (`invoice.*due`, `.*bills?`); two do not (`.*.*!` takes seconds on a
+ * thousand characters).
  */
 export const MAX_BACKTRACK_COST = 8 * MAX_TESTED_LENGTH;
+
+/**
+ * The most a whole rule set's patterns may cost together, since each runs on
+ * every item: four patterns at the budget, so a set at its worst takes about
+ * sixty milliseconds per item.
+ */
+export const MAX_SET_BACKTRACK_COST = 4 * MAX_BACKTRACK_COST;
 
 // =============================================================================
 // CHARACTER SETS
@@ -642,20 +650,48 @@ function backtrackCost(node: Node): number {
 }
 
 /**
- * Refuses `tree` when an alternative of it could backtrack past the budget.
- * The top-level alternatives are tried one after another, so each is held to
- * the budget on its own.
+ * Refuses `tree` when it could backtrack past the budget. `RegExp.test` tries
+ * every top-level alternative at every start position, so the budget is for
+ * their sum, not for each: sixteen alternatives each just under it took a
+ * quarter of a second on a thousand spaces.
  */
 function checkBacktracking(tree: Node): void {
-  const alternatives = tree.kind === "alt" ? tree.branches : [tree];
-  for (const alternative of alternatives) {
-    if (backtrackCost(alternative) > MAX_BACKTRACK_COST) {
-      fail(
-        "the pattern could backtrack too long: it may hold one unbounded " +
-          "quantifier (*, + or {n,}), with few other choices beside it",
-      );
-    }
+  if (backtrackCost(tree) > MAX_BACKTRACK_COST) {
+    fail(
+      "the pattern could backtrack too long: it may hold one unbounded " +
+        "quantifier (*, + or {n,}), with few other choices beside it, " +
+        "across all its alternatives",
+    );
   }
+}
+
+/**
+ * `pattern`'s backtracking cost, as the budget counts it, or `Infinity` for a
+ * pattern outside the grammar.
+ */
+export function patternCost(pattern: string): number {
+  try {
+    return backtrackCost(simplify(parse(pattern)));
+  } catch (e) {
+    if (e instanceof Error && e.name === GRAMMAR_ERROR) return Infinity;
+    throw e;
+  }
+}
+
+/**
+ * Why a rule set as a whole could backtrack too long, or null when it fits.
+ * Every rule of a set runs on every item, so their costs add: this holds a
+ * set to `MAX_SET_BACKTRACK_COST`, which a few rules at the per-pattern
+ * budget fill and ordinary rules (literals, one `.*` each) never do.
+ */
+export function ruleSetCostRefusal(
+  rules: ReadonlyArray<Pick<CanonicalRule, "pattern">>,
+): string | null {
+  const total = rules.reduce((sum, rule) => sum + patternCost(rule.pattern), 0);
+  return total > MAX_SET_BACKTRACK_COST
+    ? "the rule set could backtrack too long: together its rules hold too " +
+      "many unbounded quantifiers or choices"
+    : null;
 }
 
 // =============================================================================

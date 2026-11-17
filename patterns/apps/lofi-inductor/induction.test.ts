@@ -289,6 +289,27 @@ describe("judgeProposal", () => {
     expect(unsafe.refusals[0]).toMatch(/backtrack/);
   });
 
+  it("rejects a set whose rules together could backtrack too long", () => {
+    // Each rule is within the per-pattern budget; five of them are not
+    // within the set's
+    const costly = Array.from({ length: 5 }, (_, i) => ({
+      field: "subject",
+      pattern: `\\s{0,88}\\s{0,88}${String.fromCharCode(97 + i)}`,
+      predicts: true,
+    }));
+    const judged = judgeProposal(current, { rules: costly }, heldOut);
+    expect(judged.accepted).toBe(false);
+    expect(judged.refusals).toEqual([
+      expect.stringMatching(/rule set could backtrack too long/),
+    ]);
+    const fewer = judgeProposal(
+      current,
+      { rules: costly.slice(0, 4) },
+      heldOut,
+    );
+    expect(fewer.refusals).toEqual([]);
+  });
+
   it("rejects malformed and oversized proposals", () => {
     expect(judgeProposal(current, null, heldOut).accepted).toBe(false);
     expect(judgeProposal(current, { rules: "x" }, heldOut).accepted).toBe(

@@ -119,16 +119,19 @@ Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
 - The grammar is also the safety check, and it runs on the canonical form, which
   is what runs, so `(a|b)+` is accepted as `[ab]+`. It refuses a repeated group
   holding a choice (`(a|aa)+`, exponential), and bounds polynomial backtracking:
-  counting the ways each top-level alternative can match one span (a sequence
-  multiplies, an alternation adds, an unbounded quantifier counts as
-  `MAX_TESTED_LENGTH`), it allows at most `MAX_BACKTRACK_COST`, eight times
-  `MAX_TESTED_LENGTH`. In practice that is one unbounded quantifier with a few
-  small choices beside it: `invoice.*due` passes, `.*.*!` does not (seconds on a
+  counting the ways the pattern can match one span (a sequence multiplies, an
+  alternation adds, an unbounded quantifier counts as `MAX_TESTED_LENGTH`), it
+  allows at most `MAX_BACKTRACK_COST`, eight times `MAX_TESTED_LENGTH`, for all
+  the top-level alternatives together, since `RegExp.test` tries each of them at
+  every position. In practice that is one unbounded quantifier with a few small
+  choices beside it: `invoice.*due` passes, `.*.*!` does not (seconds on a
   thousand characters, measured). A rule tests only a field's first
   `MAX_TESTED_LENGTH` (1000) code units, which turns that count into a bound on
-  time: a few milliseconds per rule and field at worst. The pool applies the
-  same grammar to every contribution, and takes at most `MAX_RULES` (20) rules
-  from one.
+  time: about fifteen milliseconds per rule and field at worst, measured. Every
+  rule of a set runs on every item, so a set's patterns together may cost at
+  most `MAX_SET_BACKTRACK_COST`, four patterns' worth. The pool applies the same
+  grammar and set budget to every contribution, and takes at most `MAX_RULES`
+  (20) rules from one.
 - A rule set says YES when a YES rule matches and no NO rule does.
 - Scoring all labelled held-out items, not only surprises, is what lets the gate
   see a proposal that fixes the surprises by breaking items the current rules

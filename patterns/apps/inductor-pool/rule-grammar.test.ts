@@ -6,9 +6,27 @@ import {
   canonicalizePattern,
   checkRule,
   describeRule,
+  MAX_BACKTRACK_COST,
   MAX_PATTERN_LENGTH,
+  MAX_SET_BACKTRACK_COST,
+  patternCost,
+  ruleSetCostRefusal,
   stableHash,
 } from "./rule-grammar.ts";
+
+/**
+ * `n` alternatives, each `piece` followed by a different letter, or two
+ * letters past 26.
+ */
+function alternatives(piece: string, n: number): string {
+  const letter = (i: number) => String.fromCharCode(97 + i);
+  return Array.from(
+    { length: n },
+    (_, i) =>
+      piece +
+      (n <= 26 ? letter(i) : letter(i % 26) + letter(Math.floor(i / 26))),
+  ).join("|");
+}
 
 /** The canonical form of `pattern`, failing the test when it is refused. */
 function canon(pattern: string): string {
@@ -148,6 +166,12 @@ const OUT_OF_GRAMMAR: Array<[string, RegExp]> = [
   ["from.*to.*", /backtrack too long/],
   ["\\w{0,99}\\w{0,99}!", /backtrack too long/],
   [".*a?a?a?a?!", /backtrack too long/],
+  // Every alternative is tried at every position, so the budget is their
+  // sum: each of these alternatives is within it alone, and together they
+  // took a quarter of a second on a thousand spaces
+  [alternatives("\\s{0,88}\\s{0,88}", 16), /backtrack too long/],
+  [alternatives("\\s{0,19}\\s{0,19}\\s{0,19}", 11), /backtrack too long/],
+  [alternatives(".*", 60), /backtrack too long/],
   // Exponential backtracking, as isRegexSafe refuses it
   ["(a|aa)+", /exponentially/],
   ["(a+)+", /exponentially/],
@@ -164,6 +188,9 @@ const WITHIN_BUDGET = [
   ".*a?a?a?!",
   "(?:ab)+",
   "invoice.*|.*statement",
+  // One alternative of the refused sums above, alone
+  "\\s{0,88}\\s{0,88}a",
+  alternatives(".*", 4),
 ];
 
 describe("canonicalizePattern", () => {
@@ -316,6 +343,13 @@ describe("canonicalizePattern", () => {
     expect(canon("\\d{1,3}(?:,\\d{3})*")).toBe("\\d{1,3}(?:,\\d{3})*");
   });
 
+  it("prices a pattern as the sum of its alternatives", () => {
+    const one = patternCost("\\s{0,88}\\s{0,88}a");
+    expect(one).toBeLessThanOrEqual(MAX_BACKTRACK_COST);
+    expect(patternCost(alternatives("\\s{0,88}\\s{0,88}", 2))).toBe(2 * one);
+    expect(patternCost("(a)\\1")).toBe(Infinity);
+  });
+
   it("refuses a value that is not a string", () => {
     // Model output reaches this untyped
     const untyped: unknown = 42;
@@ -370,6 +404,26 @@ describe("checkRule", () => {
     expect(refused({ field: "s", pattern: "(a)\\1", predicts: true })).toBe(
       true,
     );
+  });
+});
+
+describe("ruleSetCostRefusal", () => {
+  it("holds a whole set to the set budget", () => {
+    // Each rule runs on every item, so their costs add
+    const costly = { pattern: canon("\\s{0,88}\\s{0,88}a") };
+    const fits = Math.floor(
+      MAX_SET_BACKTRACK_COST / patternCost(costly.pattern),
+    );
+    expect(ruleSetCostRefusal(Array(fits).fill(costly))).toBeNull();
+    expect(ruleSetCostRefusal(Array(fits + 1).fill(costly))).toMatch(
+      /backtrack too long/,
+    );
+    // Ordinary rules never come near it
+    expect(
+      ruleSetCostRefusal(
+        Array(20).fill({ pattern: canon("invoice.*due") }),
+      ),
+    ).toBeNull();
   });
 });
 

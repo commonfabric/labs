@@ -18,6 +18,7 @@ import {
   describeRule,
   MAX_RULES,
   MAX_TESTED_LENGTH,
+  ruleSetCostRefusal,
   stableHash,
 } from "../inductor-pool/rule-grammar.ts";
 
@@ -538,6 +539,8 @@ export function judgeProposal(
   if (refusals.length > 0) {
     return refuse("a proposed rule was refused", rules, refusals);
   }
+  const tooCostly = ruleSetCostRefusal(rules);
+  if (tooCostly !== null) return refuse(tooCostly, rules, [tooCostly]);
 
   const proposedF1 = scoreRules(rules, heldOut).f1;
   const enough = heldOut.length >= MIN_HELD_OUT;
