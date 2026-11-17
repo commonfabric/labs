@@ -311,10 +311,11 @@ The runner renders the view as a browser does, finds the one element whose text
 is `control`, and clicks it, so the handler bound there receives the click with
 the provenance the control's rendered markers give it; a reviewed control needs
 no `trustedUi`. `within` picks one row out of several that show the same
-control, and `modifiers` holds keys down during the click, as
-`{ press: list[UI], control: "Telegram", modifiers: ["meta"] }` Cmd-clicks a
-control. `patterns/system/fabrichat/composer-attach.test.tsx` removes an
-attachment this way.
+control; `patterns/system/fabrichat/composer-attach.test.tsx` removes an
+attachment this way. `modifiers` holds keys down during the click, so
+`{ press: list[UI], control: "Telegram", modifiers: ["meta"] }` Cmd-clicks the
+control; `runtime/cli/test/fixtures/press/press-modifiers.test.tsx` presses
+with and without them.
 
 Prefer it to walking the tree in an `action`, below, when the control is bound
 per row or per session. With server execution on, an `action` runs on the
