@@ -856,11 +856,11 @@ describe("SpaceServer", () => {
 
       for (
         const [shape, chain] of [
-          ["eleven `result` hops deep", 12],
-          ["naming each other by `result`", 2],
+          ["a document eleven `result` hops deep", 12],
+          ["one of two documents naming each other by `result`", 2],
         ] as const
       ) {
-        it(`serves a piece whose argument links to a document ${shape}`, async () => {
+        it(`serves a piece whose argument links to ${shape}`, async () => {
           host = newHost();
           const setup = openRuntime(false, setupSigner);
           const compiled = await setup.patternManager.compilePattern(
@@ -1022,9 +1022,12 @@ describe("SpaceServer", () => {
         expect(await recordedOnEvent(stream)).toBe(-1);
       });
 
-      it("starts a row a `map` built after the piece that built it, in its own right", async () => {
+      it("starts a row a `map` built after the piece that built it, in its own right, with its key parked by no failure of that piece", async () => {
         // TODO(danfuzz): Expect the row to stop with the piece that built it,
-        // once a demanded row starts as the child of the `map` that builds it.
+        // once a demanded row starts as the child of the `map` that builds it,
+        // and its document parked by that piece's failed start commit, once a
+        // row's key is indexed under the pieces enclosing the `map`'s callback.
+        using logs = captureLogs("space-server");
         host = newHost();
         const setup = openRuntime(false, setupSigner);
         const compiled = await setup.patternManager.compilePattern(
@@ -1071,6 +1074,11 @@ describe("SpaceServer", () => {
         await awaitEach(cycles, () => serves(row));
         expect(serves(builder.getAsNormalizedFullLink())).toBe(true);
         expect(await recordedOnEvent(stream)).toBe(10);
+        servingRuntime!.pieceStartCommitFailureObserver!({
+          actionId: `piece-start/${builder.getAsNormalizedFullLink().id}`,
+          error: new Error("test failure of the builder's start commit"),
+        });
+        expect(logs.textsOf("structure-load-start-failed")).toEqual([]);
         servingRuntime!.runner.stop(
           servingRuntime!.getCellFromLink(builder.getAsNormalizedFullLink()),
         );

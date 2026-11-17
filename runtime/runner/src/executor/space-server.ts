@@ -6744,8 +6744,10 @@ export class SpaceServer implements TransactionSealDestination {
     const admitStart = (owning: OwningRootAddress) =>
       !this.#failedStartRoots.has(owning.id);
     // TODO(danfuzz): Start a demanded row as the child of the `map` that
-    // builds it, once the walk can name that `map`; until then a row starts in
-    // its own right after the piece that built it, and outlives that piece.
+    // builds it, once the walk can name that `map`, and index its keys under
+    // the pieces enclosing the `map`'s callback; until then a row starts in its
+    // own right after the piece that built it, outlives that piece, and its
+    // keys are indexed under the callback's piece alone.
     // `space-server-enclosing-start.test.ts` pins it.
     const enclosingFirst = {
       startInputSources: true,
