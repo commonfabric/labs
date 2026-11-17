@@ -619,7 +619,10 @@ describe("view-push", () => {
 
       expect(summary).toBe("asked");
       expect(asked).toEqual([
-        ["feature", { commit: "0123456789abcdef", removed: 1, added: 2 }],
+        ["feature", {
+          commit: "0123456789abcdef",
+          counts: { removed: 1, added: 2 },
+        }],
       ]);
       expect(ran).toEqual([]);
       expect(shown).toEqual([]);
@@ -656,8 +659,21 @@ describe("view-push", () => {
 
       expect(pushedBranch(query, "feature")).toEqual({
         commit: "0123456789abcdef",
-        removed: 1,
-        added: 2,
+        counts: { removed: 1, added: 2 },
+      });
+    });
+
+    it("returns no counts when the checkout's history is shallow", () => {
+      const query = fakeIo({
+        answers: {
+          ...FEATURE_PUSHED,
+          "rev-parse --is-shallow-repository": "true\n",
+        },
+      }).io.query;
+
+      expect(pushedBranch(query, "feature")).toEqual({
+        commit: "0123456789abcdef",
+        counts: null,
       });
     });
 
@@ -681,8 +697,7 @@ describe("view-push", () => {
       expect(
         describePush("feature", {
           commit: "0123456789abcdef",
-          removed: 0,
-          added: 2,
+          counts: { removed: 0, added: 2 },
         }),
       ).toBe(
         "origin already has feature, at 0123456789ab when last fetched or " +
@@ -692,8 +707,10 @@ describe("view-push", () => {
 
     it("says that pushing would replace a branch that has commits the checkout does not, and what it would add", () => {
       const said = (removed: number, added: number) =>
-        describePush("feature", { commit: "c0ffee", removed, added })
-          .split("\n")[1];
+        describePush("feature", {
+          commit: "c0ffee",
+          counts: { removed, added },
+        }).split("\n")[1];
 
       expect(said(1, 0)).toBe(
         "Pushing would replace it, removing 1 commit that this checkout " +
@@ -707,10 +724,23 @@ describe("view-push", () => {
 
     it("says that pushing would leave a branch at the checked-out commit as it is", () => {
       expect(
-        describePush("feature", { commit: "c0ffee", removed: 0, added: 0 }),
+        describePush("feature", {
+          commit: "c0ffee",
+          counts: { removed: 0, added: 0 },
+        }),
       ).toBe(
         "origin already has feature, at c0ffee when last fetched or pushed." +
           "\nPushing would leave it as it is.",
+      );
+    });
+
+    it("says that the commits cannot be counted when the checkout's history is shallow", () => {
+      expect(
+        describePush("feature", { commit: "c0ffee", counts: null }),
+      ).toBe(
+        "origin already has feature, at c0ffee when last fetched or pushed." +
+          "\nThis checkout's history is shallow, so the commits pushing " +
+          "would add or remove cannot be counted.",
       );
     });
   });
@@ -885,16 +915,52 @@ describe("view-push", () => {
         const pushedCommit = git(work, env, "rev-parse", "HEAD");
         expect(await push()).toEqual({
           commit: pushedCommit,
-          removed: 0,
-          added: 0,
+          counts: { removed: 0, added: 0 },
         });
         git(work, env, "commit", "--quiet", "--amend", "-m", "Amended");
         git(work, env, "commit", "--quiet", "--allow-empty", "-m", "More");
 
         expect(await push()).toEqual({
           commit: pushedCommit,
-          removed: 1,
-          added: 2,
+          counts: { removed: 1, added: 2 },
+        });
+      } finally {
+        Deno.removeSync(root, { recursive: true });
+      }
+    });
+
+    it("counts no commits once origin has the branch in a shallow clone", async () => {
+      const { root, env, origin, work } = repositories();
+      try {
+        const io = realPushIo({ cwd: work, env, write: () => {} });
+        expect(await pushBranch(io, undefined, () => "")).toBe(
+          "Pushed feature to origin.",
+        );
+        const shallow = join(root, "shallow");
+        git(
+          root,
+          env,
+          "clone",
+          "--quiet",
+          "--depth",
+          "1",
+          "--no-single-branch",
+          `file://${origin}`,
+          shallow,
+        );
+        git(shallow, env, "switch", "--quiet", "feature");
+
+        expect(
+          await pushBranch(
+            realPushIo({ cwd: shallow, env, write: () => {} }),
+            undefined,
+            () => "",
+            undefined,
+            (_, remote) => Promise.resolve(remote),
+          ),
+        ).toEqual({
+          commit: git(work, env, "rev-parse", "HEAD"),
+          counts: null,
         });
       } finally {
         Deno.removeSync(root, { recursive: true });

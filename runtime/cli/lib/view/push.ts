@@ -57,12 +57,16 @@ export interface PushedBranch {
   /** The commit `origin`'s branch is at. */
   readonly commit: string;
 
-  /** How many commits the checkout has that `origin`'s branch does not. */
-  readonly added: number;
+  /** How many commits each side has that the other does not, or null when
+   * the checkout's history is shallow, so that git cannot count them. */
+  readonly counts: {
+    /** How many commits the checkout has that `origin`'s branch does not. */
+    readonly added: number;
 
-  /** How many commits `origin`'s branch has that the checkout does not,
-   * which a push removes from it. */
-  readonly removed: number;
+    /** How many commits `origin`'s branch has that the checkout does not,
+     * which a push removes from it. */
+    readonly removed: number;
+  } | null;
 }
 
 /**
@@ -155,6 +159,11 @@ export function pushedBranch(
   const tracking = `refs/remotes/origin/${branch}`;
   const commit = git(["rev-parse", "--verify", "--quiet", tracking])?.trim();
   if (!commit) return null;
+  // A shallow history's commits end at the depth it was cloned or fetched
+  // to, so counting them leaves out those beyond it.
+  if (git(["rev-parse", "--is-shallow-repository"])?.trim() === "true") {
+    return { commit, counts: null };
+  }
   const counts = /^(\d+)\s+(\d+)$/.exec(
     git(["rev-list", "--left-right", "--count", `${tracking}...HEAD`])
       ?.trim() ?? "",
@@ -162,7 +171,10 @@ export function pushedBranch(
   if (counts === null) {
     throw new Error(`git could not compare ${branch} with origin's`);
   }
-  return { commit, removed: Number(counts[1]), added: Number(counts[2]) };
+  return {
+    commit,
+    counts: { removed: Number(counts[1]), added: Number(counts[2]) },
+  };
 }
 
 /** Returns what pushing `branch`, which `origin` has as `pushed` says,
@@ -170,14 +182,17 @@ export function pushedBranch(
 export function describePush(branch: string, pushed: PushedBranch): string {
   const commits = (count: number) =>
     count === 1 ? "1 commit" : `${count} commits`;
-  const { added, removed } = pushed;
-  const effect = removed > 0
-    ? `Pushing would replace it, removing ${commits(removed)} that this ` +
-      `checkout does not have${
-        added > 0 ? ` and adding ${commits(added)}` : ""
+  const { counts } = pushed;
+  const effect = counts === null
+    ? "This checkout's history is shallow, so the commits pushing would add " +
+      "or remove cannot be counted."
+    : counts.removed > 0
+    ? `Pushing would replace it, removing ${commits(counts.removed)} that ` +
+      `this checkout does not have${
+        counts.added > 0 ? ` and adding ${commits(counts.added)}` : ""
       }.`
-    : added > 0
-    ? `Pushing would add ${commits(added)} to it.`
+    : counts.added > 0
+    ? `Pushing would add ${commits(counts.added)} to it.`
     : "Pushing would leave it as it is.";
   return `origin already has ${branch}, at ${pushed.commit.slice(0, 12)} ` +
     `when last fetched or pushed.\n${effect}`;

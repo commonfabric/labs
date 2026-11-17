@@ -706,13 +706,14 @@ different repository.
 When `origin` already has the branch, as git last fetched or pushed it, the
 dialog asks before pushing. It says which commit `origin`'s branch is at, and
 what pushing would do to it: add commits, replace it, removing the commits that
-the checkout does not have, or leave it as it is. It also gives the number and
-address of the pull request open from the branch, which it looks for as `L`
-does, below, or says that there is none, or why it could not look; Abort stops
-that search, and the dialog asks without it. Push (`u`) then pushes, its output
-following the question, and Cancel takes the dialog down. No button is the
-default, so Enter does nothing until a button has the focus, and pressing `P`
-again does not push.
+the checkout does not have, or leave it as it is. In a shallow checkout, whose
+history git cannot count to the end, it says so in place of the counts. It also
+gives the number and address of the pull request open from the branch, which it
+looks for as `L` does, below, or says that there is none, or why it could not
+look; Abort stops that search, and the dialog asks without it. Push (`u`) then
+pushes, its output following the question, and Cancel takes the dialog down. No
+button is the default, so Enter does nothing until a button has the focus, and
+pressing `P` again does not push.
 
 When git fails to push or is aborted, as it can when the network is unreliable,
 a Retry push button (`P`) pushes again, unless git says the push was rejected,
