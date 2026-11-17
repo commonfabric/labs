@@ -1087,9 +1087,12 @@ export interface Closure {
  *   whose callback writes the stream. Every position of the collection
  *   holds the one stream.
  * - `member`: no collection. The one position of a member that is
- *   written after a spread. `index` is the number of entries, members
- *   and spreads, that the array or the children are written with before
- *   that member (assumed; section 8, question 78).
+ *   written after a spread in an array value, outside the children of
+ *   a view node. `index` is the number of entries, members and
+ *   spreads, that the array is written with before that member
+ *   (assumed; section 8, question 78). By ruling a collection among
+ *   the children of a view node is one child, so a child written
+ *   after it has a static position and no `*`.
  * - `inside`: a collection that no `element` step of the binding names,
  *   of which one element holds the stream inside its value.
  */
@@ -1193,7 +1196,10 @@ export interface Binding {
    * stored at under some selection of each conditional above it. A path
    * has `*` at the position of each collection it passes through, as the
    * path of a per-element output has (section 1.4), and at the position
-   * of a member written after a spread. By ruling the path states what
+   * of a member written after a spread in an array value. A collection
+   * among the children of a view node is the child at its position
+   * `n`, so the `*` of its elements follows `children/<n>` (section
+   * 3.4). By ruling the path states what
    * each `*` stands for, in `stars`: one position per element key, every
    * position of a collection, the one position of a member after a
    * spread, or the one element that holds the stream inside a value.
@@ -1527,7 +1533,7 @@ a `site` step adds to the path is decided by the rule for a tag above.
   callee's tree has the segment `$UI` after the place. What the callback
   of an element construct returns is such a place: the element of the
   assembled collection is the callee's result, whether or not the
-  collection is then spread into the children of a view node. A branch
+  collection is then a child of a view node. A branch
   of a conditional is such a place as well, also where the conditional
   is itself the child of a view node: the tag is written as an operand
   of the `select` and not at the child position, the position holds the
@@ -1546,13 +1552,13 @@ callback returns, with `*` at the position of each collection the path
 passes through, outermost first. For a row rendered as
 `<ul>{items.map((item) => <li onClick={select({ item })} />)}</ul>` at the
 root of the tree, the path is
-`["$UI", "children", "*", "props", "onClick"]`: the assembled array is a
-spread child, and the positions from a spread on are at `children/*`
-(section 3.4). For a callback that returns a tag,
+`["$UI", "children", "0", "*", "props", "onClick"]`: by ruling the
+assembled array is one child, here the first, and its elements are at
+`children/0/*` (section 3.4). For a callback that returns a tag,
 `<ul>{items.map((item) => <Row item={item} />)}</ul>`, a stream at
 `props/onClick` of the root of the tree of `Row` has the path
-`["$UI", "children", "*", "$UI", "props", "onClick"]`, by the second rule
-for a `site` step above. The `*` of each of the two paths is of kind
+`["$UI", "children", "0", "*", "$UI", "props", "onClick"]`, by the
+second rule for a `site` step above. The `*` of each of the two paths is of kind
 `element` ("What a `*` of a result path stands for", below).
 
 **A path through a collection the binding is not within.** A `*` of a
@@ -1652,14 +1658,14 @@ a `within` step"), and the compiler owes the following.
   defect of the compiler under this rule. In the prototype's corpus
   run, while its compiler listed no path for them, 13 stored positions
   held the stream of a binding at a position no listed path named: 6 of
-  a member written after a spread among the children of a view node,
+  a child written after a collection among the children of a view node,
   and 7 of a stream inside a value that the elements of a collection
   hold, read as `entry.node`. At 208 more positions of the second kind,
   read as `example[UI]`, the run stored a record in the place of the
   stream, and no count held them (`execution-and-storage.md` §2.2).
   Under the check 12 evaluations in 8 modules failed. With a path
-  listed for each kind, by the rules above for a member written after a
-  spread and for a member of an element, no evaluation of the run
+  listed for each kind, by the rules for a child written after a
+  collection and for a member of an element, no evaluation of the run
   fails.
 - **No path at which no selection stores the stream.** The check is of
   the markers a run stores, so it does not find a listed path that
@@ -1716,7 +1722,8 @@ without the listed path each fails at the first element.
 `Binding.result` can stand for four things: the positions of a
 collection for whose keys the binding has an `element` step; every
 position of a collection whose callback writes the stream of an outer
-binding; the one position of a member written after a spread; or the
+binding; the one position of a member written after a spread in an
+array value; or the
 one element that holds the stream inside a value ("The stream is
 reached through a member of the element", above). By ruling the path
 states which: the entry has, for each `*` of its path and in the order
@@ -1731,9 +1738,11 @@ ruling.
   position of an element of the collection, and not at a member
   written beside the collection in the same array. At a `*` of kind
   `member` it is accepted at the position of that member, and not at a
-  position of a collection spread before it. The runtime knows which
-  stored position is which from how it assembled the array (section
-  3.6).
+  position of a collection spread before it. For an array value with a
+  spread the runtime knows which stored position is which from how it
+  assembled the array (section 3.6). Among the children of a view node
+  each collection is the child at its own position, so the path names
+  the collection.
 - **A reader that has the plan resolves the path.** For kind `element`
   it chooses the position that holds the key whose stream it wants.
   For kind `every` it chooses any position of the collection. For kind
@@ -1751,44 +1760,59 @@ that passes one on (`Output.passesCollection`), a `*` is of kind
 `element` where the binding has the `element` step of the collection
 whose keys the result has (section 1.3).
 
-*Assumed* (section 8, question 78), since the ruling is on the kind and
-no other rule of the documents says how a kind is counted to a stored
-position:
+*Assumed* (section 8, question 78), except where an item names a
+ruling, since the ruling on the kinds does not say how a kind is
+counted to a stored position:
 
-- **From a path to a position.** This is the rule of the compiled path,
-  for the layout it stores (`execution-and-storage.md` §4.2). Where the
-  runtime stores the same positions today is in section 3.1 ("A binding
-  with a `within` step"), and the two differ. The stored path has, in
-  the place of each `*`, the index of the position in the stored
-  array. For a `*` that stands for a collection that is the index of
-  the element in the collection, plus the number of positions stored
-  before the collection's first element: the members written before
-  the spread, and the elements of the collections spread before it.
-  For a `*` of kind `member` it is the number of positions stored
-  before the member. The path does not hold those numbers, because
-  every position from the first spread on is at `*` (section 3.4).
-  The runtime knows them from how it assembled the array.
+- **From a path to a position, among the children of a view node.** By
+  ruling a collection among the children is one nested child
+  (section 3.4, `execution-and-storage.md` §4.2). The stored path has,
+  in the place of a `*` that stands for the collection, the index of
+  the element in the collection, below the static child position of
+  the collection: element `i` of a collection that is child `k` is at
+  `children/k/i`. A child written after the collection is at a static
+  position and has no `*`. Two collections among the children of one
+  node are two child positions, so the `*` of each binding's path
+  names its own collection by the position before it, and a reader
+  that has the plan alone resolves it. The runtime of today stores a
+  `map` over a cell at the same positions (section 3.1, "A binding
+  with a `within` step"). This is the same whether the collection is
+  over an array of references, over an array of plain values in place,
+  or the result of another per-element construct.
+- **From a path to a position, in an array value with a spread.** An
+  array that the author writes with a spread outside the children of a
+  view node, as `[head, ...xs, tail]`, is stored flat (section 3.4),
+  and every position from the first spread on is at `*`. The stored
+  path has, in the place of a `*` that stands for a collection, the
+  index of the element in the collection plus the number of positions
+  stored before the collection's first element: the members written
+  before the spread, and the elements of the collections spread before
+  it. For a `*` of kind `member` it is the number of positions stored
+  before the member. The path does not hold those numbers. The runtime
+  knows them from how it assembled the array.
 - **The `index` of kind `member`.** The kind alone does not say which
   member a `*` stands for where several members are written after a
   spread. *Assumed:* the kind holds the number of entries, members and
   spreads, written before the member. A reader then finds the
   position by adding one for each member written before it and the
-  length of each collection spread before it.
-- **Two collections spread into one array of children.** The path is a
-  result path of each binding all the same: the instance stores the
-  links at those positions, and section 3.4 gives each the path
-  `children/*`. The `*` of each binding's path is of kind `element`
-  or `every` and stands for the positions of its own collection alone.
-  The kind does not say which of the two collections that is, and the
-  path does not hold the length of a collection spread before it. The
-  runtime knows both from how it assembled the array (section 3.6). A
-  reader that has the plan alone has them only where it can name the
-  collections that the array is written with and read their lengths.
-  The alternative gives a `*` that stands for a collection the same
-  `index` that kind `member` has, so that the entry names the spread.
-  This is the same whether a collection that is spread is over an
-  array of references, over an array of plain values in place, or the
-  result of another per-element construct.
+  length of each collection spread before it. The kind remains only
+  for such an array value. Whether it remains at all is not ruled.
+- **Two collections spread into one array value.** For
+  `[...as.map(f), ...bs.map(g)]` written as a value outside the
+  children of a view node, the `*` of each binding's path is of kind
+  `element` or `every` and stands for the positions of its own
+  collection alone. The kind does not say which of the two
+  collections that is, and the path does not hold the length of a
+  collection spread before it. The runtime knows both from how it
+  assembled the array (section 3.6). A reader that has the plan alone
+  has them only where it can name the collections that the array is
+  written with and read their lengths. Open (section 8, question 78):
+  which collection such a `*` stands for. The alternative gives a `*`
+  that stands for a collection the same `index` that kind `member`
+  has, so that the entry names the spread. This is the same whether a
+  collection that is spread is over an array of references, over an
+  array of plain values in place, or the result of another
+  per-element construct.
 - **From a position to a stream.** The link stored there is to the stream
   of the binding for the element key at that position: the stream named
   by the binding's `name` and `within`, with that key at the `element`
@@ -4491,23 +4515,24 @@ expected. Sixteen more rules fix what a row of the comparison is.
   no step. Three things differ, and each is where the run of today
   stores something, not what a template holds.
   - **Where the stream is.** A scenario sends an event to the stream
-    that a link at a path of `Binding.result` leads to. The rule of
-    section 1.1, "From a path to a position", is for the layout of the
-    compiled path. The runtime does not store the children of a view
-    node that way. The JSX factory flattens the children it is given
+    that a link at a path of `Binding.result` leads to. For a
+    collection among the children of a view node the compiled path
+    and the runtime store the same positions (section 1.1, "From a
+    path to a position, among the children of a view node"). The JSX
+    factory flattens the children it is given
     when the pattern is built (`children.flat()` in `h` in
     `runtime/runner/src/builder/h.ts`). The result of a `map` over a
     cell is no array at that time, so it is one child, at the position
     the expression is written at, and the stored child holds the
     assembled array. The stream of element `i` is then at
     `children/k/i` followed by the rest of the path, where `k` is the
-    position of that child, and not at `children/*` counted from the
-    spread. A `map` over a constant array of the module is evaluated
-    when the pattern is built, its result is an array, and its elements
-    are stored in place among the children, at the positions section
-    1.1 gives. The path does not hold the number of children written
-    before them (section 1.1), so a harness that has the plan and the
-    stored tree alone sends such a binding no event. At a child
+    position of that child. One case differs. A `map` over a constant
+    array of the module is evaluated
+    when the pattern is built, its result is an array, and the runtime
+    stores its elements in place among the children, each as a child of
+    its own, where the compiled path stores the collection as one
+    child. A harness that reads the run of today resolves a path of
+    such a binding at the children themselves. At a child
     position that holds the result of a pattern, the runtime's path has
     `$UI` after the position, by the rule above for such a position. A
     path below a `select` holds no stream while another branch is
@@ -5074,9 +5099,10 @@ spread operand at `*`, of the templates of the members written after the
 first spread, and of the array's `enumeration`, which says where each
 landed. An element that comes from a spread operand is passed by
 reference. A spread of a value of tuple type has static positions and is
-the members written out. A spread attribute and a spread child in JSX
-(`language-subset.md` §4.5) are a spread in the object literal of the
-attributes and in the array literal of the children.
+the members written out. A spread attribute in JSX
+(`language-subset.md` §4.5) is a spread in the object literal of the
+attributes. The children of a view node are not such an array literal:
+a collection among them is one child ("A JSX element", below).
 
 **A hole.** `[a, , b]` has a constant key set. The position of the hole
 holds nothing, has no template, and contributes nothing to a `fold` over
@@ -5100,13 +5126,23 @@ constants, `props`, the object literal of the attributes, and `children`,
 the array literal of the children. So the template of the path
 `props/title` of an element is the template of the expression written
 at the attribute `title`, and the template of `children/0` is that of
-the first child. A child whose type is an array, the assembled result of
-a `map` among them, is a spread child: its elements are stored among the
-children, and the rule for a spread in an array literal gives the
-positions from it on. That is the layout of the compiled path. The
-factory flattens the arrays it is given when the pattern is built, and
-the result of a `map` over a cell is no array then, so the runtime
-stores it as one child (section 3.1, "A binding with a `within` step").
+the first child. By ruling a collection among the children, the
+assembled result of a `map` among them, is stored as one nested child,
+as the runtime of today stores the result of a `map`: the collection
+is the child at the position `n` it is written at, whether it is
+written as an expression or as a spread child, and the template of
+`children/<n>/*` is that of its elements (section 3.6). The children
+array is not stored flat, so every child has a static position, a
+child written after a collection included, and two collections among
+the children of one node are two child positions. The rule is the
+same for a collection over an array of references, over an array of
+plain values in place, and over the result of another per-element
+construct. An array literal that the author writes among the children
+is no collection: its members are written out among the children when
+the tree is built, each at a child position of its own, as the JSX
+factory does today (`children.flat()` in `h`). The runtime of today
+stores the same paths for a `map` over a cell (section 3.1, "A binding
+with a `within` step").
 A fragment is the same record with the fragment's
 name. The rendered tree under `$UI` is such a construction, and its paths
 are these.
@@ -10865,7 +10901,8 @@ this document made.
     writes a `select`, a `pick` or a per-element output over such a
     value once per path. The rendered tree under `$UI` then has the
     paths of its view nodes, `props/<attribute>` and `children/<n>`,
-    and a child that is an array is a spread child. *Assumed.* That the
+    and by ruling a collection among the children is the one child at
+    its position, with its elements at `children/<n>/*`. *Assumed.* That the
     value has no one template for the whole follows from "equal to or
     tighter". What is assumed is how fine the entries are and that the
     paths of a view node are part of the plan. In the corpus about a
@@ -11286,31 +11323,43 @@ this document made.
     after a spread at the position of an element, and a reader does
     not send an event for such a binding to the stream of an element,
     as the harness of the prototype's comparison did. The prototype's
-    plans do not hold the kinds. *Assumed,* as section 1.1 has it,
-    since the ruling is on the kind: the path has `*` at the position
+    plans hold the kinds: of the 1,420 listed paths of its 382 corpus
+    patterns, 448 have a `*`, and their 476 `*` are 215 `inside`, 207
+    `element`, 51 `member` and 3 `every`, counted with the children of
+    a view node stored flat. Not open either, by ruling: a
+    collection among the children of a view node is stored as one
+    nested child, so its elements are at `children/<n>/*`, a child
+    written after it has a static position and no `*`, and two
+    collections among the children of one node are two child
+    positions, each named by the path (section 3.4). *Assumed,* as
+    section 1.1 has it: the path has `*` at the position
     of each enclosing collection, as the path of a per-element output
-    has; the stored path has the index of the position in the stored
-    array, counted after the positions stored before the collection or
-    the member; the link there is to the stream of the element key at
+    has; the link there is to the stream of the element key at
     that position; and a binding whose stream is at no kept path of
     what the callback returns has no `result` path. Section 1.4 and
     the view-node paths of section 3.4 give the form of the path.
-    *Assumed* with it: kind `member` holds the number of entries
-    written before the member (`index`), because the kind alone does
-    not say which of several members written after a spread is meant.
-    Open: the entry does not hold the number of positions stored
-    before a spread, and where two collections are spread into one
-    array a `*` of kind `element` or `every` does not say which of
-    them it stands for. The runtime knows both from how it assembled
+    Kind `member` remains for an array value that the author spreads
+    into outside the children of a view node, as `[...xs, x]`, unless
+    a ruling removes it. *Assumed* for such a value: the array is
+    stored flat; the stored path has the index of the position in the
+    stored array, counted after the positions stored before the
+    collection or the member; and kind `member` holds the number of
+    entries written before the member (`index`), because the kind
+    alone does not say which of several members written after a
+    spread is meant.
+    Open, for such a value alone: the entry does not hold the number
+    of positions stored before a spread, and in
+    `[...as.map(f), ...bs.map(g)]` a `*` of kind `element` or `every`
+    does not say which of the two collections it stands for. The
+    runtime knows both from how it assembled
     the array, and a reader that has the plan alone does not. The
     alternative gives a `*` that stands for a collection the `index`
-    of its spread as well. `execution-and-storage.md` and
+    of its spread as well, or stores each spread collection of an
+    array value nested, as among children. `execution-and-storage.md` and
     `scheduler-and-serving-loop.md` have to agree, since a client
     resolves the same path to send an event. A position below a
     `select` is a result path and holds the stream under one branch
-    only. The prototype lists a path for a member written after a
-    spread and for a binding of two collections spread into one array,
-    in the children of a view node and in an array literal. Not
+    only. Not
     verified: that the prototype can form the
     address of a state cell that a pattern compiled into an element body
     declares, which a write edge of a handler bound in such a pattern

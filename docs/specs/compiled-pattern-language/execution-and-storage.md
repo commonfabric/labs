@@ -916,8 +916,8 @@ stream of a handler, as a rendered tree does at an event attribute.
 `plan-and-label-templates.md` §1.1 lists those positions in
 `Binding.result`, because the instance has to store a link to the stream
 there. The runtime cannot place a stream from the listed paths alone: a
-path with `*` among the children of a view node holds the kind of the
-`*` and not the positions it stands for (its §8, question 78), and a
+path with `*` holds the kind of the `*` and not which position holds
+which element key (its §8, question 78), and a
 path below a conditional holds the stream under one selection only. By
 ruling the value function places the stream, and the runtime checks
 where.
@@ -949,9 +949,14 @@ where.
   position of a collection, or for the one element that holds the
   stream inside a value, it is accepted at the position of an element
   of that collection. At a `*` for a member written after a spread it
-  is accepted at the position of that member. The runtime knows which
-  stored position is an element of which collection, and which is a
-  member written beside them, from how it assembled the array. The
+  is accepted at the position of that member. That kind arises only in
+  an array value that the author spreads into outside the children of
+  a view node, as `[...xs, x]`: among the children of a view node a
+  collection is one child position (section 4.2), so a child written
+  after it has a static path. For such an array value the runtime
+  knows which stored position is an element of which collection, and
+  which is a member written beside them, from how it assembled the
+  array. The
   kinds are the same over an array of references, over an array of
   plain values in place, and over the result of another per-element
   construct. A path below a conditional matches under either
@@ -1014,7 +1019,7 @@ positions that no listed path named were these.
 
 | Kind | Positions | Bindings | Under the rules |
 | --- | ---: | ---: | --- |
-| A member written after a spread among the children of a view node | 6 | 3 | The compiler owes the path (`plan-and-label-templates.md` §1.1, "From a path to a position") |
+| A child written after a collection among the children of a view node | 6 | 3 | The compiler owes the path, which has a static position (section 4.2) |
 | A stream inside a value that the elements of a collection hold, read as `entry.node` | 7 | 5 | The compiler owes the path, as assumed (its §8, question 84) |
 | The same, read as `example[UI]`, where that run stored a record in the place of the stream | 208 | 208 | The same |
 | A stream that is an input of the pattern | 2 | 0 | No binding's stream; not checked |
@@ -1027,7 +1032,7 @@ are 5 positions of a stream that no marker stands for. With the marker
 and the check, and before the prototype's compiler listed the paths of
 the first three rows, 12 evaluations in 8 modules failed. The compiler
 lists them, and none fails. The first row is the same whether the
-collection spread before the member is over an array of references, over
+collection written before the child is over an array of references, over
 an array of plain values in place, or the result of another per-element
 construct. The second and third rows are of an array of plain values in
 place and of the result of another per-element construct, and do not
@@ -2787,21 +2792,34 @@ the key `$UI` of the result, the string the API's `UI` constant holds
 factory returns (`h` in `runtime/runner/src/builder/h.ts`), and it is
 stored with the paths of that record: `type` and `name`, which are
 constants, `props/<attribute>` for the value of each attribute, and
-`children/<n>` for the child at position `n`. A child that is an array,
-the assembled result of a `map` among them, is flattened into the
-children, so the positions from it on are data and their path is
-`children/*`. These are the paths `plan-and-label-templates.md` §3.4
+`children/<n>` for the child at position `n`. By ruling a collection
+among the children of a view node, the assembled result of a `map`
+among them, is stored as one nested child, as the runtime of today
+stores the result of a `map`: the collection is the child at the
+position `n` it is written at, and its elements are at
+`children/<n>/*`. The children array is not stored flat. A child
+written after the collection is at the static position that follows
+it, and two collections among the children of one node are two child
+positions. That holds for a collection over an array of references,
+over an array of plain values in place, and over the result of
+another per-element construct. An array literal that the author
+writes among the children is not such a collection: its members are
+written out among the children when the tree is built, as the JSX
+factory does today (`children.flat()` in `h`), and each has a child
+position of its own. These are the paths
+`plan-and-label-templates.md` §3.4
 gives the entries of `Plan.outputs` for a JSX element, and the paths a
 label entry, a provenance record and a split point of section 4.10 are
 named by. `Binding.result` of that document's §1.1 names by the same
 paths the positions at which the instance stores a link to a binding's
 stream: an event attribute of the first child of the root is
 `$UI/children/0/props/onClick`. For a binding in an element body the
-path has `*` at the position of each enclosing collection, as
-`$UI/children/*/props/onClick` for a row of a `map` spread into the
-root's children, and the link stored at each position is to the stream
-of the element key there (that document's §1.1, "The result paths of a
-binding in an element body", assumed there under its question 78). The
+path has `*` at the position of each enclosing collection, below the
+child position of that collection, as
+`$UI/children/0/*/props/onClick` for a row of a `map` that is the
+first child of the root, and the link stored at each position is to
+the stream of the element key there (that document's §1.1, "The result
+paths of a binding in an element body"). The
 value function puts the marker of `host.stream` at the position, and the
 runtime stores the link in its place and checks the position against
 these paths (section 2.2).
@@ -2811,9 +2829,9 @@ link to it. A child position whose value is the result of a pattern
 compiled into the plan holds the callee's tree in place, with no `$UI`
 level between the position and the tree's paths (its §1.1). An element
 of an assembled collection is no child position, also where the
-collection is spread into the children: where the callback returns the
+collection is a child of a view node: where the callback returns the
 result of a pattern, the element is that result, with the callee's tree
-below `$UI`, as `$UI/children/*/$UI/props/onClick`. That document
+below `$UI`, as `$UI/children/0/*/$UI/props/onClick`. That document
 assumes them
 (its §8, question 53: how fine the entries are, and that the paths of a
 view node are part of the plan),

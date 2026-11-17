@@ -1467,6 +1467,22 @@ is relitigated.
   (`ResultPath.stars`). The same over an array of references, over an
   array of plain values in place, and over the result of another
   per-element construct.
+- A collection among the children of a view node is stored as one
+  nested child, as the runtime of today stores the result of a `map`.
+  The collection is the child at the position `n` it is written at,
+  and its elements are at `children/<n>/*`. The children array is not
+  stored flat. A child written after the collection has a static
+  position, and two collections among the children of one node are
+  two child positions, so each `*` names its collection by the
+  position before it. The paths of `Plan.outputs`, of label entries,
+  of provenance records, of split points and of `Binding.result`
+  follow. An array literal that the author writes among the children
+  is still written out among them when the tree is built. The kind
+  `member` of a `*` remains only for an array value that the author
+  spreads into outside the children of a view node. The same for a
+  collection over an array of references, over an array of plain
+  values in place, and over the result of another per-element
+  construct.
 - Where a marker stands at a position that no listed path covers, the
   evaluation that fails is the one that stores the value, and not the
   one that called `host.stream`. The output that holds the position
@@ -2353,16 +2369,26 @@ as an assumption.
     member written after a spread, and `inside` for the one element
     that holds the stream inside a value (question 130). The check
     accepts a marker only at a position of the stated kind, and a
-    reader with the plan resolves the path by it. *Assumed* beside the
-    ruling: a `*` at the position of each enclosing collection; and
-    kind `member` holds the number of entries written before the
-    member, since the kind alone does not say which of several
-    members is meant. Open: two collections spread into one array of
-    children are not told apart by a `*` of kind `element` or `every`,
-    and the entry does not hold the number of positions stored before
-    a spread. *Assumed:* the runtime knows both from how it assembled
-    the array. The alternative gives such a `*` the ordinal of its
-    spread. The prototype's plans do not hold the kinds. The path
+    reader with the plan resolves the path by it. Settled by ruling
+    as well: a collection among the children of a view node is one
+    nested child, with its elements at `children/<n>/*`, so two
+    collections among the children of one node are told apart by
+    their child positions, and a child written after a collection has
+    a static position ([Decided](#decided)). *Assumed* beside the
+    rulings: a `*` at the position of each enclosing collection; and
+    kind `member`, which remains only for an array value that the
+    author spreads into outside the children of a view node, holds
+    the number of entries written before the member, since the kind
+    alone does not say which of several members is meant. Open, for
+    such an array value alone: in `[...as.map(f), ...bs.map(g)]` the
+    two collections are not told apart by a `*` of kind `element` or
+    `every`, and the entry does not hold the number of positions
+    stored before a spread. *Assumed:* the runtime knows both from
+    how it assembled the array. The alternative gives such a `*` the
+    ordinal of its spread, or stores each spread collection of an
+    array value nested as well. Whether kind `member` remains at all
+    is not ruled. The prototype's plans hold the kinds, counted with
+    the children stored flat (prototype note 372). The path
     names a position of the stored result, so the rule and what is
     open are the same over an array of references, an array of plain
     values in place, and the result of another per-element construct;
