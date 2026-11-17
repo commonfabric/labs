@@ -2088,10 +2088,11 @@ export class Scheduler {
   /**
    * Whether an action registered here, other than the one `tx` runs, declares
    * a write to some instance of `address`'s document, at any scope, and has
-   * not yet run for the instance `tx` reads: the instance its run identity
-   * resolves to on a fanned-out writer, and any instance on a writer that is
-   * not fanned out. A writer that has run for that instance and left it absent
-   * has produced it, and its value is `undefined`.
+   * not yet produced the instance `tx` reads: no run of it for that instance
+   * (the one its run identity resolves to on a fanned-out writer, any on a
+   * writer that is not fanned out) has finished without being withdrawn. A
+   * writer whose run finished and left the instance absent has produced it,
+   * and its value is `undefined`; one whose run was withdrawn has not.
    *
    * The lookup spans every scope because the write index keys a derivation by
    * its declared scope, while a JavaScript derivation writes its output at the
@@ -2110,7 +2111,7 @@ export class Scheduler {
         entityNameKey({ ...address, scope }),
       );
       for (const writer of writers ?? []) {
-        if (writer !== reader && !this.#hasRunForInstance(writer, identity)) {
+        if (writer !== reader && !this.#hasProducedInstance(writer, identity)) {
           return true;
         }
       }
@@ -2119,17 +2120,17 @@ export class Scheduler {
   }
 
   /**
-   * Whether `action` has finished a run for the instance `identity` resolves
-   * to: on a fanned-out node, a run of that instance at the current ratchet;
-   * on any other, a run at all.
+   * Whether `action` has produced the instance `identity` resolves to: a run of
+   * it finished without being withdrawn, for that instance at the current
+   * ratchet on a fanned-out node, and at all on any other.
    */
-  #hasRunForInstance(action: Action, identity: ScopeKeyIdentity): boolean {
+  #hasProducedInstance(action: Action, identity: ScopeKeyIdentity): boolean {
     const node = this.#nodes.get(action);
     if (node === undefined) return false;
-    if (node.fanOut === undefined) return node.status !== "never-ran";
+    if (node.fanOut === undefined) return node.produced === true;
     const key = keyAtRatchet(node.fanOut, identity);
     return key !== undefined &&
-      node.fanOut.instances.get(key)?.log !== undefined;
+      node.fanOut.instances.get(key)?.produced === true;
   }
 
   /**

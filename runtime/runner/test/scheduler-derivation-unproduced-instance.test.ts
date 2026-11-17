@@ -14,7 +14,8 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 /**
  * A runtime whose storage manager serves its signer's space when `serving`
  * is set, as a serving runtime's does, and a client runtime otherwise.
- * `holder` holds, at `state`, a link to `state`, a user-scoped document.
+ * `holder` holds, at `state`, a link to `state`, a user-scoped document, and
+ * at `upstream`, a link to `upstream`, another.
  */
 async function fixture(name: string, serving: boolean) {
   const signer = await Identity.fromPassphrase(`unproduced instance ${name}`);
@@ -35,7 +36,14 @@ async function fixture(name: string, serving: boolean) {
     undefined,
     "user",
   );
-  const holder = runtime.getCell<{ state?: unknown }>(
+  const upstream = runtime.getCell<string>(
+    space,
+    `unproduced-instance-upstream-${name}`,
+    undefined,
+    undefined,
+    "user",
+  );
+  const holder = runtime.getCell<{ state?: unknown; upstream?: unknown }>(
     space,
     `unproduced-instance-holder-${name}`,
   );
@@ -44,7 +52,10 @@ async function fixture(name: string, serving: boolean) {
     `unproduced-instance-output-${name}`,
   );
   const seed = runtime.edit();
-  holder.withTx(seed).set({ state: state.getAsLink() });
+  holder.withTx(seed).set({
+    state: state.getAsLink(),
+    upstream: upstream.getAsLink(),
+  });
   output.withTx(seed).set("as it was");
   expect((await seed.commit().settled).error).toBeUndefined();
 
@@ -97,10 +108,11 @@ async function fixture(name: string, serving: boolean) {
      * of `state`'s document at the user instance and leaves that instance
      * absent. Waits for it to settle.
      */
-    async runEmptyWriter() {
+    async runEmptyWriter(options: { readsUpstream?: boolean } = {}) {
       const user = state.getAsNormalizedFullLink();
       const slot = { ...user, scope: "space" as const };
       const writer = (tx: IExtendedStorageTransaction) => {
+        if (options.readsUpstream) holder.withTx(tx).key("upstream").get();
         tx.writeValueOrThrow(
           slot,
           createSigilLinkFromParsedLink(user, {
@@ -117,6 +129,18 @@ async function fixture(name: string, serving: boolean) {
       await runtime.scheduler.run(writer);
       await runtime.idle();
       await storage.synced();
+    },
+
+    /**
+     * Registers a derivation that declares a write to `upstream` and never
+     * produces it.
+     */
+    registerUpstreamWriter() {
+      runtime.scheduler.subscribe(() => {}, {
+        reads: [],
+        shallowReads: [],
+        writes: [toMemorySpaceAddress(upstream.getAsNormalizedFullLink())],
+      });
     },
 
     /**
@@ -233,6 +257,24 @@ describe("scheduler-derivation-unproduced-instance", () => {
 
       expect(f.consumerRuns()).toBe(1);
       expect(f.output.get()).toBe("derived from nothing");
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("commits nothing from a served derivation that read a scoped instance whose writer's run was withdrawn for reading one not yet produced", async () => {
+    // A writer whose run was withdrawn has not produced its instance: what it
+    // left absent is not its output, so the reader waits as for one that has
+    // not run.
+
+    const f = await fixture("withdrawn-writer", true);
+    try {
+      f.registerUpstreamWriter();
+      await f.runEmptyWriter({ readsUpstream: true });
+      await f.runConsumer();
+
+      expect(f.consumerRuns()).toBe(1);
+      expect(f.output.get()).toBe("as it was");
     } finally {
       await f.close();
     }
