@@ -165,6 +165,7 @@ import {
 } from "../space-host.ts";
 import type { RuntimeTelemetryMarker } from "../telemetry.ts";
 import { combineOptionalSchema, isUnknownCellSchema } from "../traverse.ts";
+import { AddressInterner } from "./address-intern.ts";
 import { recordCommitElisions } from "./commit-elision.ts";
 import { recordCommitLocalSeq, recordCommitSeq } from "./commit-identity.ts";
 import * as Differential from "./differential.ts";
@@ -2101,6 +2102,8 @@ export class StorageManager implements IStorageManager {
    */
   #cfcSchemaDocumentSyncer: CfcSchemaDocumentSyncer | undefined = undefined;
 
+  #addressInterner = new AddressInterner();
+
   /**
    * Attach the runtime's telemetry bus so replicas can emit the
    * `storage.push/pull.*` markers. Late-bound and optional: the manager is
@@ -2231,6 +2234,11 @@ export class StorageManager implements IStorageManager {
           undefined,
         ),
     };
+  }
+
+  /** @inheritDoc */
+  get addressInterner(): AddressInterner {
+    return this.#addressInterner;
   }
 
   /**

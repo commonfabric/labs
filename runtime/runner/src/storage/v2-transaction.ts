@@ -51,6 +51,7 @@ import {
 } from "../../../memory/v2/path.ts";
 import type { CellScope } from "../builder/types.ts";
 import { normalizeCellScope } from "../scope.ts";
+import { AddressInterner } from "./address-intern.ts";
 import { getCommitLocalSeq, getCommitSeq } from "./commit-identity.ts";
 import { createTransactionCommitReceipt } from "./commit-receipt.ts";
 import { diagnosticPrefix, type PendingCommitContext } from "./diagnostics.ts";
@@ -199,17 +200,17 @@ type WritableDocumentEntry = {
   displaced?: DisplacedRoot[];
 
   /**
-   * The paths this transaction's writes to the document report for
-   * reactivity, from `buildReactivityPathsForChanges()`, kept so that every
-   * build of the reactivity log during one commit shares them. They depend
-   * only on `initial`, `current` and `patchDetails`, so a read leaves them
-   * standing. `V2StorageTransaction.#invalidateWrittenState()` drops them
-   * wherever `current` or `patchDetails` may change: ahead of every in-place
-   * write to the working root, which all go through
+   * The log addresses this transaction's writes to the document report for
+   * reactivity, at the paths `buildReactivityPathsForChanges()` finds, kept
+   * so that every build of the reactivity log during one commit shares them.
+   * They depend only on `initial`, `current` and `patchDetails`, so a read
+   * leaves them standing. `V2StorageTransaction.#invalidateWrittenState()`
+   * drops them wherever `current` or `patchDetails` may change: ahead of every
+   * in-place write to the working root, which all go through
    * `V2StorageTransaction.#writeWorkingRoot()`, and wherever the root or the
    * recorded patch details are replaced.
    */
-  reactivityPaths?: readonly (readonly string[])[];
+  reactivityWrites?: readonly IMemorySpaceAddress[];
 
   // Mergeable-write intents recorded by recordMergeableOp, keyed by document
   // path. The commit emits these as the corresponding mergeable op (which the
@@ -1104,6 +1105,17 @@ export class V2StorageTransaction implements IStorageTransaction {
 
   #branches = new Map<MemorySpace, SpaceBranch>();
   #readActivities: IReadActivity[] = [];
+
+  /**
+   * The log address of each read in `#readActivities`, at the same index, so
+   * that a log rebuilt after a later write takes each read's address from
+   * here rather than from the interner again. Cleared with the reads. The
+   * scope-key identity `#instanceOf()` resolves against cannot change under
+   * it: every recorded read loads its document first, and once one has loaded
+   * the `scopeKeyIdentity` setter refuses a new identity.
+   */
+  #readAddresses: (IMemorySpaceAddress | undefined)[] = [];
+
   #potentiallyExternalReadActivities: IReadActivity[] = [];
 
   /**
@@ -1239,6 +1251,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     this.#state = { status: "done", result };
     this.#branches.clear();
     this.#readActivities.length = 0;
+    this.#readAddresses.length = 0;
     this.#potentiallyExternalReadActivities.length = 0;
     this.#writeAttemptLog.length = 0;
     this.#reactivityLogCache = undefined;
@@ -1247,9 +1260,16 @@ export class V2StorageTransaction implements IStorageTransaction {
   }
 
   readonly #storage: IStorageManager;
+  readonly #addressInterner: AddressInterner;
 
+  /**
+   * Constructs an instance on `storage`, whose address interner the
+   * reactivity log takes its entries from. A manager without one gets an
+   * interner of this transaction's own.
+   */
   constructor(storage: IStorageManager) {
     this.#storage = storage;
+    this.#addressInterner = storage.addressInterner ?? new AddressInterner();
   }
 
   setReadOnly(reason = "runtime.readTx()"): void {
@@ -3614,12 +3634,12 @@ export class V2StorageTransaction implements IStorageTransaction {
 
   /**
    * Drops what the reactivity log derives from `doc`'s written state: the
-   * paths kept on the document, and the log built from them. Called by
+   * addresses kept on the document, and the log built from them. Called by
    * `#writeWorkingRoot()` ahead of every in-place write to the working root,
    * and wherever the root or the recorded patch details are replaced.
    */
   #invalidateWrittenState(doc: WritableDocumentEntry): void {
-    doc.reactivityPaths = undefined;
+    doc.reactivityWrites = undefined;
     this.#invalidateReactivityLog();
   }
 
@@ -3665,20 +3685,21 @@ export class V2StorageTransaction implements IStorageTransaction {
     const shallowReads: IMemorySpaceAddress[] = [];
     let attemptedWrites: IMemorySpaceAddress[] | undefined;
 
-    for (const read of this.#readActivities) {
+    for (let index = 0; index < this.#readActivities.length; index++) {
+      const read = this.#readActivities[index];
       const meta = read.meta ?? EMPTY_META;
       const ignored = isReadIgnoredForScheduling(meta);
       const attempted = isReadMarkedAsAttemptedWrite(meta);
       if (ignored && !attempted) continue;
 
-      const instance = this.#instanceOf(read.scope);
-      const address = {
-        space: read.space,
-        scope: read.scope,
-        id: read.id,
-        ...(instance !== undefined ? { scopeKey: instance } : {}),
-        path: read.path,
-      };
+      const address = this.#readAddresses[index] ??= this.#addressInterner
+        .address(
+          read.space,
+          read.scope,
+          read.id,
+          this.#instanceOf(read.scope),
+          read.path,
+        );
 
       if (attempted) {
         attemptedWrites ??= [];
@@ -3699,22 +3720,18 @@ export class V2StorageTransaction implements IStorageTransaction {
           continue;
         }
 
-        const { id, scope } = this.#parseDocKey(key);
-        const instance = this.#instanceOf(scope);
-        doc.reactivityPaths ??= buildReactivityPathsForChanges(
-          doc.initial.value,
-          doc.current.value,
-          doc.patchDetails.values().map((detail) => detail.address.path),
-        );
-        for (const path of doc.reactivityPaths) {
-          writes.push({
-            space,
-            scope,
-            id,
-            ...(instance !== undefined ? { scopeKey: instance } : {}),
-            path,
-          });
+        if (doc.reactivityWrites === undefined) {
+          const { id, scope } = this.#parseDocKey(key);
+          const instance = this.#instanceOf(scope);
+          doc.reactivityWrites = buildReactivityPathsForChanges(
+            doc.initial.value,
+            doc.current.value,
+            doc.patchDetails.values().map((detail) => detail.address.path),
+          ).map((path) =>
+            this.#addressInterner.address(space, scope, id, instance, path)
+          );
         }
+        for (const address of doc.reactivityWrites) writes.push(address);
       }
     }
 
