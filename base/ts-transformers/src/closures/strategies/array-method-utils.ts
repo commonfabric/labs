@@ -123,11 +123,22 @@ function buildElementBindingPlan(
       return factory.createObjectBindingPattern(elements);
     }
 
-    const newElements = node.elements.map((element) => {
+    const newElements = node.elements.map((element, index) => {
       if (ts.isOmittedExpression(element)) return element;
+      // A rest element holds the remaining items rather than one of them, so
+      // a pattern nested in it is read from the array itself.
       const clonedName = ts.isIdentifier(element.name)
         ? factory.createIdentifier(element.name.text)
-        : walk(element.name, path, template);
+        : element.dotDotDotToken
+        ? walk(element.name, path, template)
+        : walk(
+          element.name,
+          [...path, String(index)],
+          factory.createElementAccessExpression(
+            template ?? factory.createIdentifier("__cf_placeholder"),
+            factory.createNumericLiteral(index),
+          ),
+        );
       if (!clonedName && !element.dotDotDotToken) {
         return element;
       }

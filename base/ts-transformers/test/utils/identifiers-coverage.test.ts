@@ -38,7 +38,7 @@ Deno.test("isSafeIdentifierText rejects a reserved word", () => {
 });
 
 Deno.test(
-  "isSafeIdentifierText rejects a word strict-mode or module code reserves",
+  "isSafeIdentifierText rejects a word strict-mode or module code reserves or forbids binding",
   () => {
     const words = [
       "implements",
@@ -51,6 +51,8 @@ Deno.test(
       "static",
       "yield",
       "await",
+      "eval",
+      "arguments",
     ];
     expect(words.filter(isSafeIdentifierText)).toEqual([]);
   },

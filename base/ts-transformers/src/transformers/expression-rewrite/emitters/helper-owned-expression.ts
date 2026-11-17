@@ -1,12 +1,11 @@
 import ts from "typescript";
-import { getCellKind } from "@commonfabric/schema-generator/cell-brand";
 
 import {
   createReactiveWrapperForExpression,
   hasSyntheticComputeCallbackAncestor,
   isAlreadySyntheticComputeOwned,
 } from "../rewrite-helpers.ts";
-import { getGetCallReceiver } from "../../call-root-support.ts";
+import { isCellReadTerminalCall } from "../../call-root-support.ts";
 import {
   findPendingComputeWrapCandidate,
   isJsxLocalRewriteContainer,
@@ -19,20 +18,8 @@ function isHelperOwnedCellGetExpression(
   expression: ts.Expression,
   context: Parameters<Emitter>[0]["context"],
 ): expression is ts.CallExpression {
-  const receiver = ts.isCallExpression(expression)
-    ? getGetCallReceiver(expression)
-    : undefined;
-  if (!receiver) {
-    return false;
-  }
-
-  try {
-    const receiverType = context.checker.getTypeAtLocation(receiver);
-    const cellKind = getCellKind(receiverType, context.checker);
-    return cellKind === "cell" || cellKind === "stream";
-  } catch {
-    return false;
-  }
+  return ts.isCallExpression(expression) &&
+    isCellReadTerminalCall(expression, context);
 }
 
 interface RewriteHelperOwnedExpressionParams {

@@ -304,8 +304,32 @@ Deno.test("analyzeElementBinding drops nested object patterns that hold only a c
   );
   assertEquals(analysis.computedAliases.length, 1);
   assertEquals(analysis.computedAliases[0].aliasName, "chosen");
+  assertEquals(analysis.computedAliases[0].path, ["0"]);
   assert(analysis.destructureStatement);
   assert(boundNames(analysis.destructureStatement).includes("kept"));
+});
+
+Deno.test("analyzeElementBinding reads a computed key nested in an array element from that element", () => {
+  // `chosen` is `element[1][k]`: the alias's path and template both name the
+  // array index the pattern sits at.
+  const { sourceFile, checker } = createProgram(
+    "declare const k: string;\n" +
+      "const f = ([kept, { [k]: chosen }]) => chosen;",
+  );
+  const analysis = analyzeElementBinding(
+    firstArrowParam(sourceFile),
+    new Map(),
+    testContext(checker),
+    new Set<string>(),
+    passthroughBindingId,
+  );
+  assertEquals(analysis.computedAliases.length, 1);
+  const [alias] = analysis.computedAliases;
+  assertEquals(alias.path, ["1"]);
+  const template = alias.baseTemplate;
+  assert(template && ts.isElementAccessExpression(template));
+  assert(ts.isNumericLiteral(template.argumentExpression));
+  assertEquals(template.argumentExpression.text, "1");
 });
 
 Deno.test("analyzeElementBinding drops nested object patterns that hold only a computed key inside an object", () => {

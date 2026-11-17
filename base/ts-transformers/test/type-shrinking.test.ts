@@ -678,6 +678,27 @@ export default pattern<{ v: any }>(({ v }) => ({ m: l(v) }));`,
           await liftDiagnostics("", "(r: string[] & { x: string }) => r.x"),
         ).toEqual([]);
       });
+
+      it("reports nothing for a read of the array's own method", async () => {
+        expect(
+          await liftDiagnostics(
+            "",
+            "(r: { id: string }[] & { total: number }) => r.values",
+          ),
+        ).toEqual([]);
+      });
+
+      it("reports an element member the element does not declare, named like an array method", async () => {
+        expect(
+          await liftDiagnostics(
+            "",
+            "(r: { id: string }[] & { total: number }) => r.map((x) => x.values)",
+          ),
+        ).toEqual([
+          "Parameter 'r' accesses '.values' but type '{ id: string; }' does " +
+          "not include it. Add the missing property to the type.",
+        ]);
+      });
     });
   });
 

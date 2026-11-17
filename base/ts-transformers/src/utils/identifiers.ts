@@ -12,9 +12,10 @@ export interface UniqueIdentifierOptions extends SanitizeIdentifierOptions {
 }
 
 /**
- * Whether `name` can be written as an identifier anywhere in a module: an
- * identifier that is neither a reserved word nor one that strict-mode or
- * module code reserves, as `let`, `yield` and `await` are.
+ * Whether `name` can be written as an identifier anywhere in a module,
+ * binding positions included: an identifier that is neither a reserved word
+ * nor one that strict-mode or module code reserves, as `let`, `yield` and
+ * `await` are, nor `eval` or `arguments`, which strict code may not bind.
  */
 export function isSafeIdentifierText(name: string): boolean {
   if (name.length === 0) return false;
@@ -51,7 +52,8 @@ export function isSafeIdentifierText(name: string): boolean {
       ts.SyntaxKind.FirstFutureReservedWord,
       ts.SyntaxKind.LastFutureReservedWord,
     ) &&
-    token !== ts.SyntaxKind.AwaitKeyword;
+    token !== ts.SyntaxKind.AwaitKeyword &&
+    name !== "eval" && name !== "arguments";
 }
 
 export function sanitizeIdentifierCandidate(

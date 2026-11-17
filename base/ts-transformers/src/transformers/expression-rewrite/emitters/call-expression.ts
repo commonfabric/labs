@@ -182,13 +182,10 @@ function isCellGetTerminalCall(
     return false;
   }
 
-  try {
-    const receiverType = context.checker.getTypeAtLocation(receiver);
-    const cellKind = getCellKind(receiverType, context.checker);
-    return cellKind !== undefined;
-  } catch {
-    return false;
-  }
+  return getCellKind(
+    context.checker.getTypeAtLocation(receiver),
+    context.checker,
+  ) !== undefined;
 }
 
 export const emitCallExpression: Emitter = ({
