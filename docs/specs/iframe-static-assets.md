@@ -2,7 +2,7 @@
 
 ## Status
 
-Parts 1 to 5 are built. Part 6 is being built, and part 7 is proposed. The document covers files that ship with a pattern: images, fonts,
+Parts 1 to 6 are built, and part 7 is proposed. The document covers files that ship with a pattern: images, fonts,
 and audio. Files people add while using a pattern are out of scope.
 
 ## The problem
@@ -350,21 +350,30 @@ WebGL texture without an element.
 
 ## 6. The wrapper generator
 
-`scripts/write-iframe-wrapper.ts` bundles the guest, puts the bundle into the
-HTML document in place of a marker, and writes the whole document into the
-generated wrapper as one string literal, `GUEST_HTML`, passed as `src` with no
-`script`. That literal is not a `dataFile` string, so part 1 does not reach it,
-and each piece stores the whole guest. Ring Loops, in labs and in Loom, and
-three of Loom's foundation patterns are built this way.
+`scripts/write-iframe-wrapper.ts` writes the guest the way hand-written
+patterns hold it, so that part 1 reaches it. A string literal in the wrapper,
+which is how the guest could otherwise travel, is not a `dataFile` string, and
+each piece would store the whole guest. Ring Loops is built with the
+generator, in labs and in Loom, and so are three of Loom's foundation
+patterns.
 
-The generator changes in two ways:
-
-- It writes `guest.html` and the bundle as `guest.js` beside the wrapper, and
-  the wrapper reads them with `dataFile()` and passes them as `src` and
-  `script`, the shape hand-written patterns already use.
+- It writes the bundle to `guest.js` beside the wrapper, and the wrapper reads
+  it with `dataFile()` and passes it as `script`.
+- With `--html`, the wrapper reads that document with `dataFile()` where it
+  is, and passes it as `src`; the generator never rewrites it. Without one,
+  the generator writes its default document to `guest.html` beside the
+  wrapper. The document needs no marker for the script, since `cf-iframe`
+  runs `script` as the document's last module script, and a
+  `<!-- PATTERN_IFRAME_SCRIPT -->` left in one is an ordinary comment.
+- Each file it writes is refused when it exists already, unless `--force`, and
+  is replaced through a rename, so a forced run never writes through a link
+  into a source file. It refuses before writing anything when an output would
+  replace a source file.
 - `IFRAME_PATTERN` takes `assets`: a directory path, which the wrapper passes
   as `dataFile.urls(path)`, or a record from a name to a file path, which it
   passes as `dataFile.url(path)` for each. Paths are relative to the contract.
+  The generator refuses a name outside `[A-Za-z0-9_-]+`, a file whose
+  extension `dataFile.url()` does not read, and a path with nothing behind it.
 
 ## 7. Assets beyond one request
 
@@ -394,6 +403,10 @@ uses when it writes a source set itself. The details are open.
 - **A single file larger than one request.** See part 7.
 - **References from script.** Part 4 replaces references in the guest's
   document only. A script that builds an element uses `fabric.asset(name).url`.
+- **The names `__proto__` and `constructor`.** Both match the grammar of an
+  asset's name, and the runtime refuses both as keys of a stored record
+  (`isUnsafeObjectKey` in `base/js-values/src/types.ts`), so a view whose
+  `assets` holds one is refused when setup stores it.
 
 ## Alternatives considered
 
@@ -427,16 +440,8 @@ uses when it writes a source set itself. The details are open.
 - Part 7's threshold, and how a lifecycle request names a file it does not
   carry.
 
-## Order of work
+## Remaining work
 
-1. Part 1. It needs nothing else, and it removes the per-instance copy of
-   `guest.html` and `guest.js` from every hand-written iframe pattern.
-2. Part 2, with the inverse in `writeSourcePackage`.
-3. Parts 4 and 5, with single files from `dataFile.url()`.
-4. Part 3.
-5. Part 6.
-6. Part 7.
-7. The live documents the change makes out of date: the five iframe guides
-   under `docs/common/ai/`, `skills/pattern-iframe/SKILL.md`, the doc comment
-   on `DataFileFunction`, and the data-file passages of
-   `docs/specs/module-loading.md`.
+Part 7, once its open questions are settled. It changes the program a
+lifecycle request carries, so `docs/features/server-pattern-lifecycle.md`
+changes with it.

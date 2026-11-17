@@ -79,7 +79,7 @@ and per-session output, `patterns/examples/iframe-cursor-canvas/` a presence
 room, and `patterns/examples/iframe-donut-menu/` pictures shipped as assets.
 `patterns/showcase/iframe-ring-loops/` is the exception, not a template: its
 `main.tsx` composes a `frame.tsx` that `scripts/write-iframe-wrapper.ts`
-generates, and it has no `guest.js`. Do not copy its shape into a new pattern.
+generates, along with its `guest.js`. Do not copy its shape into a new pattern.
 
 Run the pattern or add a focused test when behavior, rather than only its data
 contract, changed. `deno task cf check` proves the pattern compiles, not that
