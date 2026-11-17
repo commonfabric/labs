@@ -71,21 +71,32 @@ agent).
 
 Rules use a restricted regex grammar (no backreferences, no lookaround) and are
 compared by a canonical form, so two people who learned the same rule in
-slightly different spellings count as proposing the same rule. Personal details
-belong in parameter slots, never in a rule's text, or no one else's rule will
-ever match it.
+slightly different spellings count as proposing the same rule.
+
+**Personal details in rules.** The design calls for personal details to go in
+parameter slots rather than a rule's text. Parameter slots are not built. The
+protection against a published rule carrying someone's details is the pool's
+threshold: a rule that names one person is held by one contributor and is never
+released. Publishing also holds back, cheaply, any rule whose pattern has an `@`
+or a run of six or more digits (`looksPersonal`); the view says how many it held
+back. Neither is a guarantee: a rule with a name in it is sent, and stays
+confidential in the pool only by its policy.
 
 **`inductor-pool`** collects contributions and releases consensus.
 
 - Each person contributes under one pseudonym per goal: the same pseudonym every
-  time they publish for that goal, so they are never counted twice for a rule,
-  and a different one for each goal, so their goals cannot be linked.
+  time they publish for that goal, and a different one for each goal, so their
+  goals are not linked by pseudonym (cut 2 says what still links them). The pool
+  counts each principal once, whatever pseudonym they send.
 - A rule is released, with its count, once the number of distinct pseudonyms
   that proposed it reaches its threshold. The threshold is a configurable centre
   (default 15) plus a per-rule offset in `[-k, +k]` (default `k = 5`): a keyed
   hash of a pool secret and the rule's canonical form. It is deterministic, so
-  the rule's threshold never moves, and unguessable, so no one can plant
-  "threshold − 1" contributions to probe whether someone else holds a rule.
+  the rule's threshold never moves, and unguessable without the secret, so a
+  prober cannot plant exactly "threshold − 1" contributions to test whether
+  someone else holds a rule. The secret is not hidden from everyone: the first
+  contributor's runtime mints it, and any runtime that runs the pool can read it
+  (the platform limit below).
 - What the offset buys is bounded: someone adding fake contributors one at a
   time can still watch for release, but cannot tell whether up to about `2k` of
   the contributors were real people.
@@ -175,9 +186,13 @@ policy's one exchange rule drops the clause on that stamp, as
 `examples/cfc-exchange-rules/blessed-computation.tsx` releases a tally. The
 threshold, its hidden offset, and the rule that nothing below threshold is
 emitted (not the rule, not its count, not that it exists) are that function's
-own logic, so they need no new CFC machinery. The secret and the per-rule counts
-never leave the function; only released rules and their counts do, into a public
-store.
+own logic, so they need no new CFC machinery. The rule also requires an input
+witness: everything the function read was written by the pool's own
+`submitContribution`, so the function run over contributions anyone else made up
+is not released (`apps/inductor-pool/README.md`). The secret and the per-rule
+counts never leave the function; only released rules and their counts do, as the
+pool's public result, read where it is computed (the runtime refuses storing it
+today; see the pool's README).
 
 **Cuts** (both approved by Alex, 2026-11-16):
 
@@ -188,8 +203,12 @@ store.
    (personhood) atom.
 2. _Pseudonym linkability._ Commits and owner-integrity labels in the pool space
    name the contributor's core identity (`docs/specs/profile-delegation.md`,
-   "Attribution and unlinkability"; the intermediate key is deferred). Missing
-   semantics: unlinkable pseudonymous authorship.
+   "Attribution and unlinkability"; the intermediate key is deferred). And the
+   release is exact and live: a released rule's count moves the moment a
+   contribution lands, and each contribution is an identity-signed commit, so
+   anyone who reads the pool space can tell which principal's commit moved a
+   released rule's count, and so that they hold it. Missing semantics:
+   unlinkable pseudonymous authorship.
 
 **Platform limit, not a pattern cut.** Labels are enforced by the client; a
 reader with raw access to the pool space sees confidential contributions. This

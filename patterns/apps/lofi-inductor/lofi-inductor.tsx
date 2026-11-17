@@ -37,6 +37,7 @@ import {
   type HistoryEntry,
   type Item,
   type ItemRow,
+  looksPersonal,
   markdownOf,
   newSurprises,
   percent,
@@ -416,13 +417,19 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         pseudonym.set(`p-${Math.random().toString(36).slice(2, 12)}`);
       }
       const question = goal.get().trim();
-      const snapshot = rules.get().map((rule) => ({ ...rule }));
-      const reached = target !== null && sameGoal(target.goal ?? "", question);
+      // A rule that looks like it names someone stays here.
+      const all = rules.get();
+      const snapshot = all.filter((rule) => !looksPersonal(rule)).map((
+        rule,
+      ) => ({ ...rule }));
+      const reached = snapshot.length > 0 && target !== null &&
+        sameGoal(target.goal ?? "", question);
       published.set({
         goal: question,
         rules: snapshot,
         publishedAt: Date.now(),
         pooled: reached,
+        withheld: all.length - snapshot.length,
       });
       if (reached) {
         target.submit.send({ pseudonym: pseudonym.get(), rules: snapshot });
@@ -506,11 +513,18 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
           ? "No rules to publish yet."
           : "Not published yet.";
       }
-      return snapshot.pooled
-        ? `Sent ${snapshot.rules.length} rules to the pool for ` +
+      const withheld = snapshot.withheld
+        ? ` Held back ${snapshot.withheld} that look personal (an @ or a ` +
+          `run of six digits).`
+        : "";
+      if (snapshot.pooled) {
+        return `Sent ${snapshot.rules.length} rules to the pool for ` +
           `“${snapshot.goal}”. No one learns a rule from it until enough ` +
-          `others hold it too.`
-        : `No pool for “${snapshot.goal}” found; nothing was sent.`;
+          `others hold it too.${withheld}`;
+      }
+      return snapshot.rules.length === 0
+        ? `Nothing was sent.${withheld}`
+        : `No pool for “${snapshot.goal}” found; nothing was sent.${withheld}`;
     });
     const noRules = computed(() => rules.get().length === 0);
     const hasOffer = computed(() => offer !== null);

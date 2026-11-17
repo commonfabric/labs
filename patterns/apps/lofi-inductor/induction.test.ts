@@ -12,6 +12,7 @@ import {
   type ItemRow,
   judgeProposal,
   labelWith,
+  looksPersonal,
   markdownOf,
   MAX_RULES,
   MAX_TESTED_LENGTH,
@@ -467,6 +468,17 @@ describe("poolOffer", () => {
         judged,
       ]),
     ).not.toBeNull();
+  });
+});
+
+describe("looksPersonal", () => {
+  it("flags an @ or a run of six digits, and nothing generic", () => {
+    expect(looksPersonal(rule("from", "pat@example\\.org"))).toBe(true);
+    expect(looksPersonal(rule("from", "[@]"))).toBe(true);
+    expect(looksPersonal(rule("subject", "order 1234567"))).toBe(true);
+    expect(looksPersonal(rule("subject", "invoice"))).toBe(false);
+    expect(looksPersonal(rule("subject", "\\d{6,}"))).toBe(false);
+    expect(looksPersonal(rule("subject", "12345 due"))).toBe(false);
   });
 });
 

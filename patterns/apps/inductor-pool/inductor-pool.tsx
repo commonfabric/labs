@@ -240,7 +240,8 @@ export interface ContributionEvent {
  * the per-goal pseudonym (profile-delegation.md, "Attribution and
  * unlinkability"), the server attest that the pseudonym committed, and the
  * label name the pseudonym, unlinkable to its owner and their other
- * pseudonyms.
+ * pseudonyms. Because the release is exact and live, the signed commit that
+ * moves a released rule's count also says whose contribution holds it.
  */
 export const submitContribution = handler<ContributionEvent, SubmitState>(
   (event, { contributions, thresholdCenter, jitter }) => {

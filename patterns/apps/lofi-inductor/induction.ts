@@ -150,6 +150,8 @@ export interface Published {
   publishedAt: number;
   /** Whether the rules were sent to a pool for this goal. */
   pooled?: boolean;
+  /** How many rules were held back as looking personal (`looksPersonal`). */
+  withheld?: number;
 }
 
 /**
@@ -681,6 +683,22 @@ export function poolOffer(
   );
   if (history.some((entry) => entry.poolOffer === key)) return null;
   return { key, judgement };
+}
+
+// =============================================================================
+// PUBLISHING
+// =============================================================================
+
+/**
+ * Whether a rule looks like it carries a personal detail: an `@` (an email
+ * address or handle) or a run of six or more digits (an account, order, or
+ * phone number) written into its pattern. Such a rule is held back from a
+ * pool. It is a cheap filter, not a guarantee: the pool's threshold is the
+ * real protection, since a detail only one person's rules hold is never
+ * released.
+ */
+export function looksPersonal(rule: Pick<CanonicalRule, "pattern">): boolean {
+  return rule.pattern.includes("@") || /[0-9]{6,}/.test(rule.pattern);
 }
 
 // =============================================================================

@@ -166,7 +166,13 @@ release that outlives a change to the inputs, say). Until then nothing does.
    contributor's core identity, which anyone who reads the pool space can see.
    Principled CFC would sign with an intermediate key chained from the per-goal
    pseudonym, have the server attest it, and label with the pseudonym. Comment
-   at `submitContribution`.
+   at `submitContribution`. The release makes this worse than it looks: it is
+   exact and live, so a released rule's count moves with the very commit that
+   adds a contributor holding it, and that commit is signed by the contributor's
+   identity. Anyone who reads the pool space can see which principal's commit
+   moved a released rule's count, and so that they hold it. A principled release
+   would also need to decouple when counts move from when contributions land
+   (batched or noised counts).
 
 **Not cuts, but worth Berni's eye:**
 

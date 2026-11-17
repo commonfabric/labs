@@ -3,7 +3,8 @@
  * the matching pool stores one contribution under the pseudonym the first
  * publish mints, and replaces it when the inductor republishes, and a pool for another
  * goal receives nothing. The goal matches ignoring case and space, the view
- * says the rules were sent, and an inductor with no rules publishes nothing.
+ * says the rules were sent, a rule with an @ or a six-digit run is held back,
+ * and an inductor with no rules publishes nothing.
  *
  * Patterns under test: ./lofi-inductor.tsx publishing into
  * ../inductor-pool/inductor-pool.tsx. Release across contributors is in
@@ -12,7 +13,7 @@
 import { assert, pattern, TESTS, UI } from "commonfabric";
 import { hasText } from "../../tools/test-support/vnode-helpers.ts";
 import InductorPool from "../inductor-pool/inductor-pool.tsx";
-import { INVOICE_ONLY } from "./lofi-inductor-test-fixture.ts";
+import { INVOICE_ONLY, rule } from "./lofi-inductor-test-fixture.ts";
 import LofiInductor from "./lofi-inductor.tsx";
 
 const GOAL = "Is this email a bill?";
@@ -49,6 +50,27 @@ export default pattern(() => {
     history: [],
     published: null,
     pool: newsletterPool,
+  });
+
+  // Rules that look like they name someone stay in the piece.
+  const personalPool = InductorPool(
+    {
+      goal: GOAL,
+      thresholdCenter: 2,
+      jitter: 0,
+    } as Parameters<typeof InductorPool>[0],
+  );
+  const personal = LofiInductor({
+    goal: GOAL,
+    items: [],
+    rules: [
+      ...INVOICE_ONLY,
+      rule("from", "billing@example\\.org"),
+      rule("subject", "account 1234567"),
+    ],
+    history: [],
+    published: null,
+    pool: personalPool,
   });
 
   // With no rules, there is nothing to publish.
@@ -112,6 +134,19 @@ export default pattern(() => {
         ),
       },
 
+      // Only the rule with no @ and no six-digit run reaches the pool.
+      { action: personal.publish },
+      {
+        assertion: assert(() =>
+          personal.published?.pooled === true &&
+          personal.published?.withheld === 2 &&
+          personal.published?.rules.length === 1 &&
+          personalPool.contributions.length === 1 &&
+          personalPool.contributions[0]?.rules.length === 1 &&
+          personalPool.contributions[0]?.rules[0]?.pattern === "invoice"
+        ),
+      },
+
       // An inductor with no rules publishes nothing, and mints nothing.
       { action: empty.publish },
       {
@@ -124,6 +159,8 @@ export default pattern(() => {
     billPool,
     newsletterPool,
     empty,
+    personal,
+    personalPool,
     matching,
     mismatched,
   };
