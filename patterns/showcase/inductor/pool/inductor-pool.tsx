@@ -131,8 +131,8 @@ export default pattern<InductorPoolInput, InductorPoolOutput>(
       return question ? `Inductor pool: ${question}` : "Inductor pool";
     });
     const thresholdLine = computed(() =>
-      `This pool is set to show a rule once about ${thresholdCenter} people ` +
-      `hold it (give or take ${jitter}, and never fewer than ` +
+      `This pool is set to show a rule once about ${thresholdCenter} ` +
+      `contributors hold it (give or take ${jitter}, and never fewer than ` +
       `${MIN_SEALED_THRESHOLD}). Each rule's exact threshold is kept secret. ` +
       `The setting in force at the first contribution is fixed for good, ` +
       `so changing it afterwards has no effect.`
@@ -140,7 +140,9 @@ export default pattern<InductorPoolInput, InductorPoolOutput>(
     const releasedLines = computed(() =>
       consensus.map((rule: ReleasedRule) => ({
         rule: describeRule(rule),
-        count: rule.count === 1 ? "1 person" : `${rule.count} people`,
+        count: rule.count === 1
+          ? "1 contributor"
+          : `${rule.count} contributors`,
       }))
     );
     const content = computed(() =>
@@ -162,8 +164,8 @@ export default pattern<InductorPoolInput, InductorPoolOutput>(
           <cf-vstack slot="header" gap="1" padding="4">
             <cf-heading level={4}>{title}</cf-heading>
             <cf-text tone="muted">
-              Rules that many people learned on their own, for one yes-or-no
-              question, shared without saying who learned them.
+              Rules that many contributors learned on their own, for one
+              yes-or-no question, shared without saying who learned them.
             </cf-text>
           </cf-vstack>
           <cf-vstack gap="3" padding="4">
@@ -193,8 +195,9 @@ export default pattern<InductorPoolInput, InductorPoolOutput>(
                 <cf-heading level={5}>How it works</cf-heading>
                 <cf-text>{thresholdLine}</cf-text>
                 <cf-text tone="muted">
-                  Until then no one learns the rule, how many people hold it, or
-                  that it exists, and no one learns who holds a released one.
+                  Until then no one learns the rule, how many contributors hold
+                  it, or that it exists, and no one learns who holds a released
+                  one.
                 </cf-text>
               </cf-vstack>
             </cf-card>
