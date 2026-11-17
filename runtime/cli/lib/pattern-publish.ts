@@ -37,6 +37,7 @@ import {
 } from "@commonfabric/pattern-index/privacy";
 import {
   type CompiledPattern,
+  normalizeHashtags,
   patternDocMetadata,
   publishRequestFor,
 } from "@commonfabric/pattern-index/publish";
@@ -262,9 +263,7 @@ const metadataFor = (
   }
   return {
     description,
-    hashtags: [...(options.hashtags ?? doc.hashtags)].map((tag) =>
-      tag.replace(/^#/, "").toLowerCase()
-    ),
+    hashtags: normalizeHashtags(options.hashtags ?? doc.hashtags),
     keywords: [...(options.keywords ?? doc.keywords)],
   };
 };

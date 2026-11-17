@@ -38,6 +38,7 @@ import {
   type PatternIndexPublishResponse,
 } from "@commonfabric/pattern-index/client";
 import {
+  normalizeHashtags,
   patternDocMetadata,
   publishRequestFor,
 } from "@commonfabric/pattern-index/publish";
@@ -291,9 +292,7 @@ export async function recordDeployedVersion(
         // Not the file's name, which can say more than its author meant to
         // once a version is shared.
         description: doc.description ?? "A pattern with no description yet.",
-        hashtags: doc.hashtags.map((tag) =>
-          tag.replace(/^#/, "").toLowerCase()
-        ),
+        hashtags: normalizeHashtags(doc.hashtags),
         keywords: doc.keywords,
         ...(remixedFrom === undefined ? {} : { remixedFrom }),
       }),

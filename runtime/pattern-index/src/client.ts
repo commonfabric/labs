@@ -926,6 +926,71 @@ export interface PatternIndexPublishRequest {
    * for is an entry nobody can decide about later.
    */
   nonDiscoverable?: { readonly reason: string };
+
+  /**
+   * The repository file this pattern is the newest version of, sent by a
+   * repository sync. The index keeps one lineage per repository and path,
+   * so it sets the predecessor itself, and `publishPattern` refuses one sent
+   * with `priorPatternId`, `lineageId` or `slot`.
+   */
+  source?: PatternIndexRepoSource;
+}
+
+/** Where in a repository a synced pattern comes from. */
+export interface PatternIndexRepoSource {
+  /** `owner/name`, as GitHub names it. */
+  repository: string;
+
+  /** The entry file's path from the repository root. */
+  path: string;
+
+  /** The commit the program was read at. */
+  commit: string;
+
+  /**
+   * A hash of the program's files as read, before compiling. A later sync
+   * compares it to decide whether the source changed, without compiling.
+   */
+  sourceHash: string;
+}
+
+/** Asks for the newest version of every lineage a repository holds. */
+export interface PatternIndexListRepoHeadsRequest {
+  /** `owner/name`. */
+  repository: string;
+}
+
+/** The newest version the index holds for one repository path. */
+export interface PatternIndexRepoHead {
+  path: string;
+  patternId: string;
+  sourceHash: string;
+  commit: string;
+  listing?: PatternIndexListing;
+
+  /** Gate gardener verdicts by gardener name. */
+  gates?: Readonly<Record<string, PatternIndexGardenerVerdict>>;
+}
+
+export interface PatternIndexListRepoHeadsResponse {
+  heads: readonly PatternIndexRepoHead[];
+}
+
+/**
+ * Withdraws the lineages of repository paths that are no longer patterns
+ * there: each is unlisted and stays readable by id, and a path that comes
+ * back resumes its lineage.
+ */
+export interface PatternIndexWithdrawRepoPathsRequest {
+  /** `owner/name`. */
+  repository: string;
+
+  paths: readonly string[];
+}
+
+export interface PatternIndexWithdrawRepoPathsResponse {
+  /** Each path asked about, and whether a lineage was withdrawn for it. */
+  withdrawn: readonly { path: string; withdrawn: boolean }[];
 }
 
 export interface PatternIndexPublishResponse {
@@ -933,6 +998,12 @@ export interface PatternIndexPublishResponse {
 
   /** `false` when the index already held this identity, which is not an error. */
   created: boolean;
+
+  /**
+   * For a repository sync: `true` when the lineage's newest version already
+   * has this identity, so nothing was written.
+   */
+  unchanged?: boolean;
 
   /** Request fields this deployment no longer stores and dropped. */
   ignored?: readonly string[];
@@ -944,6 +1015,12 @@ export interface PatternIndexPublishResponse {
   versionId?: string;
   lineageId?: string;
   seq?: number;
+
+  /**
+   * Who may read the new version. A repository sync's version is
+   * `published`, unless the same source is already public under someone
+   * else, when it is `private`.
+   */
   visibility?: PatternIndexVisibility;
   share?: PatternIndexShareState;
 
@@ -1170,6 +1247,17 @@ export interface PatternIndexClientOptions {
    * signer is its own root.
    */
   proofs?: readonly string[];
+
+  /**
+   * Mints a GitHub Actions OIDC token whose audience is
+   * `pattern-index:<index host>:<signer DID>`, sent inside every signed call.
+   * The host keeps a token minted for one index deployment from being
+   * accepted by another, and the DID binds it to this client's signer. It makes the signer act for the brand that
+   * owns the token's repository; `github-oidc.ts` says how the token is
+   * minted. Called once per call, since a token lives only minutes and a
+   * sync can run longer.
+   */
+  githubOidc?: () => Promise<string>;
 }
 
 /** A JSON object's own property, or `undefined` for anything else. */
@@ -1230,6 +1318,7 @@ export class PatternIndexClient {
   readonly #fetchFn: PatternIndexFetch;
   readonly #signer: FirstPartyHttpSigner;
   readonly #proofs?: readonly string[];
+  readonly #githubOidc?: () => Promise<string>;
 
   constructor(options: PatternIndexClientOptions) {
     // The function name is appended to the base's path, so a base carrying a
@@ -1259,6 +1348,7 @@ export class PatternIndexClient {
       // A copy, so the caller's later edits never change what is sent.
       this.#proofs = [...options.proofs];
     }
+    this.#githubOidc = options.githubOidc;
   }
 
   /**
@@ -1284,11 +1374,13 @@ export class PatternIndexClient {
     const url = functionUrl(this.#baseUrl, fn);
     // The proof commits to the body hash, so the bytes signed and the bytes
     // sent must be identical — serialize once.
-    const body = JSON.stringify(
-      this.#proofs === undefined
-        ? payload
-        : { ...payload, proofs: [...this.#proofs] },
-    );
+    const body = JSON.stringify({
+      ...payload,
+      ...(this.#proofs === undefined ? {} : { proofs: [...this.#proofs] }),
+      ...(this.#githubOidc === undefined
+        ? {}
+        : { githubOidc: await this.#githubOidc() }),
+    });
     const headers = await signFirstPartyHttpRequest({
       url,
       method: "POST",
@@ -1447,6 +1539,16 @@ export class PatternIndexClient {
   async publishPattern(
     request: PatternIndexPublishRequest,
   ): Promise<PatternIndexPublishResponse> {
+    // The index places a synced version in its path's lineage itself.
+    if (
+      request.source !== undefined &&
+      (request.priorPatternId !== undefined ||
+        request.lineageId !== undefined || request.slot !== undefined)
+    ) {
+      throw new Error(
+        "a publish with a repository source names no predecessor, lineage or slot",
+      );
+    }
     const schemas = {
       ...(request.argumentSchema !== undefined
         ? { argumentSchema: request.argumentSchema }
@@ -1486,6 +1588,7 @@ export class PatternIndexClient {
       ...(request.remixedFrom !== undefined
         ? { remixedFrom: request.remixedFrom }
         : {}),
+      ...(request.source !== undefined ? { source: request.source } : {}),
       ...(request.lineageId !== undefined
         ? { lineageId: request.lineageId }
         : {}),
@@ -1496,6 +1599,34 @@ export class PatternIndexClient {
         ? { deployedTo: pieceRef("deployedTo", request.deployedTo) }
         : {}),
     });
+  }
+
+  /** Withdraws the lineages of repository paths that are gone. */
+  withdrawRepoPaths(
+    request: PatternIndexWithdrawRepoPathsRequest,
+  ): Promise<PatternIndexWithdrawRepoPathsResponse> {
+    return this.#call(
+      "withdrawRepoPaths",
+      { ...request, paths: [...request.paths] },
+      (answer) =>
+        Array.isArray(ownField(answer, "withdrawn"))
+          ? undefined
+          : "withdrawn is not an array",
+    );
+  }
+
+  /** Reads the newest version of every lineage a repository holds. */
+  listRepoHeads(
+    request: PatternIndexListRepoHeadsRequest,
+  ): Promise<PatternIndexListRepoHeadsResponse> {
+    return this.#call(
+      "listRepoHeads",
+      { ...request },
+      (answer) =>
+        Array.isArray(ownField(answer, "heads"))
+          ? undefined
+          : "heads is not an array",
+    );
   }
 
   /**
