@@ -1809,23 +1809,79 @@ function resolvedSchemaPolicyGraph(
  * declares nothing. A claim spelled as a member holding `undefined` compares
  * as no claim. Positions at a logical path `omits` names, and everything
  * beneath them, are not compared; a position whose path the walk cannot tell
- * is compared whatever `omits` says.
+ * is compared whatever `omits` says. Given `ifcEqual`, two positions' policies
+ * are the same where it says so, rather than where they are equal.
  */
 export const cfcSchemaPoliciesEqual = (
   left: JSONSchema,
   right: JSONSchema,
   omits: (path: readonly string[]) => boolean = () => false,
-): boolean =>
-  hashStringOf(
+  ifcEqual?: (left: unknown, right: unknown) => boolean,
+): boolean => {
+  const [leftGraph, rightGraph] = [left, right].map((schema) =>
     withoutUndefinedMembers(
-      resolvedSchemaPolicyGraph(left, left, [], omits, undefined),
-    ),
-  ) ===
-    hashStringOf(
-      withoutUndefinedMembers(
-        resolvedSchemaPolicyGraph(right, right, [], omits, undefined),
-      ),
+      resolvedSchemaPolicyGraph(schema, schema, [], omits, undefined),
+    )
+  );
+  return ifcEqual === undefined
+    ? hashStringOf(leftGraph) === hashStringOf(rightGraph)
+    : policyGraphsEqual(leftGraph, rightGraph, ifcEqual);
+};
+
+/**
+ * Helper for `cfcSchemaPoliciesEqual()`: whether two policy graphs have the
+ * same shape, each pair of positions declaring policies `ifcEqual` takes for
+ * the same.
+ */
+const policyGraphsEqual = (
+  left: SchemaPolicyGraph | undefined,
+  right: SchemaPolicyGraph | undefined,
+  ifcEqual: (left: unknown, right: unknown) => boolean,
+): boolean => {
+  if (left === undefined || right === undefined) return left === right;
+  return left.ref === right.ref && ifcEqual(left.ifc, right.ifc) &&
+    left.children.length === right.children.length &&
+    left.children.every((child, i) => {
+      const other = right.children[i];
+      return child.keyword === other.keyword && child.key === other.key &&
+        child.index === other.index &&
+        policyGraphsEqual(child.policy, other.policy, ifcEqual);
+    });
+};
+
+/**
+ * Whether the policy `merged` declares at a position is the policy `stored`
+ * declares there but for write-policy alternatives `release` appended: the
+ * stored `writePolicyAnyOf` list begins the merged one, alternative for
+ * alternative and in order, each further alternative is one the release may
+ * append (`writePolicyAlternativeAdmissible()`), and every other member is
+ * the same. Equal policies are trivially so.
+ */
+export const ifcDiffersOnlyByReleaseAppend = (
+  stored: unknown,
+  merged: unknown,
+  release: WritePolicyRelease,
+): boolean => {
+  if (deepEqual(stored, merged)) return true;
+  if (!isObjectNotArray(stored) || !isObjectNotArray(merged)) return false;
+  const storedList = stored.writePolicyAnyOf;
+  const mergedList = merged.writePolicyAnyOf;
+  if (
+    !Array.isArray(storedList) || !Array.isArray(mergedList) ||
+    mergedList.length <= storedList.length
+  ) {
+    return false;
+  }
+  const { writePolicyAnyOf: _s, ...storedRest } = stored;
+  const { writePolicyAnyOf: _m, ...mergedRest } = merged;
+  return deepEqual(storedRest, mergedRest) &&
+    storedList.every((alternative, i) =>
+      deepEqual(alternative, mergedList[i])
+    ) &&
+    mergedList.slice(storedList.length).every((added) =>
+      writePolicyAlternativeAdmissible(added, storedList, release)
     );
+};
 
 /**
  * `value` with every object member holding `undefined` removed, recursively.
