@@ -41,7 +41,7 @@
           ],
           "valuesWithoutOutput": []
         },
-        "line": 17,
+        "line": 19,
         "name": "default",
         "plan": {
           "argumentSchema": "unhashed:schema/0",
@@ -67,7 +67,7 @@
             {
               "at": {
                 "file": "compare/fixtures/spread-child.tsx",
-                "start": 867
+                "start": 990
               },
               "bodies": [],
               "entry": "map",
@@ -86,7 +86,7 @@
             {
               "at": {
                 "file": "compare/fixtures/spread-child.tsx",
-                "start": 792
+                "start": 915
               },
               "bodies": [],
               "entry": "$UI",
