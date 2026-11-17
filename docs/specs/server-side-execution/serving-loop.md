@@ -114,10 +114,20 @@ execution observer and decides which worker serves which space:
   and `start-local-dev.sh` set to 16384 for the main thread, replaces the
   limit V8 gives each worker. The pool sees that from the `heap_size_limit` a
   worker's init reports (`heap-limit-overridden`) and holds such a worker to
-  `heapLimitMb` itself: it takes the worker out as one that reached its limit
-  once two heartbeats in a row report a heap of `heapLimitMb` or more. Two,
-  since a heartbeat's heap includes garbage V8 has not collected yet. This
-  check needs the worker's heartbeats, which its timers send between tasks,
+  `heapLimitMb` itself. A heartbeat's heap includes garbage V8 has not
+  collected yet, so at a heartbeat that reports a heap of `heapLimitMb` or
+  more the pool asks the worker to collect its garbage (`host.collectedMemory`,
+  one request at a time), and takes it out as one that reached its limit only
+  if its heap is still that large once collected. A worker whose collected
+  heap is under the limit goes on serving. One that refuses the request, or
+  does not answer it while its heartbeats go on, is taken out at six
+  heartbeats in a row past the limit. The toolshed exposes V8's collector at
+  startup for this (`EXPOSE_GC` decides only whether
+  `/api/health/collected-memory` answers); a pool without it
+  (`collectBeforeEnding` unset) takes the worker out at two heartbeats in a
+  row past the limit. Pattern code cannot reach the collector: V8 gives
+  `gc()` only to contexts created by `vm`, not to a worker's own realm or to
+  a SES compartment. This check needs the worker's heartbeats, which its timers send between tasks,
   so a worker that allocates without yielding is bounded only by the process
   flag and by the watchdog, which ends it after `watchdogLimitMs` of silence.
   Either way
@@ -196,13 +206,17 @@ A space stays placed on its worker for as long as the worker runs. Counted:
 A space is ACTIVE when it has ≥1 live client session or undelivered
 events; otherwise it MAY be parked (lease released, loop stopped, and
 the runtime disposed or kept for the space's next tenure — Parking
-below). A client session is any session except a serving loop's own,
-which is a session of the deployment's service identity that
-reached the memory server from the process holding it, declared the
-serving binding (`actingAs: "space-owner"`, a serving runtime of another
-process), or declared that it is not demand (`demand: false`, which the
-toolshed's own webhook runtime declares, since it keeps a session on
-every space it touched for as long as it runs and no one waits on it).
+below). A client session is any session except a serving loop's own
+and one that declared that it is not demand. A serving loop's own is a
+session of the deployment's service identity that reached the memory
+server from the process holding it, or declared the serving binding
+(`actingAs: "space-owner"`, a serving runtime of another process). A
+session of any identity declares that it is not demand with
+`demand: false`: the toolshed's own webhook runtime does, since it keeps
+a session on every space it touched for as long as it runs and no one
+waits on it, and so does a client that only copies documents, such as
+the Topics command-line tool's mirror, whose watches would otherwise
+make the server start every piece whose documents it holds.
 The connection and the session's declaration decide, not the key: a local
 toolshed that runs under the identity its operator's client also signs
 with still counts that client's sessions as client sessions, for

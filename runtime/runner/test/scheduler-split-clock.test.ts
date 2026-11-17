@@ -9,7 +9,10 @@ import {
   isRunnableSchedulingSeed,
   type PullSchedulingState,
 } from "../src/scheduler/work-oracle.ts";
-import type { SchedulerNode } from "../src/scheduler/node-record.ts";
+import {
+  NodeRegistry,
+  type SchedulerNode,
+} from "../src/scheduler/node-record.ts";
 import type { QueuedEvent } from "../src/scheduler/types.ts";
 
 describe("split-clock readiness decisions", () => {
@@ -43,7 +46,7 @@ describe("split-clock readiness decisions", () => {
     const state = {
       pullScheduling: {
         pending: new Set(),
-        nodes: { getInvalidNodes: () => [] },
+        nodes: new NodeRegistry(),
       } as unknown as PullSchedulingState,
       eventQueue: [{ notBefore: NOT_BEFORE } as unknown as QueuedEvent],
       idlePromises: [() => {
