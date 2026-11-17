@@ -569,6 +569,14 @@ struct Emitter<'r, 'm, 'a> {
     /// of a promoted `computed` return, over all its `return` statements,
     /// while the statements of one are being evaluated.
     returned_streams: Vec<StreamAt>,
+    /// The literals that the call of a pattern compiled in writes for
+    /// properties of its argument, by the property: set by the call for
+    /// the pattern it compiles in next.
+    literal_values: HashMap<String, Value>,
+    /// The same for the pattern being compiled in, by the name its
+    /// parameter binds the property to: the constant of a state path of
+    /// a binding that is bound to the name (PL §1.1, `Binding.state`).
+    callee_literals: HashMap<String, Value>,
     /// The patterns whose source the plan holds code of, by the module
     /// and the start of the function: the pattern the plan is compiled
     /// from, then each pattern compiled in, in the order of its first
@@ -1945,6 +1953,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             Some(argument) => self.eval(argument, name),
             None => Place::Const,
         };
+        self.literal_values.clear();
         // The properties the call writes as a literal. A property bound to
         // a path the caller's own argument leaves out is a constant here
         // too, and is not one of them.
@@ -1967,6 +1976,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                         static_key_name(&property.key),
                     ) {
                         self.literal_keys.insert(key.to_string());
+                    }
+                    let value = self
+                        .resolver
+                        .constant_value(self.module, &property.value, 0);
+                    if let (false, Some(key), Some(value)) =
+                        (property.computed, static_key_name(&property.key), value)
+                    {
+                        self.literal_values.insert(key.to_string(), value);
                     }
                 }
             }
@@ -2051,6 +2068,8 @@ impl<'a> Emitter<'_, '_, 'a> {
         let saved_pattern = WRITTEN_IN.replace(pattern);
         self.inline_at.push(at);
         let literal_keys = std::mem::take(&mut self.literal_keys);
+        let literal_values = std::mem::take(&mut self.literal_values);
+        let mut literals: HashMap<String, Value> = HashMap::new();
         let mut given: HashSet<String> = HashSet::new();
         let mut defaults: HashMap<String, Value> = HashMap::new();
         let mut saved_bound = None;
@@ -2103,6 +2122,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                         {
                             given.insert(identifier.name.to_string());
                         }
+                        if let Some(value) = literal_values.get(key) {
+                            literals.insert(identifier.name.to_string(), value.clone());
+                        }
                     }
                 }
             }
@@ -2128,6 +2150,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
         let saved_given = std::mem::replace(&mut self.given_constants, given);
         let saved_defaults = std::mem::replace(&mut self.callee_defaults, defaults);
+        let saved_literals = std::mem::replace(&mut self.callee_literals, literals);
         let result = match function.expression_body() {
             Some(expression) => Some(self.eval(expression, name)),
             None => function
@@ -2136,6 +2159,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         };
         self.given_constants = saved_given;
         self.callee_defaults = saved_defaults;
+        self.callee_literals = saved_literals;
         if let Some(saved) = saved_bound {
             self.bound_defaults = saved;
         }
@@ -4313,6 +4337,9 @@ impl<'a> Emitter<'_, '_, 'a> {
     /// (PL §1.1, `language-subset.md` §4.5).
     fn tag_argument(&mut self, element: &JSXElement<'a>) -> Place {
         let mut fields: BTreeMap<String, Place> = BTreeMap::new();
+        // The attributes written as a literal, for the pattern the tag
+        // names, where it is compiled in.
+        let mut literals: HashMap<String, Value> = HashMap::new();
         for attribute in &element.opening_element.attributes {
             match attribute {
                 JSXAttributeItem::Attribute(attribute) => {
@@ -4320,6 +4347,20 @@ impl<'a> Emitter<'_, '_, 'a> {
                         JSXAttributeName::Identifier(identifier) => identifier.name.to_string(),
                         JSXAttributeName::NamespacedName(name) => name.name.name.to_string(),
                     };
+                    let literal = match &attribute.value {
+                        Some(JSXAttributeValue::StringLiteral(text)) => {
+                            Some(json!(text.value.as_str()))
+                        }
+                        Some(JSXAttributeValue::ExpressionContainer(container)) => {
+                            container.expression.as_expression().and_then(|written| {
+                                self.resolver.constant_value(self.module, written, 0)
+                            })
+                        }
+                        _ => None,
+                    };
+                    if let Some(literal) = literal {
+                        literals.insert(name.clone(), literal);
+                    }
                     let place = match &attribute.value {
                         Some(JSXAttributeValue::ExpressionContainer(container)) => {
                             match container.expression.as_expression() {
@@ -4380,6 +4421,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             self.facts.built(at, &children);
             fields.insert("children".to_string(), children);
         }
+        self.literal_values = literals;
         Place::Record(fields)
     }
 
@@ -5547,6 +5589,19 @@ impl<'a> Emitter<'_, '_, 'a> {
         let mut entry = Map::new();
         entry.insert("path".to_string(), json!(path.clone()));
         entry.insert("capture".to_string(), json!("link"));
+        // A name the parameter of a pattern compiled in binds to a
+        // property that the call writes as a literal: the path holds the
+        // literal, whole, as its constant.
+        if let (Place::Const | Place::Record(_), Some(Expression::Identifier(identifier))) =
+            (place, written.map(|written| unwrap(written)))
+        {
+            if let Some(constant) = self.callee_literals.get(identifier.name.as_str()) {
+                entry.insert("place".to_string(), json!({ "constant": constant }));
+                entry.insert("template".to_string(), json!({ "op": "const" }));
+                state.push(Value::Object(entry));
+                return;
+            }
+        }
         match place {
             Place::Slot(root, at) => {
                 let slot = self.slot(root, at, "identity");
@@ -7928,6 +7983,8 @@ pub fn emit_module<'a>(
             member_streams: Vec::new(),
             self_names: BTreeSet::new(),
             returned_streams: Vec::new(),
+            literal_values: HashMap::new(),
+            callee_literals: HashMap::new(),
             patterns: vec![(module, *start)],
             inline_at: Vec::new(),
             given_constants: HashSet::new(),

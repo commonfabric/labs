@@ -4453,3 +4453,73 @@ export const P = pattern<{ index: number; count: Writable<number> }>(({ index, c
         r#"[["$UI","children","1","props","onClick"]]"#
     );
 }
+
+/// PL §1.1, `Binding.state`: a state path of a binding of a pattern
+/// compiled in that is bound to a literal the call writes holds the
+/// literal as its constant, for a call written as a function and for one
+/// written as a tag, and for a scalar, an array and a record.
+#[test]
+fn a_literal_argument_of_a_compiled_in_call_is_the_constant_of_a_state_path() {
+    let analysis = program(
+        r#"import { Writable, handler, pattern, UI } from "commonfabric";
+interface Row { name: string }
+const sort = handler<unknown, { rows: Row[]; step: number; label: string; picked: Writable<string> }>(
+  (_, state) => {
+    state.picked.set(state.rows[0].name + state.label + state.step);
+  },
+);
+const Table = pattern<{ rows: Row[]; step: number; label: string; picked: Writable<string> }>(
+  ({ rows, step, label, picked }) => {
+    return { [UI]: <button onClick={sort({ rows, step, label, picked })}>{label}</button> };
+  },
+);
+export const P = pattern<{ picked: Writable<string> }>(({ picked }) => {
+  const called = Table({ rows: [{ name: "a" }, { name: "b" }], step: -5, label: "by call", picked });
+  return {
+    [UI]: (
+      <div>
+        {called}
+        <Table rows={[{ name: "c" }]} step={2} label="by tag" picked={picked} />
+      </div>
+    ),
+  };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let constants: Vec<Vec<(String, String)>> = plan["bindings"]
+        .as_array()
+        .expect("bindings")
+        .iter()
+        .map(|binding| {
+            binding["state"]
+                .as_array()
+                .expect("state")
+                .iter()
+                .filter(|entry| entry["place"].get("constant").is_some())
+                .map(|entry| {
+                    (
+                        entry["path"][0].as_str().unwrap_or("").to_string(),
+                        entry["place"]["constant"].to_string(),
+                    )
+                })
+                .collect()
+        })
+        .collect();
+    let text = |a: &str, b: &str| (a.to_string(), b.to_string());
+    assert_eq!(
+        constants,
+        [
+            // `-5` is expression code, and its path names an output.
+            vec![
+                text("label", r#""by call""#),
+                text("rows", r#"[{"name":"a"},{"name":"b"}]"#),
+            ],
+            vec![
+                text("label", r#""by tag""#),
+                text("rows", r#"[{"name":"c"}]"#),
+                text("step", "2"),
+            ],
+        ]
+    );
+}
