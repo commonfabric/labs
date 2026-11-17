@@ -14985,7 +14985,7 @@ export function* prepareBoundaryCommitSteps(
             return position.path === derived.path &&
               (samePolicy === undefined ||
                   deferredWriterPaths.some((path) =>
-                    pathPatternsOverlap(position.at, path)
+                    pathsOverlap(position.at, path)
                   )
                 ? deepEqual(position.ifc, derived.ifc)
                 : samePolicy(position.ifc, derived.ifc));
