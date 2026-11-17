@@ -67,6 +67,7 @@ export interface RepoSyncPlan {
 /** What happened to one entry. */
 export type EntryOutcome =
   | { path: string; status: "published"; patternId: string }
+  | { path: string; status: "public-elsewhere"; patternId: string }
   | { path: string; status: "unchanged"; patternId: string }
   | { path: string; status: "undescribed" }
   | { path: string; status: "failed"; reason: string };
@@ -207,9 +208,14 @@ const publishEntry = async (
   if (response.ignored?.includes("source")) {
     throw new Error("the index ignored the repository source");
   }
-  return response.unchanged === true
-    ? { path: entry.path, status: "unchanged", patternId: response.patternId }
-    : { path: entry.path, status: "published", patternId: response.patternId };
+  const status = response.unchanged === true
+    ? "unchanged"
+    // The same source is already public under another publisher, so the
+    // brand's version stays private rather than appearing twice.
+    : response.visibility === "private"
+    ? "public-elsewhere"
+    : "published";
+  return { path: entry.path, status, patternId: response.patternId };
 };
 
 /** The gate verdicts with findings that `heads` carry. */
@@ -360,6 +366,11 @@ export const reportMarkdown = (report: RepoSyncReport): string => {
       }
     }
   }
+  list(
+    "Already public under another publisher",
+    "The same source is public under someone else, so the brand's version stays private.",
+    withStatus("public-elsewhere").map((entry) => entry.path),
+  );
   list(
     "Not published: no description",
     "Open each with a `/** ... */` doc comment whose first paragraph says what the pattern does.",

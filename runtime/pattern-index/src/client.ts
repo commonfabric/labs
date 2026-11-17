@@ -616,6 +616,13 @@ export interface PatternIndexPublishResponse {
    */
   unchanged?: boolean;
 
+  /**
+   * Who may read the new version. A brand's version is `published`, unless
+   * the same source is already public under someone else, when it is
+   * `private`. Absent on deployments that predate versions.
+   */
+  visibility?: string;
+
   /** Request fields this deployment no longer stores and dropped. */
   ignored?: readonly string[];
 }

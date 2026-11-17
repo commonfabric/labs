@@ -379,6 +379,25 @@ describe("repo-sync", () => {
       expect(report.entries[0].status).toBe("unchanged");
     });
 
+    it("returns an entry whose source is public under someone else as public elsewhere", async () => {
+      const { client } = fakeIndex();
+      client.publishPattern = (request) =>
+        Promise.resolve({
+          patternId: request.patternId,
+          created: true,
+          visibility: "private",
+        });
+      const report = await publishPlan(
+        { entries: [compiled("p/a.tsx")], selected: ["p/a.tsx"] },
+        PUBLISH_OPTIONS,
+        client,
+      );
+      expect(report.entries[0].status).toBe("public-elsewhere");
+      expect(reportMarkdown(report)).toContain(
+        "### Already public under another publisher",
+      );
+    });
+
     it("returns a publish the index dropped the source from as failed", async () => {
       const { client } = fakeIndex();
       client.publishPattern = (request) =>
