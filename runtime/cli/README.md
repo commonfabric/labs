@@ -2417,18 +2417,19 @@ contract before that restriction is widened.
 
 A host profile may bound each model call with `maxInputBytes` and
 `maxOutputTokens`; a caller may only narrow either ceiling. Bounded calls use
-`openai-codex`, make one provider attempt without transport retries, check the
-final UTF-8 request body before sending it, and set the provider's output-token
-ceiling, including reasoning tokens. The byte check includes instructions,
-history and tool schemas and rejects oversized context without discarding it.
-The same model client carries these limits into research and delegated calls. A
-run under the gateway provider refuses these limits as its model client is
-built, before any model call. An input-byte ceiling is not a token count;
-callers budgeting tokens must reserve separate provider framing headroom.
-Provider-added native-search context and image token expansion require separate
-accounting; the serialized byte check does not bound them. A response that
-reaches its output-token ceiling ends as a provider failure, with no partial
-structured result admitted.
+`openai-codex`, make one provider attempt without transport retries (a request
+whose access token the provider refuses is issued once more with a refreshed
+token), check the final UTF-8 request body before sending it, and set the
+provider's output-token ceiling, including reasoning tokens. The byte check
+includes instructions, history and tool schemas and rejects oversized context
+without discarding it. The same model client carries these limits into research
+and delegated calls. A run under the gateway provider refuses these limits as
+its model client is built, before any model call. An input-byte ceiling is not a
+token count; callers budgeting tokens must reserve separate provider framing
+headroom. Provider-added native-search context and image token expansion require
+separate accounting; the serialized byte check does not bound them. A response
+that reaches its output-token ceiling ends as a provider failure, with no
+partial structured result admitted.
 
 `imageAttachments` contains at most eight `{mediaType, base64}` objects, using
 PNG, JPEG, GIF or WebP bytes. Canonical base64 and the declared image signature

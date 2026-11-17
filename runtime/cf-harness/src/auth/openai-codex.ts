@@ -3,7 +3,10 @@ import {
   defaultHarnessFetch,
   type HarnessFetch,
 } from "../contracts/http-fetch.ts";
-import type { HarnessCredentialStore } from "./credential-store.ts";
+import type {
+  HarnessCredentialRecord,
+  HarnessCredentialStore,
+} from "./credential-store.ts";
 import {
   HARNESS_CREDENTIAL_OWNER_REF_TYPE,
   type HarnessCredentialOwnerRef,
@@ -385,44 +388,7 @@ export class OpenAICodexCredentialResolver {
           if (latest.expiresAt - this.#refreshSkewMs > this.#now()) {
             return currentRecord;
           }
-          let response: Response;
-          try {
-            response = await this.#fetchFn(OPENAI_CODEX_TOKEN_URL, {
-              method: "POST",
-              redirect: "error",
-              headers: { "Content-Type": "application/x-www-form-urlencoded" },
-              body: new URLSearchParams({
-                grant_type: "refresh_token",
-                refresh_token: latest.refreshToken,
-                client_id: OPENAI_CODEX_CLIENT_ID,
-              }),
-              signal,
-            });
-          } catch {
-            if (signal?.aborted) throw abortReason(signal);
-            throw new OpenAICodexAuthError(
-              "network",
-              "OpenAI Codex token refresh failed before receiving a response",
-            );
-          }
-          try {
-            const credential = await readTokenResponse(
-              response,
-              "refresh",
-              this.#now(),
-              latest.refreshToken,
-            );
-            return { credential };
-          } catch (error) {
-            const reason = error instanceof OpenAICodexAuthError
-              ? TERMINAL_REASONS[error.kind]
-              : undefined;
-            if (reason === undefined) throw error;
-            return {
-              credential: latest,
-              health: { status: "reconnect-required", reason },
-            };
-          }
+          return await this.#refreshed(latest, signal);
         },
         signal,
       );
@@ -455,6 +421,146 @@ export class OpenAICodexCredentialResolver {
       );
     }
     return refreshed;
+  }
+
+  /**
+   * The record a refresh of `latest` leaves: a new credential, or the same
+   * one marked as needing reconnection when the provider refused the refresh
+   * for good. Any other failure is thrown, and the record stays as it was.
+   */
+  async #refreshed(
+    latest: OpenAICodexOAuthCredential,
+    signal?: AbortSignal,
+  ): Promise<HarnessCredentialRecord> {
+    let response: Response;
+    try {
+      response = await this.#fetchFn(OPENAI_CODEX_TOKEN_URL, {
+        method: "POST",
+        redirect: "error",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: latest.refreshToken,
+          client_id: OPENAI_CODEX_CLIENT_ID,
+        }),
+        signal,
+      });
+    } catch {
+      if (signal?.aborted) throw abortReason(signal);
+      throw new OpenAICodexAuthError(
+        "network",
+        "OpenAI Codex token refresh failed before receiving a response",
+      );
+    }
+    try {
+      const credential = await readTokenResponse(
+        response,
+        "refresh",
+        this.#now(),
+        latest.refreshToken,
+      );
+      return { credential };
+    } catch (error) {
+      const reason = error instanceof OpenAICodexAuthError
+        ? TERMINAL_REASONS[error.kind]
+        : undefined;
+      if (reason === undefined) throw error;
+      return {
+        credential: latest,
+        health: { status: "reconnect-required", reason },
+      };
+    }
+  }
+
+  /**
+   * The provider answered a model request made with `rejected` by refusing
+   * its access token, though the stored expiry said it was still good. The
+   * expiry is the token endpoint's estimate; the refusal is the fact. So the
+   * token is refreshed now, whatever its expiry says.
+   *
+   * Returns the credential to issue the request again with: the refreshed
+   * one (`fresh`), or the stored one when another process has already
+   * replaced the refused token. Returns `undefined` when there is none to
+   * try: the owner disconnected, the credential already needs reconnection,
+   * or the refresh was refused for good (which marks it so). A refresh that
+   * could not be completed, or a store that could not be updated, rejects as
+   * `provider-unavailable`, as it does in `resolve`: the credential is still
+   * connected, and the refusal is not the reason the request failed.
+   */
+  async refreshRejected(
+    rejected: OpenAICodexOAuthCredential,
+    signal?: AbortSignal,
+  ): Promise<
+    { credential: OpenAICodexOAuthCredential; fresh: boolean } | undefined
+  > {
+    let fresh = false;
+    try {
+      const record = await this.#store.updateRecord(
+        this.#ownerKey,
+        OPENAI_CODEX_PROVIDER_ID,
+        async (currentRecord) => {
+          if (signal?.aborted) throw abortReason(signal);
+          const latest = currentRecord.credential;
+          if (
+            !latest || currentRecord.health !== undefined ||
+            latest.accessToken !== rejected.accessToken
+          ) {
+            return currentRecord;
+          }
+          fresh = true;
+          return await this.#refreshed(latest, signal);
+        },
+        signal,
+      );
+      if (signal?.aborted) throw abortReason(signal);
+      return record.health === undefined && record.credential !== undefined
+        ? { credential: record.credential, fresh }
+        : undefined;
+    } catch (error) {
+      if (signal?.aborted) throw abortReason(signal);
+      if (error instanceof HarnessControlError) throw error;
+      throw new HarnessControlError(
+        "provider-unavailable",
+        error instanceof OpenAICodexAuthError
+          ? error.message
+          : "OpenAI Codex credential storage could not be updated",
+      );
+    }
+  }
+
+  /**
+   * The provider refused `rejected` although it had just been refreshed, so
+   * no token this credential can obtain is accepted: mark it as needing
+   * reconnection. A credential replaced since, or already marked, is left as
+   * it is. A store that cannot be written leaves the mark unmade; the request
+   * has already failed as authentication required.
+   */
+  async markRejected(
+    rejected: OpenAICodexOAuthCredential,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    try {
+      await this.#store.updateRecord(
+        this.#ownerKey,
+        OPENAI_CODEX_PROVIDER_ID,
+        (currentRecord) => {
+          const latest = currentRecord.credential;
+          if (
+            !latest || currentRecord.health !== undefined ||
+            latest.accessToken !== rejected.accessToken
+          ) {
+            return currentRecord;
+          }
+          return {
+            credential: latest,
+            health: { status: "reconnect-required", reason: "revoked" },
+          };
+        },
+        signal,
+      );
+    } catch {
+      if (signal?.aborted) throw abortReason(signal);
+    }
   }
 }
 
