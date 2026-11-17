@@ -112,7 +112,9 @@ export default pattern(() => {
           pool.contributions[0]?.rules.length === 2
         ),
       },
-      // One contributor is below every threshold: nothing is released.
+      // One contributor is below every threshold: the released function
+      // emits nothing, and nothing reaches the public store.
+      { assertion: assert(() => pool.consensus.length === 0) },
       { assertion: assert(() => pool.releasedCount === 0) },
       { assertion: assert(() => pool.released.length === 0) },
 
