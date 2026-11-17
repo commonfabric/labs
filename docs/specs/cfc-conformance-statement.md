@@ -962,10 +962,13 @@ further alternative is one `writePolicyAlternativeAdmissible` admits, and every
 other claim there is the same (`ifcDiffersOnlyByReleaseAppend` in
 `cfc/schema-merge.ts`). A position whose logical path the comparison cannot
 tell, or that is at, above or beneath a deferred field, is compared exactly.
-specs#67 as proposed compares every position exactly, so the runtime admits
-more than it as well as more than the pin; @danfuzz ruled on
-2026-11-17 that this lands at the strict default with no dial, ahead of an
-amendment to specs#67, under its `SPEC-PENDING` marker.
+That is specs#67 as amended (§8.15.4, the replayed-setup restatement), which
+decides the deferred paths against the stored envelope's requirements alone;
+the runtime decides them against every schema the write answers to, the
+stored envelope among them, so it compares at least the positions the
+amendment compares exactly. Against the pin the runtime admits more; @danfuzz
+ruled on 2026-11-17 that this lands at the strict default with no dial, ahead
+of specs#67's ruling, under its `SPEC-PENDING` marker.
 
 **Residuals.**
 

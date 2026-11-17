@@ -14919,10 +14919,10 @@ export function* prepareBoundaryCommitSteps(
     // at or beneath: they govern a value the setup initializes. Where any are
     // left out, the merged envelope, which declares them, is stored in place
     // of the stored one; in a release it re-describes the claims beneath
-    // links too, as any release's merged envelope does. Where those are left
-    // out, in a release, a position whose write policy the release extended
-    // with alternatives it may append counts as unchanged too, and the merged
-    // envelope, which holds them, is stored.
+    // links too, as any release's merged envelope does. In the comparison
+    // that leaves those out, in a release, a position whose write policy the
+    // release extended with alternatives it may append counts as unchanged
+    // too, and the merged envelope, which holds them, is stored.
     let keepsStoredSchema = false;
     // TODO(danfuzz): Leaving out the positions beneath links applies the
     // link-position rule of commonfabric/specs pull request 52, in its
@@ -15018,12 +15018,12 @@ export function* prepareBoundaryCommitSteps(
         // TODO(danfuzz): Taking a position whose policy differs only by the
         // write-policy alternatives this transaction's release appended for
         // an unchanged one (commonfabric/specs pull request 96, "Release")
-        // admits more than §8.15.4 permits, and more than commonfabric/specs
-        // pull request 67 proposes, through the marker at the restatement
-        // deferral this waiver discharges. It runs by default ahead of an
-        // amendment to pull request 67, by Dan's decision of 2026-11-17. The
-        // stored envelope is not kept then: the merged one, which holds the
-        // appended alternatives, is stored.
+        // admits more than §8.15.4 permits. It is commonfabric/specs pull
+        // request 67 as amended, in §8.15.4's replayed-setup restatement, and
+        // waits on that ruling through the marker at the restatement deferral
+        // this waiver discharges, running by default ahead of it by Dan's
+        // decision of 2026-11-17. The stored envelope is not kept then: the
+        // merged one, which holds the appended alternatives, is stored.
         if (
           leavesDeferredPaths(
             (path) => governsNothingHere(path) || newField(path),
