@@ -90,13 +90,14 @@ confidential in the pool only by its policy.
   counts each principal once, whatever pseudonym they send.
 - A rule is released, with its count, once the number of distinct pseudonyms
   that proposed it reaches its threshold. The threshold is a configurable centre
-  (default 15) plus a per-rule offset in `[-k, +k]` (default `k = 5`): a keyed
-  hash of a pool secret and the rule's canonical form. It is deterministic, so
-  the rule's threshold never moves, and unguessable without the secret, so a
-  prober cannot plant exactly "threshold − 1" contributions to test whether
-  someone else holds a rule. The secret is not hidden from everyone: the first
-  contributor's runtime mints it, and any runtime that runs the pool can read it
-  (the platform limit below).
+  (default 15) plus a per-rule offset in `[-k, +k]` (default `k = 5`), and never
+  below five, a floor the pool's policy module fixes: a keyed hash of a pool
+  secret and the rule's canonical form. It is deterministic, so the rule's
+  threshold never moves, and unguessable without the secret, so a prober cannot
+  plant exactly "threshold − 1" contributions to test whether someone else holds
+  a rule. The secret is not hidden from everyone: the first contributor's
+  runtime mints it, and any runtime that runs the pool can read it (the platform
+  limit below).
 - What the offset buys is bounded: someone adding fake contributors one at a
   time can still watch for release, but cannot tell whether up to about `2k` of
   the contributors were real people.

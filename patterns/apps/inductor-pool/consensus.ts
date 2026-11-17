@@ -66,6 +66,25 @@ export const DEFAULT_JITTER = 5;
  */
 export const MIN_THRESHOLD = 2;
 
+/**
+ * The lowest threshold a pool may seal: no rule of a sealed pool is released
+ * with fewer than five contributors holding it, whatever its configured
+ * centre and jitter say. `mintSeal` refuses a centre below it and narrows the
+ * jitter so the centre less the jitter is never below it, and the release
+ * refuses a seal that breaks it.
+ *
+ * Why a module constant and why five: `submitContribution` is exported, so
+ * code of anyone's can bind it to a contribution list of its own and choose
+ * that list's configuration, and the release over that list is witnessed like
+ * the pool's own. What it cannot choose is this number, which is part of the
+ * policy module. So the cheapest public release of a rule, a rule read from
+ * someone else's contribution included, takes this many principals. Two (the
+ * bare `MIN_THRESHOLD`) made that one accomplice; five makes it a handful of
+ * accounts while keeping a small pool for a team usable, and a released count
+ * of at least five says less about any one holder.
+ */
+export const MIN_SEALED_THRESHOLD = 5;
+
 // =============================================================================
 // RULE IDENTITY
 // =============================================================================
@@ -381,10 +400,11 @@ export function releaseFrom(
 }
 
 /**
- * The one seal every contribution carries, or undefined when there is none or
- * two disagree. The submit handler copies the first contribution's seal into
- * every later one, so honest contributions always agree; a disagreement means
- * a list the handler did not write, and it releases nothing.
+ * The one seal every contribution carries, or undefined when there is none,
+ * two disagree, or one is not a seal `mintSeal` could mint (`isSealed`). The
+ * submit handler copies the first contribution's seal into every later one,
+ * so honest contributions always agree; a disagreement means a list the
+ * handler did not write, and it releases nothing.
  */
 export function agreedSeal(
   contributions: readonly (Contribution | undefined)[] | undefined,
@@ -392,13 +412,7 @@ export function agreedSeal(
   let agreed: PoolSeal | undefined;
   for (const contribution of contributions ?? []) {
     const seal = contribution?.seal;
-    if (
-      typeof seal?.secret !== "string" || seal.secret === "" ||
-      typeof seal.thresholdCenter !== "number" ||
-      typeof seal.jitter !== "number"
-    ) {
-      return undefined;
-    }
+    if (seal === undefined || !isSealed(seal)) return undefined;
     if (agreed === undefined) {
       agreed = {
         secret: seal.secret,
@@ -431,24 +445,44 @@ export function releaseSealed(
 }
 
 /**
+ * Whether `seal` is one `mintSeal` could have minted: a secret, a whole
+ * centre of at least `MIN_SEALED_THRESHOLD`, and a whole jitter that keeps
+ * the centre less the jitter at or above it. The release refuses any other,
+ * so a list whose first entry carried a lower seal, which the submit handler
+ * would copy, releases nothing.
+ */
+export function isSealed(seal: PoolSeal | null | undefined): boolean {
+  if (typeof seal !== "object" || seal === null) return false;
+  const { secret, thresholdCenter, jitter } = seal;
+  return typeof secret === "string" && secret !== "" &&
+    Number.isInteger(thresholdCenter) &&
+    thresholdCenter >= MIN_SEALED_THRESHOLD &&
+    Number.isInteger(jitter) && jitter >= 0 &&
+    thresholdCenter - jitter >= MIN_SEALED_THRESHOLD;
+}
+
+/**
  * The seal a pool's first contribution fixes: a fresh secret from `random`,
- * and the configured threshold, checked. Throws on a configuration the
- * release could never use, so a bad one refuses the first contribution
- * rather than sealing a pool that can release nothing.
+ * and the configured threshold, checked. The centre must be a whole number of
+ * at least `MIN_SEALED_THRESHOLD`, and the jitter is narrowed so that no
+ * rule's threshold falls below it. Throws on a configuration the release
+ * could never use, so a bad one refuses the first contribution rather than
+ * sealing a pool that can release nothing.
  */
 export function mintSeal(
   random: () => number,
   config: PoolConfig,
 ): PoolSeal {
-  return {
-    secret: mintSecret(random),
-    thresholdCenter: wholeAtLeast(
-      "thresholdCenter",
-      config.thresholdCenter,
-      1,
-    ),
-    jitter: wholeAtLeast("jitter", config.jitter, 0),
-  };
+  const thresholdCenter = wholeAtLeast(
+    "thresholdCenter",
+    config.thresholdCenter,
+    MIN_SEALED_THRESHOLD,
+  );
+  const jitter = Math.min(
+    wholeAtLeast("jitter", config.jitter, 0),
+    thresholdCenter - MIN_SEALED_THRESHOLD,
+  );
+  return { secret: mintSecret(random), thresholdCenter, jitter };
 }
 
 /**

@@ -1,10 +1,14 @@
 /**
  * The released function run over inputs other code chose is not released.
- * A probe copies the pool's contributions, doubles each under a made-up
- * pseudonym and seals the copies with a threshold of its own, and hands them
- * to `releaseConsensus`. The function computes the victim's rule as released,
+ * A probe copies the pool's contributions, repeats each under made-up
+ * pseudonyms, seals the copies with a secret of its own, and hands them to
+ * `releaseConsensus`. The function computes the victim's rule as released,
  * but the policy's input witness sees contributions `submitContribution` did
  * not write, so a public store refuses the result.
+ *
+ * And `submitContribution`, bound by other code to a list of its own with a
+ * threshold of one, refuses to seal it: the floor is the module's
+ * (`MIN_SEALED_THRESHOLD`), not the binding's.
  *
  * Pattern under test: ./inductor-pool.tsx. The honest release reaching a
  * public store is in ./inductor-pool-multi-user.test.tsx.
@@ -22,6 +26,7 @@ import {
   type VNode,
   type Writable,
 } from "commonfabric";
+import { MIN_SEALED_THRESHOLD } from "./consensus.ts";
 import {
   INVOICE,
   type OpenPublic,
@@ -29,9 +34,11 @@ import {
 } from "./inductor-pool-test-fixture.ts";
 import InductorPool, {
   type Contribution,
+  type ContributionEvent,
   releaseConsensus,
   type ReleasedRule,
   type StoredContribution,
+  submitContribution,
 } from "./inductor-pool.tsx";
 
 /** Copies rules into `to`, as a release into a public store would. */
@@ -65,15 +72,21 @@ interface ProbeOutput {
 
 const ReplayProbe = pattern<ProbeInput, ProbeOutput>(
   ({ contributions, leaked }) => {
-    // Each contribution twice, under a second pseudonym, sealed with the
-    // lowest threshold there is and the probe's own secret.
+    // Each contribution as many times as the lowest threshold a seal may
+    // have, under made-up pseudonyms, sealed with that threshold and the
+    // probe's own secret.
     const forged = computed((): Contribution[] =>
       (contributions ?? []).flatMap((contribution) =>
-        [contribution.pseudonym, `${contribution.pseudonym}-twin`].map(
-          (pseudonym) => ({
-            pseudonym,
+        Array.from(
+          { length: MIN_SEALED_THRESHOLD },
+          (_, i) => ({
+            pseudonym: `${contribution.pseudonym}-${i}`,
             rules: (contribution.rules ?? []).map((rule) => ({ ...rule })),
-            seal: { secret: "chosen", thresholdCenter: 2, jitter: 0 },
+            seal: {
+              secret: "chosen",
+              thresholdCenter: MIN_SEALED_THRESHOLD,
+              jitter: 0,
+            },
           }),
         )
       )
@@ -89,6 +102,30 @@ const ReplayProbe = pattern<ProbeInput, ProbeOutput>(
   },
 );
 
+interface OwnListInput {
+  contributions: Writable<Default<StoredContribution[], []>>;
+}
+
+interface OwnListOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  contributions: StoredContribution[];
+  released: ReleasedRule[];
+  submit: Stream<ContributionEvent>;
+}
+
+/**
+ * The pool's exported submit handler, bound by other code to a list of its
+ * own and configured with the lowest threshold there is.
+ */
+const OwnList = pattern<OwnListInput, OwnListOutput>(({ contributions }) => ({
+  [NAME]: "Own list",
+  [UI]: <div />,
+  contributions,
+  released: releaseConsensus(contributions),
+  submit: submitContribution({ contributions, thresholdCenter: 1, jitter: 0 }),
+}));
+
 export default pattern(() => {
   const pool = InductorPool(
     {
@@ -100,6 +137,7 @@ export default pattern(() => {
   const probe = ReplayProbe(
     { contributions: pool.contributions } as Parameters<typeof ReplayProbe>[0],
   );
+  const own = OwnList({} as Parameters<typeof OwnList>[0]);
   return {
     [TESTS]: [
       {
@@ -113,7 +151,7 @@ export default pattern(() => {
         assertion: assert(() =>
           probe.released.length === 1 &&
           probe.released[0]?.pattern === "invoice" &&
-          probe.released[0]?.count === 2
+          probe.released[0]?.count === MIN_SEALED_THRESHOLD
         ),
       },
       // ...but its inputs are not the pool's own contributions, so a public
@@ -124,10 +162,23 @@ export default pattern(() => {
           probe.leaked.length === 1 && probe.leaked[0]?.key === "untouched"
         ),
       },
+      // The submit handler, bound to a list configured with a threshold of
+      // one, refuses to seal it, so the list holds nothing to release.
+      {
+        action: own.submit,
+        event: { pseudonym: "accomplice", rules: [INVOICE] },
+      },
+      {
+        assertion: assert(() =>
+          own.contributions.length === 0 && own.released.length === 0
+        ),
+      },
     ],
     // The refused publish logs the CFC refusal; the refusal is the point.
     allowConsoleWarnings: true,
+    expectRuntimeErrors: [`at least ${MIN_SEALED_THRESHOLD}`],
     pool,
     probe,
+    own,
   };
 });

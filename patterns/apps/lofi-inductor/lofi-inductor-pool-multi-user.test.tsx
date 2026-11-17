@@ -1,17 +1,19 @@
 /**
  * Two people, each with their own lo-fi inductor for the same goal, publish
- * to one pool whose threshold is exactly two. The rule both hold is released
- * with its count; the rule only one holds is not; and the release comes back
- * to each inductor as a candidate set.
+ * to one pool whose threshold is exactly five, the lowest a pool may seal;
+ * three more contributors send `invoice` to the pool directly. The rule all
+ * five hold is released with its count; the rules only one holds are not;
+ * and the release comes back to each inductor as a candidate set.
  *
  * Patterns under test: ./lofi-inductor.tsx publishing into
  * ../inductor-pool/inductor-pool.tsx
  */
 import { assert, multiUserTest, pattern, TESTS } from "commonfabric";
+import { MIN_SEALED_THRESHOLD } from "../inductor-pool/consensus.ts";
 import InductorPool, {
   type InductorPoolOutput,
 } from "../inductor-pool/inductor-pool.tsx";
-import { rule } from "./lofi-inductor-test-fixture.ts";
+import { INVOICE_ONLY, rule } from "./lofi-inductor-test-fixture.ts";
 import LofiInductor from "./lofi-inductor.tsx";
 
 const GOAL = "Is this email a bill?";
@@ -24,17 +26,17 @@ export const setup = pattern<Record<string, never>, Setup>(() => ({
   pool: InductorPool(
     {
       goal: GOAL,
-      thresholdCenter: 2,
+      thresholdCenter: MIN_SEALED_THRESHOLD,
       jitter: 0,
     } as Parameters<typeof InductorPool>[0],
   ),
 }));
 
-/** Whether the pool's public result is exactly `invoice`, held by two. */
+/** Whether the pool's public result is exactly `invoice`, held by five. */
 function invoiceReleased(pool: InductorPoolOutput): boolean {
   const released = pool.consensus ?? [];
   return released.length === 1 && released[0]?.pattern === "invoice" &&
-    released[0]?.count === 2 && pool.releasedCount === 1;
+    released[0]?.count === 5 && pool.releasedCount === 1;
 }
 
 export const alice = pattern<{ setup: Setup }>(({ setup }) => {
@@ -57,8 +59,8 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
         ),
       },
       { label: "alice-published" },
-      { await: "bob-published" },
-      // Both hold `invoice`; only Alice holds `lunch`.
+      { await: "erin-submitted" },
+      // All five hold `invoice`; only Alice holds `lunch`, only Bob `bill`.
       { assertion: assert(() => invoiceReleased(setup.pool)) },
       // Alice's inductor offers the pool's release back to her as a
       // candidate set. With no held-out items of hers it cannot be scored,
@@ -88,11 +90,50 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     [TESTS]: [
       { await: "alice-published" },
       { action: inductor.publish },
-      { assertion: assert(() => invoiceReleased(setup.pool)) },
+      { assertion: assert(() => (setup.pool.consensus ?? []).length === 0) },
       { label: "bob-published" },
     ],
     inductor,
   };
 });
 
-export default multiUserTest({ setup, participants: { alice, bob } });
+export const carol = pattern<{ setup: Setup }>(({ setup }) => ({
+  [TESTS]: [
+    { await: "bob-published" },
+    {
+      action: setup.pool.submit,
+      event: { pseudonym: "carol-bills", rules: INVOICE_ONLY },
+    },
+    { label: "carol-submitted" },
+  ],
+}));
+
+export const dave = pattern<{ setup: Setup }>(({ setup }) => ({
+  [TESTS]: [
+    { await: "carol-submitted" },
+    {
+      action: setup.pool.submit,
+      event: { pseudonym: "dave-bills", rules: INVOICE_ONLY },
+    },
+    // Four hold `invoice`: one short.
+    { assertion: assert(() => (setup.pool.consensus ?? []).length === 0) },
+    { label: "dave-submitted" },
+  ],
+}));
+
+export const erin = pattern<{ setup: Setup }>(({ setup }) => ({
+  [TESTS]: [
+    { await: "dave-submitted" },
+    {
+      action: setup.pool.submit,
+      event: { pseudonym: "erin-bills", rules: INVOICE_ONLY },
+    },
+    { assertion: assert(() => invoiceReleased(setup.pool)) },
+    { label: "erin-submitted" },
+  ],
+}));
+
+export default multiUserTest({
+  setup,
+  participants: { alice, bob, carol, dave, erin },
+});

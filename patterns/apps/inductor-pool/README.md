@@ -16,7 +16,11 @@ this pattern is its implementation.
   when the pool is made. The first contribution seals them (below), so anything
   that can write the pool's inputs, a contributor included, cannot lower the
   threshold once there is something to release
-  (`inductor-pool-config.test.tsx`).
+  (`inductor-pool-config.test.tsx`). Whatever the config says, no rule's
+  threshold is below `MIN_SEALED_THRESHOLD` (5), a constant of the policy
+  module: sealing refuses a centre below it and narrows the jitter so that the
+  centre less the jitter is never below it (see "What the witness does not
+  cover" for why).
 - **Contribute.** `submit` takes `{pseudonym, rules}`, the rules in canonical
   form (`CanonicalRule` from `rule-grammar.ts`, beside the pool). The handler
   checks every rule against the grammar again, stores it in canonical form, and
@@ -47,13 +51,14 @@ this pattern is its implementation.
   rule's threshold is `thresholdCenter + offset`, from the seal, where `offset`
   is in `[-k, +k]`: the first 32 bits of HMAC-SHA-256(secret, rule), reduced to
   the range. It is deterministic, and it cannot be predicted without the secret.
-  The threshold is never under 2, because a threshold of 1 would publish one
-  person's rule. The function emits only the rules at or above their threshold,
-  with their counts. Of the rest it emits nothing: not the rule, not its count,
-  not that it exists, not how many there are. When the contributions' seals
-  disagree, or one has none, it emits nothing at all. That output, `consensus`,
-  is the pool's public result, with `releasedCount` and the view derived from
-  it. It is not stored (see "Workaround: the release is not stored").
+  A sealed threshold is never under `MIN_SEALED_THRESHOLD`, and the release
+  refuses a seal that breaks it. The function emits only the rules at or above
+  their threshold, with their counts. Of the rest it emits nothing: not the
+  rule, not its count, not that it exists, not how many there are. When the
+  contributions' seals disagree, or one has none, it emits nothing at all. That
+  output, `consensus`, is the pool's public result, with `releasedCount` and the
+  view derived from it. It is not stored (see "Workaround: the release is not
+  stored").
 
 The pure logic is in `consensus.ts`, and the rule grammar in `rule-grammar.ts`.
 The policy module's identity covers both, because a module's identity covers the
@@ -130,11 +135,16 @@ contributions was `submitContribution`. It says nothing about who called it.
 `submitContribution` is exported, so code can bind it to a contribution list of
 its own and feed it any event, rules read from someone else's contribution
 included, and the release over that list is witnessed like an honest one. The
-handler still binds one pseudonym to each principal, and the seal it mints still
-floors the threshold at 2, so this takes as many principals as the threshold
-(cut 1). Closing it needs evidence minted where a contribution enters, a
-person's gesture on a trusted surface, which is the proof-of-gesture work the
-witness spec names.
+handler still binds one pseudonym to each principal, and the binding chooses the
+list's configuration, but not the floor: `mintSeal` refuses a centre below
+`MIN_SEALED_THRESHOLD` (5), a constant of the policy module, and narrows the
+jitter so no rule's threshold is below it, and the release refuses a seal below
+it (a list whose first entry was planted with a lower seal included). So a
+public release of a rule over such a list, a rule read from someone else's
+contribution included, costs `MIN_SEALED_THRESHOLD` principals (cut 1), not the
+2 it cost while the binding could choose a centre of 1. Closing it needs
+evidence minted where a contribution enters, a person's gesture on a trusted
+surface, which is the proof-of-gesture work the witness spec names.
 
 ## Workaround: the release is not stored
 

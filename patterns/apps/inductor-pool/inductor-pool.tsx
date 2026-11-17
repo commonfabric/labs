@@ -48,7 +48,8 @@ import {
   type Contribution,
   DEFAULT_JITTER,
   DEFAULT_THRESHOLD_CENTER,
-  MIN_THRESHOLD,
+  isSealed,
+  MIN_SEALED_THRESHOLD,
   mintSeal,
   type PoolSeal,
   type ReleasedRule,
@@ -266,8 +267,15 @@ export const submitContribution = handler<ContributionEvent, SubmitState>(
     // that seal. A concurrent first contribution conflicts on the list, which
     // this handler read, and, retried, copies the seal that landed. Once every
     // contributor has withdrawn, the next contribution seals afresh.
-    const seal = contributions.get()[0]?.seal ??
-      mintSeal(Math.random, { thresholdCenter, jitter });
+    // A pool's threshold never goes under `MIN_SEALED_THRESHOLD`: `mintSeal`
+    // refuses a lower centre and narrows the jitter, and a copied seal that
+    // breaks the floor (a list this handler did not start) is refused here,
+    // as the release would refuse it.
+    const first = contributions.get()[0]?.seal;
+    if (first !== undefined && !isSealed(first)) {
+      throw new Error("The pool's seal is not one this pool could mint.");
+    }
+    const seal = first ?? mintSeal(Math.random, { thresholdCenter, jitter });
 
     const contribution = {
       pseudonym,
@@ -308,8 +316,10 @@ interface InductorPoolInput {
   /** The yes-or-no question this pool collects rules for. */
   goal: Default<string, "">;
   /**
-   * The threshold a rule has before its offset. The first contribution seals
-   * it, with `jitter`; the release never reads it again.
+   * The threshold a rule has before its offset, at least
+   * `MIN_SEALED_THRESHOLD` (5). The first contribution seals it, with
+   * `jitter`, narrowed so no rule's threshold is below that floor; the
+   * release never reads it again.
    */
   thresholdCenter: Default<number, typeof DEFAULT_THRESHOLD_CENTER>;
   /** The bound `k` of each rule's offset, in `[-k, +k]`. */
@@ -368,7 +378,7 @@ export default pattern<InductorPoolInput, InductorPoolOutput>(
     });
     const configLine = computed(() =>
       `A rule is released once ${thresholdCenter} ± ${jitter} distinct ` +
-      `contributors hold it (never fewer than ${MIN_THRESHOLD}); each ` +
+      `contributors hold it (never fewer than ${MIN_SEALED_THRESHOLD}); each ` +
       `rule's exact threshold is hidden. The first contribution fixes ` +
       `these numbers; changing them afterwards changes nothing.`
     );

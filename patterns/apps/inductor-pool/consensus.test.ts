@@ -8,6 +8,8 @@ import {
   canonicalSet,
   type Contribution,
   hmacSha256,
+  isSealed,
+  MIN_SEALED_THRESHOLD,
   MIN_THRESHOLD,
   mintSeal,
   mintSecret,
@@ -305,29 +307,69 @@ describe("tallyAll", () => {
 });
 
 describe("sealed release", () => {
-  const SEAL = { secret: SECRET, thresholdCenter: 2, jitter: 0 };
-  const sealed = (prefix: string, n: number, rules: CanonicalRule[]) =>
-    many(prefix, n, rules).map((c) => ({ ...c, seal: { ...SEAL } }));
+  const SEAL = {
+    secret: SECRET,
+    thresholdCenter: MIN_SEALED_THRESHOLD,
+    jitter: 0,
+  };
+  const sealed = (
+    prefix: string,
+    n: number,
+    rules: CanonicalRule[],
+    seal: { secret: string; thresholdCenter: number; jitter: number } = SEAL,
+  ) => many(prefix, n, rules).map((c) => ({ ...c, seal: { ...seal } }));
 
   it("releases with the threshold the contributions carry", () => {
-    expect(releaseSealed(sealed("p", 2, [INVOICE])).map((r) => r.count))
-      .toEqual([2]);
-    expect(releaseSealed(sealed("p", 1, [INVOICE]))).toEqual([]);
+    expect(
+      releaseSealed(sealed("p", MIN_SEALED_THRESHOLD, [INVOICE])).map((r) =>
+        r.count
+      ),
+    ).toEqual([MIN_SEALED_THRESHOLD]);
+    expect(releaseSealed(sealed("p", MIN_SEALED_THRESHOLD - 1, [INVOICE])))
+      .toEqual([]);
   });
 
   it("releases nothing when a contribution has no seal or the seals differ", () => {
-    const honest = sealed("p", 3, [INVOICE]);
+    const honest = sealed("p", MIN_SEALED_THRESHOLD + 1, [INVOICE]);
     expect(releaseSealed([...honest, ...many("q", 1, [INVOICE])])).toEqual(
       [],
     );
-    const lowered = {
+    const raised = {
       ...honest[0],
-      seal: { ...SEAL, thresholdCenter: 1 },
+      seal: { ...SEAL, thresholdCenter: MIN_SEALED_THRESHOLD + 1 },
     };
-    expect(agreedSeal([lowered, ...honest.slice(1)])).toBeUndefined();
-    expect(releaseSealed([lowered, ...honest.slice(1)])).toEqual([]);
+    expect(agreedSeal([raised, ...honest.slice(1)])).toBeUndefined();
+    expect(releaseSealed([raised, ...honest.slice(1)])).toEqual([]);
     expect(releaseSealed(many("p", 3, [INVOICE]))).toEqual([]);
     expect(releaseSealed([])).toEqual([]);
+  });
+
+  it("releases nothing from a list sealed below the module's floor", () => {
+    // A list someone bound `submitContribution` to, configured as low as it
+    // goes: every seal agrees, and the contributions hold the rule well past
+    // that list's own threshold, but not past the module's.
+    for (
+      const low of [
+        { secret: SECRET, thresholdCenter: 1, jitter: 0 },
+        {
+          secret: SECRET,
+          thresholdCenter: MIN_SEALED_THRESHOLD - 1,
+          jitter: 0,
+        },
+        {
+          secret: SECRET,
+          thresholdCenter: MIN_SEALED_THRESHOLD + 2,
+          jitter: 3,
+        },
+        { secret: SECRET, thresholdCenter: 15, jitter: 1e9 },
+      ]
+    ) {
+      expect(isSealed(low)).toBe(false);
+      const list = sealed("p", MIN_SEALED_THRESHOLD - 1, [INVOICE], low);
+      expect(agreedSeal(list)).toBeUndefined();
+      expect(releaseSealed(list)).toEqual([]);
+    }
+    expect(isSealed(SEAL)).toBe(true);
   });
 
   it("mints a seal from a valid config and refuses an invalid one", () => {
@@ -337,9 +379,31 @@ describe("sealed release", () => {
       thresholdCenter: 15,
       jitter: 5,
     });
+    expect(isSealed(seal)).toBe(true);
     expect(() => mintSeal(() => 0, { thresholdCenter: 0, jitter: 5 }))
       .toThrow();
     expect(() => mintSeal(() => 0, { thresholdCenter: 15, jitter: -1 }))
       .toThrow();
+  });
+
+  it("refuses a centre below the module's floor and narrows the jitter", () => {
+    for (const thresholdCenter of [1, 2, MIN_SEALED_THRESHOLD - 1]) {
+      expect(() => mintSeal(() => 0, { thresholdCenter, jitter: 0 }))
+        .toThrow(`at least ${MIN_SEALED_THRESHOLD}`);
+    }
+    // The low end, centre less jitter, never goes under the floor.
+    expect(mintSeal(() => 0, { thresholdCenter: 15, jitter: 1e9 }).jitter)
+      .toBe(15 - MIN_SEALED_THRESHOLD);
+    expect(
+      mintSeal(() => 0, { thresholdCenter: MIN_SEALED_THRESHOLD, jitter: 3 })
+        .jitter,
+    ).toBe(0);
+    for (let i = 0; i < 50; i++) {
+      const seal = mintSeal(Math.random, { thresholdCenter: 7, jitter: 5 });
+      expect(seal.jitter).toBe(2);
+      expect(
+        thresholdFor(seal.secret, `rule-${i}`, seal),
+      ).toBeGreaterThanOrEqual(MIN_SEALED_THRESHOLD);
+    }
   });
 });

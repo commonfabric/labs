@@ -23,14 +23,14 @@ export default pattern(() => {
   const billPool = InductorPool(
     {
       goal: GOAL,
-      thresholdCenter: 2,
+      thresholdCenter: 5,
       jitter: 0,
     } as Parameters<typeof InductorPool>[0],
   );
   const newsletterPool = InductorPool(
     {
       goal: OTHER_GOAL,
-      thresholdCenter: 2,
+      thresholdCenter: 5,
       jitter: 0,
     } as Parameters<typeof InductorPool>[0],
   );
@@ -56,7 +56,7 @@ export default pattern(() => {
   const personalPool = InductorPool(
     {
       goal: GOAL,
-      thresholdCenter: 2,
+      thresholdCenter: 5,
       jitter: 0,
     } as Parameters<typeof InductorPool>[0],
   );

@@ -5,7 +5,7 @@
  * both a computation the policy does not name and a raw contribution, and
  * withdrawing takes the contribution out.
  *
- * Pattern under test: ./inductor-pool.tsx. Release itself takes two
+ * Pattern under test: ./inductor-pool.tsx. Release itself takes five
  * contributors, so it is in ./inductor-pool-multi-user.test.tsx.
  */
 import {
@@ -103,7 +103,7 @@ export default pattern(() => {
   const pool = InductorPool(
     {
       goal: "Is this email a bill?",
-      thresholdCenter: 2,
+      thresholdCenter: 5,
       jitter: 0,
     } as Parameters<typeof InductorPool>[0],
   );

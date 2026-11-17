@@ -1,12 +1,14 @@
 /**
- * Three contributors, each in their own runtime and under their own
- * principal, share one pool whose threshold is exactly two. A rule two of
- * them hold is released with its count, and a public store takes it; a rule
- * only one holds never appears; no one can submit under another's
- * pseudonym; a contributor who resubmits, under a new pseudonym too,
- * replaces their own entry and is still counted once, even after another
- * contributor's replacement rewrote the list; and a contributor who
- * withdraws takes their count off every rule.
+ * Five contributors, each in their own runtime and under their own
+ * principal, share one pool whose threshold is exactly five, the lowest a
+ * pool may seal (`MIN_SEALED_THRESHOLD`). A rule five of them hold is
+ * released with its count, and a public store takes it; a rule four hold
+ * never appears; no one can submit under another's pseudonym; a contributor
+ * who resubmits, under a new pseudonym too, replaces their own entry and is
+ * still counted once, even after another contributor's replacement rewrote
+ * the list; and a contributor who withdraws takes their count off every
+ * rule. Carol, Dave, and Erin each hold all three rules, so Alice's and
+ * Bob's choices decide which reach five.
  *
  * Pattern under test: ./inductor-pool.tsx
  */
@@ -30,6 +32,7 @@ import {
   type OpenPublic,
   type Untouched,
 } from "./inductor-pool-test-fixture.ts";
+import { MIN_SEALED_THRESHOLD } from "./consensus.ts";
 import InductorPool, {
   type InductorPoolOutput,
   type ReleasedRule,
@@ -43,7 +46,7 @@ export const setup = pattern<Record<string, never>, Setup>(() => ({
   pool: InductorPool(
     {
       goal: "Is this email a bill?",
-      thresholdCenter: 2,
+      thresholdCenter: MIN_SEALED_THRESHOLD,
       jitter: 0,
     } as Parameters<typeof InductorPool>[0],
   ),
@@ -122,34 +125,33 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       // Alone, nothing is released.
       { assertion: assert(() => releasedIs(setup.pool, [])) },
       { label: "alice-submitted" },
-      { await: "bob-submitted" },
-      { await: "carol-submitted" },
-      // Two hold `invoice`: released, with its count. `bill` (bob alone) and
-      // `lunch` (alice alone) do not appear.
-      { assertion: assert(() => releasedIs(setup.pool, [["invoice", 2]])) },
+      { await: "erin-submitted" },
+      // Five hold `invoice`: released, with its count. `bill` and `lunch`,
+      // four each, do not appear.
+      { assertion: assert(() => releasedIs(setup.pool, [["invoice", 5]])) },
       // The release is public: the policy lets it into a public store.
       { action: reader.publishFirst },
       {
         assertion: assert(() =>
           reader.first.length === 1 &&
           reader.first[0]?.pattern === "invoice" &&
-          reader.first[0]?.count === 2
+          reader.first[0]?.count === 5
         ),
       },
-      // Alice replaces her set, which rewrites the list around Bob's entry.
+      // Alice replaces her set, which rewrites the list around the others'.
       {
         action: setup.pool.submit,
         event: { pseudonym: "alice-bills", rules: [INVOICE, LUNCH, BILL] },
       },
       {
         assertion: assert(() =>
-          releasedIs(setup.pool, [["bill", 2], ["invoice", 2]])
+          releasedIs(setup.pool, [["bill", 5], ["invoice", 5]])
         ),
       },
       { label: "alice-replaced" },
       { await: "bob-renamed" },
       // Bob's new pseudonym replaced his entry: he holds only `lunch` now.
-      { assertion: assert(() => releasedIs(setup.pool, [["lunch", 2]])) },
+      { assertion: assert(() => releasedIs(setup.pool, [["lunch", 5]])) },
       // A replaced contribution is still the pool's own, so the release
       // after it is public too.
       { action: reader.publishLater },
@@ -163,8 +165,8 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       {
         assertion: assert(() =>
           releasedIs(setup.pool, []) &&
-          setup.pool.contributions.length === 1 &&
-          setup.pool.contributions[0]?.pseudonym === "bob-new"
+          setup.pool.contributions.length === 4 &&
+          setup.pool.contributions.every((c) => c?.pseudonym !== "alice-bills")
         ),
       },
     ],
@@ -179,7 +181,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => ({
       action: setup.pool.submit,
       event: { pseudonym: "bob-bills", rules: [INVOICE, BILL] },
     },
-    { assertion: assert(() => releasedIs(setup.pool, [["invoice", 2]])) },
+    { assertion: assert(() => releasedIs(setup.pool, [])) },
     { label: "bob-submitted" },
     { await: "alice-replaced" },
     // A new pseudonym from Bob replaces his entry rather than adding one or
@@ -190,8 +192,8 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => ({
     },
     {
       assertion: assert(() =>
-        setup.pool.contributions.length === 2 &&
-        releasedIs(setup.pool, [["lunch", 2]])
+        setup.pool.contributions.length === 5 &&
+        releasedIs(setup.pool, [["lunch", 5]])
       ),
     },
     { label: "bob-renamed" },
@@ -207,10 +209,46 @@ export const carol = pattern<{ setup: Setup }>(({ setup }) => ({
       action: setup.pool.submit,
       event: { pseudonym: "bob-bills", rules: [BILL] },
     },
-    { assertion: assert(() => releasedIs(setup.pool, [["invoice", 2]])) },
+    {
+      assertion: assert(() =>
+        setup.pool.contributions.length === 2 && releasedIs(setup.pool, [])
+      ),
+    },
+    {
+      action: setup.pool.submit,
+      event: { pseudonym: "carol-bills", rules: [INVOICE, BILL, LUNCH] },
+    },
     { label: "carol-submitted" },
   ],
   expectRuntimeErrors: ["belongs to another contributor"],
 }));
 
-export default multiUserTest({ setup, participants: { alice, bob, carol } });
+export const dave = pattern<{ setup: Setup }>(({ setup }) => ({
+  [TESTS]: [
+    { await: "carol-submitted" },
+    {
+      action: setup.pool.submit,
+      event: { pseudonym: "dave-bills", rules: [INVOICE, BILL, LUNCH] },
+    },
+    // Four hold `invoice`: one short.
+    { assertion: assert(() => releasedIs(setup.pool, [])) },
+    { label: "dave-submitted" },
+  ],
+}));
+
+export const erin = pattern<{ setup: Setup }>(({ setup }) => ({
+  [TESTS]: [
+    { await: "dave-submitted" },
+    {
+      action: setup.pool.submit,
+      event: { pseudonym: "erin-bills", rules: [INVOICE, BILL, LUNCH] },
+    },
+    { assertion: assert(() => releasedIs(setup.pool, [["invoice", 5]])) },
+    { label: "erin-submitted" },
+  ],
+}));
+
+export default multiUserTest({
+  setup,
+  participants: { alice, bob, carol, dave, erin },
+});
