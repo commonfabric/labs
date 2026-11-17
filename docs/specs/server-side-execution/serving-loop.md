@@ -114,10 +114,20 @@ execution observer and decides which worker serves which space:
   and `start-local-dev.sh` set to 16384 for the main thread, replaces the
   limit V8 gives each worker. The pool sees that from the `heap_size_limit` a
   worker's init reports (`heap-limit-overridden`) and holds such a worker to
-  `heapLimitMb` itself: it takes the worker out as one that reached its limit
-  once two heartbeats in a row report a heap of `heapLimitMb` or more. Two,
-  since a heartbeat's heap includes garbage V8 has not collected yet. This
-  check needs the worker's heartbeats, which its timers send between tasks,
+  `heapLimitMb` itself. A heartbeat's heap includes garbage V8 has not
+  collected yet, so at a heartbeat that reports a heap of `heapLimitMb` or
+  more the pool asks the worker to collect its garbage (`host.collectedMemory`,
+  one request at a time), and takes it out as one that reached its limit only
+  if its heap is still that large once collected. A worker whose collected
+  heap is under the limit goes on serving. One that refuses the request, or
+  does not answer it while its heartbeats go on, is taken out at six
+  heartbeats in a row past the limit. The toolshed exposes V8's collector at
+  startup for this (`EXPOSE_GC` decides only whether
+  `/api/health/collected-memory` answers); a pool without it
+  (`collectBeforeEnding` unset) takes the worker out at two heartbeats in a
+  row past the limit. Pattern code cannot reach the collector: V8 gives
+  `gc()` only to contexts created by `vm`, not to a worker's own realm or to
+  a SES compartment. This check needs the worker's heartbeats, which its timers send between tasks,
   so a worker that allocates without yielding is bounded only by the process
   flag and by the watchdog, which ends it after `watchdogLimitMs` of silence.
   Either way

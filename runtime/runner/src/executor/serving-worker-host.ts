@@ -77,6 +77,21 @@ const HEAP_LIMIT_SLACK_MB = 512;
  */
 const BEATS_PAST_REPLACED_LIMIT = 2;
 
+/**
+ * How many heartbeats in a row must report a heap of `heapLimitMb` or more
+ * before the pool ends a worker whose V8 limit a process-wide flag replaced,
+ * when the pool has such a worker collect its garbage first
+ * (`collectBeforeEnding`) and no collection has brought the heap under the
+ * limit meanwhile: a worker that refuses the collection, or does not answer
+ * it while its heartbeats go on.
+ */
+const BEATS_PAST_LIMIT_UNCOLLECTED = 6;
+
+const MB = 1024 * 1024;
+
+/** `bytes` in whole megabytes, for a log line. */
+const megabytes = (bytes: number): number => Math.round(bytes / MB);
+
 /** How often a worker posts a heartbeat and its watchdog checks for messages. */
 const WATCHDOG_INTERVAL_MS = 10_000;
 
@@ -195,6 +210,20 @@ export type ServingWorkerPoolOptions = {
    * limit, and one that reaches it aborts the process.
    */
   heapLimitMb?: number;
+
+  /**
+   * Whether the pool has a worker collect its garbage before ending it for a
+   * heap past `heapLimitMb` that V8 does not enforce, because a process-wide
+   * `--max-old-space-size` replaced the worker's limit. The pool then ends
+   * the worker at once if its heap is still past the limit once collected,
+   * and keeps it serving if the collection brings it under. A worker that
+   * refuses the collection, or does not answer it, is still ended, at
+   * {@link BEATS_PAST_LIMIT_UNCOLLECTED} heartbeats in a row past its limit.
+   * Needs `exposeGarbageCollector()` to have run in this process before the
+   * worker started. Default: false, and such a worker is ended at
+   * {@link BEATS_PAST_REPLACED_LIMIT} heartbeats in a row past its limit.
+   */
+  collectBeforeEnding?: boolean;
 
   /**
    * Starts a worker's thread. Default: {@link startServingThread}. A test
@@ -322,6 +351,12 @@ type PoolWorker = {
    * more, while `heapLimitReplaced`.
    */
   beatsPastLimit: number;
+
+  /**
+   * Whether the pool has asked the worker to collect its garbage, for a heap
+   * past `heapLimitMb`, and the worker has not answered yet.
+   */
+  collecting: boolean;
 
   /**
    * The request that closes the worker's host if it holds nothing, while it
@@ -1110,6 +1145,7 @@ export class ServingWorkerPool {
       heapUsed: 0,
       heapLimitReplaced: false,
       beatsPastLimit: 0,
+      collecting: false,
       retiring: undefined,
       sentWhileRetiring: [],
       warmOutstanding: [],
@@ -1172,8 +1208,11 @@ export class ServingWorkerPool {
     logger.warn("heap-limit-overridden", () => [
       `a serving worker's heap is limited to ${actualMb} MB, not the ` +
       `${limitMb} MB it was started with, by a process-wide ` +
-      "--max-old-space-size; the pool ends it at two heartbeats in a row " +
-      `that report ${limitMb} MB or more`,
+      "--max-old-space-size; the pool ends it " +
+      (this.#options.collectBeforeEnding
+        ? `once its heap holds ${limitMb} MB or more after a full collection`
+        : `at ${BEATS_PAST_REPLACED_LIMIT} heartbeats in a row that report ` +
+          `${limitMb} MB or more`),
     ]);
     return true;
   }
@@ -1253,30 +1292,36 @@ export class ServingWorkerPool {
    * it without reaching it, and shrink once the handler is gone. A worker
    * whose buffers outside the heap come to the limit is taken out the same
    * way, at the heartbeat that reports them, since nothing else bounds them.
-   * So is a worker whose V8 limit a process-wide flag replaced, once
+   * So is a worker whose V8 limit a process-wide flag replaced, since V8
+   * would let it grow to the process's limit: with `collectBeforeEnding`,
+   * once a heartbeat past its limit has it collect its garbage and its heap
+   * is still past the limit after (`#collectPastLimit()`), and otherwise once
    * {@link BEATS_PAST_REPLACED_LIMIT} heartbeats in a row report a heap of
-   * its limit or more, since V8 would let it grow to the process's limit.
+   * its limit or more.
    */
   #onHeartbeat(worker: PoolWorker, heartbeat: WorkerHeartbeat): void {
     worker.heapUsed = heartbeat.heapUsed;
     const limitMb = this.#options.heapLimitMb;
-    const megabytes = (bytes: number) => Math.round(bytes / (1024 * 1024));
-    worker.beatsPastLimit = limitMb !== undefined && worker.heapLimitReplaced &&
-        heartbeat.heapUsed >= limitMb * 1024 * 1024
-      ? worker.beatsPastLimit + 1
-      : 0;
+    const collect = this.#options.collectBeforeEnding === true;
+    const pastLimit = limitMb !== undefined && worker.heapLimitReplaced &&
+      heartbeat.heapUsed >= limitMb * MB;
+    worker.beatsPastLimit = pastLimit ? worker.beatsPastLimit + 1 : 0;
+    const beatsToEnd = collect
+      ? BEATS_PAST_LIMIT_UNCOLLECTED
+      : BEATS_PAST_REPLACED_LIMIT;
     let reached: string | undefined;
     if (heartbeat.heapLimitReached) {
       reached = "its heap reached its limit" +
         (limitMb === undefined ? "" : ` of ${limitMb} MB`) +
         `, and holds ${megabytes(heartbeat.heapUsed)} MB now`;
-    } else if (worker.beatsPastLimit >= BEATS_PAST_REPLACED_LIMIT) {
+    } else if (worker.beatsPastLimit >= beatsToEnd) {
       reached = `its heap holds ${megabytes(heartbeat.heapUsed)} MB at ` +
-        `${BEATS_PAST_REPLACED_LIMIT} heartbeats in a row, past the ` +
+        `${beatsToEnd} heartbeats in a row, past the ` +
         `${limitMb} MB it is limited to, which a process-wide ` +
-        "--max-old-space-size keeps V8 from enforcing";
+        "--max-old-space-size keeps V8 from enforcing" +
+        (collect ? ", and no collection brought it under the limit" : "");
     } else if (
-      limitMb !== undefined && heartbeat.external >= limitMb * 1024 * 1024
+      limitMb !== undefined && heartbeat.external >= limitMb * MB
     ) {
       reached = "its buffers outside the heap hold " +
         `${megabytes(heartbeat.external)} MB, at the ${limitMb} MB its heap ` +
@@ -1289,7 +1334,52 @@ export class ServingWorkerPool {
       });
       return;
     }
+    if (pastLimit && collect && !worker.collecting) {
+      this.#collectPastLimit(worker, limitMb);
+    }
     this.#evictParkedWorkers();
+  }
+
+  /**
+   * Helper for `#onHeartbeat()`, which has `worker`, whose heartbeat reported
+   * a heap past its `limitMb` that V8 does not enforce, collect its garbage,
+   * and ends it as one that reached its limit if its heap is still past the
+   * limit once collected. A worker whose collected heap is under the limit
+   * goes on, and its count of heartbeats past the limit starts again. A
+   * refusal is logged, and leaves the worker to that count.
+   */
+  #collectPastLimit(worker: PoolWorker, limitMb: number): void {
+    worker.collecting = true;
+    const before = worker.heapUsed;
+    worker.bridge.requestCollectedMemory().then(({ heapUsed }) => {
+      worker.collecting = false;
+      if (worker.gone) return;
+      worker.heapUsed = heapUsed;
+      if (heapUsed >= limitMb * MB) {
+        this.#onWorkerFailed(
+          worker,
+          `its heap holds ${megabytes(heapUsed)} MB after a full ` +
+            `collection, past the ${limitMb} MB it is limited to, which a ` +
+            "process-wide --max-old-space-size keeps V8 from enforcing",
+          { killed: true, atHeapLimit: true },
+        );
+        return;
+      }
+      worker.beatsPastLimit = 0;
+      logger.warn("heap-collected", () => [
+        `a serving worker past its ${limitMb} MB heap limit holds ` +
+        `${megabytes(heapUsed)} MB after a full collection, down from ` +
+        `${megabytes(before)} MB, and goes on serving`,
+      ]);
+    }, (error) => {
+      worker.collecting = false;
+      if (worker.gone) return;
+      logger.warn("heap-collection-refused", () => [
+        `a serving worker past its ${limitMb} MB heap limit did not collect ` +
+        `its garbage (${String(error)}); it is ended at ` +
+        `${BEATS_PAST_LIMIT_UNCOLLECTED} heartbeats in a row past the limit`,
+      ]);
+    });
   }
 
   /**
