@@ -13,7 +13,13 @@ import {
   UI,
   type VNode,
 } from "commonfabric";
-import { percent, type PoolOffer, type Published } from "./induction.ts";
+import {
+  LOOKS_PERSONAL,
+  MONO,
+  percent,
+  type PoolOffer,
+  type Published,
+} from "./induction.ts";
 import { type CanonicalRule, describeRule } from "../shared/rule-grammar.ts";
 
 interface PoolCardInput {
@@ -32,8 +38,6 @@ export interface PoolCardOutput {
   [NAME]: string;
   [UI]: VNode;
 }
-
-const MONO = "font-family: var(--cf-theme-mono-font-family);";
 
 export default pattern<PoolCardInput, PoolCardOutput>(
   ({
@@ -90,8 +94,8 @@ export default pattern<PoolCardInput, PoolCardOutput>(
           : "Not published yet.";
       }
       const withheld = (snapshot.withheld
-        ? ` Held back ${snapshot.withheld} that look personal (an @ or a ` +
-          `run of six digits).`
+        ? ` Held back ${snapshot.withheld} that look personal ` +
+          `(${LOOKS_PERSONAL}).`
         : "") +
         (snapshot.adopted
           ? ` Left out ${snapshot.adopted} adopted from the pool.`

@@ -454,23 +454,30 @@ describe("rewrite gating", () => {
 
   it("reports where the rewrite stands", () => {
     const request = { prompt: "p", answered: ["mail-1"] };
-    expect(rewriteStatus(null, { pending: false }, [], training)).toEqual({
+    const status = (
+      request: { prompt: string; answered: string[] } | null,
+      generation: { pending: boolean; error?: unknown; result?: unknown },
+      rewriteAfter = 2,
+    ) => rewriteStatus(request, generation, [], training, [], rewriteAfter);
+    // Idle, it counts the new surprises it still waits for, and 0 once it
+    // waits only for labels
+    const surprises = newSurprises(training, []).length;
+    expect(status(null, { pending: false }, surprises + 3)).toEqual({
       status: "idle",
+      missing: 3,
     });
-    expect(rewriteStatus(request, { pending: true }, [], training).status)
-      .toBe("pending");
-    expect(rewriteStatus(request, { pending: false }, [], training).status)
-      .toBe("pending");
+    expect(status(null, { pending: false }, surprises)).toEqual({
+      status: "idle",
+      missing: 0,
+    });
+    expect(status(request, { pending: true }).status).toBe("pending");
+    expect(status(request, { pending: false }).status).toBe("pending");
     // A failed call is not a judgement: nothing to record, nothing answered
-    expect(
-      rewriteStatus(request, { pending: false, error: "down" }, [], training),
-    ).toEqual({ status: "failed", reason: "the model call failed: down" });
-    const ready = rewriteStatus(
-      request,
-      { pending: false, result: { rules: [] } },
-      [],
-      training,
-    );
+    expect(status(request, { pending: false, error: "down" })).toEqual({
+      status: "failed",
+      reason: "the model call failed: down",
+    });
+    const ready = status(request, { pending: false, result: { rules: [] } });
     expect(ready.status === "ready" && ready.answered).toEqual(["mail-1"]);
   });
 });

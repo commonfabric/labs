@@ -113,7 +113,11 @@ export interface RewriteRequest {
 
 /** Where the current rewrite stands. */
 export type RewriteStatus =
-  | { status: "idle" }
+  /**
+   * No rewrite asked for: `missing` more new surprises are needed, or, at 0,
+   * the hi-fi labels of the items so far.
+   */
+  | { status: "idle"; missing: number }
   | { status: "pending" }
   | { status: "failed"; reason: string }
   | { status: "ready"; judgement: Judgement; answered: string[] };
@@ -640,7 +644,8 @@ export interface RewriteGeneration {
 }
 
 /**
- * Where the rewrite stands: idle with no request, pending while the model
+ * Where the rewrite stands: idle with no request, counting the new surprises
+ * it still waits for against `rewriteAfter`, pending while the model
  * works, failed when the call failed, and ready with a judgement once it
  * answers. A failed call is not a rejection: nothing is recorded and its
  * surprises stay new, so retrying asks the same question again.
@@ -650,8 +655,16 @@ export function rewriteStatus(
   generation: RewriteGeneration,
   current: readonly CanonicalRule[],
   rows: readonly ItemRow[],
+  history: readonly HistoryEntry[],
+  rewriteAfter: number,
 ): RewriteStatus {
-  if (request === null || request.prompt === "") return { status: "idle" };
+  if (request === null || request.prompt === "") {
+    const fresh = newSurprises(rows, history).length;
+    return {
+      status: "idle",
+      missing: Math.max(0, Math.max(1, rewriteAfter) - fresh),
+    };
+  }
   if (generation.pending) return { status: "pending" };
   if (generation.error) {
     return {
@@ -816,6 +829,9 @@ export function adoptedAfter(
   return [...keys].sort();
 }
 
+/** What `looksPersonal` looks for, as the view words it. */
+export const LOOKS_PERSONAL = "an @ or a run of six digits";
+
 /**
  * Whether a rule looks like it carries a personal detail: an `@` (an email
  * address or handle) or a run of six or more digits (an account, order, or
@@ -861,6 +877,9 @@ export function sameGoal(a: string, b: string): boolean {
 //
 // Presentation
 //
+
+/** The inline style the cards set rules and model output in. */
+export const MONO = "font-family: var(--cf-theme-mono-font-family);";
 
 /** A fraction as a whole percentage, such as "83%". */
 export function percent(fraction: number | null): string {

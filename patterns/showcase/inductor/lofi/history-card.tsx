@@ -5,7 +5,7 @@
  */
 
 import { computed, NAME, pattern, UI, type VNode } from "commonfabric";
-import type { HistoryEntry } from "./induction.ts";
+import { type HistoryEntry, MONO } from "./induction.ts";
 import { describeRule } from "../shared/rule-grammar.ts";
 
 interface HistoryCardInput {
@@ -48,12 +48,7 @@ export default pattern<HistoryCardInput, HistoryCardOutput>(
                 <cf-text variant="heading-sm">{entry.round}</cf-text>
                 <cf-text tone="muted">{entry.reason}</cf-text>
                 {entry.detail.map((line) => (
-                  <cf-text
-                    variant="caption"
-                    style="font-family: var(--cf-theme-mono-font-family);"
-                  >
-                    {line}
-                  </cf-text>
+                  <cf-text variant="caption" style={MONO}>{line}</cf-text>
                 ))}
               </cf-vstack>
             ))}

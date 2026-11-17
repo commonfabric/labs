@@ -398,6 +398,8 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         },
         rules.get(),
         rows,
+        history.get(),
+        rewriteAfter.get(),
       )
     );
 
@@ -641,9 +643,6 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       heldOutF1,
       summary,
       rewrite,
-      rewriteAfter,
-      rows,
-      history,
       settleRewrite,
       retryRewrite,
       removeRule,

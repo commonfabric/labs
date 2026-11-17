@@ -14,9 +14,7 @@ import {
   type VNode,
 } from "commonfabric";
 import {
-  type HistoryEntry,
-  type ItemRow,
-  newSurprises,
+  MONO,
   percent,
   type RewriteStatus,
   type Summary,
@@ -33,9 +31,6 @@ interface RulesCardInput {
   heldOutF1: number;
   summary: Summary;
   rewrite: RewriteStatus;
-  rewriteAfter: number;
-  rows: ItemRow[];
-  history: HistoryEntry[];
   settleRewrite: Stream<void>;
   retryRewrite: Stream<void>;
   removeRule: Stream<RuleRef>;
@@ -48,17 +43,12 @@ export interface RulesCardOutput {
   [UI]: VNode;
 }
 
-const MONO = "font-family: var(--cf-theme-mono-font-family);";
-
 export default pattern<RulesCardInput, RulesCardOutput>(
   ({
     rules,
     heldOutF1,
     summary,
     rewrite,
-    rewriteAfter,
-    rows,
-    history,
     settleRewrite,
     retryRewrite,
     removeRule,
@@ -71,10 +61,9 @@ export default pattern<RulesCardInput, RulesCardOutput>(
     const rewriteLine = computed(() => {
       const status = rewrite;
       if (status.status === "idle") {
-        const missing = Math.max(1, rewriteAfter) -
-          newSurprises(rows, history).length;
-        return missing > 0
-          ? `Waiting for ${missing} more surprises before proposing new rules.`
+        return status.missing > 0
+          ? `Waiting for ${status.missing} more surprises before proposing ` +
+            "new rules."
           : "Waiting for the hi-fi model to label the items so far.";
       }
       if (status.status === "pending") return "Proposing a new rule set…";
