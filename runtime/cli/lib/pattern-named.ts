@@ -15,6 +15,7 @@ import {
   decodeDelegation,
   type Delegation,
   type DIDKey,
+  verifyDelegation,
 } from "@commonfabric/identity";
 import { indexProofs } from "@commonfabric/pattern-index/membership";
 import type { ListedProfile } from "./profile.ts";
@@ -49,9 +50,11 @@ export function chooseProfile(
     : profiles.find((profile) => profile.space === space);
   if (chosen === undefined) {
     throw new NamingError(
-      space === undefined
+      space !== undefined
+        ? `None of your profiles lives in ${space}; cf profile ls lists them.`
+        : profiles.length === 0
         ? "You have no profile to publish under: make one with cf profile create."
-        : `None of your profiles lives in ${space}; cf profile ls lists them.`,
+        : "None of your profiles is the current one; name one with --profile <space> (cf profile ls lists them).",
     );
   }
   if (chosen.name === "") {
@@ -73,14 +76,24 @@ export async function profileProof(
   profile: NamingProfile,
   signer: DIDKey,
 ): Promise<string[]> {
-  const decoded: Delegation[] = [];
+  // Only the profile's own delegation to the signer is needed, so a record
+  // that does not decode or verify is passed over rather than failing the
+  // publish; the index would refuse a proof whose signature does not hold,
+  // and by then the pattern would already be shared.
+  let root: Delegation | undefined;
   for (const bytes of profile.delegations) {
-    decoded.push(await decodeDelegation(bytes));
+    const delegation = await decodeDelegation(bytes).catch(() => undefined);
+    if (
+      delegation === undefined ||
+      delegation.payload.iss !== profile.space ||
+      delegation.payload.sub !== profile.space ||
+      delegation.payload.aud !== signer ||
+      delegation.payload.cmd !== "/memory" ||
+      !await verifyDelegation(delegation).then(() => true, () => false)
+    ) continue;
+    root = delegation;
+    break;
   }
-  const root = decoded.find(({ payload }) =>
-    payload.iss === profile.space && payload.sub === profile.space &&
-    payload.aud === signer && payload.cmd === "/memory"
-  );
   if (root === undefined) {
     throw new NamingError(
       `The profile in ${profile.space} holds no delegation to this identity, so the index could not tell it is yours; a profile made before profiles owned themselves cannot be published under yet.`,
