@@ -17,8 +17,8 @@ knowing it says nothing about any one of them.
 Two patterns.
 
 **`lofi-inductor`** holds one goal ("is this email a bill?") and a stream of
-items (`{id, fields}`; anything can feed it: a connector, another piece, an
-agent).
+items (`{id, fields}`; anything can feed it through `addItem` or `addItems`: a
+connector, another piece, an agent).
 
 1. Every item is labelled by the hi-fi model (an LLM, assumed right) and by the
    lo-fi rule set (regular expressions, run as plain pattern code, assumed
@@ -159,15 +159,53 @@ Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
   pool's `submit` (see step 5 and `showcase/inductor/pool`).
 - The goal changes only through `setGoal` (the view's "Set goal" button sends
   it), never per keystroke: every hi-fi call is asked for the goal, so a live
-  input re-asked about every item on each key. A new goal clears the rules, the
+  input re-asked about every item on each key. A new goal first withdraws this
+  piece's contribution from the old goal's pool, then clears the rules, the
   history, what was published, and the pseudonym, so the pool cannot link this
   piece's contributions for two questions; the items stay, and the hi-fi model
   labels them for the new goal.
-- Agents drive it through its streams: `setGoal`, `submitItem`, `removeItem`,
-  `settleRewrite`, `retryRewrite`, `settlePoolOffer`, and `publish`. The pool's
-  are `submit` and `withdraw`.
-- Choose the hi-fi model with `hifiModel`; omitted, the deployment's default
-  `generateObject` model answers.
+- `unpublish` takes this piece's contribution back out of the goal's pool (the
+  pool's `withdraw`, which removes only the sender's) and clears `published`.
+  The pseudonym stays, so publishing again comes back under it.
+- Choose the hi-fi model with `hifiModel` or `setHifiModel`; empty, the
+  deployment's default `generateObject` model answers.
+
+**Layout.** `lofi-inductor.tsx` holds the state, the verbs, and the judgements
+(`rows`, `summary`, `heldOutF1`, `rewrite`, `poolOffer`), and lays out four
+sub-patterns in sibling files. Each takes the cells and streams it shows and
+sends, and words them itself:
+
+- `rules-card.tsx`: the current rules with their held-out F1, where the rewrite
+  stands, the ready proposal, and the buttons that apply or dismiss it, retry a
+  failed call, take a rule out, or clear the set.
+- `pool-card.tsx`: the pool's offer, what was last published, and the buttons
+  that adopt or dismiss the offer, publish, and unpublish.
+- `history-card.tsx`: every judged proposal, newest first.
+- `items-card.tsx`: each item with its labels, a surprise in the error tone, a
+  remove button, and the add-an-item box, whose draft is per session.
+
+The cards are known by their position in the view, so a new one goes after the
+last. The hi-fi calls stay in the parent's map rather than in a per-item
+sub-pattern: one that owned its item's `generateObject` never delivered a label
+(the third runtime issue below).
+
+**Verbs.** Everything the view does, an agent can do through a stream, and a
+malformed event throws rather than doing nothing:
+
+- Items: `addItem` (`{fields, id?}`: string fields, at least one; an id the list
+  holds adds nothing, and one is minted when none is given), `addItems`
+  (`{items}`, a batch of the same), and `removeItem` (`{item}`, the item itself
+  as read from `items`; one the list no longer holds changes nothing). The id is
+  only a dedupe key, so a connector that sends the same record twice adds it
+  once; nothing addresses an item by it.
+- Rules: `removeRule` (`{rule}`, as read from `rules`; it also drops the rule's
+  adopted mark), `resetRules` (empties the set and the marks; the history
+  stays), `settleRewrite`, `retryRewrite`, and `settlePoolOffer`.
+- Settings: `setGoal` (`{goal}`, not blank), `setRewriteAfter` (`{count}`, a
+  whole number, at least 1), `setHeldOutPercent` (`{percent}`, above 0 and below
+  100), and `setHifiModel` (`{model}`, a name, or "" for the default).
+- The pool: `publish` and `unpublish`. The pool's own verbs are `submit` and
+  `withdraw`.
 
 Known runtime issues this pattern works around:
 
@@ -180,7 +218,16 @@ Known runtime issues this pattern works around:
    (`contribution-dropped`, a builtin write superseded). Recording the judgement
    while hi-fi calls are in flight can still hit it. Filed as top/3204.
 
-(A third, a first publish that ran twice under server execution and minted two
+3. A sub-pattern instance per item that owns the item's `generateObject` (an
+   `ItemLabel({goal, item})` mapped over the items, returning `{id, answer}`)
+   never delivers a label: every row stays unlabelled. The hi-fi calls stay in
+   the parent's expression-bodied map.
+4. `removeByValue` with an element's cell (`list.key(i)`) matches only an
+   element stored as a link, which `push` writes; an element seeded with the
+   piece is stored inline, and only its value matches it. `removeItem` and
+   `removeRule` send both, and each removes nothing of the other kind.
+
+(Another, a first publish that ran twice under server execution and minted two
 pseudonyms, locked the contributor out of the pool. The pool now binds the
 principal rather than the pseudonym, so the second run's submission replaces the
 first's.)

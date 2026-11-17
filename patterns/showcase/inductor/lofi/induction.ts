@@ -24,9 +24,9 @@ import {
 
 export { MAX_RULES, MAX_TESTED_LENGTH } from "../shared/rule-grammar.ts";
 
-// =============================================================================
-// TYPES
-// =============================================================================
+//
+// Types
+//
 
 /** One thing to label: a connector's record, a message, anything with text. */
 export interface Item {
@@ -180,9 +180,9 @@ export const MIN_F1_GAIN = 0.02;
 const PROMPT_SURPRISES = 30;
 const PROMPT_AGREEMENTS = 20;
 
-// =============================================================================
-// SPLIT
-// =============================================================================
+//
+// The held-out split
+//
 
 /**
  * The side of the graded set `id` is on: held out when its hash falls in the
@@ -194,9 +194,9 @@ export function splitOf(id: string, heldOutPercent: number): Split {
   return bucket < heldOutPercent ? "heldout" : "train";
 }
 
-// =============================================================================
-// RUNNING RULES
-// =============================================================================
+//
+// Running rules
+//
 
 /** A rule with its compiled expression. */
 interface CompiledRule {
@@ -311,9 +311,9 @@ export function summarize(rows: readonly ItemRow[]): Summary {
   };
 }
 
-// =============================================================================
-// SCORING
-// =============================================================================
+//
+// Scoring
+//
 
 /** The held-out examples: labelled items on the held-out side. */
 export function heldOutExamples(
@@ -357,9 +357,9 @@ export function scoreRules(
   };
 }
 
-// =============================================================================
-// SURPRISES
-// =============================================================================
+//
+// Surprises
+//
 
 /** The surprises no judged round has answered yet, by id. */
 export function newSurprises(
@@ -375,9 +375,9 @@ export function newSurprises(
     .map((row) => row.id);
 }
 
-// =============================================================================
-// PROMPTS
-// =============================================================================
+//
+// Prompts
+//
 
 export const HIFI_SYSTEM =
   `You are a careful labeller. You are given a yes-or-no question and one item.
@@ -494,9 +494,9 @@ export function buildRewritePrompt(
     "";
 }
 
-// =============================================================================
-// JUDGING A PROPOSAL
-// =============================================================================
+//
+// Judging a proposal
+//
 
 /**
  * Whether the proposed rule set replaces `current`. The proposal is model
@@ -657,9 +657,9 @@ export function settle(
   };
 }
 
-// =============================================================================
-// THE POOL'S RULES
-// =============================================================================
+//
+// The pool's rules
+//
 
 /**
  * The pool's released rules for this goal, judged as a candidate set by the
@@ -716,9 +716,9 @@ export function poolOffer(
   return { key, judgement, unexercised };
 }
 
-// =============================================================================
-// PUBLISHING
-// =============================================================================
+//
+// Publishing
+//
 
 /**
  * The keys of the rules adopted from the pool once `judgement` is recorded
@@ -785,9 +785,9 @@ export function looksPersonal(rule: Pick<CanonicalRule, "pattern">): boolean {
   return /(?:\d[\s.\-()]?){6,}/.test(plain);
 }
 
-// =============================================================================
-// GOALS
-// =============================================================================
+//
+// Goals
+//
 
 /**
  * Whether two goals ask the same question, as a pool matches an inductor:
@@ -798,9 +798,9 @@ export function sameGoal(a: string, b: string): boolean {
   return norm(a) !== "" && norm(a) === norm(b);
 }
 
-// =============================================================================
-// PRESENTATION
-// =============================================================================
+//
+// Presentation
+//
 
 /** A fraction as a whole percentage, such as "83%". */
 export function percent(fraction: number | null): string {

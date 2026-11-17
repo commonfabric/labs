@@ -623,8 +623,8 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       } agreement · ${summary.surprises} surprises`
     );
 
-    // The cards are known by their order here (composition.md): a new card
-    // goes after the last, so the items card keeps its draft.
+    // The cards are known by their position in the view (composition.md): a
+    // new one goes after the last, so the items card keeps its draft.
     const rulesCard = RulesCard({
       rules,
       heldOutF1,
