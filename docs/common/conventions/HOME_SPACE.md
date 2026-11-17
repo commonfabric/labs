@@ -206,20 +206,23 @@ committed it ([`principal-of.md`](../../features/principal-of.md)).
 
 A profile's face is its `picture`, or else its legacy `avatar` text, when that
 value's own cell represents its owner. The runtime decides whom a value's own
-cell represents by one rule (`runtime/runner/src/cfc/written-principal.ts`):
-the one principal the label of the cell a write to the field lands in names,
-when the value is the whole of that cell and no link stored there leads
-elsewhere. That label says nothing of who pointed the field at the cell; a
-profile's owner-protected fields keep their write redirects from being
-repointed. A pattern asks
+cell represents by one rule (`runtime/runner/src/cfc/written-principal.ts`): the
+one principal the label of the cell a write to the field lands in names, when
+the value is the whole of that cell, that cell is in the space of the document
+holding the field, and no link stored there leads elsewhere. That label says
+nothing of who pointed the field at the cell. A cell in another space is
+refused, since its label says who wrote the value there, not that anyone put it
+at this field. Within the profile's space, a visitor can still point a face
+field at another cell the owner wrote there. A reader names the field through
+the profile, as `profile.key("picture")` does: a write redirect of its own to
+the field, stored in its own space, is refused like any other. A pattern asks
 with `writtenPrincipalOf()`, a host holding a runtime with
 `writtenPrincipalAt()`, and a host holding cell handles with
-`observeWrittenPrincipal()` from `@commonfabric/runtime-client`. Patterns read
-a face with `profileFace()` from
-`patterns/system/profile-face/profile-face.ts`, which compares that principal
-with `profileOwnerOf()`; `cf-profile-badge` compares it with the principal its
-seal shows. So a picture a visitor set, or one stored before pictures were
-labeled, is not shown as the owner's face.
+`observeWrittenPrincipal()` from `@commonfabric/runtime-client`. Patterns read a
+face with `profileFace()` from `patterns/system/profile-face/profile-face.ts`,
+which compares that principal with `profileOwnerOf()`; `cf-profile-badge`
+compares it with the principal its seal shows. So a picture a visitor set, or
+one stored before pictures were labeled, is not shown as the owner's face.
 
 A field's writes are checked only once a write stores its policy in the value
 cell. A field with a default, such as `name` or `bio`, has its owner-protected
