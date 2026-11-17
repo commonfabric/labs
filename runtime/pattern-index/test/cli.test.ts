@@ -1,3 +1,4 @@
+import { deployedPieceRef } from "../src/client.ts";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
@@ -179,9 +180,12 @@ describe("cli", () => {
         [{ op: "feedback", verdict: "up" }, "patternId is required"],
         [
           { op: "getPattern", includeSource: true },
-          "op must be search, feedback, whoami, admit or join",
+          "op must be search, feedback, whoami, admit, join, view, getSharing or setSharing",
         ],
-        [null, "op must be search, feedback, whoami, admit or join"],
+        [
+          null,
+          "op must be search, feedback, whoami, admit, join, view, getSharing or setSharing",
+        ],
         ["{", "request body is not JSON"],
       ]
     ) {
@@ -336,6 +340,105 @@ describe("cli", () => {
       ok: true,
       value: { handle: "p-1", role: "user", signer: did },
     });
+  });
+
+  const PIECE = "piece:" + "ab".repeat(32);
+
+  it("sends a view of a piece or of a pattern as the member's viewed_in_loom", async () => {
+    reply = () => Response.json({ ok: true, recorded: false });
+    for (
+      const [request, sent] of [
+        [{ op: "view", piece: PIECE }, { piece: PIECE }],
+        [{ op: "view", patternId: "pat-1" }, { patternId: "pat-1" }],
+      ] as const
+    ) {
+      const output = await callHelper(directory, baseUrl, request);
+      expect(JSON.parse(output.stdout)).toMatchObject({ ok: true });
+      expect(calls.at(-1)?.fn).toBe("recordEvent");
+      expect(calls.at(-1)?.body).toMatchObject({
+        ...sent,
+        eventType: "viewed_in_loom",
+      });
+    }
+  });
+
+  it("keys a piece exactly as Loom does, so Loom's views reach the versions run_pattern and cf deployed", async () => {
+    // The same literal is pinned in Loom (tests/pattern_index/test_pattern_index_usage.py).
+    expect(await deployedPieceRef("did:key:z6Mkspace", "of:fid1:note")).toBe(
+      "piece:964d427d05870c59302580ffd9745a4b6e09a7e64ad6e83454ddbb89ebaf3a90",
+    );
+  });
+
+  it("answers 502 for a view the index answered ok:false", async () => {
+    reply = () => Response.json({ ok: false });
+    const output = await callHelper(directory, baseUrl, {
+      op: "view",
+      piece: PIECE,
+    });
+    expect(JSON.parse(output.stdout)).toMatchObject({ ok: false, status: 502 });
+  });
+
+  it("refuses a view naming both, neither, or a piece that is not a piece key, calling nothing", async () => {
+    for (
+      const request of [
+        { op: "view" },
+        { op: "view", piece: PIECE, patternId: "p" },
+        { op: "view", piece: "did:key:z/fid1:raw" },
+        { op: "view", piece: "piece:abc" },
+      ]
+    ) {
+      const output = await callHelper(directory, baseUrl, request);
+      expect(JSON.parse(output.stdout)).toMatchObject({
+        ok: false,
+        status: 400,
+      });
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it("reads the member's sharing settings", async () => {
+    const settings = { enabled: false, selfBuilt: true, updatedAt: null };
+    reply = () => Response.json(settings);
+
+    const output = await callHelper(directory, baseUrl, { op: "getSharing" });
+
+    expect(JSON.parse(output.stdout)).toEqual({ ok: true, value: settings });
+    expect(calls.map((call) => call.fn)).toEqual(["getSharingSettings"]);
+  });
+
+  it("changes only the sharing switches the request set", async () => {
+    reply = () =>
+      Response.json({ enabled: false, selfBuilt: true, updatedAt: "t" });
+
+    const output = await callHelper(directory, baseUrl, {
+      op: "setSharing",
+      enabled: false,
+    });
+
+    expect(JSON.parse(output.stdout)).toMatchObject({
+      ok: true,
+      value: { enabled: false, selfBuilt: true },
+    });
+    expect(calls.map((call) => call.fn)).toEqual(["setSharingSettings"]);
+    expect(calls[0].body.enabled).toBe(false);
+    expect("selfBuilt" in calls[0].body).toBe(false);
+  });
+
+  it("refuses a sharing change that sets nothing, or a switch that is not a boolean, calling nothing", async () => {
+    for (
+      const request of [
+        { op: "setSharing" },
+        { op: "setSharing", enabled: "false" },
+        { op: "setSharing", enabled: true, selfBuilt: 0 },
+      ]
+    ) {
+      const output = await callHelper(directory, baseUrl, request);
+      expect(JSON.parse(output.stdout)).toMatchObject({
+        ok: false,
+        status: 400,
+      });
+    }
+    expect(calls).toEqual([]);
   });
 
   it("returns 400 for admit without a did:key, calling nothing", async () => {

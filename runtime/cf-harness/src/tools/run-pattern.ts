@@ -3,6 +3,7 @@ import type {
   PatternIndexEventType,
   PatternIndexPublishRequest,
 } from "@commonfabric/pattern-index/client";
+import { deployedPieceRef } from "@commonfabric/pattern-index/client";
 import type { JSONSchema } from "@commonfabric/api";
 import {
   type Cell,
@@ -1975,6 +1976,16 @@ export const runPatternTool: HarnessToolDefinition<
           "run_pattern could not publish the pattern it ran: the compiled pattern carries no durable content-addressed entry identity",
         );
       } else {
+        // A person's own agent (`--pattern-index-origin agent`) says so, and
+        // names the piece it deployed to: the index shares the version under
+        // the person's sharing setting once they use that piece in a loom.
+        // The piece is the lineage, so its iterations are versions of one
+        // pattern. Any other run names neither, and is never shared on its
+        // own. Taken before the gate, whose abort check then covers this
+        // await too.
+        const madeForPerson = context.patternIndexOrigin === "agent"
+          ? await deployedPieceRef(space, piece.id)
+          : undefined;
         const verdict = await renderGateVerdict();
         // A cancelled gate is a cancelled run. Nothing is staged: an index
         // entry is a claim about a run that finished, and this one did not.
@@ -2007,6 +2018,13 @@ export const runPatternTool: HarnessToolDefinition<
         {
           const request: PatternIndexPublishRequest = {
             patternId: entryIdentity,
+            ...(madeForPerson !== undefined
+              ? {
+                origin: "agent" as const,
+                slot: madeForPerson,
+                deployedTo: madeForPerson,
+              }
+              : {}),
             program: {
               main: program.main,
               files: program.files.map((file) => ({

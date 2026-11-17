@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
-import { PatternIndexClient } from "@commonfabric/pattern-index/client";
+import {
+  deployedPieceRef,
+  PatternIndexClient,
+} from "@commonfabric/pattern-index/client";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
@@ -277,7 +280,7 @@ describe("run_pattern publish render gate", () => {
 
   const createEngine = (
     index: IndexStub,
-    options: { publishDiscoverable?: true } = {},
+    options: { publishDiscoverable?: true; origin?: "agent" } = {},
   ): CfHarnessEngine =>
     new CfHarnessEngine({
       sandboxRuntime: new FakeSandboxRuntime(),
@@ -291,6 +294,16 @@ describe("run_pattern publish render gate", () => {
             signer,
           }),
         ),
+      ...(options.origin === "agent"
+        ? {
+          fabricSession: {
+            apiUrl: "https://toolshed.test/",
+            identityKeyPath: "/keys/agent.pkcs8",
+            space: "publish-gate",
+          },
+          patternIndex: { baseUrl: "https://index.test", origin: "agent" },
+        }
+        : {}),
       ...(options.publishDiscoverable === true
         ? {
           fabricSession: {
@@ -519,6 +532,31 @@ describe("run_pattern publish render gate", () => {
     expect(output.patternPublication?.reason).toBe("ui-rendered");
     expect(published(index)[0].body.discoverable).toBe(true);
     expect(published(index)[0].body.discoverabilityReason).toBeUndefined();
+  });
+
+  it("names its origin and the piece it deployed to only when it is a person's own agent", async () => {
+    const run = async (origin: "agent" | undefined) => {
+      const index = stubIndex();
+      const engine = createEngine(index, origin ? { origin } : {});
+      const result = await engine.invokeBuiltinTool("run_pattern", {
+        sourceText: WORKING_SORTABLE_TABLE,
+        inputs: { rows: [{ name: "Avery", score: 12 }] },
+        description: "Sortable table that reads its cells",
+        hashtags: ["table"],
+      });
+      await engine.flushPatternIndexLedger();
+      const output = result.output as RunPatternToolSuccessOutput;
+      return { body: published(index)[0].body, pieceId: output.pieceId };
+    };
+    const agent = await run("agent");
+    const piece = await deployedPieceRef(pieces.getSpace(), agent.pieceId);
+    expect(agent.body.origin).toBe("agent");
+    expect(agent.body.deployedTo).toBe(piece);
+    expect(agent.body.slot).toBe(piece);
+    const other = await run(undefined);
+    expect(other.body.origin).toBeUndefined();
+    expect(other.body.deployedTo).toBeUndefined();
+    expect(other.body.slot).toBeUndefined();
   });
 
   it("records automatic and render-gated entries for distinguishable reasons", async () => {

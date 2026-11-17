@@ -153,6 +153,11 @@ describe("local-jobs/profiles", () => {
           "carry",
         ),
       ).toEqual({ ...CARRY, patternIndexPublish: true });
+      expect(
+        (await read({ carry: { ...CARRY, patternIndexOrigin: "agent" } })).get(
+          "carry",
+        ),
+      ).toEqual({ ...CARRY, patternIndexOrigin: "agent" });
     });
 
     it("reads a fabric session with no pattern index or subagents", async () => {
@@ -278,6 +283,24 @@ describe("local-jobs/profiles", () => {
         "a publish flag that is not true or false",
         { ...CARRY, patternIndexPublish: "no" },
         "`patternIndexPublish`",
+      ],
+      [
+        "an origin other than agent",
+        { ...CARRY, patternIndexOrigin: "self" },
+        '`patternIndexOrigin` must be "agent"',
+      ],
+      [
+        "an origin with no pattern index",
+        {
+          ...carryWithout(
+            "patternIndexUrl",
+            "patternIndexPublish",
+            "subagentProfiles",
+          ),
+          tools: ["run_pattern"],
+          patternIndexOrigin: "agent",
+        },
+        "`patternIndexOrigin` needs `patternIndexUrl`",
       ],
       [
         "a publish flag with no pattern index",

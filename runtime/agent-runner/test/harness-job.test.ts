@@ -780,6 +780,23 @@ describe("runHarnessJob()", () => {
       }
     });
 
+    it("says a job's published patterns are made for a person only when the spec says so", async () => {
+      const { seen } = await runScripted(
+        plainSpec({
+          tools: ["run_pattern"],
+          fabric: localFabric(),
+          patternIndexUrl: "https://index.example",
+          patternIndexOrigin: "agent",
+        }),
+        answering("Titan"),
+      );
+      expect(seen.loopOptions?.engine?.config.patternIndex).toEqual({
+        baseUrl: "https://index.example",
+        origin: "agent",
+      });
+      expect(seen.loopOptions?.engine?.patternIndexOrigin).toBe("agent");
+    });
+
     it("configures no pattern index for a spec that names none", async () => {
       const { seen } = await runScripted(
         plainSpec({ tools: ["run_pattern"], fabric: localFabric() }),
