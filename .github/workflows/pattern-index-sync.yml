@@ -1,0 +1,48 @@
+# Keeps the patterns on main current in the pattern index: every push that
+# changes a pattern publishes a new version of each entry whose source moved,
+# under the commonfabric brand. `.github/actions/pattern-index-sync/README.md`
+# describes the action, and how another repository adopts it.
+name: Pattern Index Sync
+
+on:
+  push:
+    branches: [main]
+    paths: ["patterns/**"]
+  workflow_dispatch:
+
+# The OIDC token is the run's whole credential: `id-token: write` lets the job
+# ask GitHub for one, and nothing here needs to write to the repository.
+permissions:
+  contents: read
+  id-token: write
+
+# One sync at a time. A push arriving while one runs waits rather than
+# cancelling it, and of several waiting only the newest runs; a sync reads the
+# whole tree, so the newest covers what the skipped ones changed.
+concurrency:
+  group: pattern-index-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync patterns to the index
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: 🚀 Sync patterns
+        uses: ./.github/actions/pattern-index-sync
+        with:
+          program-root: patterns
+          include: |
+            patterns/**
+          # Development fixtures, regression scaffolding and personal variants
+          # are not for anyone to find; tools and browser tests are not
+          # patterns.
+          exclude: |
+            patterns/dev/**
+            patterns/integration/**
+            patterns/tools/**
+            patterns/baselines/**

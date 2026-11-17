@@ -36,6 +36,19 @@ a composition past the cap, name none. A compile diagnostic, or an index
 response body, can quote that source, so it is kept apart as `rawCauseMessage`
 for an artifact or an operator log.
 
+## Syncing a repository
+
+`sync-repo.ts` publishes the pattern entries a GitHub repository holds to the
+index, one lineage per entry file. It runs from a GitHub Actions job, with a
+GitHub OIDC token as its only credential. `src/repo-sync.ts` decides what to
+publish: it hashes each entry's resolved program and compiles only the entries
+whose hash differs from the one `listRepoHeads` returns for that path.
+`src/github-oidc.ts` mints the token, bound to a key made for the run. Other
+repositories adopt it through the composite action in
+`.github/actions/pattern-index-sync`, whose README covers adoption and the run
+step by step. This repository's own patterns sync through
+`.github/workflows/pattern-index-sync.yml`.
+
 ## Loom helper contract
 
 Loom's CFS commands spawn `runtime/pattern-index/cli.ts` once per request:

@@ -1,0 +1,103 @@
+name: "Pattern index sync"
+description: >-
+  Publish the newest version of each pattern entry file in this repository to
+  the Common Fabric pattern index, one lineage per file, under the brand of the
+  repository's GitHub owner. README.md beside this file says how to adopt it.
+
+inputs:
+  include:
+    description: >-
+      Globs, one per line and relative to the repository root, naming the
+      files that may be pattern entries. A file is an entry when it also has a
+      top-level `export default` and is not a test.
+    required: true
+  exclude:
+    description: "Globs, one per line, removing files `include` named."
+    default: ""
+  program-root:
+    description: >-
+      The directory, relative to the repository root, that program file names
+      are written against. Every file an entry imports must lie inside it.
+    required: true
+  labs-path:
+    description: >-
+      A Labs checkout to run the sync from, relative to the repository root:
+      for a repository that vendors Labs, its vendored copy, so patterns
+      compile against the Labs they were written for. Empty runs the copy of
+      Labs this action was fetched with.
+    default: ""
+  index-url:
+    description: "The pattern index; empty for the one Common Fabric runs."
+    default: ""
+  setup-deno:
+    description: >-
+      Install the Deno version the Labs checkout pins. Pass false when an
+      earlier step already put that Deno on PATH.
+    default: "true"
+  dry-run:
+    description: "Compile every entry and publish nothing, with no token."
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    # Inputs reach every script through the environment, never through `${{ }}`
+    # inside `run:`, so no input can become shell syntax.
+    - name: 🔍 Find the Labs checkout
+      id: labs
+      shell: bash
+      env:
+        LABS_PATH: ${{ inputs.labs-path }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        if [ -n "$LABS_PATH" ]; then
+          labs="$GITHUB_WORKSPACE/$LABS_PATH"
+        else
+          # A `uses:` reference fetches the whole repository the action lives
+          # in, so this action's Labs is three directories up.
+          labs="$(cd "$ACTION_PATH/../../.." && pwd)"
+        fi
+        if [ ! -f "$labs/runtime/pattern-index/sync-repo.ts" ]; then
+          echo "::error::$labs has no runtime/pattern-index/sync-repo.ts; labs-path must name a Labs checkout recent enough to sync."
+          exit 1
+        fi
+        version="$(sed -n 's/^deno = "\([^"]*\)"$/\1/p' "$labs/mise.toml")"
+        echo "dir=$labs" >> "$GITHUB_OUTPUT"
+        echo "deno=$version" >> "$GITHUB_OUTPUT"
+
+    - name: 🦕 Install Deno ${{ steps.labs.outputs.deno }}
+      if: inputs.setup-deno == 'true'
+      uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+      with:
+        deno-version: ${{ steps.labs.outputs.deno }}
+
+    - name: 🚀 Publish changed patterns to the index
+      shell: bash
+      working-directory: ${{ steps.labs.outputs.dir }}
+      env:
+        INCLUDE: ${{ inputs.include }}
+        EXCLUDE: ${{ inputs.exclude }}
+        PROGRAM_ROOT: ${{ inputs.program-root }}
+        INDEX_URL: ${{ inputs.index-url }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        REPOSITORY: ${{ github.repository }}
+        COMMIT: ${{ github.sha }}
+      run: |
+        args=(
+          --repository "$REPOSITORY"
+          --commit "$COMMIT"
+          --repo-root "$GITHUB_WORKSPACE"
+          --program-root "$PROGRAM_ROOT"
+          --summary "$GITHUB_STEP_SUMMARY"
+        )
+        while IFS= read -r glob; do
+          [ -n "$glob" ] && args+=(--include "$glob")
+        done <<< "$INCLUDE"
+        while IFS= read -r glob; do
+          [ -n "$glob" ] && args+=(--exclude "$glob")
+        done <<< "$EXCLUDE"
+        [ -n "$INDEX_URL" ] && args+=(--index-url "$INDEX_URL")
+        [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+        deno run --frozen \
+          --allow-read --allow-write --allow-env --allow-net --allow-ffi --allow-run=git \
+          runtime/pattern-index/sync-repo.ts "${args[@]}"
