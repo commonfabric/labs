@@ -152,16 +152,9 @@ import {
 } from "@commonfabric/pattern-index/store";
 import { noteWroteTo } from "../lib/write-receipt.ts";
 import { loadIdentity } from "../lib/identity.ts";
-import {
-  openPatternIndexClient,
-  resolvePatternIndexUrl,
-} from "@commonfabric/pattern-index/access";
-import {
-  type DeployedSource,
-  recordDeployedVersion,
-  versionJson,
-  versionLine,
-  type VersionOutcome,
+import type {
+  DeployedSource,
+  VersionOutcome,
 } from "../lib/pattern-versions.ts";
 
 // Hint system: print helpful next-step suggestions after operations. The
@@ -5079,6 +5072,14 @@ export async function restoreFromCommand(
   }
 }
 
+/** The modules recording a version needs, loaded on first use. */
+const loadVersionModules = async () => ({
+  // deno-lint-ignore cf-imports/no-inline-module-import
+  access: await import("@commonfabric/pattern-index/access"),
+  // deno-lint-ignore cf-imports/no-inline-module-import
+  versions: await import("../lib/pattern-versions.ts"),
+});
+
 /**
  * Keeps a deploy of the person's own source as a private version in the
  * pattern index `CF_PATTERN_INDEX_URL` names, else the default index,
@@ -5090,15 +5091,20 @@ export async function recordVersionInIndex(
   identity: string,
   deployed: DeployedSource,
 ): Promise<VersionOutcome> {
+  // Loaded here rather than with the command: recording reaches the
+  // compiler's identity code, which starting `cf piece` must not load.
+  let modules;
   let baseUrl: string;
   let store: PatternIndexStore;
   try {
-    baseUrl = resolvePatternIndexUrl(undefined);
+    modules = await loadVersionModules();
+    baseUrl = modules.access.resolvePatternIndexUrl(undefined);
     store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
   } catch (error) {
     return { status: "failed", reason: describeFailure(error) };
   }
-  return await recordDeployedVersion(deployed, {
+  const { openPatternIndexClient } = modules.access;
+  return await modules.versions.recordDeployedVersion(deployed, {
     store,
     openClient: async () =>
       openPatternIndexClient({
@@ -5139,6 +5145,7 @@ function versionRecorder(
     settle: async () => {
       if (pending === undefined) return undefined;
       const outcome = await pending;
+      const { versionLine } = (await loadVersionModules()).versions;
       const line = versionLine(outcome);
       if (line !== undefined) print(line);
       return outcome;
@@ -5302,11 +5309,16 @@ export async function newPieceFromCommand(
   const print = deps.render ?? render;
   if (options.json) {
     const kept = await version?.settle();
+    const versionJson = kept === undefined
+      ? undefined
+      : (await loadVersionModules()).versions.versionJson;
     print(
       {
         pieceId,
         ...(name === undefined ? {} : { name }),
-        ...(kept === undefined ? {} : { version: versionJson(kept) }),
+        ...(kept === undefined || versionJson === undefined
+          ? {}
+          : { version: versionJson(kept) }),
       },
       { json: true },
     );
