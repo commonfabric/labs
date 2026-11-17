@@ -14,6 +14,7 @@ import {
   type PieceReconciliationReason,
 } from "./piece-reconciliation.ts";
 import type { Runtime } from "./runtime.ts";
+import { PieceStateMovedError } from "./stored-setup-build.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
 import { ignoreReadForScheduling } from "./storage/reactivity-log.ts";
 
@@ -107,8 +108,6 @@ async function followResultCellChain(
  * to `unstarted` with its verdict. With `EnsurePieceOptions.sourcesRequired`,
  * the first such source's verdict is returned instead, and an error starting a
  * source is thrown, so `owner` does not start without it.
- * `EnsurePieceOptions.onSourceRoot` is told of each source before it is asked
- * about, running or not.
  */
 async function startInputSources(
   runtime: Runtime,
@@ -126,28 +125,42 @@ async function startInputSources(
     const key = rootKey(source);
     if (visited.has(key)) continue;
     visited.add(key);
-    options?.onSourceRoot?.(source);
     if (runtime.runner.isRunning(runtime.getCellFromLink(source))) continue;
-    const verdict = await ensureVerdict(
-      runtime,
-      source,
-      {
-        startInputSources: true,
-        ...(signal !== undefined && { signal }),
-        ...(options?.admitStart !== undefined &&
-          { admitStart: options.admitStart }),
-        ...(options?.originFollowed !== undefined &&
-          { originFollowed: options.originFollowed }),
-        ...(options?.forEvent !== undefined && { forEvent: options.forEvent }),
-        ...(options?.enclosingSourcesOnly !== undefined &&
-          { enclosingSourcesOnly: options.enclosingSourcesOnly }),
-        ...(required && { sourcesRequired: true, propagateErrors: true }),
-        ...(options?.onSourceRoot !== undefined &&
-          { onSourceRoot: options.onSourceRoot }),
-      },
-      visited,
-      unstarted,
-    );
+    let verdict: EnsurePieceVerdict;
+    try {
+      verdict = await ensureVerdict(
+        runtime,
+        source,
+        {
+          startInputSources: true,
+          ...(signal !== undefined && { signal }),
+          ...(options?.admitStart !== undefined &&
+            { admitStart: options.admitStart }),
+          ...(options?.originFollowed !== undefined &&
+            { originFollowed: options.originFollowed }),
+          ...(options?.forEvent !== undefined &&
+            { forEvent: options.forEvent }),
+          ...(options?.enclosingSourcesOnly !== undefined &&
+            { enclosingSourcesOnly: options.enclosingSourcesOnly }),
+          ...(required && { sourcesRequired: true, propagateErrors: true }),
+        },
+        visited,
+        unstarted,
+      );
+    } catch (error) {
+      // Under `sourcesRequired`, say which piece's start failed. A refusal
+      // keeps its own type, which names the refused piece, and an abort is
+      // the caller's own.
+      if (
+        !required || signal?.aborted || error instanceof PieceStateMovedError
+      ) {
+        throw error;
+      }
+      throw new Error(
+        `The start of ${source.id}, a piece that encloses ${owner.id}, failed`,
+        { cause: error },
+      );
+    }
     signal?.throwIfAborted();
     if (verdict.started || verdict.reason === "no-pattern-meta") continue;
     if (required || verdict.reason === "origin-pending") {
@@ -390,7 +403,10 @@ export type EnsurePieceVerdict = {
   /** The owning piece is (now) running. */
   started: boolean;
 
-  /** Why a `started: false` verdict could not start the piece. */
+  /** Why a `started: false` verdict could not start the piece. Where a piece
+   * the owning piece's inputs come from held it back (`heldBy`), each reason
+   * is that piece's, and names what that piece's own chain, meta, pattern or
+   * caller did. */
   reason?:
 
     /** Result-metadata cycle, or traversal depth exceeded. */
@@ -429,7 +445,8 @@ export type EnsurePieceVerdict = {
 
   /** The owning result doc (the chain terminus) where the chain
    * resolved — present for `started`, `no-pattern-meta`,
-   * `pattern-unloadable`, `start-declined`, and `origin-pending`. */
+   * `pattern-unloadable`, `start-declined`, and `origin-pending`, and for any
+   * reason a piece named in `heldBy` gave. */
   root?: OwningRootAddress;
 
   /** The content identity of the pattern a `pattern-unloadable` verdict
@@ -552,15 +569,6 @@ export type EnsurePieceOptions = {
    * document that is no piece's is passed over either way.
    */
   sourcesRequired?: boolean;
-
-  /**
-   * With `startInputSources`, called with the root of each piece the owning
-   * piece's inputs come from as the walk reaches it, before it is started and
-   * whether or not it is running already, at any depth. A caller keying what
-   * it supplies a started piece by what was demanded records the mapping
-   * here, as it does for the owning piece in `onOwningRoot`.
-   */
-  onSourceRoot?: (root: OwningRootAddress) => void;
 
   /**
    * The walk delivers an event, so each piece it starts, the pieces its

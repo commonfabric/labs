@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import { getLogger } from "@commonfabric/logger";
 import { resolveScopeKey } from "@commonfabric/memory/v2";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 
 import { sendEvent } from "../../src/cell.ts";
 import { ExecutorHost } from "../../src/executor/host.ts";
+import { STRUCTURE_LOAD_STUCK_AFTER } from "../../src/executor/space-server.ts";
 import type { NormalizedFullLink } from "../../src/link-types.ts";
 import { getMetaLink } from "../../src/link-utils.ts";
 import { PieceStateMovedError } from "../../src/stored-setup-build.ts";
@@ -17,6 +17,7 @@ import { Runtime } from "../../src/runtime.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
 import { newSharedServer } from "../memory-v2-test-utils.ts";
+import { captureLogs } from "../support/captured-logs.ts";
 import { ArrivalLog, awaitEach } from "../support/serving-waits.ts";
 import { sessionDemandOf } from "../support/session-demand.ts";
 
@@ -33,7 +34,6 @@ const setupSigner = await Identity.fromPassphrase(
 const aliceSigner = await Identity.fromPassphrase(
   "space-server enclosing start alice",
 );
-const logger = getLogger("space-server");
 
 // A handler a nested pattern defines, whose input the pattern enclosing it
 // derives: the event's stream belongs to the nested instance, and `doubled` is
@@ -269,7 +269,8 @@ describe("SpaceServer", () => {
    * it and moves `value` to 5 with nothing running, so that what its
    * outermost instance derives now is what a run of it in the serving runtime
    * derives. With `origin`, the outermost instance records that origin.
-   * Returns the innermost instance as `nested`, with its argument.
+   * Returns the innermost instance as `nested`, with its argument, and the
+   * pattern pointer of the outermost one.
    */
   const setUpNested = async (
     { origin, program = NESTED_PROGRAM }: {
@@ -277,7 +278,11 @@ describe("SpaceServer", () => {
       program?: RuntimeProgram;
     } = {},
   ): Promise<
-    Piece & { stream: NormalizedFullLink; nestedArgument: NormalizedFullLink }
+    Piece & {
+      stream: NormalizedFullLink;
+      nestedArgument: NormalizedFullLink;
+      enclosingPattern: { identity: string; symbol: string };
+    }
   > => {
     const setup = openRuntime(false, setupSigner);
     const compiled = await setup.patternManager.compilePattern(
@@ -320,6 +325,10 @@ describe("SpaceServer", () => {
       setup.getCellFromLink(nested),
       "argument",
     )!;
+    const enclosingPattern = result.getMetaRaw("patternIdentity") as {
+      identity: string;
+      symbol: string;
+    };
     setup.runner.stop(result);
     {
       const tx = setup.edit();
@@ -335,6 +344,7 @@ describe("SpaceServer", () => {
       nested,
       local,
       nestedArgument,
+      enclosingPattern,
     };
   };
 
@@ -346,6 +356,7 @@ describe("SpaceServer", () => {
     const cell = writer.getCell<number>(space, "enclosing start touch", {
       type: "number",
     });
+    await cell.sync();
     const tx = writer.edit();
     cell.withTx(tx).set(++touches);
     expect((await tx.commit().settled).error).toBeUndefined();
@@ -471,12 +482,10 @@ describe("SpaceServer", () => {
             return start(cell, options);
           };
         };
-        const warned = () =>
-          logger.countsByKey["structure-load-failed"]?.warn ?? 0;
+        using logs = captureLogs("space-server");
         host = newHost();
         const { stream, enclosing, nested, local } = await setUpNested();
         failing.id = enclosing.id;
-        const warnedBefore = warned();
         await demand(local);
 
         // Whichever comes first, so that a nested piece started alone fails
@@ -487,7 +496,10 @@ describe("SpaceServer", () => {
         );
         expect(failing.left).toBe(0);
         expect(serves(nested)).toBe(false);
-        expect(warned()).toBe(warnedBefore + 1);
+        expect(logs.textsOf("structure-load-failed")).toEqual([
+          `demanded root ${local.id} did not load The start of ` +
+          `${enclosing.id}, a piece that encloses ${nested.id}, failed`,
+        ]);
         await touchSpace();
         await awaitEach(cycles, () => serves(nested));
         expect(serves(enclosing)).toBe(true);
@@ -562,26 +574,103 @@ describe("SpaceServer", () => {
         expect(host.stats().structureLoadFailures).toBe(0);
       });
 
-      it("parks the demanded document of a nested piece once its enclosing piece's start commit fails", async () => {
-        const previousLevel = logger.level;
-        logger.level = "debug";
-        try {
-          const parkedLogs = () =>
-            logger.countsByKey["structure-load-start-failed"]?.info ?? 0;
-          host = newHost();
-          const { enclosing, nested, local } = await setUpNested();
-          await demand(local);
-          await awaitEach(cycles, () => serves(nested));
-          const before = parkedLogs();
+      it("parks every demanded document of a nested piece once its enclosing piece's start commit fails, a second one included", async () => {
+        using logs = captureLogs("space-server");
+        host = newHost();
+        const { enclosing, nested, local, nestedArgument } =
+          await setUpNested();
+        await demand(local);
+        await awaitEach(cycles, () => serves(nested));
+        const reconciled = host.stats().demand.demandKeysReconciled;
+        // The second document resolves to the nested piece, already running.
+        await demand(local, nestedArgument);
+        await awaitEach(
+          cycles,
+          () => host!.stats().demand.demandKeysReconciled > reconciled,
+        );
 
-          servingRuntime!.pieceStartCommitFailureObserver!({
-            actionId: `piece-start/${enclosing.id}`,
-            error: new Error("test failure of the enclosing start's commit"),
-          });
-          expect(parkedLogs()).toBe(before + 1);
-        } finally {
-          logger.level = previousLevel;
+        servingRuntime!.pieceStartCommitFailureObserver!({
+          actionId: `piece-start/${enclosing.id}`,
+          error: new Error("test failure of the enclosing start's commit"),
+        });
+        expect(logs.textsOf("structure-load-start-failed")).toEqual([
+          `piece ${enclosing.id}'s start commit failed; its 2 demanded ` +
+          "document(s) parked until a commit touches the piece",
+        ]);
+      });
+
+      it("supplies the runs of the enclosing piece the demanders of the nested piece's demanded document", async () => {
+        const supplied: { roots: string[]; principals: string[] }[] = [];
+        onServingRuntime = (runtime) => {
+          const demandersFor = runtime.serverRunDemandersFor.bind(runtime);
+          runtime.serverRunDemandersFor = (roots) => {
+            const demanders = demandersFor(roots);
+            supplied.push({
+              roots: [...roots],
+              principals: (demanders ?? []).map(({ principal }) =>
+                String(principal)
+              ),
+            });
+            return demanders;
+          };
+        };
+        host = newHost();
+        const { stream, enclosing, nested, local } = await setUpNested();
+        await demand(local);
+        await awaitEach(cycles, () => serves(nested));
+        expect(await recordedOnEvent(stream)).toBe(10);
+
+        const forEnclosing = supplied.filter(({ roots }) =>
+          roots.length === 1 && roots[0] === enclosing.id
+        );
+        expect(forEnclosing.length).toBeGreaterThan(0);
+        expect(
+          forEnclosing.every(({ principals }) =>
+            principals.includes(aliceSigner.did())
+          ),
+        ).toBe(true);
+      });
+
+      it("holds a nested piece back for good while its enclosing piece's pattern never loads, warning that it is stuck, and starts it alone for an event", async () => {
+        const unloadable: { identity?: string; symbol?: string } = {};
+        onServingRuntime = (runtime) => {
+          const load = runtime.patternManager.loadPatternByIdentity.bind(
+            runtime.patternManager,
+          );
+          runtime.patternManager.loadPatternByIdentity = (
+            identity,
+            symbol,
+            ...rest
+          ) =>
+            identity === unloadable.identity && symbol === unloadable.symbol
+              ? Promise.resolve(undefined)
+              : load(identity, symbol, ...rest);
+        };
+        using logs = captureLogs("space-server");
+        host = newHost();
+        const { stream, enclosing, nested, local, enclosingPattern } =
+          await setUpNested();
+        Object.assign(unloadable, enclosingPattern);
+        await demand(local);
+        for (let cycle = 0; cycle < STRUCTURE_LOAD_STUCK_AFTER; cycle++) {
+          const deferred = host.stats().structureLoadDeferred;
+          await touchSpace();
+          await awaitEach(
+            cycles,
+            () => host!.stats().structureLoadDeferred > deferred,
+          );
         }
+
+        expect(host.stats().structureLoadStuck).toBe(1);
+        expect(serves(nested)).toBe(false);
+        expect(logs.textsOf("structure-load-stuck")[0]).toContain(
+          `(pattern-unloadable at ${enclosing.id}, a piece enclosing it)`,
+        );
+        // An event to the nested piece's stream starts it alone, as the event
+        // path starts a piece whose sources do not start.
+        expect(await recordedOnEvent(stream)).toBe(-1);
+        expect(serves(nested)).toBe(true);
+        expect(serves(enclosing)).toBe(false);
       });
 
       it("leaves unstarted a producer a hub's nested piece takes its input from", async () => {

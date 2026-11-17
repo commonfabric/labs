@@ -11043,6 +11043,14 @@ export class Runner {
    */
   #demandRootChains = new Map<string, readonly string[]>();
 
+  /**
+   * The root of the piece whose own graph instantiated each piece as one of
+   * its nested nodes, by the nested piece's root, for pieces in the same space
+   * as that piece. A piece a handler made, a piece started on its own, and a
+   * child in a space of its own have no entry. `enclosingPiecesOf()` reads it.
+   */
+  readonly #enclosingPieceByNested = new Map<string, string>();
+
   #demandRootChainFor(
     id: string,
     parentPieceRootId?: string,
@@ -12658,6 +12666,22 @@ export class Runner {
     if (keys.size === 0) return undefined;
     return Promise.all([...keys].map((key) => this.#watcherFollowsSettled(key)))
       .then(() => {});
+  }
+
+  /**
+   * The roots of the pieces that enclose the piece rooted at `rootId`, nearest
+   * first: the piece whose graph instantiated it as a nested node in this
+   * runtime, that piece's own enclosing piece, and so on. Empty for a piece
+   * this runtime has not instantiated as a nested node.
+   */
+  enclosingPiecesOf(rootId: string): string[] {
+    const chain: string[] = [];
+    let next = this.#enclosingPieceByNested.get(rootId);
+    while (next !== undefined && next !== rootId && !chain.includes(next)) {
+      chain.push(next);
+      next = this.#enclosingPieceByNested.get(next);
+    }
+    return chain;
   }
 
   /**
@@ -17519,6 +17543,12 @@ export class Runner {
         ),
         parentPieceRootId: parentResultCell.getAsNormalizedFullLink().id,
       };
+      if (!crossSpace) {
+        this.#enclosingPieceByNested.set(
+          childResultCell.getAsNormalizedFullLink().id,
+          options.parentPieceRootId,
+        );
+      }
       if (leftAlone && this.isRunning(childResultCell)) {
         this.#stopResult(childResultCell);
       }

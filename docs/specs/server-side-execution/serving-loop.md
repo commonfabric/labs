@@ -386,12 +386,15 @@ piece whose document a client session tracks at that commit keeps running,
 because that session's demand has already made its attempt to load it. The result
 pattern's index entry goes with the release, and so do the watches of the
 documents only the stopped pieces read: the release asks for the pass a stop
-asks for (`docs/features/document-release.md`). A
-demand that reaches a nested instance's values starts the instances that
-enclose it first, whether or not it reaches any of theirs (runtime-mapping.md,
-N22): the documents of an enclosing instance's that a demand reaches may all
-be ones the demand pass starts nothing from, such as its argument and a
-`computed:` document holding a link to the nested instance.
+asks for (`docs/features/document-release.md`).
+
+**A nested piece a demand reaches.** A demand that reaches a nested instance's
+values starts the instances that enclose it first, whether or not it reaches
+any of theirs (runtime-mapping.md, N22): the documents of an enclosing
+instance's that a demand reaches may all be ones the demand pass starts nothing
+from, such as its argument and a `computed:` document holding a link to the
+nested instance. The walk does not reach past a piece a handler made to the
+piece whose handler made it.
 
 **Parking.** A park releases the lease and stops the loop. A park for a
 failed loop, a failed initialization or a closing host disposes the runtime. An IDLE park (§3's "on idle") that abandoned no
