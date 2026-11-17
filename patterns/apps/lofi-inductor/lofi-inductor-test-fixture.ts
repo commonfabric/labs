@@ -30,6 +30,7 @@ const HIFI_ANSWERS: Array<[string, boolean]> = [
   ["Bill for March", true],
   ["Electricity bill", true],
   ["Weekend plans", false],
+  ["Team lunch Friday", false],
 ];
 
 /** One answer per subject, wherever and however often it is asked. */
@@ -44,13 +45,15 @@ export const HIFI_MOCKS = HIFI_ANSWERS.map(([subject, label]) => ({
 
 /**
  * Items whose ids split 30% held out (pinned by `induction.test.ts`):
- * mail-6, mail-7, mail-12, and mail-13 are held out, the rest train.
+ * mail-6, mail-7, mail-12, mail-13, and mail-17 are held out, the rest
+ * train. Five is the fewest a proposal is scored on (`MIN_HELD_OUT`).
  */
 export const HELD_OUT_ITEMS = [
   { id: "mail-6", fields: { subject: "Invoice 42" } },
   { id: "mail-7", fields: { subject: "Your bill is ready" } },
   { id: "mail-12", fields: { subject: "Lunch?" } },
   { id: "mail-13", fields: { subject: "Billing team offsite" } },
+  { id: "mail-17", fields: { subject: "Team lunch Friday" } },
 ];
 
 /** Training items, two of them bills the current rules miss. */

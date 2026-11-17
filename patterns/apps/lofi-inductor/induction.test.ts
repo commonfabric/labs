@@ -15,6 +15,8 @@ import {
   markdownOf,
   MAX_RULES,
   MAX_TESTED_LENGTH,
+  MIN_F1_GAIN,
+  MIN_HELD_OUT,
   newSurprises,
   rewriteRequest,
   rewriteStatus,
@@ -160,12 +162,13 @@ const HELD_OUT_ROWS = rows([
   ["mail-7", "Your bill is ready", true],
   ["mail-12", "Lunch?", false],
   ["mail-13", "Billing team offsite", false],
+  ["mail-17", "Team lunch Friday", false],
 ]);
 
 describe("scoreRules", () => {
   it("scores F1 over YES", () => {
     const examples = heldOutExamples(HELD_OUT_ROWS);
-    expect(examples.length).toBe(4);
+    expect(examples.length).toBe(5);
     expect(scoreRules([rule("subject", "invoice|\\bbill\\b")], examples).f1)
       .toBe(1);
     expect(scoreRules([rule("subject", "invoice")], examples).f1).toBeCloseTo(
@@ -203,7 +206,45 @@ describe("judgeProposal", () => {
       heldOut,
     );
     expect(judgement.accepted).toBe(false);
-    expect(judgement.reason).toMatch(/not better/);
+    expect(judgement.reason).toMatch(/not at least 2 points better/);
+  });
+
+  it("needs a margin over the current F1", () => {
+    // Eleven held-out examples, ten of them YES: one more caught is a gain
+    // of under two points, which is not enough.
+    const examples = [
+      ...Array.from({ length: 10 }, (_, i) => ({
+        fields: { subject: i === 0 ? "receipt" : `invoice ${i}` },
+        label: true,
+      })),
+      { fields: { subject: "lunch" }, label: false },
+    ];
+    const almost = judgeProposal(
+      [rule("subject", "invoice")],
+      proposal({
+        field: "subject",
+        pattern: "invoice|receipt",
+        predicts: true,
+      }),
+      [...examples, ...Array.from({ length: 40 }, () => examples[1])],
+    );
+    expect(almost.proposedF1).toBeGreaterThan(almost.currentF1);
+    expect(almost.proposedF1 - almost.currentF1).toBeLessThan(MIN_F1_GAIN);
+    expect(almost.accepted).toBe(false);
+  });
+
+  it("scores nothing on fewer than MIN_HELD_OUT examples", () => {
+    const judgement = judgeProposal(
+      current,
+      proposal({
+        field: "subject",
+        pattern: "invoice|\\bbill\\b",
+        predicts: true,
+      }),
+      heldOut.slice(0, MIN_HELD_OUT - 1),
+    );
+    expect(judgement.accepted).toBe(false);
+    expect(judgement.reason).toMatch(/a proposal needs 5/);
   });
 
   it("rejects a set that scores worse", () => {
@@ -263,7 +304,7 @@ describe("judgeProposal", () => {
       [],
     );
     expect(judgement.accepted).toBe(false);
-    expect(judgement.reason).toMatch(/no held-out/);
+    expect(judgement.reason).toMatch(/0 held-out examples/);
   });
 
   it("collapses rules that are the same in canonical form", () => {
@@ -405,7 +446,7 @@ describe("settle", () => {
       refusals: [],
       currentF1: judgement.currentF1,
       proposedF1: 1,
-      heldOut: 4,
+      heldOut: 5,
       answered: ["mail-1"],
       decidedAt: 1000,
     });

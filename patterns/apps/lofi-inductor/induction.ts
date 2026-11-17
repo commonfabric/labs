@@ -133,6 +133,20 @@ export interface Published {
   pooled?: boolean;
 }
 
+/**
+ * The fewest held-out examples a proposal is scored on before it can be
+ * adopted. Below five, one example moves F1 by twenty points or more, so a
+ * "better" set is mostly luck; with fewer, the current rules stay.
+ */
+export const MIN_HELD_OUT = 5;
+
+/**
+ * How much a proposal's held-out F1 must beat the current set's: two points.
+ * A set that only ties, up to rounding, would churn the rules (and what was
+ * published) for nothing.
+ */
+export const MIN_F1_GAIN = 0.02;
+
 /** How many examples of each kind the rewrite prompt carries at most. */
 const PROMPT_SURPRISES = 30;
 const PROMPT_AGREEMENTS = 20;
@@ -457,9 +471,10 @@ export function buildRewritePrompt(
 /**
  * Whether the proposed rule set replaces `current`. The proposal is model
  * output, so nothing in it is trusted to have its declared type. It is
- * accepted only when every rule is inside the grammar and safe to run, and the
- * set scores strictly better F1 than the current one on the held-out examples;
- * a tie keeps the current set.
+ * accepted only when every rule is inside the grammar and safe to run, there
+ * are at least `MIN_HELD_OUT` held-out examples, and the set's F1 on them
+ * beats the current one's by at least `MIN_F1_GAIN`; anything less keeps the
+ * current set.
  */
 export function judgeProposal(
   current: readonly CanonicalRule[],
@@ -504,16 +519,19 @@ export function judgeProposal(
   }
 
   const proposedF1 = scoreRules(rules, heldOut).f1;
-  const better = proposedF1 > currentF1;
+  const enough = heldOut.length >= MIN_HELD_OUT;
+  // The epsilon keeps a gain of exactly MIN_F1_GAIN from losing to rounding
+  const better = enough && proposedF1 >= currentF1 + MIN_F1_GAIN - 1e-9;
   return {
     accepted: better,
-    reason: heldOut.length === 0
-      ? "there are no held-out examples to score on yet"
+    reason: !enough
+      ? `there are ${heldOut.length} held-out examples to score on; a ` +
+        `proposal needs ${MIN_HELD_OUT}`
       : better
       ? `held-out F1 rose from ${percent(currentF1)} to ${percent(proposedF1)}`
-      : `held-out F1 ${percent(proposedF1)} is not better than ${
-        percent(currentF1)
-      }`,
+      : `held-out F1 ${percent(proposedF1)} is not at least ${
+        Math.round(MIN_F1_GAIN * 100)
+      } points better than ${percent(currentF1)}`,
     rules,
     refusals,
     currentF1,

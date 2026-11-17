@@ -105,7 +105,7 @@ export default pattern(() => {
   // the invoice-only rules miss: three new surprises, past the two a rewrite
   // waits for
   const assert_surprised = assert(() =>
-    better.summary.labelled === 7 && better.summary.surprises === 3 &&
+    better.summary.labelled === 8 && better.summary.surprises === 3 &&
     better.rewrite.status === "ready"
   );
 
