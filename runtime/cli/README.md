@@ -3479,6 +3479,10 @@ requests it again. The next step it prints is deploying the pattern with
 `/deploy index:<id>`. A listed pattern moves from Unvetted to Main once its
 author opens it in a loom.
 
+`cf pattern unshare <entry>` takes the pattern out of others' searches and
+listings and shares no later version until `cf pattern share` runs again. A
+version already shared stays readable by its id, so imports of it keep working.
+
 ### Publishing under a name
 
 `cf pattern publish <entry file>` shares the pattern as `cf pattern share` does,

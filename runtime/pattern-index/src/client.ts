@@ -516,7 +516,8 @@ export type PatternIndexShareState =
   | "pending"
   | "held"
   | "error"
-  | "exposed";
+  | "exposed"
+  | "public_elsewhere";
 
 /**
  * Who made a version, which decides the sharing sub-setting that applies:
@@ -532,12 +533,15 @@ export interface PatternIndexProfileRef {
   piece?: string;
 }
 
-/** The person a named lineage is published under. */
+/**
+ * The person a named lineage is published under. Others read the name from
+ * the profile itself.
+ */
 export interface PatternIndexPublishedAuthor {
   profile: PatternIndexProfileRef;
 
-  /** The name read from the profile when it was named; a display hint. */
-  displayName: string;
+  /** The name the owner gave when naming it; only the owner sees it. */
+  displayName?: string;
 
   /** The UTC day it was named. */
   since: string;
@@ -670,10 +674,16 @@ export interface PatternIndexShareVersionResponse {
 export interface PatternIndexPublishLineageRequest {
   lineageId: string;
   profile: PatternIndexProfileRef;
-  displayName: string;
+
+  /** A name for the owner's own view; others read it from the profile. */
+  displayName?: string;
+
   profileProof: readonly string[];
 
-  /** Also shares this version. */
+  /**
+   * Shares this version first; a share the index refuses is answered as
+   * that refusal, and nothing is named.
+   */
   versionId?: string;
 }
 
@@ -681,6 +691,12 @@ export interface PatternIndexPublishLineageResponse {
   lineageId: string;
   published: PatternIndexPublishedAuthor;
   share?: PatternIndexShareState;
+}
+
+export interface PatternIndexUnshareLineageResponse {
+  lineageId: string;
+  unshared: true;
+  changed: boolean;
 }
 
 export interface PatternIndexUnpublishLineageResponse {
@@ -751,7 +767,10 @@ export interface PatternIndexPublishRequest {
    */
   priorPatternId?: string;
 
-  /** Someone else's pattern this one was built from; credits it, inherits nothing. */
+  /**
+   * Someone else's pattern this one was built from; credits it, inherits
+   * nothing, and starts a new lineage.
+   */
   remixedFrom?: string;
 
   /** Continue this lineage of the caller's; refused when it is not theirs. */
@@ -1490,6 +1509,17 @@ export class PatternIndexClient {
       ...request,
       profileProof: [...request.profileProof],
     });
+  }
+
+  /**
+   * Takes one of the caller's lineages out of listing and stops sharing it
+   * on its own; what was exposed stays readable by id. A later
+   * `shareVersion` shares it again.
+   */
+  unshareLineage(
+    request: { lineageId: string },
+  ): Promise<PatternIndexUnshareLineageResponse> {
+    return this.#call("unshareLineage", { ...request });
   }
 
   /** Stops naming the caller on a lineage from now on. */

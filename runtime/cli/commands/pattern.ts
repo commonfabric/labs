@@ -299,13 +299,13 @@ async function publishNamed(
     if (lineageId === undefined) {
       throw new Error(`the index keeps no versions of ${entry}`);
     }
-    const { published } = await client.publishLineage({
+    await client.publishLineage({
       lineageId,
       profile: { space: chosen.space, piece: chosen.id },
       displayName: chosen.name,
       profileProof: proof,
     });
-    return `Published under "${published.displayName}"; cf pattern unpublish ${entry} stops showing it.`;
+    return `Published under "${chosen.name}"; cf pattern unpublish ${entry} stops showing it.`;
   });
 }
 
@@ -402,6 +402,28 @@ async function rollback(
     );
     render(
       options.json ? report : rollbackLines(entry, report).join("\n"),
+      { json: options.json },
+    );
+  });
+}
+
+async function unshare(
+  options: IndexCLIOptions,
+  entry: string,
+): Promise<void> {
+  await ownerOnly(async () => {
+    const { client, sources } = await indexFor(options);
+    const lineage = await lineageForEntry(client, absPath(entry), sources);
+    if (lineage === undefined) {
+      throw new PatternHistoryError(`No versions of ${entry} are kept.`);
+    }
+    const result = await client.unshareLineage({
+      lineageId: lineage.lineageId,
+    });
+    render(
+      options.json
+        ? result
+        : `${entry} is no longer listed or shared on its own. Anyone holding the id of a version already shared can still open it; cf pattern share shares it again.`,
       { json: options.json },
     );
   });
@@ -603,6 +625,20 @@ export const pattern = new Command()
           "Restore version 3 of ./bins.tsx.",
         ),
     ).action(rollback),
+  )
+  /* pattern unshare */
+  .command(
+    "unshare",
+    indexAccessOptions(
+      new Command()
+        .description(
+          "Stop sharing a pattern: it leaves others' searches and listings, " +
+            "and no later version is shared until cf pattern share. A version " +
+            "already shared stays readable by its id, so imports of it keep " +
+            "working.",
+        )
+        .arguments("<entry:string>"),
+    ).action(unshare),
   )
   /* pattern unpublish */
   .command(

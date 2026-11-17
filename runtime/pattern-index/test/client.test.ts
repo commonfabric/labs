@@ -728,6 +728,11 @@ describe("PatternIndexClient", () => {
         },
       },
       {
+        fn: "unshareLineage",
+        call: (c) => c.unshareLineage({ lineageId: "lin-1" }),
+        body: { lineageId: "lin-1" },
+      },
+      {
         fn: "unpublishLineage",
         call: (c) => c.unpublishLineage({ lineageId: "lin-1" }),
         body: { lineageId: "lin-1" },

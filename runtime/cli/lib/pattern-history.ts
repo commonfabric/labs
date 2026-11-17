@@ -102,6 +102,8 @@ export const standing = (
       return "private, held by the privacy check";
     case "error":
       return "private, the check to share failed";
+    case "public_elsewhere":
+      return "private, the same source is already shared by someone else";
     default:
       return "private";
   }
@@ -136,7 +138,11 @@ export const lineageLines = (
       }, newest v${lineage.head.seq} ${standing(lineage.head)}${
         lineage.published === undefined
           ? ` (shown as ${lineage.pseudonym})`
-          : ` (published as ${lineage.published.displayName})`
+          : ` (published under your name${
+            lineage.published.displayName === undefined
+              ? ""
+              : `, ${lineage.published.displayName}`
+          })`
       }`
     );
 

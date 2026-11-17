@@ -302,6 +302,7 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf pattern history ", "files", "*.tsx"],
   ["cf pattern rollback ", "files", "*.tsx"],
   ["cf pattern unpublish ", "files", "*.tsx"],
+  ["cf pattern unshare ", "files", "*.tsx"],
   ["cf piece setsrc ", "files", "*.tsx"],
   ["cf check ", "files", "*.tsx"],
   ["cf test ", "files", "*.tsx"],

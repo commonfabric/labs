@@ -1230,6 +1230,7 @@ const ARGUMENT_PROVIDERS: Readonly<
   "pattern history:entry": patternFiles,
   "pattern rollback:entry": patternFiles,
   "pattern unpublish:entry": patternFiles,
+  "pattern unshare:entry": patternFiles,
   "index sharing:state": () =>
     Promise.resolve(values([{ value: "on" }, { value: "off" }])),
   "index move-root:file": () =>
