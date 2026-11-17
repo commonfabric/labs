@@ -95,9 +95,10 @@ const compiled = (path: string, sourceHash = `hash:${path}`) => ({
 const head = (
   path: string,
   sourceHash = `old:${path}`,
+  patternId = `head:${path}`,
 ): PatternIndexRepoHead => ({
   path,
-  patternId: `head:${path}`,
+  patternId,
   sourceHash,
   commit: "beef",
 });
@@ -285,6 +286,17 @@ describe("repo-sync", () => {
       ]);
     });
 
+    it("returns a selected file it cannot read as failed beside the entries that compiled", async () => {
+      const deps = planDeps({ "patterns/b/main.tsx": DESCRIBED });
+      deps.trackedFiles = () =>
+        Promise.resolve(["patterns/a/main.tsx", "patterns/b/main.tsx"]);
+      const plan = await planRepo(OPTIONS, deps);
+      expect(plan.entries.map((entry) => [entry.path, entry.status])).toEqual([
+        ["patterns/a/main.tsx", "failed"],
+        ["patterns/b/main.tsx", "compiled"],
+      ]);
+    });
+
     it("throws when the program root lies outside the repository", async () => {
       await expect(
         planRepo({ ...OPTIONS, programRoot: ".." }, planDeps({})),
@@ -348,8 +360,10 @@ describe("repo-sync", () => {
       expect(published[0].priorPatternId).toBeUndefined();
     });
 
-    it("publishes nothing for an entry whose hash matches its head", async () => {
-      const { client, published } = fakeIndex([head("p/a.tsx", "same")]);
+    it("publishes nothing for an entry whose hash and id match its head", async () => {
+      const { client, published } = fakeIndex([
+        head("p/a.tsx", "same", "id:p/a.tsx"),
+      ]);
       const report = await publishPlan(
         { entries: [compiled("p/a.tsx", "same")], selected: ["p/a.tsx"] },
         PUBLISH_OPTIONS,
@@ -358,9 +372,24 @@ describe("repo-sync", () => {
       expect(report.entries).toEqual([{
         path: "p/a.tsx",
         status: "unchanged",
-        patternId: "head:p/a.tsx",
+        patternId: "id:p/a.tsx",
       }]);
       expect(published).toEqual([]);
+    });
+
+    it("publishes an entry whose hash matches its head but whose id does not", async () => {
+      // A newer Labs compiling the same source to a different pattern.
+
+      const { client, published } = fakeIndex([head("p/a.tsx", "same")]);
+      const report = await publishPlan(
+        { entries: [compiled("p/a.tsx", "same")], selected: ["p/a.tsx"] },
+        PUBLISH_OPTIONS,
+        client,
+      );
+      expect(report.entries[0].status).toBe("published");
+      expect(published.map((request) => request.patternId)).toEqual([
+        "id:p/a.tsx",
+      ]);
     });
 
     it("returns an entry as unchanged when the index says its head already has the id", async () => {
@@ -481,6 +510,26 @@ describe("repo-sync", () => {
       expect(withdrawals).toEqual([["p/gone.tsx"]]);
       expect(report.withdrawn).toEqual(["p/gone.tsx"]);
       expect(report.dormant).toEqual(["p/helper.ts"]);
+    });
+
+    it("returns the published entries and the withdrawal's refusal when the index refuses to withdraw", async () => {
+      const { client } = fakeIndex([head("p/gone.tsx")]);
+      client.withdrawRepoPaths = () =>
+        Promise.reject(new Error("pattern index withdrawRepoPaths 503"));
+      const report = await publishPlan(
+        { entries: [compiled("p/a.tsx")], selected: ["p/a.tsx"] },
+        PUBLISH_OPTIONS,
+        client,
+      );
+      expect(report.entries.map((entry) => entry.status)).toEqual([
+        "published",
+      ]);
+      expect(report.withdrawn).toEqual([]);
+      expect(report.withdrawFailure).toBe(
+        "pattern index withdrawRepoPaths 503",
+      );
+      expect(syncFailed(report)).toBe(true);
+      expect(reportMarkdown(report)).toContain("### Withdrawal failed");
     });
 
     it("asks to withdraw nothing when every head is still selected", async () => {

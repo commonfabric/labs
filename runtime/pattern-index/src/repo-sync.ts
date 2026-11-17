@@ -89,6 +89,12 @@ export interface RepoSyncReport {
   /** Paths whose lineages were withdrawn, since the repository lost them. */
   withdrawn: readonly string[];
 
+  /**
+   * Why the index refused to withdraw the lineages of paths the repository
+   * lost, when it did. The entries above were synced either way.
+   */
+  withdrawFailure?: string;
+
   /** Paths the index holds a lineage for that are here but not entries. */
   dormant: readonly string[];
 
@@ -191,7 +197,12 @@ const publishEntry = async (
   options: PublishPlanOptions,
   client: PublishClient,
 ): Promise<EntryOutcome> => {
-  if (head?.sourceHash === entry.sourceHash) {
+  // The source is what usually moves, but a newer Labs can compile the same
+  // source to a different pattern, so the id has to match as well.
+  if (
+    head?.sourceHash === entry.sourceHash &&
+    head.patternId === entry.request.patternId
+  ) {
     return { path: entry.path, status: "unchanged", patternId: head.patternId };
   }
   const response = await client.publishPattern({
@@ -235,14 +246,15 @@ const gardenerReports = (
 
 /**
  * The publish phase: publishes a new version of every compiled entry whose
- * hash differs from its lineage's newest, and withdraws the lineages of paths
- * the repository no longer selects.
+ * source hash or pattern id differs from its lineage's newest, and withdraws
+ * the lineages of paths the repository no longer selects.
  *
- * A refused publish is recorded and the others still run; the caller fails
- * the job when any entry failed, here or in the plan.
+ * A refused publish is recorded and the others still run, and a refused
+ * withdrawal is recorded beside them; the caller fails the job when
+ * {@link syncFailed} says so.
  *
- * @throws PatternIndexError when the index refuses `listRepoHeads` (before
- *   anything is published) or `withdrawRepoPaths` (after).
+ * @throws PatternIndexError when the index refuses `listRepoHeads`, before
+ *   anything is published.
  */
 export const publishPlan = async (
   plan: RepoSyncPlan,
@@ -276,17 +288,26 @@ export const publishPlan = async (
   const gone = heads.map((head) => head.path).filter((path) =>
     !selected.has(path)
   ).sort();
-  const withdrawn = gone.length === 0 ? [] : (await client.withdrawRepoPaths({
-    repository: options.repository,
-    paths: gone,
-  })).withdrawn.filter((removal) => removal.withdrawn).map((removal) =>
-    removal.path
-  );
+  let withdrawn: string[] = [];
+  let withdrawFailure: string | undefined;
+  if (gone.length > 0) {
+    try {
+      const answer = await client.withdrawRepoPaths({
+        repository: options.repository,
+        paths: gone,
+      });
+      withdrawn = answer.withdrawn.filter((removal) => removal.withdrawn)
+        .map((removal) => removal.path);
+    } catch (error) {
+      withdrawFailure = reasonOf(error);
+    }
+  }
   return {
     repository: options.repository,
     commit: options.commit,
     entries: outcomes,
     withdrawn,
+    ...(withdrawFailure === undefined ? {} : { withdrawFailure }),
     dormant: heads.map((head) => head.path).filter((path) =>
       selected.has(path) && !entryPaths.has(path)
     ).sort(),
@@ -294,8 +315,12 @@ export const publishPlan = async (
   };
 };
 
-/** Whether the job should fail: some entry could not be synced. */
+/**
+ * Whether the job should fail: some entry could not be synced, or the
+ * lineages of lost paths could not be withdrawn.
+ */
 export const syncFailed = (report: RepoSyncReport): boolean =>
+  report.withdrawFailure !== undefined ||
   report.entries.some((entry) => entry.status === "failed");
 
 /** Text safe inside a Markdown table cell. */
@@ -333,6 +358,16 @@ export const reportMarkdown = (report: RepoSyncReport): string => {
       if (entry.status !== "failed") continue;
       lines.push(`| \`${entry.path}\` | ${cell(entry.reason)} |`);
     }
+  }
+  if (report.withdrawFailure !== undefined) {
+    lines.push(
+      "",
+      "### Withdrawal failed",
+      "",
+      `The index refused to withdraw the lineages of paths no longer here: ${
+        cell(report.withdrawFailure)
+      }`,
+    );
   }
   if (published.length > 0) {
     lines.push("", "### Published", "", "| Entry | Pattern |", "| --- | --- |");

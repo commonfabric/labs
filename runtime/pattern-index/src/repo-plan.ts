@@ -116,6 +116,9 @@ const selectedPaths = async (
 ): Promise<string[]> =>
   (await deps.trackedFiles()).filter(selector(options)).sort();
 
+/** Whether a module's source makes it a pattern entry. */
+const isEntrySource = (source: string): boolean => DEFAULT_EXPORT.test(source);
+
 /**
  * The repository-relative entry files `options` names: the selected modules
  * that have a default export.
@@ -127,14 +130,17 @@ export const findEntries = async (
   const entries: string[] = [];
   for (const path of await selectedPaths(options, deps)) {
     const source = await deps.readTextFile(join(options.repoRoot, path));
-    if (DEFAULT_EXPORT.test(source)) entries.push(path);
+    if (isEntrySource(source)) entries.push(path);
   }
   return entries;
 };
 
-/** Resolves and compiles one entry. */
+/**
+ * Resolves and compiles one entry, given the source already read from it.
+ */
 const planEntry = async (
   path: string,
+  source: string,
   root: string,
   options: RepoEntryOptions,
   deps: PlanDeps,
@@ -148,7 +154,7 @@ const planEntry = async (
   if (compiled.patternId === undefined) {
     throw new Error("the compile produced no durable pattern id");
   }
-  const doc = patternDocMetadata(await deps.readTextFile(entry));
+  const doc = patternDocMetadata(source);
   // The index finds patterns by what their description says, so one with
   // none would be found by nothing; the report asks for the doc comment.
   if (doc.description === undefined) return { path, status: "undescribed" };
@@ -169,8 +175,9 @@ const planEntry = async (
 /**
  * The plan phase: compiles every entry, and lists every path the globs
  * select, so the publish phase can tell a lineage whose file is gone from
- * one that is still here. An entry that fails to resolve or compile is
- * recorded and the rest still run.
+ * one that is still here. A selected file that cannot be read, and an entry
+ * that fails to resolve or compile, is recorded as failed and the rest still
+ * run.
  *
  * @throws Error when the program root lies outside the repository.
  */
@@ -179,13 +186,16 @@ export const planRepo = async (
   deps: PlanDeps,
 ): Promise<RepoSyncPlan> => {
   const root = programRootOf(options);
+  const selected = await selectedPaths(options, deps);
   const entries: PlannedEntry[] = [];
-  for (const path of await findEntries(options, deps)) {
+  for (const path of selected) {
     try {
-      entries.push(await planEntry(path, root, options, deps));
+      const source = await deps.readTextFile(join(options.repoRoot, path));
+      if (!isEntrySource(source)) continue;
+      entries.push(await planEntry(path, source, root, options, deps));
     } catch (error) {
       entries.push({ path, status: "failed", reason: reasonOf(error) });
     }
   }
-  return { entries, selected: await selectedPaths(options, deps) };
+  return { entries, selected };
 };

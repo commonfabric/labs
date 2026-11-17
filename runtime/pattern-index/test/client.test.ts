@@ -1072,6 +1072,23 @@ describe("PatternIndexClient", () => {
     });
     expect(JSON.parse(requests[0].body).source).toEqual(source);
   });
+  it("throws, sending nothing, for a publish with a repository source and a predecessor", async () => {
+    const { client, requests } = createClient([]);
+    await expect(client.publishPattern({
+      patternId: "pat-1",
+      description: "Doubles",
+      hashtags: [],
+      program: { main: "/a.tsx", files: [{ name: "/a.tsx", contents: "" }] },
+      source: {
+        repository: "acme/patterns",
+        path: "patterns/a/main.tsx",
+        commit: "c0ffee",
+        sourceHash: "abc",
+      },
+      priorPatternId: "pat-0",
+    })).rejects.toThrow("names no predecessor");
+    expect(requests).toEqual([]);
+  });
   it("snapshots its chain, and refuses one longer than the index accepts", async () => {
     const { fetchFn, requests } = recordingFetch([
       jsonResponse({ handle: "quiet-fox", role: "user" }),

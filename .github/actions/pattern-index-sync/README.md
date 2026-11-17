@@ -66,7 +66,10 @@ next.
 A repository that vendors Labs can run the vendored copy instead
 (`uses: ./vendor/labs/.github/actions/pattern-index-sync` and
 `labs-path: vendor/labs`, after a step that fetches it), so its patterns compile
-against the Labs they were written for.
+against the Labs they were written for. Then the code holding the credential is
+the repository's own, from its default branch, as trusted as the workflow file
+that grants the token. The publish job still runs none of the patterns, and the
+plan job still holds no credential, so pattern code never runs beside the token.
 
 ## What counts as an entry
 
@@ -101,15 +104,16 @@ still readable by id. A path that comes back resumes the same lineage.
    only requests signed by the key it names. So a token copied out of a log is
    useless without the key.
 3. It asks the index for the newest version of each lineage this repository
-   holds, with the hash each was published from. Entries whose hash matches are
-   left alone. Each of the rest is published as the lineage's next version,
-   named under the brand and listed at once. Lineages whose paths the globs no
-   longer select are withdrawn.
+   holds, with the hash each was published from. Entries whose hash and pattern
+   id both match are left alone; the id catches a newer Labs compiling the same
+   source differently. Each of the rest is published as the lineage's next
+   version, named under the brand and listed at once. Lineages whose paths the
+   globs no longer select are withdrawn.
 4. It writes a summary to the job: what it published, what failed, which entries
    lack a description, and what was withdrawn. It also shows the privacy
    gardener's findings on each newest version. The gardener judges every brand
    version and never holds one back, so its findings are reported, not enforced.
 
-The publish job fails if any entry failed to compile or publish, after
-publishing the others. Nothing about past runs is kept outside the index, so the
-next run after a failure catches up.
+The publish job fails if any entry failed to compile or publish, or the
+withdrawals were refused, after publishing the others. Nothing about past runs
+is kept outside the index, so the next run after a failure catches up.

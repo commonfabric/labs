@@ -927,8 +927,8 @@ export interface PatternIndexPublishRequest {
   /**
    * The repository file this pattern is the newest version of, sent by a
    * repository sync. The index keeps one lineage per repository and path,
-   * so it sets the predecessor itself and the caller sends no
-   * `priorPatternId`.
+   * so it sets the predecessor itself, and `publishPattern` refuses one sent
+   * with `priorPatternId`, `lineageId` or `slot`.
    */
   source?: PatternIndexRepoSource;
 }
@@ -1246,8 +1246,10 @@ export interface PatternIndexClientOptions {
   proofs?: readonly string[];
 
   /**
-   * Mints a GitHub Actions OIDC token whose audience names the signer, sent
-   * inside every signed call. It makes the signer act for the brand that
+   * Mints a GitHub Actions OIDC token whose audience is
+   * `pattern-index:<index host>:<signer DID>`, sent inside every signed call.
+   * The host keeps a token minted for one index deployment from being
+   * accepted by another, and the DID binds it to this client's signer. It makes the signer act for the brand that
    * owns the token's repository; `github-oidc.ts` says how the token is
    * minted. Called once per call, since a token lives only minutes and a
    * sync can run longer.
@@ -1534,6 +1536,16 @@ export class PatternIndexClient {
   async publishPattern(
     request: PatternIndexPublishRequest,
   ): Promise<PatternIndexPublishResponse> {
+    // The index places a synced version in its path's lineage itself.
+    if (
+      request.source !== undefined &&
+      (request.priorPatternId !== undefined ||
+        request.lineageId !== undefined || request.slot !== undefined)
+    ) {
+      throw new Error(
+        "a publish with a repository source names no predecessor, lineage or slot",
+      );
+    }
     const schemas = {
       ...(request.argumentSchema !== undefined
         ? { argumentSchema: request.argumentSchema }
