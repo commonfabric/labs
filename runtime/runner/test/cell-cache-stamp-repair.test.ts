@@ -773,6 +773,149 @@ describe("cell-cache", () => {
       }
     });
 
+    for (const shape of ["label", "value"] as const) {
+      it(`erases nothing where another session's commit changes the guarding source record's ${shape} after the repair read it`, async () => {
+        // The racing commit goes to the server ahead of the repair's, and the
+        // repairing session has not heard of it when its own commit goes out,
+        // so only the server's check of the guard read can refuse it.
+
+        const server = newSharedServer();
+        const writerManager = EmulatedStorageManager.connectTo(server, {
+          as: signer,
+        });
+        const writer = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: writerManager,
+          cfcEnforcementMode: "enforce-strict",
+          cfcFlowLabels: "persist",
+        });
+        const repairerManager = EmulatedStorageManager.connectTo(server, {
+          as: signer,
+        });
+        const repairer = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: repairerManager,
+          cfcEnforcementMode: "enforce-strict",
+          cfcFlowLabels: "persist",
+        });
+        const read = (runtime: Runtime, id: URI) => {
+          const tx = runtime.edit();
+          try {
+            return storedFields(tx, address(id)) as Stored;
+          } finally {
+            tx.abort();
+          }
+        };
+        try {
+          const modules = toModules(PROGRAM);
+          const tx = writer.edit();
+          writeSourceAndCompiledDocs(
+            writer,
+            space,
+            modules.modules,
+            modules.entryIdentity,
+            {
+              runtimeVersion: RUNTIME_VERSION,
+              moduleDelegations: new Map([[
+                modules.entryIdentity,
+                new Set(["predecessor"]),
+              ]]),
+            },
+            tx,
+          );
+          writer.prepareTxForCommit(tx);
+          expect((await tx.commit().settled).error).toBeUndefined();
+          const idIn = (key: string) =>
+            writer.getCell(space, key).getAsNormalizedFullLink().id as URI;
+          const source = idIn(sourceDocKey(modules.entryIdentity));
+          const compiled = idIn(
+            compiledDocKey(RUNTIME_VERSION, modules.entryIdentity),
+          );
+          const seed = writer.edit();
+          const current = storedFields(seed, address(compiled)) as Stored;
+          seedStoredEnvelope(seed, address(compiled), {
+            ...current,
+            cfc: {
+              ...current.cfc!,
+              labelMap: {
+                ...current.cfc!.labelMap,
+                entries: [
+                  ...current.cfc!.labelMap.entries,
+                  ...rootPairStamp(space),
+                ],
+              },
+            },
+          } as unknown as FabricValue);
+          expect((await seed.commit().settled).error).toBeUndefined();
+          await writerManager.synced();
+          const before = read(writer, source);
+
+          const race = async () => {
+            const racing = writer.edit();
+            const stored = storedFields(racing, address(source)) as Stored;
+            seedStoredEnvelope(
+              racing,
+              address(source),
+              (shape === "label"
+                ? {
+                  ...stored,
+                  cfc: {
+                    ...stored.cfc!,
+                    labelMap: { ...stored.cfc!.labelMap, entries: [] },
+                  },
+                }
+                : {
+                  ...stored,
+                  value: {
+                    ...stored.value!,
+                    delegatedModuleIdentities: ["predecessor", "raced"],
+                  },
+                }) as unknown as FabricValue,
+            );
+            expect((await racing.commit().settled).error).toBeUndefined();
+          };
+          let sawRace: boolean | undefined;
+          const edit = repairer.edit.bind(repairer);
+          (repairer as { edit: typeof repairer.edit }).edit = (...args) => {
+            const tx = edit(...args);
+            const commit = tx.commit.bind(tx);
+            (tx as { commit: () => unknown }).commit = () => ({
+              settled: (async () => {
+                const racing = race();
+                sawRace = JSON.stringify(read(repairer, source)) !==
+                  JSON.stringify(before);
+                const result = await commit().settled;
+                await racing;
+                return result;
+              })(),
+            });
+            return tx;
+          };
+
+          const outcome = await repairCompileCacheStamps(
+            repairer,
+            space,
+            modules.entryIdentity,
+            RUNTIME_VERSION,
+          );
+
+          (repairer as { edit: typeof repairer.edit }).edit = edit;
+          expect(sawRace).toBe(false);
+          expect(outcome).toBe("conflicted");
+          await writer.getCell(
+            space,
+            compiledDocKey(RUNTIME_VERSION, modules.entryIdentity),
+          ).sync();
+          expect(read(writer, compiled).value).toBeDefined();
+        } finally {
+          await repairer.dispose();
+          await writer.dispose();
+          await repairerManager.close();
+          await writerManager.close();
+        }
+      });
+    }
+
     it("repairs a closure holding two modules of one filename, each in a view of its own", async () => {
       // An entry's cache-root edges can reach two generations of one
       // ambient file, as two seals leave them; each is verified in its own

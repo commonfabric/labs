@@ -2694,7 +2694,11 @@ export async function repairCompileCacheStamps(
       };
       // Each record is read whole, which conditions the commit on the
       // record being unchanged. One the repair only guards is read as the
-      // verifier reads, so that its label flows nowhere.
+      // verifier reads, so that its label flows nowhere. It still reads at
+      // the document's root: a commit drops a verifier read only at the
+      // envelope path `["cfc"]` (`SpaceReplica.#commitReadActivities()`), so a
+      // read narrowed to the envelope would no longer refuse the commit when
+      // the guarding record changed.
       const current = target.write
         ? tx.readOrThrow(address)
         : tx.readOrThrow(address, { meta: internalVerifierRead });
