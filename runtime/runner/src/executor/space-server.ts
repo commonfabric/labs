@@ -1662,6 +1662,10 @@ export class SpaceServer implements TransactionSealDestination {
    * write to another instance of the document does not. */
   readonly #notRunWaits = new Map<string, Set<string>>();
 
+  /** The cancels of the scheduler watches (`watchProducedDocument()`) each
+   * entry of `#notRunWaits` holds, by the same key. */
+  readonly #notRunWatchCancels = new Map<string, () => void>();
+
   /** The events in `#notRunWaits` that no commit has woken yet. The drain
    * dispatches none of them, and stops its pass at one, as at any other
    * barrier, so that no later arrival in the space overtakes it. */
@@ -3853,6 +3857,20 @@ export class SpaceServer implements TransactionSealDestination {
     this.#retireWave(wave);
   }
 
+  /** Wakes the events waiting on the instance `waitKey` names (events.md §5):
+   * a commit wrote it, or a writer of its document finished a run or stopped
+   * writing it. The entries are dispatched again, and judged afresh. */
+  #wakeNotRunWait(waitKey: string): void {
+    const woken = this.#notRunWaits.get(waitKey);
+    if (woken === undefined) return;
+    this.#notRunWaits.delete(waitKey);
+    this.#notRunWatchCancels.get(waitKey)?.();
+    this.#notRunWatchCancels.delete(waitKey);
+    for (const eventId of woken) this.#notRunWaiting.delete(eventId);
+    this.#eventScanOwed = true;
+    this.#feedArrived?.resolve();
+  }
+
   /** Re-arm the event scan for DEFERRED (transient) drain outcomes —
    * never synchronously (verdict blocker, 2026-08-12): an immediate
    * `#eventScanOwed = true` makes `#hasWork()` spin the next wave at
@@ -4579,12 +4597,7 @@ export class SpaceServer implements TransactionSealDestination {
       // on re-drains it (events.md §5).
       if (this.#notRunWaits.size > 0) {
         for (const write of record.writes) {
-          const waitKey = toDirtyKey(write.id, write.scopeKey);
-          const woken = this.#notRunWaits.get(waitKey);
-          if (woken === undefined) continue;
-          this.#notRunWaits.delete(waitKey);
-          for (const eventId of woken) this.#notRunWaiting.delete(eventId);
-          this.#eventScanOwed = true;
+          this.#wakeNotRunWait(toDirtyKey(write.id, write.scopeKey));
         }
       }
       // Deferred events re-try on NEW INPUT (the creation-race arm:
@@ -5434,6 +5447,17 @@ export class SpaceServer implements TransactionSealDestination {
                       if (waiting === undefined) {
                         waiting = new Set();
                         this.#notRunWaits.set(waitKey, waiting);
+                        // A writer that runs and leaves the instance absent
+                        // commits no write to it, so its run wakes the wait
+                        // too, as does a writer that stops writing the
+                        // document.
+                        this.#notRunWatchCancels.set(
+                          waitKey,
+                          runtime.scheduler.watchProducedDocument(
+                            waitsOn,
+                            () => this.#wakeNotRunWait(waitKey),
+                          ),
+                        );
                       }
                       waiting.add(entry.eventId);
                       this.#notRunWaiting.add(entry.eventId);
@@ -8586,6 +8610,8 @@ export class SpaceServer implements TransactionSealDestination {
     // A waiting entry is dispatched afresh by the next tenure, which judges
     // it against the state it finds: the commit that would have woken it can
     // land while no tenure is watching.
+    for (const cancel of this.#notRunWatchCancels.values()) cancel();
+    this.#notRunWatchCancels.clear();
     this.#notRunWaits.clear();
     this.#notRunWaiting.clear();
     for (const eventId of [...this.#deliveryCheckpoints.keys()]) {

@@ -696,7 +696,11 @@ loop's duty).
   current, since the run supply runs no other. Such a deferral spends no
   deferral budget and arms no backstop: the entry waits on that
   instance and is not dispatched again until a commit writes it (a write
-  to another instance of the document does not wake it), and
+  to another instance of the document does not wake it) or a writer of
+  the document finishes a run that was not withdrawn, or stops writing
+  it. The second wake is what reaches a writer whose run leaves the
+  instance absent, which commits no write to it. Once dispatched again,
+  the entry is judged afresh; and
   the drain stops its pass at the waiting entry, so later arrivals in
   the space wait behind it. Time and unrelated commits decide nothing
   about it. A tenure that parks forgets the wait, and the next one

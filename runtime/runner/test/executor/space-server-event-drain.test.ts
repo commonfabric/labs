@@ -417,6 +417,43 @@ describe("SpaceServer", () => {
       expect(fixture.storedLog()).toEqual(["W", "L"]);
     });
 
+    it("dispatches a waiting event again when a writer of the awaited document finishes a run, though it commits no write to the instance", async () => {
+      // A writer whose run yields `undefined` writes nothing, so the
+      // scheduler's watch is what wakes the wait.
+
+      let resolved = false;
+      const wakes: (() => void)[] = [];
+      const fixture = await serve({
+        prepare: (runtime) => {
+          stub(
+            runtime.scheduler,
+            "comingOwedScopedInstance",
+            () => resolved ? undefined : awaitedKey,
+          );
+          stub(
+            runtime.scheduler,
+            "watchProducedDocument",
+            (_address: unknown, wake: () => void) => {
+              wakes.push(wake);
+              return () => {};
+            },
+          );
+        },
+        withdraw: () => !resolved,
+      });
+      await admit("waiting", { name: "W" });
+      await fixture.activate();
+      expect(fixture.called).toEqual(["W"]);
+      expect(wakes.length).toBe(1);
+
+      resolved = true;
+      wakes[0]();
+      await fixture.feed();
+      expect(fixture.called).toEqual(["W", "W"]);
+      expect(fixture.entries()[0].consequenced).toBe(true);
+      expect(fixture.storedLog()).toEqual(["W"]);
+    });
+
     it("drops the event through the deferral budget when no writer that owes the document will run", async () => {
       const { fixture } = await withdrawUntilAwaitedArrives(false);
       expect(fixture.entries()[0].status).toBe("dropped");

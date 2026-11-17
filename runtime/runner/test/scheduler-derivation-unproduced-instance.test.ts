@@ -384,6 +384,25 @@ describe("scheduler-derivation-unproduced-instance", () => {
     }
   });
 
+  it("wakes a watch on a document when a writer of it finishes a run that leaves its instance absent", async () => {
+    // Such a run commits no write to the instance, so a waiter on the
+    // instance learns of it only from the watch.
+
+    const f = await fixture("watch-produced", true);
+    try {
+      let woken = 0;
+      f.runtime.scheduler.watchProducedDocument(
+        f.state.getAsNormalizedFullLink(),
+        () => woken++,
+      );
+      await f.runEmptyWriter();
+
+      expect(woken).toBe(1);
+    } finally {
+      await f.close();
+    }
+  });
+
   it("reports an owed instance as coming while a writer that owes it is queued to run", async () => {
     const f = await fixture("coming-queued", true);
     try {

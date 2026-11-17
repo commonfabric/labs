@@ -569,6 +569,10 @@ export interface SchedulerActionRunState {
   readonly maybeAutoDebounce: (action: Action) => void;
   readonly markActionHasRun: (action: Action) => void;
   readonly markNodeHasRun: (action: Action) => void;
+
+  /** Notes that `action` finished a run that was not withdrawn
+   * (`Scheduler.watchProducedDocument()`). */
+  readonly noteProduced?: (action: Action) => void;
   readonly handleError: (error: Error, action: Action) => void;
   readonly resubscribe: (action: Action, log: ReactivityLog) => void;
   readonly markInvalid: (action: Action, options?: MarkInvalidOptions) => void;
@@ -1492,10 +1496,12 @@ function finalizeReactiveActionCommit(
   // (`Scheduler.owesScopedInstance()`, which ignores the flag on a builtin,
   // whose output can land after its run returns). A withdrawn run read
   // something it could not take as state, so what it left is not its output.
-  if (
-    owner !== undefined && refused === undefined && unproduced === undefined
-  ) {
-    owner.produced = true;
+  // A run that was not withdrawn also wakes whoever watches the documents it
+  // writes (`Scheduler.watchProducedDocument()`): one that left its instance
+  // absent commits no write there to wake them otherwise.
+  if (refused === undefined && unproduced === undefined) {
+    if (owner !== undefined) owner.produced = true;
+    state.noteProduced?.(args.action);
   }
   const registrationToken = args.registrationToken;
   // Sealing is not durable acceptance. A withdrawn contribution can have read

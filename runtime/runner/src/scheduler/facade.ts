@@ -277,6 +277,11 @@ function isAuthorizationLoadFailure(error: unknown): boolean {
     error.failure.failureClass === "authorization";
 }
 
+/** The key of one document in `Scheduler`'s produced-watchers: its space and
+ * id, which hold no NUL. */
+const producedWatchKey = (space: string, id: string): string =>
+  `${space}\0${id}`;
+
 /**
  * Like `isAuthorizationLoadFailure()`, except that the failure also carries
  * durable evidence of the refusal (`permanentEvidence`), as one naming the
@@ -1545,6 +1550,9 @@ export class Scheduler {
 
   #demandedWriterHookInstalled = false;
 
+  /** The callbacks `watchProducedDocument()` holds, by `producedWatchKey()`. */
+  readonly #producedWatchers = new Map<string, Set<() => void>>();
+
   #installDemandedWriterHook(): void {
     if (this.#demandedWriterHookInstalled) return;
     this.#demandedWriterHookInstalled = true;
@@ -1553,6 +1561,9 @@ export class Scheduler {
     // its last demanded entity leaves it. Bracketed like every other root
     // flip (serving-loop.md §8: capture wasLive → flip → notify).
     this.#writeIndex.onWriterEntitiesChanged = (action, added, removed) => {
+      // A writer that stops writing a document has stopped owing it, which
+      // is news to whoever waits on it being produced.
+      if (removed.size > 0) this.#wakeProducedWatchers(removed);
       let touchesDemand = false;
       for (const entity of added) {
         if ((this.#demandedEntityRefs.get(entity) ?? 0) > 0) {
@@ -2102,6 +2113,55 @@ export class Scheduler {
     tx: IExtendedStorageTransaction,
   ): boolean {
     return this.#owingWriters(address, tx).owing.length > 0;
+  }
+
+  /**
+   * Calls `wake`, once, when a writer of `address`'s document finishes a run
+   * that was not withdrawn, or stops writing the document; returns a cancel.
+   * A writer's run that leaves its instance absent commits no write to it, so
+   * one waiting on the instance learns of that run here rather than from a
+   * commit. A served event whose handler did not run waits this way
+   * (events.md §5).
+   */
+  watchProducedDocument(
+    address: { space: string; id: string },
+    wake: () => void,
+  ): () => void {
+    this.#installDemandedWriterHook();
+    const key = producedWatchKey(address.space, address.id);
+    let watchers = this.#producedWatchers.get(key);
+    if (watchers === undefined) {
+      watchers = new Set();
+      this.#producedWatchers.set(key, watchers);
+    }
+    watchers.add(wake);
+    return () => {
+      const current = this.#producedWatchers.get(key);
+      current?.delete(wake);
+      if (current?.size === 0) this.#producedWatchers.delete(key);
+    };
+  }
+
+  /** Wakes, once, the watchers of every document among `entities`
+   * (`watchProducedDocument()`). */
+  #wakeProducedWatchers(entities: Iterable<SpaceScopeAndURI>): void {
+    if (this.#producedWatchers.size === 0) return;
+    for (const entity of entities) {
+      // An entity key is `<space>/<scope>/<id>` (`entityNameKey()`).
+      const [space, , ...id] = entity.split("/");
+      const key = producedWatchKey(space, id.join("/"));
+      const watchers = this.#producedWatchers.get(key);
+      if (watchers === undefined) continue;
+      this.#producedWatchers.delete(key);
+      for (const wake of watchers) wake();
+    }
+  }
+
+  /** Notes that `action` finished a run that was not withdrawn, waking the
+   * watchers of the documents it writes. */
+  #noteProduced(action: Action): void {
+    const entities = this.#writeIndex.actionWriteEntities.get(action);
+    if (entities !== undefined) this.#wakeProducedWatchers(entities);
   }
 
   /**
@@ -3801,6 +3861,7 @@ export class Scheduler {
       maybeAutoDebounce: (target) => this.#maybeAutoDebounce(target),
       markActionHasRun: (target) => this.#gates.markActionHasRun(target),
       markNodeHasRun: (target) => this.#markNodeHasRun(target),
+      noteProduced: (target) => this.#noteProduced(target),
       handleError: (error, target) => this.#handleError(error, target),
       resubscribe: (target, log) => this.resubscribe(target, log),
       markInvalid: (target, options) =>
