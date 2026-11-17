@@ -77,7 +77,11 @@ connector, another piece, an agent).
    the person's other goals. The view says which happened: "Sent N rules to the
    pool for …" or "No pool for … found". It says sent, not published: whether
    the pool took them is not visible to the piece (a refusal is thrown in the
-   pool's handler, and a contribution is confidential to the pool).
+   pool's handler, and a contribution is confidential to the pool). Anything
+   with a pool's shape and the goal receives the rules, a fake pool included:
+   the inductor does not vet the receiver. What it sends is labelled with the
+   real pool's policy instead (see "CFC debt"), so a fake can receive the rules
+   but not publish them.
 
 6. The pool's release comes back. The inductor reads the rules the pool for its
    goal releases (`consensus`, public by the pool's policy) and offers them as a
@@ -281,6 +285,21 @@ is not released (`showcase/inductor/pool/README.md`). The secret and the
 per-rule counts never leave the function; only released rules and their counts
 do, as the pool's public result, read where it is computed (the runtime refuses
 storing it today; see the pool's README).
+
+**What the inductor sends is labelled with the pool's policy.** The inductor
+publishes to whatever pool its `pool` input or wish gives it, checking only the
+shape and the goal, so a fake pool of that shape receives the person's rules.
+Trust comes from the label, not from vetting the receiver: the inductor types
+what it sends as the pool's `ContributionEvent` (`../pool/pool-policy.tsx`), the
+event and each rule `Confidential<…, [PolicyOf<typeof poolRules>]>`, and only
+the real pool's `releaseConsensus` may drop that clause. This is the idiomatic
+design, not a cut. It waits on a runtime fix, top/3175 (a send's payload arrives
+unlabelled): `lofi-inductor-fake-pool.test.tsx` shows a fake that writes a
+received rule straight into a public store refused with server execution on, and
+landing with it off; and, in either posture, a fake that keeps the rules in a
+store of its own first can publish them later, since what a handler writes from
+its event does not carry the event's label. The test asserts both as they stand,
+to flip when top/3175 is fixed.
 
 **Cuts** (both approved by Alex, 2026-11-16):
 

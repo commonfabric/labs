@@ -22,9 +22,14 @@ debt"); this pattern is its implementation.
   centre less the jitter is never below it (see "What the witness does not
   cover" for why).
 - **Contribute.** `submit` takes `{pseudonym, rules}`, the rules in canonical
-  form (`CanonicalRule` from `../shared/rule-grammar.ts`). The handler checks
-  every rule against the grammar again, stores it in canonical form, and keeps a
-  rule given twice once. A rule out of grammar refuses the whole set.
+  form (`CanonicalRule` from `../shared/rule-grammar.ts`), typed
+  `ContributionEvent`: labelled with the policy, the event and each rule, as a
+  stored contribution is. A sender that types what it sends this way, as the
+  lo-fi inductor does, labels it with this pool's policy whoever receives it, so
+  a pool of the same shape that is not this one cannot make it public (see
+  "Discovery and wiring"). The handler checks every rule against the grammar
+  again, stores it in canonical form, and keeps a rule given twice once. A rule
+  out of grammar refuses the whole set.
 - **One pseudonym per person per goal.** Each stored contribution is labelled
   `authored-by` the principal it acted for, by the runtime
   (`AuthoredByCurrentUser`), and only `submitContribution` may write one
@@ -95,6 +100,18 @@ structural type of its own (`goal`, `submit`), falls back to
 `wish({ query: "#inductorPool", scope: ["~", "."] })`, and its `publish` action
 mints a stable per-goal pseudonym once and sends `submit` only when the pool's
 goal is its own, ignoring case and surrounding or repeated space.
+
+Anything of that shape and goal receives the rules: a fake pool in a shared
+space, say. The inductor does not vet the receiver. What it sends is typed with
+this pool's `ContributionEvent`, so it carries `PolicyOf<typeof poolRules>`, and
+only this module's `releaseConsensus` may drop that clause; a fake pool can
+receive the rules but not write them anywhere public. Today that holds only in
+part, waiting on a runtime fix (top/3175):
+`../lofi/lofi-inductor-fake-pool.test.tsx` shows a fake that writes a received
+rule straight into a public store refused with server execution on, and landing
+with it off, where the payload arrives unlabelled; and in either posture a fake
+that first keeps the rules in a store of its own can publish them later, since
+what a handler writes from its event does not carry the event's label.
 
 Under the approved cut 2, a random string kept by the inductor piece is the
 idiomatic pseudonym today. It is stable for that piece, so for the person's
