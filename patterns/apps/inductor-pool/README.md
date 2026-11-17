@@ -37,7 +37,8 @@ this pattern is its implementation.
 - **Withdraw.** `withdraw` takes the sender's entry out, by principal. It sends
   `submit` `{ withdraw: true }`, so `submitContribution` stays the only code
   that writes a contribution, which the release's input witness needs. Once
-  every contributor has withdrawn, the next contribution seals afresh.
+  every contributor has withdrawn, the next contribution seals afresh. A
+  withdrawn pseudonym is free for anyone to take (see "Not cuts").
 - **The seal.** The first contribution mints a 128-bit pool secret
   (`Math.random`, the sandbox's, which a handler may call) and copies the
   configured `thresholdCenter` and `jitter` beside it. That seal is stored in
@@ -125,10 +126,13 @@ files, a grammar fix included, gives the module a new identity, and stored
 contributions carry the old one's `PolicyOf` clause and `TransformedBy`
 witnesses. As far as we can tell, the new release rule matches neither, so a
 pool updated in place releases nothing from contributions made before the update
-until each contributor submits again. **Question for Berni:** is that the
-intended consequence of content-addressed policy identity, and is there an
-idiomatic way for a policy to name its successor (the attested-succession path
-`WritePolicyAnyOf` has for writers)?
+until each contributor submits again. And because the release reads every
+contribution, one that has not been resubmitted carries the old clause into the
+whole output: the release stalls entirely, rules held only by contributors who
+did resubmit included, until the last contributor resubmits or withdraws.
+**Question for Berni:** is that the intended consequence of content-addressed
+policy identity, and is there an idiomatic way for a policy to name its
+successor (the attested-succession path `WritePolicyAnyOf` has for writers)?
 
 **What the witness does not cover.** It pins one level: whoever wrote the
 contributions was `submitContribution`. It says nothing about who called it.
@@ -192,7 +196,26 @@ release that outlives a change to the inputs, say). Until then nothing does.
   version would fix the threshold into the policy when the pool is made.
 - The keyed offset is computed in pattern code from a secret any runtime that
   runs the pool can read. That is the platform limit the lo-fi inductor README
-  names: labels are enforced by the client.
+  names: labels are enforced by the client. Concretely, the jitter hides nothing
+  from a contributor with a modified client: every contributor's runtime reads
+  the seal (the submit handler copies it from the first contribution), so it can
+  compute every rule's exact threshold. It hides the thresholds only from
+  readers who run unmodified clients.
+- The secret comes from the sandbox's `Math.random`, the randomness the pattern
+  guide gives handlers, which is not documented as cryptographically secure; a
+  generator that is not can be predicted from its earlier outputs. A principled
+  version would mint the secret from a secure source. Given the point above,
+  this matters only against someone who cannot read the seal but sees other
+  outputs of the same generator.
+- A withdrawn pseudonym can be taken. Withdrawing removes the principal's entry,
+  and with it their hold on the pseudonym, so another principal who knows it
+  (from raw access to the pool space, since contributions are confidential) can
+  contribute under it, and the original owner's inductor, which keeps its
+  pseudonym, is then refused when it publishes again. Holding the pseudonym
+  after a withdraw would mean keeping an entry, an empty one, labelled
+  `authored-by` the withdrawn principal, so withdrawing would no longer remove
+  every trace of them from the pool. We left that choice open rather than trade
+  one for the other.
 
 ## CFC snags (runtime, found while building this)
 
