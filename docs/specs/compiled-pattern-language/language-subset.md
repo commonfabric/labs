@@ -663,22 +663,32 @@ element has at each read and each write. So in a callback over plain
 values, `equals(selected, item)` is true for the element a handler
 stored in `selected`, `$checked={item.done}` writes the member of the
 element in the array, and a handler given `item` writes through it,
-before and after the elements move. Two things differ from an element
-that is a cell. A write that changes the value makes the element a new
-element, as any edit of a plain value in place does, so the callback
-is evaluated for it again, with new state cells. And once
-the element is removed, a reference kept elsewhere, as by
-`center.set(stop.position)`, reads as `undefined`; in the runtime of
-today such a reference names the position and reads the element that
-stands there. A record that a function body wrote into the array with
-`set`, `push`, or `addUnique` is a cell and not this case: a reference
-to it reads the record after the array no longer holds it, today and
-in this design. An author who wants
-the value kept writes a copy, and one who wants the element to keep
-its identity across edits makes the elements cells
-(`plan-and-label-templates.md` §1.3; what a write that changes the
-value does to a reference kept elsewhere is assumed there, §8,
-question 112).
+before and after the elements move. By ruling a write through the
+element that changes its value keeps the element: the runtime gives
+it its new key in the same transaction and moves the state of its row
+with it, so the state cells of the callback survive and a handler can
+write two members one after the other. Two things differ from an
+element that is a cell. An edit that is not made through the element,
+such as a `set` of the whole array with a changed value at the
+position, makes a new element, so the callback is evaluated for it
+again, with new state cells. And once the element is removed or
+edited, a reference to it that was stored elsewhere, by a node of the
+reactive tier or as a handle a handler was given, reads as
+`undefined`; in the runtime of today such a reference names the
+position and reads the element that stands there. A function body
+that reads the value holds a copy, by ruling: `center.set(stop.position)`
+in a handler that reads `stop` stores the value, as today, and the
+cell keeps it after the element is removed. `items.key(i)` is a
+handle by position, at the call and when it is stored: nothing
+rewrites it to a reference to the element, so `items.key(0)` names
+the first element, whichever it is, over an array of references, an
+array of plain values in place, and the result of another per-element
+construct alike. It is equal to the element that stands at `i` at the
+moment of the comparison. A record that a function body wrote into
+the array with `set`, `push`, or `addUnique` is a cell and not this
+case: a reference to it reads the record after the array no longer
+holds it, today and in this design
+(`plan-and-label-templates.md` §1.3).
 
 ```tsx
 // Shown for illustration only.

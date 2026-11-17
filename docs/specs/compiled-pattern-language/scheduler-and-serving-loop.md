@@ -934,7 +934,15 @@ membership as well as at the bound address, so a move rebinds the
 slot, which makes no reader stale where the value at the path is the
 same, and a removal or an edit of the element in place leaves the
 slot unbound, reading as nothing. A write through such a reference is
-resolved the same way when it is made.
+resolved the same way when it is made. By ruling a write through it
+that changes the element's value re-keys the element in the same
+transaction (`execution-and-storage.md` §2.5): the entries registered
+for the old key are registered for the new key, the writer's
+reference is updated, and a slot bound through a reference stored
+elsewhere under the old key is left unbound. A handle by position, as
+`items.key(i)` yields, is no reference by key: by ruling nothing
+rewrites it, and a slot whose path crosses a stored one is bound at
+the position, whichever element stands there.
 
 - After the first evaluation of a collection, and after each change of its
   membership, the scheduler registers one entry per key and element

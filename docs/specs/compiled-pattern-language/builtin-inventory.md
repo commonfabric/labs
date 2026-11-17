@@ -617,23 +617,31 @@ the element is keyed by the identity of that cell.
   changes, the cone is dirtied and the key, and with it the state, stays.
 - *A plain value edited in place is a new element.* The cone instances
   of its old key are dropped, and what is stored under the old key
-  stays, as for a removal.
+  stays, as for a removal. One edit is excepted by ruling: a write
+  through a reference by key to the element re-keys it in the same
+  transaction, and what the old key holds moves to the new key.
 - *A reference to a plain value in place follows the element.* Over an
   array of plain values in place, `equals` finds two references to one
   element equal: they name the same collection, key and path. A member
   bound both ways and a handler's write through the element land at
   the position that holds the key. A move changes nothing the
-  reference holds. After the element is removed, or edited in place,
-  no position holds the key, and a reference stored elsewhere reads as
+  reference holds. By ruling a write through the reference that
+  changes the value re-keys the element in the same transaction: what
+  the body holds under the old key moves to the new key, and the
+  writer's reference is updated. After the element is removed, or
+  edited so, no position holds the old key, and a reference stored
+  elsewhere reads as
   nothing. That differs from today, deliberately: today a reference
   to a value stored in place names its position, and reads whatever
   stands there. A record that a handler wrote into a list with `set`,
   `push` or `addUnique` is not this case. It is a cell of its own,
   today and in this design, and a reference to it reads the record
-  after the list no longer holds it. What a write
-  that changes the value does to the reference, how the reference is
-  stored and labeled, and which readers hold one are assumed
-  (`plan-and-label-templates.md` §8, questions 112 to 115). Over an
+  after the list no longer holds it. By ruling a function body that
+  reads such a value holds a copy and stores the value where it
+  writes it elsewhere, and `key(i)` on the array is a handle by
+  position that nothing rewrites to a reference to the element. How
+  the reference is stored and labeled is assumed
+  (`plan-and-label-templates.md` §8, questions 113 and 114). Over an
   array of references none of this applies.
 - *A list of keyed records is an array of references.* The record
   that `elementById` yields a handle of is, by ruling, a cell of its

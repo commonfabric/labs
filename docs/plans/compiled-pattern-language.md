@@ -1833,6 +1833,33 @@ is relitigated.
   place, and the result of another per-element construct where the
   upstream position holds a value. Over an array of references a
   reference to an element is the link to its cell.
+- A write through a reference by key that changes the value re-keys
+  the element in the same transaction. The runtime moves what the old
+  key holds to the new key and updates the reference that the writer
+  holds, so the state of the row survives and later writes in the
+  same handler succeed. References stored elsewhere under the old key
+  still read as nothing, because the runtime cannot find them all.
+  The case is an array of plain values in place; nothing of it arises
+  over an array of references.
+- A function body that reads a plain value holds a copy, and writing
+  it elsewhere stores the value, as today. References by key are for
+  the nodes of the reactive tier that pass an element on. A handle
+  that a body is given for the element is a reference by key, and a
+  value that the body reads through a handle is a copy. The case is
+  an array of plain values in place.
+- `items.key(i)` is a handle by position, at the call and when it is
+  stored. Nothing rewrites it to a reference to the element, so
+  `items.key(0)` addresses the first element, whichever it is, and a
+  stored one reads whatever element is at the position at the time of
+  the read. The same for `items` an array of references, an array of
+  plain values in place, and the result of another per-element
+  construct. A reference to the element itself comes from the element
+  handle that a per-element body is given, from `elementById`, or,
+  for an array of references, from reading the element's own cell.
+- `items.key(i)` is equal to a reference by key to the element at
+  position `i`. Both are resolved to the current position and compared
+  there, so the comparison is of one moment and needs a read of the
+  parent. The case is an array of plain values in place.
 - An element of a collection that is the result of a per-element
   construct, such as a `map` or a `filter`, is keyed by the key of the
   upstream element it came from. A change of one upstream element then
@@ -2745,36 +2772,23 @@ assumption.
      not where the positions hold references to cells.
 
 160. **A write through a reference by key that changes the value** (PL
-     question 112). The key of a plain value is formed from the value,
-     so such a write leaves the position with another key. *Assumed:*
-     the reference holds the key it was made with and reads as nothing
-     after the write; a second write through it in the same run finds
-     no position; and a write through a reference whose key no
-     position holds is refused. The alternative carries the reference
-     to the new key. The prototype does as assumed, and a fixture of
-     it shows the consequences for a row over an array of plain values
-     in place:
-     - One write through the reference, as
-       `stop.key("done").set(true)`, commits. The row gets a new key
-       and loses its state: its state cells are those of the new key
-       and read their first values, and the cells of the old key stay
-       stored and unread. A cell elsewhere that held the element reads
-       as nothing, and `equals` with it is false in every row.
-     - A second write through the same reference in the same run finds
-       no position that holds the key. It is refused, and the event is
-       rejected with both writes.
-     - One `update` of both members commits. *Assumed:* an `update` is
-       one write, with the key resolved once.
-     - Over an array of references none of this arises: the same two
-       writes commit, and the row keeps its state.
-
-     No event of the prototype's corpus run is refused for a missing
-     key. The owner is asked whether a row is to lose its state on
-     every write to its element, and whether a handler that writes two
-     members in turn is to be rejected. The case is an array of plain
-     values in place, and the result of another per-element construct
-     where the upstream position holds a stored value; not an array of
-     references.
+     question 112). Settled by ruling: the write re-keys the element
+     in the same transaction. The runtime moves what the old key
+     holds to the new key and updates the reference the writer holds,
+     so a row keeps its state and a handler that writes two members
+     in turn succeeds at both. References stored elsewhere under the
+     old key still read as nothing. *Assumed* beside it: what is
+     moved is the state cells, the streams, the operation state and
+     the children of the row, with their labels unchanged; an edit
+     that is not made through a reference by key is a new element and
+     moves nothing; and a write through a reference whose key no
+     position holds is refused. The prototype does not re-key: there
+     one write commits and the row loses its state, and a second
+     write through the same reference is refused with the event. The
+     case is an array of plain values in place, and the result of
+     another per-element construct where the upstream position holds
+     a stored value; not an array of references. The entry keeps its
+     number.
 161. **How a reference by key is stored, and a key that returns** (PL
      question 113). *Assumed:* a link whose target is the address of
      the collection, with the key in the place of a position and the
@@ -2799,30 +2813,23 @@ assumption.
      the label of the array. The alternative joins the labels of every
      position's value. The same two cases; not an array of references.
 163. **Which readers hold a reference by key** (PL question 115).
-     *Assumed:* a function body that reads the array through a handle
-     and passes a member on holds one as well, and a handle that names
-     a position by its path names the position and is not equal to a
-     reference by key. The prototype does both as assumed, and its
-     corpus run shows a consequence of each:
-     - Under the first, a handler that reads two arrays, exchanges
-       members, and sets both writes into the first array references
-       by key into the second and then replaces the second. The
-       members that changed arrays read as nothing, where today's
-       runtime stores copies (`showcase/card-piles/main.tsx`; 0, 6 or
-       9 of its 28 values differ, by what `Math.random` draws). The
-       assumption of ES question 84 covers one array and not two.
-     - Under the second, a handler of a row that finds its element
-       with `items.key(i).equals(item)` finds nothing, where today
-       both name the position
-       (`dev/gideon-tests/test-handler-capture-key-equals.tsx`, 2
-       values).
-
-     The owner is asked whether a function body that reads a plain
-     value in place and writes it elsewhere stores a reference by key
-     or a copy, and whether `items.key(i)` is equal to the reference
-     by key of the element that stands at `i`. The case is an array of
-     plain values in place. Over an array of references both resolve
-     to the cell, and neither consequence arises.
+     Settled by ruling, in both halves. A function body that reads a
+     plain value holds a copy, and writing it elsewhere stores the
+     value, as today; a handle the body is given for the element is a
+     reference by key. And `items.key(i)` is equal to a reference by
+     key to the element at position `i`, with both resolved to the
+     current position and compared there. With them, by ruling:
+     `items.key(i)` is a handle by position at the call and when
+     stored, and nothing rewrites it. The prototype does neither
+     half: a handler that exchanges members between two arrays stores
+     references by key (`showcase/card-piles/main.tsx`, 9 of 28
+     values differ in a seeded run), and it holds a handle by
+     position unequal to a reference by key
+     (`dev/gideon-tests/test-handler-capture-key-equals.tsx`, 2
+     values). Question 174 has what the comparison gives where the
+     parent cannot be read. The case of the two halves is an array of
+     plain values in place. Over an array of references both operands
+     resolve to the cell. The entry keeps its number.
 
 **From the rulings on questions 141 and 144 as the prototype implemented
 them, and from the pieces added to its executor.** Each is what its
@@ -2960,19 +2967,37 @@ undetermined, written into the documents as an assumption.
      beside the plan. The alternative gives `ComputedInput` a schema
      member. Not about a per-element construct.
 173. **A write below a place that holds nothing and is no state cell**
-     (ES question 92). By ruling a write below the root of a state
-     cell that holds nothing creates the document from the default
-     with the write applied. The ruling does not name another place,
-     such as a path of the argument at which nothing is stored and
-     whose schema declares a default array, onto which a handler
-     pushes. *Assumed:* the write starts from the default that a read
-     of the place gives, and the members taken from the default keep
-     the label of a default. The alternative starts from nothing.
-     Today's runtime has written the default into the argument
-     document by then, which this design is assumed not to do
-     (question 150). The prototype's executor starts from the empty
-     array, by a reading of its code with no test. The same for a
-     handle in an element body in all three cases.
+     (ES question 92). Settled by ruling: as for a state cell. A
+     `push` below a path of the argument at which nothing is stored
+     and whose schema declares a default starts from the default, and
+     the push is applied. The members taken from the default keep the
+     label of a default. Today's runtime has written the default into
+     the argument document by then, which this design is assumed not
+     to do (question 150). The prototype's executor starts from the
+     empty array, by a reading of its code with no test. The same for
+     a handle in an element body in all three cases. The entry keeps
+     its number.
+
+**From the rulings of 2026-11-16 and 2026-11-17 on questions 160, 163,
+164, 170 and 173, on the children of a view node, and on a pattern
+call that is an instance of its own; and from the prototype's notes 367
+to 386.** Each is what a ruling leaves undetermined or a note found
+undetermined, written into the documents as an assumption.
+
+174. **A handle by position compared with a reference by key, where
+     the parent cannot be read** (PL question 121). By ruling
+     `items.key(i)` is never rewritten to a reference to the element,
+     and it is equal to a reference by key to the element at position
+     `i`, with both resolved to the current position. Resolving needs
+     a read of the parent. *Assumed:* where the comparing code cannot
+     read the parent, the two are not equal. The alternatives fail
+     the comparison or leave it pending. The owner did not restate
+     that the ruling on the comparison stands beside the ruling on
+     `key(i)`; the documents take it to stand, as a comparison at one
+     moment. The case is an array of plain values in place, and the
+     result of another per-element construct where the upstream
+     position holds a value; over an array of references both
+     resolve to the element's cell, which needs the same read.
 
 One question above is restated by the notes 307 to 320. For the
 assumption of ES question 83, in which transaction a first value that is not a
@@ -3023,8 +3048,9 @@ is when the key enters the element table, in all three cases.
   result; in which transaction the first value of a state cell is
   written where it is not a constant; and what a write stores where a
   value passed on unchanged refers into what the write replaces. The
-  last covers one array; a body that exchanges members between two
-  arrays of plain values in place is under question 163.
+  last covers one array; by ruling a body that exchanges members
+  between two arrays of plain values in place stores copies
+  (question 163).
 - **Defects of the prototype that the value comparison depends on:** a
   pattern compiled in at a call inside an initializer is evaluated in
   the caller's cone; the cone of an array written in place lists no

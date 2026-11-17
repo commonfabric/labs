@@ -1099,7 +1099,14 @@ and where resolution ends at a reference by key it compares the
 collection, the key and the path, and resolves no key to a position
 (its §1.3). The cone instance depends on the links the resolution
 crossed, and is stale when one of them changes. It does not depend on
-the position a key stands at. The call is the same in an element body
+the position a key stands at. One comparison does resolve a key. By
+ruling a handle by position, as `items.key(i)` yields, is equal to a
+reference by key to the element that stands at position `i`: the
+runtime resolves both to the current position and compares there.
+That needs a read of the collection's array, so the cone instance
+depends on the array's membership as well, and the result is of the
+moment of the comparison. What it gives where the parent cannot be
+read is open (its §8, question 121). The call is the same in an element body
 over an array of references, where an element resolves to its cell;
 over an array of plain values in place, where an element is a
 reference by key; and over the result of another per-element
@@ -1388,12 +1395,13 @@ it has one, and a write through it stores a value at that path.
 
 A write below such a position has to start from something, as a write
 below the root of a state cell that holds nothing does (section 4.1).
-The ruling there names a state cell. *Assumed* (section 11, question
-92), for a place that holds nothing and is no state cell, such as a
-path of the argument whose schema declares a default array and onto
-which a handler pushes: the write starts from the default that a read
-of the place gives, by the rule of section 2.2, and stores the result
-at the path, and the members taken from the default keep the label of
+By ruling the same holds for a place that holds nothing and is no
+state cell, such as a path of the argument whose schema declares a
+default array and onto which a handler pushes: the array starts from
+the default, and the push is applied. The write starts from the
+default that a read of the place gives, by the rule of section 2.2,
+and stores the result at the path. *Assumed* with it, as for a state
+cell: the members taken from the default keep the label of
 a default. The runtime of today reaches the same value by another
 route. It has written the callee's default into the argument document
 at setup (`#applySetupState` in `runtime/runner/src/runner.ts`), which
@@ -1470,18 +1478,26 @@ a cell, or below a link, carries that address. By ruling an element
 that is a plain value in place of an array carries a reference by key:
 the collection, the element's key, and the path below the element
 (`plan-and-label-templates.md` §1.3). The runtime stores that
-reference where a cone or a body passes the element or a member of it
-on, and no copy and no link to the position. The reference resolves to
+reference where a cone of the reactive tier passes the element or a
+member of it on, and where a body passes on a handle that it was
+given for the element, and no copy and no link to the position. The
+reference resolves to
 the position that holds the key at each read and each write, so it
 stays right when the element moves, and it reads as nothing once no
-position holds the key. That such a reference reaches a function body
-that read the array through a handle is assumed (its §8, question
-115). Under that assumption a body that exchanges members between
-two arrays of plain values in place and sets both leaves references
-whose keys no position holds, and the members read as nothing; the
-assumption of question 84, below, covers one array and not that
-case. One write does not follow the rule of this paragraph: the edge
-of a first value of a state cell always stores a value (section 4.1).
+position holds the key. By ruling such a reference does not reach a
+function body through a read: a function body that reads a plain
+value in place, through `get()` on a handle or at a position of its
+argument that it declares as data, holds a copy, and writing it
+elsewhere stores the value, as today. The value that such a body is
+given carries no address for the rule of this paragraph. So a body
+that exchanges members between two arrays of plain values in place
+and sets both stores the values in both. A handle by position, as
+`items.key(i)` yields, is stored as a link to the position and is
+never rewritten to a reference to the element, by ruling, in each of
+the three cases of a per-element source. Two writes do not follow the
+rule of this paragraph: that of a plain value in place that a
+function body read, and the edge of a first value of a state cell,
+which always stores a value (section 4.1).
 
 The rule does not decide a write whose value holds a reference into what
 the write replaces. `items.set(items.get().toSpliced(i, 1))` writes to
@@ -1694,9 +1710,30 @@ the salt of the space (section 5.3). The reader is registered at the
 collection's membership and at the path below the position it resolved
 to, so a move, a removal, and a change at the path each make it stale.
 A reference whose key no position holds reads as nothing. How the
-reference is stored, what a client does that cannot read the salt,
-and what a write does that changes the element's value are assumed
-(`plan-and-label-templates.md` §8, questions 112 and 113).
+reference is stored, and what a client does that cannot read the
+salt, are assumed (`plan-and-label-templates.md` §8, question 113).
+
+**A write that changes the value re-keys the element.** The case is an
+array of plain values in place, where the key is formed from the
+value; it does not arise over an array of references. By ruling a
+write through a reference by key that changes the value re-keys the
+element in the same transaction. The runtime computes the key of the
+new value, with its occurrence count, and moves what the old key
+holds to the new key: in the element table the entry of the position,
+and in storage the state cells, the streams, the operation state and
+the children that the body keeps under the key ("State, handlers and
+children", below). It updates the reference that the writer holds, so
+a later write through it in the same run of a handler lands at the
+same element. References stored elsewhere under the old key are not
+updated, because the runtime cannot find them all, and read as
+nothing. The cone instances of the row are those of the new key and
+are stale for the changed value. *Assumed*
+(`plan-and-label-templates.md` §8, question 112): the stored
+documents are moved by writing them under the identifiers of the new
+key and retiring those of the old key in the same transaction, so
+that an identifier is still a function of the key (section 5.3); and
+a link held elsewhere to a state cell or a stream of the old key
+reads what it read before the write and no later value.
 
 **Which cones are the body's.** The cones of a collection's body are the
 cones of the plan whose `Cone.within` has the `element` step that names
@@ -1893,7 +1930,11 @@ declares is a state cell of the body, per key as any other
   stored, by ruling (section 2.6).
 - **A plain value edited in place** is another key at the same position:
   the child of the earlier value is torn down and a child is set up for
-  the new one. In the runtime of today the key of a value stored in
+  the new one. By ruling an edit made through a reference by key is
+  excepted: the element is re-keyed, and the child, with the rest of
+  what the old key holds, is moved to the new key and not torn down
+  ("A write that changes the value re-keys the element", above). In
+  the runtime of today the key of a value stored in
   place holds the position (`plan-and-label-templates.md` §1.3;
   `listElementKeys` in
   `runtime/runner/src/builtins/list-element-keys.ts`), so today such a
@@ -1929,7 +1970,8 @@ element part when the value behind the link changes.
 | Elements are reordered | The collection's membership | Nothing, unless a cone of the body reads the index. The runtime moves what each key holds (below) | The stored array is rewritten in the new order: the storage links of rows that are parts, and the values of rows stored in place. Label entries only where the label at a position changed |
 | A cone of the body reads the index and an element moves | The cone instances of the moved keys that list the slot of root `index`. No key changes, and state cells, streams, operation state and children stay | Those cone instances | Their changed kept paths |
 | The value behind a linked element changes | That element's cone instances; the key is unchanged | That element | Its changed kept paths |
-| A plain value is edited in place | Membership: the old key leaves and a new key enters | The new key | The position |
+| A plain value is edited in place, other than through a reference by key | Membership: the old key leaves and a new key enters | The new key | The position |
+| A plain value is edited through a reference by key | The element is re-keyed: what the old key holds moves to the new key (section 2.5) | The cone instances of the row that read the changed value | The position |
 
 A cone downstream of a collection, such as a `count` or a `filter` over the
 result of a `map`, is made stale through its own slots and upstream outputs
@@ -1978,8 +2020,10 @@ over the result of another per-element construct.
   the key has the stream it had, because each is named from the key.
   Over an array of plain values in place the key is formed from the
   value. A value that is removed and written back finds the cells it
-  had, and a value that was edited is another key and finds none
-  (`plan-and-label-templates.md` §8, question 112).
+  had. A value that was edited through a reference by key was
+  re-keyed, and its state moved with it (section 2.5); a value that
+  was edited in another way, as by a `set` of the whole array, is
+  another key and finds none.
 - **As today.** The runtime of today names the result cell of an
   element from the result container and the key
   (`listElementResultCell` in
@@ -2025,7 +2069,10 @@ references, where the element is a cell.
   `equals(selected, item)` does, holds a reference by key. Two
   references by key are equal where they name the same collection, key
   and path, and a reference by key and a reference to a cell are not
-  equal. `equals` resolves no key to a position.
+  equal. `equals` of two references by key resolves no key to a
+  position. By ruling a handle by position, as `items.key(i)`, is
+  equal to the reference by key of the element that stands at `i`,
+  with both resolved to the current position (section 2.2).
 - **A handler bound in the body** is given the same reference as the
   cones of its row, and a write through it lands at the position that
   holds the key when the write is made. The element table keeps the
@@ -2035,18 +2082,24 @@ references, where the element is a cell.
   attribute a reference by key with the member's path, and a write
   from the rendered tree lands in the member of the element where it
   stands. The write changes the value, so the position then holds
-  another key: the row of the new key is evaluated, and what the old
-  key held is dropped, as for any plain value edited in place.
-- **A stored reference to a member.** A handler that writes a member of
-  the element to a cell, as `center.set(stop.position)` does, stores a
-  reference by key with the member's path. It follows the element when
+  another key. By ruling the write re-keys the element in the same
+  transaction: what the old key held is moved to the new key, and the
+  row keeps its state (section 2.5, "A write that changes the value
+  re-keys the element").
+- **A stored reference to a member.** A node of the reactive tier that
+  passes a member of the element on, and a handler that stores a
+  handle it was given for the member, store a reference by key with
+  the member's path. It follows the element when
   the element moves. After the element is removed no position holds
   the key, and the cell reads as nothing. That is a deliberate
   difference from the runtime of today, where a reference to a member
   of a record stored in place names the position: after a removal it
   reads the element that moved to the position, and nothing once no
   element stands there (`plan-and-label-templates.md` §1.3, "Which
-  stored forms make which case").
+  stored forms make which case"). By ruling a handler that reads the
+  member and writes the value to a cell, as
+  `center.set(stop.position)` does, stores a copy, as today, and the
+  cell reads the value after the removal.
 
 A list that function bodies fill with records through `set`, `push`
 or `addUnique` is not this case. Each record is a document of its own
@@ -5524,11 +5577,15 @@ Added by the ruling that the scheduler is switched per space (section 9):
     case is an array of plain values in place, and the result of
     another per-element construct where the upstream position holds a
     value. Over an array of references the result holds the link to
-    the cell, and nothing changed. What the ruling leaves open is
-    assumed in `plan-and-label-templates.md` (its §8, questions 112 to
-    115): a write that changes the value and so the key, the stored
-    form and a key that returns, the label, and which readers hold
-    such a reference.
+    the cell, and nothing changed. Ruled as well
+    (`plan-and-label-templates.md` §8, questions 112 and 115): a
+    write through the reference that changes the value re-keys the
+    element in the same transaction, a function body that reads a
+    plain value holds a copy, and a handle by position is equal to a
+    reference by key to the element that stands there. What the
+    rulings leave open is assumed there (its questions 113, 114 and
+    121): the stored form and a key that returns, the label, and the
+    comparison where the parent cannot be read.
 80. **Which cone with side-writes is of which kind** (section 2.3;
     `scheduler-and-serving-loop.md` §7.1). By ruling a cone with a
     small, fixed set of write targets is an ordinary node whose targets
@@ -5626,7 +5683,10 @@ Added by the ruling that the scheduler is switched per space (section 9):
     same over an array of references, over an array of plain values in
     place, where an element is a reference by key and no key is
     resolved to a position, and over the result of another per-element
-    construct.
+    construct. By ruling one comparison resolves a key: a handle by
+    position against a reference by key, which are equal where the
+    element stands at the position at that moment. The cone instance
+    then depends on the membership of the collection's array.
 91. **Which record gives the type of a position of a body's argument
     that no slot names** (section 2.4). Whether an `identity` position
     holds a handle or a reference stand-in follows from the type the
@@ -5639,17 +5699,14 @@ Added by the ruling that the scheduler is switched per space (section 9):
     per-element construct: the same in an element body in each of the
     three cases.
 92. **A write below a place that holds nothing and is no state cell**
-    (section 2.4). By ruling a write below the root of a state cell
-    that holds nothing creates the document from the default with the
-    write applied. The ruling does not name another place, such as a
-    path of the argument at which nothing is stored and whose schema
-    declares a default array, onto which a handler pushes through a
-    handle. *Assumed:* the write starts from the default that a read
-    of the place gives and stores the result at the path, and the
+    (section 2.4). Not open, by ruling: as for a state cell. A `push`
+    below a path of the argument at which nothing is stored and whose
+    schema declares a default starts from the default, and the push
+    is applied. The write stores the result at the path, and the
     members taken from the default keep the label of a default. The
-    alternative starts from nothing, so that a `push` yields an array
-    of the pushed value alone. The same for a handle in an element
-    body in each of the three cases of a per-element source.
+    prototype's executor starts from the empty array. The same for a
+    handle in an element body in each of the three cases of a
+    per-element source. The entry keeps its number.
 
 ### 11.2 For another document or the prototype
 
@@ -6043,11 +6100,10 @@ From the prototype's executor, for this document to decide:
     position, where the element is held there in place, is stored as
     its value. The case is an array of plain values in place; a
     member that is a reference to a cell is stored as a link. It
-    extends question 10 of the continuation plan. The assumption
-    covers one array. Where a body exchanges members between two
-    stored arrays of plain values in place and sets both, a member
-    written into the first is a reference by key into the second,
-    which the second write replaces, and the member then reads as
-    nothing, where the runtime of today stores copies. Whether such
-    a body stores a reference by key or a copy is open
-    (`plan-and-label-templates.md` §8, question 115).
+    extends question 10 of the continuation plan. By ruling a
+    function body that reads a plain value in place holds a copy, so
+    the case remains only for a member that is a handle the body was
+    given, and a body that exchanges members between two stored
+    arrays of plain values in place and sets both stores the values,
+    as the runtime of today does (`plan-and-label-templates.md` §8,
+    question 115).

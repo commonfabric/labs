@@ -1138,19 +1138,23 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   `handler`, an `action`, or an inline event handler
   ([language subset](language-subset.md), §13, question 26).
 - **A reference to a plain value in place.** By ruling such an element
-  is named by its collection and its key. Four things are assumed, each
+  is named by its collection and its key; a write through the
+  reference that changes the value re-keys the element in the same
+  transaction, so its row keeps its state; a function body that reads
+  the value holds a copy; and `items.key(i)` is a handle by position
+  that nothing rewrites, equal to the reference of the element that
+  stands at `i` at the moment of the comparison. Three things are
+  assumed, each
   for an array of plain values in place and for the result of another
   per-element construct where the upstream position holds a value, and
   none for an array of references
   ([plan format and label templates](plan-and-label-templates.md), §8,
-  questions 112 to 115): a write through the reference that changes
-  the value leaves the reference reading as nothing, because the key
-  is formed from the value; the reference is stored as a link that
+  questions 113, 114 and 121): the reference is stored as a link that
   holds the key, a client does not resolve it, and it resolves again
   when an equal value is added after a removal; a read through it
   carries the label of the element and of the collection's array; and
-  a function body that reads the array through a handle and passes a
-  member on holds such a reference too.
+  the comparison of a handle by position with such a reference gives
+  "not equal" where the parent cannot be read.
 - **Element bodies and equal elements.** The rulings leave five things
   open ([plan format and label templates](plan-and-label-templates.md),
   §8, questions 36, 90, 101, 105, and 111). By ruling each says which case
