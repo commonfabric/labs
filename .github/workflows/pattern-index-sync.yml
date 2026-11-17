@@ -20,11 +20,15 @@ concurrency:
   group: pattern-index-sync
   cancel-in-progress: false
 
+# Both jobs wait for the repository variable PATTERN_INDEX_SYNC to be `on`,
+# which is set once the index accepts this repository's brand. Until then a
+# push runs nothing.
 jobs:
   # Compiles the patterns, which evaluates their code, so it holds no
   # credential: no id-token, and no git credential left in the checkout.
   plan:
     name: Compile patterns
+    if: vars.PATTERN_INDEX_SYNC == 'on'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
