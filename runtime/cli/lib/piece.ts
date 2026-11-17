@@ -140,6 +140,7 @@ import {
   isObjectOrArray,
   isPlainObject,
 } from "@commonfabric/js-values/types";
+import { encodeDataFile } from "@commonfabric/text/data-file";
 import { caseFold } from "unicode-case-folding";
 
 import { isHandlerCell } from "../../fuse/callables.ts";
@@ -2894,6 +2895,10 @@ async function recordSavedIndexSource(
  * layout it comes back to, and a `setsrc` from here resolves the same imports
  * and the same data files. A name that is not grounded belongs to no layout
  * and is refused rather than written somewhere arbitrary.
+ *
+ * Each file is written as the bytes it was stored from, so a binary media
+ * file, which the package holds as a `data:` URL, comes back as the image,
+ * font, or sound it was read from.
  */
 export async function writeSourcePackage(
   program: RuntimeProgram,
@@ -2905,7 +2910,7 @@ export async function writeSourcePackage(
     }
     const outFilePath = join(outPath, name.substring(1));
     await Deno.mkdir(dirname(outFilePath), { recursive: true });
-    await Deno.writeTextFile(outFilePath, contents);
+    await Deno.writeFile(outFilePath, encodeDataFile(contents, name));
   }
 }
 

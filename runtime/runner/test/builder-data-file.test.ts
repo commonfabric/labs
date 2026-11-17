@@ -29,6 +29,13 @@ describe("commonfabric dataFile builtin", () => {
     );
   });
 
+  it("refuses a URL read when no data-file closure is bound", () => {
+    expect(() => dataFile.url("/glaze.png")).toThrow(
+      'No attached data file "/glaze.png": this pattern was loaded without a ' +
+        "data-file closure.",
+    );
+  });
+
   it("says the closure is missing rather than blaming the path", () => {
     // The distinction matters: a caller whose path is right, on a load that
     // carried no data, is told the load is the problem.

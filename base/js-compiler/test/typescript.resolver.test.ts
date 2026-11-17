@@ -240,6 +240,36 @@ describe("typescript/resolver.ts", () => {
       )).toEqual(["/data/cities.json"]);
     });
 
+    it("reads the path a call to dataFile's `url` member names", () => {
+      expect(namesIn(
+        "/donuts/main.tsx",
+        'import { dataFile } from "commonfabric";\n' +
+          'export default () => dataFile.url("./glaze.png");\n',
+      )).toEqual(["/donuts/glaze.png"]);
+    });
+
+    it("follows the binding to the `url` member through a renaming import", () => {
+      expect(names(
+        'import { dataFile as read } from "commonfabric";\n' +
+          'export default () => read.url("/glaze.png");\n',
+      )).toEqual(["/glaze.png"]);
+    });
+
+    it("follows the binding to the `url` member through a namespace import", () => {
+      expect(names(
+        'import * as cf from "commonfabric";\n' +
+          'export default () => cf.dataFile.url("/glaze.png");\n',
+      )).toEqual(["/glaze.png"]);
+    });
+
+    it("ignores a `url` member of anything but the runtime's dataFile", () => {
+      expect(names(
+        'import { dataFile } from "commonfabric";\n' +
+          "const other = { url: (path: string) => path };\n" +
+          'export default () => [other.url("/glaze.png"), dataFile.text];\n',
+      )).toEqual([]);
+    });
+
     it("ignores a dataFile that is not the runtime's", () => {
       expect(names(
         'import { dataFile } from "./local-helpers.ts";\n' +

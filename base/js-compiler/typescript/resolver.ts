@@ -162,6 +162,9 @@ const FABRIC_MODULE = "commonfabric";
 /** The runtime function that reads a data file stored with the program. */
 const DATA_FILE_READER = "dataFile";
 
+/** The member of {@link DATA_FILE_READER} that reads a file as a URL. */
+const URL_READER = "url";
+
 /**
  * Returns the data-file names `source` declares, as the paths its `dataFile()`
  * calls name, each resolved against `source` the way an import specifier is.
@@ -173,10 +176,11 @@ const DATA_FILE_READER = "dataFile";
  * The runtime resolves a read the same way, so a file is attached under the
  * name it is later looked up by.
  *
- * Only a call to the runtime's own `dataFile` counts, and only where the
- * argument is a string literal. The binding is followed through a renaming
- * import and through a namespace import, so `df("./x.json")` and
- * `cf.dataFile("./x.json")` are the same declaration as the plain call. A
+ * Only a call to the runtime's own `dataFile` counts, or to its `url` member,
+ * and only where the argument is a string literal. The binding is followed
+ * through a renaming import and through a namespace import, so
+ * `df("./x.json")`, `cf.dataFile("./x.json")`, and `df.url("./x.png")` are the
+ * same declaration as the plain call. A
  * type-only import binds no value and so declares nothing. A computed path
  * cannot be read from the source at all, and stays the caller's to name.
  */
@@ -306,26 +310,42 @@ function dataFileReaders(
 
 /**
  * Helper for `scanSource()`, which returns the path `call` reads when it calls
- * the runtime's `dataFile` through one of `readers` with a string literal, and
- * `undefined` for any other call.
+ * the runtime's `dataFile`, or its `url` member, through one of `readers` with
+ * a string literal, and `undefined` for any other call.
  */
 function dataFileReadPath(
   call: ts.CallExpression,
   readers: DataFileReaders,
 ): string | undefined {
   const callee = call.expression;
-  const read = ts.isIdentifier(callee) && readers.direct.has(callee.text)
-    ? callee
-    : ts.isPropertyAccessExpression(callee) &&
-        ts.isIdentifier(callee.expression) &&
-        readers.namespaces.has(callee.expression.text) &&
-        callee.name.text === DATA_FILE_READER
-    ? callee.expression
-    : undefined;
+  const read = dataFileReaderName(callee, readers) ??
+    (ts.isPropertyAccessExpression(callee) && callee.name.text === URL_READER
+      ? dataFileReaderName(callee.expression, readers)
+      : undefined);
   const argument = call.arguments[0];
   return read !== undefined && argument !== undefined &&
       ts.isStringLiteral(argument) && !isShadowed(read)
     ? argument.text
+    : undefined;
+}
+
+/**
+ * Helper for `dataFileReadPath()`, which returns the identifier through which
+ * `expression` names the runtime's `dataFile` — the reader itself, or the
+ * namespace it is read off — and `undefined` when it names anything else.
+ */
+function dataFileReaderName(
+  expression: ts.Expression,
+  readers: DataFileReaders,
+): ts.Identifier | undefined {
+  if (ts.isIdentifier(expression)) {
+    return readers.direct.has(expression.text) ? expression : undefined;
+  }
+  return ts.isPropertyAccessExpression(expression) &&
+      ts.isIdentifier(expression.expression) &&
+      readers.namespaces.has(expression.expression.text) &&
+      expression.name.text === DATA_FILE_READER
+    ? expression.expression
     : undefined;
 }
 

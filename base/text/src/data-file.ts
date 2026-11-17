@@ -1,0 +1,135 @@
+/**
+ * How a data file's bytes are stored in a source package, and how they are
+ * read back as bytes or as a `data:` URL.
+ *
+ * A source package holds text. A text file is stored as its UTF-8 decoding,
+ * and a binary media file (an image, a font, a sound) as a base64 `data:` URL
+ * carrying its media type, which is also the form an iframe guest can load
+ * under its Content Security Policy (`docs/specs/iframe-static-assets.md`,
+ * part 2). The file's extension decides which, from a closed table, so a file
+ * is stored the same way whatever its bytes happen to be.
+ */
+
+import { decodeBase64, encodeBase64 } from "@std/encoding/base64";
+
+/** A media type, and whether a file of that type is stored as a `data:` URL. */
+interface MediaTypeEntry {
+  /** The media type a `data:` URL for such a file carries. */
+  readonly mediaType: string;
+
+  /** Whether the file is binary, and so stored as a `data:` URL. */
+  readonly binary: boolean;
+}
+
+/** The media types a `data:` URL can carry, by lowercase extension. */
+const MEDIA_TYPES: ReadonlyMap<string, MediaTypeEntry> = new Map([
+  ["png", { mediaType: "image/png", binary: true }],
+  ["jpg", { mediaType: "image/jpeg", binary: true }],
+  ["jpeg", { mediaType: "image/jpeg", binary: true }],
+  ["gif", { mediaType: "image/gif", binary: true }],
+  ["webp", { mediaType: "image/webp", binary: true }],
+  ["avif", { mediaType: "image/avif", binary: true }],
+  ["woff2", { mediaType: "font/woff2", binary: true }],
+  ["woff", { mediaType: "font/woff", binary: true }],
+  ["ttf", { mediaType: "font/ttf", binary: true }],
+  ["otf", { mediaType: "font/otf", binary: true }],
+  ["mp3", { mediaType: "audio/mpeg", binary: true }],
+  ["ogg", { mediaType: "audio/ogg", binary: true }],
+  ["wav", { mediaType: "audio/wav", binary: true }],
+  ["svg", { mediaType: "image/svg+xml", binary: false }],
+]);
+
+/**
+ * Returns the media type of the file `name` names, from its extension, or
+ * `undefined` when the table has none for it. A file name that is only an
+ * extension, such as `.png`, has none.
+ */
+export function dataFileMediaType(name: string): string | undefined {
+  return mediaTypeEntry(name)?.mediaType;
+}
+
+/**
+ * Returns whether the file `name` names is stored as a base64 `data:` URL
+ * rather than as text.
+ */
+export function isStoredAsDataUrl(name: string): boolean {
+  return mediaTypeEntry(name)?.binary === true;
+}
+
+/**
+ * Decodes a data file's bytes as the text a source package stores.
+ *
+ * A binary media file becomes a base64 `data:` URL carrying its media type.
+ * Any other file is decoded as UTF-8 strictly: a file that is not valid UTF-8
+ * is reported by `name` rather than stored with replacement characters in
+ * place of the bytes that were read. `ignoreBOM` keeps a leading byte order
+ * mark in the result instead of consuming it, since a data file is stored
+ * byte for byte and dropping the mark would deploy something other than the
+ * authored file. Every reader of a data file decodes it here, so that each one
+ * stores and hashes the same text.
+ */
+export function decodeDataFile(bytes: Uint8Array, name: string): string {
+  const entry = mediaTypeEntry(name);
+  if (entry?.binary === true) {
+    return `${dataUrlPrefix(entry.mediaType)}${encodeBase64(bytes)}`;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
+      .decode(bytes);
+  } catch {
+    throw new Error(`Data file \`${name}\` is not valid UTF-8 text.`);
+  }
+}
+
+/**
+ * Returns the bytes of the file `contents` was stored from, the inverse of
+ * {@link decodeDataFile}: what a source package is written back to disk as.
+ * Throws for a binary media file whose contents are not a `data:` URL of its
+ * own media type, which `decodeDataFile()` never stores.
+ */
+export function encodeDataFile(contents: string, name: string): Uint8Array {
+  const entry = mediaTypeEntry(name);
+  if (entry?.binary !== true) return new TextEncoder().encode(contents);
+  const prefix = dataUrlPrefix(entry.mediaType);
+  if (!contents.startsWith(prefix)) {
+    throw new Error(
+      `Data file \`${name}\` does not hold an \`${entry.mediaType}\` ` +
+        "`data:` URL.",
+    );
+  }
+  return decodeBase64(contents.slice(prefix.length));
+}
+
+/**
+ * Returns the stored `contents` of the file `name` names as a base64 `data:`
+ * URL: a binary media file's contents as they are, and a text file's UTF-8
+ * bytes encoded under its media type. Throws, listing the known extensions,
+ * for a file the table has no media type for.
+ */
+export function dataFileUrl(contents: string, name: string): string {
+  const entry = mediaTypeEntry(name);
+  if (entry === undefined) {
+    const known = [...MEDIA_TYPES.keys()].map((ext) => `\`.${ext}\``);
+    throw new Error(
+      `\`${name}\` has no media type a \`data:\` URL can carry. Known ` +
+        `extensions: ${known.join(", ")}.`,
+    );
+  }
+  if (entry.binary) return contents;
+  return `${dataUrlPrefix(entry.mediaType)}${
+    encodeBase64(new TextEncoder().encode(contents))
+  }`;
+}
+
+/** Helper for the functions above, which looks `name` up by its extension. */
+function mediaTypeEntry(name: string): MediaTypeEntry | undefined {
+  const base = name.slice(name.lastIndexOf("/") + 1);
+  const dot = base.lastIndexOf(".");
+  if (dot <= 0) return undefined;
+  return MEDIA_TYPES.get(base.slice(dot + 1).toLowerCase());
+}
+
+/** Helper for the functions above, which starts a base64 `data:` URL. */
+function dataUrlPrefix(mediaType: string): string {
+  return `data:${mediaType};base64,`;
+}

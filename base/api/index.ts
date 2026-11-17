@@ -3251,8 +3251,27 @@ export type CompileAndRunFunction = <T = any, S = any>(
  * closure, so this reads memory rather than storage: it is synchronous, it
  * cannot fail part-way, and it returns the same bytes on every load of a given
  * source revision. A path naming no attached data file throws.
+ *
+ * A binary media file (an image, a font, or a sound, by its extension) has no
+ * text, and reading one this way throws; read it with `dataFile.url()`.
  */
-export type DataFileFunction = (path: string) => string;
+export interface DataFileFunction {
+  /** Reads the text of the attached data file `path` names. */
+  (path: string): string;
+
+  /**
+   * Reads an attached data file as a base64 `data:` URL carrying its media
+   * type, such as `data:image/png;base64,…`: the form an image, a font, or a
+   * sound takes in an iframe guest, whose Content Security Policy admits
+   * `data:` URLs and no host (see `cf-iframe`'s `assets`). `path` resolves as
+   * for `dataFile()`.
+   *
+   * The media type comes from the file's extension: `.png`, `.jpg`, `.jpeg`,
+   * `.gif`, `.webp`, `.avif`, `.svg`, `.woff2`, `.woff`, `.ttf`, `.otf`,
+   * `.mp3`, `.ogg`, and `.wav`. Any other extension throws.
+   */
+  url(path: string): string;
+}
 
 //
 // SQLite builtins (docs/specs/sqlite-builtin)

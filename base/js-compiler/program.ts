@@ -5,7 +5,7 @@ import { join } from "@std/path/join";
 import { normalize } from "@std/path/normalize";
 import { relative } from "@std/path/relative";
 
-import { decodeDataFile } from "@commonfabric/text/utf8";
+import { decodeDataFile } from "@commonfabric/text/data-file";
 import { isDeno } from "@commonfabric/platform/env";
 
 import type { ProgramResolver, Source } from "./interface.ts";

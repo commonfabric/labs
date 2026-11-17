@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { dataFileUrl } from "@commonfabric/text/data-file";
 
 import { isCell } from "../src/cell.ts";
 import { DataFileStrings } from "../src/data-file-strings.ts";
@@ -176,6 +177,42 @@ describe("data-file-strings", () => {
       const stored = (result.getRaw() as { page: unknown }).page;
       expect(parseLink(stored, result)?.id).toBe(codeDocumentId(PAGE));
       expect(result.key("page").get()).toBe(PAGE);
+    });
+
+    it("stores a URL `dataFile.url()` built as a link to its code document", async () => {
+      const svg = `<svg>${"<g/>".repeat(300)}</svg>`;
+      const program: RuntimeProgram = {
+        main: "/main.tsx",
+        files: [
+          {
+            name: "/main.tsx",
+            contents: [
+              'import { dataFile, pattern } from "commonfabric";',
+              'const LOGO = dataFile.url("./logo.svg");',
+              "export default pattern(() => ({ logo: LOGO }));",
+            ].join("\n"),
+          },
+          { name: "/logo.svg", contents: svg },
+        ],
+        dataFiles: ["/logo.svg"],
+      };
+      const pattern = await runtime.patternManager.compileOrGetPattern(
+        program,
+      );
+      const tx = runtime.edit();
+      runtime.run(
+        tx,
+        pattern,
+        {},
+        runtime.getCell(space, "logo", undefined, tx),
+      );
+      await tx.commit().settled;
+      const result = runtime.getCell(space, "logo", undefined);
+
+      const url = dataFileUrl(svg, "logo.svg");
+      const stored = (result.getRaw() as { logo: unknown }).logo;
+      expect(parseLink(stored, result)?.id).toBe(codeDocumentId(url));
+      expect(result.key("logo").get()).toBe(url);
     });
 
     it("stores a short data-file string inline", async () => {

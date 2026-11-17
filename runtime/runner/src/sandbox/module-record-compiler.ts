@@ -13,6 +13,7 @@ import type {
 } from "@commonfabric/ts-transformers";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { dataFileUrl, isStoredAsDataUrl } from "@commonfabric/text/data-file";
 import type ts from "typescript";
 
 import type { DataFileStrings } from "../data-file-strings.ts";
@@ -774,7 +775,10 @@ type NamespaceBinder = (
  * The read is a map lookup: the closure is fully loaded before any module
  * executes, so it needs no storage access and cannot be asynchronous.
  *
- * Each string a read returns is recorded in `dataFileStrings`, when one is
+ * The reader returns a text file's contents, and its `url` member any file's
+ * contents as a base64 `data:` URL, which is how a binary media file is read:
+ * the plain reader refuses one, whose stored contents are that URL already.
+ * Each string either returns is recorded in `dataFileStrings`, when one is
  * given, so that setup can store it by reference.
  *
  * A graph carrying no data files hands every namespace straight through, and a
@@ -790,24 +794,47 @@ function dataFileBinding(
     return () => passThrough;
   }
   const attached = [...dataByPath.keys()].sort();
+  const contentsOf = (resolved: string): string => {
+    const contents = dataByPath.get(resolved);
+    if (contents !== undefined) return contents;
+    // The message states what is attached and stops there. How a caller
+    // attaches one differs by the surface driving the compile — a CLI flag, a
+    // scenario field, an argument to `resolveLocalProgram` — and the runtime
+    // knows none of that, so naming any single mechanism would misdirect
+    // every caller reaching it by another route.
+    throw new Error(
+      `No attached data file "${resolved}". ` +
+        `Attached: ${attached.join(", ")}.`,
+    );
+  };
+  // A URL built from a text file, by path, so that every read of one returns
+  // the same string and the string is built and recorded once.
+  const builtUrls = new Map<string, string>();
+  const urlOf = (resolved: string): string => {
+    let url = builtUrls.get(resolved);
+    if (url === undefined) {
+      url = dataFileUrl(contentsOf(resolved), resolved);
+      builtUrls.set(resolved, url);
+    }
+    dataFileStrings?.record(url);
+    return url;
+  };
   return (moduleName: string) => {
-    const read = freezeSandboxValue((path: string): string => {
+    const read = (path: string): string => {
       const resolved = resolveDataFilePath(path, moduleName);
-      const bytes = dataByPath.get(resolved);
-      if (bytes !== undefined) {
-        dataFileStrings?.record(bytes);
-        return bytes;
+      const contents = contentsOf(resolved);
+      if (isStoredAsDataUrl(resolved)) {
+        throw new Error(
+          `Data file \`${resolved}\` is binary. Read it with ` +
+            "`dataFile.url()`.",
+        );
       }
-      // The message states what is attached and stops there. How a caller
-      // attaches one differs by the surface driving the compile — a CLI flag, a
-      // scenario field, an argument to `resolveLocalProgram` — and the runtime
-      // knows none of that, so naming any single mechanism would misdirect
-      // every caller reaching it by another route.
-      throw new Error(
-        `No attached data file "${resolved}". ` +
-          `Attached: ${attached.join(", ")}.`,
-      );
-    });
+      dataFileStrings?.record(contents);
+      return contents;
+    };
+    const url = (path: string): string =>
+      urlOf(resolveDataFilePath(path, moduleName));
+    const reader = freezeSandboxValue(Object.assign(read, { url }));
     const bound = new WeakMap<
       Record<string, unknown>,
       Record<string, unknown>
@@ -815,7 +842,7 @@ function dataFileBinding(
     return (namespace) => {
       const memo = bound.get(namespace);
       if (memo !== undefined) return memo;
-      const copy = Object.freeze({ ...namespace, [DATA_FILE_READER]: read });
+      const copy = Object.freeze({ ...namespace, [DATA_FILE_READER]: reader });
       bound.set(namespace, copy);
       return copy;
     };

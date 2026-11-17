@@ -150,6 +150,18 @@ const toSchema: ToSchemaFunction = (_options?) => {
 
 const runtimeSchema = freezeVerifiedPlainData as typeof schemaIdentity;
 
+/**
+ * Returns the error a `dataFile` read throws when it reaches the builder's
+ * placeholder rather than a module's own reader: the module was loaded in a
+ * graph carrying no data files (see `compileSourcesToRecords`).
+ */
+function noDataFileClosure(path: string): Error {
+  return new Error(
+    `No attached data file "${path}": this pattern was loaded without a ` +
+      `data-file closure.`,
+  );
+}
+
 export interface CreateBuilderOptions {
   unsafeHostTrust?: UnsafeHostTrust;
 }
@@ -263,14 +275,18 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     // Placeholder for the per-module binding. A graph carrying data files hands
     // each module its own copy of this namespace, whose reader is closed over
     // that load's files and that module's path (see
-    // `compileSourcesToRecords`). Reaching this body means the module is
-    // running outside a graph that carries any.
-    dataFile: (path: string): string => {
-      throw new Error(
-        `No attached data file "${path}": this pattern was loaded without a ` +
-          `data-file closure.`,
-      );
-    },
+    // `compileSourcesToRecords`). Reaching either body here means the module
+    // is running outside a graph that carries any.
+    dataFile: Object.assign(
+      (path: string): string => {
+        throw noDataFileClosure(path);
+      },
+      {
+        url: (path: string): string => {
+          throw noDataFileClosure(path);
+        },
+      },
+    ),
     sqliteDatabase,
     sqliteQuery,
     table,

@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+
+import { decodeDataFile } from "@commonfabric/text/data-file";
+
 import {
   compileWithEntryBody,
   Engine,
@@ -535,6 +538,68 @@ describe("Engine.evaluateRecordGraph()", () => {
     await expect(engine.compileAndEvaluateModules(program)).rejects.toThrow(
       'No attached data file "/data/absent.json". Attached: /data/cities.json.',
     );
+  });
+
+  describe("dataFile.url()", () => {
+    /** A program whose entry exports `expression`, with three files attached. */
+    const programReading = (expression: string): RuntimeProgram => ({
+      main: "/main.tsx",
+      dataFiles: ["/glaze.png", "/logo.svg", "/cities.json"],
+      files: [
+        {
+          name: "/main.tsx",
+          contents: [
+            'import { __cf_data, dataFile } from "commonfabric";',
+            `export default __cf_data(${expression});`,
+          ].join("\n"),
+        },
+        {
+          name: "/glaze.png",
+          contents: decodeDataFile(
+            new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+            "/glaze.png",
+          ),
+        },
+        { name: "/logo.svg", contents: "<svg/>" },
+        { name: "/cities.json", contents: "[]" },
+      ],
+    });
+
+    it("returns a binary file's `data:` URL", async () => {
+      const { main } = await engine.compileAndEvaluateModules(
+        programReading('dataFile.url("./glaze.png")'),
+      );
+
+      expect(main?.default).toBe("data:image/png;base64,iVBORw==");
+    });
+
+    it("returns an SVG file as a `data:` URL of its text", async () => {
+      const { main } = await engine.compileAndEvaluateModules(
+        programReading('dataFile.url("./logo.svg")'),
+      );
+
+      expect(main?.default).toBe("data:image/svg+xml;base64,PHN2Zy8+");
+    });
+
+    it("throws for a file whose extension names no media type", async () => {
+      await expect(
+        engine.compileAndEvaluateModules(
+          programReading('dataFile.url("./cities.json")'),
+        ),
+      ).rejects.toThrow(
+        "`/cities.json` has no media type a `data:` URL can carry.",
+      );
+    });
+
+    it("leaves a plain read of a binary file to throw, naming `dataFile.url()`", async () => {
+      await expect(
+        engine.compileAndEvaluateModules(
+          programReading('dataFile("./glaze.png")'),
+        ),
+      ).rejects.toThrow(
+        "Data file `/glaze.png` is binary. Read it with `dataFile.url()`.",
+      );
+    });
   });
 
   it("separates identities for data files differing only in line endings", async () => {
