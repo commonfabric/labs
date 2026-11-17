@@ -2485,11 +2485,10 @@ export type CompileCacheStampRepair =
   | "repaired"
   /** The closure is absent, or did not verify. */
   | "unverified"
-  /**
-   * A record holds something the repair does not make canonical, or the
-   * session may not write the space.
-   */
+  /** A record holds something the repair does not make canonical. */
   | "refused"
+  /** The store refused the commit: the session may not write the space. */
+  | "unwritable"
   /** A record changed after verification, or the commit failed otherwise. */
   | "conflicted";
 
@@ -2741,9 +2740,9 @@ export async function repairCompileCacheStamps(
         `entry=${entryIdentity}`,
         error,
       ]);
-      // A session that may not write the space is refused again at every
-      // commit; anything else is a race a later attempt may win.
-      return error.name === "AuthorizationError" ? "refused" : "conflicted";
+      // A session that may not write the space now may be granted that
+      // later, and anything else is a race a later attempt may win.
+      return error.name === "AuthorizationError" ? "unwritable" : "conflicted";
     }
     return "repaired";
   } catch (error) {

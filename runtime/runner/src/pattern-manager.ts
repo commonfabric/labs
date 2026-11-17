@@ -2835,8 +2835,9 @@ export class PatternManager {
             directCommit: true,
           }),
       );
-      // A refusal stands until the records change; a conflict is a race
-      // the next load may win, so it is tried again.
+      // A refusal stands until the records change. A conflict is a race the
+      // next load may win, and a session refused write access may be granted
+      // it, so each of those is tried again.
       if (outcome === "refused") this.#unrepairedStampedClosures.add(key);
       if (outcome !== "clean" && outcome !== "unverified") {
         logger.debug("compile-cache-stamp-repair", () => [

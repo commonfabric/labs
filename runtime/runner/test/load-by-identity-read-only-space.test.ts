@@ -9,7 +9,19 @@ import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-op
 import { getLogger } from "@commonfabric/logger";
 
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
-import { setCompileCacheRuntimeVersionForTesting } from "../src/compilation-cache/cell-cache.ts";
+import {
+  setCompileCacheRuntimeVersionForTesting,
+  sourceDocKey,
+} from "../src/compilation-cache/cell-cache.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import type { FabricValue } from "@commonfabric/data-model";
+import type { URI } from "../src/sigil-types.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  storedFields,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { captureLogs } from "./support/captured-logs.ts";
@@ -293,6 +305,84 @@ describe("pattern-manager", () => {
       } finally {
         restore();
       }
+    });
+  });
+
+  describe("a stamped closure whose repair the store refuses for want of write access", () => {
+    it("is repaired at a later load, once the session may write", async () => {
+      // The refusal is for this session's access, which can change while the
+      // session runs, so it is not remembered as a refusal of the records.
+
+      const { runtime: owner } = open(
+        await Identity.fromPassphrase("stamp repair access owner"),
+      );
+      const space = await owner.createSpace();
+      const compiled = await owner.patternManager.compilePattern(PROGRAM, {
+        space,
+      });
+      await owner.patternManager.flushCompileCacheWrites();
+      const identity = owner.patternManager.getArtifactEntryRef(compiled)!
+        .identity;
+      const id = owner.getCell(space, sourceDocKey(identity))
+        .getAsNormalizedFullLink().id as URI;
+      const address = { space, scope: "space" as const, id, path: [] };
+      const stamp = owner.edit();
+      writeSeedEnvelopeDoc(stamp, space);
+      const stored = storedFields(stamp, address) as {
+        cfc?: { labelMap: { entries: FabricValue[] } };
+      };
+      const cfc = stored.cfc ?? {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: { version: 1, entries: [] },
+      };
+      const reader = (await Identity.fromPassphrase("stamp repair reader"))
+        .did();
+      seedStoredEnvelope(stamp, address, {
+        ...stored,
+        cfc: {
+          ...cfc,
+          labelMap: {
+            ...cfc.labelMap,
+            entries: [...cfc.labelMap.entries, {
+              path: [],
+              origin: "derived",
+              observes: "value",
+              label: { confidentiality: [reader] },
+            }],
+          },
+        },
+      } as unknown as FabricValue);
+      expect((await stamp.commit().settled).error).toBeUndefined();
+      await owner.storageManager.synced();
+      const atoms = () => {
+        const tx = owner.edit();
+        try {
+          return (readStoredCfcMetadata(tx, address)?.labelMap.entries ?? [])
+            .flatMap((entry) => entry.label.confidentiality ?? []);
+        } finally {
+          tx.abort();
+        }
+      };
+      const refusal = Object.assign(new Error("the session may not write"), {
+        name: "AuthorizationError",
+      });
+      const { runtime, factory } = open(
+        await Identity.fromPassphrase("stamp repair access owner"),
+      );
+      factory.failIn = (target) => target === space ? refusal : undefined;
+
+      await runtime.patternManager.prepareSourceClosureVerification(space, [
+        identity,
+      ]);
+      expect(atoms()).toEqual([reader]);
+      factory.failIn = undefined;
+      await runtime.patternManager.prepareSourceClosureVerification(space, [
+        identity,
+      ]);
+      await owner.getCell(space, sourceDocKey(identity)).sync();
+
+      expect(atoms()).toEqual([]);
     });
   });
 });
