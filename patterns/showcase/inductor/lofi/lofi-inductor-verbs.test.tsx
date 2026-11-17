@@ -200,6 +200,16 @@ export default pattern(() => {
     subject.rewriteAfter === 4 && subject.heldOutPercent === 50 &&
     subject.hifiModel === "gateway:stronger-model"
   );
+  // A model typed but not applied is dropped by "Use the default model", so
+  // a later Apply does not bring it back.
+  const action_type_model = action(() => {
+    setBound(
+      findNodeByProp(subject[UI], "placeholder", "gateway:stronger-model"),
+      "$value",
+      "gateway:typed-model",
+      "the model box",
+    );
+  });
   const assert_default_model = assert(() => subject.hifiModel === "");
 
   // Every refusal leaves what it would have changed as it was.
@@ -236,7 +246,10 @@ export default pattern(() => {
       { action: action_fill_settings },
       { press: subject[UI], control: "Apply" },
       { assertion: assert_settings_applied },
+      { action: action_type_model },
       { press: subject[UI], control: "Use the default model" },
+      { assertion: assert_default_model },
+      { press: subject[UI], control: "Apply" },
       { assertion: assert_default_model },
       // The refusals, in the order of `REFUSALS`.
       { action: subject.addItem, event: { id: "mail-9", fields: {} } },

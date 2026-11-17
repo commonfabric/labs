@@ -60,8 +60,11 @@ export default pattern<SettingsCardInput, SettingsCardOutput>(
       heldOutDraft.set("");
     });
 
+    // A model typed but not applied goes too, so a later Apply does not
+    // switch back to it.
     const useDefault = action(() => {
       if (hifiModel !== "") setHifiModel.send({ model: "" });
+      modelDraft.set("");
     });
 
     const summary = computed(() =>
