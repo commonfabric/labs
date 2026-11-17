@@ -38,9 +38,10 @@ const INVOICE = rule("subject", "invoice");
 const BILL = rule("subject", "bill");
 const LUNCH = rule("subject", "lunch", false);
 
-/** `n` pseudonyms that each contribute `rules`. */
+/** `n` contributors, each under their own pseudonym, contributing `rules`. */
 const many = (prefix: string, n: number, rules: CanonicalRule[]) =>
   Array.from({ length: n }, (_, i): Contribution => ({
+    contributor: `${prefix}-${i}`,
     pseudonym: `${prefix}-${i}`,
     rules,
   }));
@@ -144,32 +145,50 @@ describe("thresholdFor", () => {
 });
 
 describe("supportOf", () => {
-  it("counts distinct pseudonyms, not contributions or repeats", () => {
+  it("counts distinct contributors, not contributions or repeats", () => {
     const support = supportOf([
-      { pseudonym: "a", rules: [INVOICE, INVOICE] },
-      { pseudonym: "b", rules: [INVOICE] },
+      { contributor: "a", pseudonym: "a", rules: [INVOICE, INVOICE] },
+      { contributor: "b", pseudonym: "b", rules: [INVOICE] },
     ]);
-    expect(support.get(ruleIdentity(INVOICE))?.pseudonyms.size).toBe(2);
+    expect(support.get(ruleIdentity(INVOICE))?.contributors.size).toBe(2);
   });
 
-  it("keeps only a pseudonym's latest set: a resubmission replaces", () => {
+  it("counts one contributor once across pseudonyms and old entries", () => {
     const support = supportOf([
-      { pseudonym: "a", rules: [INVOICE, BILL] },
-      { pseudonym: "b", rules: [BILL] },
-      { pseudonym: "a", rules: [LUNCH] },
+      { contributor: "mallory", pseudonym: "m-1", rules: [INVOICE] },
+      { contributor: "mallory", pseudonym: "m-2", rules: [INVOICE] },
+      { contributor: "mallory", pseudonym: "m-3", rules: [INVOICE] },
+      { contributor: "alice", pseudonym: "a", rules: [INVOICE] },
+    ]);
+    expect(support.get(ruleIdentity(INVOICE))?.contributors.size).toBe(2);
+  });
+
+  it("keeps only a contributor's latest set: a resubmission replaces", () => {
+    const support = supportOf([
+      { contributor: "a", pseudonym: "a", rules: [INVOICE, BILL] },
+      { contributor: "b", pseudonym: "b", rules: [BILL] },
+      { contributor: "a", pseudonym: "a", rules: [LUNCH] },
     ]);
     expect(support.get(ruleIdentity(INVOICE))).toBeUndefined();
-    expect(support.get(ruleIdentity(BILL))?.pseudonyms.size).toBe(1);
-    expect(support.get(ruleIdentity(LUNCH))?.pseudonyms.size).toBe(1);
+    expect(support.get(ruleIdentity(BILL))?.contributors.size).toBe(1);
+    expect(support.get(ruleIdentity(LUNCH))?.contributors.size).toBe(1);
   });
 
   it("counts spellings of one rule together, and labels apart", () => {
     const support = supportOf([
-      { pseudonym: "a", rules: [rule("subject", "INVOICE")] },
-      { pseudonym: "b", rules: [rule("subject", "[iI]nvoice")] },
-      { pseudonym: "c", rules: [rule("subject", "invoice", false)] },
+      { contributor: "a", pseudonym: "a", rules: [rule("subject", "INVOICE")] },
+      {
+        contributor: "b",
+        pseudonym: "b",
+        rules: [rule("subject", "[iI]nvoice")],
+      },
+      {
+        contributor: "c",
+        pseudonym: "c",
+        rules: [rule("subject", "invoice", false)],
+      },
     ]);
-    expect(support.get(ruleIdentity(INVOICE))?.pseudonyms.size).toBe(2);
+    expect(support.get(ruleIdentity(INVOICE))?.contributors.size).toBe(2);
     expect(support.get(ruleIdentity(rule("subject", "invoice", false))))
       .toBeDefined();
   });
@@ -177,18 +196,22 @@ describe("supportOf", () => {
   it("counts a stored rule by its text, not a key it claims", () => {
     const forged = { ...BILL, key: INVOICE.key };
     const support = supportOf([
-      { pseudonym: "a", rules: [INVOICE] },
-      { pseudonym: "b", rules: [forged] },
+      { contributor: "a", pseudonym: "a", rules: [INVOICE] },
+      { contributor: "b", pseudonym: "b", rules: [forged] },
     ]);
-    expect(support.get(ruleIdentity(INVOICE))?.pseudonyms.size).toBe(1);
-    expect(support.get(ruleIdentity(BILL))?.pseudonyms.size).toBe(1);
+    expect(support.get(ruleIdentity(INVOICE))?.contributors.size).toBe(1);
+    expect(support.get(ruleIdentity(BILL))?.contributors.size).toBe(1);
   });
 
-  it("skips entries with no pseudonym and rules out of grammar", () => {
+  it("skips entries with no contributor and rules out of grammar", () => {
     const support = supportOf([
-      { pseudonym: "", rules: [INVOICE] },
+      { contributor: "", pseudonym: "", rules: [INVOICE] },
       undefined,
-      { pseudonym: "a", rules: [{ ...INVOICE, pattern: "(a)\\1" }] },
+      {
+        contributor: "a",
+        pseudonym: "a",
+        rules: [{ ...INVOICE, pattern: "(a)\\1" }],
+      },
     ]);
     expect(support.size).toBe(0);
   });
@@ -215,14 +238,22 @@ describe("releaseFrom", () => {
   it("does not count one pseudonym's repeated contributions", () => {
     const repeated = Array.from(
       { length: 5 },
-      (): Contribution => ({ pseudonym: "same", rules: [INVOICE] }),
+      (): Contribution => ({
+        contributor: "same",
+        pseudonym: "same",
+        rules: [INVOICE],
+      }),
     );
     expect(releaseFrom(repeated, SECRET, FIXED)).toEqual([]);
   });
 
   it("withdraws a rule whose holder resubmits without it", () => {
     const before = many("p", 3, [INVOICE]);
-    const after = [...before, { pseudonym: "p-0", rules: [BILL] }];
+    const after = [...before, {
+      contributor: "p-0",
+      pseudonym: "p-0",
+      rules: [BILL],
+    }];
     expect(releaseFrom(before, SECRET, FIXED)).toHaveLength(1);
     expect(releaseFrom(after, SECRET, FIXED)).toEqual([]);
   });
@@ -310,9 +341,10 @@ describe("canonicalSet", () => {
 
 describe("tallyAll", () => {
   it("counts every rule, below threshold too", () => {
-    expect(tallyAll([{ pseudonym: "a", rules: [INVOICE] }])).toEqual([
-      { ...INVOICE, count: 1 },
-    ]);
+    expect(tallyAll([{ contributor: "a", pseudonym: "a", rules: [INVOICE] }]))
+      .toEqual([
+        { ...INVOICE, count: 1 },
+      ]);
   });
 });
 

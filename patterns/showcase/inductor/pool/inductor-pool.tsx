@@ -1,6 +1,6 @@
 /**
  * Inductor pool: one goal's lo-fi rules, contributed under pseudonyms, and
- * released once enough distinct pseudonyms hold the same rule. See README.md
+ * released once enough distinct contributors hold the same rule. See README.md
  * for the design and its CFC debt.
  *
  * This module is the pattern and its view. The policy, and the one handler
@@ -66,7 +66,7 @@ interface InductorPoolInput {
 /**
  * A #inductorPool: collects lo-fi rules for one goal under per-goal
  * pseudonyms and releases a rule, with its count, once enough distinct
- * pseudonyms hold it. Lo-fi inductors find one with
+ * contributors hold it. Lo-fi inductors find one with
  * `wish({ query: "#inductorPool" })`.
  */
 export interface InductorPoolOutput {

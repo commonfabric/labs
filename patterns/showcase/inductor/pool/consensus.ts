@@ -1,6 +1,6 @@
 /**
  * The inductor pool's release decision, apart from the pattern that stores and
- * shows it: which rules enough distinct pseudonyms hold, and each rule's
+ * shows it: which rules enough distinct contributors hold, and each rule's
  * threshold.
  *
  * Every function here is pure. `releaseConsensus` in `inductor-pool.tsx`, the
@@ -23,8 +23,14 @@ export type { CanonicalRule } from "../shared/rule-grammar.ts";
 // Types
 //
 
-/** What one pseudonym contributes: its whole current rule set. */
+/** What one contributor contributes: their whole current rule set. */
 export interface Contribution {
+  /**
+   * The principal who wrote this contribution, as the pool's one writer read
+   * it from the runtime. Counting is by contributor, so one principal's
+   * contributions count once however many pseudonyms or old entries they hold.
+   */
+  contributor: string;
   /** The contributor's one stable pseudonym for this pool's goal. */
   pseudonym: string;
   rules: CanonicalRule[];
@@ -43,7 +49,7 @@ export interface PoolSeal extends PoolConfig {
   secret: string;
 }
 
-/** A rule enough distinct pseudonyms hold, and how many hold it. */
+/** A rule enough distinct contributors hold, and how many hold it. */
 export interface ReleasedRule {
   field: string;
   pattern: string;
@@ -314,7 +320,7 @@ export function thresholdOffset(
 }
 
 /**
- * How many distinct pseudonyms must hold the rule before it is released: the
+ * How many distinct contributors must hold the rule before it is released: the
  * centre plus the rule's offset, and never under `MIN_THRESHOLD`.
  */
 export function thresholdFor(
@@ -333,42 +339,43 @@ export function thresholdFor(
 // Counting
 //
 
-/** One rule and the distinct pseudonyms that hold it. */
+/** One rule and the distinct contributors that hold it. */
 export interface Support {
   rule: CanonicalRule;
-  pseudonyms: Set<string>;
+  contributors: Set<string>;
 }
 
 /**
- * Each rule and the distinct pseudonyms holding it. A pseudonym's later
- * contribution replaces its earlier one, so only its latest rule set counts,
+ * Each rule and the distinct contributors holding it. A contributor's later
+ * contribution replaces their earlier one, so only their latest rule set
+ * counts, whatever pseudonym it is under,
  * and a rule a set holds twice counts once. Rules are checked against the
  * grammar again and counted by their canonical form, so a stored rule whose
  * pattern is not canonical, or whose key does not match its text, cannot
  * stand apart from or in for another; one that fails the check is skipped.
- * An entry without a pseudonym is skipped too.
+ * An entry without a contributor is skipped too.
  */
 export function supportOf(
   contributions: readonly (Contribution | undefined)[] | undefined,
 ): Map<string, Support> {
   const latest = new Map<string, readonly CanonicalRule[]>();
   for (const contribution of contributions ?? []) {
-    const pseudonym = contribution?.pseudonym;
-    if (typeof pseudonym !== "string" || pseudonym === "") continue;
+    const contributor = contribution?.contributor;
+    if (typeof contributor !== "string" || contributor === "") continue;
     latest.set(
-      pseudonym,
+      contributor,
       Array.isArray(contribution?.rules) ? contribution.rules : [],
     );
   }
   const support = new Map<string, Support>();
-  for (const [pseudonym, rules] of latest) {
+  for (const [contributor, rules] of latest) {
     for (const stored of rules) {
       const checked = checkRule(stored);
       if (!checked.ok) continue;
       const identity = ruleIdentity(checked.rule);
       const entry = support.get(identity) ??
-        { rule: checked.rule, pseudonyms: new Set<string>() };
-      entry.pseudonyms.add(pseudonym);
+        { rule: checked.rule, contributors: new Set<string>() };
+      entry.contributors.add(contributor);
       support.set(identity, entry);
     }
   }
@@ -388,14 +395,14 @@ export function releaseFrom(
 ): ReleasedRule[] {
   if (typeof secret !== "string" || secret === "") return [];
   const released: ReleasedRule[] = [];
-  for (const [identity, { rule, pseudonyms }] of supportOf(contributions)) {
-    if (pseudonyms.size < thresholdFor(secret, identity, config)) continue;
+  for (const [identity, { rule, contributors }] of supportOf(contributions)) {
+    if (contributors.size < thresholdFor(secret, identity, config)) continue;
     released.push({
       field: rule.field,
       pattern: rule.pattern,
       predicts: rule.predicts,
       key: rule.key,
-      count: pseudonyms.size,
+      count: contributors.size,
     });
   }
   return released.sort((a, b) =>
@@ -525,12 +532,14 @@ export function canonicalSet(drafts: unknown): CanonicalRule[] {
 export function tallyAll(
   contributions: readonly (Contribution | undefined)[] | undefined,
 ): ReleasedRule[] {
-  return [...supportOf(contributions).values()].map(({ rule, pseudonyms }) => ({
+  return [...supportOf(contributions).values()].map((
+    { rule, contributors },
+  ) => ({
     field: rule.field,
     pattern: rule.pattern,
     predicts: rule.predicts,
     key: rule.key,
-    count: pseudonyms.size,
+    count: contributors.size,
   }));
 }
 

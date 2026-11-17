@@ -51,19 +51,22 @@ debt"); this pattern is its implementation.
   secret and threshold are written only by `submitContribution`, like the rules,
   and the release reads them from the contributions alone.
 - **Release.** `releaseConsensus`, a `lift` exported from `pool-policy.tsx`,
-  takes the contributions and nothing else. It counts the distinct pseudonyms
-  holding each rule. A rule is counted by its field, label and canonical
-  pattern, not by its 64-bit `key`, whose FNV hash anyone can collide. Each
-  rule's threshold is `thresholdCenter + offset`, from the seal, where `offset`
-  is in `[-k, +k]`: the first 32 bits of HMAC-SHA-256(secret, rule), reduced to
-  the range. It is deterministic, and it cannot be predicted without the secret.
-  A sealed threshold is never under `MIN_SEALED_THRESHOLD`, and the release
-  refuses a seal that breaks it. The function emits only the rules at or above
-  their threshold, with their counts. Of the rest it emits nothing: not the
-  rule, not its count, not that it exists, not how many there are. When the
-  contributions' seals disagree, or one has none, it emits nothing at all. That
-  output, `consensus`, is the pool's public result, with `releasedCount` and the
-  view derived from it. It is not stored (see "Workaround: the release is not
+  takes the contributions and nothing else. It counts the distinct contributors
+  holding each rule: the principal `submitContribution` stamped on each
+  contribution from the runtime, which no one else can write. So a principal
+  counts once even if someone replays their replaced or withdrawn entries into
+  the release. A rule is counted by its field, label and canonical pattern, not
+  by its 64-bit `key`, whose FNV hash anyone can collide. Each rule's threshold
+  is `thresholdCenter + offset`, from the seal, where `offset` is in `[-k, +k]`:
+  the first 32 bits of HMAC-SHA-256(secret, rule), reduced to the range. It is
+  deterministic, and it cannot be predicted without the secret. A sealed
+  threshold is never under `MIN_SEALED_THRESHOLD`, and the release refuses a
+  seal that breaks it. The function emits only the rules at or above their
+  threshold, with their counts. Of the rest it emits nothing: not the rule, not
+  its count, not that it exists, not how many there are. When the contributions'
+  seals disagree, or one has none, it emits nothing at all. That output,
+  `consensus`, is the pool's public result, with `releasedCount` and the view
+  derived from it. It is not stored (see "Workaround: the release is not
   stored").
 - **The view** shows the goal, the configured threshold centre and jitter, and
   the released rules with their counts. It does not show how many people have
@@ -183,11 +186,11 @@ release that outlives a change to the inputs, say). Until then nothing does.
 
 **Cuts** (both approved by Alex, 2026-11-16, and the only ones taken):
 
-1. _Distinct people._ `releaseConsensus` counts distinct pseudonyms. The pool
-   binds pseudonyms to principals one to one, but nothing attests that two
-   principals are two people. Principled CFC would count an attested
-   distinct-principal (personhood) atom on each contribution in the release
-   rule. Comment at `releaseConsensus`.
+1. _Distinct people._ `releaseConsensus` counts distinct principals, as the
+   pool's one writer stamped them, but nothing attests that two principals are
+   two people. Principled CFC would count an attested distinct-principal
+   (personhood) atom on each contribution in the release rule. Comment at
+   `releaseConsensus`.
 2. _Pseudonym linkability._ The `authored-by` label and the commit name the
    contributor's core identity, which anyone who reads the pool space can see.
    Principled CFC would sign with an intermediate key chained from the per-goal

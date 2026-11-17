@@ -104,7 +104,12 @@ export type PrivateRule = Confidential<
 
 /** A contribution, readable only through the pool's policy. */
 export type PrivateContribution = Confidential<
-  { pseudonym: string; rules: PrivateRule[]; seal: PoolSeal },
+  {
+    contributor: string;
+    pseudonym: string;
+    rules: PrivateRule[];
+    seal: PoolSeal;
+  },
   readonly [PolicyOf<typeof poolRules>]
 >;
 
@@ -125,7 +130,7 @@ export type StoredContribution = AuthoredByCurrentUser<
 
 /**
  * The pool's one released function: the rules at least their threshold of
- * distinct pseudonyms hold, with their counts, and nothing else. It takes the
+ * distinct contributors hold, with their counts, and nothing else. It takes the
  * contributions alone; the secret and threshold are the seal they carry, so
  * the secret, the offsets, and every count below threshold stay inside it,
  * and a caller chooses none of them.
@@ -134,10 +139,10 @@ export type StoredContribution = AuthoredByCurrentUser<
  * `TransformedBy` names a function by its module and export name, and only an
  * exported, named function has both. The same holds for `tallyEveryRule`.
  *
- * CFC DEBT, cut 1 (distinct people): this counts distinct pseudonyms. The
- * pool binds each pseudonym to one authenticated principal and each principal
- * to one pseudonym (`submitContribution`), but nothing attests that two
- * principals are two people. Principled CFC would have the threshold count an
+ * CFC DEBT, cut 1 (distinct people): this counts distinct principals, as
+ * `submitContribution` stamped them, so one principal counts once even over
+ * entries they replaced or withdrew; but nothing attests that two principals
+ * are two people. Principled CFC would have the threshold count an
  * attested distinct-principal (personhood) atom on each contribution, so the
  * release rule itself could require N distinct attested people.
  */
@@ -265,7 +270,10 @@ export const submitContribution = handler<ContributionEvent, SubmitState>(
     }
     const seal = first ?? mintSeal(Math.random, { thresholdCenter, jitter });
 
+    // The contributor is the runtime's principal for this run, written only
+    // here, so the release counts each principal once, old entries included.
     const contribution = {
+      contributor: actor,
       pseudonym,
       rules,
       seal: {

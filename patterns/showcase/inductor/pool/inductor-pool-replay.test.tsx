@@ -89,6 +89,7 @@ const ReplayProbe = pattern<ProbeInput, ProbeOutput>(
         Array.from(
           { length: MIN_SEALED_THRESHOLD },
           (_, i) => ({
+            contributor: `${contribution.contributor}-${i}`,
             pseudonym: `${contribution.pseudonym}-${i}`,
             rules: (contribution.rules ?? []).map((rule) => ({ ...rule })),
             seal: {
@@ -147,6 +148,7 @@ const linkBesideForgeries = handler<
   const forgeries = Array.from(
     { length: victim.seal.thresholdCenter + victim.seal.jitter - 1 },
     (_, i) => ({
+      contributor: `${victim.contributor}-${i}`,
       pseudonym: `${victim.pseudonym}-${i}`,
       rules: (victim.rules ?? []).map((rule) => ({ ...rule })),
       seal: { ...victim.seal },
