@@ -930,8 +930,8 @@ describe("ensure-piece-running", () => {
         };
 
         /**
-         * `stopAfterInputChanges()` for the stored enclosing source, whose piece
-         * records the `system:` origin the route serves.
+         * `stopAfterInputChanges()` for the stored enclosing source, whose
+         * piece records the `system:` origin the route serves.
          */
         const stopAfterInputChangesWithOrigin = async () => {
           const first = routedRuntime();

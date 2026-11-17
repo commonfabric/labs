@@ -515,13 +515,13 @@ export type EnsurePieceOptions = {
    * which finds the row as a backlink chain passes through it; the row itself
    * carries a `result` backlink to the piece that built it, and starts with
    * that piece. Not found: a nested instance whose argument links into its
-   * enclosing instance only at that instance's result root, or not at all; and,
-   * unprobed, the instances `filter`, `flatMap` and `ifElse` build, and wish
-   * results. A pattern that itself stores a link straight to a piece's root as
-   * the whole value of a document it owns reads as enclosing that piece. Where
-   * no enclosing piece is found, the owning piece starts alone, and silently: a
-   * piece nothing encloses and one whose enclosing piece is not found look the
-   * same to the walk.
+   * enclosing instance only at that instance's result root, or not at all.
+   * Whether the instances `filter`, `flatMap` and `ifElse` build, and wish
+   * results, are found is not determined. A pattern that itself stores a link
+   * straight to a piece's root as the whole value of a document it owns reads
+   * as enclosing that piece. Where no enclosing piece is found, the owning
+   * piece starts alone, and silently: a piece nothing encloses and one whose
+   * enclosing piece is not found look the same to the walk.
    */
   enclosingSourcesOnly?: boolean;
 

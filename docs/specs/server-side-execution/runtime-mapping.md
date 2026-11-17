@@ -285,8 +285,9 @@ nested instance runs, no event starts its enclosing instance, so a nested
 instance opened alone would run every later event's handler against inputs
 nothing in the runtime derives. A piece whose output the opened piece's
 argument links to, as `cf piece link` wires one, is not started by the open;
-an event's auto-load of a piece that is not running starts it. An open that follows the opened
-piece's origin follows each enclosing piece's origin first. The opened piece
+an event's auto-load of a piece that is not running starts it. An open
+that follows the opened piece's origin follows each enclosing piece's
+origin first. The opened piece
 is started in its own right after them, so it keeps running when one of them
 stops; each enclosing piece is started in its own right too, and runs until
 it is stopped itself or the runtime ends, as a piece an event's auto-load
