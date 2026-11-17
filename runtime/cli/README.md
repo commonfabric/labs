@@ -3406,10 +3406,12 @@ machine never joined an index, a deploy makes no index call and says so once.
 The index write never changes a deploy's outcome: a failure is reported in one
 line and the deploy's exit status stands.
 
-When the person's sharing setting (kept by the index; Loom's settings change it)
-says to share what they build, the index also asks its privacy check to share
-each new version anonymously, and the deploy's line says so. With it off,
-versions stay private. The index write follows the deploy's commit and never
+A deploy never shares a version, whatever the person's sharing setting says:
+drafts land many times an hour, and a pattern is worth sharing once it works,
+which `cf pattern share` marks. When the setting (kept by the index; Loom's
+settings change it) asks that what the person builds be shared, the deploy's
+line says to run `cf pattern share` once the pattern works, and `--json` carries
+it as `shareWhenReady`. The index write follows the deploy's commit and never
 changes its outcome, but the command waits for it before exiting.
 
 `cf pattern history` lists the person's lineages; `cf pattern history <entry>`

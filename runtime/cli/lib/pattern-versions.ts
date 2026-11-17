@@ -2,18 +2,20 @@
  * Private versions: every deploy of a person's own pattern from `cf` (`cf
  * piece new <file>`, `cf piece setsrc`) is kept in the pattern index as a
  * version only they can read, so they get history and rollback without git
- * and without ever running a save command. The index shares a version
- * anonymously on its own when the person's sharing setting says to, after
- * its privacy gardener passes it; `cf` only reports what it did.
+ * and without ever running a save command.
+ *
+ * A deploy never shares. Drafts land many times an hour, and a pattern is
+ * worth others' time, and the privacy gardener's, once it works, which
+ * `cf pattern share` marks. When the person's sharing setting asks that what
+ * they build be shared, the deploy's line says to run it then.
  *
  * The index is never in the deploy's way. The version is recorded after the
  * deploy commits, a failure is reported in one line and never changes the
  * deploy's outcome, and a machine that never joined an index makes no index
  * call at all: it is told so once, and then nothing.
  *
- * A pattern is recognized across deploys by its entry file: the lineage's
- * slot is a hash of the file's absolute path, so the index never stores the
- * person's directory names.
+ * A pattern is recognized across deploys by its entry file, through the
+ * lineage slot {@link entrySlot} computes.
  */
 
 import {
@@ -32,12 +34,14 @@ import {
   PatternIndexError,
   type PatternIndexLineage,
   type PatternIndexPublishResponse,
+  type PatternIndexSharingSettings,
 } from "@commonfabric/pattern-index/client";
 import {
   patternDocMetadata,
   publishRequestFor,
 } from "@commonfabric/pattern-index/publish";
 import type { PatternIndexStore } from "@commonfabric/pattern-index/store";
+import { shellWord } from "./shell-quote.ts";
 
 /** The git checkout a file is in: its top directory and `origin` remote. */
 export interface GitCheckout {
@@ -177,6 +181,16 @@ export type VersionOutcome =
     created: boolean;
 
     response: PatternIndexPublishResponse;
+
+    /** The entry file, as the deploy named it. */
+    entry: string;
+
+    /**
+     * Whether the person's sharing setting asks that what they build be
+     * shared: a deploy keeps every version private, and
+     * `cf pattern share` shares one once it works.
+     */
+    shareWhenReady: boolean;
   }
   | {
     status: "not-joined";
@@ -236,7 +250,8 @@ export async function recordDeployedVersion(
     }
     const entry = resolve(deployed.entry);
     const client = await deps.openClient();
-    if (!await keepsVersions(client, deps.store)) {
+    const settings = await sharingSettings(client, deps.store);
+    if (settings === "keeps no versions") {
       return {
         status: "skipped",
         reason: "this pattern index does not keep private versions yet",
@@ -270,6 +285,9 @@ export async function recordDeployedVersion(
       }
     }
     const doc = patternDocMetadata(await deps.readTextFile(entry));
+    // Every deploy stays private, whatever the sharing setting says: a
+    // pattern is shared at a point where it works, which `cf pattern share`
+    // marks, never as each draft lands.
     const response = await client.publishPattern({
       ...publishRequestFor({
         patternId,
@@ -285,33 +303,49 @@ export async function recordDeployedVersion(
       }),
       slot,
       origin: "self",
+      keepPrivate: true,
     });
-    return { status: "recorded", created: response.created, response };
+    const setting = await settings;
+    return {
+      status: "recorded",
+      created: response.created,
+      response,
+      entry: deployed.entry,
+      shareWhenReady: setting?.enabled === true && setting.selfBuilt === true,
+    };
   } catch (error) {
     return { status: "failed", reason: failureReason(error) };
   }
 }
 
 /**
- * Whether the index keeps private versions, asked once and remembered: an
- * index from before them answers its sharing setting with 404, and would
- * store a deploy's source where anyone may fetch it by id.
+ * The person's sharing setting, read alongside the version it informs, or
+ * `"keeps no versions"` for an index from before private versions, which
+ * answers it with 404 and would store a deploy's source where anyone may
+ * fetch it by id. The first answer is remembered, so only the first deploy
+ * against an index waits for the read before sending anything; a later read
+ * that fails answers `undefined`.
  */
-const keepsVersions = async (
+const sharingSettings = async (
   client: Pick<PatternIndexClient, "getSharingSettings">,
   store: PatternIndexStore,
-): Promise<boolean> => {
-  if (await store.keepsVersions()) return true;
+): Promise<
+  Promise<PatternIndexSharingSettings | undefined> | "keeps no versions"
+> => {
+  if (await store.keepsVersions()) {
+    return client.getSharingSettings().catch(() => undefined);
+  }
+  let settings: PatternIndexSharingSettings;
   try {
-    await client.getSharingSettings();
+    settings = await client.getSharingSettings();
   } catch (error) {
     if (error instanceof PatternIndexError && error.status === 404) {
-      return false;
+      return "keeps no versions";
     }
     throw error;
   }
   await store.recordKeepsVersions();
-  return true;
+  return Promise.resolve(settings);
 };
 
 /** A failure in words the person can act on, quoting no index detail. */
@@ -342,12 +376,16 @@ export function versionLine(outcome: VersionOutcome): string | undefined {
       return `Version not kept: ${outcome.reason}. The deploy itself succeeded.`;
     case "recorded": {
       const { response } = outcome;
-      if (!outcome.created) {
-        return "No new version: your newest one already has this source.";
-      }
-      return `Kept as version ${response.seq ?? "?"} (${
-        shareNote(response)
-      }); cf pattern history lists them.`;
+      const kept = outcome.created
+        ? `Kept as private version ${
+          response.seq ?? "?"
+        }; cf pattern history lists them.`
+        : "No new version: your newest one already has this source.";
+      return outcome.shareWhenReady && response.visibility === "private"
+        ? `${kept} Your sharing setting shares what you build: once it works, run cf pattern share ${
+          shellWord(outcome.entry)
+        }.`
+        : kept;
     }
   }
 }
@@ -363,10 +401,7 @@ export function versionJson(outcome: VersionOutcome): Record<string, unknown> {
         ...(response.visibility === undefined
           ? {}
           : { visibility: response.visibility }),
-        ...(response.autoShare === undefined
-          ? {}
-          : { autoShare: response.autoShare }),
-        ...(response.reason === undefined ? {} : { reason: response.reason }),
+        shareWhenReady: outcome.shareWhenReady,
       };
     }
     case "not-joined":
@@ -376,24 +411,6 @@ export function versionJson(outcome: VersionOutcome): Record<string, unknown> {
       return { status: outcome.status, reason: outcome.reason };
   }
 }
-
-/** What the index did about sharing a version, in a few words. */
-const shareNote = (response: PatternIndexPublishResponse): string => {
-  switch (response.autoShare) {
-    case "requested":
-      return "private; shared anonymously once the privacy check passes";
-    case "already_shared":
-      return "shared";
-    case "not_eligible":
-      return `private; not shared${
-        response.reason === undefined ? "" : `: ${response.reason}`
-      }`;
-    case "sharing_off":
-    case "kept_private":
-    case undefined:
-      return "private";
-  }
-};
 
 /** The caller's lineage kept for `entry`, or `undefined` for none yet. */
 export async function lineageForEntry(

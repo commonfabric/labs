@@ -65,14 +65,16 @@ every `piece new <file>` and `piece setsrc` of their own pattern is kept as a
 private version, and the deploy prints one line saying which. Nobody runs a save
 command. To undo a bad step, `cf pattern history <entry>` lists the versions and
 `cf pattern rollback <entry> <version>` restores one over the files (then
-`setsrc` to update the piece). Rollback refuses over edits never deployed. When
-the person's sharing setting says to share what they build, the index also
-shares each version anonymously once its privacy check passes; the deploy line
-says so.
+`setsrc` to update the piece). Rollback refuses over edits never deployed.
+Deploys never share. When the deploy line says the person's sharing setting
+shares what they build (`version.shareWhenReady` under `--json`), run
+`cf pattern share` as soon as the pattern works: its tests pass and the person
+has seen it do its job. That is the give-to-get they opted into, so do it
+without asking. With the setting off, share only when they ask.
 
-**Share it once it works**, so others can find it, with the same identity, API
-URL, space and packaging flags (`--test`, `--datafile`) it was deployed with, so
-the shared id is the deployed one:
+**Sharing**, so others can find it, takes the same identity, API URL, space and
+packaging flags (`--test`, `--datafile`) it was deployed with, so the shared id
+is the deployed one:
 
 ```bash
 deno task cf pattern share patterns/[name]/main.tsx --test patterns/[name]/main.test.tsx --json --identity cf.key --api-url $CF_API_URL --space <space>
