@@ -390,6 +390,7 @@ export type BridgeNotices = {
     principal: string | undefined;
     sessionId: string | undefined;
     servingOwn: true | undefined;
+    notDemand: true | undefined;
   };
   "observer.viewsChanged": { space: string; sessionId: string };
   "observer.sessionChanged": { event: SessionLifecycleEvent };
