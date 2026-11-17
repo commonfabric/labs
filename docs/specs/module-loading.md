@@ -996,10 +996,12 @@ cell's contents. The cache is designed around this:
     preparation, ahead of the transaction that verifies the closure: a served
     instantiation, a controller's creation, the children a handler returns,
     and a supplied source compiled into a space for a wish's sidecar, which
-    the sidecar's creation in the wish's own transaction then reads. Not
-    repaired first: a child a pattern's own graph places in another space,
-    whose closure no load prepares there. Its creation reads a stamped
-    record as before.
+    the sidecar's creation in the wish's own transaction then reads. A
+    supplied source is compiled once per space in a session, so a record an
+    older runtime stamps again later in that session is not repaired before
+    the next sidecar created from it. Not repaired first: a child a
+    pattern's own graph places in another space, whose closure no load
+    prepares there. Its creation reads a stamped record as before.
 - **Fail-closed, not fail-hard.** A compiled document with a missing or invalid
   integrity label is treated as a **cache miss** and recompiled from the
   (self-verifying) source set, which re-runs the SES verifier. So the verifier
