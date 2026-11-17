@@ -1,0 +1,403 @@
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+
+import {
+  buildHifiPrompt,
+  buildRewritePrompt,
+  gradeItems,
+  heldOutExamples,
+  type HifiState,
+  type HistoryEntry,
+  type Item,
+  type ItemRow,
+  judgeProposal,
+  labelWith,
+  markdownOf,
+  MAX_RULES,
+  newSurprises,
+  rewriteStatus,
+  scoreRules,
+  settle,
+  splitOf,
+  summarize,
+} from "./induction.ts";
+import { type CanonicalRule, checkRule } from "./rule-grammar.ts";
+
+/** A rule in canonical form, failing the test when it is refused. */
+function rule(field: string, pattern: string, predicts = true): CanonicalRule {
+  const check = checkRule({ field, pattern, predicts });
+  if (!check.ok) throw new Error(check.reason);
+  return check.rule;
+}
+
+const item = (id: string, subject: string): Item => ({
+  id,
+  fields: { subject },
+});
+
+const answered = (id: string, label: boolean): HifiState => ({
+  id,
+  pending: false,
+  result: { label, reasoning: "because" },
+});
+
+// With 30% held out, mail-6, mail-7, mail-12, and mail-13 are held out and
+// mail-1 to mail-5, mail-8, and mail-9 train; a test below pins this.
+const HELD_OUT = ["mail-6", "mail-7", "mail-12", "mail-13"];
+const TRAIN = ["mail-1", "mail-2", "mail-3", "mail-4", "mail-5", "mail-8"];
+
+describe("splitOf", () => {
+  it("is stable and puts about the asked share on each side", () => {
+    for (const id of HELD_OUT) expect(splitOf(id, 30)).toBe("heldout");
+    for (const id of TRAIN) expect(splitOf(id, 30)).toBe("train");
+    const ids = Array.from({ length: 1000 }, (_, i) => `id-${i}`);
+    const heldOut = ids.filter((id) => splitOf(id, 30) === "heldout").length;
+    expect(heldOut).toBeGreaterThan(250);
+    expect(heldOut).toBeLessThan(350);
+    expect(ids.every((id) => splitOf(id, 0) === "train")).toBe(true);
+  });
+});
+
+describe("labelWith", () => {
+  const rules = [
+    rule("subject", "invoice|bill"),
+    rule("subject", "spam", false),
+  ];
+
+  it("says YES when a YES rule matches and no NO rule does", () => {
+    expect(labelWith(rules, { subject: "Your INVOICE" })).toBe(true);
+    expect(labelWith(rules, { subject: "spam invoice" })).toBe(false);
+    expect(labelWith(rules, { subject: "hello" })).toBe(false);
+    expect(labelWith(rules, { body: "invoice" })).toBe(false);
+    expect(labelWith([], { subject: "invoice" })).toBe(false);
+  });
+
+  it("skips a seeded rule that is outside the grammar or unsafe", () => {
+    const seeded: CanonicalRule[] = [
+      { field: "subject", pattern: "(a)\\1", predicts: true, key: "x" },
+      { field: "subject", pattern: "(a+)+", predicts: true, key: "y" },
+    ];
+    expect(labelWith(seeded, { subject: "aa" })).toBe(false);
+  });
+});
+
+describe("gradeItems", () => {
+  const items = [
+    item("mail-1", "invoice"),
+    item("mail-2", "hello"),
+    item("mail-3", "bill"),
+    item("mail-4", "pending"),
+  ];
+  const hifi: HifiState[] = [
+    answered("mail-1", true),
+    answered("mail-2", false),
+    answered("mail-3", true),
+    { id: "mail-4", pending: true },
+  ];
+
+  it("marks a surprise only where a hi-fi label disagrees", () => {
+    const rows = gradeItems(items, hifi, [rule("subject", "invoice")], 30);
+    expect(rows.map((row) => [row.id, row.hifi, row.lofi, row.surprise]))
+      .toEqual([
+        ["mail-1", true, true, false],
+        ["mail-2", false, false, false],
+        ["mail-3", true, false, true],
+        ["mail-4", null, false, false],
+      ]);
+  });
+
+  it("ignores a failed or malformed hi-fi answer", () => {
+    const rows = gradeItems(
+      items.slice(0, 2),
+      [
+        { id: "mail-1", pending: false, error: "down" },
+        { id: "mail-2", pending: false, result: { label: "yes" } },
+      ],
+      [],
+      30,
+    );
+    expect(rows.map((row) => row.hifi)).toEqual([null, null]);
+    expect(rows.some((row) => row.surprise)).toBe(false);
+  });
+
+  it("summarizes agreement over labelled items", () => {
+    const rows = gradeItems(items, hifi, [rule("subject", "invoice")], 30);
+    expect(summarize(rows)).toEqual({
+      items: 4,
+      labelled: 3,
+      agreements: 2,
+      surprises: 1,
+      agreementRate: 2 / 3,
+      heldOut: 0,
+    });
+    expect(summarize([]).agreementRate).toBe(null);
+  });
+});
+
+/** Rows as grading would give them, from `[id, subject, hifi]`. */
+function rows(
+  entries: Array<[string, string, boolean]>,
+  rules: CanonicalRule[] = [],
+): ItemRow[] {
+  return gradeItems(
+    entries.map(([id, subject]) => item(id, subject)),
+    entries.map(([id, , label]) => answered(id, label)),
+    rules,
+    30,
+  );
+}
+
+/** Held-out examples where only "invoice" and "bill" subjects are YES. */
+const HELD_OUT_ROWS = rows([
+  ["mail-6", "Invoice 42", true],
+  ["mail-7", "Your bill is ready", true],
+  ["mail-12", "Lunch?", false],
+  ["mail-13", "Billing team offsite", false],
+]);
+
+describe("scoreRules", () => {
+  it("scores F1 over YES", () => {
+    const examples = heldOutExamples(HELD_OUT_ROWS);
+    expect(examples.length).toBe(4);
+    expect(scoreRules([rule("subject", "invoice|\\bbill\\b")], examples).f1)
+      .toBe(1);
+    expect(scoreRules([rule("subject", "invoice")], examples).f1).toBeCloseTo(
+      2 / 3,
+    );
+    expect(scoreRules([rule("subject", "bill")], examples).recall).toBe(0.5);
+    expect(scoreRules([], examples).f1).toBe(0);
+  });
+});
+
+describe("judgeProposal", () => {
+  const heldOut = heldOutExamples(HELD_OUT_ROWS);
+  const current = [rule("subject", "invoice")];
+  const proposal = (...rules: unknown[]) => ({ rules, reasoning: "r" });
+
+  it("accepts a valid set that scores strictly better", () => {
+    const judgement = judgeProposal(
+      current,
+      proposal(
+        { field: "subject", pattern: "Invoice|\\bBILL\\b", predicts: true },
+      ),
+      heldOut,
+    );
+    expect(judgement.accepted).toBe(true);
+    expect(judgement.proposedF1).toBe(1);
+    expect(judgement.rules.map((r) => r.pattern)).toEqual([
+      "\\bbill\\b|invoice",
+    ]);
+  });
+
+  it("keeps the current set on a tie", () => {
+    const judgement = judgeProposal(
+      current,
+      proposal({ field: "subject", pattern: "INVOICE", predicts: true }),
+      heldOut,
+    );
+    expect(judgement.accepted).toBe(false);
+    expect(judgement.reason).toMatch(/not better/);
+  });
+
+  it("rejects a set that scores worse", () => {
+    const judgement = judgeProposal(
+      current,
+      proposal({ field: "subject", pattern: "bill", predicts: true }),
+      heldOut,
+    );
+    expect(judgement.accepted).toBe(false);
+    expect(judgement.proposedF1).toBeLessThan(judgement.currentF1);
+  });
+
+  it("rejects the whole set when one rule is out of grammar or unsafe", () => {
+    const outOfGrammar = judgeProposal(
+      current,
+      proposal(
+        { field: "subject", pattern: "invoice|\\bbill\\b", predicts: true },
+        { field: "subject", pattern: "(?<=re: )bill", predicts: true },
+      ),
+      heldOut,
+    );
+    expect(outOfGrammar.accepted).toBe(false);
+    expect(outOfGrammar.refusals).toEqual([
+      "rule 2: lookaround is not allowed",
+    ]);
+
+    const unsafe = judgeProposal(
+      current,
+      proposal(
+        { field: "subject", pattern: "invoice|\\bbill\\b", predicts: true },
+        { field: "subject", pattern: "(bill|bills)+", predicts: true },
+      ),
+      heldOut,
+    );
+    expect(unsafe.accepted).toBe(false);
+    expect(unsafe.refusals[0]).toMatch(/backtrack/);
+  });
+
+  it("rejects malformed and oversized proposals", () => {
+    expect(judgeProposal(current, null, heldOut).accepted).toBe(false);
+    expect(judgeProposal(current, { rules: "x" }, heldOut).accepted).toBe(
+      false,
+    );
+    const many = Array.from(
+      { length: MAX_RULES + 1 },
+      (_, i) => ({ field: "subject", pattern: `w${i}`, predicts: true }),
+    );
+    expect(judgeProposal(current, { rules: many }, heldOut).reason).toMatch(
+      /more than/,
+    );
+  });
+
+  it("accepts nothing without held-out examples", () => {
+    const judgement = judgeProposal(
+      [],
+      proposal({ field: "subject", pattern: "invoice", predicts: true }),
+      [],
+    );
+    expect(judgement.accepted).toBe(false);
+    expect(judgement.reason).toMatch(/no held-out/);
+  });
+
+  it("collapses rules that are the same in canonical form", () => {
+    const judgement = judgeProposal(
+      [],
+      proposal(
+        { field: "subject", pattern: "invoice", predicts: true },
+        { field: "subject", pattern: "(INVOICE)", predicts: true },
+      ),
+      heldOut,
+    );
+    expect(judgement.rules.length).toBe(1);
+  });
+});
+
+describe("rewrite gating", () => {
+  const training = rows([
+    ["mail-1", "invoice", true],
+    ["mail-2", "bill due", true],
+    ["mail-3", "statement", true],
+    ["mail-4", "hi", false],
+  ]);
+
+  it("asks only once enough surprises are new", () => {
+    expect(newSurprises(training, [])).toEqual(["mail-1", "mail-2", "mail-3"]);
+    expect(buildRewritePrompt("Is it a bill?", [], training, [], 4)).toBe("");
+    const prompt = buildRewritePrompt("Is it a bill?", [], training, [], 3);
+    expect(prompt).toContain("Question: Is it a bill?");
+    expect(prompt).toContain('{"subject":"bill due"} → YES');
+    expect(prompt).toContain('{"subject":"hi"} → NO');
+    expect(buildRewritePrompt("  ", [], training, [], 1)).toBe("");
+  });
+
+  it("never shows the model a held-out example", () => {
+    const prompt = buildRewritePrompt(
+      "Is it a bill?",
+      [],
+      [...training, ...HELD_OUT_ROWS],
+      [],
+      1,
+    );
+    expect(prompt).not.toContain("Invoice 42");
+  });
+
+  it("counts surprises a judged round answered as old", () => {
+    const history: HistoryEntry[] = [{
+      round: 1,
+      accepted: false,
+      reason: "r",
+      proposed: [],
+      refusals: [],
+      currentF1: 0,
+      proposedF1: 0,
+      heldOut: 0,
+      answered: ["mail-1", "mail-2"],
+      decidedAt: 0,
+    }];
+    expect(newSurprises(training, history)).toEqual(["mail-3"]);
+    expect(buildRewritePrompt("Is it a bill?", [], training, history, 3)).toBe(
+      "",
+    );
+  });
+
+  it("reports where the rewrite stands", () => {
+    expect(rewriteStatus("", { pending: false }, [], training)).toEqual({
+      status: "idle",
+    });
+    expect(rewriteStatus("p", { pending: true }, [], training).status).toBe(
+      "pending",
+    );
+    expect(rewriteStatus("p", { pending: false }, [], training).status).toBe(
+      "pending",
+    );
+    const failed = rewriteStatus(
+      "p",
+      { pending: false, error: "down" },
+      [],
+      training,
+    );
+    expect(failed.status === "ready" && failed.judgement.accepted).toBe(false);
+  });
+});
+
+describe("settle", () => {
+  const current = [rule("subject", "invoice")];
+  const judgement = judgeProposal(current, {
+    rules: [{
+      field: "subject",
+      pattern: "invoice|\\bbill\\b",
+      predicts: true,
+    }],
+  }, heldOutExamples(HELD_OUT_ROWS));
+
+  it("adopts an accepted set and records the round", () => {
+    const next = settle(current, [], judgement, ["mail-1"], 1000);
+    expect(next.rules).toEqual(judgement.rules);
+    expect(next.history).toEqual([{
+      round: 1,
+      accepted: true,
+      reason: judgement.reason,
+      proposed: judgement.rules,
+      refusals: [],
+      currentF1: judgement.currentF1,
+      proposedF1: 1,
+      heldOut: 4,
+      answered: ["mail-1"],
+      decidedAt: 1000,
+    }]);
+  });
+
+  it("keeps the current set when the round was rejected", () => {
+    const next = settle(
+      current,
+      [],
+      { ...judgement, accepted: false },
+      [],
+      0,
+    );
+    expect(next.rules).toEqual(current);
+    expect(next.history[0].accepted).toBe(false);
+  });
+});
+
+describe("prompts and text", () => {
+  it("asks the hi-fi model nothing without a goal", () => {
+    expect(buildHifiPrompt("", item("a", "x"))).toBe("");
+    expect(buildHifiPrompt("Is it a bill?", item("a", "x"))).toContain(
+      '"subject": "x"',
+    );
+  });
+
+  it("projects what the pattern holds as Markdown", () => {
+    const text = markdownOf(
+      "Is it a bill?",
+      summarize(HELD_OUT_ROWS),
+      [rule("subject", "invoice")],
+      2 / 3,
+      [],
+    );
+    expect(text).toContain("# Is it a bill?");
+    expect(text).toContain("- `subject: /invoice/i → YES`");
+    expect(text).toContain("held-out F1 67%");
+  });
+});
