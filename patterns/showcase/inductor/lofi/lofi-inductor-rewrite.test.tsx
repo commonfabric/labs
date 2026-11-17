@@ -103,10 +103,15 @@ export default pattern(() => {
 
   // "Your bill is ready", "Bill for March", and "Electricity bill" are bills
   // the invoice-only rules miss: three new surprises, past the two a rewrite
-  // waits for
+  // waits for. Every inductor that is later settled is read here, because an
+  // assertion is what asks for its model calls: without server execution, a
+  // piece nothing reads makes no calls, and its `settleRewrite` would find
+  // nothing ready.
   const assert_surprised = assert(() =>
-    better.summary.labelled === 8 && better.summary.surprises === 3 &&
-    better.rewrite.status === "ready"
+    [better, worse, unsafe, outOfGrammar].every((piece) =>
+      piece.summary.labelled === 8 && piece.summary.surprises === 3 &&
+      piece.rewrite.status === "ready"
+    )
   );
 
   // Judged, but nothing recorded yet: a computed does not write
@@ -231,5 +236,8 @@ export default pattern(() => {
       { render: unsafe[UI] },
       { assertion: assert_view_shows_refusal },
     ],
+    // The flaky inductor's first rewrite call fails on purpose, and the model
+    // client warns about it when it runs in this process.
+    allowConsoleWarnings: true,
   };
 });
