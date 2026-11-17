@@ -2015,6 +2015,11 @@ export const runPatternTool: HarnessToolDefinition<
           const madeForPerson = context.patternIndexOrigin === "agent"
             ? await deployedPieceRef(space, piece.id)
             : undefined;
+          if (signal?.aborted) {
+            return cancelledOutput(
+              `the pattern ran and created piece ${piece.id}, which is not undone; it was not contributed to the pattern index`,
+            );
+          }
           const request: PatternIndexPublishRequest = {
             patternId: entryIdentity,
             ...(madeForPerson !== undefined

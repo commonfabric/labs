@@ -2093,6 +2093,14 @@ export const parseCfHarnessCliArgs = async (
     throw new Error("--pattern-index-url requires a non-empty value");
   }
   let patternIndex: HarnessPatternIndexConfig | undefined;
+  if (
+    args["pattern-index-origin"] !== undefined &&
+    (rawPatternIndexUrl === undefined || rawPatternIndexUrl === "")
+  ) {
+    throw new Error(
+      "--pattern-index-origin needs --pattern-index-url: an origin says who a published pattern is for",
+    );
+  }
   if (rawPatternIndexUrl !== undefined) {
     try {
       new URL(rawPatternIndexUrl);

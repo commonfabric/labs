@@ -202,12 +202,14 @@ const answerRequest = async (
             error: "view needs a patternId or a piece, exactly one",
           };
         }
-        return {
-          ok: true,
-          value: await client.recordUsageEvent({
-            ...subject,
-            eventType: "viewed_in_loom",
-          }),
+        const viewed = await client.recordUsageEvent({
+          ...subject,
+          eventType: "viewed_in_loom",
+        });
+        return viewed.ok ? { ok: true, value: viewed } : {
+          ok: false,
+          status: 502,
+          error: "the index did not take the view",
         };
       }
       case "getSharing":

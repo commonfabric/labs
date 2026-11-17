@@ -367,6 +367,15 @@ describe("cli", () => {
     );
   });
 
+  it("answers 502 for a view the index answered ok:false", async () => {
+    reply = () => Response.json({ ok: false });
+    const output = await callHelper(directory, baseUrl, {
+      op: "view",
+      piece: "piece:abc",
+    });
+    expect(JSON.parse(output.stdout)).toMatchObject({ ok: false, status: 502 });
+  });
+
   it("refuses a view naming both, neither, or a piece that is not a piece key, calling nothing", async () => {
     for (
       const request of [

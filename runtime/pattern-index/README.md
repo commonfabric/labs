@@ -54,7 +54,7 @@ or the checkout's `deno.jsonc` through its vendor-config helper.
 
 The identity file contains PKCS#8 bytes. The helper reads one JSON value until
 stdin closes, writes one JSON answer followed by a newline on stdout, and exits.
-Its only operations are:
+Its operations are:
 
 - Search: `{"op":"search","text":"calendar","limit":10,"tags":["time"]}`. Search
   fields are optional and use the read frontend's shaping: string text, numeric
@@ -66,6 +66,25 @@ Its only operations are:
   "eventType":"thumbs_up","recordedBy":"did:key:..."}}`.
   The author comes from the signer. Extra input fields, including `did` and
   `note`, are omitted.
+- View: `{"op":"view","piece":"piece:<sha256 hex>"}` or
+  `{"op":"view","patternId":"..."}`, exactly one. It records the signer's
+  `viewed_in_loom`: a piece key (`deployedPieceRef`) settles the version of
+  theirs deployed to that piece, which shares it under their sharing setting,
+  and ranks nothing. A pattern id ranks a pattern the person placed from the
+  index. The result is the index's answer,
+  `{"ok":true,"value":{"ok":true,
+  "recorded":false,"settled":{...}}}`; an
+  index answer of `ok:false` returns status 502.
+- Sharing settings: `{"op":"getSharing"}` reads the signer's member's
+  give-to-get settings, and `{"op":"setSharing","enabled":false}` changes them,
+  sending only the switches given (`enabled`, `selfBuilt`, each a boolean; at
+  least one). Both answer
+  `{"ok":true,"value":{"enabled":true,"selfBuilt":true,
+  "receivesAnonymous":true,"updatedAt":null}}`,
+  as the index answered it.
+
+Membership operations (`whoami`, `admit`, `join`) are described with the
+membership store below.
 
 A refused request returns `{"ok":false,"status":400,"error":"..."}`. Index 4xx
 statuses pass through, including distinct 401 signature failures and 403

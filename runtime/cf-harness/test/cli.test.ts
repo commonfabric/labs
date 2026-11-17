@@ -1309,6 +1309,10 @@ Deno.test("parseCfHarnessCliArgs refuses an unknown output mode, prompt slot rol
         ["--pattern-index-url", "  "],
         "--pattern-index-url requires a non-empty value",
       ],
+      [
+        ["--pattern-index-origin", "agent"],
+        "--pattern-index-origin needs --pattern-index-url",
+      ],
     ] as const
   ) {
     await assertRejects(

@@ -1617,8 +1617,9 @@ export class ConsoleServer {
    * reason.
    *
    * The index client is the other way round: it reads the fabric identity from
-   * disk to sign with, so it is built lazily, cached once healthy, and handed
-   * in by a test that has no keyfile to read.
+   * disk to sign with, so it is built lazily, afresh for each use (it carries
+   * the member's chain as of its building; each run's engine keeps its own
+   * for the run), and handed in by a test that has no keyfile to read.
    */
   constructor(
     config: ConsoleConfig,
