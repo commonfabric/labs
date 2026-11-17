@@ -397,6 +397,14 @@ const withStreamedOutput = (
     : terminal;
 };
 
+/**
+ * Which of the retry schedule's attempts `attempt` is. The attempt a refused
+ * token was issued again as is outside the schedule, so every attempt from it
+ * on is one earlier in the schedule than its number.
+ */
+const scheduledAttempt = (exchange: CodexExchange, attempt: number): number =>
+  exchange.reissued === undefined ? attempt : attempt - 1;
+
 export class OpenAICodexResponsesClient implements HarnessModelClient {
   readonly providerId = "openai-codex";
   readonly credentialOwner?: HarnessCredentialOwnerRef;
@@ -645,7 +653,10 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
         continue;
       }
       if (outcome.retry === undefined) throw outcome.error;
-      await this.#retrySchedule.waitBefore(attempt + 1, request.signal);
+      await this.#retrySchedule.waitBefore(
+        scheduledAttempt(exchange, attempt) + 1,
+        request.signal,
+      );
     }
   }
 
@@ -681,7 +692,9 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
    * Issues and records one exchange, which `interruption` cuts off as an
    * interrupted stream. An unbounded transient failure carries a retry kind
    * when its schedule has an attempt left. Bounded calls, aborts and protocol
-   * failures end without another provider attempt.
+   * failures end without another provider attempt, with one exception that
+   * holds for bounded calls too: a request whose access token the provider
+   * refused (a 401) is issued once more with a refreshed token.
    */
   async #issue(
     exchange: CodexExchange,
@@ -720,9 +733,11 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
         serializedBytes: textBytes(body),
       },
     };
-    // Bounded and aborted calls record no retry. The abort itself is thrown
-    // after the failure record, so one arriving during the write is reported
-    // as cancellation rather than a provider failure.
+    // Bounded and aborted calls record no scheduled retry. A refused token's
+    // reissue is not one: it is recorded, and made, for a bounded call too.
+    // The abort itself is thrown after the failure record, so one arriving
+    // during the write is reported as cancellation rather than a provider
+    // failure.
     const failed = async (
       kind: HarnessTransientFailureKind | undefined,
       record: Omit<HarnessModelAttemptDiagnostic, keyof typeof attemptBase>,
@@ -743,7 +758,10 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
       }
       const retry = bounded || request.signal?.aborted
         ? undefined
-        : this.#retrySchedule.retryAfter(attempt, kind);
+        : this.#retrySchedule.retryAfter(
+          scheduledAttempt(exchange, attempt),
+          kind,
+        );
       await emitAttempt(request.onAttempt, {
         ...attemptBase,
         ...record,

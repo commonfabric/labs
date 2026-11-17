@@ -2203,6 +2203,59 @@ Deno.test("Codex Responses records the refusal when the caller aborts during the
   }
 });
 
+Deno.test("Codex Responses keeps the whole retry schedule for the request a refused token is issued again as", async () => {
+  const delays: number[] = [];
+  const attempts: HarnessModelAttemptDiagnostic[] = [];
+  const responses = [
+    refusedToken(),
+    new Response("unavailable", { status: 503 }),
+    completedHello(),
+  ];
+  const client = new OpenAICodexResponsesClient({
+    transportRetries: 1,
+    transportRetryDelayMs: 100,
+    transportRetryDelay: (ms) => {
+      delays.push(ms);
+      return Promise.resolve();
+    },
+    credentialResolver: {
+      resolve: () => Promise.resolve(credential),
+      refreshRejected: () =>
+        Promise.resolve({ credential: refreshedCredential, fresh: true }),
+    },
+    fetchFn: () => {
+      const next = responses.shift();
+      if (next === undefined) throw new Error("unexpected request");
+      return Promise.resolve(next);
+    },
+  });
+
+  const result = await client.complete({
+    ...helloRequest,
+    onAttempt: (attempt) => {
+      attempts.push(attempt);
+    },
+  });
+
+  // the refusal used none of the schedule: its one retry is still there, at
+  // the first backoff
+  assertEquals(result.assistant.content, "hello");
+  assertEquals(delays, [100]);
+  assertEquals(
+    attempts.map((a) => [
+      a.attempt,
+      a.maxTransportAttempts,
+      a.httpStatus,
+      a.retry,
+    ]),
+    [
+      [1, 3, 401, { kind: "credential_refused", delayMs: 0 }],
+      [2, 3, 503, { kind: "http_status", delayMs: 100 }],
+      [3, 3, 200, undefined],
+    ],
+  );
+});
+
 Deno.test("Codex Responses marks a credential whose refreshed token is refused too", async () => {
   const { client, seen } = rejectionHarness(
     [refusedToken(), refusedToken()],
