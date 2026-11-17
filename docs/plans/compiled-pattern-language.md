@@ -1485,11 +1485,15 @@ is relitigated.
   construct.
 - Where a marker stands at a position that no listed path covers, the
   evaluation that fails is the one that stores the value, and not the
-  one that called `host.stream`. The output that holds the position
-  keeps the value that was stored before, and other outputs are not
-  affected. The same in an element body over an array of references,
-  over an array of plain values in place, and over the result of
-  another per-element construct.
+  one that called `host.stream`. What keeps the value that was stored
+  before is the top-level property of the result that holds the
+  position, for example the whole of `[UI]`, and not the nearest plan
+  entry above the position. An error is recorded on the instance, and
+  the other top-level properties of the result are not affected. The
+  same in an element body over an array of references, over an array
+  of plain values in place, and over the result of another
+  per-element construct: the rows of the other keys below the same
+  top-level property keep their stored values with it.
 - A stream that a function body returns into the result is allowed and
   not checked. A `lift` or a `computed` that returns a value holding
   the stream of a binding returns a reference and no marker, and the
@@ -2819,14 +2823,23 @@ leaves undetermined.
 164. **Which cone instance fails the check of a stream's position** (ES
      question 88). Settled by ruling: the evaluation that stores the
      value fails, also where another cone instance placed the marker
-     and passed it through an interim output. The output that holds
-     the position keeps the value stored before, and other outputs are
-     not affected: no output takes the error state. The same in an
-     element body over an array of references, over an array of plain
-     values in place, and over the result of another per-element
-     construct. *Assumed* beside it: the output is dropped as a derived
-     write that failed a constraint is, for the memo and for a cone
-     instance that read the staged value. The entry keeps its number.
+     and passed it through an interim output. Settled by ruling as
+     well: what keeps the value stored before is the top-level
+     property of the result that holds the position, for example the
+     whole of `[UI]`, with an error recorded on the instance, and not
+     the nearest plan entry above the position. The other top-level
+     properties are stored, and no output takes the error state. The
+     same in an element body over an array of references, over an
+     array of plain values in place, and over the result of another
+     per-element construct. The prototype's executor puts back the
+     nearest kept entry of `Plan.outputs`, for a cone of an element
+     body the row alone, and leaves a position with no entry above it
+     as it was (prototype notes 369 and 370). *Assumed* beside the
+     ruling: the form of the error, which names the binding, the
+     position and the property; and that the property is dropped as a
+     derived write that failed a constraint is, for the memo and for a
+     cone instance that read the staged value. The entry keeps its
+     number.
 
 165. **A stream that a function body returns into the result** (PL
      question 116). Settled by ruling: it is allowed and not checked.

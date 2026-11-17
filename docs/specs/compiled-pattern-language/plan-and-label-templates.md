@@ -1642,9 +1642,13 @@ result path stands for", below). A path below a
 conditional matches under either selection. A marker at a position that
 no listed path of its binding covers fails the evaluation. By ruling
 the evaluation that fails is the one that stores the value, also where
-another cone instance placed the marker, and the output that holds the
-position keeps the value and the label that were stored before. Other
-outputs are not affected, and none takes the error state of section 5.2
+another cone instance placed the marker. By ruling the top-level
+property of the result that holds the position, for example the whole
+of `$UI`, keeps the value and the labels that were stored before, at
+every path below it, and an error is recorded on the instance. The
+unit is not the nearest entry of `Plan.outputs` above the position.
+The other top-level properties of the result are not affected, and no
+output takes the error state of section 5.2
 (`execution-and-storage.md` §2.2, "What fails"). `Binding.result` is
 therefore what the label analysis and a reader of the plan rely on for
 where a stream of the instance is stored (section 3.1, "A binding with

@@ -198,8 +198,10 @@ The compiler emits two things for a pattern, content-addressed together.
   stores the value it writes the link to the stream in the marker's
   place, and fails the evaluation where the plan does not list the
   position for that binding. The evaluation that fails is the one that
-  stores the value, the output that holds the position keeps what was
-  stored before, and other outputs are not affected
+  stores the value. The top-level property of the result that holds
+  the position, for example the whole rendered tree, keeps what was
+  stored before, an error is recorded on the instance, and the other
+  top-level properties are not affected
   ([execution and storage](execution-and-storage.md), §2.2).
 - **The plan:** data describing the pattern. It holds the input slots and
   their schemas, the label template of each output path, the footprint of each

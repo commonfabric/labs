@@ -965,19 +965,31 @@ where.
 - **What fails.** A marker can be placed by one cone instance, passed
   through an interim output, and stored by another, as where a
   declaration cone computes a tree and the `result` cone stores it. By
-  ruling the evaluation that fails is the one that stores the value:
-  that of the cone instance whose output holds the position when the
-  value is stored, and not that of the cone instance that called
-  `host.stream`. The output that holds the position is not written. It
-  keeps the value, the label and the provenance record that are
-  stored, and where nothing is stored it holds nothing. Other outputs
-  are not affected: the other outputs of the same cone instance are
-  stored, and every other cone instance evaluated for the cause
-  commits. No output takes the error state. That is the outcome of a
-  derived write that is dropped, and not that of a failed cone
-  (section 1.7). *Assumed:* the memo, and a cone instance that read
-  the staged value, are treated as that item of section 1.7 treats
-  them for a derived write that failed a constraint (section 3.3).
+  ruling the evaluation that fails is the one that stores the value,
+  and not that of the cone instance that called `host.stream`. By
+  ruling what keeps its stored value is the top-level property of the
+  result that holds the position: for a marker anywhere in the
+  rendered tree, the whole of `$UI`. It is not the nearest entry of
+  `Plan.outputs` above the position, so a tree is never stored with
+  one subtree of an earlier evaluation in it. Nothing at or below
+  that property is written. Every path below it keeps the value, the
+  label and the provenance record that are stored, and where nothing
+  is stored the property holds nothing. An error is recorded on the
+  instance. The other top-level properties of the result are not
+  affected: they are stored, and every other cone instance evaluated
+  for the cause commits. No output takes the error state. That is
+  the outcome of a derived write that is dropped, and not that of a
+  failed cone (section 1.7). The rule covers a position that no entry
+  of `Plan.outputs` is at or above, such as a member of the result
+  that holds a stream and nothing a cone computes: the top-level
+  property is defined for every position. *Assumed* (question 88 of
+  section 11): the error names the binding, the position and the
+  property, is stored where the error state of a failed cone
+  instance of the instance is reported from, and is cleared by the
+  next evaluation that stores the property; and the memo, and a cone
+  instance that read the staged value, are treated as that item of
+  section 1.7 treats them for a derived write that failed a
+  constraint (section 3.3).
 - **What the list is for.** `Binding.result` stays the statement that
   the label analysis and a reader of the plan rely on for where a
   stream of the instance is stored, and it has to be complete.
@@ -1002,9 +1014,11 @@ of a per-element source: an array of references, an array of plain
 values in place, and the result of another per-element construct. The
 marker is replaced by the link to the stream of the instance's key in
 each, and the three differ only in how the key is computed (section
-2.5). The output that keeps its stored value where the check fails is
-that of the cone instance of the key whose output holds the position,
-and the outputs of the other keys are stored.
+2.5). What keeps its stored value where the check fails is the
+top-level property of the result in each: where the marker of one
+element key stands at a position that no listed path covers, the rows
+of the other keys below the same top-level property keep their stored
+values as well.
 
 The prototype's executor implements the marker, the replacement and the
 check. Its marker is a frozen object with no member, and the binding and
@@ -5551,19 +5565,29 @@ Added by the ruling that the scheduler is switched per space (section 9):
     value fails, which is that of the cone instance whose output holds
     the position when the value is stored, also where another cone
     instance called `host.stream` and passed the marker through an
-    interim output. That output keeps the value stored before, and
-    other outputs are not affected, those of the same cone instance
-    included. No output takes the error state. The same for a cone of
+    interim output. Not open either, by ruling: what keeps the value
+    stored before is the top-level property of the result that holds
+    the position, for example the whole of `$UI`, and not the nearest
+    entry of `Plan.outputs` above the position; an error is recorded
+    on the instance; and the other top-level properties are stored.
+    No output takes the error state. The same for a cone of
     an element body over an array of references, over an array of
     plain values in place, and over the result of another per-element
-    construct: the output that keeps its value is that of the key
-    whose output holds the position. The prototype's executor makes
-    the check where it stores the result document, and on a failure it
-    stores nothing of the result, where the ruling has the other
-    outputs stored. *Assumed* beside the ruling: the memo, and a cone
-    instance that read the staged value, are treated as for a derived
-    write that failed a constraint (sections 1.7 and 3.3). The entry
-    keeps its number.
+    construct: the rows of the other keys below the same top-level
+    property keep their stored values with it. The prototype's
+    executor puts back the stored value at the kept entry of
+    `Plan.outputs` with the longest path at or above the position, so
+    for a cone of an element body the row alone, and leaves a position
+    that no entry is above as it was, where the ruling has the
+    top-level property. It keeps the memo entry of the cone instance
+    that computed the value, markers included, so a reader of an
+    interim output of it gets the new value while the stored result
+    holds the old one. *Assumed* beside the ruling: the form of the
+    error, which names the binding, the position and the property and
+    is cleared by the next evaluation that stores the property; and
+    that the memo, and a cone instance that read the staged value, are
+    treated as for a derived write that failed a constraint (sections
+    1.7 and 3.3). The entry keeps its number.
 89. **Where the record of a key of a list is stored** (`elementById`;
     section 2.4). Not open, by ruling: as the runtime of today does,
     the record is a cell of its own, named by the address of the list
