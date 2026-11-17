@@ -48,6 +48,8 @@ import { proguardLanguage } from "../lib/view/languages/proguard/language.ts";
 import { iniLanguage } from "../lib/view/languages/ini/language.ts";
 import { orgLanguage } from "../lib/view/languages/org/language.ts";
 import { gitAttributesLanguage } from "../lib/view/languages/gitattributes/language.ts";
+import { leanLanguage } from "../lib/view/languages/lean/language.ts";
+import { leanToolchainLanguage } from "../lib/view/languages/lean-toolchain/language.ts";
 import { xmlLanguage } from "../lib/view/languages/xml/language.ts";
 import { binaryLanguage } from "../lib/view/languages/binary/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
@@ -155,6 +157,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("hcl"), hclLanguage);
   assertEquals(languageForName("opentofu"), hclLanguage);
   assertEquals(languageForName("terraform"), hclLanguage);
+  assertEquals(languageForName("lean"), leanLanguage);
+  assertEquals(languageForName("lean4"), leanLanguage);
+  assertEquals(languageForName("lean-toolchain"), leanToolchainLanguage);
   assertEquals(languageForName("shell"), shellLanguage);
   assertEquals(languageForName("sh"), shellLanguage);
   assertEquals(languageForName("bash"), shellLanguage);
@@ -191,6 +196,8 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "rust",
     "toml",
     "hcl",
+    "lean",
+    "lean-toolchain",
     "shell",
     "make",
     "properties",
@@ -229,6 +236,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "tofu",
     "terraform",
     "tf",
+    "lean",
+    "lean4",
+    "lean-toolchain",
     "shell",
     "sh",
     "bash",

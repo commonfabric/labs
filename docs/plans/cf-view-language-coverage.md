@@ -40,7 +40,9 @@ files of Python tools, has syntax highlighting and a structure tree of sections
 and the keys and hosts in each. Org mode has syntax highlighting, with each
 source block colored as the language it names, and a structure tree of
 headlines. Git attributes files have syntax highlighting and a structure tree
-of their patterns and macro definitions.
+of their patterns and macro definitions. Lean has syntax highlighting and a
+structure tree of namespaces, sections, and declarations, and a project's
+`lean-toolchain` file has highlighting of its own.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
@@ -61,15 +63,15 @@ remain outside diff editing and semantic source loading.
 
 Python, Swift, Kotlin, Rust, TOML, HCL, and shell run on Tree-sitter through a
 shared, language-neutral adapter, which Go and HTML will use as well. Java
-properties, INI, ProGuard rules, Git attributes, XML, makefiles, and Org mode
-use focused scanners.
+properties, INI, ProGuard rules, Git attributes, XML, makefiles, Org mode, and
+Lean use focused scanners.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
-JSON, JSONC, JSON Lines, YAML, Python, Swift, Kotlin, Rust, TOML, HCL, shell,
-makefile, Java properties, INI, ProGuard, Git attributes, XML, Org mode, and
-diff support to honest handling of every textual syntax in the active
+JSON, JSONC, JSON Lines, YAML, Python, Swift, Kotlin, Rust, TOML, HCL, Lean,
+shell, makefile, Java properties, INI, ProGuard, Git attributes, XML, Org mode,
+and diff support to honest handling of every textual syntax in the active
 `commonfabric` repositories.
 
 The frozen evidence is in the
@@ -628,13 +630,82 @@ including malformed and partially edited markup.
 
 ## Stage 6: Lean
 
-- [ ] Highlight `.lean`.
-- [ ] Recognize `lean-toolchain`.
-- [ ] Add structure for namespaces, sections, declarations, definitions,
+Lean is implemented ahead of Stage 3 and the rest of Stage 5. A November 13,
+2026 read of the local checkouts of the organization's repositories found Lean
+only in Specs: 398 `.lean` files and 2 `lean-toolchain` files, with 324
+path-change events on the Lean files and 1 on a toolchain file in the six months
+before the read.
+
+- [x] Highlight `.lean`.
+- [x] Recognize `lean-toolchain`.
+- [x] Add structure for namespaces, sections, declarations, definitions,
   theorems, and inductive types.
 
+Lean uses a focused scanner rather than Tree-sitter. No npm package carries a
+Tree-sitter Lean grammar, and a Lean file can extend its own grammar with
+notation, macros, and syntax declarations, so a fixed grammar cannot parse Lean
+in general. The scanner reads the lexical syntax that every Lean file shares:
+nested block comments and documentation comments; strings, with the code in
+the braces of an `s!`, `m!`, or `f!` string or a `throwError` or `dbg_trace`
+message colored as code; character, name, and number literals; identifiers,
+which may hold Greek letters, letter-like symbols such as `ℝ`, subscripts, and
+`«…»` escapes; keywords; and attribute names. The mathematical angle, white,
+and double brackets Lean uses take a nesting depth as ASCII brackets do.
+`.lean` selects the language. Tactic names are identifiers to the scanner,
+since a file's imports define them.
+
+A command keyword, such as `theorem`, `namespace`, or `open`, starts a command
+when it begins a line indented no further than the open declaration's first
+line. A declaration keyword also starts one after a modifier, an attribute, or
+`in` on its line. Any other word that begins such a line starts a command too,
+unless the token before it cannot end a term, as `:=`, `by`, `where`, and `,`
+cannot. So an `open … in` inside a proof stays part of the proof, and a command
+that a library defines, such as Mathlib's `notation3`, ends the declaration
+before it. Structure lists namespaces, sections, and `mutual` blocks, each
+closed by an `end`, and the definitions, theorems, lemmas, abbreviations,
+instances, examples, axioms, opaque constants, Mathlib's irreducible
+definitions, structures, classes, and inductive and coinductive types inside
+them. An `end` that names a dotted namespace closes one scope for each
+component. A declaration starts at its first modifier or attribute and ends at
+its last token before the next command. A declaration that names nothing, such
+as an anonymous instance, takes as its label its signature on its first line,
+up to a `:=` or `where` outside brackets.
+
+A coverage check over the 398 Lean files found every file reconstructed exactly.
+Of the characters other than white space, 68 percent are identifiers, 14
+percent are comments, and the rest are keywords, declared names, operators,
+brackets, and literals. The structure tree has one declaration for each of the
+6,784 lines outside comments that start with a declaration keyword, after any
+modifiers and attributes, and lists 894 namespaces, sections, and `mutual`
+blocks. Every line other than blank lines, comments, scope lines, and commands
+that declare nothing, such as `open` and `macro` and their continuation lines,
+lies inside a declaration.
+
+The timings ran on a machine whose load average stayed between 74 and 105. A
+TOML control run before and after each of four rounds took 2.5 to 12.6 times
+TOML's recorded medians, so no figure measured directly describes a quiet
+machine. In every round, the median of each Lean operation on 100 kilobytes of
+source was at most 0.31 of the TOML medians around it for a complete highlight,
+0.39 for a document parse, and 0.56 for a re-color after one edit. Scaling
+TOML's recorded 95th percentiles by those ratios gives 6.2, 11.6, and 6.7
+milliseconds, inside each maximum. This is an inference from the control. In
+CPU time, which the load inflates less, a complete highlight took a median of
+14 milliseconds against TOML's 28 in the same runs. Initialization loads no
+grammar, and its median was under 4 milliseconds in every round. Each
+100-kilobyte input built to slow the scanner that was measured, such as one
+line of 25,000 words, 50,000 unclosed attribute lists, or an interpolated
+string opening 100,000 braces, took under 100 milliseconds of CPU time to parse
+with structure, and the time grew linearly with the input. The exception is
+deep nesting: about 2,000 unclosed `namespace` or `section` lines overflow the
+stack in the structure-tree code that every language shares, as 2,000 nested
+XML elements do.
+
+The `lean-toolchain` language colors the repository that publishes the
+toolchain, such as `leanprover`'s `lean4`, as a type name, and the release
+after the `:` as a string. Its name selects it. The fixtures come from Specs.
+
 Completion gate: representative Specs source and diffs pass the shared fixture
-contract.
+contract. The gate passes.
 
 ## Stage 7: Starlark and Bazel
 
