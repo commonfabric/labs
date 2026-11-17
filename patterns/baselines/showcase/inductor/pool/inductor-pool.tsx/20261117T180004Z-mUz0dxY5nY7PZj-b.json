@@ -52,8 +52,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "HID_qFHpFwuV7HjgDB0gUuRlkiJ4Jk0jG5mrdruwI5M",
-              "policyDigest": "N6-UBOGyfLsV8XqzBYkAUzjeyLTbuNlNGjRDs0prRKY",
+              "moduleIdentity": "BmLWT9TP2QgPgVUNRLEDR-qcvrk4n9B6BqdyfjOKveY",
+              "policyDigest": "Eclln5A9b_FunevtDo4frBu-dN_MQJ0Hgm0Yu7UQZdY",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -89,8 +89,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "HID_qFHpFwuV7HjgDB0gUuRlkiJ4Jk0jG5mrdruwI5M",
-              "policyDigest": "N6-UBOGyfLsV8XqzBYkAUzjeyLTbuNlNGjRDs0prRKY",
+              "moduleIdentity": "BmLWT9TP2QgPgVUNRLEDR-qcvrk4n9B6BqdyfjOKveY",
+              "policyDigest": "Eclln5A9b_FunevtDo4frBu-dN_MQJ0Hgm0Yu7UQZdY",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -114,8 +114,8 @@
           ],
           "confidentiality": [
             {
-              "moduleIdentity": "HID_qFHpFwuV7HjgDB0gUuRlkiJ4Jk0jG5mrdruwI5M",
-              "policyDigest": "N6-UBOGyfLsV8XqzBYkAUzjeyLTbuNlNGjRDs0prRKY",
+              "moduleIdentity": "BmLWT9TP2QgPgVUNRLEDR-qcvrk4n9B6BqdyfjOKveY",
+              "policyDigest": "Eclln5A9b_FunevtDo4frBu-dN_MQJ0Hgm0Yu7UQZdY",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -126,8 +126,8 @@
           ],
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
-              "file": "/patterns/apps/inductor-pool/inductor-pool.tsx",
-              "moduleIdentity": "HID_qFHpFwuV7HjgDB0gUuRlkiJ4Jk0jG5mrdruwI5M",
+              "file": "/patterns/showcase/inductor/pool/pool-policy.tsx",
+              "moduleIdentity": "BmLWT9TP2QgPgVUNRLEDR-qcvrk4n9B6BqdyfjOKveY",
               "path": [
                 "submitContribution"
               ]
@@ -142,7 +142,7 @@
           "cell"
         ],
         "default": [],
-        "description": "One entry per contributor, written only by `submit`.",
+        "description": "One entry per contributor, written only by `submit` and `withdraw`.",
         "items": {
           "$ref": "#/$defs/StoredContribution"
         },
@@ -172,7 +172,7 @@
     ],
     "type": "object"
   },
-  "pattern": "apps/inductor-pool/inductor-pool.tsx",
+  "pattern": "showcase/inductor/pool/inductor-pool.tsx",
   "resultSchema": {
     "$defs": {
       "CanonicalRule": {
@@ -210,11 +210,12 @@
               "$ref": "#/$defs/CanonicalRule"
             },
             "type": "array"
-          },
-          "withdraw": {
-            "type": "boolean"
           }
         },
+        "required": [
+          "pseudonym",
+          "rules"
+        ],
         "type": "object"
       },
       "PoolSeal": {
@@ -243,8 +244,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "HID_qFHpFwuV7HjgDB0gUuRlkiJ4Jk0jG5mrdruwI5M",
-              "policyDigest": "N6-UBOGyfLsV8XqzBYkAUzjeyLTbuNlNGjRDs0prRKY",
+              "moduleIdentity": "BmLWT9TP2QgPgVUNRLEDR-qcvrk4n9B6BqdyfjOKveY",
+              "policyDigest": "Eclln5A9b_FunevtDo4frBu-dN_MQJ0Hgm0Yu7UQZdY",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -280,8 +281,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "HID_qFHpFwuV7HjgDB0gUuRlkiJ4Jk0jG5mrdruwI5M",
-              "policyDigest": "N6-UBOGyfLsV8XqzBYkAUzjeyLTbuNlNGjRDs0prRKY",
+              "moduleIdentity": "BmLWT9TP2QgPgVUNRLEDR-qcvrk4n9B6BqdyfjOKveY",
+              "policyDigest": "Eclln5A9b_FunevtDo4frBu-dN_MQJ0Hgm0Yu7UQZdY",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -332,8 +333,8 @@
           ],
           "confidentiality": [
             {
-              "moduleIdentity": "HID_qFHpFwuV7HjgDB0gUuRlkiJ4Jk0jG5mrdruwI5M",
-              "policyDigest": "N6-UBOGyfLsV8XqzBYkAUzjeyLTbuNlNGjRDs0prRKY",
+              "moduleIdentity": "BmLWT9TP2QgPgVUNRLEDR-qcvrk4n9B6BqdyfjOKveY",
+              "policyDigest": "Eclln5A9b_FunevtDo4frBu-dN_MQJ0Hgm0Yu7UQZdY",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -344,8 +345,8 @@
           ],
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
-              "file": "/patterns/apps/inductor-pool/inductor-pool.tsx",
-              "moduleIdentity": "HID_qFHpFwuV7HjgDB0gUuRlkiJ4Jk0jG5mrdruwI5M",
+              "file": "/patterns/showcase/inductor/pool/pool-policy.tsx",
+              "moduleIdentity": "BmLWT9TP2QgPgVUNRLEDR-qcvrk4n9B6BqdyfjOKveY",
               "path": [
                 "submitContribution"
               ]
@@ -421,7 +422,7 @@
         "asCell": [
           "stream"
         ],
-        "description": "Contribute (or replace) the sender's rule set, under a pseudonym."
+        "description": "Contribute the sender's rule set under a pseudonym, replacing any set\nthey gave before."
       },
       "thresholdCenter": {
         "type": "number"
