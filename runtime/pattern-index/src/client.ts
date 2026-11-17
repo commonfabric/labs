@@ -645,6 +645,9 @@ export interface PatternIndexRollbackRequest {
 
   /** The version whose source becomes the new head. */
   toVersionId: string;
+
+  /** Keep the new head private whatever the sharing setting says. */
+  keepPrivate?: boolean;
 }
 
 export interface PatternIndexShareVersionResponse {
@@ -687,14 +690,17 @@ export interface PatternIndexUnpublishLineageResponse {
 }
 
 /**
- * The member's give-to-get setting. While sharing is on for a version's
- * origin, the index shares the version as it records it; while
- * `receivesAnonymous` is false, the member sees only named patterns.
+ * The member's give-to-get setting. `enabled` is the main switch: while it
+ * is on, the index shares versions agents make for the member, and the
+ * member sees what others share; `selfBuilt` also shares the versions the
+ * member builds themselves (`cf`, Claude Code). Turned off, the member sees
+ * only named patterns.
  */
 export interface PatternIndexSharingSettings {
   enabled: boolean;
   selfBuilt: boolean;
-  agentBuilt: boolean;
+
+  /** Whether the member sees anonymous shared patterns; follows `enabled`. */
   receivesAnonymous: boolean;
 
   /** `null` until the member first sets it. */
@@ -704,7 +710,6 @@ export interface PatternIndexSharingSettings {
 export interface PatternIndexSetSharingSettingsRequest {
   enabled?: boolean;
   selfBuilt?: boolean;
-  agentBuilt?: boolean;
 }
 
 /** What a publish did about sharing the version it recorded. */
@@ -758,7 +763,10 @@ export interface PatternIndexPublishRequest {
    */
   slot?: string;
 
-  /** Who made it; the index assumes an agent when absent. */
+  /**
+   * Who made it, which decides whether the sharing setting shares it; a
+   * version sent without one is never shared on its own.
+   */
   origin?: PatternIndexOrigin;
 
   /** Keep this version private whatever the sharing setting says. */

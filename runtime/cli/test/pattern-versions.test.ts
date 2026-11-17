@@ -72,7 +72,6 @@ const stubClient = (answers: {
         : Promise.resolve({
           enabled: true,
           selfBuilt: false,
-          agentBuilt: true,
           receivesAnonymous: true,
           updatedAt: null,
         }),
