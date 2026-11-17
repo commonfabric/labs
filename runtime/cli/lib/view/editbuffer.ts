@@ -388,8 +388,10 @@ export class EditBuffer {
     this.#endYank();
     if (this.col > 0) {
       const cps = this.#chars(this.row);
-      const { start } = this.#characterAt(this.row, this.col - 1);
-      cps.splice(start, this.col - start);
+      // The whole character before the cursor goes, even when the cursor was
+      // put inside it.
+      const { start, end } = this.#characterAt(this.row, this.col - 1);
+      cps.splice(start, end - start);
       this.lines[this.row] = cps.join("");
       this.col = start;
     } else if (this.row > 0) {

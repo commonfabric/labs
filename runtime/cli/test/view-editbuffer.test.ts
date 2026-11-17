@@ -91,6 +91,15 @@ Deno.test("editbuffer: a mark after a control character joins the control's pict
   assertEquals(b.col, 2);
 });
 
+Deno.test("editbuffer: Backspace with the cursor inside a joined character removes the whole character", () => {
+  // The cursor is put between the e and its combining accent.
+  const b = new EditBuffer("ae\u0301b");
+  b.col = 2;
+  b.deleteBackward();
+
+  assertEquals([b.lines[0], b.col], ["ab", 1]);
+});
+
 Deno.test("editbuffer: up and down keep the display column, at the start of the character drawn there", () => {
   // The accented e takes one column, and each Han character two, so the
   // display column 2 of "abc" falls on the x, and on 字 below.

@@ -252,8 +252,9 @@ export interface ViewState {
    * coexist. */
   dialog?: DialogState | null;
 
-  /** The text cursor, in document coordinates (line + display column), when
-   * edit mode has it visible. The pager positions the real terminal cursor. */
+  /** The text cursor, in document coordinates (line + source column, in code
+   * points), when edit mode has it visible. The pager positions the real
+   * terminal cursor. */
   cursor?: { line: number; col: number } | null;
 
   /** Edit-mode key hints, shown on the status line in place of the navigation
@@ -1075,6 +1076,10 @@ function composeContent(
   for (let i = 0; i < cells.length; i++) {
     cells[i] = { ch: " ", style: rowBg };
   }
+  // A row whose one character is wider than its text draws the character
+  // over the marker's column instead of the marker.
+  const overMarker = showWrapMarker && display !== undefined &&
+    Math.min(display.length, sourceEnd) > offset + sourceWidth;
   if (line && display) {
     // The display list may hold fewer cells than the line has code points —
     // ANSI sequences are hidden and runs of control codes collapse — so cells
@@ -1097,12 +1102,12 @@ function composeContent(
     const end = Math.min(
       display.length,
       sourceEnd,
-      offset + sourceWidth,
+      offset + sourceWidth + (overMarker ? 1 : 0),
     );
     placeDisplayCells(cells, indentWidth, display, offset, end, styleCell);
   }
 
-  if (showWrapMarker) {
+  if (showWrapMarker && !overMarker) {
     cells[indentWidth + sourceWidth] = {
       ch: "\\",
       style: color ? mergeBg(ui.wrapMarker, rowBg) : EMPTY_STYLE,

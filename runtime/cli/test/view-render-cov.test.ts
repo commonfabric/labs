@@ -1447,3 +1447,19 @@ Deno.test("dialog: a mark after a control character is drawn with the control's 
     "\u2401\u0301   ",
   );
 });
+
+Deno.test("renderFrame: a wrapped row too narrow for its wide character draws it over the marker's column", () => {
+  // Each row is two columns wide: one for text and one for the marker, until
+  // a Han character needs both.
+  const view = baseView({
+    width: 2,
+    height: 3,
+    color: false,
+    wrapMode: "hard",
+  });
+  const rows = renderFrame(parseDocument("漢字"), view).map(stripAnsi);
+  const ascii = renderFrame(parseDocument("abc"), view).map(stripAnsi);
+
+  assertEquals(rows.slice(0, 2), ["漢", "字"]);
+  assertEquals(ascii.slice(0, 2), ["a\\", "bc"]);
+});

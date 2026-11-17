@@ -25,16 +25,18 @@ export function firstShown(
   chars: readonly string[],
 ): number {
   const columns = Math.max(1, width);
-  const widths = chars.map((char) => shownCells(char).length);
+  // Only the characters a field's width away from the cursor and from the
+  // end are measured.
+  const widthOf = (i: number) => shownCells(chars[i]).length;
   let earliest = cursor;
-  let used = widths[cursor] ?? 1;
-  while (earliest > 0 && used + widths[earliest - 1] <= columns) {
-    used += widths[--earliest];
+  let used = cursor < chars.length ? widthOf(cursor) : 1;
+  while (earliest > 0 && used + widthOf(earliest - 1) <= columns) {
+    used += widthOf(--earliest);
   }
-  let latest = widths.length;
+  let latest = chars.length;
   let tail = 1;
-  while (latest > 0 && tail + widths[latest - 1] <= columns) {
-    tail += widths[--latest];
+  while (latest > 0 && tail + widthOf(latest - 1) <= columns) {
+    tail += widthOf(--latest);
   }
   return Math.max(earliest, Math.min(scroll, latest, cursor));
 }
