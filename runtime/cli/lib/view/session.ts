@@ -147,14 +147,15 @@ export interface PushedFrame {
   readonly view: ViewState;
 }
 
-/** A `git blame` the session asks its driver to run, which the driver hands
- * back with the result to {@link Session.finishBlameLoad}. */
+/** The blame of a file or a commit that the session asks its driver to run,
+ * which the driver hands back with the result to
+ * {@link Session.finishBlameLoad}. */
 export interface BlameLoad {
   readonly request: BlameRequest;
 }
 
-/** A file's blame: the load that fetches it, and its lines once it has
- * finished. */
+/** A file's or a commit's blame: the load that fetches it, and its lines
+ * once it has finished. */
 interface BlameEntry {
   readonly load: BlameLoad;
   lines: readonly BlameLine[] | null;
@@ -380,13 +381,13 @@ export class Session {
   /** The clock the blame column's ages are measured by. */
   #now: () => number;
 
-  /** Each file's blame, by {@link blameKey}. */
+  /** Each file's and commit's blame, by {@link blameKey}. */
   #blames = new Map<string, BlameEntry>();
 
   /** Loads the viewport needs that the driver has not yet taken. */
   #blameWanted: BlameLoad[] = [];
 
-  /** The {@link blameKey}s of files git could not blame. */
+  /** The {@link blameKey}s of files and commits git could not blame. */
   #blameFailures = new Set<string>();
 
   /** The source's blame targets, and the source, text, and baseline they are
@@ -4385,8 +4386,8 @@ export class Session {
 
   /** The blame column: the attribution it shows on each display line in view,
    * or null where it shows none, and the current time; null when the column
-   * is hidden. Asks for the blame of any file in view that it does not have
-   * yet. */
+   * is hidden. Asks for the blame of any file or commit in view that it does
+   * not have yet. */
   #blameColumn(): ViewState["blame"] {
     const source = this.#blameSource();
     if (!source) return null;
@@ -4415,7 +4416,8 @@ export class Session {
   }
 
   /** The attribution of `target`'s line, or null while it is unknown. Loads
-   * the blame of a file that has none, or has one taken of other text. */
+   * the blame of a file or commit that has none, or of a file that has one
+   * taken of other text. */
   #blameFor(target: BlameTarget): BlameLine | null {
     const key = blameKey(target.request);
     if (this.#blameFailures.has(key)) return null;
@@ -4451,8 +4453,8 @@ export class Session {
     if (entry?.load === load) entry.lines = lines;
   }
 
-  /** Record that git could not blame a load's file, which is not tried
-   * again, and say why. */
+  /** Record that git could not blame a load's file or commit, which is not
+   * tried again, and say why. */
   failBlameLoad(load: BlameLoad, reason: string): void {
     const key = blameKey(load.request);
     if (this.#blames.get(key)?.load !== load) return;

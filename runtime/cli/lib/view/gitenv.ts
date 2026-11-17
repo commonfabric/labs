@@ -5,8 +5,9 @@
  */
 
 /** `env` without the variables that tie git to one repository, as
- * `git rev-parse --local-env-vars` lists them, so that git finds the
- * repository from the directory it runs in. Git can export some of them to
+ * `git rev-parse --local-env-vars` lists them, apart from those that carry
+ * configuration, such as the settings `git -c` passes on, so that git finds
+ * the repository from the directory it runs in. Git can export some of them to
  * the pager it starts: it exports `GIT_DIR` for a linked worktree, for
  * instance, and with `GIT_DIR` and no `GIT_WORK_TREE`, git takes the
  * directory it runs in as the top of that repository's working tree. */
@@ -21,8 +22,9 @@ export function repositoryIndependentEnv(
 
 /** The environment for git commands about the repository a directory is in,
  * made from `env`, the environment this process started with in the
- * directory `start`. When git finds the same repository from `start` without
- * the variables that tie it to one, as it does for a linked worktree, the
+ * directory `start`. When git finds the same repository and working tree from
+ * `start` without the variables that tie it to one, as it does for a linked
+ * worktree, the
  * result leaves them out, as {@link repositoryIndependentEnv} does, so that
  * git finds each directory's own repository. When it finds another or none,
  * as for a repository named with `--git-dir` and `--work-tree`, the result
@@ -45,9 +47,10 @@ export async function repositoryEnv(
       ).output()
     ),
   );
-  const [gitDir, workTree] = new TextDecoder().decode(named.stdout).split("\n");
-  return !named.success ||
-      new TextDecoder().decode(found.stdout).split("\n")[0] === gitDir
+  const decoder = new TextDecoder();
+  const repository = decoder.decode(named.stdout);
+  const [gitDir, workTree] = repository.split("\n");
+  return !named.success || decoder.decode(found.stdout) === repository
     ? independent
     : { ...independent, GIT_DIR: gitDir, GIT_WORK_TREE: workTree };
 }
@@ -70,13 +73,16 @@ function gitCommand(
   });
 }
 
-/** `env` without the variables named on the lines `listed` wrote. */
+/** `env` without the variables named on the lines `listed` wrote, apart from
+ * those that carry configuration. */
 function withoutLocalVariables(
   env: Readonly<Record<string, string>>,
   listed: Deno.CommandOutput,
 ): Record<string, string> {
   const local = new Set(new TextDecoder().decode(listed.stdout).split("\n"));
   return Object.fromEntries(
-    Object.entries(env).filter(([name]) => !local.has(name)),
+    Object.entries(env).filter(([name]) =>
+      !local.has(name) || name.startsWith("GIT_CONFIG")
+    ),
   );
 }

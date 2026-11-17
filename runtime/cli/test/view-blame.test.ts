@@ -417,15 +417,13 @@ describe("blame", () => {
           "origin",
           "git@github.com:x/y",
         ]);
-        // The rest of the environment still reaches git.
-        const config = join(root, "config");
+        // The settings `git -c` passed on still reach git.
         const mailmap = join(root, "mailmap");
-        await Deno.writeTextFile(config, `[mailmap]\n\tfile = ${mailmap}\n`);
         await Deno.writeTextFile(mailmap, "Carol Real <carol@example.com>\n");
         const run = blameRunner({
           ...Deno.env.toObject(),
           GIT_DIR: join(root, ".git"),
-          GIT_CONFIG_GLOBAL: config,
+          GIT_CONFIG_PARAMETERS: `'mailmap.file'='${mailmap}'`,
         }, root);
         const [line] = await run(
           { cwd: join(root, "sub"), path: "g.ts" },
@@ -440,6 +438,33 @@ describe("blame", () => {
       } finally {
         await Deno.remove(root, { recursive: true });
         await Deno.remove(other.root, { recursive: true });
+      }
+    });
+
+    it("blames a file in the working tree git has named inside its repository", async () => {
+      // As `git --work-tree=alt` does from inside the repository, where git
+      // would otherwise find the repository's own working tree.
+      const { root } = await repository();
+      try {
+        await Deno.mkdir(join(root, "sub"));
+        await Deno.writeTextFile(join(root, "sub", "g.ts"), "const g = 1;\n");
+        await git(root, ["add", "sub/g.ts"]);
+        await git(root, ["commit", "-q", "-m", "g"], carol());
+        const alt = join(root, "alt");
+        await Deno.mkdir(join(alt, "sub"), { recursive: true });
+        await Deno.writeTextFile(join(alt, "sub", "g.ts"), "const g = 1;\n");
+        const run = blameRunner({
+          ...Deno.env.toObject(),
+          GIT_DIR: join(root, ".git"),
+          GIT_WORK_TREE: alt,
+        }, alt);
+        const [line] = await run(
+          { cwd: join(alt, "sub"), path: "g.ts" },
+          NEVER,
+        );
+        expect(line.author).toBe("Carol");
+      } finally {
+        await Deno.remove(root, { recursive: true });
       }
     });
 
@@ -1080,6 +1105,42 @@ describe("blame", () => {
         expect(blameOf(session, "Author: Bob <bob@example.com>")).toBe(
           "168d Bob",
         );
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("compares a commit's lines with its saved lines only up to a bound", async () => {
+      const { root } = await repository();
+      try {
+        const show = await git(root, ["show", "--format=medium", "HEAD"]);
+        const head = (await git(root, ["rev-parse", "HEAD"])).trim();
+        const message = (prefix: string, count: number, shared: number) =>
+          Array.from(
+            { length: count },
+            (_, i) => i === shared ? "    shared" : `    ${prefix}${i}`,
+          ).join("\n");
+        const targets = (count: number) => {
+          const text = show.replace("    by Bob", message("x", count, 7));
+          const baseline = show.replace("    by Bob", message("y", count, 7));
+          const ws = realWorkspace(root);
+          const { edit } = buildDiffDocument(text, parseDiff(text)!, ws);
+          const source = diffSource(ws, edit, undefined, realGit(root));
+          const lines = text.split("\n");
+          const at = (line: string) =>
+            source.blameTargets!(text, baseline)[
+              lines.indexOf(line)
+            ];
+          return { at, request: { cwd: root, rev: head } };
+        };
+        const small = targets(2000);
+        expect(small.at(`commit ${head}`)?.request).toEqual(small.request);
+        expect(small.at("    shared")?.request).toEqual(small.request);
+        expect(small.at("    x8")).toBeNull();
+        // Past the bound, only the lines shared at either end are compared.
+        const large = targets(2100);
+        expect(large.at(`commit ${head}`)?.request).toEqual(large.request);
+        expect(large.at("    shared")).toBeNull();
       } finally {
         await Deno.remove(root, { recursive: true });
       }

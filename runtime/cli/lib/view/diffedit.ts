@@ -2395,8 +2395,15 @@ function commitLines(text: string): CommitLines {
   return out;
 }
 
+/** The most pairs of lines {@link unchangedLines} compares, which bounds the
+ * memory and time one comparison takes. */
+const MAX_COMPARED_LINE_PAIRS = 1 << 22;
+
 /** For each of `current`'s lines, whether it is in one longest sequence of
- * lines that `current` and `before` share in the same order. */
+ * lines that `current` and `before` share in the same order. When the lines
+ * between those the two share at either end would need more than
+ * {@link MAX_COMPARED_LINE_PAIRS} comparisons, none of them counts as
+ * shared. */
 function unchangedLines(
   current: readonly string[],
   before: readonly string[],
@@ -2413,8 +2420,12 @@ function unchangedLines(
     tail < Math.min(current.length, before.length) - head &&
     current[current.length - 1 - tail] === before[before.length - 1 - tail]
   ) tail++;
+  const unchanged = current.map((_, i) =>
+    i < head || i >= current.length - tail
+  );
   const a = current.slice(head, current.length - tail);
   const b = before.slice(head, before.length - tail);
+  if (a.length * b.length > MAX_COMPARED_LINE_PAIRS) return unchanged;
   // shared[i * width + j] is the length of the longest such sequence in a[i..]
   // and b[j..].
   const width = b.length + 1;
@@ -2426,9 +2437,6 @@ function unchangedLines(
         : Math.max(shared[(i + 1) * width + j], shared[i * width + j + 1]);
     }
   }
-  const unchanged = current.map((_, i) =>
-    i < head || i >= current.length - tail
-  );
   for (let i = 0, j = 0; i < a.length && j < b.length;) {
     if (a[i] === b[j]) {
       unchanged[head + i++] = true;
