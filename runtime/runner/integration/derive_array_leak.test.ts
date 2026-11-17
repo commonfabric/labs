@@ -44,6 +44,7 @@ import { uiSchema } from "@commonfabric/runner/schemas";
 import { createTestSpace, env } from "@commonfabric/integration";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { defer, type Deferred } from "@commonfabric/async/defer";
+import { withStuckNet } from "@commonfabric/test-support/stuck-net";
 
 import {
   type CollectedMemory,
@@ -180,10 +181,14 @@ async function runTest() {
       // the value arrives from the server, which neither the runtime going
       // idle nor the server confirming this runtime's commits waits for.
       const click = async (
+        cycle: string,
         stream: "increment" | "decrement",
         expected: number,
       ) => {
         if (failure) throw failure;
+        const label =
+          `derive array leak: ${cycle}, ${stream}, expected ${expected}`;
+        let stage = "send";
         const wait = shown = defer();
         onChange = () => {
           const items = mock.document.getElementById("items")
@@ -193,24 +198,68 @@ async function runTest() {
           }
         };
         try {
-          piece.key(stream).send({});
-          await wait.promise;
+          // A live server keeps the event loop open even when this click
+          // cannot finish. Cover each settling stage with the shared net.
+          await withStuckNet(
+            (async () => {
+              piece.key(stream).send({});
+              stage = "counter and view";
+              await wait.promise;
+              shown = undefined;
+              stage = "runtime idle";
+              await runtime.idle();
+              stage = "storage synced";
+              await runtime.storageManager.synced();
+            })(),
+            label,
+          );
+        } catch (error) {
+          // Read diagnostic state only on failure: cell reads can take
+          // document holds and affect the memory this test measures.
+          const readDiagnostic = (read: () => unknown): unknown => {
+            try {
+              return read();
+            } catch (error) {
+              return `Diagnostic unavailable: ${String(error)}`;
+            }
+          };
+          // Print before disposal, which can itself wait on the scheduler.
+          console.error(label, {
+            error: failure ?? error,
+            stage,
+            value: readDiagnostic(() => piece.get().value),
+            items: readDiagnostic(() =>
+              mock.document.getElementById("items")
+                ?.getElementsByTagName("i").length
+            ),
+            scheduler: readDiagnostic(() => runtime.scheduler.getStats()),
+            storage: readDiagnostic(() => storageManager.getDiagnostics()),
+          });
+          throw failure ?? error;
         } finally {
           shown = undefined;
         }
-        await runtime.idle();
-        await runtime.storageManager.synced();
       };
-      const cycle = async () => {
-        await click("increment", piece.get().stepsPerClick);
-        await click("decrement", 0);
+      const cycle = async (label: string) => {
+        await click(label, "increment", piece.get().stepsPerClick);
+        await click(label, "decrement", 0);
       };
 
-      for (let i = 0; i < WARM_UP_CYCLES; i++) await cycle();
+      console.log("derive array leak: warmup cycles");
+      for (let i = 0; i < WARM_UP_CYCLES; i++) {
+        await cycle(`warmup cycle ${i + 1}/${WARM_UP_CYCLES}`);
+      }
+      console.log("derive array leak: baseline client memory");
       const clientBeforeMB = getClientMemoryMB();
+      console.log("derive array leak: baseline server memory");
       const serverBeforeMB = await getServerMemoryMB();
-      for (let i = 0; i < MEASURED_CYCLES; i++) await cycle();
+      console.log("derive array leak: measured cycles");
+      for (let i = 0; i < MEASURED_CYCLES; i++) {
+        await cycle(`measured cycle ${i + 1}/${MEASURED_CYCLES}`);
+      }
+      console.log("derive array leak: final client memory");
       const clientGrowthMB = getClientMemoryMB() - clientBeforeMB;
+      console.log("derive array leak: final server memory");
       const serverGrowthMB = await getServerMemoryMB() - serverBeforeMB;
       if (failure) throw failure;
 
@@ -238,11 +287,14 @@ async function runTest() {
         );
       }
     } finally {
+      console.log("derive array leak: view cleanup");
       cancelValueSink();
       render.cancel();
     }
   } finally {
+    console.log("derive array leak: runtime disposal");
     await runtime.dispose();
+    console.log("derive array leak: storage close");
     await storageManager.close();
   }
 }
