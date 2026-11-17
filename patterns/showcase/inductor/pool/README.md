@@ -26,10 +26,12 @@ debt"); this pattern is its implementation.
   `ContributionEvent`: labelled with the policy, the event and each rule, as a
   stored contribution is. A sender that types what it sends this way, as the
   lo-fi inductor does, labels it with this pool's policy whoever receives it, so
-  a pool of the same shape that is not this one cannot make it public (see
-  "Discovery and wiring"). The handler checks every rule against the grammar
-  again, stores it in canonical form, and keeps a rule given twice once. A rule
-  out of grammar refuses the whole set.
+  that, by design, a pool of the same shape that is not this one cannot make it
+  public. Today that holds only in part (top/3175): with server execution off a
+  receiver can publish the payload directly, and in either posture one that
+  stores it first can publish it later (see "Discovery and wiring"). The handler
+  checks every rule against the grammar again, stores it in canonical form, and
+  keeps a rule given twice once. A rule out of grammar refuses the whole set.
 - **One pseudonym per person per goal.** Each stored contribution is labelled
   `authored-by` the principal it acted for, by the runtime
   (`AuthoredByCurrentUser`), and only `submitContribution` may write one
@@ -192,9 +194,25 @@ jitter so no rule's threshold is below it, and the release refuses a seal below
 it (a list whose first entry was planted with a lower seal included). So a
 public release of a rule over such a list, a rule read from someone else's
 contribution included, costs `MIN_SEALED_THRESHOLD` principals (cut 1), not the
-2 it cost while the binding could choose a centre of 1. Closing it needs
-evidence minted where a contribution enters, a person's gesture on a trusted
-surface, which is the proof-of-gesture work the witness spec names.
+2 it cost while the binding could choose a centre of 1.
+
+Precisely, what such a list can and cannot do. Every entry in it was written by
+`submitContribution`, so each names the principal that ran it, and the release
+counts distinct principals; the release refuses seals that disagree or break the
+floor. An entry `submitContribution` did not write into that very list does not
+count: a link to the real pool's entry, or to an old entry a contributor
+replaced or withdrew, is a slot other code wrote, which the spec gives no
+witness (`docs/specs/cfc-transformed-by-input-witnesses.md`, the slot-stamp
+rules), so the release over a list holding one is not released. What the
+attacker controls is who submits into their binding: their own accounts, each
+with a rule value they hold, and anyone whose inductor sends to it, such as a
+fake pool built on it. So the floor is five distinct principals, and a rule's
+real holder who sent to the fake is one of them: four accounts beside the holder
+release the holder's rule. Nothing on this path lowers a threshold or counts one
+principal twice. (All of this is the design; today even the honest release is
+refused, CFC snag 6.) Closing it needs evidence minted where a contribution
+enters, a person's gesture on a trusted surface, which is the proof-of-gesture
+work the witness spec names.
 
 ## Workaround: the release is not stored
 

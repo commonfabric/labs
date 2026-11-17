@@ -83,7 +83,10 @@ connector, another piece, an agent).
    contribution is confidential to the pool). Anything with a pool's shape and
    the goal receives the rules, a fake pool included: the inductor does not vet
    the receiver. What it sends is labelled with the real pool's policy instead
-   (see "CFC debt"), so a fake can receive the rules but not publish them.
+   (see "CFC debt"), so that, by design, a fake can receive the rules but not
+   publish them. Today that holds only in part (top/3175): with server execution
+   off a fake can publish a received rule directly, and in either posture one
+   that stores the rules first can publish them later.
 
 6. The pool's release comes back. The inductor reads the rules the pool for its
    goal releases (`consensus`, public by the pool's policy) and offers them as a
@@ -289,12 +292,24 @@ policy's one exchange rule drops the clause on that stamp, as
 threshold, its hidden offset, and the rule that nothing below threshold is
 emitted (not the rule, not its count, not that it exists) are that function's
 own logic, so they need no new CFC machinery. The rule also requires an input
-witness: everything the function read was written by the pool's own
-`submitContribution`, so the function run over contributions anyone else made up
-is not released (`showcase/inductor/pool/README.md`). The secret and the
-per-rule counts never leave the function; only released rules and their counts
-do, as the pool's public result, read where it is computed (the runtime refuses
-storing it today; see the pool's README).
+witness: every contribution the function read was written by
+`submitContribution`, so the function run over contributions other code wrote or
+spliced together is not released. The witness names the writer function, not the
+pool: `submitContribution` is exported, so code of anyone's can bind it to a
+list of its own, and a release over that list is witnessed too. What bounds that
+is the writer's own logic. It stamps each entry's contributor from the runtime's
+principal, so an entry names its real author, and the release counts distinct
+contributors; and every seal it mints or copies keeps each rule's threshold at
+or above `MIN_SEALED_THRESHOLD` (5), a constant of the policy module, which the
+release checks again. So a release over such a list takes at least five distinct
+principals holding the rule, counting a real holder whose inductor sent to that
+binding (a fake pool built on it, say). It does not take more: an attacker who
+holds a rule, read from someone's contribution included, can release it with
+five accounts of their own, or four beside its holder (cut 1). The details are
+in `showcase/inductor/pool/README.md`, "What the witness does not cover". The
+secret and the per-rule counts never leave the function; only released rules and
+their counts do, as the pool's public result, read where it is computed (the
+runtime refuses storing it today; see the pool's README).
 
 **What the inductor sends is labelled with the pool's policy.** The inductor
 publishes to whatever pool its `pool` input or wish gives it, checking only the
@@ -313,11 +328,13 @@ to flip when top/3175 is fixed.
 
 **Cuts** (both approved by Alex, 2026-11-16):
 
-1. _Distinct people._ The trusted function counts distinct pseudonyms. Nothing
-   attests that two pseudonyms are two people, so one person with many
-   pseudonyms counts as many. The hidden offset raises the cost of probing but
-   does not stop it. Missing semantics: an attested distinct-principal
-   (personhood) atom.
+1. _Distinct people._ The trusted function counts distinct contributor
+   principals, as the pool's one writer stamped them from the runtime, not
+   pseudonyms: one principal counts once whatever pseudonyms it sends, and a
+   resubmission replaces its entry. Nothing attests that two principals are two
+   people, so one person who controls several principals (accounts) counts as
+   several. The hidden offset raises the cost of probing but does not stop it.
+   Missing semantics: an attested distinct-principal (personhood) atom.
 2. _Pseudonym linkability._ Commits and owner-integrity labels in the pool space
    name the contributor's core identity (`docs/specs/profile-delegation.md`,
    "Attribution and unlinkability"; the intermediate key is deferred). And the
