@@ -2884,6 +2884,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     target: { space: MemorySpace; key: string },
     replacement: { value: FabricValue; cfc: CfcMetadata } | undefined,
   ): void {
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/103
     this.#assertWritable("writeRepairedCompileCacheRecord()");
     // The repair writes a stored label the commit boundary did not derive, so
     // it takes the repair's own builtin identity, as a release takes the

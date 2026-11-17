@@ -2749,6 +2749,7 @@ async function planStampRepair(
   runtimeVersion: string | undefined,
   tx: IExtendedStorageTransaction,
 ): Promise<StampRepairTarget[] | CompileCacheStampRepair> {
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/103
   const closure = await loadVerifiedSourceClosure(
     runtime,
     space,
