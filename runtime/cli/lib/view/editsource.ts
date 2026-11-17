@@ -243,9 +243,12 @@ export interface EditableSource {
   readonly path?: string;
 
   /** What `git blame` attributes each line of `text` to, indexed by line, or
-   * null for a line with no file line behind it. Absent when no line of this
-   * source has one. */
-  blameTargets?(text: string): readonly (BlameTarget | null)[];
+   * null for a line with no file line behind it. `baseline` is the text as
+   * last loaded or saved. Absent when no line of this source has one. */
+  blameTargets?(
+    text: string,
+    baseline: string,
+  ): readonly (BlameTarget | null)[];
 }
 
 /**

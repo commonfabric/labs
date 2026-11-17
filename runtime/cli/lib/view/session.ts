@@ -389,10 +389,12 @@ export class Session {
   /** The {@link blameKey}s of files git could not blame. */
   #blameFailures = new Set<string>();
 
-  /** The source's blame targets, and the source and text they are for. */
+  /** The source's blame targets, and the source, text, and baseline they are
+   * for. */
   #blameTargetCache?: {
     source: EditableSource;
     text: string;
+    baseline: string;
     targets: readonly (BlameTarget | null)[];
   };
 
@@ -4316,23 +4318,26 @@ export class Session {
   }
 
   /** Turn the blame column on or off, keeping the viewport's top line. It
-   * stays off when no line comes from a file git can blame. */
+   * stays off when no line can be blamed. */
   #toggleBlame(): void {
     const source = this.#source;
     if (
       !this.#blameOn &&
       !(source && this.#blameTargets(source).some((target) => target !== null))
     ) {
-      this.#message = "No line here comes from a file git can blame";
+      this.#message = "No line here can be blamed";
       return;
     }
     const anchor = this.#wrapLines ? this.#viewportAnchor() : null;
     this.#blameOn = !this.#blameOn;
     if (anchor) this.#restoreWrappedAnchor(anchor);
+    const shown = this.#blameSource();
     this.#message = !this.#blameOn
       ? "Blame off"
-      : this.#blameShown()
-      ? "Blame on"
+      : shown
+      ? this.#blameTargetsInView(shown).some((target) => target !== null)
+        ? "Blame on"
+        : "Blame on; no line in view can be blamed"
       : blameColumnWidth(this.width, true) === 0
       ? "Blame on; the screen is too narrow to show it"
       : "Blame on; it shows in the source view";
@@ -4356,13 +4361,23 @@ export class Session {
       : null;
   }
 
-  /** The source's blame targets for the current text, cached against both. */
+  /** The source's blame targets for the current text and the text as last
+   * loaded or saved, cached against all three. */
   #blameTargets(source: EditableSource): readonly (BlameTarget | null)[] {
     if (!source.blameTargets) return [];
     const text = this.#sourceDoc.text;
+    const baseline = this.#buffer?.baseline() ?? text;
     let cache = this.#blameTargetCache;
-    if (cache?.source !== source || cache.text !== text) {
-      cache = { source, text, targets: source.blameTargets(text) };
+    if (
+      cache?.source !== source || cache.text !== text ||
+      cache.baseline !== baseline
+    ) {
+      cache = {
+        source,
+        text,
+        baseline,
+        targets: source.blameTargets(text, baseline),
+      };
       this.#blameTargetCache = cache;
     }
     return cache.targets;
@@ -4375,19 +4390,28 @@ export class Session {
   #blameColumn(): ViewState["blame"] {
     const source = this.#blameSource();
     if (!source) return null;
+    return {
+      lines: this.#blameTargetsInView(source).map((target) =>
+        target && this.#blameFor(target)
+      ),
+      now: this.#now(),
+    };
+  }
+
+  /** The source's blame target for each display line, null outside the
+   * view. */
+  #blameTargetsInView(source: EditableSource): (BlameTarget | null)[] {
     const targets = this.#blameTargets(source);
     const plan = this.#foldPlan();
-    const column = new Array<BlameLine | null>(plan.displayLines.length)
-      .fill(null);
     const first = this.#toFolded(this.#toDoc(this.top));
     const last = this.#toFolded(
       this.#toDoc(this.top + this.#contentRows() - 1),
     );
-    for (let row = first; row <= last; row++) {
-      const target = targets[plan.displayToDoc(row)];
-      if (target) column[row] = this.#blameFor(target);
-    }
-    return { lines: column, now: this.#now() };
+    return plan.displayLines.map((_, row) =>
+      row >= first && row <= last
+        ? targets[plan.displayToDoc(row)] ?? null
+        : null
+    );
   }
 
   /** The attribution of `target`'s line, or null while it is unknown. Loads
