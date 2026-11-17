@@ -2163,7 +2163,14 @@ whole collection again on each change of the array, in place of
 keeping the results of cone instances per key. This is a choice of the
 implementation and is not observable: the stored values and labels are
 those the per-key evaluation gives, and the state cells, streams,
-operation state and children stay per key.
+operation state and children stay per key. Such an array is the one
+case where no upstream cause identifies an element: the key of each
+is its whole value with the occurrence count, where by ruling the key
+of an element of an array of references, and of the result of another
+per-element construct, derives from upstream causes and stays stable.
+Whether an author can declare a key field for such an array is not
+ruled, and the design has none (`plan-and-label-templates.md` §8,
+question 122).
 
 ### 2.7 Side-writes and bounded iteration
 

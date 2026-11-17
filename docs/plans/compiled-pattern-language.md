@@ -1614,7 +1614,10 @@ is relitigated.
   the result of another per-element construct.
 - The name a pattern binds to `[SELF]` is a reference to the result
   cell of the instance. Passed on, it adds no label, as a handle passed
-  on without a read adds none.
+  on without a read adds none. A handler binding that captures the
+  name holds, at that state path, a kind of place of its own in the
+  binding record, which names the result of the instance
+  (`Binding.state.place` with `result`).
 - A read of a default carries no integrity. Where a stored object has
   an absent property and a default fills it, the defaulted part carries
   the empty integrity, not the object's claims. The specification has no
@@ -1868,6 +1871,12 @@ is relitigated.
   computation produces as a whole array, an implementation may evaluate
   the whole collection again on each change in place of keeping results
   per element, and the observable result is the same.
+- The key of an element is derived from upstream causes and stays
+  stable, for an array of references and for the result of another
+  per-element construct. A declared key field would matter only for
+  an array of plain values that is generated from scratch, where one
+  computation produces the whole array each time. Whether to add such
+  a declaration is not decided (question 175).
 - The key of an element that a `flatMap` contributes is formed from
   the member itself, by the same rule as for any array, together with
   the source element's key: the cell identity for a member that is a
@@ -2938,14 +2947,12 @@ undetermined, written into the documents as an assumption.
      slot, a member for it. The prototype does the first half. The
      same in an element body in all three cases.
 170. **What `Binding.state.place` holds for a state path bound to the
-     name of `[SELF]`** (PL question 120). By ruling the name is a
-     reference to the result cell, and `place` names a slot, an
-     output, a stream, or a constant. *Assumed:* the entry holds a
-     mark that the path is the result cell, in a form no record
-     defines, and the runtime hands the handler a reference to the
-     result cell. The alternative gives the plan a slot root for the
-     result of the instance. The prototype hands the handler nothing.
-     The same for a binding in an element body in all three cases.
+     name of `[SELF]`** (PL question 120). Settled by ruling: a new
+     kind of place in the binding record names the result of the
+     instance, written `{ result: true }`, and the runtime hands the
+     handler a reference to the result cell. The prototype hands the
+     handler nothing. The same for a binding in an element body in
+     all three cases. The entry keeps its number.
 171. **How value code compares two references** (ES question 90).
      `equals` compares what its operands name once their links are
      resolved, and a value function cannot read through a reference.
@@ -2998,6 +3005,18 @@ undetermined, written into the documents as an assumption.
      result of another per-element construct where the upstream
      position holds a value; over an array of references both
      resolve to the element's cell, which needs the same read.
+
+175. **A declared key field for an array of plain values generated
+     from scratch** (PL question 122). By ruling keys derive from
+     upstream causes and stay stable, over an array of references and
+     over the result of another per-element construct, and a declared
+     key field would matter only for an array of plain values that
+     one computation produces whole each time. *Assumed:* the
+     language has no such declaration, the elements of such an array
+     are keyed by their whole value with the occurrence count, and an
+     element whose value changes is a new element. The alternative
+     lets the construct or the array's type name a member as the key.
+     The question is about an array of plain values in place alone.
 
 One question above is restated by the notes 307 to 320. For the
 assumption of ES question 83, in which transaction a first value that is not a

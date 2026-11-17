@@ -1149,11 +1149,14 @@ export interface Binding {
      * collection of an enclosing element body is the slot of root `index`
      * that names that collection; an output of the instance
      * (`Plan.outputs`); the stream of another binding of the reactive tier
-     * (`Plan.bindings`); or a constant written at the binding, which the
-     * plan holds and nothing stores. `template` is the label of the same
+     * (`Plan.bindings`); a constant written at the binding, which the
+     * plan holds and nothing stores; or, by ruling, the result of the
+     * instance, for a path bound to the name of `[SELF]`. `template` is
+     * the label of the same
      * place: the `slot` node, which for a slot of root `index` resolves to
      * the label of that collection's array (section 2.2), the output's
-     * template, and `const` for a stream and for a constant. A constant
+     * template, and `const` for a stream, for a constant, and for the
+     * result of the instance, which is a reference passed on. A constant
      * is held as its value, whether it is written as a literal or as the
      * name of a module-scope constant, which the compiler evaluates. A
      * path bound to `undefined` has no entry of `state`. Absent for a
@@ -1164,7 +1167,8 @@ export interface Binding {
       | { readonly slot: Index }
       | { readonly output: Index }
       | { readonly stream: Index }
-      | { readonly constant: unknown };
+      | { readonly constant: unknown }
+      | { readonly result: true };
     /**
      * For a binding of a pattern compiled in, at a path whose `place`
      * is a slot of the caller that the call bound a path of the
@@ -1485,14 +1489,16 @@ path of the result that a cone of the instance computes, has no record
 and is open (section 8, question 108).
 
 A handler binding of the reactive tier can capture the name, and its
-state path then resolves to the result cell. `Binding.state.place`
-names a slot, an output, a stream, or a constant, and the result cell
-is none of the four. *Assumed* (section 8, question 120): the entry
-holds, in the place of `place`, a mark that the path is the result
-cell, and at dispatch the runtime hands the handler a reference to the
-result cell at that path, as it supplies one to value code. No record
-defines the form of the mark. The prototype's plans hold no `place`
-for such an entry, and its executor hands the handler nothing there.
+state path then resolves to the result cell. By ruling the binding
+record has a kind of place of its own for it, which names the result
+of the instance: `place` is `{ result: true }`. At dispatch the
+runtime hands the handler a reference to the result cell at that
+path, as it supplies one to value code. The entry's `capture` is
+`link` and its `template` is `const`, because the name passed on adds
+no label. The form of the member, a record with the one member
+`result`, is this document's choice. The prototype's plans hold no
+`place` for such an entry, and its executor hands the handler nothing
+there.
 The rule is the same for a binding in an element body over an array
 of references, over an array of plain values in place, and over the
 result of another per-element construct, where the name is that of
@@ -2647,6 +2653,22 @@ Consequences, which later sections rely on:
   the key of the element of the first source. So a change of one
   upstream element makes stale the cone instances of that key in each
   body of the chain, and no cone instance of another key.
+- **A key derives from upstream causes and stays stable.** By ruling
+  the key of an element is derived from upstream causes: over an array
+  of references from the address the link resolves to, and over the
+  result of another per-element construct from the upstream key. Such
+  a key does not change when the value of the element changes, so no
+  author has to declare a key for it. That holds for the rows of a
+  list of search results as for any other collection, where the
+  results are references or come from a per-element construct over a
+  stable source. A key field that the author declares would matter in
+  one case alone: an array of plain values that is generated from
+  scratch, where one computation produces the whole array of plain
+  values each time and nothing upstream identifies an element. There
+  the key is the whole value, with its occurrence count, and an
+  element whose value changes is a new element. Whether the language
+  gets such a declaration is not ruled (section 8, question 122). The
+  design has none.
 - **The key of an element that a `flatMap` contributes.** A `flatMap`
   yields a segment per source element, so one source key cannot stand
   for the several elements of a segment. By ruling the key of such an
@@ -12161,16 +12183,16 @@ this document made.
      plain values in place, and over the result of another
      per-element construct.
 120. **What `Binding.state.place` holds for a state path bound to the
-     name of `[SELF]`** (for the project owner). By ruling the name is
-     a reference to the result cell of the instance. A handler binding
-     of the reactive tier can capture it, and `place` names a slot, an
-     output, a stream, or a constant (section 1.1). *Assumed:* the
-     entry holds a mark that the path is the result cell, in a form
-     that no record defines, and the runtime hands the handler a
-     reference to the result cell. The alternative gives the plan a
-     slot root for the result of the instance, which a `place` and a
-     template could then name. The same for a binding in an element
-     body in each of the three cases of a per-element source.
+     name of `[SELF]`** (for the project owner). Not open, by ruling:
+     a new kind of place in the binding record names the result of
+     the instance. `place` is `{ result: true }` (section 1.1), and
+     the runtime hands the handler a reference to the result cell at
+     the path. The form of the member is this document's choice. No
+     slot root for the result of the instance is added, so what a
+     read through the name is, of a path that a cone of the instance
+     computes, stays with question 108. The same for a binding in an
+     element body in each of the three cases of a per-element source.
+     The entry keeps its number.
 121. **A handle by position compared with a reference by key, where
      the parent cannot be read** (for the project owner). By ruling
      `items.key(i)` is a handle by position that nothing rewrites,
@@ -12191,3 +12213,22 @@ this document made.
      the upstream position holds a value. Over an array of references
      both operands resolve to the element's cell, which needs a read
      of the parent as well, and the same question arises there.
+122. **A declared key field for an array of plain values generated
+     from scratch** (for the project owner). By ruling the key of an
+     element is derived from upstream causes and stays stable, over
+     an array of references and over the result of another
+     per-element construct, so no declaration is needed there. One
+     case has no upstream cause: an array of plain values in place
+     that one computation produces whole each time, as a `computed`
+     that builds rows from a response does. Its elements are keyed by
+     their whole value with the occurrence count (section 1.3), so a
+     row whose value changes in one member is a new element, and the
+     state of its body does not follow it. The ruling names a
+     declared key field as what would matter there and does not add
+     one. *Assumed:* the language has no such declaration, and an
+     author who wants a stable row over such an array makes the
+     elements cells or derives the rows with a per-element construct
+     over a stable source. The alternative lets a per-element
+     construct, or the type of the array, name a member of the
+     element as its key, and `Collection` then records that member.
+     The question is about an array of plain values in place alone.
