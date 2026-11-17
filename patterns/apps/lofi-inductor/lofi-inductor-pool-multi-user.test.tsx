@@ -3,7 +3,7 @@
  * to one pool whose threshold is exactly five, the lowest a pool may seal;
  * three more contributors send `invoice` to the pool directly. The rule all
  * five hold is released with its count; the rules only one holds are not;
- * and the release comes back to each inductor as a candidate set.
+ * and an inductor with no held-out items is offered none of it.
  *
  * Patterns under test: ./lofi-inductor.tsx publishing into
  * ../inductor-pool/inductor-pool.tsx
@@ -62,16 +62,9 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       { await: "erin-submitted" },
       // All five hold `invoice`; only Alice holds `lunch`, only Bob `bill`.
       { assertion: assert(() => invoiceReleased(setup.pool)) },
-      // Alice's inductor offers the pool's release back to her as a
-      // candidate set. With no held-out items of hers it cannot be scored,
-      // so it would not be adopted.
-      {
-        assertion: assert(() =>
-          inductor.poolOffer?.judgement.rules.length === 1 &&
-          inductor.poolOffer?.judgement.rules[0]?.pattern === "invoice" &&
-          inductor.poolOffer?.judgement.accepted === false
-        ),
-      },
+      // Alice's inductor reads the release, but none of her held-out items
+      // (she has none) exercises it, so there is nothing to offer her.
+      { assertion: assert(() => inductor.poolOffer === null) },
     ],
     inductor,
   };

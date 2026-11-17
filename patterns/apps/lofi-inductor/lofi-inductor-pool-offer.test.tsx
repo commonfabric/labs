@@ -2,7 +2,8 @@
  * The payoff of the pool: an inductor offers the pool's released rules for
  * its goal as a candidate set, judged on its own held-out items by the same
  * gate as a rewrite, and adopted or dismissed the same way. A better set is
- * adopted; a worse one is dismissed, and neither is offered again; a pool
+ * adopted, without a released rule that none of the held-out items
+ * exercises; a worse one is dismissed, and neither is offered again; a pool
  * for another goal offers nothing.
  *
  * Patterns under test: ./lofi-inductor.tsx, reading a pool's release. The
@@ -70,6 +71,12 @@ const BETTER = {
   predicts: true,
 };
 const WORSE = { field: "subject", pattern: "lunch", predicts: true };
+/** A NO exception no held-out item exercises, riding along with BETTER. */
+const PLANTED = {
+  field: "from",
+  pattern: "billing@bank\\.example",
+  predicts: false,
+};
 
 const ITEMS = [...HELD_OUT_ITEMS, ...TRAINING_ITEMS];
 
@@ -88,7 +95,10 @@ const inductor = (pool: StandInOutput) =>
 
 export default pattern(() => {
   const goodPool = StandInPool(
-    { goal: ` ${GOAL.toLowerCase()}`, consensus: [BETTER] } as Parameters<
+    {
+      goal: ` ${GOAL.toLowerCase()}`,
+      consensus: [BETTER, PLANTED],
+    } as Parameters<
       typeof StandInPool
     >[0],
   );
@@ -123,8 +133,15 @@ export default pattern(() => {
     elsewhere.poolOffer === null &&
     adopter.rules[0]?.pattern === "invoice" && adopter.history.length === 0
   );
+  // The planted rule is left out of the offer, and the view says so
+  const assert_planted_left_out = assert(() =>
+    adopter.poolOffer?.judgement.rules.length === 1 &&
+    adopter.poolOffer?.unexercised.length === 1 &&
+    adopter.poolOffer?.unexercised[0]?.field === "from"
+  );
   const assert_view_offers = assert(() =>
     hasText(adopter[UI], "Adopt the pool's rules (F1 67% → 100%)") &&
+    hasText(adopter[UI], "left out, no held-out item matches it: from:") &&
     hasText(dismisser[UI], "Dismiss the pool's rules")
   );
 
@@ -150,6 +167,7 @@ export default pattern(() => {
       { action: action_submit_items },
       { settle: true },
       { assertion: assert_offered },
+      { assertion: assert_planted_left_out },
       { render: adopter[UI] },
       { render: dismisser[UI] },
       { assertion: assert_view_offers },

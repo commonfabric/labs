@@ -531,13 +531,21 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     const offerLine = computed(() =>
       offer === null
         ? ""
-        : `The pool for this goal releases ${offer.judgement.rules.length} ` +
-          `rules. On your held-out items: ${offer.judgement.reason}.`
+        : `The pool for this goal offers ${offer.judgement.rules.length} ` +
+          `rules your held-out items exercise. On those items: ` +
+          `${offer.judgement.reason}.`
     );
+    // Each released rule, and what became of it: offered, refused, or left
+    // out because none of the held-out items exercises it.
     const offerLines = computed(() =>
       offer === null ? [] : [
-        ...offer.judgement.rules.map(describeRule),
-        ...offer.judgement.refusals,
+        ...offer.judgement.rules.map((rule) =>
+          `offered: ${describeRule(rule)}`
+        ),
+        ...offer.judgement.refusals.map((reason) => `refused: ${reason}`),
+        ...(offer.unexercised ?? []).map((rule) =>
+          `left out, no held-out item matches it: ${describeRule(rule)}`
+        ),
       ]
     );
     const offerLabel = computed(() => {

@@ -475,6 +475,25 @@ describe("poolOffer", () => {
     expect(worse?.judgement.accepted).toBe(false);
   });
 
+  it("leaves out a released rule no held-out item exercises", () => {
+    // A NO exception aimed at a sender this person has not heard from yet
+    const planted = {
+      field: "from",
+      pattern: "billing@bank\\.example",
+      predicts: false,
+    };
+    const offer = poolOffer(current, [better, planted], heldOut, [])!;
+    expect(offer.judgement.rules.map((r) => r.pattern)).toEqual([
+      "\\bbill\\b|invoice",
+    ]);
+    expect(offer.unexercised.map((r) => r.pattern)).toEqual([
+      "billing@bank\\.example",
+    ]);
+    expect(offer.judgement.accepted).toBe(true);
+    // A release of nothing but such rules offers nothing
+    expect(poolOffer(current, [planted], heldOut, [])).toBeNull();
+  });
+
   it("offers nothing empty, nothing current, and nothing already judged", () => {
     expect(poolOffer(current, [], heldOut, [])).toBeNull();
     expect(poolOffer(current, undefined, heldOut, [])).toBeNull();
@@ -484,11 +503,16 @@ describe("poolOffer", () => {
     expect(judged.poolOffer).toBe(offer.key);
     expect(judged.reason).toMatch(/^the pool's rules: /);
     expect(poolOffer(current, [better], heldOut, [judged])).toBeNull();
-    // A different release is a new offer
+    // A different release, exercised, is a new offer
     expect(
-      poolOffer(current, [better, { ...better, pattern: "receipt" }], heldOut, [
-        judged,
-      ]),
+      poolOffer(
+        current,
+        [better, { ...better, pattern: "lunch", predicts: false }],
+        heldOut,
+        [
+          judged,
+        ],
+      ),
     ).not.toBeNull();
   });
 });

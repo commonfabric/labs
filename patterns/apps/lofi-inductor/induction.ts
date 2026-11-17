@@ -142,6 +142,11 @@ export interface PoolOffer {
   /** Which set this is: a hash of its rules' keys. */
   key: string;
   judgement: Judgement;
+  /**
+   * Released rules left out of the offer because none of this person's
+   * held-out items exercises them: no score could say what they do.
+   */
+  unexercised: CanonicalRule[];
 }
 
 /** The rules a person is ready to share for a goal. */
@@ -657,9 +662,16 @@ export function settle(
 /**
  * The pool's released rules for this goal, judged as a candidate set by the
  * same gate as a rewrite, on this person's own held-out items. Null when the
- * pool releases nothing, when the set is the current one, or when a recorded
- * round already judged this very set. The pool releases its most-held rules
- * first, so a release past `MAX_RULES` is cut to its first `MAX_RULES`.
+ * pool releases nothing this person's items exercise, when the set is the
+ * current one, or when a recorded round already judged this very set. The
+ * pool releases its most-held rules first, so a release past `MAX_RULES` is
+ * cut to its first `MAX_RULES`.
+ *
+ * A released rule that matches none of the held-out items is left out before
+ * the set is judged (`unexercised`). The gate scores only what the held-out
+ * items exercise, so such a rule would ride along unexamined: a NO exception
+ * aimed at a sender this person has not yet heard from, say, which a pool's
+ * contributors could plant to silence a future message.
  */
 export function poolOffer(
   current: readonly CanonicalRule[],
@@ -667,11 +679,24 @@ export function poolOffer(
   heldOut: ReadonlyArray<{ fields: Record<string, string>; label: boolean }>,
   history: readonly HistoryEntry[],
 ): PoolOffer | null {
+  const unexercised: CanonicalRule[] = [];
   const drafts = (released ?? []).slice(0, MAX_RULES).map((rule) => ({
     field: rule?.field,
     pattern: rule?.pattern,
     predicts: rule?.predicts,
-  }));
+  })).filter((draft) => {
+    // A rule out of grammar stays, so the judgement refuses it and says why
+    const check = checkRule(draft);
+    if (!check.ok) return true;
+    const regex = new RegExp(check.rule.pattern, "i");
+    const exercised = heldOut.some((example) => {
+      const value = example.fields[check.rule.field];
+      return typeof value === "string" &&
+        regex.test(value.slice(0, MAX_TESTED_LENGTH));
+    });
+    if (!exercised) unexercised.push(check.rule);
+    return exercised;
+  });
   if (drafts.length === 0) return null;
   const judgement = judgeProposal(current, { rules: drafts }, heldOut);
   const keysOf = (rules: readonly CanonicalRule[]) =>
@@ -686,7 +711,7 @@ export function poolOffer(
     `${keysOf(judgement.rules)}|${judgement.refusals.join("|")}`,
   );
   if (history.some((entry) => entry.poolOffer === key)) return null;
-  return { key, judgement };
+  return { key, judgement, unexercised };
 }
 
 // =============================================================================

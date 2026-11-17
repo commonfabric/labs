@@ -65,9 +65,13 @@ agent).
 6. The pool's release comes back. The inductor reads the rules the pool for its
    goal releases (`consensus`, public by the pool's policy) and offers them as a
    candidate set, judged by the same gate as a rewrite on the person's own
-   held-out items (`poolOffer`). Recording it takes a send of `settlePoolOffer`:
-   "Adopt the pool's rules (F1 a → b)" or "Dismiss the pool's rules". A set
-   already judged is not offered again; a new release is.
+   held-out items (`poolOffer`). A released rule that matches none of those
+   items is left out first: the score cannot see what it does, so it would ride
+   along unexamined (a NO exception aimed at a sender the person has not heard
+   from yet, say). The view lists every released rule as offered, refused, or
+   left out. Recording it takes a send of `settlePoolOffer`: "Adopt the pool's
+   rules (F1 a → b)" or "Dismiss the pool's rules". A set already judged is not
+   offered again; a new release is.
 
 Rules use a restricted regex grammar (no backreferences, no lookaround) and are
 compared by a canonical form, so two people who learned the same rule in
