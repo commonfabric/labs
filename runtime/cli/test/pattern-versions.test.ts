@@ -59,12 +59,23 @@ const stubClient = (answers: {
   publish?: () => Promise<PatternIndexPublishResponse>;
   patterns?: Record<string, Partial<PatternIndexPattern>>;
   slots?: string[];
+  keepsVersions?: boolean;
 } = {}) => {
   const published: PatternIndexPublishRequest[] = [];
   const client: Pick<
     PatternIndexClient,
-    "publishPattern" | "getPattern" | "listLineages"
+    "publishPattern" | "getPattern" | "listLineages" | "getSharingSettings"
   > = {
+    getSharingSettings: () =>
+      answers.keepsVersions === false
+        ? Promise.reject(new PatternIndexError("getSharingSettings", 404))
+        : Promise.resolve({
+          enabled: true,
+          selfBuilt: false,
+          agentBuilt: true,
+          receivesAnonymous: true,
+          updatedAt: null,
+        }),
     listLineages: () =>
       Promise.resolve({
         lineages: (answers.slots ?? []).map((slot) =>
@@ -113,7 +124,7 @@ describe("pattern-versions", () => {
   const depsWith = (
     client: Pick<
       PatternIndexClient,
-      "publishPattern" | "getPattern" | "listLineages"
+      "publishPattern" | "getPattern" | "listLineages" | "getSharingSettings"
     >,
   ) => {
     const opened = { count: 0 };
@@ -184,6 +195,18 @@ describe("pattern-versions", () => {
       expect(published).toHaveLength(0);
       expect(versionLine(first)).toContain("cf index join");
       expect(versionLine(second)).toBeUndefined();
+    });
+
+    it("sends no source to an index that does not keep private versions", async () => {
+      await joinIndex();
+      const { client, published } = stubClient({ keepsVersions: false });
+      const { deps } = depsWith(client);
+
+      const outcome = await recordDeployedVersion(deployed(), deps);
+
+      expect(outcome.status).toBe("skipped");
+      expect(published).toHaveLength(0);
+      expect(await store.keepsVersions()).toBe(false);
     });
 
     it("records nothing for a piece that follows an origin, which is not the person's source", async () => {

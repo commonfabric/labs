@@ -192,7 +192,13 @@ export interface VersionDeps {
 
   /** Opened only for a machine that joined the index. */
   openClient: () => Promise<
-    Pick<PatternIndexClient, "publishPattern" | "getPattern" | "listLineages">
+    Pick<
+      PatternIndexClient,
+      | "publishPattern"
+      | "getPattern"
+      | "listLineages"
+      | "getSharingSettings"
+    >
   >;
 
   readTextFile: (path: string) => Promise<string>;
@@ -230,6 +236,12 @@ export async function recordDeployedVersion(
     }
     const entry = resolve(deployed.entry);
     const client = await deps.openClient();
+    if (!await keepsVersions(client, deps.store)) {
+      return {
+        status: "skipped",
+        reason: "this pattern index does not keep private versions yet",
+      };
+    }
     const sources: SlotSources = {
       pathKey: () => deps.store.slotKey(),
       ...(deps.checkoutOf === undefined ? {} : { checkoutOf: deps.checkoutOf }),
@@ -279,6 +291,28 @@ export async function recordDeployedVersion(
     return { status: "failed", reason: failureReason(error) };
   }
 }
+
+/**
+ * Whether the index keeps private versions, asked once and remembered: an
+ * index from before them answers its sharing setting with 404, and would
+ * store a deploy's source where anyone may fetch it by id.
+ */
+const keepsVersions = async (
+  client: Pick<PatternIndexClient, "getSharingSettings">,
+  store: PatternIndexStore,
+): Promise<boolean> => {
+  if (await store.keepsVersions()) return true;
+  try {
+    await client.getSharingSettings();
+  } catch (error) {
+    if (error instanceof PatternIndexError && error.status === 404) {
+      return false;
+    }
+    throw error;
+  }
+  await store.recordKeepsVersions();
+  return true;
+};
 
 /** A failure in words the person can act on, quoting no index detail. */
 const failureReason = (error: unknown): string => {

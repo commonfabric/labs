@@ -69,6 +69,7 @@ const PUBLISHED = "published.json";
 const PENDING_MOVE = "pending-root-move";
 const NOTED_NOT_JOINED = "noted-not-joined";
 const SLOT_KEY = "slot.key";
+const KEEPS_VERSIONS = "keeps-versions";
 
 /**
  * The directory every index's store lives under, one subdirectory per index
@@ -250,6 +251,30 @@ export class PatternIndexStore {
       return;
     }
     await Deno.writeTextFile(path, `${cid}\n`, { mode: 0o600 });
+  }
+
+  /**
+   * Whether this index has answered as one that keeps private versions. An
+   * index from before them stores whatever it is sent where anyone may
+   * fetch it by id, so `cf` sends a deploy's source only once this is true.
+   */
+  async keepsVersions(): Promise<boolean> {
+    await this.#checkPrivate();
+    return await Deno.lstat(join(this.#dir, KEEPS_VERSIONS)).then(
+      () => true,
+      (error) => {
+        if (isNotFound(error)) return false;
+        throw error;
+      },
+    );
+  }
+
+  /** Records that this index keeps private versions. */
+  async recordKeepsVersions(): Promise<void> {
+    await this.#ensureDir();
+    await Deno.writeTextFile(join(this.#dir, KEEPS_VERSIONS), "", {
+      mode: 0o600,
+    });
   }
 
   /**
