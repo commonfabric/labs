@@ -256,11 +256,9 @@ async function enclosingPieceOf(
 /**
  * Helper for `enclosingPieceOf()`, which indicates whether the piece at
  * `candidate` records the piece at `owner` as the output of a nested node of
- * its own graph, in one of its `internal` documents: as that document's whole
- * value, a link to `owner`'s root, which is what a nested call writes; or a
- * link to a list one of whose elements is a link to `owner`'s root, which is
- * what a list builtin such as `map` writes for the instances it builds. A
- * match compares documents by `rootKey()`, so the scope counts too.
+ * its own graph: one of its `internal` documents holds, as its whole value, a
+ * link to `owner`'s root. A match compares documents by `rootKey()`, so the
+ * scope counts too.
  */
 async function enclosesAsNested(
   runtime: Runtime,
@@ -281,28 +279,17 @@ async function enclosesAsNested(
   const valueLink = async (document: Cell<any>) => {
     await document.sync();
     signal?.throwIfAborted();
-    const value = document.getRaw();
-    return { value, link: parseLink(value, document) };
+    return parseLink(document.getRaw(), document);
   };
   for (const entry of internal) {
     const link = isKeyableObjectOrArray(entry)
       ? parseLink((entry as { link?: unknown }).link, root)
       : undefined;
     if (link === undefined || link.space !== owner.space) continue;
-    const { link: held } = await valueLink(
+    const held = await valueLink(
       runtime.getCellFromLink({ ...link, path: [] }, undefined, tx),
     );
-    if (held === undefined) continue;
     if (namesOwner(held)) return true;
-    if (held.path.length !== 0 || held.space !== owner.space) continue;
-    const list = runtime.getCellFromLink(held, undefined, tx);
-    const { value } = await valueLink(list);
-    if (
-      Array.isArray(value) &&
-      value.some((element) => namesOwner(parseLink(element, list)))
-    ) {
-      return true;
-    }
   }
   return false;
 }
@@ -513,27 +500,26 @@ export type EnsurePieceOptions = {
    * stores no pointer to its enclosing instance; what the runtime stores is the
    * other direction. Setup records each nested node's output among the
    * enclosing instance's `internal` documents, as a document whose whole value
-   * is a link to the nested instance's root, or, for the instances a list
-   * builtin such as `map` builds, a link to the builtin's list, one of whose
-   * elements links the instance's root; such an instance carries a `result`
-   * backlink to its creator, so each piece a backlink chain passes through is a
-   * candidate too. So the walk looks for the piece that records the owning
-   * piece that way among the pieces whose argument or internal documents the
-   * owning piece's argument links into, and starts that one piece; the walk
-   * then does the same for it. A link to a piece's result root names no
-   * candidate, so the producers a piece is wired to are not asked. A child a
-   * handler made is held behind a value-link slot, never named that way, so its
-   * creator is left to the event path, as is a piece wired to another's output,
-   * and the owner of any other document the argument links into. Found this
-   * way: a named nested node, a pattern returning a nested instance's result
-   * whole, nested instances fed by a sibling under one parent, and the rows
-   * `map` builds, which the parent records as the elements of the builtin's
-   * list. Not found: a nested instance whose argument links into its enclosing
-   * instance only at that instance's result root, or not at all; and, unprobed,
-   * the instances `filter`, `flatMap` and `ifElse` build, and wish results. A
-   * pattern that itself stores a link straight to a piece's root as the whole
-   * value of a document it owns reads as enclosing that piece. Where no
-   * enclosing piece is found, the owning piece starts alone, and silently: a
+   * is a link to the nested instance's root. So the walk looks for the piece
+   * that records the owning piece that way among the pieces whose argument or
+   * internal documents the owning piece's argument links into, counting each
+   * piece a `result` backlink chain passes through on the way to its owning
+   * root, and starts that one piece; the walk then does the same for it. A link
+   * to a piece's result root names no candidate, so the producers a piece is
+   * wired to are not asked. A child a handler made is held behind a value-link
+   * slot, never named that way, so its creator is left to the event path, as is
+   * a piece wired to another's output, and the owner of any other document the
+   * argument links into. Found this way: a named nested node, a pattern
+   * returning a nested instance's result whole, nested instances fed by a
+   * sibling under one parent, and an instance nested in a row `map` builds,
+   * which finds the row as a backlink chain passes through it; the row itself
+   * carries a `result` backlink to the piece that built it, and starts with
+   * that piece. Not found: a nested instance whose argument links into its
+   * enclosing instance only at that instance's result root, or not at all; and,
+   * unprobed, the instances `filter`, `flatMap` and `ifElse` build, and wish
+   * results. A pattern that itself stores a link straight to a piece's root as
+   * the whole value of a document it owns reads as enclosing that piece. Where
+   * no enclosing piece is found, the owning piece starts alone, and silently: a
    * piece nothing encloses and one whose enclosing piece is not found look the
    * same to the walk.
    */
