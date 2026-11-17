@@ -11,14 +11,17 @@
 import {
   calculateF1,
   calculatePrecisionRecall,
-  isRegexSafe,
 } from "../self-improving-classifier/classifier-logic.ts";
 import {
   type CanonicalRule,
   checkRule,
   describeRule,
+  MAX_RULES,
+  MAX_TESTED_LENGTH,
   stableHash,
 } from "./rule-grammar.ts";
+
+export { MAX_RULES, MAX_TESTED_LENGTH } from "./rule-grammar.ts";
 
 // =============================================================================
 // TYPES
@@ -119,9 +122,6 @@ export interface Published {
   pooled?: boolean;
 }
 
-/** The most rules a set may hold. */
-export const MAX_RULES = 20;
-
 /** How many examples of each kind the rewrite prompt carries at most. */
 const PROMPT_SURPRISES = 30;
 const PROMPT_AGREEMENTS = 20;
@@ -151,14 +151,16 @@ interface CompiledRule {
 }
 
 /**
- * `rules` compiled, leaving out any that is outside the grammar or unsafe.
- * Stored rules are canonical already; a rule seeded by hand may not be.
+ * `rules` compiled, leaving out any that is outside the grammar. The grammar
+ * refuses every pattern that could backtrack past its budget, so a rule it
+ * accepts always compiles and runs. Stored rules are canonical already; a rule
+ * seeded by hand may not be.
  */
 function compileRules(rules: readonly CanonicalRule[]): CompiledRule[] {
   const compiled: CompiledRule[] = [];
   for (const rule of rules) {
     const check = checkRule(rule);
-    if (!check.ok || !isRegexSafe(check.rule.pattern)) continue;
+    if (!check.ok) continue;
     compiled.push({ rule, regex: new RegExp(check.rule.pattern, "i") });
   }
   return compiled;
@@ -176,7 +178,10 @@ function label(
   let yes = false;
   for (const { rule, regex } of compiled) {
     const value = fields[rule.field];
-    if (typeof value !== "string" || !regex.test(value)) continue;
+    if (
+      typeof value !== "string" ||
+      !regex.test(value.slice(0, MAX_TESTED_LENGTH))
+    ) continue;
     if (!rule.predicts) return false;
     yes = true;
   }
@@ -443,12 +448,6 @@ export function judgeProposal(
     const check = checkRule(draft);
     if (!check.ok) {
       refusals.push(`rule ${index + 1}: ${check.reason}`);
-    } else if (!isRegexSafe(check.rule.pattern)) {
-      refusals.push(
-        `rule ${
-          index + 1
-        }: /${check.rule.pattern}/ could backtrack catastrophically`,
-      );
     } else if (!rules.some((rule) => rule.key === check.rule.key)) {
       rules.push(check.rule);
     }

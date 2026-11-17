@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { checkRule } from "../lofi-inductor/rule-grammar.ts";
+import { checkRule, MAX_RULES } from "../lofi-inductor/rule-grammar.ts";
 import {
   agreedSeal,
   type CanonicalRule,
@@ -282,6 +282,17 @@ describe("canonicalSet", () => {
     expect(() => canonicalSet([INVOICE, { ...BILL, pattern: "(a)\\1" }]))
       .toThrow("Refused a rule");
     expect(() => canonicalSet(undefined)).toThrow();
+  });
+
+  it("refuses a rule that could backtrack too long, and too many rules", () => {
+    expect(() => canonicalSet([{ ...BILL, pattern: ".*.*.*.*.*!" }]))
+      .toThrow("backtrack too long");
+    const tooMany = Array.from(
+      { length: MAX_RULES + 1 },
+      (_, i) => ({ field: "subject", pattern: `word${i}`, predicts: true }),
+    );
+    expect(() => canonicalSet(tooMany)).toThrow(`at most ${MAX_RULES}`);
+    expect(canonicalSet(tooMany.slice(0, MAX_RULES))).toHaveLength(MAX_RULES);
   });
 });
 

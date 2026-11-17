@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { isRegexSafe } from "../self-improving-classifier/classifier-logic.ts";
 import {
   canonicalizePattern,
   checkRule,
@@ -134,6 +135,30 @@ const OUT_OF_GRAMMAR: Array<[string, RegExp]> = [
   ["", /empty/],
   ["()", /match something/],
   ["a".repeat(MAX_PATTERN_LENGTH + 1), /longer/],
+  // Polynomial backtracking: five unbounded quantifiers take seconds on a
+  // hundred characters
+  [".*.*.*.*.*!", /backtrack too long/],
+  [".*.*!", /backtrack too long/],
+  ["\\s*\\s*x", /backtrack too long/],
+  ["from.*to.*", /backtrack too long/],
+  ["\\w{0,99}\\w{0,99}!", /backtrack too long/],
+  [".*a?a?a?a?!", /backtrack too long/],
+  // Exponential backtracking, as isRegexSafe refuses it
+  ["(a|aa)+", /exponentially/],
+  ["(a+)+", /exponentially/],
+  ["(?:ab?){3}", /exponentially/],
+];
+
+/** Patterns the backtracking budget lets through. */
+const WITHIN_BUDGET = [
+  "invoice.*due",
+  ".*bills?",
+  "(?:bill|invoice|payment due|receipt|statement).*",
+  "\\$\\d+\\.\\d\\d",
+  "pay(?:ment)? due",
+  ".*a?a?a?!",
+  "(?:ab)+",
+  "invoice.*|.*statement",
 ];
 
 describe("canonicalizePattern", () => {
@@ -161,9 +186,11 @@ describe("canonicalizePattern", () => {
     expect(canon("INVOICE|Statement")).toBe("invoice|statement");
     expect(canon("(a|b)+")).toBe("[ab]+");
     expect(canon("[A-Za-z0-9_]+")).toBe("\\w+");
-    expect(canon("(ab|cd)+")).toBe("(?:ab|cd)+");
+    expect(canon("(ab|cd)?")).toBe("(?:ab|cd)?");
     expect(canon("pay(ment)? due")).toBe("pay(?:ment)? due");
-    expect(canon("a{0,}b{1,}c{0,1}d{3,}e{2,4}")).toBe("a*b+c?d{3,}e{2,4}");
+    expect(canon("a{0,}c{0,1}e{2,4}")).toBe("a*c?e{2,4}");
+    expect(canon("b{1,}")).toBe("b+");
+    expect(canon("d{3,}")).toBe("d{3,}");
     expect(canon("x/y")).toBe("x\\/y");
     expect(canon("\\t")).toBe("\\u0009");
   });
@@ -255,8 +282,9 @@ describe("canonicalizePattern", () => {
       }
       expect(canon(result.pattern)).toBe(result.pattern);
     }
-    // The generator mostly stays inside the grammar
-    expect(checked).toBeGreaterThan(300);
+    // The generator mostly stays inside the grammar; the backtracking budget
+    // refuses many of its patterns with two unbounded quantifiers
+    expect(checked).toBeGreaterThan(200);
   });
 
   it("refuses what the grammar excludes, saying why", () => {
@@ -266,6 +294,19 @@ describe("canonicalizePattern", () => {
         reason: expect.stringMatching(why),
       });
     }
+  });
+
+  it("accepts a pattern within the backtracking budget, as safe", () => {
+    for (const pattern of WITHIN_BUDGET) {
+      const canonical = canon(pattern);
+      expect({ pattern, safe: isRegexSafe(canonical) }).toEqual({
+        pattern,
+        safe: true,
+      });
+    }
+    // A repeat of a fixed count is no choice, so a group holding one may
+    // repeat, which isRegexSafe, reading text, refuses
+    expect(canon("\\d{1,3}(?:,\\d{3})*")).toBe("\\d{1,3}(?:,\\d{3})*");
   });
 
   it("refuses a value that is not a string", () => {

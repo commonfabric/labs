@@ -14,6 +14,7 @@ import {
   labelWith,
   markdownOf,
   MAX_RULES,
+  MAX_TESTED_LENGTH,
   newSurprises,
   rewriteStatus,
   scoreRules,
@@ -69,6 +70,12 @@ describe("labelWith", () => {
     expect(labelWith(rules, { subject: "hello" })).toBe(false);
     expect(labelWith(rules, { body: "invoice" })).toBe(false);
     expect(labelWith([], { subject: "invoice" })).toBe(false);
+  });
+
+  it("tests only a field's first MAX_TESTED_LENGTH code units", () => {
+    const padding = "x".repeat(MAX_TESTED_LENGTH - "invoice".length);
+    expect(labelWith(rules, { subject: `${padding}invoice` })).toBe(true);
+    expect(labelWith(rules, { subject: `${padding}xinvoice` })).toBe(false);
   });
 
   it("skips a seeded rule that is outside the grammar or unsafe", () => {

@@ -143,7 +143,7 @@ export default pattern(() => {
 
   const assert_view_shows_refusal = assert(() =>
     hasText(unsafe[UI], "Round 1: rejected") &&
-    hasText(unsafe[UI], "could backtrack catastrophically")
+    hasText(unsafe[UI], "could backtrack exponentially")
   );
 
   return {

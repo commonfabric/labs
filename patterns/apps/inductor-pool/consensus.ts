@@ -13,6 +13,7 @@
 import {
   type CanonicalRule,
   checkRule,
+  MAX_RULES,
 } from "../lofi-inductor/rule-grammar.ts";
 
 export type { CanonicalRule } from "../lofi-inductor/rule-grammar.ts";
@@ -455,14 +456,18 @@ export function mintSeal(
 }
 
 /**
- * `drafts` as one contribution's rule set: each checked against the grammar
- * and put in canonical form, a rule given twice kept once. A rule out of
+ * `drafts` as one contribution's rule set: at most `MAX_RULES`, each checked
+ * against the grammar, which refuses a pattern that could backtrack past its
+ * budget, and put in canonical form, a rule given twice kept once. A rule out of
  * grammar refuses the whole set, so a contributor learns their set was not
  * taken rather than having part of it silently dropped.
  */
 export function canonicalSet(drafts: unknown): CanonicalRule[] {
   if (!Array.isArray(drafts)) {
     throw new Error("A contribution needs a list of rules.");
+  }
+  if (drafts.length > MAX_RULES) {
+    throw new Error(`A contribution holds at most ${MAX_RULES} rules.`);
   }
   const rules = new Map<string, CanonicalRule>();
   for (const draft of drafts) {

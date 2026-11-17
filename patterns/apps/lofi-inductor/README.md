@@ -29,9 +29,10 @@ agent).
 3. After enough new surprises (`rewriteAfter`, default 3), another LLM call sees
    the current rules and the training examples and proposes a whole new rule
    set. It replaces the current one only if every rule is in the grammar and
-   passes the regex safety check, and the set's F1 on the held-out examples is
-   strictly higher; a tie keeps the current set. No one has to approve rules one
-   by one. Every judged proposal goes into the history, accepted or not.
+   passes the grammar's backtracking check, and the set's F1 on the held-out
+   examples is strictly higher; a tie keeps the current set. No one has to
+   approve rules one by one. Every judged proposal goes into the history,
+   accepted or not.
 4. Some goals never settle into rules. That is a valid outcome: they stay on the
    hi-fi model.
 5. Publishing sends the accepted rules to a pool for the goal, under the piece's
@@ -65,9 +66,10 @@ ever match it.
   time can still watch for release, but cannot tell whether up to about `2k` of
   the contributors were real people.
 
-Builds on `apps/self-improving-classifier` (`classifier-logic.ts`): regex
-compiling, `isRegexSafe`, and scoring. Design notes: the "hi-fi → lo-fi pump" in
-the enricher-ecosystem PRD (§6.8–6.10).
+Builds on `apps/self-improving-classifier` (`classifier-logic.ts`): scoring, and
+the shape of `isRegexSafe`, which the grammar's backtracking check generalizes.
+Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
+(§6.8–6.10).
 
 ## Building `lofi-inductor`
 
@@ -76,8 +78,20 @@ the enricher-ecosystem PRD (§6.8–6.10).
   cannot change it: alternation order, laziness, capturing groups, letter case,
   equivalent spellings of one character or class, and quantifier spelling. When
   unsure it leaves a pattern as written, so two rules may compare different that
-  mean the same, but never the reverse. The safety check runs on the canonical
-  form, which is what runs, so `(a|b)+` is accepted as `[ab]+`.
+  mean the same, but never the reverse.
+- The grammar is also the safety check, and it runs on the canonical form, which
+  is what runs, so `(a|b)+` is accepted as `[ab]+`. It refuses a repeated group
+  holding a choice (`(a|aa)+`, exponential), and bounds polynomial backtracking:
+  counting the ways each top-level alternative can match one span (a sequence
+  multiplies, an alternation adds, an unbounded quantifier counts as
+  `MAX_TESTED_LENGTH`), it allows at most `MAX_BACKTRACK_COST`, eight times
+  `MAX_TESTED_LENGTH`. In practice that is one unbounded quantifier with a few
+  small choices beside it: `invoice.*due` passes, `.*.*!` does not (seconds on a
+  thousand characters, measured). A rule tests only a field's first
+  `MAX_TESTED_LENGTH` (1000) code units, which turns that count into a bound on
+  time: a few milliseconds per rule and field at worst. The pool applies the
+  same grammar to every contribution, and takes at most `MAX_RULES` (20) rules
+  from one.
 - A rule set says YES when a YES rule matches and no NO rule does.
 - Scoring all labelled held-out items, not only surprises, is what lets the gate
   see a proposal that fixes the surprises by breaking items the current rules

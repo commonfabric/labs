@@ -78,6 +78,28 @@ export const MAX_REPEAT_COUNT = 100;
 /** The longest field name accepted. */
 const MAX_FIELD_LENGTH = 64;
 
+/** The most rules one set (a proposal, or a contribution to a pool) holds. */
+export const MAX_RULES = 20;
+
+/**
+ * How much of a field a rule is tested against, in code units: a rule tests
+ * only the field's first `MAX_TESTED_LENGTH` code units. A subject or a
+ * snippet fits whole; a long body is cut. The bound is what makes the
+ * backtracking budget below a bound on time.
+ */
+export const MAX_TESTED_LENGTH = 1000;
+
+/**
+ * The most ways one alternative of a pattern may match a single span, as
+ * `backtrackCost` counts them, with an unbounded quantifier counting as
+ * `MAX_TESTED_LENGTH` ways. `RegExp.test` tries the pattern at every start
+ * position, so its work is at most about this times the tested length:
+ * eight million steps, a few milliseconds per rule and field, measured. One
+ * unbounded quantifier with up to eight ways around it fits (`invoice.*due`,
+ * `.*bills?`); two do not (`.*.*!` takes seconds on a thousand characters).
+ */
+export const MAX_BACKTRACK_COST = 8 * MAX_TESTED_LENGTH;
+
 // =============================================================================
 // CHARACTER SETS
 // =============================================================================
@@ -560,6 +582,76 @@ function print(node: Node): string {
 }
 
 // =============================================================================
+// BACKTRACKING
+// =============================================================================
+
+/** Whether `node` holds a quantifier or an alternation anywhere inside it. */
+function holdsChoice(node: Node): boolean {
+  switch (node.kind) {
+    case "alt":
+      return node.branches.length > 1 || node.branches.some(holdsChoice);
+    case "repeat":
+      return node.min !== node.max || holdsChoice(node.body);
+    case "seq":
+      return node.items.some(holdsChoice);
+    default:
+      return false;
+  }
+}
+
+/**
+ * An upper bound on how many ways `node` can match one span, with an
+ * unbounded quantifier counted as `MAX_TESTED_LENGTH` ways: a sequence
+ * multiplies its items' ways, an alternation adds its branches', and a
+ * quantifier adds its body's ways at each count it allows. Throws a grammar
+ * error on a group that holds a choice repeated more than once (`(a|aa)+`,
+ * `(a+)+`, `(?:ab?){3}`), which backtracks exponentially, as
+ * `isRegexSafe` in the self-improving classifier refuses it.
+ */
+function backtrackCost(node: Node): number {
+  switch (node.kind) {
+    case "set":
+    case "assert":
+      return 1;
+    case "seq":
+      return node.items.reduce((ways, item) => ways * backtrackCost(item), 1);
+    case "alt":
+      return node.branches.reduce(
+        (ways, branch) => ways + backtrackCost(branch),
+        0,
+      );
+    case "repeat": {
+      if (node.max !== 1 && holdsChoice(node.body)) {
+        fail(
+          "a repeated group holding a quantifier or an alternation could backtrack exponentially",
+        );
+      }
+      if (node.max === null) return MAX_TESTED_LENGTH;
+      // With no choice inside, the body matches one way at each count
+      const body = backtrackCost(node.body);
+      return body === 1 ? node.max - node.min + 1 : 1 + body;
+    }
+  }
+}
+
+/**
+ * Refuses `tree` when an alternative of it could backtrack past the budget.
+ * The top-level alternatives are tried one after another, so each is held to
+ * the budget on its own.
+ */
+function checkBacktracking(tree: Node): void {
+  const alternatives = tree.kind === "alt" ? tree.branches : [tree];
+  for (const alternative of alternatives) {
+    if (backtrackCost(alternative) > MAX_BACKTRACK_COST) {
+      fail(
+        "the pattern could backtrack too long: it may hold one unbounded " +
+          "quantifier (*, + or {n,}), with few other choices beside it",
+      );
+    }
+  }
+}
+
+// =============================================================================
 // PUBLIC API
 // =============================================================================
 
@@ -583,7 +675,9 @@ export function canonicalizePattern(
     return { ok: false, reason: "write the pattern without slashes or flags" };
   }
   try {
-    const canonical = print(simplify(parse(pattern)));
+    const tree = simplify(parse(pattern));
+    checkBacktracking(tree);
+    const canonical = print(tree);
     if (canonical === "") {
       return { ok: false, reason: "a pattern must match something" };
     }
