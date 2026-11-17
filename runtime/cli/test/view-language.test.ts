@@ -38,6 +38,7 @@ import { yamlLanguage } from "../lib/view/languages/yaml/language.ts";
 import { pythonLanguage } from "../lib/view/languages/python/language.ts";
 import { swiftLanguage } from "../lib/view/languages/swift/language.ts";
 import { kotlinLanguage } from "../lib/view/languages/kotlin/language.ts";
+import { rustLanguage } from "../lib/view/languages/rust/language.ts";
 import { tomlLanguage } from "../lib/view/languages/toml/language.ts";
 import { hclLanguage } from "../lib/view/languages/hcl/language.ts";
 import { shellLanguage } from "../lib/view/languages/shell/language.ts";
@@ -148,6 +149,8 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("swift"), swiftLanguage);
   assertEquals(languageForName("kotlin"), kotlinLanguage);
   assertEquals(languageForName("kt"), kotlinLanguage);
+  assertEquals(languageForName("rust"), rustLanguage);
+  assertEquals(languageForName("rs"), rustLanguage);
   assertEquals(languageForName("toml"), tomlLanguage);
   assertEquals(languageForName("hcl"), hclLanguage);
   assertEquals(languageForName("opentofu"), hclLanguage);
@@ -185,6 +188,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "python",
     "swift",
     "kotlin",
+    "rust",
     "toml",
     "hcl",
     "shell",
@@ -217,6 +221,8 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "swift",
     "kotlin",
     "kt",
+    "rust",
+    "rs",
     "toml",
     "hcl",
     "opentofu",

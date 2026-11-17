@@ -382,6 +382,18 @@ interface CommentSyntax {
   readonly nestedBlocks: boolean;
   readonly skipHighlightedCode: boolean;
   readonly heredocs: boolean;
+
+  /** Whether strings span lines and raw strings, byte strings, and character
+   * literals are read as Rust reads them. */
+  readonly rustLiterals: boolean;
+}
+
+/** A Rust string or character literal: the text that opens it, the text that
+ * closes it, and whether a backslash escapes the character after it. */
+interface RustLiteral {
+  readonly open: string;
+  readonly close: string;
+  readonly escapes: boolean;
 }
 
 interface HeredocState {
@@ -396,8 +408,12 @@ interface CommentState {
     depth: number;
     readonly nested: boolean;
   };
-  literalClose?: string;
+  literal?: RustLiteral;
   heredocs?: HeredocState[];
+
+  /** Whether every line before the one scanned next has been scanned, so that
+   * a `"` with no close on its line is known to open a string. */
+  inStep?: boolean;
 }
 
 /** Scans each file side so multiline syntax carries across diff hunks. */
@@ -414,8 +430,14 @@ function fallbackCommentLines(
   if (!oldSyntax && !newSyntax) return new Map();
 
   const result = new Map<number, string>();
-  const oldState: CommentState = {};
-  const newState: CommentState = {};
+  const firstLine = (side: "oldStart" | "newStart") =>
+    file.hunks[0]?.[side] === 1;
+  const oldState: CommentState = {
+    inStep: Boolean(context?.oldLines) || firstLine("oldStart"),
+  };
+  const newState: CommentState = {
+    inStep: Boolean(context?.newLines) || firstLine("newStart"),
+  };
   let oldNextLine = 0;
   let newNextLine = 0;
   for (const [hunkIndex, hunk] of file.hunks.entries()) {
@@ -527,6 +549,10 @@ function reconcileStateAfterGap(
     : previous.newStart + previous.newCount;
   const currentStart = side === "old" ? current.oldStart : current.newStart;
   if (previousEnd === currentStart) return;
+  // A `"` in the lines after the gap may close a string as well as open one,
+  // so only a raw string, whose delimiter says which it is, stays open.
+  state.inStep = false;
+  if (state.literal?.escapes) state.literal = undefined;
 
   const texts: string[] = [];
   for (const hunk of remaining) {
@@ -547,12 +573,12 @@ function reconcileStateAfterGap(
   ) {
     state.block = undefined;
   }
-  const literalClose = state.literalClose;
+  const literal = state.literal;
   if (
-    literalClose &&
-    !texts.some((text) => hasVisibleClose(text, literalClose, syntax))
+    literal &&
+    !texts.some((text) => hasVisibleClose(text, literal.close, syntax))
   ) {
-    state.literalClose = undefined;
+    state.literal = undefined;
   }
   const heredocs = state.heredocs;
   if (heredocs) {
@@ -645,9 +671,10 @@ function fallbackSyntaxFor(
   path: string | undefined,
   language: Language,
 ): CommentSyntax | undefined {
-  // Shell's highlighting colors each hunk on its own, and this scanner carries
-  // a heredoc across the lines between hunks.
-  if (!["plain-text", "markdown", "shell"].includes(language.id)) {
+  // The diff colors each hunk on its own. This scanner knows shell heredocs
+  // and Rust's strings and nested comments, and carries them across the lines
+  // between hunks.
+  if (!["plain-text", "markdown", "shell", "rust"].includes(language.id)) {
     return undefined;
   }
   const syntax = commentSyntaxFor(path ?? "", language);
@@ -674,12 +701,12 @@ function stripCommonComments(
 
   let start = 0;
   let result = "";
-  if (state.literalClose) {
-    const end = text.indexOf(state.literalClose);
+  if (state.literal) {
+    const end = literalEnd(text, state.literal, 0);
     if (end < 0) return text;
-    result = text.slice(0, end + state.literalClose.length);
-    start = result.length;
-    state.literalClose = undefined;
+    result = text.slice(0, end);
+    start = end;
+    state.literal = undefined;
   }
 
   let quote = "";
@@ -699,6 +726,28 @@ function stripCommonComments(
       continue;
     }
     const ch = text[i];
+    if (syntax.rustLiterals && !quote) {
+      const literal = rustLiteralAt(text, i);
+      const end = literal
+        ? literalEnd(text, literal, i + literal.open.length)
+        : -1;
+      if (literal && (end >= 0 || !literal.escapes || state.inStep)) {
+        if (end < 0) {
+          result += text.slice(i);
+          state.literal = literal;
+          break;
+        }
+        result += text.slice(i, end);
+        i = end;
+        continue;
+      }
+      // The quote of a lifetime or a label starts no literal.
+      if (ch === "'") {
+        result += ch;
+        i++;
+        continue;
+      }
+    }
     if (quote) {
       result += ch;
       if (ch === "\\" && i + 1 < text.length) {
@@ -716,19 +765,6 @@ function stripCommonComments(
       quote = ch;
       result += ch;
       i++;
-      continue;
-    }
-    const rawString = rustRawStringAt(text, i);
-    if (rawString) {
-      const end = text.indexOf(rawString.close, i + rawString.open.length);
-      if (end < 0) {
-        result += text.slice(i);
-        state.literalClose = rawString.close;
-        break;
-      }
-      const after = end + rawString.close.length;
-      result += text.slice(i, after);
-      i = after;
       continue;
     }
     // `<<<` is a here-string, and `<<` inside `((` is a shift.
@@ -761,13 +797,29 @@ function stripCommonComments(
   return result;
 }
 
-function rustRawStringAt(
-  text: string,
-  index: number,
-): { readonly open: string; readonly close: string } | undefined {
-  const match = /^(?:br|r)(#*)"/.exec(text.slice(index));
-  if (!match) return undefined;
-  return { open: match[0], close: `"${match[1]}` };
+/** The Rust string, raw string, or character literal that starts at `index`.
+ * A byte string's `b` comes before the literal it marks. */
+function rustLiteralAt(text: string, index: number): RustLiteral | undefined {
+  const rest = text.slice(index);
+  const raw = /^b?r(#*)"/u.exec(rest);
+  if (raw) return { open: raw[0], close: `"${raw[1]}`, escapes: false };
+  if (rest.startsWith('"')) return { open: '"', close: '"', escapes: true };
+  const character =
+    /^'(?:[^'\\\n]|\\(?:x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f]{1,6}\}|.))'/u
+      .exec(rest);
+  return character
+    ? { open: character[0], close: "", escapes: false }
+    : undefined;
+}
+
+/** The offset just past the close of `literal` in `text`, from `from`, or -1
+ * when the literal continues past the end of the line. */
+function literalEnd(text: string, literal: RustLiteral, from: number): number {
+  for (let i = from; i <= text.length; i++) {
+    if (literal.escapes && text[i] === "\\") i++;
+    else if (text.startsWith(literal.close, i)) return i + literal.close.length;
+  }
+  return -1;
 }
 
 function startsLineComment(
@@ -790,13 +842,14 @@ function closingQuote(text: string, start: number, quote: string): number {
 }
 
 /**
- * The comment forms of a file's syntax. Shell's come from its language, which
- * a shebang can select for a path with no extension; the rest come from the
- * path's extension or name.
+ * The comment forms of a file's syntax. Shell's and Rust's come from their
+ * languages, which a shebang or an explicit choice can select for any path; the
+ * rest come from the path's extension or name.
  */
 function commentSyntaxFor(path: string, language: Language): CommentSyntax {
   const lower = path.toLowerCase();
   const shell = language.id === "shell";
+  const rust = language.id === "rust";
   const lines: string[] = [];
   const blocks: [string, string][] = [];
   let nestedBlocks = false;
@@ -810,6 +863,7 @@ function commentSyntaxFor(path: string, language: Language): CommentSyntax {
   };
 
   if (
+    rust ||
     /\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx|m|mm|java|go|rs|swift|kt|kts|scala|groovy|cs|fs|fsx|dart|php|scss|sass|less|proto|sol|zig|vue|svelte)$/
       .test(
         lower,
@@ -846,7 +900,14 @@ function commentSyntaxFor(path: string, language: Language): CommentSyntax {
     addBlock("{-", "-}");
     nestedBlocks = true;
   }
-  if (/\.rs$/.test(lower)) nestedBlocks = true;
+  if (rust) nestedBlocks = true;
   if (/\.(?:lisp|cl|clj|cljs|edn|scm|rkt|el)$/.test(lower)) addLine(";");
-  return { lines, blocks, nestedBlocks, skipHighlightedCode, heredocs };
+  return {
+    lines,
+    blocks,
+    nestedBlocks,
+    skipHighlightedCode,
+    heredocs,
+    rustLiterals: rust,
+  };
 }

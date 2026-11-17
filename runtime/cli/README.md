@@ -515,8 +515,8 @@ uses this fixture mechanism at both postures.
 
 `cf view [file]` is an interactive pager for transformed TypeScript, source
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
-Swift, Kotlin, TOML, HCL, shell, makefile, Java properties, INI, ProGuard, XML,
-and Org mode files use their own syntax highlighting. HCL covers OpenTofu and
+Swift, Kotlin, Rust, TOML, HCL, shell, makefile, Java properties, INI, ProGuard,
+XML, and Org mode files use their own highlighting. HCL covers OpenTofu and
 Terraform configuration named `.tf` or `.tofu`, variable definitions files named
 `.tfvars`, backend configuration files named `.tfbackend`, and other `.hcl`
 files, such as dependency lock files. A string's interpolations and template
