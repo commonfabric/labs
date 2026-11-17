@@ -162,7 +162,7 @@ return {
 Each step is most often `{ action: Stream<void> }` or `{ assertion }`, where the
 assertion is the record `assert()` produces — see
 [Write assertions with `assert()`](#write-assertions-with-assert) below. A
-`{ press, control, within? }` step clicks a control the view renders, as
+`{ press, control, within?, modifiers? }` step clicks a control the view renders, as
 [Firing a handler the pattern does not export](#firing-a-handler-the-pattern-does-not-export)
 describes, and `docs/specs/PATTERN_TESTING_SPEC.md` lists every kind of step.
 
@@ -311,6 +311,8 @@ The runner renders the view as a browser does, finds the one element whose text
 is `control`, and clicks it, so the handler bound there receives the click with
 the provenance the control's rendered markers give it; a reviewed control needs
 no `trustedUi`. `within` picks one row out of several that show the same
+control, and `modifiers` holds keys down during the click, as
+`{ press: list[UI], control: "Telegram", modifiers: ["meta"] }` Cmd-clicks a
 control. `patterns/system/fabrichat/composer-attach.test.tsx` removes an
 attachment this way.
 

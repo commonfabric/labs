@@ -3010,7 +3010,8 @@ type OnlyTestStep<Own extends TestStepKey, Fields> =
  *   trimmed, is `control`, and dispatches a click on it, so the handler bound
  *   there receives the event with the provenance its rendered markers give.
  *   `within` names text an element around the control shows, for a view that
- *   shows `control` more than once, such as a row of a list.
+ *   shows `control` more than once, such as a row of a list. `modifiers` names
+ *   the keys held during the click, such as `["meta"]` for a Cmd-click.
  * - `{ render }` materializes a VDOM subtree.
  * - `{ settle: true }` waits for full settlement (scheduler, storage, and
  *   in-flight async builtin I/O) before the next step.
@@ -3030,7 +3031,12 @@ export type TestStep =
     event?: unknown;
     trustedUi?: { surface: string; action: string };
   }>
-  | OnlyTestStep<"press", { press: unknown; control: string; within?: string }>
+  | OnlyTestStep<"press", {
+    press: unknown;
+    control: string;
+    within?: string;
+    modifiers?: ("alt" | "ctrl" | "meta" | "shift")[];
+  }>
   | OnlyTestStep<"render", { render: unknown }>
   | OnlyTestStep<"settle", { settle: true }>
   | OnlyTestStep<"label", { label: string }>
