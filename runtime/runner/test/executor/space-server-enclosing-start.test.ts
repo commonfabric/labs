@@ -621,7 +621,7 @@ describe("SpaceServer", () => {
         expect(serves(nested)).toBe(false);
         expect(logs.textsOf("structure-load-failed")).toEqual([
           `demanded root ${local.id} did not load The start of ` +
-          `${enclosing.id}, a piece that encloses ${nested.id}, failed`,
+          `${enclosing.id}, which the start of ${nested.id} requires, failed`,
         ]);
         await touchSpace();
         await awaitEach(cycles, () => serves(nested));
@@ -1084,6 +1084,31 @@ describe("SpaceServer", () => {
         );
         expect(serves(builder.getAsNormalizedFullLink())).toBe(false);
         expect(serves(row)).toBe(true);
+      });
+
+      it("starts a nested piece alone whose enclosing piece carries no pattern pointer, which nothing can start", async () => {
+        host = newHost();
+        const { enclosing, nested, local } = await setUpNested();
+        // A pattern without a durable identity sets its piece up with an
+        // `internal` record and no `patternIdentity`.
+        {
+          const writer = openRuntime(false, setupSigner);
+          const root = writer.getCellFromLink(enclosing);
+          await root.sync();
+          const tx = writer.edit();
+          root.withTx(tx).setMetaRaw(
+            "patternIdentity",
+            undefined,
+            rawMetaWriteAuthorization,
+          );
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await writer.storageManager.synced();
+          await closeLastRuntime();
+        }
+        await demand(local);
+
+        await awaitEach(cycles, () => serves(nested));
+        expect(serves(enclosing)).toBe(false);
       });
 
       it("leaves unstarted a producer a hub's nested piece takes its input from", async () => {

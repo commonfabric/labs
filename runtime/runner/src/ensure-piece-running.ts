@@ -163,7 +163,8 @@ async function startInputSources(
         throw error;
       }
       throw new Error(
-        `The start of ${source.id}, a piece that encloses ${owner.id}, failed`,
+        `The start of ${source.id}, which the start of ${owner.id} requires, ` +
+          "failed",
         { cause: error },
       );
     }
