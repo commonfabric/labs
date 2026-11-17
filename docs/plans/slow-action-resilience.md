@@ -188,9 +188,40 @@ itself, with the watchdog at its default.
 The health route did not return during the main thread's block, so every
 space of that instance waited there, whatever worker it had. The worker
 committed throughout its work, so no single action held it for long, and the
-silence Estuary's watchdog saw did not occur. What remains to measure is the
-same space with the board open in a shell, and with other spaces on its
-worker, which is how Estuary ran it.
+silence Estuary's watchdog saw did not occur.
+
+The same space with the board open in a shell, from a cold start, again on a
+worker of its own:
+
+| Measure                                    | Value                      |
+| ------------------------------------------ | -------------------------- |
+| Time until the shell showed the board      | about 45 s                 |
+| Serving worker, CPU before it was ended    | about 96 s over 100 s      |
+| Derived commits in that time               | 10                         |
+| Longest stretch with no wave               | about 70 s                 |
+| Longest stretch with no heartbeat counted  | about 40 s                 |
+| Worker heap when it was ended              | 3,167 MB                   |
+| Main thread, CPU over the same 140 s       | about 67 s                 |
+| Main thread, blocks the health route saw   | 20 s, 16 s, 9 s and 5.5 s  |
+| Slowest single traversal logged            | 16.1 s                     |
+| Process resident memory at its highest     | 5.9 GB                     |
+
+The pool ended the worker after 100 s under the heap limit's rule, at two
+heartbeats in a row above 2,048 MB, and left the space unplaced. It was not
+the watchdog. The heap figure on the health route did not change for the 40 s
+before those two heartbeats while the worker used a whole core, which is what
+a worker that sends none looks like; with other spaces on that worker, or a
+slower machine, the same stretch passes the watchdog's 60 s. Nothing outside
+the worker says which action that stretch was, or whether it was one: that is
+what stages 1 and 2 add.
+
+Two things here are outside what stages 2 to 4 reach. The main thread was
+busy for about half of those 140 s, in blocks of up to 20 s, and every space
+of the instance waited through each. And the worker's memory, not its time,
+is what ended it on a host where the pool watches the heap.
+
+Not yet measured: the same load with other spaces on the board's worker,
+which is how Estuary ran it.
 
 Exit: a record in `docs/history/` that names the actions, their costs, the
 thread each cost fell on, and whether the watchdog loop above happened.
