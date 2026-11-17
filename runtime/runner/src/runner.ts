@@ -122,7 +122,6 @@ import {
   recordCapturedArgumentFields,
   recordReferencedArgumentFields,
   recordReplayedArgumentSlots,
-  replayedArgumentSlots,
 } from "./cfc/reference-initialization.ts";
 import { legacyPieceCreatorEvidence } from "./cfc/piece-creator-evidence.ts";
 import { STATIC_READ_TARGET_READ } from "./cfc/static-read-target-read.ts";
@@ -4141,29 +4140,18 @@ export class Runner {
       projection,
       [],
     );
-    // The argument document is the piece's own, and this writes it whole but
-    // for the slots it replays: a binding it already holds stays where the
-    // argument names the same cell, and is replaced where the argument binds
-    // the slot another way. A write through the old binding would land in the
-    // cell it names, which is the caller's.
-    //
-    // The slots this setup replays from the stored document hold the bytes it
-    // would write there, so they are left as they stand, and each other slot
-    // is attempted at its own path. An attempt at the whole document would
-    // reach every path in it, the replayed slots among them, and a replayed
-    // slot under another writer's claim would then need that writer wherever
-    // the document's envelope changes elsewhere, as a release that adds a
-    // writer to another of its positions changes it.
+    // The argument document is the piece's own, and this writes it whole: a
+    // binding it already holds stays where the argument names the same cell,
+    // and is replaced where the argument binds the slot another way. A write
+    // through the old binding would land in the cell it names, which is the
+    // caller's.
     const changed = diffAndUpdate(
       this.#runtime,
       tx,
       argumentLink,
       storable,
       argumentLink,
-      {
-        replacesBindings: true,
-        leavesSlots: replayedArgumentSlots(tx, argumentLink, storable),
-      },
+      { replacesBindings: true },
     );
     // The document now holds the value supplied here, so flow labels may
     // stamp it as a whole write, as they may a `Cell.set()`; and a mergeable

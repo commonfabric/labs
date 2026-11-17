@@ -545,16 +545,6 @@ export type DiffAndUpdateOptions = IReadOptions & {
    * itself, realized at that scope, and is followed as on any write.
    */
   replacesBindings?: true;
-
-  /**
-   * Slots of the record at the walk's link that the walk leaves as they
-   * stand: it reads none of them, writes none of them, and removes none of
-   * them, and its read of the record itself is no attempt to write it. A
-   * setup that stages a piece's argument document again names the slots it
-   * replays, which hold the bytes it would write there, so that what it
-   * attempts is each other slot, at that slot's own path.
-   */
-  leavesSlots?: ReadonlySet<string>;
 };
 
 /**
@@ -598,17 +588,6 @@ export interface DiffWalkState {
    * still the stored element at its index, without descending into it.
    */
   carried?: { array: readonly unknown[]; length: number };
-
-  /**
-   * The slots `DiffAndUpdateOptions.leavesSlots` names, at the record at
-   * `path`, and the options its other slots are read and written under,
-   * which mark each read as an attempted write.
-   */
-  leaves?: {
-    path: readonly string[];
-    slots: ReadonlySet<string>;
-    childOptions: DiffAndUpdateOptions;
-  };
 }
 
 /**
@@ -750,7 +729,6 @@ function writeWalked(
     },
   };
   const anchored: NonNullable<DiffWalkState["anchored"]> = [];
-  const leavesSlots = options?.leavesSlots;
   const state: DiffWalkState = {
     seen: new Map(),
     nextAnchorId: anchorIds,
@@ -758,13 +736,6 @@ function writeWalked(
     // Only an anchored element consults what the walk wrote above it.
     writtenKinds: anchorIds === undefined ? undefined : new Map(),
     carried,
-    ...(leavesSlots === undefined || leavesSlots.size === 0 ? {} : {
-      leaves: {
-        path: link.path,
-        slots: leavesSlots,
-        childOptions: readOptions,
-      },
-    }),
   };
   const changes = normalizeAndDiff(
     runtime,
@@ -772,10 +743,7 @@ function writeWalked(
     link,
     newValue,
     context,
-    state.leaves === undefined ? readOptions : {
-      ...readOptions,
-      meta: { ...options?.meta, ...allowMutableTransactionRead },
-    },
+    readOptions,
     state,
   );
   diffLogger.debug(
@@ -2488,19 +2456,6 @@ export function normalizeAndDiff(
       "diff",
       () => `[BRANCH_OBJECT] Processing object at path=${pathStr}`,
     );
-    // The slots this walk leaves as they stand, where this is the record
-    // they are slots of (see `DiffAndUpdateOptions.leavesSlots`), and the
-    // options its other slots are read and written under.
-    const leaves = state.leaves !== undefined &&
-        state.leaves.path.length === link.path.length &&
-        state.leaves.path.every((segment, i) => link.path[i] === segment)
-      ? state.leaves
-      : undefined;
-    const childOptions = leaves?.childOptions ?? options;
-    // Only slots of a stored record are left as they stand: a record this
-    // walk resets below holds none of them.
-    let leftSlots = leaves?.slots;
-
     // If the current value is not a (regular) object, set it to an empty object.
     // Note that the alias case is handled above.
     // Resetting on an array→object transition is required; otherwise per-key
@@ -2516,7 +2471,6 @@ export function normalizeAndDiff(
       !isKeyableObjectNotArray(currentValue) ||
       currentValueIsLink
     ) {
-      leftSlots = undefined;
       diffLogger.debug(
         "diff",
         () =>
@@ -2556,7 +2510,6 @@ export function normalizeAndDiff(
     // `Object.keys`, not `for...in`: the latter also walks the prototype chain,
     // and only `newValue`'s own keys are being written.
     for (const key of Object.keys(newValue)) {
-      if (leftSlots?.has(key)) continue;
       diffLogger.debug("diff", () => {
         const childPath = [...link.path, key].join(".");
         return `[DIFF_RECURSE] Recursing into key='${key}' childPath=${childPath}`;
@@ -2589,21 +2542,14 @@ export function normalizeAndDiff(
         { ...link, path: [...link.path, key], schema: childSchema },
         newValue[key],
         context,
-        childOptions,
+        options,
         state,
         // Indexing alone would fall through to the prototype: for a key named
         // `valueOf`, a record with no such own property yields
         // `Object.prototype.valueOf`, and the diff below then fails with
         // "Cannot compare a function value" — a write refused because of a
         // method the data never had. Absent means absent.
-        // Where this walk leaves some of the record's slots as they stand,
-        // its read of the record is no attempt at the others, so each of
-        // them reads what it holds itself, as an attempt at that slot.
-        leftSlots !== undefined
-          ? NO_PRECOMPUTED
-          : Object.hasOwn(currentRecord, key)
-          ? currentRecord[key]
-          : undefined,
+        Object.hasOwn(currentRecord, key) ? currentRecord[key] : undefined,
         requiredProps === undefined ? undefined : requiredProps.has(key),
       );
       for (const change of nestedChanges) changes.push(change);
@@ -2655,7 +2601,7 @@ export function normalizeAndDiff(
           childLink,
           childScope,
           context,
-          childOptions,
+          options,
           state,
           currentRecord[key],
         );
