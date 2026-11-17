@@ -1162,14 +1162,15 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
             }
             Expression::ArrayExpression(array) => {
                 let mut members: Vec<String> = Vec::new();
-                let mut spreads = false;
                 for element in &array.elements {
                     match element {
                         ArrayExpressionElement::Elision(_) => members.push(String::new()),
+                        // `$rt.spread` gives the members of what the
+                        // operand holds, and none for an operand that
+                        // holds nothing.
                         ArrayExpressionElement::SpreadElement(spread) => {
                             let code = self.render(&spread.argument, Want::Use);
-                            members.push(format!("$rt.spread({code})"));
-                            spreads = true;
+                            members.push(format!("...$rt.spread({code})"));
                         }
                         element => {
                             if let Some(element) = element.as_expression() {
@@ -1178,14 +1179,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                         }
                     }
                 }
-                // An array with a spread is assembled by the runtime,
-                // which then knows the entry each position came from (PL
-                // §1.1, "What a `*` of a result path stands for").
-                Some(if spreads {
-                    format!("$rt.list([{}])", members.join(", "))
-                } else {
-                    format!("[{}]", members.join(", "))
-                })
+                Some(format!("[{}]", members.join(", ")))
             }
             Expression::ConditionalExpression(conditional) => {
                 let test = self.render(&conditional.test, Want::Use);

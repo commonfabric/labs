@@ -31,7 +31,8 @@ import {
 import { resolveLocalProgram } from "../../../runtime/runner/src/harness/local-program.deno.ts";
 import { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../runtime/runner/src/storage/cache.deno.ts";
-import { eventOrder } from "./corpus.ts";
+import type { Artifact } from "../exec/executor.ts";
+import { eventOrder, executorOf } from "./corpus.ts";
 import {
   type CostPlan,
   ENTRY_BYTES,
@@ -63,21 +64,24 @@ type CorpusModule = {
     };
     schemas: Schemas;
     unsupported: unknown[];
+    /** The value code of the plan, which the executor runs. */
+    code?: Artifact["code"];
   }[];
 };
 
 /**
  * The modules the comparison over the corpus runs: every module the crate
  * accepts and emits a plan for with no unsupported construct
- * (`corpus.ts`).
+ * (`corpus.ts`), each with its value code.
  */
 const corpusModules = async (only?: string): Promise<CorpusModule[]> => {
   const { success, stdout, stderr } = await new Deno.Command(crate, {
-    args: ["plan", "--corpus", ".", "--json"],
+    args: ["emit", "--corpus", "."],
     cwd: patterns,
   }).output();
   if (!success) throw new Error(new TextDecoder().decode(stderr));
-  const modules: CorpusModule[] = JSON.parse(new TextDecoder().decode(stdout));
+  const modules: CorpusModule[] = new TextDecoder().decode(stdout).split("\n")
+    .filter((line) => line.length > 0).map((line) => JSON.parse(line));
   return modules.filter((module) =>
     module.patterns.length > 0 &&
     module.patterns.every((pattern) => pattern.unsupported.length === 0) &&
@@ -834,6 +838,11 @@ const runModule = async (
     }))
     : [];
   const { probe, result } = measuring();
+  // The executor's record of where each stream is stored, by which the
+  // harness sends the events (`Scenario.streams`).
+  const streams = options.events
+    ? executorOf(chosen.pattern, inputs)
+    : undefined;
   const { error: consoleError, warn: consoleWarn } = console;
   console.error = () => {};
   console.warn = () => {};
@@ -849,6 +858,7 @@ const runModule = async (
       inputs,
       events,
       probe,
+      ...(streams === undefined ? {} : { streams }),
     });
   } catch (error) {
     const message = `${(error as Error)?.message ?? error}`.split("\n")[0];

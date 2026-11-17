@@ -11,12 +11,9 @@ const bump = handler<{ by: number }, { count: Writable<number> }>(
   },
 );
 
-// Kind `member` of a `*` of a path of `Binding.result` (ruling Z21): the
-// one position of a member written after a spread in an array value. By
-// ruling Z31 the children of a view node have no such position, so the
-// kind arises in an array literal alone. `after` is written after two
-// entries of `rows`, a member and a spread, and `tail` after one entry of
-// `words`. The spread of `rows` is over records, which a test gives as
+// A stream at a member written after a spread in an array value, which
+// is stored flat (ruling Z43). `after` is written after two entries of
+// `rows`, a member and a spread, and `tail` after one entry of `words`. The spread of `rows` is over records, which a test gives as
 // references to cells, and that of `words` over plain values in place.
 // The executor's tests run this fixture. It is not compared with today's
 // runtime.

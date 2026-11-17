@@ -84,8 +84,9 @@ describe("the values of a fixture", () => {
     expect(comparison.notExecuted).toBeUndefined();
     expect(comparison.differences).toEqual([]);
     expect(comparison.failedEvents).toEqual([]);
-    // Every position that holds a stream is one `Binding.result` lists.
-    expect(comparison.streams?.atNoListedPath).toBe(0);
+    // Each of the two rows holds the link to its stream of `pickAt` and
+    // to its stream of `clear`.
+    expect(comparison.storedStreams).toBe(4);
   });
 
   it("are equal where a pattern compiled in declares a default for a path", async () => {

@@ -5,7 +5,6 @@
       {
         "line": 35,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -15,36 +14,6 @@
                 "body": 0
               },
               "name": "inc",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "0",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": []
-                },
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "1",
-                    "children",
-                    "1",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": []
-                },
-                {
-                  "path": [
-                    "inc"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -68,25 +37,6 @@
                 "body": 1
               },
               "name": "pick",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "1",
-                    "children",
-                    "0",
-                    "*",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -127,25 +77,6 @@
                 "body": 1
               },
               "name": "pick",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "2",
-                    "children",
-                    "0",
-                    "*",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -186,25 +117,6 @@
                 "body": 1
               },
               "name": "pick",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "3",
-                    "children",
-                    "0",
-                    "*",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -446,7 +358,7 @@
             {
               "at": {
                 "file": "compare/fixtures/stream-marker.tsx",
-                "start": 1373
+                "start": 1363
               },
               "bodies": [],
               "entry": "map",
@@ -465,7 +377,7 @@
             {
               "at": {
                 "file": "compare/fixtures/stream-marker.tsx",
-                "start": 1564
+                "start": 1554
               },
               "bodies": [],
               "entry": "map",
@@ -484,7 +396,7 @@
             {
               "at": {
                 "file": "compare/fixtures/stream-marker.tsx",
-                "start": 1704
+                "start": 1694
               },
               "bodies": [],
               "entry": "filter",
@@ -504,7 +416,7 @@
             {
               "at": {
                 "file": "compare/fixtures/stream-marker.tsx",
-                "start": 1733
+                "start": 1723
               },
               "bodies": [],
               "entry": "map",
@@ -523,7 +435,7 @@
             {
               "at": {
                 "file": "compare/fixtures/stream-marker.tsx",
-                "start": 1285
+                "start": 1275
               },
               "bodies": [],
               "entry": "$UI",

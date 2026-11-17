@@ -25,17 +25,17 @@ const Story = pattern<{ label: string }>(({ label }) => {
   };
 });
 
-// Ruling Z21: each `*` of a path of `Binding.result` states what it
-// stands for. `every`: the callback of each of the first two lists writes
-// the one stream of `inc`, over records, which a test gives as references
-// to cells, and over plain values in place. `member`: `more` is written
-// after two entries of the third list, a text and a spread. `element`:
-// `pick` is bound per key, and the fourth list holds two collections
-// spread into one array. `inside`: one element of `sections`, an array of
-// plain values written in place, holds the stream of a binding of `Story`
-// inside its value. The last list is over the result of another
-// per-element construct, whose elements hold the stream of a binding of
-// that construct's body: its `*` is of kind `element`.
+// The positions of an array at which value code places the stream of a
+// binding (ruling Z43). The callback of each of the first two lists
+// writes the one stream of `inc` at every element, over records, which a
+// test gives as references to cells, and over plain values in place.
+// `more` is written after two entries of the third list, a text and a
+// collection. `pick` is bound per key, and the fourth list holds two
+// collections among the children of one node. One element of
+// `sections`, an array of plain values written in place, holds the
+// stream of a binding of `Story` inside its value. The last list is over
+// the result of another per-element construct, whose elements hold the
+// stream of a binding of that construct's body.
 export default pattern<{ items: Item[]; tags: string[] }>(
   ({ items, tags }) => {
     const count = Writable.of(0);

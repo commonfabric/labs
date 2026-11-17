@@ -77,7 +77,6 @@
         },
         "line": 20,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [],

@@ -67,7 +67,6 @@
         },
         "line": 52,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -77,20 +76,6 @@
                 "body": 0
               },
               "name": "note",
-              "result": [
-                {
-                  "path": [
-                    "rows",
-                    "*",
-                    "note"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -118,20 +103,6 @@
                 "body": 1
               },
               "name": "finishAndRename",
-              "result": [
-                {
-                  "path": [
-                    "rows",
-                    "*",
-                    "finishAndRename"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -159,20 +130,6 @@
                 "body": 2
               },
               "name": "finishAndPick",
-              "result": [
-                {
-                  "path": [
-                    "rows",
-                    "*",
-                    "finishAndPick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -213,20 +170,6 @@
                 "body": 3
               },
               "name": "pick",
-              "result": [
-                {
-                  "path": [
-                    "rows",
-                    "*",
-                    "pick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -267,20 +210,6 @@
                 "body": 0
               },
               "name": "note",
-              "result": [
-                {
-                  "path": [
-                    "open",
-                    "*",
-                    "see"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",

@@ -279,6 +279,12 @@ type StoredStream = {
   $stream: { binding: number; keys: string[]; instance?: string };
 };
 
+/** A position of a document that holds the link to a stream. */
+export type StreamPosition = {
+  path: string[];
+  stream: StoredStream["$stream"];
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -344,9 +350,41 @@ export class Store {
    * address: what writes it elsewhere stores the value.
    */
   readonly copies = new WeakSet<object>();
+  /**
+   * The link to a stream at each position that holds one, by document:
+   * a write records the position of each such link in the value it
+   * stores, and drops the record of a position it stores another value
+   * at (ruling Z43). The entries of a document are in no stated order.
+   */
+  readonly streams = new Map<string, StreamPosition[]>();
+
+  /**
+   * Records the stream links of a value stored at a path of a document,
+   * in place of what the record has at that path and below it.
+   */
+  #record(doc: string, path: readonly string[], value: unknown): void {
+    const kept = (this.streams.get(doc) ?? []).filter((entry) =>
+      !isPrefix(path, entry.path)
+    );
+    const walk = (held: unknown, at: string[]) => {
+      if (isStream(held)) {
+        kept.push({ path: at, stream: structuredClone(held.$stream) });
+      } else if (Array.isArray(held)) {
+        held.forEach((member, index) => walk(member, [...at, `${index}`]));
+      } else if (isRecord(held)) {
+        for (const [name, member] of Object.entries(held)) {
+          walk(member, [...at, name]);
+        }
+      }
+    };
+    walk(value, [...path]);
+    if (kept.length === 0) this.streams.delete(doc);
+    else this.streams.set(doc, kept);
+  }
 
   create(id: string, kind: string, value: unknown): void {
     this.docs.set(id, { kind, value });
+    this.#record(id, [], value);
     this.clock += 1;
     this.log.push({ doc: id, path: [], at: this.clock });
   }
@@ -617,6 +655,10 @@ export class Store {
       this.docs.delete(from);
       this.docs.set(to, document);
     }
+    const streams = this.streams.get(from);
+    this.streams.delete(from);
+    this.streams.delete(to);
+    if (streams !== undefined) this.streams.set(to, streams);
     if (declared !== undefined) {
       this.declared.delete(from);
       this.declared.set(to, declared);
@@ -793,6 +835,7 @@ export class Store {
     }
     if (path.length === 0) {
       document.value = value;
+      this.#record(doc, path, value);
     } else {
       if (!isRecord(document.value) && !Array.isArray(document.value)) {
         document.value = {};
@@ -807,9 +850,12 @@ export class Store {
       }
       const last = path[path.length - 1];
       if (Array.isArray(holder) && last === "length") {
+        // The array is stored without the positions past the length.
         (holder as unknown[]).length = value as number;
+        this.#record(doc, path.slice(0, -1), holder);
       } else {
         holder[last] = value;
+        this.#record(doc, path, value);
       }
     }
     this.clock += 1;

@@ -122,33 +122,19 @@ describe("eventOrder", () => {
     collections: [],
     outputs: [],
     bindings: [
-      {
-        name: "outer",
-        handler: { body: 0 },
-        result: [{ path: ["a"], stars: [] }],
-      },
-      {
-        name: "inner",
-        handler: { body: 1 },
-        result: [{ path: ["b"], stars: [] }],
-        within: [{ element: 0 }],
-      },
-      { name: "no path", handler: { body: 2 } },
-      {
-        name: "later",
-        handler: { body: 3 },
-        result: [{ path: ["c"], stars: [] }],
-      },
-      { name: "no handler", result: [{ path: ["d"], stars: [] }] },
+      { name: "outer", handler: { body: 0 } },
+      { name: "inner", handler: { body: 1 }, within: [{ element: 0 }] },
+      { name: "later", handler: { body: 2 } },
+      { name: "no handler" },
     ],
   };
 
   it("has the bindings with no `within` step first, each group in the order of the plan", () => {
-    expect(eventOrder(plan, "outside first")).toEqual([0, 3, 1]);
+    expect(eventOrder(plan, "outside first")).toEqual([0, 2, 1]);
   });
 
   it("has the bindings in the order of the plan", () => {
-    expect(eventOrder(plan, "plan")).toEqual([0, 1, 3]);
+    expect(eventOrder(plan, "plan")).toEqual([0, 1, 2]);
   });
 });
 

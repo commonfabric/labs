@@ -35,7 +35,6 @@
         },
         "line": 37,
         "name": "Row",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -45,16 +44,6 @@
                 "body": 0
               },
               "name": "mark",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -399,7 +388,6 @@
         },
         "line": 42,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -409,25 +397,6 @@
                 "body": 0
               },
               "name": "choose",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "1",
-                    "children",
-                    "1",
-                    "*",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -481,26 +450,6 @@
                 "body": 1
               },
               "name": "mark",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "2",
-                    "children",
-                    "0",
-                    "*",
-                    "$UI",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",

@@ -13,6 +13,7 @@ import {
 } from "../scenarios.ts";
 import { categoryOf } from "../template.ts";
 import { type Row, runScenario } from "../harness.ts";
+import { runBesideExecutor } from "../values.ts";
 
 // The comparison of stage 3
 // (`docs/specs/compiled-pattern-language/README.md`, "Staging") for one
@@ -357,11 +358,12 @@ describe("a handler bound in an element body", () => {
   const run = async () => {
     const read = (name: string) =>
       Deno.readTextFile(new URL(`../fixtures/${name}`, import.meta.url));
-    const modules = JSON.parse(await read("element-handlers.plan.json"));
-    const { plan } = modules[0].patterns.find((pattern: { name: string }) =>
+    const modules = JSON.parse(await read("element-handlers.emit.json"));
+    const artifact = modules[0].patterns.find((pattern: { name: string }) =>
       pattern.name === "default"
     );
-    return await runScenario({
+    const { plan } = artifact;
+    return await runBesideExecutor(artifact, {
       program: {
         main: "/main.tsx",
         files: [{
@@ -376,11 +378,11 @@ describe("a handler bound in an element body", () => {
   };
 
   it("gets its event at the stream of the last element of each enclosing collection", async () => {
-    // PL §1.1, "The result paths of a binding in an element body": "a
-    // reader that wants the stream of one element chooses, for each `*`,
-    // a position of the collection". The run of today stores the
-    // assembled array as one child of the view node, so the element is
-    // at the position of that child and then at its own.
+    // The harness takes the positions at which the executor stored the
+    // link, the last element of each collection first (ruling Z43). The
+    // run of today stores the assembled array as one child of the view
+    // node, so the element is at the position of that child and then at
+    // its own.
     const { events } = await run();
 
     expect(events).toEqual([
@@ -454,8 +456,8 @@ describe("an element body where one node reads the index", () => {
   const run = async () => {
     const read = (name: string) =>
       Deno.readTextFile(new URL(`../fixtures/${name}`, import.meta.url));
-    const [{ patterns }] = JSON.parse(await read("index-nodes.plan.json"));
-    return await runScenario({
+    const [{ patterns }] = JSON.parse(await read("index-nodes.emit.json"));
+    return await runBesideExecutor(patterns[0], {
       program: {
         main: "/main.tsx",
         files: [{ name: "/main.tsx", contents: await read("index-nodes.tsx") }],
@@ -534,7 +536,7 @@ describe("a state cell in an element body over two equal plain values", () => {
   it("is a cell of each occurrence, and the handler of one occurrence writes its own", async () => {
     const read = (name: string) =>
       Deno.readTextFile(new URL(`../fixtures/${name}`, import.meta.url));
-    const [{ patterns }] = JSON.parse(await read("equal-values.plan.json"));
+    const [{ patterns }] = JSON.parse(await read("equal-values.emit.json"));
     const [{ plan, unsupported }] = patterns;
     expect(unsupported).toEqual([]);
     expect(plan.stateCells).toEqual([
@@ -545,7 +547,7 @@ describe("a state cell in an element body over two equal plain values", () => {
         schema: plan.stateCells[0].schema,
       },
     ]);
-    const run = await runScenario({
+    const run = await runBesideExecutor(patterns[0], {
       program: {
         main: "/main.tsx",
         files: [{
@@ -575,8 +577,8 @@ describe("a binding whose stream the result holds at several paths", () => {
   const run = async (shown: boolean, items: string[]) => {
     const read = (name: string) =>
       Deno.readTextFile(new URL(`../fixtures/${name}`, import.meta.url));
-    const [{ patterns }] = JSON.parse(await read("outer-stream.plan.json"));
-    return await runScenario({
+    const [{ patterns }] = JSON.parse(await read("outer-stream.emit.json"));
+    return await runBesideExecutor(patterns[0], {
       program: {
         main: "/main.tsx",
         files: [{

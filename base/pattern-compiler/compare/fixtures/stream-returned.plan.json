@@ -3,18 +3,8 @@
     "module": "compare/fixtures/stream-returned.tsx",
     "patterns": [
       {
-        "line": 32,
+        "line": 31,
         "name": "default",
-        "noResultPath": [
-          {
-            "binding": 1,
-            "reason": "its stream is at no kept path of the result"
-          },
-          {
-            "binding": 2,
-            "reason": "its stream is at no kept path of the result"
-          }
-        ],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -24,14 +14,6 @@
                 "body": 0
               },
               "name": "inc",
-              "result": [
-                {
-                  "path": [
-                    "inc"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -328,7 +310,7 @@
             {
               "at": {
                 "file": "compare/fixtures/stream-returned.tsx",
-                "start": 1229
+                "start": 1145
               },
               "bodies": [
                 1
@@ -343,7 +325,7 @@
             {
               "at": {
                 "file": "compare/fixtures/stream-returned.tsx",
-                "start": 1338
+                "start": 1254
               },
               "bodies": [
                 3
@@ -362,7 +344,7 @@
             {
               "at": {
                 "file": "compare/fixtures/stream-returned.tsx",
-                "start": 1440
+                "start": 1356
               },
               "bodies": [
                 4

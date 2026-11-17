@@ -24,11 +24,11 @@ const pick = handler<unknown, { title: string; chosen: Writable<string> }>(
   },
 );
 
-// Ruling Z11: value code places the stream of a binding with the marker
-// of `host.stream`, and the runtime replaces the marker when it stores
-// the value and checks the position against `Binding.result`. `inc` is
-// one stream at a member of the result, below a conditional, and after a
-// spread. `pick` is bound once per element key in three bodies: over
+// Rulings Z11 and Z43: value code places the stream of a binding with
+// the marker of `host.stream`, and the runtime replaces the marker by
+// the link to the stream when it stores the value. `inc` is one stream
+// at a member of the result, below a conditional, and after a
+// collection. `pick` is bound once per element key in three bodies: over
 // records, which a test gives as references to cells, over plain values
 // stored in place, and over the result of a `filter`. `outside` is a
 // stream the pattern is given, which it passes on as any input.

@@ -43,7 +43,6 @@
         },
         "line": 22,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -53,20 +52,6 @@
                 "body": 0
               },
               "name": "keep",
-              "result": [
-                {
-                  "path": [
-                    "rows",
-                    "*",
-                    "keep"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -106,20 +91,6 @@
                 "body": 0
               },
               "name": "keep",
-              "result": [
-                {
-                  "path": [
-                    "words",
-                    "*",
-                    "keep"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -159,14 +130,6 @@
                 "body": 0
               },
               "name": "keep",
-              "result": [
-                {
-                  "path": [
-                    "keep"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",

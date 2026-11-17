@@ -20,11 +20,11 @@
  * runs the executor alone on the crate's current output and compares it
  * with the values the earlier run read.
  */
-import { fromFileUrl } from "@std/path";
-
 import type { Artifact } from "../exec/executor.ts";
 import {
+  artifactsOf,
   type CorpusModule,
+  corpusModules,
   eventOrder,
   mainPattern,
   runModule,
@@ -33,29 +33,21 @@ import { generateEvent, generateInputs } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
 import type { EventOutcome } from "./harness.ts";
 import {
+  argumentOf,
   compareValues,
+  ExecutorRun,
   readingValues,
   type ValueComparison,
   type Values,
 } from "./values.ts";
 
-const repository = fromFileUrl(new URL("../../../", import.meta.url));
-
-type EmittedModule = CorpusModule & {
+type EmittedModule = Omit<CorpusModule, "patterns"> & {
   patterns: (CorpusModule["patterns"][number] & Artifact)[];
 };
 
 /** The plans and the value code of the accepted corpus modules. */
-const corpusArtifacts = async (): Promise<EmittedModule[]> => {
-  const { success, stdout, stderr } = await new Deno.Command(
-    `${repository}base/pattern-compiler/target/release/pattern-compiler`,
-    { args: ["emit", "--corpus", "."], cwd: `${repository}patterns` },
-  ).output();
-  if (!success) throw new Error(new TextDecoder().decode(stderr));
-  return new TextDecoder().decode(stdout).split("\n").filter((line) =>
-    line.length > 0
-  ).map((line) => JSON.parse(line));
-};
+const corpusArtifacts = (): Promise<EmittedModule[]> =>
+  corpusModules() as Promise<EmittedModule[]>;
 
 /** The value comparison of one module, as the results file holds it. */
 export type ModuleValues = {
@@ -75,18 +67,6 @@ export type ModuleValues = {
   };
 };
 
-/** The artifact of a pattern of the corpus, by its identity. */
-const artifactsOf = (modules: Iterable<EmittedModule>) => {
-  const known = new Map<string, Artifact>();
-  for (const module of modules) {
-    for (const pattern of module.patterns) {
-      const id = pattern.plan.patterns?.[0];
-      if (id !== undefined) known.set(id, pattern);
-    }
-  }
-  return (id: string) => known.get(id);
-};
-
 const runOne = async (
   module: EmittedModule,
   artifacts: (id: string) => Artifact | undefined,
@@ -98,7 +78,12 @@ const runOne = async (
   const artifact = chosen.pattern;
   const { plan, schemas } = artifact;
   const { probe, values } = readingValues(plan);
-  const result = await runModule(module, "outside first", probe);
+  const inputs = generateInputs(plan, schemas, await scenarioAudience());
+  const argument = argumentOf({ argument: {}, inputs });
+  // The executor runs beside today's run, which finds each stream by
+  // where the executor stored it (ruling Z43).
+  const executor = new ExecutorRun(artifact, argument, artifacts);
+  const result = await runModule(module, "outside first", probe, executor);
   if (result.skipped !== undefined) {
     return {
       module: module.module,
@@ -110,25 +95,17 @@ const runOne = async (
     binding,
     event: generateEvent(plan, schemas, binding),
   }));
-  const inputs = generateInputs(plan, schemas, await scenarioAudience());
-  const argument = Object.fromEntries(
-    Object.entries(inputs).map(([name, input]) => [name, input.value]),
-  );
-  const outcomes = (result.outcomes ?? []).map(({ outcome, elements }) => ({
+  const outcomes = (result.outcomes ?? []).map((
+    { outcome, elements, reason },
+  ) => ({
     outcome,
     ...(elements === undefined ? {} : { elements }),
+    ...(outcome === "not sent" && reason !== undefined ? { reason } : {}),
   }));
   return {
     module: module.module,
     pattern: artifact.name,
-    comparison: compareValues(
-      artifact,
-      argument,
-      events,
-      outcomes,
-      values,
-      artifacts,
-    ),
+    comparison: executor.compare(events, outcomes, values),
     events: {
       sent: outcomes.filter(({ outcome }) => outcome !== "not sent").length,
       committed: outcomes.filter(({ outcome }) => outcome === "committed")
@@ -354,44 +331,13 @@ const report = async (file: string, verbose: boolean) => {
     console.log(`  ${name}: ${total(name)}`);
   }
   console.log(
-    "where the stored result holds a stream, against `Binding.result`:",
+    `positions of the stored results that hold the link to a stream: ${
+      executed.reduce(
+        (sum, result) => sum + (result.comparison?.storedStreams ?? 0),
+        0,
+      )
+    }`,
   );
-  for (
-    const name of [
-      "atListedPath",
-      "atNoListedPath",
-      "listedPathsHeld",
-      "listedPathsNotHeld",
-    ] as const
-  ) {
-    console.log(
-      `  ${name}: ${
-        executed.reduce(
-          (sum, result) => sum + (result.comparison?.streams?.[name] ?? 0),
-          0,
-        )
-      }`,
-    );
-  }
-  const failing = executed.filter((result) =>
-    (result.comparison?.failedEvaluations ?? 0) > 0
-  );
-  console.log(
-    "evaluations that stored a stream's marker at a position no listed " +
-      `path covers: ${
-        executed.reduce(
-          (sum, result) => sum + (result.comparison?.failedEvaluations ?? 0),
-          0,
-        )
-      }, in ${failing.length} modules`,
-  );
-  if (verbose) {
-    for (const result of failing) {
-      for (const { name, path } of result.comparison?.misplaced ?? []) {
-        console.log(`    ${result.module}: ${name} at /${path.join("/")}`);
-      }
-    }
-  }
   const documents = new Map<string, number>();
   for (const result of executed) {
     for (

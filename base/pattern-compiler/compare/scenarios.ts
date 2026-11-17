@@ -4,8 +4,12 @@
  * Each `<name>.plan.json` is the output of the crate for `<name>.tsx`.
  * Regenerate one from `base/pattern-compiler` with
  * `cargo run --release -- plan compare/fixtures/<name>.tsx > compare/fixtures/<name>.plan.json`.
+ * `<name>.emit.json` holds the plan with its value code (`emit` in place
+ * of `plan`): a scenario with events runs the executor beside today's
+ * run, which sends each event where the executor stored the stream.
  */
 import { type Plan, type Row, type Run, runScenario } from "./harness.ts";
+import { runBesideExecutor } from "./values.ts";
 import { atomKey, type Label } from "./template.ts";
 
 const read = (name: string) =>
@@ -102,8 +106,8 @@ export const compareCreated = (): Promise<Row[]> =>
  * pushes onto a list. The event's `text` has a label its schema declares.
  */
 export const runHandler = async (): Promise<Run> => {
-  const [{ patterns }] = JSON.parse(await read("handler.plan.json"));
-  return runScenario({
+  const [{ patterns }] = JSON.parse(await read("handler.emit.json"));
+  return runBesideExecutor(patterns[0], {
     program: {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: await read("handler.tsx") }],

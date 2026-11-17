@@ -29,7 +29,6 @@
         },
         "line": 30,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -39,14 +38,6 @@
                 "body": 0
               },
               "name": "add",
-              "result": [
-                {
-                  "path": [
-                    "add"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",

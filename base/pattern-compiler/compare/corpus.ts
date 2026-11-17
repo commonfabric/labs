@@ -16,17 +16,21 @@
  */
 import { fromFileUrl } from "@std/path";
 
+import type { Artifact } from "../exec/executor.ts";
 import { generateEvent, generateInputs, type Schemas } from "./generate.ts";
 import {
+  type LabeledInput,
   type Plan,
   type Probe,
   type Row,
   type Run,
   runScenario,
   scenarioAudience,
+  type StreamRecord,
   type WriteRow,
 } from "./harness.ts";
 import { showLabel } from "./scenarios.ts";
+import { argumentOf, ExecutorRun } from "./values.ts";
 import {
   type Category,
   categoryOf,
@@ -46,8 +50,8 @@ export type CorpusModule = {
     plan: CorpusPlan;
     schemas: Schemas;
     unsupported: unknown[];
-    /** The bindings of an element body the crate gives no result path. */
-    noResultPath?: { binding: number; reason: string }[];
+    /** The value code of the plan, which the executor runs. */
+    code?: Artifact["code"];
   }[];
 };
 
@@ -136,15 +140,12 @@ export type ModuleResult = {
   /** The same, each with what was not compared. */
   notComparedOfHandlersList?: { what: string; reason: string; where: string }[];
   /**
-   * Each binding of a handler: where it is bound, whether the plan has a
-   * result path for it, why not where the crate says, and the number of
+   * Each binding of a handler: where it is bound, and the number of
    * write edges of its body.
    */
   handlers?: {
     name: string;
     within?: Within;
-    path: boolean;
-    reason?: string;
     writes: number;
   }[];
   decided?: Run["decided"];
@@ -172,15 +173,50 @@ export type ModuleResult = {
 const repository = fromFileUrl(new URL("../../../", import.meta.url));
 const patterns = `${repository}patterns`;
 
-/** The plans of the accepted corpus modules, from the crate. */
-const corpusPlans = async (): Promise<CorpusModule[]> => {
+/**
+ * The plans and the value code of the accepted corpus modules, from the
+ * crate.
+ */
+export const corpusModules = async (): Promise<CorpusModule[]> => {
   const { success, stdout, stderr } = await new Deno.Command(
     `${repository}base/pattern-compiler/target/release/pattern-compiler`,
-    { args: ["plan", "--corpus", ".", "--json"], cwd: patterns },
+    { args: ["emit", "--corpus", "."], cwd: patterns },
   ).output();
   if (!success) throw new Error(new TextDecoder().decode(stderr));
-  return JSON.parse(new TextDecoder().decode(stdout));
+  return new TextDecoder().decode(stdout).split("\n").filter((line) =>
+    line.length > 0
+  ).map((line) => JSON.parse(line));
 };
+
+/** The artifact of a pattern of the corpus, by its identity. */
+export const artifactsOf = (modules: Iterable<CorpusModule>) => {
+  const known = new Map<string, Artifact>();
+  for (const module of modules) {
+    for (const pattern of module.patterns) {
+      const id = (pattern.plan as { patterns?: string[] }).patterns?.[0];
+      if (id !== undefined && pattern.code !== undefined) {
+        known.set(id, pattern as unknown as Artifact);
+      }
+    }
+  }
+  return (id: string) => known.get(id);
+};
+
+/**
+ * The executor's side of a run of a pattern with generated inputs: the
+ * record the harness finds each stream by (ruling Z43). Nothing for a
+ * pattern with no value code.
+ */
+export const executorOf = (
+  pattern: CorpusModule["patterns"][number],
+  inputs: Record<string, LabeledInput>,
+  artifacts?: (id: string) => Artifact | undefined,
+): ExecutorRun | undefined =>
+  pattern.code === undefined ? undefined : new ExecutorRun(
+    pattern as unknown as Artifact,
+    argumentOf({ argument: {}, inputs }),
+    artifacts,
+  );
 
 // What a pattern needs that a test process with no server does not have,
 // by the kind of the plan's operation.
@@ -239,12 +275,14 @@ export const resultRow = (
 export type EventOrder = "outside first" | "plan";
 
 /**
- * The bindings a run sends an event to, in the order it sends them: each
- * binding of a handler whose stream the result holds at a path.
+ * The bindings a run has an event for, in the order of the events: each
+ * binding of a handler. The plan does not say whether the result holds
+ * the stream of a binding (ruling Z43), and the harness sends no event
+ * for one whose stream it does not find.
  */
 export const eventOrder = (plan: Plan, order: EventOrder): number[] => {
   const sent = (plan.bindings ?? []).flatMap((binding, index) =>
-    binding.handler?.body !== undefined && binding.result !== undefined
+    binding.handler?.body !== undefined
       ? [{ index, inside: (binding.within ?? []).length > 0 }]
       : []
   );
@@ -280,12 +318,18 @@ export const mainPattern = async <P extends { name: string }>(
 
 /**
  * Runs one module of the corpus with a generated scenario. `probe` is
- * called at each point of the run (`Scenario.probe`).
+ * called at each point of the run (`Scenario.probe`). `streams` is the
+ * executor's record of where each stream is stored
+ * (`Scenario.streams`): with none, the run makes one from the module's
+ * value code, with `artifacts` for a pattern a function body
+ * instantiates.
  */
 export const runModule = async (
   module: CorpusModule,
   order: EventOrder = "outside first",
   probe?: Probe,
+  streams?: StreamRecord,
+  artifacts?: (id: string) => Artifact | undefined,
 ): Promise<ModuleResult> => {
   const chosen = await mainPattern(module);
   if (chosen === undefined) {
@@ -298,29 +342,26 @@ export const runModule = async (
     const reason = NEEDS[operation.kind ?? ""];
     if (reason !== undefined) return { ...base, skipped: reason };
   }
-  // One event for each handler whose stream the result holds. A handler
-  // bound in an element body gets its event at one element of each
-  // enclosing collection, which the harness chooses. What a handler's run
+  // One event for each handler, which is sent where the result holds its
+  // stream. A handler bound in an element body gets its event at one
+  // element of each enclosing collection, which the harness chooses. What a handler's run
   // finds stored is what the events before it left, so the rows of a run
   // are those of one order of the events (`EventOrder`).
   const events = eventOrder(plan, order).map((binding) => ({
     binding,
     event: generateEvent(plan, schemas, binding),
   }));
-  const handlers = (plan.bindings ?? []).flatMap((binding, index) => {
+  const handlers = (plan.bindings ?? []).flatMap((binding) => {
     if (binding.handler?.body === undefined) return [];
     const within = withinOf(binding.within);
-    const reason = pattern.noResultPath?.find((entry) =>
-      entry.binding === index
-    )?.reason;
     return [{
       name: binding.name ?? "",
       ...(within === undefined ? {} : { within }),
-      path: binding.result !== undefined,
-      ...(reason === undefined ? {} : { reason }),
       writes: plan.bodies?.[binding.handler.body]?.writes?.length ?? 0,
     }];
   });
+  const inputs = generateInputs(plan, schemas, await scenarioAudience());
+  const record = streams ?? executorOf(pattern, inputs, artifacts);
   let run: Run;
   // What the runtime reports while the scenario runs: a write it refuses
   // is logged and does not fail the run.
@@ -343,9 +384,10 @@ export const runModule = async (
       },
       plan,
       argument: {},
-      inputs: generateInputs(plan, schemas, await scenarioAudience()),
+      inputs,
       events,
       ...(probe === undefined ? {} : { probe }),
+      ...(record === undefined ? {} : { streams: record }),
     });
   } catch (error) {
     // With `COMPARE_TRACE` set, where the run failed.
@@ -461,7 +503,9 @@ const run = async (
   only: string | undefined,
   order: EventOrder,
 ) => {
-  const modules = (await corpusPlans()).filter((module) =>
+  const emitted = await corpusModules();
+  const artifacts = artifactsOf(emitted);
+  const modules = emitted.filter((module) =>
     module.patterns.length > 0 &&
     module.patterns.every((pattern) => pattern.unsupported.length === 0) &&
     (only === undefined || module.module.includes(only))
@@ -482,7 +526,13 @@ const run = async (
       { append: true },
     );
     console.error(module.module);
-    const result = await runModule(module, order);
+    const result = await runModule(
+      module,
+      order,
+      undefined,
+      undefined,
+      artifacts,
+    );
     await Deno.writeTextFile(file, `${JSON.stringify(result)}\n`, {
       append: true,
     });
@@ -722,8 +772,8 @@ const report = async (file: string) => {
   for (const [reason, number] of [...reasons].sort((a, b) => b[1] - a[1])) {
     console.log(`  ${`${number}`.padStart(5)}  ${reason}`);
   }
-  // The handlers by where they are bound: with a result path, sent an
-  // event, and what became of it.
+  // The handlers by where they are bound: sent an event, and what became
+  // of it.
   const handlers = ran.flatMap((result) => result.handlers ?? []);
   const sent = ran.flatMap((result) => result.outcomes ?? []);
   console.log("handlers, by where they are bound:");
@@ -736,12 +786,8 @@ const report = async (file: string) => {
     );
     const edges = (list: typeof of) =>
       list.reduce((sum, handler) => sum + handler.writes, 0);
-    const withPath = of.filter((handler) => handler.path);
     console.log(
       `  ${within}: ${of.length} bindings with ${edges(of)} write edges; ` +
-        `${withPath.length} with a result path (${
-          edges(withPath)
-        } write edges); ` +
         `events committed ${
           events.filter((outcome) => outcome.outcome === "committed").length
         }, refused ${
@@ -750,15 +796,6 @@ const report = async (file: string) => {
           events.filter((outcome) => outcome.outcome === "not sent").length
         }`,
     );
-    for (
-      const [reason, group] of count(
-        of.filter((handler) => !handler.path),
-        (handler) =>
-          handler.reason ?? "its stream is at no kept path of the result",
-      )
-    ) {
-      console.log(`      no result path, ${reason}: ${group.length}`);
-    }
     const reasons = new Map<string, number>();
     for (const result of ran) {
       for (

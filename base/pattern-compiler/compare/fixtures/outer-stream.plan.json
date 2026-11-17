@@ -5,7 +5,6 @@
       {
         "line": 13,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -15,45 +14,6 @@
                 "body": 0
               },
               "name": "inc",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "0",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": []
-                },
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "1",
-                    "children",
-                    "0",
-                    "*",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "every"
-                    }
-                  ]
-                },
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "2",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",

@@ -8,19 +8,25 @@ import {
   generateValue,
   type Schema,
 } from "../generate.ts";
-import { type Plan, runScenario, scenarioAudience } from "../harness.ts";
+import type { Artifact } from "../../exec/executor.ts";
+import { type Plan, scenarioAudience } from "../harness.ts";
 import { atomKey } from "../template.ts";
+import { runBesideExecutor } from "../values.ts";
 
 const fixture = (name: string) =>
   new URL(`../fixtures/${name}`, import.meta.url);
 
+// The plan of a fixture, with the artifact the executor runs beside
+// today's run: the harness sends an event where the executor stored the
+// link to the stream.
 const planOf = async (name: string) => {
   const [{ patterns }] = JSON.parse(
-    await Deno.readTextFile(fixture(`${name}.plan.json`)),
+    await Deno.readTextFile(fixture(`${name}.emit.json`)),
   );
-  return patterns[0] as {
+  return { ...patterns[0], artifact: patterns[0] } as {
     plan: Plan & { argumentSchema?: string };
     schemas: { id: string; schema: Schema }[];
+    artifact: Artifact;
   };
 };
 
@@ -189,8 +195,8 @@ describe("a generated scenario for the handler fixture", () => {
   });
 
   it("runs the pattern from disk with the generated inputs and event, and compares the handler's writes", async () => {
-    const { plan, schemas } = await planOf("handler");
-    const run = await runScenario({
+    const { plan, schemas, artifact } = await planOf("handler");
+    const run = await runBesideExecutor(artifact, {
       program: {
         main: fromFileUrl(fixture("handler.tsx")),
         root: fromFileUrl(fixture("")),
@@ -231,8 +237,8 @@ describe("a generated scenario for a handler that writes its inputs", () => {
   // document of a pushed object admits none, so each generated clause has
   // to be one every store of the space admits.
   it("has the runtime commit the event, and compares both writes", async () => {
-    const { plan, schemas } = await planOf("input-writes");
-    const run = await runScenario({
+    const { plan, schemas, artifact } = await planOf("input-writes");
+    const run = await runBesideExecutor(artifact, {
       program: {
         main: fromFileUrl(fixture("input-writes.tsx")),
         root: fromFileUrl(fixture("")),
@@ -263,8 +269,8 @@ describe("a generated scenario for a handler that writes an input with a declare
   // at its root, and the atom the runtime has for a `PolicyOf`, which the
   // crate's schema names by module and binding.
   it("has the runtime commit both events", async () => {
-    const { plan, schemas } = await planOf("declared-writes");
-    const run = await runScenario({
+    const { plan, schemas, artifact } = await planOf("declared-writes");
+    const run = await runBesideExecutor(artifact, {
       program: {
         main: fromFileUrl(fixture("declared-writes.tsx")),
         root: fromFileUrl(fixture("")),
@@ -293,12 +299,13 @@ describe("a handler that passes a handle on without reading through it", () => {
   // label of the link the body was given the handle through (PL §2.2).
   const run = async () => {
     const modules = JSON.parse(
-      await Deno.readTextFile(fixture("handle-passed.plan.json")),
+      await Deno.readTextFile(fixture("handle-passed.emit.json")),
     );
-    const { plan, schemas } = modules[0].patterns.find((
+    const artifact = modules[0].patterns.find((
       pattern: { name: string },
     ) => pattern.name === "default");
-    return await runScenario({
+    const { plan, schemas } = artifact;
+    return await runBesideExecutor(artifact, {
       program: {
         main: fromFileUrl(fixture("handle-passed.tsx")),
         root: fromFileUrl(fixture("")),
@@ -351,8 +358,8 @@ describe("a handler that writes a reference it passes on", () => {
   // record whose `room` is the value of `first`, unchanged. The edge at
   // `room` has a `reference` member.
   it("compares the written link with both sides reading its target", async () => {
-    const { plan, schemas } = await planOf("reference-written");
-    const run = await runScenario({
+    const { plan, schemas, artifact } = await planOf("reference-written");
+    const run = await runBesideExecutor(artifact, {
       program: {
         main: fromFileUrl(fixture("reference-written.tsx")),
         root: fromFileUrl(fixture("")),
@@ -394,8 +401,8 @@ describe("a handler of an element body that resolves the handle of its element",
   // reference, so the handle is not one that is only passed on (PL §2.2,
   // "A `resolved` slot"; §2.5, "A resolved reference").
   it("has the label the list declares for its element, and is equal to the run", async () => {
-    const { plan, schemas } = await planOf("element-resolved");
-    const run = await runScenario({
+    const { plan, schemas, artifact } = await planOf("element-resolved");
+    const run = await runBesideExecutor(artifact, {
       program: {
         main: fromFileUrl(fixture("element-resolved.tsx")),
         root: fromFileUrl(fixture("")),
@@ -437,11 +444,11 @@ describe("a handler that sends to the stream of another binding", () => {
   // has the stream of `inc` as its target. A stream stores no value, so
   // the edge has no stored label to compare.
   it("has a write edge that is not compared, under a reason that names the stream", async () => {
-    const { plan, schemas } = await planOf("stream-target");
+    const { plan, schemas, artifact } = await planOf("stream-target");
     const binding = (plan.bindings ?? []).findIndex((binding) =>
-      binding.result !== undefined
+      binding.name === "onClick"
     );
-    const run = await runScenario({
+    const run = await runBesideExecutor(artifact, {
       program: {
         main: fromFileUrl(fixture("stream-target.tsx")),
         root: fromFileUrl(fixture("")),
@@ -470,8 +477,8 @@ describe("a handler whose write leaves a cycle of links", () => {
   // `center` resolves no value, and the runtime's read of the label there
   // says that it failed (`cfcLabelViewForResolvedCellWithStatus`).
   const cycle = async (bindings: number[]) => {
-    const { plan, schemas } = await planOf("link-cycle");
-    return runScenario({
+    const { plan, schemas, artifact } = await planOf("link-cycle");
+    return runBesideExecutor(artifact, {
       program: {
         main: fromFileUrl(fixture("link-cycle.tsx")),
         root: fromFileUrl(fixture("")),
@@ -512,8 +519,8 @@ describe("a handler whose run stores a link at the target of an edge with no `re
     // `reference`": "such a row is not a row of the comparison and is
     // counted apart, and where the plan has an edge with `reference` for
     // the same write, that edge's row is the row of the write."
-    const { plan, schemas } = await planOf("link-cycle");
-    const run = await runScenario({
+    const { plan, schemas, artifact } = await planOf("link-cycle");
+    const run = await runBesideExecutor(artifact, {
       program: {
         main: fromFileUrl(fixture("link-cycle.tsx")),
         root: fromFileUrl(fixture("")),
@@ -545,8 +552,8 @@ describe("an event whose transaction the runtime does not commit", () => {
   // while its target holds no value. The target holds none after the event
   // either, which is no sign of a write: the event wrote nothing.
   it("has no write edge compared", async () => {
-    const { plan, schemas } = await planOf("handler-throws");
-    const run = await runScenario({
+    const { plan, schemas, artifact } = await planOf("handler-throws");
+    const run = await runBesideExecutor(artifact, {
       program: {
         main: fromFileUrl(fixture("handler-throws.tsx")),
         root: fromFileUrl(fixture("")),
@@ -583,7 +590,7 @@ describe("the template of a write edge", () => {
   // has written `count`, so a template evaluated on what is stored after
   // the event hides what it lacks.
   it("is evaluated on the labels stored when the event's transaction begins", async () => {
-    const { plan, schemas } = await planOf("input-writes");
+    const { plan, schemas, artifact } = await planOf("input-writes");
     const label = plan.slots.findIndex((slot) =>
       slot.root.kind === "binding" && slot.path.join("/") === "label"
     );
@@ -593,7 +600,7 @@ describe("the template of a write edge", () => {
     };
     template.inputs = template.inputs.filter((input) => input.slot !== label);
 
-    const run = await runScenario({
+    const run = await runBesideExecutor(artifact, {
       program: {
         main: fromFileUrl(fixture("input-writes.tsx")),
         root: fromFileUrl(fixture("")),

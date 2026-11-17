@@ -37,7 +37,6 @@
         },
         "line": 39,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -47,14 +46,6 @@
                 "body": 0
               },
               "name": "pin",
-              "result": [
-                {
-                  "path": [
-                    "pin"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -78,14 +69,6 @@
                 "body": 1
               },
               "name": "unpin",
-              "result": [
-                {
-                  "path": [
-                    "unpin"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -109,14 +92,6 @@
                 "body": 2
               },
               "name": "draft",
-              "result": [
-                {
-                  "path": [
-                    "draft"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",

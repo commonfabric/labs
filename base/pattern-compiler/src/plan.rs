@@ -54,10 +54,6 @@ pub struct PatternPlan {
     /// The handles of a binding's state that are bound to a computed
     /// value, by case (ruling T3).
     pub handle_writes: Vec<HandleWrite>,
-    /// The bindings of a handler in an element body that have no `result`
-    /// path (PL §1.1, "The result paths of a binding in an element body"):
-    /// the index of the binding in the plan, and why it has none.
-    pub element_bindings: Vec<(usize, String)>,
     /// The schemas of the pattern's argument and of its result, where
     /// the pattern declares the type (PL §1.1, `Child.argumentSchema` and
     /// `Child.resultSchema` are their content addresses).
@@ -322,13 +318,6 @@ struct Computed {
     step: bool,
     /// What the value holds, where the emitter decided it (ruling T3).
     origin: Option<Declared>,
-    /// The paths below the value that hold the stream of a binding, and
-    /// the binding (PL §1.1, `Binding.result`). A rendered tree has the
-    /// positions that hold a stream. The assembled result of a `map` or
-    /// a `flatMap` has the paths of what its callback returns below `*`,
-    /// and so has an array literal from a spread on ("The result paths
-    /// of a binding in an element body").
-    streams: Vec<StreamAt>,
     order: usize,
 }
 
@@ -353,96 +342,6 @@ pub(crate) fn written_children<'b, 'a>(expression: &'b Expression<'a>) -> Vec<&'
         }
     }
     vec![expression]
-}
-
-/// What one `*` of a result path of a binding stands for (PL §1.1,
-/// `ResultStar`; ruling Z21).
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Star {
-    /// A collection for whose keys the binding has an `element` step.
-    Element,
-    /// A collection no `element` step of the binding names, whose
-    /// callback writes the stream: every position holds the one stream.
-    Every,
-    /// The one position of a member written after a spread, with the
-    /// number of entries, members and spreads, written before it.
-    Member(usize),
-    /// A collection no `element` step of the binding names, of which one
-    /// element holds the stream inside its value.
-    Inside,
-}
-
-impl Star {
-    fn json(&self) -> Value {
-        match self {
-            Star::Element => json!({ "kind": "element" }),
-            Star::Every => json!({ "kind": "every" }),
-            Star::Member(index) => json!({ "kind": "member", "index": index }),
-            Star::Inside => json!({ "kind": "inside" }),
-        }
-    }
-}
-
-/// A path below a value that holds the stream of a binding.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct StreamAt {
-    path: Vec<String>,
-    binding: usize,
-    /// The kind of each `*` of `path`, in the order of the path.
-    stars: Vec<Star>,
-    /// For the positions from a spread on, whose holder writes them at
-    /// `*`: the kind of that `*`, which is not in `path`.
-    head: Option<Star>,
-    /// For a stream reached through a member of an element: the
-    /// collection of the element, and the kind the `*` of that
-    /// collection has for this stream. The `*` is not in `path` until
-    /// the result of the collection's callback is assembled.
-    through: Option<(usize, Star)>,
-}
-
-impl StreamAt {
-    fn new(path: Vec<String>, binding: usize) -> Self {
-        StreamAt {
-            path,
-            binding,
-            stars: Vec::new(),
-            head: None,
-            through: None,
-        }
-    }
-
-    /// The path with `prefix` before it. A prefix that ends with `*` is
-    /// the holder of the positions from a spread on, and its `*` has the
-    /// kind of `head`.
-    fn below(&self, prefix: &[String]) -> Self {
-        let mut placed = self.clone();
-        placed.path = prefix
-            .iter()
-            .cloned()
-            .chain(self.path.iter().cloned())
-            .collect();
-        if prefix.last().is_some_and(|last| last == "*") {
-            let head = placed.head.take().unwrap_or(Star::Every);
-            placed.stars.insert(0, head);
-        }
-        placed
-    }
-
-    /// For a path that begins with `*`: the path below the element, with
-    /// the kind of that `*`.
-    fn element(&self) -> Option<(Self, Star)> {
-        if self.path.first().is_none_or(|first| first != "*") {
-            return None;
-        }
-        let mut below = self.clone();
-        below.path.remove(0);
-        let star = if below.stars.is_empty() {
-            Star::Every
-        } else {
-            below.stars.remove(0)
-        };
-        Some((below, star))
-    }
 }
 
 struct ConeOut {
@@ -555,20 +454,9 @@ struct Emitter<'r, 'm, 'a> {
     hints: Vec<(String, u32)>,
     /// The handles bound to a computed value (ruling T3).
     handle_writes: Vec<HandleWrite>,
-    /// For each collection: the streams its elements hold before the body
-    /// runs, each with its path below an element. An array written in
-    /// place holds the stream of a binding of a pattern compiled in at a
-    /// member, and the assembled result of another construct holds the
-    /// streams its body placed (PL §1.1, "The stream is reached through a
-    /// member of the element").
-    member_streams: Vec<Vec<StreamAt>>,
     /// The names a pattern binds to `[SELF]` of its parameter: each is a
     /// reference to the result of the instance (ruling Z17).
     self_names: BTreeSet<String>,
-    /// The paths that hold the stream of a binding in what the statements
-    /// of a promoted `computed` return, over all its `return` statements,
-    /// while the statements of one are being evaluated.
-    returned_streams: Vec<StreamAt>,
     /// The literals that the call of a pattern compiled in writes for
     /// properties of its argument, by the property: set by the call for
     /// the pattern it compiles in next.
@@ -615,10 +503,6 @@ struct Emitter<'r, 'm, 'a> {
     root_types: HashMap<Root, TypeId>,
     /// The type the pattern declares for its result.
     result_type: Option<TypeId>,
-    /// The members of the record the pattern returns, in the order its
-    /// object literal writes them (PL §1.1, `Binding.result`: "in source
-    /// order").
-    result_order: Vec<String>,
     /// The value type of a state cell, where its constructor is written
     /// with one (PL §1.5, `StateCell.schema`).
     state_types: HashMap<usize, TypeId>,
@@ -1132,7 +1016,6 @@ impl<'a> Emitter<'_, '_, 'a> {
             step: false,
             referred: false,
             origin: None,
-            streams: Vec::new(),
             order,
         });
         order
@@ -1259,10 +1142,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         branches: [Option<&Expression<'a>>; 2],
         origins: &mut Vec<Option<Declared>>,
     ) -> Place {
-        // A stream in a branch is stored below the position of the
-        // `select` while the branch is selected.
-        let mut streams: Vec<StreamAt> = Vec::new();
-        let place = self.build(hint, at, |emitter, _| {
+        self.build(hint, at, |emitter, _| {
             let selector = emitter.selector(2);
             let class = class.unwrap_or_else(|| emitter.test_class(test));
             let (tested, condition) = emitter.one(class, |emitter| emitter.eval(test, "condition"));
@@ -1281,25 +1161,12 @@ impl<'a> Emitter<'_, '_, 'a> {
                 origins.push(emitter.declared_of(&place));
                 constructed.push((emitter.entries_of(&place), template.clone()));
                 templates.push(template);
-                if branch.is_some() {
-                    let mut found = Vec::new();
-                    emitter.stream_paths(&place, &mut Vec::new(), &mut found);
-                    for entry in found {
-                        if !streams.contains(&entry) {
-                            streams.push(entry);
-                        }
-                    }
-                }
             }
             emitter.per_path(&constructed, |at| {
                 select_node(selector, condition.clone(), at)
             });
             select_node(selector, condition, templates)
-        });
-        if let Place::Value(value, _) = &place {
-            self.values[*value].streams = streams;
-        }
-        place
+        })
     }
 
     /// A dynamic key in the reactive tier: a `pick` whose choice the value
@@ -1911,20 +1778,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                 Statement::ReturnStatement(statement) => {
                     return Ok(match &statement.argument {
                         Some(argument) => {
-                            let (place, template) =
-                                self.one("identity", |emitter| emitter.eval(argument, "branch"));
-                            // A stream in what a `return` gives is stored
-                            // below the position of the `computed` while
-                            // that path is taken, as one in a branch of a
-                            // `select` is.
-                            let mut found = Vec::new();
-                            self.stream_paths(&place, &mut Vec::new(), &mut found);
-                            for stream in found {
-                                if !self.returned_streams.contains(&stream) {
-                                    self.returned_streams.push(stream);
-                                }
-                            }
-                            template
+                            self.one("identity", |emitter| emitter.eval(argument, "branch"))
+                                .1
                         }
                         None => Some(json!({ "op": "const" })),
                     });
@@ -2247,35 +2102,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                         Self::extend(&object, &index.value.to_string())
                     }
                     key => {
-                        // A key the pattern API names, as `[UI]`: the
-                        // member is at a static path, and a stream below
-                        // it is at the path below the read.
-                        let named = match key {
-                            Expression::Identifier(key)
-                                if matches!(key.name.as_str(), "UI" | "NAME")
-                                    && !self.env.contains_key(key.name.as_str()) =>
-                            {
-                                Some(format!("${}", key.name))
-                            }
-                            _ => None,
-                        };
                         let key = self.eval(key, hint);
                         if matches!(object, Place::Const) && matches!(key, Place::Const) {
                             return Place::Const;
                         }
-                        let picked = self.pick(&object, &key, hint, at);
-                        if let (Some(named), Place::Value(value, below)) = (named, &picked) {
-                            if below.is_empty() {
-                                let mut found = Vec::new();
-                                self.stream_paths(
-                                    &Self::extend(&object, &named),
-                                    &mut Vec::new(),
-                                    &mut found,
-                                );
-                                self.values[*value].streams = found;
-                            }
-                        }
-                        picked
+                        self.pick(&object, &key, hint, at)
                     }
                 }
             }
@@ -2309,8 +2140,6 @@ impl<'a> Emitter<'_, '_, 'a> {
             },
             Expression::ObjectExpression(object) => {
                 let mut fields = BTreeMap::new();
-                // The members in the order they are written.
-                let mut written: Vec<String> = Vec::new();
                 for property in &object.properties {
                     match property {
                         ObjectPropertyKind::ObjectProperty(property) => {
@@ -2342,9 +2171,6 @@ impl<'a> Emitter<'_, '_, 'a> {
                                     }
                                 },
                             };
-                            if !written.contains(&name) {
-                                written.push(name.clone());
-                            }
                             let member = self.eval(&property.value, &format!("@{name}"));
                             fields.insert(name, member);
                         }
@@ -2403,12 +2229,6 @@ impl<'a> Emitter<'_, '_, 'a> {
                         }
                     }
                 }
-                // The literal of the pattern's own result is the last one
-                // evaluated under this hint: a pattern compiled in returns
-                // while a member of it is evaluated.
-                if hint == "result" {
-                    self.result_order = written;
-                }
                 Place::Record(fields)
             }
             Expression::ArrayExpression(array) => {
@@ -2463,31 +2283,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                     // "`derive` by expression code over the `enumeration`
                     // of each spread operand".
                     let later = &array.elements[rest..];
-                    // The streams at the positions from the spread on:
-                    // those below an element of a spread operand, and
-                    // those of a member written after the first spread.
-                    let mut streams: Vec<StreamAt> = Vec::new();
                     let star = self.build(hint, at, |emitter, cone| {
                         let mut inputs: Vec<Option<Value>> = Vec::new();
                         let mut enumerations: Vec<Option<Value>> = Vec::new();
-                        for (offset, element) in later.iter().enumerate() {
-                            // The number of entries written before this
-                            // one (PL §1.1, `ResultStar`, kind `member`).
-                            let entry = rest + offset;
+                        for element in later {
                             match element {
                                 ArrayExpressionElement::Elision(_) => {}
                                 ArrayExpressionElement::SpreadElement(spread) => {
                                     let place = emitter.eval(&spread.argument, hint);
-                                    if let Place::Value(value, path) = &place {
-                                        if path.is_empty() {
-                                            for stream in &emitter.values[*value].streams {
-                                                if let Some((mut below, star)) = stream.element() {
-                                                    below.head = Some(star);
-                                                    streams.push(below);
-                                                }
-                                            }
-                                        }
-                                    }
                                     match &place {
                                         Place::Slot(root, path) => {
                                             let slot = emitter.slot(root, path, "enumeration");
@@ -2512,14 +2315,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                                 }
                                 element => {
                                     if let Some(element) = element.as_expression() {
-                                        let (place, template) = emitter
-                                            .one("identity", |emitter| emitter.eval(element, hint));
-                                        let mut found = Vec::new();
-                                        emitter.stream_paths(&place, &mut Vec::new(), &mut found);
-                                        for mut stream in found {
-                                            stream.head = Some(Star::Member(entry));
-                                            streams.push(stream);
-                                        }
+                                        let template = emitter
+                                            .one("identity", |emitter| emitter.eval(element, hint))
+                                            .1;
                                         inputs.push(template);
                                     }
                                 }
@@ -2531,10 +2329,6 @@ impl<'a> Emitter<'_, '_, 'a> {
                         inputs.push(joined(enumerations?));
                         Some(joined(inputs))
                     });
-                    if let Place::Value(value, _) = &star {
-                        streams.dedup();
-                        self.values[*value].streams = streams;
-                    }
                     fields.insert("*".to_string(), star);
                 }
                 Place::Record(fields)
@@ -2551,7 +2345,6 @@ impl<'a> Emitter<'_, '_, 'a> {
                 if placed {
                     self.ui_chain.push(None);
                 }
-                let mut streams = Vec::new();
                 let built = self.build(hint, at, |emitter, _| {
                     let tree = match expression {
                         Expression::JSXElement(element) => emitter.jsx_element(element),
@@ -2560,12 +2353,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                         }
                         _ => Place::Const,
                     };
-                    emitter.stream_paths(&tree, &mut Vec::new(), &mut streams);
                     emitter.constructed(&tree)
                 });
-                if let Place::Value(value, _) = &built {
-                    self.values[*value].streams = streams;
-                }
                 if placed {
                     self.ui_chain.pop();
                 }
@@ -3362,7 +3151,6 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
         self.collections.push(record);
         self.iterated.push(iterated.clone());
-        self.member_streams.push(Vec::new());
         // The cone the `reduce` is written in computes `init`.
         let initial = initial.map(|initial| {
             let (cone, made) = self.computing(hint, at);
@@ -3549,8 +3337,6 @@ impl<'a> Emitter<'_, '_, 'a> {
             "source": source,
         }));
         self.iterated.push(iterated.clone());
-        self.member_streams
-            .push(self.streams_of_elements(receiver, collection));
         // The body: one cone, evaluated once per element key.
         let saved_env = self.env.clone();
         let saved_cone = self.cone.take();
@@ -3633,9 +3419,6 @@ impl<'a> Emitter<'_, '_, 'a> {
             None => Place::Const,
         });
         let element_entries = self.entries_of(&result);
-        // The paths of what the callback returns that hold a stream.
-        let mut element_streams = Vec::new();
-        self.stream_paths(&result, &mut Vec::new(), &mut element_streams);
         // The element as the source has it, passed through.
         let source_element = |emitter: &mut Self| {
             let slot = emitter.slot(&Root::Element(collection), &[], "identity");
@@ -3731,32 +3514,6 @@ impl<'a> Emitter<'_, '_, 'a> {
             if via == "map" {
                 self.values[value].element_entries = element_entries;
             }
-            if via == "map" || via == "flatMap" {
-                // "The path of what the callback returns, with `*` at the
-                // position of each enclosing collection" (PL §1.1). A
-                // member of the segment that the callback of a `flatMap`
-                // writes as an array literal is at a position of the
-                // result, so its position in the segment is no segment of
-                // the path. The `*` is of kind `element` for a binding of
-                // the callback's body, and a position matches by the
-                // prefix of its key (ruling Z30).
-                let flat = via == "flatMap";
-                let segment = matches!(&result, Place::Record(fields)
-                    if !fields.is_empty() && fields.keys().all(|name| name.parse::<usize>().is_ok()));
-                let mut streams: Vec<StreamAt> = Vec::new();
-                for mut stream in element_streams {
-                    if flat && segment {
-                        stream.path.remove(0);
-                    }
-                    let star = self.star_of(collection, &mut stream);
-                    stream.path.insert(0, "*".to_string());
-                    stream.stars.insert(0, star);
-                    if !streams.contains(&stream) {
-                        streams.push(stream);
-                    }
-                }
-                self.values[value].streams = streams;
-            }
         }
         let place = Place::Value(value, Vec::new());
         // A cone outside the construct that uses the collection reads its
@@ -3803,14 +3560,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                         // has the expression's template.
                         let mut origin = None;
                         let mut passes = None;
-                        let mut streams = Vec::new();
                         let built = self.build(hint, at, |emitter, _| {
                             let (place, template) =
                                 emitter.one("identity", |emitter| emitter.eval(expression, hint));
-                            // The positions of what the expression
-                            // gives that hold a stream (PL §1.1, "The
-                            // listed paths are complete").
-                            emitter.stream_paths(&place, &mut Vec::new(), &mut streams);
                             // The expression is the assembled result of
                             // an element construct, or an output that
                             // passes one on (ruling Z13).
@@ -3832,16 +3584,12 @@ impl<'a> Emitter<'_, '_, 'a> {
                             if self.values[*value].collection.is_none() {
                                 self.values[*value].passes = passes;
                             }
-                            if !streams.is_empty() {
-                                self.values[*value].streams = streams;
-                            }
                         }
                         built
                     }
                     None => {
                         let statements = function.block_body().unwrap_or(&[]);
                         let saved = self.env.clone();
-                        let outer = std::mem::take(&mut self.returned_streams);
                         let place = self.build(hint, at, |emitter, _| {
                             match emitter.code_block(statements) {
                                 Ok(template) => template,
@@ -3850,10 +3598,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                             }
                         });
                         self.env = saved;
-                        let streams = std::mem::replace(&mut self.returned_streams, outer);
                         if let Place::Value(value, _) = &place {
                             self.values[*value].origin = self.returned_origin(function);
-                            self.values[*value].streams = streams;
                         }
                         place
                     }
@@ -6202,14 +5948,8 @@ impl<'a> Emitter<'_, '_, 'a> {
 
     fn keep(&mut self, path: &mut Vec<String>, place: &Place) {
         match place {
-            Place::Value(value, below) => {
+            Place::Value(value, _) => {
                 self.values[*value].kept.push(path.clone());
-                // The positions of a rendered tree that hold a stream.
-                if below.is_empty() {
-                    for stream in self.values[*value].streams.clone() {
-                        self.stream_at(&stream.below(path));
-                    }
-                }
             }
             Place::Record(fields) => {
                 for (name, member) in fields {
@@ -6236,179 +5976,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     self.cone = None;
                 }
             }
-            Place::Stream(binding) => self.stream_at(&StreamAt::new(path.clone(), *binding)),
-            Place::Accumulator(..) | Place::Const | Place::Unknown => {}
-        }
-    }
-
-    /// The paths of a rendered tree that hold the stream of a binding. A
-    /// member that is a value with such paths of its own has them below
-    /// its position: a tree held in a variable, the tree of a pattern
-    /// compiled in at a tag, "because the callee's tree is in place at the
-    /// call", and the children from a spread on (PL §1.1).
-    fn stream_paths(&self, place: &Place, path: &mut Vec<String>, found: &mut Vec<StreamAt>) {
-        match place {
-            Place::Stream(binding) => found.push(StreamAt::new(path.clone(), *binding)),
-            Place::Record(fields) => {
-                for (name, member) in fields {
-                    path.push(name.clone());
-                    self.stream_paths(member, path, found);
-                    path.pop();
-                }
-            }
-            Place::Value(value, below) if below.is_empty() => {
-                for stream in &self.values[*value].streams {
-                    found.push(stream.below(path));
-                }
-            }
-            // A member of an element, passed on: the streams the element
-            // holds at that member or below it.
-            Place::Slot(Root::Element(collection), member)
-            | Place::Read(Root::Element(collection), member, _) => {
-                for stream in self.member_streams.get(*collection).into_iter().flatten() {
-                    if stream.path.starts_with(member) {
-                        let mut placed = stream.clone();
-                        placed.path = stream.path[member.len()..].to_vec();
-                        found.push(placed.below(path));
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// The streams the elements of what a construct iterates hold, each
-    /// with its path below an element: for an array written in place the
-    /// streams below each member, and for the assembled result of another
-    /// construct the streams below `*`. Each has in `through` what the `*`
-    /// of `collection` stands for where the callback passes the stream on
-    /// (PL §1.1, "The stream is reached through a member of the element"):
-    /// `inside` for a member of an array written in place, which one
-    /// element holds, and for the result of another construct the kind of
-    /// the `*` of that result, since the collection has its keys.
-    fn streams_of_elements(&self, receiver: &Place, collection: usize) -> Vec<StreamAt> {
-        let mut found: Vec<StreamAt> = Vec::new();
-        let mut add = |mut stream: StreamAt, star: Star| {
-            stream.through = Some((collection, star));
-            if !found.contains(&stream) {
-                found.push(stream);
-            }
-        };
-        match receiver {
-            Place::Record(fields) => {
-                for (name, member) in fields {
-                    if name != "*" && name.parse::<usize>().is_err() {
-                        continue;
-                    }
-                    let mut below = Vec::new();
-                    self.stream_paths(member, &mut Vec::new(), &mut below);
-                    for mut stream in below {
-                        // The positions from a spread on have the kind
-                        // their holder gives them.
-                        let star = match stream.head.take() {
-                            Some(Star::Member(_)) | None => Star::Inside,
-                            Some(star) => star,
-                        };
-                        add(stream, star);
-                    }
-                }
-            }
-            Place::Value(value, path) if path.is_empty() => {
-                for stream in &self.values[*value].streams {
-                    if let Some((below, star)) = stream.element() {
-                        add(below, star);
-                    }
-                }
-            }
-            _ => {}
-        }
-        found
-    }
-
-    /// What the `*` of `collection` stands for in a path of what its
-    /// callback returns (PL §1.1, "What a `*` of a result path stands
-    /// for"). A stream the callback passes on from a member of its
-    /// element has the kind the element's source gives. Otherwise the `*`
-    /// is `element` where the binding has an `element` step for the
-    /// collection, and `every` where it has none: the callback writes the
-    /// one stream of an outer binding at every position.
-    fn star_of(&self, collection: usize, stream: &mut StreamAt) -> Star {
-        if let Some((through, star)) = &stream.through {
-            if *through == collection {
-                let star = star.clone();
-                stream.through = None;
-                return star;
-            }
-        }
-        let within = self
-            .bindings
-            .get(stream.binding)
-            .and_then(|binding| binding["within"].as_array());
-        let has_step = within
-            .into_iter()
-            .flatten()
-            .any(|step| step["element"] == json!(collection));
-        if has_step {
-            Star::Element
-        } else {
-            Star::Every
-        }
-    }
-
-    /// Where the result holds the stream of a binding, the binding names
-    /// the path (PL §1.1, `Binding.result`), "in source order". The
-    /// emitter holds the members of a record by name, so the order is
-    /// formed from the paths: the members of the returned record in the
-    /// order its object literal writes them, in a view node the attributes
-    /// before the children, and the children by position. The members of a
-    /// record nested below a result path are in the order of their names.
-    fn stream_at(&mut self, stream: &StreamAt) {
-        let binding = stream.binding;
-        let path = &stream.path;
-        let stars: Vec<Value> = stream.stars.iter().map(Star::json).collect();
-        let entry = json!({ "path": path, "stars": stars });
-        let order = self.result_order.clone();
-        let key = move |entry: &Value| -> Vec<(usize, u64, String)> {
-            let segments: Vec<&str> = entry["path"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .collect();
-            segments
-                .iter()
-                .enumerate()
-                .map(|(index, segment)| {
-                    let first = if index == 0 {
-                        order
-                            .iter()
-                            .position(|name| name == segment)
-                            .unwrap_or(order.len())
-                    } else {
-                        match *segment {
-                            "props" => 0,
-                            "children" => 1,
-                            _ => 2,
-                        }
-                    };
-                    match segment.parse::<u64>() {
-                        Ok(position) => (first, position, String::new()),
-                        Err(_) => (first, 0, (*segment).to_string()),
-                    }
-                })
-                .collect()
-        };
-        let Some(record) = self.bindings.get_mut(binding) else {
-            return;
-        };
-        if record.get("result").is_none() {
-            record["result"] = json!([]);
-        }
-        if let Some(paths) = record["result"].as_array_mut() {
-            if !paths.contains(&entry) {
-                paths.push(entry);
-                paths.sort_by_key(key);
-            }
+            Place::Stream(_) | Place::Accumulator(..) | Place::Const | Place::Unknown => {}
         }
     }
 
@@ -7980,9 +7548,7 @@ pub fn emit_module<'a>(
             iterated: Vec::new(),
             hints: Vec::new(),
             handle_writes: Vec::new(),
-            member_streams: Vec::new(),
             self_names: BTreeSet::new(),
-            returned_streams: Vec::new(),
             literal_values: HashMap::new(),
             callee_literals: HashMap::new(),
             patterns: vec![(module, *start)],
@@ -7995,7 +7561,6 @@ pub fn emit_module<'a>(
             tags: Vec::new(),
             root_types: HashMap::new(),
             result_type: None,
-            result_order: Vec::new(),
             state_types: HashMap::new(),
             child_types: HashMap::new(),
             body_guards: Vec::new(),
@@ -8055,26 +7620,6 @@ pub fn emit_module<'a>(
         let schemas = name_schemas(&mut plan, argument_schema.as_ref(), result_schema.as_ref());
         let code = crate::emit::requested()
             .then(|| crate::emit::generate(resolver, module, &plan, &finished));
-        // The bindings of an element body that have no result path.
-        let element_bindings = plan["bindings"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .enumerate()
-            .filter(|(_, binding)| {
-                binding.get("handler").is_some()
-                    && binding.get("result").is_none()
-                    && binding["within"]
-                        .as_array()
-                        .is_some_and(|steps| steps.iter().any(|step| step.get("element").is_some()))
-            })
-            .map(|(index, _)| {
-                (
-                    index,
-                    "its stream is at no kept path of the result".to_string(),
-                )
-            })
-            .collect();
         plans.push(PatternPlan {
             name: body.name.clone(),
             line: body.line,
@@ -8084,7 +7629,6 @@ pub fn emit_module<'a>(
             hints,
             flows,
             handle_writes,
-            element_bindings,
             argument_schema,
             result_schema,
             schemas,
@@ -8300,11 +7844,8 @@ pub fn corpus_summary(analysis: &crate::program::ProgramAnalysis) -> String {
     out.push_str(&format!(
         "state cells: {cells}, {first_values} with a first value that a cone writes once\n"
     ));
-    // The bindings of a handler in an element body, by whether they have
-    // a result path, and those without by reason (PL §1.1, "The result
-    // paths of a binding in an element body").
+    // The bindings of a handler in an element body.
     let mut in_element = 0;
-    let mut without: BTreeMap<&str, usize> = BTreeMap::new();
     for plan in accepted.iter().flat_map(|module| &module.plans) {
         in_element += plan.plan["bindings"]
             .as_array()
@@ -8317,18 +7858,10 @@ pub fn corpus_summary(analysis: &crate::program::ProgramAnalysis) -> String {
                         .is_some_and(|steps| steps.iter().any(|step| step.get("element").is_some()))
             })
             .count();
-        for (_, reason) in &plan.element_bindings {
-            *without.entry(reason.as_str()).or_default() += 1;
-        }
     }
-    let none: usize = without.values().sum();
     out.push_str(&format!(
-        "bindings of a handler in an element body: {in_element}, {} with a result path\n",
-        in_element - none
+        "bindings of a handler in an element body: {in_element}\n"
     ));
-    for (reason, count) in &without {
-        out.push_str(&format!("  no result path, {reason}: {count}\n"));
-    }
     // The templates of the plans emitted with no unsupported construct:
     // which records have one, and the nodes by kind.
     let complete_plans: Vec<&PatternPlan> = with_patterns

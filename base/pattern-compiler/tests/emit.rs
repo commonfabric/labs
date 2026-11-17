@@ -784,15 +784,14 @@ export const P = pattern<{ items: Item[]; selected: Writable<Item | null> }>(
     );
 }
 
-/// Ruling Z21: the runtime "knows which stored position is which from how
-/// it assembled the array" (PL §1.1, "What a `*` of a result path stands
-/// for"). An array literal with a spread is written as a call that is
-/// given each entry apart, and a spread as a value of its own, so the
-/// executor has, for each position, the entry it came from. The spread
-/// collection is over records in the first array and over plain values
-/// in the second.
+/// An array literal with a spread is an array literal in value code,
+/// with the members of each spread operand read through `$rt.spread`,
+/// which gives none for an operand that holds nothing. The runtime is
+/// told nothing about which entry a position came from (ruling Z43).
+/// The spread collection is over records in the first array and over
+/// plain values in the second.
 #[test]
-fn an_array_with_a_spread_is_given_its_entries_apart() {
+fn an_array_with_a_spread_is_an_array_literal() {
     let (_, code) = emitted(
         r#"import { pattern } from "commonfabric";
 interface Item { title: string }
@@ -808,13 +807,12 @@ export const P = pattern<{ items: Item[]; tags: string[]; note: string }>(({ ite
     );
     let text = source(&code);
     assert!(
-        text.contains("rows: $rt.list([$h.slot(") && text.contains("$rt.spread($h.v($h.output("),
+        text.contains("rows: [$h.slot(") && text.contains("...$rt.spread($h.v($h.output("),
         "{text}"
     );
-    assert!(text.contains("labels: $rt.list([$rt.spread("), "{text}");
-    // An array with no spread is an array literal.
+    assert!(text.contains("labels: [...$rt.spread("), "{text}");
     assert!(text.contains("plain: [$h.slot("), "{text}");
-    assert!(!text.contains("...("), "{text}");
+    assert!(!text.contains("$rt.list("), "{text}");
 }
 
 /// A pattern that a function body instantiates is named, in value code,

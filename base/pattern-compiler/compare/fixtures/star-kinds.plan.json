@@ -5,7 +5,6 @@
       {
         "line": 20,
         "name": "Story",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -15,16 +14,6 @@
                 "body": 0
               },
               "name": "bump",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -317,7 +306,6 @@
       {
         "line": 39,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -327,42 +315,6 @@
                 "body": 0
               },
               "name": "inc",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "0",
-                    "children",
-                    "0",
-                    "*",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "every"
-                    }
-                  ]
-                },
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "1",
-                    "children",
-                    "0",
-                    "*",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "every"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -386,20 +338,6 @@
                 "body": 0
               },
               "name": "more",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "2",
-                    "children",
-                    "2",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -423,28 +361,6 @@
                 "body": 0
               },
               "name": "bump",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "4",
-                    "children",
-                    "0",
-                    "*",
-                    "children",
-                    "0",
-                    "$UI",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "inside"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -472,28 +388,6 @@
                 "body": 0
               },
               "name": "bump",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "4",
-                    "children",
-                    "0",
-                    "*",
-                    "children",
-                    "0",
-                    "$UI",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "inside"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -521,25 +415,6 @@
                 "body": 1
               },
               "name": "pick",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "5",
-                    "children",
-                    "0",
-                    "*",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -580,25 +455,6 @@
                 "body": 1
               },
               "name": "pick",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "3",
-                    "children",
-                    "0",
-                    "*",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -639,25 +495,6 @@
                 "body": 1
               },
               "name": "pick",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "3",
-                    "children",
-                    "1",
-                    "*",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -950,7 +787,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 1774
+                "start": 1747
               },
               "bodies": [],
               "entry": "rows",
@@ -969,7 +806,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 1914
+                "start": 1887
               },
               "bodies": [],
               "entry": "map",
@@ -988,7 +825,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 1991
+                "start": 1964
               },
               "bodies": [],
               "entry": "map",
@@ -1007,7 +844,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2093
+                "start": 2066
               },
               "bodies": [],
               "entry": "map",
@@ -1026,7 +863,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2221
+                "start": 2194
               },
               "bodies": [],
               "entry": "map",
@@ -1045,7 +882,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2385
+                "start": 2358
               },
               "bodies": [],
               "entry": "map",
@@ -1064,7 +901,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2518
+                "start": 2491
               },
               "bodies": [],
               "entry": "map",
@@ -1080,7 +917,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2531
+                "start": 2504
               },
               "bodies": [],
               "entry": "map",
@@ -1099,7 +936,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2601
+                "start": 2574
               },
               "bodies": [],
               "entry": "map",
@@ -1119,7 +956,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 1883
+                "start": 1856
               },
               "bodies": [],
               "entry": "$UI",

@@ -38,7 +38,6 @@
         },
         "line": 30,
         "name": "Price",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [],
@@ -245,7 +244,6 @@
         },
         "line": 39,
         "name": "Marked",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -255,14 +253,6 @@
                 "body": 0
               },
               "name": "append",
-              "result": [
-                {
-                  "path": [
-                    "append"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -591,7 +581,6 @@
         },
         "line": 56,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -601,15 +590,6 @@
                 "body": 3
               },
               "name": "append",
-              "result": [
-                {
-                  "path": [
-                    "marked",
-                    "append"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -638,15 +618,6 @@
                 "body": 3
               },
               "name": "append",
-              "result": [
-                {
-                  "path": [
-                    "markedDefaulted",
-                    "append"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",

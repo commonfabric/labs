@@ -45,7 +45,6 @@
         },
         "line": 47,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -55,20 +54,6 @@
                 "body": 0
               },
               "name": "discard",
-              "result": [
-                {
-                  "path": [
-                    "rows",
-                    "*",
-                    "discard"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -109,14 +94,6 @@
                 "body": 1
               },
               "name": "swap",
-              "result": [
-                {
-                  "path": [
-                    "swap"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -153,14 +130,6 @@
                 "body": 2
               },
               "name": "keep",
-              "result": [
-                {
-                  "path": [
-                    "keep"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",

@@ -23,10 +23,9 @@ const wrap = lift(({ send }: { send: Stream<unknown> }) => ({
   again: send,
 }));
 
-// Ruling Z20: a stream that a function body returns into the result is
-// allowed and not checked. `wrapped.again` holds the stream of `inc`,
-// which the body of `wrap` returned, and no path of `Binding.result`
-// names the position. `rows` and `labels` do the same with the stream of
+// Ruling Z20: a function body may return a stream into the result.
+// `wrapped.again` holds the stream of `inc`, which the body of `wrap`
+// returned. `rows` and `labels` do the same with the stream of
 // a binding of an element body: over records, which a test gives as
 // references to cells, and over plain values in place.
 export default pattern<{ items: Item[]; tags: string[] }>(

@@ -35,7 +35,6 @@
         },
         "line": 27,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -45,14 +44,6 @@
                 "body": 1
               },
               "name": "note",
-              "result": [
-                {
-                  "path": [
-                    "note"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",

@@ -72,7 +72,6 @@
         },
         "line": 51,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -82,20 +81,6 @@
                 "body": 0
               },
               "name": "finish",
-              "result": [
-                {
-                  "path": [
-                    "cards",
-                    "*",
-                    "finish"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -123,14 +108,6 @@
                 "body": 1
               },
               "name": "rename_seed",
-              "result": [
-                {
-                  "path": [
-                    "renameSeed"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -154,14 +131,6 @@
                 "body": 2
               },
               "name": "bump",
-              "result": [
-                {
-                  "path": [
-                    "bump"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -185,14 +154,6 @@
                 "body": 3
               },
               "name": "rename",
-              "result": [
-                {
-                  "path": [
-                    "rename"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",

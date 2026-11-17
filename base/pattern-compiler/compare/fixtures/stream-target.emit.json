@@ -41,7 +41,6 @@
         },
         "line": 13,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -73,16 +72,6 @@
                 "body": 1
               },
               "name": "onClick",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",

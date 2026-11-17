@@ -3159,13 +3159,13 @@ fn a_derive_and_a_fold_name_the_pattern_their_source_is_written_in() {
 }
 
 #[test]
-fn a_binding_lists_the_result_paths_that_hold_its_stream_and_the_schema_of_its_event() {
-    // PL §1.1, `Binding.result`: "The paths of the result at which the
-    // instance stores a link to the stream ... Absent where the result
-    // holds none"; question 75: "it lists the positions of the rendered
-    // tree that hold the stream as well as the other paths of the
-    // result", and "a body has no `eventSchema` member:
-    // `Binding.eventSchema` holds it for every binding of the handler".
+fn a_binding_names_the_schema_of_its_event_and_no_path_of_the_result() {
+    // PL §1.1, `Binding`: a binding has no `result` member (ruling Z43).
+    // The stream is stored wherever value code places its marker, and
+    // the plan does not say where: `inc` is at three positions of the
+    // result, `bump` at one, and `unused` at none. "A body has no
+    // `eventSchema` member: `Binding.eventSchema` holds it for every
+    // binding of the handler".
     let analysis = program(
         r#"import { Writable, handler, pattern, UI } from "commonfabric";
 const bump = handler<{ by: number }, { n: Writable<number> }>((event, state) => {
@@ -3200,19 +3200,9 @@ export const P = pattern<{ n: Writable<number> }>(({ n }) => {
             .find(|binding| binding["name"] == name)
             .unwrap_or_else(|| panic!("no binding {name}"))
     };
-    assert_eq!(
-        paths_of(&binding("inc")["result"]),
-        json!([
-            ["$UI", "children", "0", "props", "onClick"],
-            ["inc"],
-            ["again"]
-        ])
-    );
-    assert_eq!(
-        paths_of(&binding("bump")["result"]),
-        json!([["$UI", "children", "1", "props", "onClick"]])
-    );
-    assert!(binding("unused").get("result").is_none());
+    for name in ["inc", "bump", "unused"] {
+        assert!(binding(name).get("result").is_none(), "{name}");
+    }
     // The schema is beside the plan, and each binding names it.
     let schema = binding("inc")["eventSchema"].as_str().expect("a schema");
     assert_eq!(binding("bump")["eventSchema"], json!(schema));
@@ -3271,45 +3261,6 @@ export const P = pattern<{ n: Writable<number> }>(({ n }) => {
             .1;
         assert_eq!(document["properties"][property]["type"], "number", "{name}");
     }
-}
-
-/// PL §1.1, `Binding.result`: "the paths are in source order". In a
-/// rendered tree the attributes of an element are written before its
-/// children, and the children in the order of their positions.
-#[test]
-fn the_result_paths_of_a_binding_are_in_source_order() {
-    let analysis = program(
-        r#"import { Cell, handler, pattern, UI } from "commonfabric";
-const inc = handler<{ by: number }, { n: Cell<number> }>((event, state) => {
-  state.n.set(state.n.get() + event.by);
-});
-export const P = pattern<{ n: Cell<number> }>(({ n }) => {
-  const go = inc({ n });
-  return {
-    zeta: go,
-    [UI]: (
-      <div onClick={go}>
-        <i /><i /><i /><i /><i /><i /><i /><i /><i /><i />
-        <b onClick={go} />
-        <u onClick={go} />
-      </div>
-    ),
-    alpha: go,
-  };
-});
-"#,
-    );
-    let plan = plan_of(&analysis, "P");
-    assert_eq!(
-        paths_of(&plan["bindings"][0]["result"]),
-        json!([
-            ["zeta"],
-            ["$UI", "props", "onClick"],
-            ["$UI", "children", "10", "props", "onClick"],
-            ["$UI", "children", "11", "props", "onClick"],
-            ["alpha"]
-        ])
-    );
 }
 
 /// PL §1.1: "the entries of the enclosing rendered tree at the tag's
@@ -3400,206 +3351,24 @@ export const P = pattern<{ n: Writable<number> }>(({ n }) => {
     assert_eq!(document["properties"]["by"]["type"], "number");
 }
 
-/// The bindings of `plan` named `name`, each with its `within` and its
-/// `result` as text.
-fn results_of(plan: &Value, name: &str) -> Vec<(String, String)> {
+/// The `within` of each binding of `plan` named `name`, as text.
+fn binding_within(plan: &Value, name: &str) -> Vec<String> {
     plan["bindings"]
         .as_array()
         .expect("bindings")
         .iter()
         .filter(|binding| binding["name"] == name)
-        .map(|binding| {
-            (
-                binding["within"].to_string(),
-                paths_of(&binding["result"]).to_string(),
-            )
-        })
+        .map(|binding| binding["within"].to_string())
         .collect()
 }
 
-/// The paths of a `Binding.result`, without the kinds of their `*`.
-fn paths_of(result: &Value) -> Value {
-    match result.as_array() {
-        Some(entries) => entries.iter().map(|entry| entry["path"].clone()).collect(),
-        None => Value::Null,
-    }
-}
-
-/// The kinds of the `*` of each path of the bindings of `plan` named
-/// `name`, as text: `element`, `every`, `inside`, or `member` with its
-/// index.
-fn stars_of(plan: &Value, name: &str) -> Vec<Vec<String>> {
-    plan["bindings"]
-        .as_array()
-        .expect("bindings")
-        .iter()
-        .filter(|binding| binding["name"] == name)
-        .flat_map(|binding| binding["result"].as_array().cloned().unwrap_or_default())
-        .map(|entry| {
-            let stars = entry["stars"].as_array().expect("stars");
-            let count = entry["path"]
-                .as_array()
-                .expect("a path")
-                .iter()
-                .filter(|segment| *segment == "*")
-                .count();
-            assert_eq!(stars.len(), count, "one entry for each `*` of {entry}");
-            stars
-                .iter()
-                .map(|star| match star.get("index") {
-                    Some(index) => format!("{}:{index}", star["kind"].as_str().expect("a kind")),
-                    None => star["kind"].as_str().expect("a kind").to_string(),
-                })
-                .collect()
-        })
-        .collect()
-}
-
-/// Ruling Z21 (PL §1.1, "What a `*` of a result path stands for"): an
-/// entry of `Binding.result` has, for each `*` of its path and in the
-/// order of the path, the kind of that `*`. `element` is a collection the
-/// binding has an `element` step for. `every` is a collection no step of
-/// the binding names, whose callback writes the stream. `member` is the
-/// one position of a member written after a spread in an array literal,
-/// with the number of entries written before it. Among the children of a
-/// view node a collection is one nested child (ruling Z31), so a child
-/// written after it has its own position and no `*`. The source is over
-/// records in `items`, over plain values in `tags`, and the result of a
-/// `filter` in the third list: the kinds are the same in the three.
+/// PL §1.1, `Binding.within`: a binding of an element body has one
+/// `element` step for each enclosing collection, outermost first. The
+/// record names no path of the result (ruling Z43). The plan has the
+/// same record over an array of references and over an array of plain
+/// values in place.
 #[test]
-fn each_star_of_a_result_path_states_what_it_stands_for() {
-    let analysis = program(
-        r#"import { Writable, handler, pattern, UI } from "commonfabric";
-interface Item { title: string }
-const bump = handler<unknown, { count: Writable<number> }>((_, state) => {
-  state.count.set(state.count.get() + 1);
-});
-const select = handler<unknown, { title: string; chosen: Writable<string> }>((_, state) => {
-  state.chosen.set(state.title);
-});
-export const P = pattern<{ items: Item[]; tags: string[]; groups: { items: Item[] }[]; count: Writable<number>; chosen: Writable<string> }>(
-  ({ items, tags, groups, count, chosen }) => {
-    const outer = bump({ count });
-    const after = bump({ count });
-    return {
-      [UI]: (
-        <div>
-          <ul>
-            <li>before</li>
-            {items.map((item) => <li onClick={select({ title: item.title, chosen })} />)}
-            text
-            <li onClick={after}>after</li>
-          </ul>
-          <ol>{tags.map((tag) => <li onClick={select({ title: tag, chosen })} />)}</ol>
-          <p>{tags.filter((tag) => tag !== "skip").map((tag) => <i onClick={select({ title: tag, chosen })} />)}</p>
-          <nav>{items.map((item) => <b onClick={outer} />)}</nav>
-          <nav>{tags.map((tag) => <b onClick={outer} />)}</nav>
-          <section>
-            {groups.map((group) => {
-              const first = select({ title: group.items[0].title, chosen });
-              return <ol>{group.items.map((item) => <li onClick={first} />)}</ol>;
-            })}
-          </section>
-        </div>
-      ),
-      rows: [{ pick: after }, ...items.map((item) => ({ pick: outer })), { pick: after }],
-    };
-  },
-);
-"#,
-    );
-    let plan = plan_of(&analysis, "P");
-    // Over records, over plain values, and over the result of a `filter`.
-    assert_eq!(
-        stars_of(&plan, "select"),
-        [vec!["element"], vec!["element"], vec!["element"],]
-    );
-    // A binding of the outer body, written in the inner callback: the
-    // outer `*` selects the stream, and every position of the inner
-    // collection holds it.
-    assert_eq!(stars_of(&plan, "first"), [vec!["element", "every"]]);
-    // A binding made outside every body, which a callback writes.
-    assert_eq!(
-        results_of(&plan, "outer")[0].1,
-        concat!(
-            r#"[["$UI","children","3","children","0","*","props","onClick"],"#,
-            r#"["$UI","children","4","children","0","*","props","onClick"],"#,
-            r#"["rows","*","pick"]]"#
-        )
-    );
-    assert_eq!(
-        stars_of(&plan, "outer"),
-        [vec!["every"], vec!["every"], vec!["every"]]
-    );
-    // A child written after a collection is at its own position, the
-    // fourth of the children: a member, the collection and a text are
-    // written before it. A member written after a spread in the array
-    // literal has two entries before it, and the member before the
-    // spread has its index in the path.
-    assert_eq!(
-        results_of(&plan, "after")[0].1,
-        concat!(
-            r#"[["$UI","children","0","children","3","props","onClick"],"#,
-            r#"["rows","0","pick"],"#,
-            r#"["rows","*","pick"]]"#
-        )
-    );
-    assert_eq!(stars_of(&plan, "after"), [vec![], vec![], vec!["member:2"]]);
-}
-
-/// Ruling Z21, kind `inside` (PL §1.1, "The stream is reached through a
-/// member of the element"): one element of a collection that no step of
-/// the binding names holds the stream inside its value. The source is an
-/// array of plain values in place, written as a literal. Over the result
-/// of another per-element construct the binding has the `element` step of
-/// the upstream collection, the downstream collection has the upstream
-/// keys, and the `*` is of kind `element`.
-#[test]
-fn a_star_through_a_member_of_an_element_is_inside_or_element() {
-    let analysis = program(
-        r#"import { Writable, handler, pattern, UI } from "commonfabric";
-interface Item { title: string }
-const bump = handler<unknown, { count: Writable<number> }>((_, state) => {
-  state.count.set(state.count.get() + 1);
-});
-const select = handler<unknown, { item: Item; chosen: Writable<string> }>((_, state) => {
-  state.chosen.set(state.item.title);
-});
-const Story = pattern<{ label: string }>(({ label }) => {
-  const count = Writable.of(0);
-  return { [UI]: <button onClick={bump({ count })}>{label}</button>, count };
-});
-export const P = pattern<{ items: Item[]; chosen: Writable<string> }>(({ items, chosen }) => {
-  const sections = [
-    { label: "one", node: Story({ label: "one" }) },
-    { label: "two", node: Story({ label: "two" }) },
-  ];
-  const rows = items.map((item) => ({ title: item.title, pick: select({ item, chosen }) }));
-  return {
-    [UI]: (
-      <div>
-        <ul>{sections.map((entry) => <li>{entry.node}</li>)}</ul>
-        <p>{rows.map((row) => <i onClick={row.pick}>{row.title}</i>)}</p>
-      </div>
-    ),
-  };
-});
-"#,
-    );
-    let plan = plan_of(&analysis, "P");
-    for name in ["bump#1", "bump#2"] {
-        assert_eq!(stars_of(&plan, name), [vec!["inside"]]);
-    }
-    assert_eq!(stars_of(&plan, "select"), [vec!["element"]]);
-}
-
-/// PL §1.1, "The result paths of a binding in an element body": "the path
-/// of what the callback returns, with `*` at the position of each
-/// enclosing collection. The path has one `*` for each `element` step of
-/// `within` whose collection the path passes through, in the order of the
-/// steps, outermost first."
-#[test]
-fn a_binding_of_an_element_body_has_a_result_path_with_a_star_per_enclosing_collection() {
+fn a_binding_of_an_element_body_has_an_element_step_per_enclosing_collection() {
     let analysis = program(
         r#"import { Writable, handler, pattern, UI } from "commonfabric";
 interface Item { title: string }
@@ -3629,31 +3398,21 @@ export const P = pattern<{ items: Item[]; groups: { items: Item[] }[]; chosen: W
     );
     let plan = plan_of(&analysis, "P");
     assert_eq!(
-        results_of(&plan, "select"),
+        binding_within(&plan, "select"),
         [
-            (
-                r#"[{"element":0}]"#.to_string(),
-                r#"[["$UI","children","1","children","0","*","props","onClick"]]"#.to_string()
-            ),
-            (
-                r#"[{"element":1},{"element":2}]"#.to_string(),
-                r#"[["$UI","children","2","children","1","*","children","0","*","props","onClick"]]"#
-                    .to_string()
-            ),
-            (
-                r#"[{"element":3}]"#.to_string(),
-                r#"[["rows","*","pick"]]"#.to_string()
-            ),
+            r#"[{"element":0}]"#,
+            r#"[{"element":1},{"element":2}]"#,
+            r#"[{"element":3}]"#,
         ]
     );
 }
 
-/// PL §1.1: "A `site` step adds no segment, because the callee's tree is
-/// in place at the call." A tag at a child position has the callee's
-/// `[UI]` there, and a tag the callback returns is the callee's result,
-/// with the tree below `$UI`.
+/// PL §1.1, `Binding.within`: a binding of a pattern compiled in at a
+/// tag of an element body has the `element` step of the collection and
+/// then the `site` step of the call, for a tag at a child position and
+/// for a tag the callback returns.
 #[test]
-fn a_site_step_adds_no_segment_to_the_result_path_of_a_binding() {
+fn a_binding_of_a_pattern_compiled_in_has_the_site_step_after_the_element_step() {
     let analysis = program(
         r#"import { Writable, handler, pattern, UI } from "commonfabric";
 interface Item { title: string }
@@ -3677,253 +3436,11 @@ export const P = pattern<{ items: Item[]; chosen: Writable<string> }>(({ items, 
     );
     let plan = plan_of(&analysis, "P");
     assert_eq!(
-        results_of(&plan, "select"),
+        binding_within(&plan, "select"),
         [
-            (
-                r#"[{"element":0},{"site":"Row"}]"#.to_string(),
-                r#"[["$UI","children","0","children","0","*","children","0","props","onClick"]]"#
-                    .to_string()
-            ),
-            (
-                r#"[{"element":1},{"site":"Row"}]"#.to_string(),
-                r#"[["$UI","children","1","children","0","*","$UI","props","onClick"]]"#
-                    .to_string()
-            ),
+            r#"[{"element":0},{"site":"Row"}]"#,
+            r#"[{"element":1},{"site":"Row"}]"#,
         ]
-    );
-}
-
-/// Ruling Z31: two collections among the children of one view node are
-/// two child positions, so the `*` of each path names its collection by
-/// the position before it. A binding whose stream is at no kept path of
-/// what the callback returns has no path, and is counted under that
-/// reason. The sources are arrays of records, which the plan has alike
-/// for references and for plain values in place.
-#[test]
-fn two_collections_among_the_children_of_one_node_are_two_child_positions() {
-    let analysis = program(
-        r#"import { Writable, handler, pattern, UI } from "commonfabric";
-interface Item { title: string }
-const select = handler<unknown, { item: Item; chosen: Writable<string> }>((_, state) => {
-  state.chosen.set(state.item.title);
-});
-export const P = pattern<{ items: Item[]; more: Item[]; chosen: Writable<string> }>(
-  ({ items, more, chosen }) => {
-    const hidden = items.map((item) => <li onClick={select({ item, chosen })} />);
-    return {
-      [UI]: (
-        <ul>
-          {items.map((item) => <li onClick={select({ item, chosen })} />)}
-          {more.map((item) => <li onClick={select({ item, chosen })} />)}
-        </ul>
-      ),
-      count: hidden.length,
-    };
-  },
-);
-"#,
-    );
-    let found = analysis
-        .modules
-        .iter()
-        .flat_map(|module| &module.plans)
-        .find(|plan| plan.name.as_deref() == Some("P"))
-        .expect("the plan");
-    assert_eq!(
-        results_of(&found.plan, "select"),
-        [
-            (r#"[{"element":0}]"#.to_string(), "null".to_string()),
-            (
-                r#"[{"element":1}]"#.to_string(),
-                r#"[["$UI","children","0","*","props","onClick"]]"#.to_string()
-            ),
-            (
-                r#"[{"element":2}]"#.to_string(),
-                r#"[["$UI","children","1","*","props","onClick"]]"#.to_string()
-            ),
-        ]
-    );
-    let reasons: Vec<&str> = found
-        .element_bindings
-        .iter()
-        .map(|(_, reason)| reason.as_str())
-        .collect();
-    assert_eq!(reasons, ["its stream is at no kept path of the result"]);
-}
-
-/// Ruling Z31: a child written after a collection among the children of
-/// a view node has a static position, also where the child is a
-/// conditional. In an array literal a member written after a spread has
-/// the path of the positions from the spread on (PL §1.1, "From a path to
-/// a position"). The collection written before the child is over records
-/// in `items`, over plain values in `tags`, and the result of a `filter`
-/// in the third list: the path has the same form in the three.
-#[test]
-fn a_child_written_after_a_collection_has_a_position_of_its_own() {
-    let analysis = program(
-        r#"import { Writable, handler, pattern, UI } from "commonfabric";
-interface Item { title: string }
-const bump = handler<unknown, { count: Writable<number> }>((_, state) => {
-  state.count.set(state.count.get() + 1);
-});
-export const P = pattern<{ items: Item[]; tags: string[]; show: boolean; count: Writable<number> }>(
-  ({ items, tags, show, count }) => {
-    const first = bump({ count });
-    const second = bump({ count });
-    const third = bump({ count });
-    const fourth = bump({ count });
-    return {
-      [UI]: (
-        <div>
-          <ul>
-            <li onClick={first}>before</li>
-            {items.map((item) => <li>{item.title}</li>)}
-            <li onClick={first}>after</li>
-            <li><b onClick={first}>inside</b></li>
-          </ul>
-          <ol>
-            {tags.map((tag) => <li>{tag}</li>)}
-            {show ? <li onClick={second}>shown</li> : null}
-          </ol>
-          <p>
-            {tags.filter((tag) => tag !== "skip").map((tag) => <i>{tag}</i>)}
-            <i onClick={third}>after</i>
-          </p>
-        </div>
-      ),
-      rows: [...items.map((item) => ({ title: item.title })), { pick: fourth }],
-    };
-  },
-);
-"#,
-    );
-    let plan = plan_of(&analysis, "P");
-    let result = |name: &str| results_of(&plan, name)[0].1.clone();
-    assert_eq!(
-        result("first"),
-        concat!(
-            r#"[["$UI","children","0","children","0","props","onClick"],"#,
-            r#"["$UI","children","0","children","2","props","onClick"],"#,
-            r#"["$UI","children","0","children","3","children","0","props","onClick"]]"#
-        )
-    );
-    assert_eq!(
-        result("second"),
-        r#"[["$UI","children","1","children","1","props","onClick"]]"#
-    );
-    assert_eq!(
-        result("third"),
-        r#"[["$UI","children","2","children","1","props","onClick"]]"#
-    );
-    assert_eq!(result("fourth"), r#"[["rows","*","pick"]]"#);
-}
-
-/// PL §1.1, "The stream is reached through a member of the element": for
-/// an array literal of the results of patterns compiled in, "the binding
-/// has a path through the collection", assumed there (section 8, question
-/// 84) to have "`*` at the collection". The member is read as the
-/// callee's result at a child position (`entry.node`, with the tree below
-/// `$UI`) or as its tree (`entry.node[UI]`). The source is an array of
-/// plain values in place, which hold the results. `again` is over the
-/// result of another per-element construct, whose elements hold the
-/// stream of a binding of that construct's body: the path has the `*` of
-/// the second collection, at whose positions the links are stored.
-#[test]
-fn a_stream_reached_through_a_member_of_an_element_has_a_path_through_the_collection() {
-    let analysis = program(
-        r#"import { Writable, handler, pattern, UI } from "commonfabric";
-interface Item { title: string }
-const bump = handler<unknown, { count: Writable<number> }>((_, state) => {
-  state.count.set(state.count.get() + 1);
-});
-const select = handler<unknown, { item: Item; chosen: Writable<string> }>((_, state) => {
-  state.chosen.set(state.item.title);
-});
-const Story = pattern<{ label: string }>(({ label }) => {
-  const count = Writable.of(0);
-  return { [UI]: <button onClick={bump({ count })}>{label}</button>, count };
-});
-export const P = pattern<{ items: Item[]; chosen: Writable<string> }>(({ items, chosen }) => {
-  const sections = [
-    { label: "one", node: Story({ label: "one" }) },
-    { label: "two", node: Story({ label: "two" }) },
-  ];
-  const rows = items.map((item) => ({ title: item.title, pick: select({ item, chosen }) }));
-  return {
-    [UI]: (
-      <div>
-        <ul>{sections.map((entry) => <li>{entry.node}</li>)}</ul>
-        <ol>{sections.map((entry) => <li>{entry.node[UI]}</li>)}</ol>
-        <p>{rows.map((row) => <i onClick={row.pick}>{row.title}</i>)}</p>
-      </div>
-    ),
-  };
-});
-"#,
-    );
-    let plan = plan_of(&analysis, "P");
-    let through = concat!(
-        r#"[["$UI","children","0","children","0","*","children","0","$UI","props","onClick"],"#,
-        r#"["$UI","children","1","children","0","*","children","0","props","onClick"]]"#
-    );
-    for name in ["bump#1", "bump#2"] {
-        assert_eq!(
-            results_of(&plan, name),
-            [(r#"[{"site":"Story"}]"#.to_string(), through.to_string())]
-        );
-    }
-    let rows = results_of(&plan, "select");
-    assert_eq!(rows.len(), 1);
-    assert_eq!(
-        rows[0].1,
-        r#"[["$UI","children","2","children","0","*","props","onClick"]]"#
-    );
-}
-
-/// A stream in a branch of a `select` is stored below the position of the
-/// `select` while that branch is selected. PL §1.1 has "the paths of the
-/// result at which the instance stores a link to the stream" and does not
-/// say whether a position that holds the stream under one selection is
-/// one. The emitter lists it (note 244 of `SPEC-NOTES.md`).
-#[test]
-fn a_stream_in_a_branch_of_a_select_has_a_result_path_below_the_select() {
-    let analysis = program(
-        r#"import { Writable, handler, ifElse, pattern, UI } from "commonfabric";
-interface Item { title: string; open: boolean }
-const select = handler<unknown, { item: Item; chosen: Writable<string> }>((_, state) => {
-  state.chosen.set(state.item.title);
-});
-export const P = pattern<{ items: Item[]; show: boolean; chosen: Writable<string> }>(
-  ({ items, show, chosen }) => {
-    const first = select({ item: items[0], chosen });
-    return {
-      [UI]: (
-        <div>
-          {show ? <b onClick={first} /> : null}
-          {items.map((item) => (
-            <li>{ifElse(item.open, <i onClick={select({ item, chosen })} />, null)}</li>
-          ))}
-        </div>
-      ),
-    };
-  },
-);
-"#,
-    );
-    let plan = plan_of(&analysis, "P");
-    assert_eq!(
-        results_of(&plan, "first"),
-        [(
-            "[]".to_string(),
-            r#"[["$UI","children","0","props","onClick"]]"#.to_string()
-        )]
-    );
-    assert_eq!(
-        results_of(&plan, "select"),
-        [(
-            r#"[{"element":0}]"#.to_string(),
-            r#"[["$UI","children","1","*","children","0","props","onClick"]]"#.to_string()
-        )]
     );
 }
 
@@ -4125,58 +3642,6 @@ export const P = pattern<{ items: Writable<Item[]>; tags: Writable<string[]>; fl
         .filter(|output| !output["passesCollection"].is_null())
         .count();
     assert_eq!(marked, 3);
-}
-
-/// Ruling Z30: a binding of the body of a `flatMap` has a path through
-/// the result, with a `*` of kind `element` at the result. A member that
-/// the callback writes in an array literal is at `*` whichever position
-/// of the segment it has. The source is over records in `items` and over
-/// plain values in `tags`, which the plan has alike, and each segment is
-/// an array of plain values that the callback writes.
-#[test]
-fn a_binding_of_a_flat_map_body_has_a_star_of_kind_element_at_the_result() {
-    let analysis = program(
-        r#"import { Writable, handler, pattern, UI } from "commonfabric";
-interface Item { title: string }
-const pick = handler<unknown, { title: string; chosen: Writable<string> }>((_, state) => {
-  state.chosen.set(state.title);
-});
-export const P = pattern<{ items: Item[]; tags: string[]; chosen: Writable<string> }>(
-  ({ items, tags, chosen }) => {
-    return {
-      [UI]: (
-        <div>
-          <ul>
-            {items.flatMap((item) => {
-              const choose = pick({ title: item.title, chosen });
-              return [<li onClick={choose}>{item.title}</li>, <li onClick={choose}>again</li>];
-            })}
-          </ul>
-          <ol>{tags.flatMap((tag) => <li onClick={pick({ title: tag, chosen })}>{tag}</li>)}</ol>
-        </div>
-      ),
-    };
-  },
-);
-"#,
-    );
-    let plan = plan_of(&analysis, "P");
-    assert_eq!(
-        results_of(&plan, "choose"),
-        [(
-            r#"[{"element":0}]"#.to_string(),
-            r#"[["$UI","children","0","children","0","*","props","onClick"]]"#.to_string()
-        )]
-    );
-    assert_eq!(
-        results_of(&plan, "pick"),
-        [(
-            r#"[{"element":1}]"#.to_string(),
-            r#"[["$UI","children","1","children","0","*","props","onClick"]]"#.to_string()
-        )]
-    );
-    assert_eq!(stars_of(&plan, "choose"), [vec!["element"]]);
-    assert_eq!(stars_of(&plan, "pick"), [vec!["element"]]);
 }
 
 /// Ruling Z28 (PL §1.1, "The name a pattern binds to `[SELF]`"): the
@@ -4403,55 +3868,6 @@ export const P = pattern<{ names: string[]; saved: KeyedBy<Repo, "id">[]; plain:
         json!("string")
     );
     assert_eq!(items_of("plain")["keyField"], Value::Null);
-}
-
-/// PL §1.1, "The listed paths are complete" (ruling Z11): a promoted
-/// `computed` that returns a tree which holds the stream of a binding
-/// gives the binding a path below the position of the `computed`, for a
-/// statement body, where each `return` is a branch, and for an
-/// expression body. No per-element construct is involved.
-#[test]
-fn a_stream_in_what_a_promoted_computed_returns_has_a_result_path() {
-    let analysis = program(
-        r#"import { Writable, computed, handler, pattern, UI } from "commonfabric";
-const bump = handler<unknown, { count: Writable<number> }>((_, state) => {
-  state.count.set(state.count.get() + 1);
-});
-export const P = pattern<{ index: number; count: Writable<number> }>(({ index, count }) => {
-  const first = bump({ count });
-  const second = bump({ count });
-  const third = bump({ count });
-  return {
-    [UI]: (
-      <div>
-        {computed(() => {
-          if (index < 0) {
-            return <i onClick={second}>none</i>;
-          }
-          const shown = index + 1;
-          return <p><b onClick={first}>{shown}</b></p>;
-        })}
-        {computed(() => <u onClick={third}>{index + 1}</u>)}
-      </div>
-    ),
-  };
-});
-"#,
-    );
-    let plan = plan_of(&analysis, "P");
-    let result = |name: &str| results_of(&plan, name)[0].1.clone();
-    assert_eq!(
-        result("first"),
-        r#"[["$UI","children","0","children","0","props","onClick"]]"#
-    );
-    assert_eq!(
-        result("second"),
-        r#"[["$UI","children","0","props","onClick"]]"#
-    );
-    assert_eq!(
-        result("third"),
-        r#"[["$UI","children","1","props","onClick"]]"#
-    );
 }
 
 /// PL §1.1, `Binding.state`: a state path of a binding of a pattern

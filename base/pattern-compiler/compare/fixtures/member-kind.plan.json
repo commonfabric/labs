@@ -3,9 +3,8 @@
     "module": "compare/fixtures/member-kind.tsx",
     "patterns": [
       {
-        "line": 23,
+        "line": 20,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -15,21 +14,6 @@
                 "body": 0
               },
               "name": "after",
-              "result": [
-                {
-                  "path": [
-                    "rows",
-                    "*",
-                    "pick"
-                  ],
-                  "stars": [
-                    {
-                      "index": 2,
-                      "kind": "member"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -53,21 +37,6 @@
                 "body": 0
               },
               "name": "tail",
-              "result": [
-                {
-                  "path": [
-                    "words",
-                    "*",
-                    "pick"
-                  ],
-                  "stars": [
-                    {
-                      "index": 1,
-                      "kind": "member"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -184,7 +153,7 @@
             {
               "at": {
                 "file": "compare/fixtures/member-kind.tsx",
-                "start": 1115
+                "start": 955
               },
               "bodies": [],
               "entry": "map",
@@ -203,7 +172,7 @@
             {
               "at": {
                 "file": "compare/fixtures/member-kind.tsx",
-                "start": 1064
+                "start": 904
               },
               "bodies": [],
               "entry": "rows",
@@ -216,7 +185,7 @@
             {
               "at": {
                 "file": "compare/fixtures/member-kind.tsx",
-                "start": 1211
+                "start": 1051
               },
               "bodies": [],
               "entry": "map",
@@ -235,7 +204,7 @@
             {
               "at": {
                 "file": "compare/fixtures/member-kind.tsx",
-                "start": 1198
+                "start": 1038
               },
               "bodies": [],
               "entry": "words",

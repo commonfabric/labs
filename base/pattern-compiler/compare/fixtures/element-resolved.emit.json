@@ -45,7 +45,6 @@
         },
         "line": 29,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -55,23 +54,6 @@
                 "body": 0
               },
               "name": "locate",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "0",
-                    "*",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",

@@ -80,7 +80,6 @@
         },
         "line": 19,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [],

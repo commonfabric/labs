@@ -15,8 +15,10 @@ import {
   type EventOutcome,
   type Plan,
   type Probe,
+  type Run,
   runScenario,
   type Scenario,
+  type StreamRecord,
 } from "./harness.ts";
 
 /** The values of an instance at one point of a run. */
@@ -67,15 +69,11 @@ export type ValueComparison = {
   /** The documents today's run stored at the end (`Values.documents`). */
   runtimeDocuments?: number;
   counts?: Instance["counts"];
-  /** The stored positions of streams against `Binding.result`. */
-  streams?: ReturnType<Instance["streamPositions"]>;
   /**
-   * The evaluations that failed the check of where a stream is stored
-   * (`Instance.failures`), and every position that held a marker no
-   * listed path of its binding covers, with the binding's name.
+   * The positions at which a reader of the executor's stored result
+   * finds the link to a stream, at the end (`Instance.streams`).
    */
-  failedEvaluations?: number;
-  misplaced?: { binding: number; name?: string; path: string[] }[];
+  storedStreams?: number;
   /** The events the executor's handler did not run to its end for. */
   failedEvents: string[];
   /**
@@ -310,16 +308,226 @@ export const categoryOf = (
   return { category: "the value code throws", detail };
 };
 
+/** The outcome of an event of today's run, as a comparison reads it. */
+type Outcome = Pick<EventOutcome, "outcome" | "elements"> & {
+  reason?: string;
+};
+
+/**
+ * The executor's side of a comparison: an instance of the compiled
+ * pattern that handles the events today's run committed, with its
+ * values after it settled and after each event. It is the record of
+ * where each stream is stored that the harness sends an event by
+ * (`StreamRecord`; ruling Z43), so it runs beside today's run, one event
+ * behind it. An executor that does not start holds no stream, and the
+ * harness then sends no event.
+ */
+export class ExecutorRun implements StreamRecord {
+  readonly #artifact: Artifact;
+  readonly #argument: Record<string, unknown>;
+  readonly #artifacts: ((id: string) => Artifact | undefined) | undefined;
+  #instance: Instance | undefined;
+  #notExecuted: { category: string; detail: string } | undefined;
+  #settled: Snapshot | undefined;
+  /** The values after each event the executor handled, by its index. */
+  readonly #events = new Map<number, Snapshot>();
+  readonly #failedEvents: string[] = [];
+
+  /**
+   * Constructs an instance which runs `artifact` on `argument`.
+   * `artifacts` gives the artifact of a pattern by its identity, for a
+   * pattern that a function body instantiates.
+   */
+  constructor(
+    artifact: Artifact,
+    argument: Record<string, unknown>,
+    artifacts?: (id: string) => Artifact | undefined,
+  ) {
+    this.#artifact = artifact;
+    this.#argument = argument;
+    this.#artifacts = artifacts;
+  }
+
+  /** @inheritDoc */
+  start(space: string | undefined): void {
+    if ((this.#artifact.code.unsupported ?? []).length > 0) {
+      const { kind, file } = this.#artifact.code.unsupported[0];
+      this.#notExecuted = {
+        category: `no value code: ${kind}`,
+        detail: `${file}`,
+      };
+      return;
+    }
+    try {
+      this.#instance = new Instance(this.#artifact, this.#argument, {
+        space,
+        artifacts: this.#artifacts,
+      });
+      this.#settled = this.#snapshot(this.#instance);
+    } catch (error) {
+      this.#notExecuted = categoryOf(error);
+    }
+  }
+
+  /** @inheritDoc */
+  held(binding: number): { path: string[]; elements: number[] }[] {
+    // A stream of an instance that a function body made, and one whose
+    // key is in no collection, is none an event of the scenario is for.
+    return (this.#instance?.streams() ?? []).flatMap((stream) =>
+      stream.binding === binding && stream.instance === undefined &&
+        stream.elements !== undefined
+        ? [{ path: stream.path, elements: stream.elements }]
+        : []
+    );
+  }
+
+  /** @inheritDoc */
+  result(): unknown {
+    return this.#instance?.result();
+  }
+
+  /** @inheritDoc */
+  committed(
+    index: number,
+    binding: number,
+    event: unknown,
+    elements: readonly number[],
+  ): void {
+    const instance = this.#instance;
+    if (instance === undefined) return;
+    const name = this.#artifact.plan.bindings[binding]?.name;
+    // The seed today's run had for this event (`random.ts`).
+    seedRandom(eventSeed(index));
+    try {
+      const handled = drawing(() =>
+        instance.send(binding, event, [...elements])
+      );
+      if (!handled.committed) {
+        this.#failedEvents.push(`${name}: ${handled.error}`);
+      }
+      this.#events.set(index, this.#snapshot(instance));
+    } catch (error) {
+      const { category, detail } = categoryOf(error);
+      this.#failedEvents.push(`${name}: ${category}: ${detail}`);
+    } finally {
+      restoreRandom();
+    }
+  }
+
+  /**
+   * Compares the executor's values with those of today's run at each
+   * point. `outcomes` has what became of each event of `events` in
+   * today's run. An event the runtime refused changed nothing, and the
+   * executor, which checks no label, was not sent it.
+   */
+  compare(
+    events: { binding: number; event: unknown }[],
+    outcomes: Outcome[],
+    runtime: Values,
+  ): ValueComparison {
+    const comparison: ValueComparison = {
+      compared: 0,
+      equal: 0,
+      differences: [],
+      failedEvents: [...this.#failedEvents],
+    };
+    const instance = this.#instance;
+    if (instance === undefined || this.#settled === undefined) {
+      comparison.notExecuted = this.#notExecuted ??
+        { category: "the executor was not started", detail: "" };
+      return comparison;
+    }
+    const compare = (
+      point: string,
+      theirs: Snapshot | undefined,
+      mine: Snapshot,
+    ) => {
+      if (theirs === undefined) return;
+      const pairs: [string, unknown, unknown][] = [];
+      const a = normalize(theirs.result);
+      const b = normalize(mine.result);
+      if (isRecord(a) && isRecord(b)) {
+        for (const name of new Set([...Object.keys(a), ...Object.keys(b)])) {
+          pairs.push([`result/${name}`, a[name], b[name]]);
+        }
+      } else {
+        pairs.push(["result", a, b]);
+      }
+      for (const [name, value] of Object.entries(theirs.state)) {
+        pairs.push([
+          `state/${name}`,
+          normalize(value),
+          normalize(mine.state[name]),
+        ]);
+      }
+      for (const [value, left, right] of pairs) {
+        comparison.compared += 1;
+        const found = firstDifference(left, right);
+        if (found === undefined) {
+          comparison.equal += 1;
+        } else {
+          comparison.differences.push({
+            point,
+            value,
+            path: found.path,
+            runtime: found.a,
+            executor: found.b,
+          });
+        }
+      }
+    };
+    compare("settled", runtime.settled, this.#settled);
+    // The events the run sent, in order: `runtime.events` has an entry
+    // for each one the harness sent, and none for one it did not send.
+    let sent = 0;
+    events.forEach(({ binding }, index) => {
+      const outcome = outcomes[index];
+      if (outcome?.outcome === "not sent") {
+        (comparison.notSent ??= []).push(
+          `${this.#artifact.plan.bindings[binding]?.name}: ${
+            outcome.reason ?? ""
+          }`,
+        );
+      }
+      if (outcome === undefined || outcome.outcome === "not sent") return;
+      const theirs = runtime.events[sent];
+      sent += 1;
+      const mine = this.#events.get(index);
+      if (mine !== undefined) compare(`event ${index}`, theirs, mine);
+    });
+    comparison.storedStreams = instance.streams().length;
+    comparison.runtimeDocuments = runtime.documents?.end;
+    comparison.documents = instance.documents();
+    comparison.counts = instance.counts;
+    return comparison;
+  }
+
+  /**
+   * The values of the instance now, as a copy that a later write to the
+   * store does not change.
+   */
+  #snapshot(instance: Instance): Snapshot {
+    return structuredClone({
+      result: instance.result(),
+      state: Object.fromEntries(
+        instance.stateCells().filter(({ keys }) => keys.length === 0).map((
+          { name, value },
+        ) => [name, value]),
+      ),
+    });
+  }
+}
+
 /**
  * Runs the executor on the argument and the events of a run of today's
- * runtime, and compares the values at each point.
+ * runtime that is over, and compares the values at each point. The
+ * events are sent for the elements the run recorded.
  */
 export const compareValues = (
   artifact: Artifact,
   argument: Record<string, unknown>,
   events: { binding: number; event: unknown }[],
-  outcomes:
-    (Pick<EventOutcome, "outcome" | "elements"> & { reason?: string })[],
+  outcomes: Outcome[],
   runtime: Values,
   /**
    * The artifact of a pattern by its identity, for a pattern that a
@@ -327,154 +535,60 @@ export const compareValues = (
    */
   artifacts?: (id: string) => Artifact | undefined,
 ): ValueComparison => {
-  const comparison: ValueComparison = {
-    compared: 0,
-    equal: 0,
-    differences: [],
-    failedEvents: [],
-  };
-  if ((artifact.code.unsupported ?? []).length > 0) {
-    const kind = artifact.code.unsupported[0].kind;
-    comparison.notExecuted = {
-      category: `no value code: ${kind}`,
-      detail: `${artifact.code.unsupported[0].file}`,
-    };
-    return comparison;
-  }
-  const compare = (
-    point: string,
-    theirs: Snapshot | undefined,
-    mine: Snapshot,
-  ) => {
-    if (theirs === undefined) return;
-    const pairs: [string, unknown, unknown][] = [];
-    const a = normalize(theirs.result);
-    const b = normalize(mine.result);
-    if (isRecord(a) && isRecord(b)) {
-      for (const name of new Set([...Object.keys(a), ...Object.keys(b)])) {
-        pairs.push([`result/${name}`, a[name], b[name]]);
-      }
-    } else {
-      pairs.push(["result", a, b]);
-    }
-    for (const [name, value] of Object.entries(theirs.state)) {
-      pairs.push([
-        `state/${name}`,
-        normalize(value),
-        normalize(mine.state[name]),
-      ]);
-    }
-    for (const [value, left, right] of pairs) {
-      comparison.compared += 1;
-      const found = firstDifference(left, right);
-      if (found === undefined) {
-        comparison.equal += 1;
-      } else {
-        comparison.differences.push({
-          point,
-          value,
-          path: found.path,
-          runtime: found.a,
-          executor: found.b,
-        });
-      }
-    }
-  };
-  const snapshot = (instance: Instance): Snapshot => ({
-    result: instance.result(),
-    state: Object.fromEntries(
-      instance.stateCells().filter(({ keys }) => keys.length === 0).map((
-        { name, value },
-      ) => [name, value]),
-    ),
-  });
-  let instance: Instance;
-  try {
-    instance = new Instance(artifact, argument, {
-      space: runtime.space,
-      artifacts,
-    });
-    compare("settled", runtime.settled, snapshot(instance));
-  } catch (error) {
-    comparison.notExecuted = categoryOf(error);
-    return comparison;
-  }
-  // The events the run sent, in order: `runtime.events` has an entry for
-  // each one the harness sent, and none for one it did not send.
-  let sent = 0;
+  const run = new ExecutorRun(artifact, argument, artifacts);
+  run.start(runtime.space);
   events.forEach(({ binding, event }, index) => {
     const outcome = outcomes[index];
-    if (outcome?.outcome === "not sent") {
-      (comparison.notSent ??= []).push(
-        `${artifact.plan.bindings[binding]?.name}: ${outcome.reason ?? ""}`,
-      );
-    }
-    if (outcome === undefined || outcome.outcome === "not sent") return;
-    const theirs = runtime.events[sent];
-    sent += 1;
-    // An event the runtime refused changed nothing, and the executor,
-    // which checks no label, is not sent it.
-    if (outcome.outcome !== "committed") return;
-    // The seed today's run had for this event (`random.ts`).
-    seedRandom(eventSeed(index));
-    try {
-      const handled = drawing(() =>
-        instance.send(
-          binding,
-          event,
-          (outcome.elements ?? []).map(({ key }) => Number(key)),
-        )
-      );
-      if (!handled.committed) {
-        comparison.failedEvents.push(
-          `${artifact.plan.bindings[binding].name}: ${handled.error}`,
-        );
-      }
-      compare(`event ${index}`, theirs, snapshot(instance));
-    } catch (error) {
-      const { category, detail } = categoryOf(error);
-      comparison.failedEvents.push(
-        `${artifact.plan.bindings[binding].name}: ${category}: ${detail}`,
-      );
-    } finally {
-      restoreRandom();
-    }
+    if (outcome?.outcome !== "committed") return;
+    run.committed(
+      index,
+      binding,
+      event,
+      (outcome.elements ?? []).map(({ key }) => Number(key)),
+    );
   });
-  comparison.streams = instance.streamPositions();
-  comparison.failedEvaluations = instance.failures.length;
-  comparison.misplaced = instance.misplaced.map(({ binding, path }) => ({
-    binding,
-    name: artifact.plan.bindings[binding]?.name,
-    path,
-  }));
-  comparison.runtimeDocuments = runtime.documents?.end;
-  comparison.documents = instance.documents();
-  comparison.counts = instance.counts;
-  return comparison;
+  return run.compare(events, outcomes, runtime);
 };
 
-/** Runs a scenario on today's runtime and on the executor, and compares. */
+/** The argument of a scenario with each input in place of its link. */
+export const argumentOf = (
+  scenario: Pick<Scenario, "argument" | "inputs">,
+): Record<string, unknown> => ({
+  ...scenario.argument,
+  ...Object.fromEntries(
+    Object.entries(scenario.inputs ?? {}).map((
+      [name, input],
+    ) => [name, input.value]),
+  ),
+});
+
+/**
+ * Runs a scenario on today's runtime with the executor of `artifact`
+ * beside it, which gives the harness the position of each stream
+ * (`Scenario.streams`): a scenario with events is run this way.
+ */
+export const runBesideExecutor = (
+  artifact: Artifact,
+  scenario: Scenario,
+  artifacts?: (id: string) => Artifact | undefined,
+): Promise<Run> =>
+  runScenario({
+    ...scenario,
+    streams: new ExecutorRun(artifact, argumentOf(scenario), artifacts),
+  });
+
+/**
+ * Runs a scenario on today's runtime and on the executor, which runs
+ * beside it and gives the harness the position of each stream, and
+ * compares.
+ */
 export const compareScenarioValues = async (
   scenario: Scenario,
   artifact: Artifact,
   artifacts?: (id: string) => Artifact | undefined,
 ): Promise<ValueComparison> => {
   const { probe, values } = readingValues(scenario.plan);
-  const run = await runScenario({ ...scenario, probe });
-  const argument = {
-    ...scenario.argument,
-    ...Object.fromEntries(
-      Object.entries(scenario.inputs ?? {}).map((
-        [name, input],
-      ) => [name, input.value]),
-    ),
-  };
-  return compareValues(
-    artifact,
-    argument,
-    scenario.events ?? [],
-    run.events,
-    values,
-    artifacts,
-  );
+  const executor = new ExecutorRun(artifact, argumentOf(scenario), artifacts);
+  const run = await runScenario({ ...scenario, probe, streams: executor });
+  return executor.compare(scenario.events ?? [], run.events, values);
 };

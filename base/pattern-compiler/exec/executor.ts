@@ -168,41 +168,8 @@ export type Plan = {
        */
       default?: unknown;
     }[];
-    /**
-     * The paths of the result at which the instance stores a link to the
-     * binding's stream, each with what its `*` stand for (PL §1.1,
-     * `ResultPath`).
-     */
-    result?: ResultPath[];
   }[];
 };
-
-/**
- * What one `*` of a path of `Binding.result` stands for (PL §1.1,
- * `ResultStar`; ruling Z21): the positions of a collection for whose
- * keys the binding has an `element` step, every position of a collection
- * whose callback writes the stream, the one position of a member written
- * after a spread, with the number of entries written before it, or the
- * one element of a collection that holds the stream inside its value.
- */
-export type ResultStar =
-  | { kind: "element" | "every" | "inside" }
-  | { kind: "member"; index: number };
-
-/** One path of `Binding.result`, with one entry of `stars` for each `*`. */
-export type ResultPath = { path: string[]; stars: ResultStar[] };
-
-/**
- * Where a position of an array the executor assembled came from: the
- * entry the array was written with, counted over its members and its
- * spreads, whether the position is an element of what a spread entry
- * holds, and for an element of the result of a per-element construct
- * the element's key.
- */
-export type Origin = { entry: number; spread: boolean; key?: string };
-
-/** The origin of each position of an array the executor assembled. */
-const origins = new WeakMap<object, readonly Origin[]>();
 
 /**
  * The elements of the assembled result of a per-element construct, by
@@ -213,38 +180,6 @@ const assembledElements = new WeakMap<
   object,
   { members: readonly Element[]; context: Context }
 >();
-
-/** An entry of an array that is written as a spread. */
-class Spread {
-  constructor(readonly values: readonly unknown[]) {}
-}
-
-/**
- * The array a list of written entries stands for: a member at one
- * position, and what a spread holds at one position each. The array has
- * the origin of each position: a position spread from an array that has
- * origins has the origin it has there.
- */
-const assembledFrom = (entries: readonly unknown[]): unknown[] => {
-  if (origins.has(entries)) return entries as unknown[];
-  const flat: unknown[] = [];
-  const from: Origin[] = [];
-  for (let entry = 0; entry < entries.length; entry++) {
-    const written = entries[entry];
-    if (!(written instanceof Spread)) {
-      flat.push(written);
-      from.push({ entry, spread: false });
-      continue;
-    }
-    const inner = origins.get(written.values);
-    written.values.forEach((value, index) => {
-      flat.push(value);
-      from.push(inner?.[index] ?? { entry, spread: true });
-    });
-  }
-  origins.set(flat, from);
-  return flat;
-};
 
 /** The value code of a plan, as the crate's `emit` command prints it. */
 export type Code = {
@@ -395,109 +330,6 @@ const declaresHandle = (schema: Schema | undefined, depth: number): boolean => {
     typeof member === "object" &&
     (member.asCell !== undefined || declaresHandle(member, depth + 1))
   );
-};
-
-/**
- * Whether a path with `*` names a position: segment for segment, with
- * `*` for any index.
- */
-const namesPosition = (listed: readonly string[], path: readonly string[]) =>
-  listed.length === path.length &&
-  listed.every((segment, index) =>
-    segment === path[index] || (segment === "*" && /^\d+$/.test(path[index]))
-  );
-
-/**
- * Whether the key of a position starts with the key of an enclosing
- * collection: the key itself, or the key followed by the part that a
- * `flatMap` adds for a member of the segment (ruling Z22).
- */
-const keyStartsWith = (key: string, prefix: string): boolean =>
-  key === prefix || key.startsWith(`${prefix}/`);
-
-/**
- * Whether a path `Binding.result` lists covers a position of the result
- * for a marker (PL §1.1, "What a `*` of a result path stands for"):
- * segment for segment, and at each `*` the position has to be of the
- * kind the path states. `trail` has the origin of each position of
- * `path` that is a position of an array the executor assembled, and
- * `keys` the keys of the marker's stream, one for each `element` step
- * of its binding.
- *
- * - `element`: an element of a collection, at a position whose key
- *   starts with the key of the marker for that step (ruling Z30). At the
- *   result of a `map` or a `filter` that is the position that holds the
- *   key, and at the result of a `flatMap` each member of the segment of
- *   that source key.
- * - `every` and `inside`: an element of a collection, and no member
- *   written beside it.
- * - `member`: the member written at the stated entry, and no element of
- *   a collection spread before it.
- */
-export const coversPosition = (
-  listed: ResultPath,
-  path: readonly string[],
-  trail: readonly (Origin | undefined)[],
-  keys: readonly string[],
-): boolean => {
-  if (listed.path.length !== path.length) return false;
-  let star = 0;
-  let step = 0;
-  for (let index = 0; index < path.length; index++) {
-    const segment = listed.path[index];
-    if (segment !== "*") {
-      if (segment !== path[index]) return false;
-      continue;
-    }
-    if (!/^\d+$/.test(path[index])) return false;
-    const stated = listed.stars[star];
-    star += 1;
-    const origin = trail[index];
-    if (stated === undefined || origin === undefined) return false;
-    switch (stated.kind) {
-      case "element": {
-        const key = keys[step];
-        step += 1;
-        if (
-          !origin.spread || key === undefined || origin.key === undefined ||
-          !keyStartsWith(origin.key, key)
-        ) {
-          return false;
-        }
-        break;
-      }
-      case "every":
-      case "inside":
-        if (!origin.spread) return false;
-        break;
-      case "member":
-        if (origin.spread || origin.entry !== stated.index) return false;
-        break;
-    }
-  }
-  return true;
-};
-
-/**
- * A value in stored form with `value` at a path of it, and with nothing
- * there where `value` is nothing.
- */
-const replaced = (
-  holder: unknown,
-  path: readonly string[],
-  value: unknown,
-): unknown => {
-  if (path.length === 0) return value;
-  const [first, ...rest] = path;
-  if (Array.isArray(holder)) {
-    const copy = [...holder];
-    copy[Number(first)] = replaced(copy[Number(first)], rest, value);
-    return copy;
-  }
-  if (!isRecord(holder)) return holder;
-  const { [first]: held, ...others } = holder;
-  const member = replaced(held, rest, value);
-  return member === undefined ? others : { ...others, [first]: member };
 };
 
 const matchesPath = (pattern: readonly string[], path: readonly string[]) =>
@@ -985,14 +817,7 @@ export class Host {
     // A marker is read through by nothing: it stays the marker.
     if (value instanceof StreamMarker) return value;
     if (value instanceof Handle) return value.get();
-    if (Array.isArray(value)) {
-      // The copy is the array the executor assembled, position for
-      // position.
-      const copy = value.map((member) => this.v(member));
-      const from = origins.get(value);
-      if (from !== undefined) origins.set(copy, from);
-      return copy;
-    }
+    if (Array.isArray(value)) return value.map((member) => this.v(member));
     if (isRecord(value)) {
       return Object.fromEntries(
         Object.entries(value).map(([name, member]) => [name, this.v(member)]),
@@ -1101,7 +926,7 @@ export class Host {
    * as a value. A marker is handed as a handle to its stream, wherever it
    * is in the value: the body can send to it and can return it, and what
    * it returns holds the reference to the stream, which is stored as a
-   * link and not checked against `Binding.result` (ruling Z20).
+   * link (ruling Z20).
    */
   pass(value: unknown): unknown {
     if (value instanceof Ref || value instanceof StreamRef) {
@@ -1142,11 +967,21 @@ class NoHost extends Host {
 }
 
 /**
- * A marker at a position of the result that no listed path of its
- * binding covers: the binding, the position, and the top-level property
- * of the result that holds the position.
+ * A position at which a reader of the stored result finds the link to a
+ * stream (`Instance.streams`).
  */
-export type StreamError = { property: string; binding: number; path: string[] };
+export type StreamHeld = {
+  binding: number;
+  keys: string[];
+  /** The instance the binding is of, where a function body made it. */
+  instance?: string;
+  /** The path from the root of the result. */
+  path: string[];
+  /** The document and the path the link is stored at. */
+  at: { doc: string; path: string[] };
+  /** The position of the element of each enclosing collection. */
+  elements?: number[];
+};
 
 /** How a handled event ended. */
 export type Outcome = {
@@ -1262,27 +1097,6 @@ export class Instance {
    * `result` for the result, in the order the evaluations ended.
    */
   readonly trace: string[] = [];
-  /**
-   * The markers that failed the check of where a stream is stored
-   * (rulings Z11, Z19 and Z29): one entry for each marker at a position
-   * no listed path of the marker's binding covers, in each evaluation
-   * that stored the result. The evaluation that fails is the one that
-   * stores the value. `property` is the top-level property of the result
-   * that holds the position: nothing at or below it is written, and it
-   * keeps what was stored.
-   */
-  readonly failures: StreamError[] = [];
-  /**
-   * The errors recorded on the instance (ruling Z29): for each top-level
-   * property of the result that the last evaluation did not store, the
-   * markers that failed the check. The next evaluation that stores the
-   * property clears its errors (ES §2.2, "What fails", assumed there).
-   */
-  errors: StreamError[] = [];
-  /** Every such position, over all failed evaluations, once each. */
-  readonly misplaced: { binding: number; path: string[] }[] = [];
-  readonly #checked = new WeakMap<Entry, StreamError[]>();
-
   constructor(
     readonly artifact: Artifact,
     argument: unknown,
@@ -1496,17 +1310,14 @@ export class Instance {
         value === undefined ? fallback() : value,
       h: viewNode,
       hf: viewNodeOfBody,
-      // An array written with a spread: the executor assembles it, and
-      // has the entry each position came from (ruling Z21).
-      spread: (value: unknown) =>
-        new Spread(
-          Array.isArray(value)
-            ? value
-            : value === undefined || value === null
-            ? []
-            : Array.from(value as Iterable<unknown>),
-        ),
-      list: (entries: unknown[]) => assembledFrom(entries),
+      // The members of the operand of a spread in an array literal: none
+      // for an operand that holds nothing.
+      spread: (value: unknown): unknown[] =>
+        Array.isArray(value)
+          ? value
+          : value === undefined || value === null
+          ? []
+          : Array.from(value as Iterable<unknown>),
     };
   }
 
@@ -2487,14 +2298,6 @@ export class Instance {
         // Each position of the assembled array is an element of the
         // collection, with its key.
         const keyed = (array: unknown[]) => {
-          origins.set(
-            array,
-            (host.members ?? []).map(({ key }) => ({
-              entry: 0,
-              spread: true,
-              key,
-            })),
-          );
           assembledElements.set(array, {
             members: host.members ?? [],
             context,
@@ -2812,17 +2615,12 @@ export class Instance {
         "value",
         (host) => result.evaluate(host),
       );
-      // A marker at a position of the result that no listed path of its
-      // binding covers fails the evaluation that stores it: the output
-      // that holds the position keeps what was stored, and the other
-      // outputs are stored (ES §2.2, "The check" and "What fails").
-      let stored = this.stored(entry.value);
-      const failed = this.#check(entry);
-      for (const property of new Set(failed.map((error) => error.property))) {
-        stored = replaced(stored, [property], this.#storedAt([property]));
-      }
-      this.errors = failed;
-      this.store.write(new Ref(this.doc("result"), []), stored);
+      // Each marker in the value is stored as the link to its stream,
+      // wherever it is: no position is checked (ruling Z43).
+      this.store.write(
+        new Ref(this.doc("result"), []),
+        this.stored(entry.value),
+      );
       // The instances that function bodies of this one made.
       for (const child of this.#children) child.settle();
       this.#afterWave = true;
@@ -2834,73 +2632,6 @@ export class Instance {
       this.#declare(none);
       if (this.store.clock === before) break;
     }
-  }
-
-  /**
-   * Checks the markers in the value of the result against
-   * `Binding.result` (PL §1.1, "The listed paths are complete"): each
-   * marker has to be at a position that a listed path of its binding
-   * covers. A `*` of a listed path matches a position of the kind the
-   * path states for it (`coversPosition`; ruling Z21).
-   * A listed path below a conditional is listed whichever branch is
-   * selected, so it matches under either selection. The check is of the
-   * positions of the result alone: a reference in the value is not
-   * followed, and a marker stored in another document is not checked.
-   * Returns one error for each marker that no listed path covers, with
-   * the top-level property of the result that holds its position
-   * (ruling Z29). The property is defined for every position: also for
-   * one that no entry of `Plan.outputs` is at or above.
-   */
-  #check(entry: Entry): StreamError[] {
-    const known = this.#checked.get(entry);
-    if (known !== undefined) return known;
-    const found: StreamError[] = [];
-    const walk = (
-      value: unknown,
-      path: string[],
-      trail: (Origin | undefined)[],
-    ) => {
-      if (value instanceof StreamMarker) {
-        const { binding, keys } = streamOf(value);
-        const listed = this.plan.bindings[binding]?.result ?? [];
-        if (!listed.some((entry) => coversPosition(entry, path, trail, keys))) {
-          found.push({ property: path[0], binding, path });
-        }
-      } else if (Array.isArray(value)) {
-        const from = origins.get(value);
-        value.forEach((member, index) =>
-          walk(member, [...path, `${index}`], [...trail, from?.[index]])
-        );
-      } else if (isRecord(value)) {
-        for (const [name, member] of Object.entries(value)) {
-          walk(member, [...path, name], [...trail, undefined]);
-        }
-      }
-    };
-    // A marker that is the whole result has no property to hold it, and
-    // is not checked: a pattern's result is a record.
-    if (!(entry.value instanceof StreamMarker)) walk(entry.value, [], []);
-    for (const error of found) {
-      this.failures.push(error);
-      const position = { binding: error.binding, path: error.path };
-      const id = canonical(position);
-      if (!this.misplaced.some((other) => canonical(other) === id)) {
-        this.misplaced.push(position);
-      }
-    }
-    this.#checked.set(entry, found);
-    return found;
-  }
-
-  /** What the result document stores at a path, with no link followed. */
-  #storedAt(path: readonly string[]): unknown {
-    let held = this.store.docs.get(this.doc("result"))?.value;
-    for (const segment of path) {
-      if (Array.isArray(held)) held = held[Number(segment)];
-      else if (isRecord(held)) held = held[segment];
-      else return undefined;
-    }
-    return held;
   }
 
   /**
@@ -2955,23 +2686,40 @@ export class Instance {
   }
 
   /**
-   * Compares where the stored result holds a link to the stream of a
-   * binding with the paths `Binding.result` lists (PL §1.1): the
-   * positions that a listed path names, the positions no listed path
-   * names, and the listed paths without `*` at which the result holds
-   * the stream and at which it holds none.
+   * Where a reader of the stored result finds the link to a stream
+   * (ruling Z43, "it reads the stored result"): each position of the
+   * result document that holds one, and each position that a link of the
+   * result leads to, in the order of the stored value. `path` is the
+   * path from the root of the result, through the links on the way.
+   * `at` is the position the store recorded the link at
+   * (`Store.streams`). `elements` has, for a stream of this instance
+   * whose binding is in an element body, the position of the element of
+   * each enclosing collection, outermost first, and is absent where a
+   * key is in no element table.
    */
-  streamPositions(): {
-    atListedPath: number;
-    atNoListedPath: number;
-    listedPathsHeld: number;
-    listedPathsNotHeld: number;
-  } {
-    const found: { binding: number; path: string[] }[] = [];
+  streams(): StreamHeld[] {
+    const found: StreamHeld[] = [];
     const open = new Set<string>();
-    const walk = (value: unknown, path: string[]) => {
+    const walk = (value: unknown, path: string[], at: Ref) => {
       if (isStream(value)) {
-        found.push({ binding: value.$stream.binding, path });
+        const { binding, keys, instance } = value.$stream;
+        const recorded = this.store.streams.get(at.doc)?.some((entry) =>
+          canonical(entry.path) === canonical(at.path)
+        );
+        if (!recorded) {
+          throw new Error("a stream link the store did not record");
+        }
+        const elements = (instance ?? "") === this.prefix
+          ? this.#positionsOf(binding, keys)
+          : undefined;
+        found.push({
+          binding,
+          keys,
+          ...(instance === undefined ? {} : { instance }),
+          path,
+          at: { doc: at.doc, path: [...at.path] },
+          ...(elements === undefined ? {} : { elements }),
+        });
       } else if (isLink(value)) {
         const located = this.store.locate(
           new Ref(value.$link.doc, value.$link.path),
@@ -2980,41 +2728,47 @@ export class Instance {
         const id = addressOf(located.ref);
         if (open.has(id)) return;
         open.add(id);
-        walk(located.value, path);
+        walk(located.value, path, located.ref);
         open.delete(id);
       } else if (Array.isArray(value)) {
-        value.forEach((member, index) => walk(member, [...path, `${index}`]));
+        value.forEach((member, index) =>
+          walk(member, [...path, `${index}`], at.key(`${index}`))
+        );
       } else if (isRecord(value)) {
         for (const [name, member] of Object.entries(value)) {
-          walk(member, [...path, name]);
+          walk(member, [...path, name], at.key(name));
         }
       }
     };
-    walk(this.store.docs.get(this.doc("result"))?.value, []);
-    const names = (listed: ResultPath, path: string[]) =>
-      namesPosition(listed.path, path);
-    const counts = {
-      atListedPath: 0,
-      atNoListedPath: 0,
-      listedPathsHeld: 0,
-      listedPathsNotHeld: 0,
-    };
-    for (const { binding, path } of found) {
-      const listed = this.plan.bindings[binding]?.result ?? [];
-      if (listed.some((entry) => names(entry, path))) counts.atListedPath += 1;
-      else counts.atNoListedPath += 1;
+    const result = new Ref(this.doc("result"), []);
+    walk(this.store.docs.get(result.doc)?.value, [], result);
+    return found;
+  }
+
+  /**
+   * The position, in the element table of each enclosing collection, of
+   * the element whose key a stream of a binding has for it, outermost
+   * first. Nothing where a key is in no table: the key left its
+   * collection.
+   */
+  #positionsOf(binding: number, keys: readonly string[]): number[] | undefined {
+    const record = this.plan.bindings[binding];
+    if (record === undefined) return undefined;
+    const context = new Map<number, Element>();
+    const positions: number[] = [];
+    for (const { element } of record.within) {
+      if (element === undefined) continue;
+      const table = this.#tables.get(
+        `a${element}|${this.#contextKey(this.#outerOf(element), context)}`,
+      ) ?? [];
+      const position = table.findIndex((member) =>
+        member.key === keys[positions.length]
+      );
+      if (position < 0) return undefined;
+      context.set(element, table[position]);
+      positions.push(position);
     }
-    this.plan.bindings.forEach((record, binding) => {
-      for (const listed of record.result ?? []) {
-        if (listed.path.includes("*")) continue;
-        const held = found.some((entry) =>
-          entry.binding === binding && names(listed, entry.path)
-        );
-        if (held) counts.listedPathsHeld += 1;
-        else counts.listedPathsNotHeld += 1;
-      }
-    });
-    return counts;
+    return positions;
   }
 
   /** The documents the instance holds, by kind (ES §4.1). */

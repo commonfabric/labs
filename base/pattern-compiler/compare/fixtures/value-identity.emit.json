@@ -84,7 +84,6 @@
         },
         "line": 78,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -94,20 +93,6 @@
                 "body": 0
               },
               "name": "pick",
-              "result": [
-                {
-                  "path": [
-                    "rows",
-                    "*",
-                    "pick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -161,20 +146,6 @@
                 "body": 1
               },
               "name": "finish",
-              "result": [
-                {
-                  "path": [
-                    "rows",
-                    "*",
-                    "finish"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -202,20 +173,6 @@
                 "body": 2
               },
               "name": "finishAndRename",
-              "result": [
-                {
-                  "path": [
-                    "rows",
-                    "*",
-                    "finishAndRename"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -243,20 +200,6 @@
                 "body": 3
               },
               "name": "update",
-              "result": [
-                {
-                  "path": [
-                    "rows",
-                    "*",
-                    "update"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -284,20 +227,6 @@
                 "body": 4
               },
               "name": "toggle",
-              "result": [
-                {
-                  "path": [
-                    "rows",
-                    "*",
-                    "toggle"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -325,20 +254,6 @@
                 "body": 5
               },
               "name": "choose",
-              "result": [
-                {
-                  "path": [
-                    "words",
-                    "*",
-                    "choose"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -379,14 +294,6 @@
                 "body": 6
               },
               "name": "reverse",
-              "result": [
-                {
-                  "path": [
-                    "reverse"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -423,14 +330,6 @@
                 "body": 7
               },
               "name": "removeFirst",
-              "result": [
-                {
-                  "path": [
-                    "removeFirst"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -467,14 +366,6 @@
                 "body": 8
               },
               "name": "addTag",
-              "result": [
-                {
-                  "path": [
-                    "addTag"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",

@@ -33,7 +33,6 @@
         },
         "line": 44,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -43,14 +42,6 @@
                 "body": 0
               },
               "name": "overwrite",
-              "result": [
-                {
-                  "path": [
-                    "overwrite"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -74,14 +65,6 @@
                 "body": 1
               },
               "name": "seal",
-              "result": [
-                {
-                  "path": [
-                    "seal"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",

@@ -282,11 +282,6 @@ fn plans_json(analysis: &ProgramAnalysis, accepted_only: bool) -> Vec<serde_json
                                 .map(|(id, document)| serde_json::json!({ "id": id, "schema": document }))
                                 .collect::<Vec<_>>(),
                             "unsupported": unsupported,
-                            "noResultPath": plan
-                                .element_bindings
-                                .iter()
-                                .map(|(binding, reason)| serde_json::json!({ "binding": binding, "reason": reason }))
-                                .collect::<Vec<_>>(),
                         });
                         if let Some(code) = &plan.code {
                             record["code"] = code.clone();

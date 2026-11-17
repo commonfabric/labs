@@ -3,9 +3,8 @@
     "module": "compare/fixtures/flat-streams.tsx",
     "patterns": [
       {
-        "line": 24,
+        "line": 22,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -15,25 +14,6 @@
                 "body": 0
               },
               "name": "choose",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "0",
-                    "children",
-                    "0",
-                    "*",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -74,25 +54,6 @@
                 "body": 0
               },
               "name": "pick",
-              "result": [
-                {
-                  "path": [
-                    "$UI",
-                    "children",
-                    "1",
-                    "children",
-                    "0",
-                    "*",
-                    "props",
-                    "onClick"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -221,7 +182,7 @@
             {
               "at": {
                 "file": "compare/fixtures/flat-streams.tsx",
-                "start": 1144
+                "start": 992
               },
               "bodies": [],
               "entry": "flatMap",
@@ -240,7 +201,7 @@
             {
               "at": {
                 "file": "compare/fixtures/flat-streams.tsx",
-                "start": 1440
+                "start": 1288
               },
               "bodies": [],
               "entry": "flatMap",
@@ -259,7 +220,7 @@
             {
               "at": {
                 "file": "compare/fixtures/flat-streams.tsx",
-                "start": 1096
+                "start": 944
               },
               "bodies": [],
               "entry": "$UI",

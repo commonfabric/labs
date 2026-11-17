@@ -73,8 +73,8 @@ const WRITTEN: Record<string, Written[]> = {
     argument: { items: [{ title: "a" }, { title: "b" }], tags: ["x", "y"] },
     events: [{ binding: 0, event: { by: 2 } }],
   }],
-  // Ruling Z21: an event for the stream of each binding, which the
-  // harness finds from the kinds of the listed paths.
+  // An event for the stream of each binding, which the harness finds
+  // from where the executor stored its link (ruling Z43).
   "star-kinds": [{
     argument: {
       items: [{ title: "a" }, { title: "b" }],
@@ -100,6 +100,21 @@ const WRITTEN: Record<string, Written[]> = {
     events: [
       { binding: 1, event: { title: "a" } },
       { binding: 1, event: { title: "b" } },
+    ],
+  }],
+  // Ruling Z43: the callback of a `flatMap` returns an inner `map` that
+  // binds a handler. The groups are records a handler pushes, which are
+  // references, and the shelves are plain values in place. An event is
+  // sent to the stream of the last row of each list.
+  "flat-inner": [{
+    argument: {
+      shelves: [{ name: "s", tags: ["x", "y"] }, { name: "t", tags: ["z"] }],
+    },
+    events: [
+      { binding: 2, event: { name: "g", titles: ["a", "b"] } },
+      { binding: 2, event: { name: "h", titles: ["c", "d"] } },
+      { binding: 0, event: {} },
+      { binding: 1, event: {} },
     ],
   }],
   "flat-keys": [{
@@ -345,7 +360,7 @@ export const compareFixtures = async (
       continue;
     }
     const events = (plan.bindings ?? []).flatMap((binding, index) =>
-      binding.handler?.body !== undefined && binding.result !== undefined
+      binding.handler?.body !== undefined
         ? [{
           binding: index,
           event: generateEvent(plan, artifact.schemas, index),

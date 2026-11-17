@@ -1,13 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import {
-  type Artifact,
-  coversPosition,
-  Handle,
-  Host,
-  Instance,
-} from "../executor.ts";
+import { type Artifact, Handle, Host, Instance } from "../executor.ts";
 import { keySegment, Ref, Store, StreamRef } from "../store.ts";
 
 // The executor of `execution-and-storage.md` (ES) on the artifacts of the
@@ -700,9 +694,10 @@ describe("a pattern compiled in", () => {
       rows: [],
       words: [],
     });
-    const append = instance.plan.bindings.findIndex((binding) =>
-      binding.result !== undefined
-    );
+    // The binding whose stream the result holds at `marked.append`.
+    const append =
+      instance.streams().find(({ path }) => path.join("/") === "marked/append")!
+        .binding;
     expect(instance.plan.bindings[append].state[0].default).toBe("$");
 
     // `symbol.set(symbol.get() + "!")`: the read gives the default.
@@ -1425,9 +1420,9 @@ describe("the `within` of a cone", () => {
   });
 });
 
-// Ruling Z11 on `fixtures/stream-marker.tsx`: `host.stream` gives value
-// code a marker, and the executor replaces it when it stores the value
-// and checks the position against `Binding.result`.
+// Rulings Z11 and Z43 on `fixtures/stream-marker.tsx`: `host.stream`
+// gives value code a marker, and the executor replaces it by the link to
+// the stream when it stores the value, wherever the marker is.
 describe("the stream of a binding in a computed value", () => {
   const link = (name: string) => ({
     $link: { doc: "argument", path: ["pool", name] },
@@ -1451,14 +1446,6 @@ describe("the stream of a binding in a computed value", () => {
   // first of the list (ruling Z31).
   const rowsOf = (list: Stored) => list.children[0] as unknown as Stored[];
   const streamsOf = (rows: Stored[]) => rows.map((row) => row.props.onClick);
-  const without = (artifact: Artifact, binding: number, path: string[]) => {
-    const copy = structuredClone(artifact);
-    const record = copy.plan.bindings[binding];
-    record.result = (record.result ?? []).filter((listed) =>
-      JSON.stringify(listed.path) !== JSON.stringify(path)
-    );
-    return copy;
-  };
 
   it("is a marker that value code can do nothing with", async () => {
     const instance = new Instance(
@@ -1497,7 +1484,6 @@ describe("the stream of a binding in a computed value", () => {
     expect(stored.inc).toEqual(one);
     expect(tree(instance).children[0].props.onClick).toEqual(one);
     expect(tree(instance).children[1].children[1].props.onClick).toEqual(one);
-    expect(instance.failures).toEqual([]);
   });
 
   it("is stored as the stream of the instance's key over references", async () => {
@@ -1552,140 +1538,29 @@ describe("the stream of a binding in a computed value", () => {
     expect((instance.result() as { chosen: string }).chosen).toBe("y");
   });
 
-  // Rulings Z19 and Z29: the evaluation that fails is the one that stores
-  // the value. The top-level property of the result that holds the
-  // position keeps what was stored, the other properties are stored, and
-  // an error is recorded on the instance.
-  it("fails the evaluation that stores a marker at a position no listed path covers", async () => {
-    const artifact = without(await artifactOf("stream-marker"), 0, ["inc"]);
-
-    const instance = new Instance(artifact, argument());
-
-    // The position is the property itself.
-    const error = { property: "inc", binding: 0, path: ["inc"] };
-    expect(instance.failures).toEqual([error]);
-    expect(instance.errors).toEqual([error]);
-    // No link is stored at the property, which held nothing before, and
-    // the other properties of the result are stored.
-    const stored = instance.store.docs.get("result")?.value as Record<
-      string,
-      unknown
-    >;
-    expect("inc" in stored).toBe(false);
-    expect(instance.result()).toMatchObject({ chosen: "", count: 0 });
-    expect(tree(instance).children[1].children[1].props.onClick).toEqual({
-      $stream: { binding: 0, keys: [] },
-    });
-  });
-
-  it("leaves the top-level property that holds the position with what was stored, and stores the others", async () => {
-    const below = ["$UI", "children", "0", "props", "onClick"];
-    const artifact = without(await artifactOf("stream-marker"), 0, below);
+  it("stores the link below a conditional when the branch that places the marker is selected", async () => {
+    const one = { $stream: { binding: 0, keys: [] } };
     // The other branch is selected, and the position holds its value.
-    const instance = new Instance(artifact, argument(false));
-    expect(instance.failures).toEqual([]);
+    const instance = new Instance(
+      await artifactOf("stream-marker"),
+      argument(false),
+    );
     expect(tree(instance).children[0]).toBe(null);
-    const before = structuredClone(tree(instance));
+    expect(rowsOf(tree(instance).children[2]).length).toBe(3);
 
-    // The branch that writes the stream is selected: the marker is at a
-    // position no listed path covers. A tag is removed in the same
-    // write, which changes another subtree of the tree.
+    // The branch that places the marker is selected, and a tag is
+    // removed in the same write, which changes another subtree.
     instance.store.write(new Ref("argument", ["tags"]), ["x"]);
     instance.writeArgument(["shown"], true);
 
-    // The whole of `$UI` keeps what was stored: it is not stored with
-    // the subtree of the conditional from the earlier evaluation and the
-    // lists from this one (ruling Z29).
-    const error = { property: "$UI", binding: 0, path: below };
-    expect(instance.errors).toEqual([error]);
-    expect(instance.failures.at(-1)).toEqual(error);
-    expect(tree(instance)).toEqual(before);
-    expect(rowsOf(tree(instance).children[2]).length).toBe(3);
+    // The tree is stored whole: the link at the position of the
+    // conditional, and the list with one row.
+    expect(tree(instance).children[0].props.onClick).toEqual(one);
+    expect(rowsOf(tree(instance).children[2]).length).toBe(1);
 
-    // An event changes another property, which is stored. The property
-    // that failed keeps what it held.
-    instance.send(0, { by: 2 });
-
-    expect((instance.result() as { count: number }).count).toBe(2);
-    expect(tree(instance)).toEqual(before);
-    expect(instance.errors).toEqual([error]);
-
-    // The next evaluation that stores the property clears the error.
     instance.writeArgument(["shown"], false);
 
-    expect(instance.errors).toEqual([]);
     expect(tree(instance).children[0]).toBe(null);
-    expect(rowsOf(tree(instance).children[2]).length).toBe(1);
-  });
-
-  it("matches a `*` of a listed path at any element, in each of the three bodies", async () => {
-    const artifact = await artifactOf("stream-marker");
-    const paths = [1, 2, 3].map((binding) =>
-      artifact.plan.bindings[binding].result?.map(({ path }) => path)
-    );
-
-    expect(paths).toEqual([
-      [["$UI", "children", "1", "children", "0", "*", "props", "onClick"]],
-      [["$UI", "children", "2", "children", "0", "*", "props", "onClick"]],
-      [["$UI", "children", "3", "children", "0", "*", "props", "onClick"]],
-    ]);
-    // Each `*` is of kind `element`: the binding has the `element` step
-    // of the collection, over references, over plain values in place,
-    // and over the result of a `filter` (ruling Z21).
-    expect(
-      [1, 2, 3].map((binding) => artifact.plan.bindings[binding].result),
-    ).toEqual(paths.map((listed) => [
-      { path: listed![0], stars: [{ kind: "element" }] },
-    ]));
-    expect(new Instance(artifact, argument()).failures).toEqual([]);
-    // Without its path, the marker of each key is at a position no
-    // listed path covers. The property that holds those positions is
-    // `$UI`: it keeps what was stored for it, which is nothing, and the
-    // other properties are stored (ruling Z29). That is the same over
-    // references, over plain values in place, and over the result of a
-    // `filter`.
-    const lengths = [2, 3, 2];
-    for (const binding of [1, 2, 3]) {
-      const instance = new Instance(
-        without(artifact, binding, paths[binding - 1]![0]),
-        argument(),
-      );
-      const list = ["$UI", "children", `${binding}`, "children", "0"];
-      expect(instance.errors).toEqual(
-        Array.from({ length: lengths[binding - 1] }, (_, index) => ({
-          property: "$UI",
-          binding,
-          path: [...list, `${index}`, "props", "onClick"],
-        })),
-      );
-      expect(tree(instance)).toBe(undefined);
-      expect(instance.store.docs.get("result")?.value).toMatchObject({
-        chosen: { $link: {} },
-        inc: { $stream: { binding: 0, keys: [] } },
-      });
-    }
-  });
-
-  it("matches a path below a conditional under either selection", async () => {
-    const artifact = await artifactOf("stream-marker");
-    const below = ["$UI", "children", "0", "props", "onClick"];
-    expect(artifact.plan.bindings[0].result).toContainEqual({
-      path: below,
-      stars: [],
-    });
-
-    // The branch that writes the stream is selected, or the other one.
-    expect(new Instance(artifact, argument(true)).failures).toEqual([]);
-    expect(new Instance(artifact, argument(false)).failures).toEqual([]);
-    // Without the path, the evaluation fails under the selection that
-    // stores the marker, and under the other one it does not.
-    const unlisted = without(artifact, 0, below);
-    expect(new Instance(unlisted, argument(false)).failures).toEqual([]);
-    expect(
-      new Instance(unlisted, argument(true)).failures.map((
-        { binding, path },
-      ) => [binding, path]),
-    ).toEqual([[0, below]]);
   });
 
   it("passes a stream that is an input of the pattern on as an input", async () => {
@@ -1696,15 +1571,13 @@ describe("the stream of a binding in a computed value", () => {
     };
 
     // The stored position holds a link to the place of the input, and no
-    // stream of a binding: no path of `Binding.result` names it, and the
-    // check does not apply.
+    // stream of a binding.
     expect(stored.outside.$link.doc).toBe("argument");
     expect(stored.outside.$link.path).toEqual(["outside"]);
     const passed = tree(instance).children[4].props.onClick as {
       $link: { doc: string; path: string[] };
     };
     expect(passed.$link.path).toEqual(["outside"]);
-    expect(instance.failures).toEqual([]);
     // A read of the position gives a stream, as a read of a binding's
     // stream does.
     expect((instance.result() as { outside: unknown }).outside).toEqual({
@@ -3050,11 +2923,10 @@ describe("a key that left its collection", () => {
   });
 });
 
-// Ruling Z20 on `fixtures/stream-returned.tsx`: a stream that a function
-// body returns into the result is allowed and not checked. The body is
-// handed the stream of a binding as a handle, and what it returns holds
-// a reference, which is stored as a link as any reference a body returns
-// is. No path of `Binding.result` names the position.
+// Ruling Z20 on `fixtures/stream-returned.tsx`: a function body may
+// return a stream into the result. The body is handed the stream of a
+// binding as a handle, and what it returns holds a reference, which is
+// stored as a link as any reference a body returns is.
 describe("a stream a function body returns into the result", () => {
   const link = (name: string) => ({
     $link: { doc: "argument", path: ["pool", name] },
@@ -3078,61 +2950,60 @@ describe("a stream a function body returns into the result", () => {
   const stored = (instance: Instance) =>
     instance.store.docs.get("result")?.value as Stored;
 
-  it("stores the link to the stream of a binding outside every element body, and checks nothing", async () => {
-    const { artifact, instance } = await start();
+  it("stores the link to the stream of a binding outside every element body", async () => {
+    const { instance } = await start();
 
-    expect(artifact.plan.bindings[0].result).toEqual([
-      { path: ["inc"], stars: [] },
-    ]);
     expect(stored(instance).wrapped.again).toEqual({
       $stream: { binding: 0, keys: [] },
     });
-    expect(instance.failures).toEqual([]);
     // An event sent through the stored link is handled by the binding.
     instance.send(0, { by: 3 });
     expect((instance.result() as { count: number }).count).toBe(3);
   });
 
   it("stores the link to the stream of the element's key over references", async () => {
-    const { artifact, instance } = await start();
+    const { instance } = await start();
 
-    expect(artifact.plan.bindings[1].result).toBe(undefined);
     expect(stored(instance).rows.map((row) => row.again)).toEqual([
       { $stream: { binding: 1, keys: ['cell:argument:["pool","a"]#0'] } },
       { $stream: { binding: 1, keys: ['cell:argument:["pool","b"]#0'] } },
     ]);
-    expect(instance.failures).toEqual([]);
   });
 
   it("stores the link to the stream of the element's key over plain values in place", async () => {
-    const { artifact, instance } = await start();
+    const { instance } = await start();
 
-    expect(artifact.plan.bindings[2].result).toBe(undefined);
     expect(stored(instance).labels.map((row) => row.again)).toEqual([
       { $stream: { binding: 2, keys: ['value:"x"#0'] } },
       { $stream: { binding: 2, keys: ['value:"y"#0'] } },
     ]);
-    expect(instance.failures).toEqual([]);
   });
 
-  it("counts the positions as held at no listed path", async () => {
+  it("records the position of each link, with the element it is for", async () => {
     const { instance } = await start();
 
-    // `inc` is at its listed path. The five streams the bodies returned
-    // are at no listed path, and none fails a check.
-    expect(instance.streamPositions()).toMatchObject({
-      atListedPath: 1,
-      atNoListedPath: 5,
-    });
+    expect(
+      instance.streams().map(({ binding, path, elements }) => [
+        binding,
+        path.join("/"),
+        elements,
+      ]),
+    ).toEqual([
+      [0, "inc", []],
+      [0, "wrapped/again", []],
+      [1, "rows/0/again", [0]],
+      [1, "rows/1/again", [1]],
+      [2, "labels/0/again", [0]],
+      [2, "labels/1/again", [1]],
+    ]);
   });
 });
 
-// Ruling Z21 on `fixtures/star-kinds.tsx`: each `*` of a path of
-// `Binding.result` states what it stands for, and the check accepts a
-// marker only at a position of the stated kind. The executor knows which
-// position of an array is an element of which collection, and which is a
-// member written beside them, from how it assembled the array.
-describe("what a `*` of a result path stands for", () => {
+// Ruling Z43 on `fixtures/star-kinds.tsx` and `fixtures/member-kind.tsx`:
+// the link to a stream is stored at each position where value code
+// placed its marker, among the elements of a collection, beside them,
+// and inside the value of an element.
+describe("where the stream of a binding is stored in an array", () => {
   const link = (name: string) => ({
     $link: { doc: "argument", path: ["pool", name] },
   });
@@ -3143,163 +3014,63 @@ describe("what a `*` of a result path stands for", () => {
     items: [link("a"), link("b")],
     tags: ["x", "y", "z"],
   });
-  type Star = { kind: "element" | "every" | "inside" } | {
-    kind: "member";
-    index: number;
-  };
-  /** The artifact with the kinds of the first path of a binding changed. */
-  const restated = (artifact: Artifact, binding: number, stars: Star[]) => {
-    const copy = structuredClone(artifact);
-    copy.plan.bindings[binding].result![0].stars = stars;
-    return copy;
-  };
   const INC = 0;
   const MORE = 1;
   const STORY = 2;
   const ROW_PICK = 4;
-  const ITEM_PICK = 5;
-  const TAG_PICK = 6;
-  const failed = (artifact: Artifact) =>
-    new Instance(artifact, argument()).failures.map(({ binding, path }) => [
-      binding,
-      path.slice(1, 6).join("/"),
-    ]);
+  /** Where the result holds the stream of a binding, and for which keys. */
+  const held = (instance: Instance, binding: number) =>
+    instance.streams().filter((stream) => stream.binding === binding).map((
+      { path, keys },
+    ) => [path.join("/"), keys]);
 
-  it("states the kind of each `*`", async () => {
-    const { plan } = await artifactOf("star-kinds");
-    const stars = (binding: number) =>
-      plan.bindings[binding].result?.map((listed) => listed.stars);
-
-    // The callback writes the stream of a binding made outside it, over
-    // references and over plain values in place.
-    expect(stars(INC)).toEqual([[{ kind: "every" }], [{ kind: "every" }]]);
-    // A child written after a collection has a position of its own and
-    // no `*` (ruling Z31).
-    expect(plan.bindings[MORE].result).toEqual([{
-      path: ["$UI", "children", "2", "children", "2", "props", "onClick"],
-      stars: [],
-    }]);
-    // One element of an array of plain values written in place holds the
-    // stream inside its value.
-    expect(stars(STORY)).toEqual([[{ kind: "inside" }]]);
-    // Over the result of another per-element construct, whose keys the
-    // collection has.
-    expect(stars(ROW_PICK)).toEqual([[{ kind: "element" }]]);
-    // Two collections among the children of one node, over references
-    // and over plain values in place.
-    expect(stars(ITEM_PICK)).toEqual([[{ kind: "element" }]]);
-    expect(stars(TAG_PICK)).toEqual([[{ kind: "element" }]]);
-  });
-
-  it("accepts each marker at a position of the stated kind", async () => {
+  it("stores the one stream of a binding made outside the callback at every element", async () => {
     const instance = new Instance(await artifactOf("star-kinds"), argument());
 
-    expect(instance.failures).toEqual([]);
-    expect(instance.streamPositions().atNoListedPath).toBe(0);
-  });
-
-  it("accepts a marker of kind `every` at an element of the collection alone", async () => {
-    const artifact = await artifactOf("star-kinds");
-
-    // Stated as a member written at the first entry: the markers stand
-    // at the elements of the collection, over references.
-    expect(failed(restated(artifact, INC, [{ kind: "member", index: 0 }])))
-      .toEqual([
-        [INC, "children/0/children/0/0"],
-        [INC, "children/0/children/0/1"],
-      ]);
-    // And over plain values in place, with the second path of `inc`.
-    const second = structuredClone(artifact);
-    second.plan.bindings[INC].result![1].stars = [{ kind: "member", index: 0 }];
-    expect(failed(second)).toEqual([
-      [INC, "children/1/children/0/0"],
-      [INC, "children/1/children/0/1"],
-      [INC, "children/1/children/0/2"],
+    // Over references, and over plain values in place.
+    expect(held(instance, INC)).toEqual([
+      ["$UI/children/0/children/0/0/props/onClick", []],
+      ["$UI/children/0/children/0/1/props/onClick", []],
+      ["$UI/children/1/children/0/0/props/onClick", []],
+      ["$UI/children/1/children/0/1/props/onClick", []],
+      ["$UI/children/1/children/0/2/props/onClick", []],
     ]);
   });
 
-  // Kind `member` arises in an array value with a spread alone, since a
-  // collection among the children of a view node is one child (ruling
-  // Z31). `fixtures/member-kind.tsx` has it after a spread over
-  // references and after one over plain values in place.
-  it("accepts a marker of kind `member` at the position of that member alone", async () => {
-    const artifact = await artifactOf("member-kind");
+  it("stores the stream at a child written after a collection", async () => {
+    const instance = new Instance(await artifactOf("star-kinds"), argument());
+
+    expect(held(instance, MORE)).toEqual([
+      ["$UI/children/2/children/2/props/onClick", []],
+    ]);
+  });
+
+  it("stores the stream that one element of an array written in place holds inside its value", async () => {
+    const instance = new Instance(await artifactOf("star-kinds"), argument());
+
+    expect(held(instance, STORY)).toEqual([
+      ["$UI/children/4/children/0/0/children/0/$UI/props/onClick", []],
+    ]);
+  });
+
+  it("stores the stream of each upstream key over the result of another per-element construct", async () => {
+    const instance = new Instance(await artifactOf("star-kinds"), argument());
+
+    expect(held(instance, ROW_PICK)).toEqual([
+      ["$UI/children/5/children/0/0/props/onClick", ['value:"x"#0']],
+      ["$UI/children/5/children/0/1/props/onClick", ['value:"y"#0']],
+      ["$UI/children/5/children/0/2/props/onClick", ['value:"z"#0']],
+    ]);
+  });
+
+  it("stores the stream at a member written after a spread, over references and over plain values in place", async () => {
+    const instance = new Instance(await artifactOf("member-kind"), argument());
     const [AFTER, TAIL] = [0, 1];
-    const failures = (changed: Artifact) =>
-      new Instance(changed, argument()).failures.map(({ binding, path }) => [
-        binding,
-        path.join("/"),
-      ]);
-    expect(artifact.plan.bindings[AFTER].result).toEqual([{
-      path: ["rows", "*", "pick"],
-      stars: [{ kind: "member", index: 2 }],
-    }]);
-    expect(artifact.plan.bindings[TAIL].result).toEqual([{
-      path: ["words", "*", "pick"],
-      stars: [{ kind: "member", index: 1 }],
-    }]);
-    expect(failures(artifact)).toEqual([]);
+
     // `rows` holds the first member, the two elements, and the member.
-    const position = [AFTER, "rows/3/pick"];
-
-    // Stated as every position of a collection, or as another member.
-    expect(failures(restated(artifact, AFTER, [{ kind: "every" }]))).toEqual([
-      position,
-    ]);
-    expect(failures(restated(artifact, AFTER, [{ kind: "inside" }]))).toEqual([
-      position,
-    ]);
-    expect(failures(restated(artifact, AFTER, [{ kind: "member", index: 1 }])))
-      .toEqual([position]);
-    expect(failures(restated(artifact, AFTER, [{ kind: "member", index: 3 }])))
-      .toEqual([position]);
-    // Over plain values in place, `words` holds three elements first.
-    expect(failures(restated(artifact, TAIL, [{ kind: "every" }]))).toEqual([
-      [TAIL, "words/3/pick"],
-    ]);
-  });
-
-  it("accepts a marker of kind `inside` at an element of the collection alone", async () => {
-    const artifact = await artifactOf("star-kinds");
-
-    expect(failed(restated(artifact, STORY, [{ kind: "member", index: 0 }])))
-      .toEqual([[STORY, "children/4/children/0/0"]]);
-    // The binding has no `element` step, so no key of it is at a
-    // position.
-    expect(failed(restated(artifact, STORY, [{ kind: "element" }]))).toEqual([
-      [STORY, "children/4/children/0/0"],
-    ]);
-  });
-
-  it("accepts a marker of kind `element` at the position that holds its key alone", async () => {
-    const artifact = await artifactOf("star-kinds");
-
-    // Over the result of another per-element construct, the position
-    // has the key of the upstream element.
-    expect(
-      failed(restated(artifact, ROW_PICK, [{ kind: "member", index: 0 }])),
-    ).toEqual([
-      [ROW_PICK, "children/5/children/0/0"],
-      [ROW_PICK, "children/5/children/0/1"],
-      [ROW_PICK, "children/5/children/0/2"],
-    ]);
-    const listed = artifact.plan.bindings[ITEM_PICK].result![0];
-    const position = [...listed.path];
-    position[position.indexOf("*")] = "1";
-    const at = (key: string | undefined) =>
-      position.map((_, index) =>
-        index === listed.path.indexOf("*")
-          ? { entry: 0, spread: true, key }
-          : undefined
-      );
-    const b = 'cell:argument:["pool","b"]#0';
-    // The position holds the key of the instance that placed the marker,
-    // another key, or it is an element of a collection with no key.
-    expect(coversPosition(listed, position, at(b), [b])).toBe(true);
-    expect(coversPosition(listed, position, at('value:"x"#0'), [b])).toBe(
-      false,
-    );
-    expect(coversPosition(listed, position, at(undefined), [b])).toBe(false);
+    expect(held(instance, AFTER)).toEqual([["rows/3/pick", []]]);
+    // `words` holds three elements first.
+    expect(held(instance, TAIL)).toEqual([["words/3/pick", []]]);
   });
 
   it("stores two collections among the children of one node as two children", async () => {
@@ -3309,9 +3080,8 @@ describe("what a `*` of a result path stands for", () => {
       $UI: { children: { children: Row[][] }[] };
     }).$UI.children[3].children;
 
-    // Each binding lists the `*` below the position of its own
-    // collection, of kind `element`: over references in the first and
-    // over plain values in place in the second.
+    // Each row holds the stream of its own key: over references in the
+    // first collection and over plain values in place in the second.
     expect(menu.length).toBe(2);
     expect(menu[0].map((row) => row.props.onClick)).toEqual([
       { $stream: { binding: 5, keys: ['cell:argument:["pool","a"]#0'] } },
@@ -3322,13 +3092,12 @@ describe("what a `*` of a result path stands for", () => {
       { $stream: { binding: 6, keys: ['value:"y"#0'] } },
       { $stream: { binding: 6, keys: ['value:"z"#0'] } },
     ]);
-    expect(instance.failures).toEqual([]);
   });
 });
 
-// Ruling Z30 on `fixtures/flat-streams.tsx`: a `*` of kind `element` at
-// the result of a `flatMap` matches a position whose key starts with the
-// keys of the binding's enclosing collections.
+// `fixtures/flat-streams.tsx`: every member of the segment that the
+// callback of a `flatMap` writes for a source element holds the stream
+// of that source key (rulings Z22 and Z43).
 describe("the stream of a binding of a `flatMap` body", () => {
   const link = (name: string) => ({
     $link: { doc: "argument", path: ["pool", name] },
@@ -3346,39 +3115,10 @@ describe("the stream of a binding of a `flatMap` body", () => {
       $UI: { children: { children: Row[][] }[] };
     }).$UI.children.map((list) => list.children[0]);
 
-  it("is accepted at every member of the segment of its source key", async () => {
+  it("is stored at every member of the segment of its source key", async () => {
     const artifact = await artifactOf("flat-streams");
     const instance = new Instance(artifact, argument());
 
-    expect(artifact.plan.bindings.map((binding) => binding.result)).toEqual([
-      [{
-        path: [
-          "$UI",
-          "children",
-          "0",
-          "children",
-          "0",
-          "*",
-          "props",
-          "onClick",
-        ],
-        stars: [{ kind: "element" }],
-      }],
-      [{
-        path: [
-          "$UI",
-          "children",
-          "1",
-          "children",
-          "0",
-          "*",
-          "props",
-          "onClick",
-        ],
-        stars: [{ kind: "element" }],
-      }],
-    ]);
-    expect(instance.failures).toEqual([]);
     // Over references: the two members of a segment hold the stream of
     // the one source key.
     const [a, b] = ["a", "b"].map((name) =>
@@ -3396,38 +3136,187 @@ describe("the stream of a binding of a `flatMap` body", () => {
     instance.send(1, {}, [0]);
     expect((instance.result() as { chosen: string }).chosen).toBe("x");
   });
+});
 
-  it("matches by the prefix of the key, and no other key", () => {
-    const listed = {
-      path: ["rows", "*", "pick"],
-      stars: [{ kind: "element" as const }],
-    };
-    const position = ["rows", "3", "pick"];
-    const at = (key: string) => [
-      undefined,
-      { entry: 0, spread: true, key },
-      undefined,
-    ];
-    const source = 'cell:argument:["pool","a"]#0';
-    // A member that is a plain value, a member that is a reference, and
-    // the key itself, as the result of a `map` or a `filter` has it.
-    for (
-      const key of [
-        `${source}/value:"x"#0`,
-        `${source}/cell:argument:["pool","b"]#0`,
-        source,
-      ]
-    ) {
-      expect(coversPosition(listed, position, at(key), [source])).toBe(true);
-    }
-    // Another source key, and a key that begins with the same text and
-    // is no member of the segment.
-    expect(
-      coversPosition(listed, position, at('value:"x"#0/value:"x"#0'), [source]),
-    ).toBe(false);
-    expect(coversPosition(listed, position, at(`${source}0`), [source])).toBe(
-      false,
+// Ruling Z43 on `fixtures/flat-inner.tsx`: the callback of a `flatMap`
+// returns an inner `map` whose body binds a handler. The result of the
+// `flatMap` has one level of positions, and each holds the link that
+// value code placed there, for the keys of both collections.
+describe("the stream of a binding of an inner `map` that a `flatMap` callback returns", () => {
+  const [OVER_REFERENCES, OVER_PLAIN_VALUES, ADD] = [0, 1, 2];
+  // The elements of `shelves` and of their `tags` are plain values
+  // stored in place.
+  const argument = () => ({
+    shelves: [{ name: "s", tags: ["x", "y"] }, { name: "t", tags: ["z"] }],
+  });
+  // The groups are records a handler pushed: references to cells, whose
+  // parts are references to cells too.
+  const withGroups = async () => {
+    const instance = new Instance(await artifactOf("flat-inner"), argument());
+    instance.send(ADD, { name: "g", titles: ["a", "b"] });
+    instance.send(ADD, { name: "h", titles: ["c"] });
+    return instance;
+  };
+  type Stream = { binding: number; keys: string[] };
+  type Row = { props: { onClick: { $stream: Stream } } };
+  const rows = (instance: Instance, list: number) =>
+    (instance.store.docs.get("result")?.value as {
+      $UI: { children: { children: Row[][] }[] };
+    }).$UI.children[list].children[0];
+  const chosen = (instance: Instance) =>
+    (instance.result() as { chosen: string }).chosen;
+
+  it("is stored at each position of the result for both keys, over references", async () => {
+    const instance = await withGroups();
+
+    const streams = rows(instance, 0).map((row) => row.props.onClick.$stream);
+    expect(streams.map(({ binding }) => binding)).toEqual([
+      OVER_REFERENCES,
+      OVER_REFERENCES,
+      OVER_REFERENCES,
+    ]);
+    // The key of the group and then the key of the part, each the
+    // identity of a cell.
+    const [a, b, c] = streams.map(({ keys }) => keys);
+    expect([a.length, b.length, c.length]).toEqual([2, 2, 2]);
+    expect(a[0]).toBe(b[0]);
+    expect(c[0]).not.toBe(a[0]);
+    expect(new Set([a[1], b[1], c[1]]).size).toBe(3);
+    for (const key of [...a, ...b, ...c]) expect(key).toMatch(/^cell:/);
+
+    // An event for the stream of each position reads its group and its
+    // part.
+    instance.send(OVER_REFERENCES, {}, [0, 1]);
+    expect(chosen(instance)).toBe("g/b");
+    instance.send(OVER_REFERENCES, {}, [1, 0]);
+    expect(chosen(instance)).toBe("h/c");
+  });
+
+  it("is stored at each position of the result for both keys, over plain values in place", async () => {
+    const instance = new Instance(await artifactOf("flat-inner"), argument());
+
+    const [s, t] = argument().shelves.map((shelf) =>
+      `value:${JSON.stringify(shelf)}#0`
     );
+    expect(rows(instance, 1).map((row) => row.props.onClick.$stream)).toEqual([
+      { binding: OVER_PLAIN_VALUES, keys: [s, 'value:"x"#0'] },
+      { binding: OVER_PLAIN_VALUES, keys: [s, 'value:"y"#0'] },
+      { binding: OVER_PLAIN_VALUES, keys: [t, 'value:"z"#0'] },
+    ]);
+
+    instance.send(OVER_PLAIN_VALUES, {}, [0, 1]);
+    expect(chosen(instance)).toBe("s/y");
+    instance.send(OVER_PLAIN_VALUES, {}, [1, 0]);
+    expect(chosen(instance)).toBe("t/z");
+  });
+
+  it("records the position of each link to a stream that it stores", async () => {
+    const instance = await withGroups();
+    const below = (list: number, row: number) => [
+      "$UI",
+      "children",
+      `${list}`,
+      "children",
+      "0",
+      `${row}`,
+      "props",
+      "onClick",
+    ];
+
+    const held = instance.streams();
+
+    // One for each row of the two lists, each with the position of the
+    // element of its two collections, and the one stream of `add`.
+    expect(held.map(({ binding, path, elements }) => [binding, path, elements]))
+      .toEqual([
+        [OVER_REFERENCES, below(0, 0), [0, 0]],
+        [OVER_REFERENCES, below(0, 1), [0, 1]],
+        [OVER_REFERENCES, below(0, 2), [1, 0]],
+        [OVER_PLAIN_VALUES, below(1, 0), [0, 0]],
+        [OVER_PLAIN_VALUES, below(1, 1), [0, 1]],
+        [OVER_PLAIN_VALUES, below(1, 2), [1, 0]],
+        [ADD, ["add"], []],
+      ]);
+    // Each is in the record of the document that holds the link.
+    for (const { binding, keys, path } of held) {
+      expect(instance.store.streams.get("result")).toContainEqual({
+        path,
+        stream: { binding, keys },
+      });
+    }
+    expect(instance.store.streams.get("result")?.length).toBe(held.length);
+  });
+
+  it("drops the record of a position that holds the link no longer", async () => {
+    const instance = await withGroups();
+
+    instance.writeArgument(["shelves"], [{ name: "s", tags: ["x"] }]);
+
+    expect(
+      instance.streams().filter(({ binding }) => binding === OVER_PLAIN_VALUES)
+        .map(({ path }) => path[5]),
+    ).toEqual(["0"]);
+    expect(instance.store.streams.get("result")?.length).toBe(5);
+  });
+});
+
+// Ruling Z43: the store records the position of each link to a stream,
+// in whichever document it is stored.
+describe("the store's record of the links to streams", () => {
+  const stream = (binding: number, ...keys: string[]) => ({
+    $stream: { binding, keys },
+  });
+  const recorded = (store: Store, doc: string) =>
+    (store.streams.get(doc) ?? []).map(({ path, stream }) => [
+      path.join("/"),
+      stream.binding,
+    ]).sort();
+
+  it("has the position of each link of a value that is stored, in any document", () => {
+    const store = new Store();
+
+    store.create("cell", "state cell", { kept: stream(0), rows: [] });
+    store.write(new Ref("cell", ["rows"]), [
+      { pick: stream(1, "a") },
+      { pick: stream(1, "b") },
+    ]);
+
+    expect(recorded(store, "cell")).toEqual([
+      ["kept", 0],
+      ["rows/0/pick", 1],
+      ["rows/1/pick", 1],
+    ]);
+    expect(store.streams.get("cell")).toContainEqual({
+      path: ["rows", "1", "pick"],
+      stream: { binding: 1, keys: ["b"] },
+    });
+  });
+
+  it("drops a position that another value is stored at, or that an array holds no longer", () => {
+    const store = new Store();
+    store.create("cell", "state cell", {
+      kept: stream(0),
+      rows: [{ pick: stream(1, "a") }, { pick: stream(1, "b") }],
+    });
+
+    store.write(new Ref("cell", ["kept"]), "text");
+    store.write(new Ref("cell", ["rows", "length"]), 1);
+
+    expect(recorded(store, "cell")).toEqual([["rows/0/pick", 1]]);
+
+    store.write(new Ref("cell", []), {});
+
+    expect(store.streams.has("cell")).toBe(false);
+  });
+
+  it("follows a document that is given another identifier", () => {
+    const store = new Store();
+    store.create("old", "state cell", { kept: stream(0) });
+
+    store.move("old", "new");
+
+    expect(store.streams.has("old")).toBe(false);
+    expect(recorded(store, "new")).toEqual([["kept", 0]]);
   });
 });
 
@@ -4174,15 +4063,13 @@ describe("an instance a function body makes", () => {
       { by: 1, press: { $stream: true } },
       { by: 2, press: { $stream: true } },
     ]);
-    // The stored positions hold a link to a stream each, which no path
-    // of `Binding.result` names and no check concerns (ruling Z20).
+    // The stored positions hold a link to a stream each (ruling Z20).
     const stored = instance.store.docs.get("result")?.value as {
       buttons: { press: { $stream: { binding: number; keys: string[] } } }[];
     };
     const [first, second] = stored.buttons.map(({ press }) => press.$stream);
     expect(first.binding).toBe(-1);
     expect(first.keys).not.toEqual(second.keys);
-    expect(instance.failures).toEqual([]);
 
     streamAt(instance, ["buttons", "1", "press"]).send({ by: 4 });
     instance.dispatch();

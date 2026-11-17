@@ -11,12 +11,10 @@ const pick = handler<unknown, { title: string; chosen: Writable<string> }>(
   },
 );
 
-// Ruling Z30: the `*` at the result of a `flatMap` is of kind `element`
-// for a binding of the callback's body, and a position matches where its
-// key starts with the keys of the binding's enclosing collections. Each
-// position of the result has the key of the source element and a part
-// formed from the member (ruling Z22), and every member of one segment
-// holds the stream of the one source key. The first list is over
+// A binding of the body of a `flatMap` callback. Each position of the
+// result has the key of the source element and a part formed from the
+// member (ruling Z22), and every member of one segment holds the stream
+// of the one source key (ruling Z43). The first list is over
 // records, which a test gives as references to cells, and the second
 // over plain values in place. Each segment is an array of plain values
 // that the callback writes. The executor's tests run this fixture. It is

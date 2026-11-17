@@ -5,7 +5,6 @@
       {
         "line": 26,
         "name": "Row",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -15,14 +14,6 @@
                 "body": 0
               },
               "name": "bump#1",
-              "result": [
-                {
-                  "path": [
-                    "bump"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -46,14 +37,6 @@
                 "body": 0
               },
               "name": "bump#2",
-              "result": [
-                {
-                  "path": [
-                    "tally"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -399,7 +382,6 @@
       {
         "line": 49,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -439,14 +421,6 @@
                 "body": 2
               },
               "name": "add",
-              "result": [
-                {
-                  "path": [
-                    "add"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",

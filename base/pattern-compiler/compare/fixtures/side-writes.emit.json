@@ -62,7 +62,6 @@
         },
         "line": 28,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -72,14 +71,6 @@
                 "body": 3
               },
               "name": "setValue",
-              "result": [
-                {
-                  "path": [
-                    "setValue"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",

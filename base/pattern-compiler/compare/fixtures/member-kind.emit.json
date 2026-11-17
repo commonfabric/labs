@@ -19,7 +19,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/member-kind.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/member-kind.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ title: $h.slot(5) })));\n}\n{\n$rt.element(1, ($h) => (({ tag: $h.slot(7) })));\n}\nreturn $rt.thunk(($h) => (({ rows: $rt.list([({ title: (\"first\") }), $rt.spread($h.v($h.output(0))), ({ pick: $h.stream(0) })]), words: $rt.list([$rt.spread($h.v($h.output(4))), ({ pick: $h.stream(1) })]), count: $h.slot(3) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/member-kind.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ title: $h.slot(5) })));\n}\n{\n$rt.element(1, ($h) => (({ tag: $h.slot(7) })));\n}\nreturn $rt.thunk(($h) => (({ rows: [({ title: (\"first\") }), ...$rt.spread($h.v($h.output(0))), ({ pick: $h.stream(0) })], words: [...$rt.spread($h.v($h.output(4))), ({ pick: $h.stream(1) })], count: $h.slot(3) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -49,9 +49,8 @@
           ],
           "valuesWithoutOutput": []
         },
-        "line": 23,
+        "line": 20,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -61,21 +60,6 @@
                 "body": 0
               },
               "name": "after",
-              "result": [
-                {
-                  "path": [
-                    "rows",
-                    "*",
-                    "pick"
-                  ],
-                  "stars": [
-                    {
-                      "index": 2,
-                      "kind": "member"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -99,21 +83,6 @@
                 "body": 0
               },
               "name": "tail",
-              "result": [
-                {
-                  "path": [
-                    "words",
-                    "*",
-                    "pick"
-                  ],
-                  "stars": [
-                    {
-                      "index": 1,
-                      "kind": "member"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -230,7 +199,7 @@
             {
               "at": {
                 "file": "compare/fixtures/member-kind.tsx",
-                "start": 1115
+                "start": 955
               },
               "bodies": [],
               "entry": "map",
@@ -249,7 +218,7 @@
             {
               "at": {
                 "file": "compare/fixtures/member-kind.tsx",
-                "start": 1064
+                "start": 904
               },
               "bodies": [],
               "entry": "rows",
@@ -262,7 +231,7 @@
             {
               "at": {
                 "file": "compare/fixtures/member-kind.tsx",
-                "start": 1211
+                "start": 1051
               },
               "bodies": [],
               "entry": "map",
@@ -281,7 +250,7 @@
             {
               "at": {
                 "file": "compare/fixtures/member-kind.tsx",
-                "start": 1198
+                "start": 1038
               },
               "bodies": [],
               "entry": "words",

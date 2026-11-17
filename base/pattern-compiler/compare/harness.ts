@@ -92,18 +92,6 @@ export type Plan = {
     handler?: { body?: number };
     state?: PlanStateEntry[];
     within?: unknown[];
-    /**
-     * The result paths that hold a link to the binding's stream (PL §1.1,
-     * `Binding.result`).
-     */
-    result?: {
-      path: string[];
-      /** What each `*` of `path` stands for (PL §1.1, `ResultStar`). */
-      stars: ({ kind: "element" | "every" | "inside" } | {
-        kind: "member";
-        index: number;
-      })[];
-    }[];
     /** The schema of the event's declared type, where the plan has it. */
     eventSchema?: string;
   }[];
@@ -136,6 +124,37 @@ export type LabeledInput = {
   declared?: { clause?: unknown };
 };
 
+/**
+ * What the harness reads of an executor of the compiled path that runs
+ * beside today's run (ruling Z43). The plan does not say where the
+ * stream of a binding is stored, so the harness takes the positions at
+ * which the executor stored the link, and sends an event where today's
+ * run holds a stream at one of them.
+ */
+export type StreamRecord = {
+  /** Starts the executor, in the space of today's run. */
+  start(space: string): void;
+  /**
+   * Where the executor's stored result holds the stream of a binding
+   * now: the path from the root of the result, and the position of the
+   * element of each enclosing collection, outermost first.
+   */
+  held(binding: number): { path: string[]; elements: number[] }[];
+  /** The executor's result, with every link in it followed. */
+  result(): unknown;
+  /**
+   * Has the executor handle an event that today's run committed: the
+   * index of the event in the scenario, and the elements it was sent
+   * for.
+   */
+  committed(
+    index: number,
+    binding: number,
+    event: unknown,
+    elements: readonly number[],
+  ): void;
+};
+
 /** One run of a pattern to compare. */
 export type Scenario = {
   /**
@@ -159,6 +178,11 @@ export type Scenario = {
   selected?: Record<number, number>;
   /** Events to send, in order, each to the stream of a binding. */
   events?: { binding: number; event: unknown }[];
+  /**
+   * The executor's record of where each stream is stored. An event is
+   * sent only where the scenario has one.
+   */
+  streams?: StreamRecord;
   /** What to call at each point of the run (`compare/cost.ts`). */
   probe?: Probe;
 };
@@ -1164,174 +1188,121 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       };
 
       // Where the run holds the stream of a binding: the path of the
-      // result, and for a binding of an element body the element chosen
-      // of each enclosing collection. A listed path states what each of
-      // its `*` stands for (PL §1.1, "What a `*` of a result path stands
-      // for"), and the harness resolves it from the plan: for kind
-      // `element` and `every` it chooses the last position of the
-      // collection, for kind `member` the one position of the member,
-      // and for kind `inside` the position of the collection that holds
-      // the stream at the rest of the path. A collection among the
-      // children of a view node is one nested child in the plan (ruling
-      // Z31) and in the run of today, so a `*` below a child position
-      // is resolved in the array that child holds. One layout of today
-      // differs: a `map` over an array written in place runs when the
-      // pattern is built, and the run holds its elements as children of
-      // their own, from the position of the expression on.
+      // result, and for a binding of an element body the element of each
+      // enclosing collection. The executor recorded the positions at
+      // which it stored the link (ruling Z43), and the harness takes the
+      // first of them at which today's run holds a stream, beginning
+      // with the last element of each enclosing collection.
       const streamAt = (
         binding: number,
       ): { path: string[]; elements: ElementBinding[] } => {
-        const record = plan.bindings?.[binding];
-        const paths = record?.result ?? [];
-        if (paths.length === 0) {
+        const record = scenario.streams;
+        if (record === undefined) {
           throw new Unsupported(
-            "a binding whose stream the result does not hold",
+            "a scenario with no record of where a stream is stored",
           );
         }
-        // The first path the run holds the stream at, in the order of
-        // the plan. A path in a branch that is not selected, or through a
-        // collection with no element, holds none.
-        let first: unknown;
-        for (const listed of paths) {
-          try {
-            return streamAtPath(binding, listed);
-          } catch (error) {
-            if (!(error instanceof Unsupported)) throw error;
-            first ??= error;
+        const steps = (plan.bindings?.[binding]?.within ?? []).flatMap(
+          (step) => {
+            const { element } = step as { element?: number };
+            return element === undefined ? [] : [element];
+          },
+        );
+        const held = record.held(binding).map((entry, order) => ({
+          ...entry,
+          order,
+        })).sort((a, b) => {
+          for (let step = 0; step < a.elements.length; step++) {
+            const by = (b.elements[step] ?? -1) - a.elements[step];
+            if (by !== 0) return by;
           }
-        }
-        throw first;
-      };
-      const streamAtPath = (
-        binding: number,
-        listed: NonNullable<
-          NonNullable<Plan["bindings"]>[number]["result"]
-        >[number],
-      ): { path: string[]; elements: ElementBinding[] } => {
-        const record = plan.bindings?.[binding];
-        const steps = (record?.within ?? []).flatMap((step) => {
-          const { element } = step as { element?: number };
-          return element === undefined ? [] : [element];
+          return a.order - b.order;
         });
-        // Each `*` of kind `element` is the collection of one `element`
-        // step, in order.
-        const keyed = listed.stars.filter((star) => star.kind === "element");
-        if (keyed.length !== steps.length) {
+        if (held.length === 0) {
           throw new Unsupported(
-            "a result path that does not pass through every enclosing collection",
+            "a binding whose stream the executor's result does not hold",
           );
         }
-        const resolve = (
-          index: number,
-          star: number,
-          from: AnyCell,
-          path: string[],
-          elements: ElementBinding[],
-          parent?: { cell: AnyCell; path: string[] },
-        ): { path: string[]; elements: ElementBinding[] } => {
-          if (index === listed.path.length) {
-            // A position that holds the stream under one selection holds
-            // another value, or none, under the other.
-            if (!isStream(from)) {
-              throw new Unsupported("a result path the run holds no stream at");
-            }
-            return { path, elements };
-          }
-          const key = listed.path[index];
-          if (key !== "*") {
-            let cell = from;
-            const at = [...path];
-            if (index > 0) {
-              const tree = treeOf(cell, key);
-              if (tree !== cell) at.push("$UI");
-              cell = tree;
-            }
-            return resolve(
-              index + 1,
-              star,
-              cell.key(key as never) as AnyCell,
-              [...at, key],
-              elements,
-              { cell, path: at },
-            );
-          }
-          const stated = listed.stars[star];
-          let cell = from;
-          let value = valueOf(cell);
-          let at = [...path];
-          if (stated?.kind === "member") {
-            // An array value with a spread is stored flat, and the plan
-            // does not hold the lengths of the collections spread before
-            // the member.
-            throw new Unsupported(
-              "a member written after a spread in an array the run stores flat",
-            );
-          }
-          // The elements of a `map` over an array written in place are
-          // children of their own in the run of today: the positions for
-          // kind `inside` are then those of the children, from the
-          // position of the expression on.
-          let offset = 0;
-          if (
-            stated?.kind === "inside" && !Array.isArray(value) &&
-            parent !== undefined && listed.path[index - 2] === "children" &&
-            /^\d+$/.test(listed.path[index - 1])
-          ) {
-            offset = Number(listed.path[index - 1]);
-            cell = parent.cell;
-            at = [...parent.path];
-            value = valueOf(cell);
-          }
-          if (!Array.isArray(value) || value.length === 0) {
-            throw new Unsupported("an enclosing collection with no element");
-          }
-          const choose = (position: string) =>
-            resolve(
-              index + 1,
-              star + 1,
-              cell.key(position as never) as AnyCell,
-              [...at, position],
-              stated?.kind === "element"
-                ? [...elements, {
-                  collection: steps[elements.length],
-                  key: position,
-                }]
-                : elements,
-            );
-          if (stated?.kind === "inside") {
-            // One element holds the stream inside its value: a position
-            // that holds a stream at the rest of the path. The harness
-            // does not read which binding a stored stream is of. Where
-            // several bindings list this path, as the bindings of two
-            // sites of one pattern do, it takes them to be in the order
-            // of the elements: the binding that is the nth of them has
-            // the nth position that holds a stream.
-            const same = JSON.stringify(listed);
-            const nth = (plan.bindings ?? []).slice(0, binding).filter((
-              other,
-            ) =>
-              (other.result ?? []).some((entry) =>
-                JSON.stringify(entry) === same
-              )
-            ).length;
-            let missed: unknown;
-            let held = 0;
-            for (let position = offset; position < value.length; position++) {
-              try {
-                const found = choose(`${position}`);
-                if (held === nth) return found;
-                held += 1;
-              } catch (error) {
-                if (!(error instanceof Unsupported)) throw error;
-                missed ??= error;
-              }
-            }
-            throw missed ??
-              new Unsupported("a result path the run holds no stream at");
-          }
-          return choose(`${value.length - 1}`);
+        const stored = record.result();
+        for (const { path, elements } of held) {
+          const found = inTodaysRun(path, stored);
+          if (found === undefined || !isStream(found.cell)) continue;
+          return {
+            path: found.path,
+            elements: elements.map((position, step) => ({
+              collection: steps[step],
+              key: `${position}`,
+            })),
+          };
+        }
+        throw new Unsupported(
+          "a stream the run holds at no position the executor stored it at",
+        );
+      };
+      // The position of today's run that a position of the executor's
+      // stored result stands for. The two differ in two ways. Today's
+      // run holds the result of a pattern at a child position, with its
+      // tree under `$UI` (`treeOf`). And the children of a view node are
+      // nested differently, as where a `map` over an array written in
+      // place runs when today's pattern is built and its elements are
+      // children of their own: the child is the one with the same
+      // number of children before it, counted with each nested array
+      // flat, which is the form the values are compared in.
+      const inTodaysRun = (
+        path: readonly string[],
+        stored: unknown,
+      ): { cell: AnyCell; path: string[] } | undefined => {
+        const leaves = (value: unknown): number =>
+          Array.isArray(value)
+            ? value.reduce((sum: number, member) => sum + leaves(member), 0)
+            : 1;
+        let cell = output;
+        let mine = stored;
+        const at: string[] = [];
+        const step = (key: string) => {
+          cell = cell.key(key as never) as AnyCell;
+          at.push(key);
         };
-        return resolve(0, 0, output, [], []);
+        let index = 0;
+        while (index < path.length) {
+          const key = path[index];
+          if (index > 0) {
+            const tree = treeOf(cell, key);
+            if (tree !== cell) at.push("$UI");
+            cell = tree;
+          }
+          step(key);
+          mine = (mine as Record<string, unknown> | undefined)?.[key];
+          index += 1;
+          if (key !== "children" || !Array.isArray(mine)) continue;
+          // The number of children before the one the path names.
+          let before = 0;
+          while (
+            index < path.length && Array.isArray(mine) &&
+            /^\d+$/.test(path[index])
+          ) {
+            const position = Number(path[index]);
+            for (let earlier = 0; earlier < position; earlier++) {
+              before += leaves(mine[earlier]);
+            }
+            mine = mine[position];
+            index += 1;
+          }
+          // The child of today's run with that many before it.
+          let held = valueOf(cell);
+          while (Array.isArray(held)) {
+            let position = 0;
+            for (; position < held.length; position++) {
+              const count = leaves(held[position]);
+              if (before < count) break;
+              before -= count;
+            }
+            if (position === held.length) return undefined;
+            step(`${position}`);
+            held = held[position];
+          }
+        }
+        return { cell, path: at };
       };
 
       // What the evaluation takes as the label of the `identity` slot of a
@@ -2316,6 +2287,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
     };
 
     const rows = await reading((within) => within.outputRows());
+    scenario.streams?.start(space);
 
     const writes: WriteRow[] = [];
     const events: EventOutcome[] = [];
@@ -2556,6 +2528,16 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           }
         });
       });
+      // The executor handles what today's run committed, so that its
+      // record is that of the same events when the next one is sent.
+      if (outcome.outcome === "committed") {
+        scenario.streams?.committed(
+          sent,
+          binding,
+          event,
+          elements.map(({ key }) => Number(key)),
+        );
+      }
     }
     restoreRandom();
 

@@ -69,7 +69,6 @@
         },
         "line": 34,
         "name": "default",
-        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
@@ -79,20 +78,6 @@
                 "body": 0
               },
               "name": "note",
-              "result": [
-                {
-                  "path": [
-                    "rows",
-                    "*",
-                    "note"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -120,20 +105,6 @@
                 "body": 0
               },
               "name": "note",
-              "result": [
-                {
-                  "path": [
-                    "labels",
-                    "*",
-                    "note"
-                  ],
-                  "stars": [
-                    {
-                      "kind": "element"
-                    }
-                  ]
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -161,14 +132,6 @@
                 "body": 1
               },
               "name": "add",
-              "result": [
-                {
-                  "path": [
-                    "add"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
@@ -192,14 +155,6 @@
                 "body": 2
               },
               "name": "hide",
-              "result": [
-                {
-                  "path": [
-                    "hide"
-                  ],
-                  "stars": []
-                }
-              ],
               "state": [
                 {
                   "capture": "link",
