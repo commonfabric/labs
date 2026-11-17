@@ -3,7 +3,7 @@
  * its goal as a candidate set, judged on its own held-out items by the same
  * gate as a rewrite, and adopted or dismissed the same way. A better set is
  * adopted, without a released rule that none of the held-out items
- * exercises; a worse one is dismissed, and neither is offered again; a pool
+ * exercises, and is not published back as the person's own; a worse one is dismissed, and neither is offered again; a pool
  * for another goal offers nothing.
  *
  * Patterns under test: ./lofi-inductor.tsx, reading a pool's release. The
@@ -152,6 +152,15 @@ export default pattern(() => {
     typeof adopter.history[0]?.poolOffer === "string" &&
     adopter.poolOffer === null
   );
+  // A rule adopted from the pool is not this person's learning, so
+  // publishing leaves it out rather than counting them for it.
+  const assert_adopted_not_published = assert(() =>
+    adopter.adopted.length === 1 &&
+    adopter.adopted[0] === adopter.rules[0]?.key &&
+    adopter.published?.rules.length === 0 &&
+    adopter.published?.adopted === 1 &&
+    adopter.published?.pooled === false
+  );
   const assert_dismissed = assert(() =>
     dismisser.rules[0]?.pattern === "invoice" &&
     dismisser.history.length === 1 &&
@@ -173,6 +182,8 @@ export default pattern(() => {
       { assertion: assert_view_offers },
       { action: action_settle },
       { assertion: assert_adopted },
+      { action: adopter.publish },
+      { assertion: assert_adopted_not_published },
       { assertion: assert_dismissed },
       { assertion: assert_elsewhere_untouched },
     ],

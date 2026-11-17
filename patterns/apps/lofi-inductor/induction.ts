@@ -158,6 +158,8 @@ export interface Published {
   pooled?: boolean;
   /** How many rules were held back as looking personal (`looksPersonal`). */
   withheld?: number;
+  /** How many rules were held back as adopted from the pool (`adoptedAfter`). */
+  adopted?: number;
 }
 
 /**
@@ -717,6 +719,42 @@ export function poolOffer(
 // =============================================================================
 // PUBLISHING
 // =============================================================================
+
+/**
+ * The keys of the rules adopted from the pool once `judgement` is recorded
+ * over `current`, given those adopted before. A pool round that is accepted
+ * marks each rule it brings that the person did not already hold as their
+ * own; a rewrite marks nothing new, and a rule adopted earlier stays marked
+ * while the set keeps it, since the model that proposed it saw it among the
+ * current rules. A rule no longer held is forgotten.
+ *
+ * Publishing leaves these rules out: the pool counts independent learners,
+ * and a rule someone took from the pool and sent back would count them for
+ * what others learned, until the pool's own release kept itself above
+ * threshold.
+ */
+export function adoptedAfter(
+  adopted: readonly string[],
+  current: readonly CanonicalRule[],
+  judgement: Pick<Judgement, "accepted" | "rules">,
+  fromPool: boolean,
+): string[] {
+  const kept = new Set(
+    (judgement.accepted ? judgement.rules : current).map((rule) => rule.key),
+  );
+  const keys = new Set(adopted.filter((key) => kept.has(key)));
+  if (judgement.accepted && fromPool) {
+    const own = new Set(
+      current.filter((rule) => !adopted.includes(rule.key)).map((rule) =>
+        rule.key
+      ),
+    );
+    for (const rule of judgement.rules) {
+      if (!own.has(rule.key)) keys.add(rule.key);
+    }
+  }
+  return [...keys].sort();
+}
 
 /**
  * Whether a rule looks like it carries a personal detail: an `@` (an email

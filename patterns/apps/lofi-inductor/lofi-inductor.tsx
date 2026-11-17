@@ -29,6 +29,7 @@ import {
   Writable,
 } from "commonfabric";
 import {
+  adoptedAfter,
   buildHifiPrompt,
   gradeItems,
   heldOutExamples,
@@ -144,6 +145,11 @@ interface LofiInductorInput {
   heldOutPercent?: PerSpace<number | Default<30>>;
   /** Retries of the current rewrite's failed model call. */
   rewriteAttempt?: PerSpace<Writable<number | Default<0>>>;
+  /**
+   * The keys of the current rules adopted from the pool, which publishing
+   * leaves out (`adoptedAfter`).
+   */
+  adopted?: PerSpace<Writable<string[] | Default<[]>>>;
 }
 
 /** Induces cheap regex rules for a yes-or-no question from a model's answers. #classifier #learning */
@@ -163,6 +169,8 @@ export interface LofiInductorOutput {
   published: Published | null;
   /** This piece's pseudonym in the goal's pool, or "" before it publishes. */
   pseudonym: string;
+  /** The keys of the current rules adopted from the pool, never published. */
+  adopted: string[];
   /** Every item with its hi-fi and lo-fi labels. */
   rows: ItemRow[];
   summary: Summary;
@@ -214,6 +222,7 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     rewriteAfter,
     heldOutPercent,
     rewriteAttempt,
+    adopted,
   }) => {
     const draft = new Writable.perSession("");
     const goalDraft = new Writable.perSession("");
@@ -294,6 +303,9 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         status.answered,
         Date.now(),
       );
+      adopted.set(
+        adoptedAfter(adopted.get(), rules.get(), status.judgement, false),
+      );
       if (status.judgement.accepted) rules.set(next.rules);
       history.push(next.entry);
       rewriteAttempt.set(0);
@@ -317,6 +329,7 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       history.set([]);
       published.set(null);
       pseudonym.set("");
+      adopted.set([]);
     });
 
     const applyGoalDraft = action(() => {
@@ -404,6 +417,11 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         Date.now(),
         current.key,
       );
+      // The pool's rules are others' learning: marked, so that publishing
+      // does not send them back as this person's.
+      adopted.set(
+        adoptedAfter(adopted.get(), rules.get(), current.judgement, true),
+      );
       if (current.judgement.accepted) rules.set(next.rules);
       history.push(next.entry);
     });
@@ -417,9 +435,12 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         pseudonym.set(`p-${Math.random().toString(36).slice(2, 12)}`);
       }
       const question = goal.get().trim();
-      // A rule that looks like it names someone stays here.
+      // A rule that looks like it names someone stays here, and so does one
+      // adopted from the pool, which is others' learning, not this person's.
       const all = rules.get();
-      const snapshot = all.filter((rule) => !looksPersonal(rule)).map((
+      const fromPool = adopted.get();
+      const own = all.filter((rule) => !fromPool.includes(rule.key));
+      const snapshot = own.filter((rule) => !looksPersonal(rule)).map((
         rule,
       ) => ({ ...rule }));
       const reached = snapshot.length > 0 && target !== null &&
@@ -429,7 +450,8 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         rules: snapshot,
         publishedAt: Date.now(),
         pooled: reached,
-        withheld: all.length - snapshot.length,
+        withheld: own.length - snapshot.length,
+        adopted: all.length - own.length,
       });
       if (reached) {
         target.submit.send({ pseudonym: pseudonym.get(), rules: snapshot });
@@ -513,10 +535,13 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
           ? "No rules to publish yet."
           : "Not published yet.";
       }
-      const withheld = snapshot.withheld
+      const withheld = (snapshot.withheld
         ? ` Held back ${snapshot.withheld} that look personal (an @ or a ` +
           `run of six digits).`
-        : "";
+        : "") +
+        (snapshot.adopted
+          ? ` Left out ${snapshot.adopted} adopted from the pool.`
+          : "");
       if (snapshot.pooled) {
         return `Sent ${snapshot.rules.length} rules to the pool for ` +
           `“${snapshot.goal}”. No one learns a rule from it until enough ` +
@@ -673,6 +698,7 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       history,
       published,
       pseudonym,
+      adopted,
       rows,
       summary,
       heldOutF1,

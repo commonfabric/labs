@@ -71,7 +71,12 @@ agent).
    from yet, say). The view lists every released rule as offered, refused, or
    left out. Recording it takes a send of `settlePoolOffer`: "Adopt the pool's
    rules (F1 a → b)" or "Dismiss the pool's rules". A set already judged is not
-   offered again; a new release is.
+   offered again; a new release is. A rule adopted from the pool is marked
+   (`adopted`, by key) and publishing leaves it out: the pool's counts measure
+   independent learners, and a rule sent back by everyone who took it would keep
+   itself above threshold on others' learning. It stays marked while the rules
+   keep it, through later rewrites too, since the model saw it among the current
+   rules.
 
 Rules use a restricted regex grammar (no backreferences, no lookaround) and are
 compared by a canonical form, so two people who learned the same rule in

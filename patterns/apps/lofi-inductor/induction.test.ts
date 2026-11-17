@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
+  adoptedAfter,
   buildHifiPrompt,
   buildRewritePrompt,
   gradeItems,
@@ -559,6 +560,45 @@ describe("looksPersonal", () => {
       expect({ pattern, personal: looksPersonal(rule("subject", pattern)) })
         .toEqual({ pattern, personal: false });
     }
+  });
+});
+
+describe("adoptedAfter", () => {
+  const invoice = rule("subject", "invoice");
+  const bill = rule("subject", "\\bbill\\b");
+  const lunch = rule("subject", "lunch", false);
+  const accept = (...rules: CanonicalRule[]) => ({ accepted: true, rules });
+
+  it("marks a pool round's rules the person did not already hold", () => {
+    expect(adoptedAfter([], [invoice], accept(invoice, bill), true))
+      .toEqual([bill.key]);
+    // A rejected round marks nothing
+    expect(
+      adoptedAfter([], [invoice], { accepted: false, rules: [bill] }, true),
+    ).toEqual([]);
+  });
+
+  it("keeps a marked rule through a rewrite that keeps it, and nothing new", () => {
+    const after = adoptedAfter(
+      [bill.key],
+      [invoice, bill],
+      accept(bill, lunch),
+      false,
+    );
+    expect(after).toEqual([bill.key]);
+    // A rule the set drops is forgotten
+    expect(adoptedAfter([bill.key], [invoice, bill], accept(lunch), false))
+      .toEqual([]);
+    // A later pool round leaves the person's own rules unmarked
+    expect(
+      adoptedAfter(
+        [bill.key],
+        [invoice, bill],
+        accept(invoice, bill, lunch),
+        true,
+      )
+        .sort(),
+    ).toEqual([bill.key, lunch.key].sort());
   });
 });
 
