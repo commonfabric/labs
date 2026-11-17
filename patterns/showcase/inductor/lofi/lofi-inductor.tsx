@@ -151,8 +151,10 @@ interface LofiInductorInput {
   published?: PerSpace<Writable<Published | null | Default<null>>>;
   /**
    * This piece's pseudonym in the goal's pool, minted on the first publish.
-   * One piece holds one goal, so it is one per goal, and unlinkable to the
-   * person's pseudonyms for other goals.
+   * One piece holds one goal, so it is one per goal. Each piece mints its
+   * own, so the strings do not relate across goals, but they are not
+   * unlinkable: the pool space's commits and `authored-by` labels name the
+   * person's core identity (CFC debt cut 2, see the README).
    */
   pseudonym?: PerSpace<Writable<string | Default<"">>>;
   /**

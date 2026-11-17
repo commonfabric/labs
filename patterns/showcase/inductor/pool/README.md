@@ -115,12 +115,13 @@ what a handler writes from its event does not carry the event's label.
 
 Under the approved cut 2, a random string kept by the inductor piece is the
 idiomatic pseudonym today. It is stable for that piece, so for the person's
-goal. It is unlinkable to their other goals' pseudonyms, since each piece mints
-its own. And the pool binds it to the authenticated principal, so a second piece
-for the same goal cannot double count. A self-owned random space per goal
-(`inSpace(name, { selfOwned: true })`) would give a random DID instead. That
-buys nothing yet, because commits and labels still name the core identity (cut
-2), but it is the hook the deferred intermediate key would hang on
+goal. Each piece mints its own, so the strings do not relate across goals, but
+they are not unlinkable: commits and `authored-by` labels in the pool space name
+the core identity (cut 2). And the pool binds it to the authenticated principal,
+so a second piece for the same goal cannot double count. A self-owned random
+space per goal (`inSpace(name, { selfOwned: true })`) would give a random DID
+instead. That buys nothing yet, because commits and labels still name the core
+identity (cut 2), but it is the hook the deferred intermediate key would hang on
 (`docs/specs/profile-delegation.md`, "Attribution and unlinkability").
 
 ## CFC debt
