@@ -131,6 +131,8 @@ export type Plan = {
         output?: number;
         stream?: number;
         constant?: unknown;
+        /** The result of the instance: the name bound to `[SELF]`. */
+        result?: true;
       };
       /**
        * For a binding of a pattern compiled in whose `place` is a slot
@@ -619,7 +621,19 @@ export class Handle {
       );
     }
     const located = this.instance.store.locate(this.target, true);
-    const held = Array.isArray(located.value) ? located.value : [];
+    // Where the place holds nothing, the array starts from the default
+    // that the place declares, as a write below the root of a state cell
+    // does: the default nearest the end of the links the handle resolves
+    // through, or that of the handle's declared type (ruling Z27).
+    const declared = located.value !== undefined
+      ? undefined
+      : located.fallback ??
+        (typeof this.declared === "object" ? this.declared.default : undefined);
+    const held = Array.isArray(located.value)
+      ? located.value
+      : Array.isArray(declared)
+      ? structuredClone(declared)
+      : [];
     this.instance.written(this.key("*"));
     // A record that is pushed gets a document of its own, as a record in
     // a list that is set does (`Instance.anchored`).
@@ -3085,6 +3099,10 @@ export class Instance {
         found = host.at(host.output(place.output), rest);
       } else if (place.stream !== undefined) {
         found = this.streamFor(place.stream, context);
+      } else if (place.result === true) {
+        // The name bound to `[SELF]`: a reference to the result cell of
+        // the instance, as value code is given one (ruling Z28).
+        found = host.at(new Ref(this.doc("result"), []), rest);
       } else {
         found = host.at(place.constant, rest);
       }

@@ -2455,6 +2455,60 @@ describe("a write through a reference by key that changes the value", () => {
   });
 });
 
+// Ruling Z27 on `fixtures/push-default.tsx`: a `push` below a path of the
+// argument that holds nothing and whose schema declares a default starts
+// from the default.
+describe("a `push` below an empty argument path with a declared default", () => {
+  type Result = { tags: string[]; entries: { text: string }[] };
+  const [ADD_TAG, ADD_ENTRY] = [0, 1];
+
+  it("starts from the default, for plain values in place", async () => {
+    const instance = new Instance(await artifactOf("push-default"), {});
+    expect((instance.result() as Result).tags).toEqual(["first"]);
+
+    const outcome = instance.send(ADD_TAG, { text: "x" });
+
+    expect(outcome.committed).toBe(true);
+    expect((instance.result() as Result).tags).toEqual(["first", "x"]);
+    expect(
+      (instance.store.docs.get("argument")?.value as Result).tags,
+    ).toEqual(["first", "x"]);
+  });
+
+  it("starts from the default, for a record that the push stores as a reference", async () => {
+    const instance = new Instance(await artifactOf("push-default"), {});
+
+    instance.send(ADD_ENTRY, { text: "x" });
+
+    // The record of the default stays in place, and the pushed record
+    // is a document of its own.
+    expect((instance.result() as Result).entries).toEqual([
+      { text: "given" },
+      { text: "x" },
+    ]);
+    const stored = (instance.store.docs.get("argument")?.value as {
+      entries: unknown[];
+    }).entries;
+    expect(stored[0]).toEqual({ text: "given" });
+    expect(stored[1]).toMatchObject({ $link: {} });
+  });
+
+  it("appends to what is stored where the path holds an array", async () => {
+    const instance = new Instance(await artifactOf("push-default"), {
+      tags: ["a"],
+      entries: [],
+    });
+
+    instance.send(ADD_TAG, { text: "x" });
+    instance.send(ADD_ENTRY, { text: "y" });
+
+    expect(instance.result()).toMatchObject({
+      tags: ["a", "x"],
+      entries: [{ text: "y" }],
+    });
+  });
+});
+
 // Ruling Z13: an output that passes a derived collection on unchanged is
 // the same collection for keying, and the plan marks it
 // (`Output.passesCollection`). `fixtures/passes-collection.tsx` has a
@@ -2622,25 +2676,63 @@ describe("the name bound to `[SELF]`", () => {
     ]);
   });
 
-  it("has no place in the state of a binding, so a handler is handed nothing for it", async () => {
+  // Ruling Z28: the state entry of a binding that captures the name has
+  // a place of its own kind, which names the result of the instance.
+  it("is handed to a handler that captures it, as a reference to the result", async () => {
     const instance = new Instance(await artifactOf("self"), {
       title: "t",
       items: [],
       tags: [],
     });
     const keep = instance.plan.bindings.findIndex((binding) =>
-      binding.name === "keep"
+      binding.name === "keep" && binding.within.length === 0
     );
     const entry = instance.plan.bindings[keep].state.find(({ path }) =>
       path[0] === "self"
     );
 
-    // No record of the plan holds the name (PL §1.1), and
-    // `Binding.state.place` has no form for the result of the instance.
-    expect(entry?.place).toBe(undefined);
-    // `kept.set(self)` stores what the handler was handed: nothing.
-    instance.send(keep, {});
-    expect((instance.result() as { kept: unknown }).kept).toBe(undefined);
+    expect(entry?.place).toEqual({ result: true });
+    // `kept.set(self)` stores what the handler was handed.
+    const outcome = instance.send(keep, {});
+    expect(outcome.committed).toBe(true);
+    const kept = instance.plan.stateCells.findIndex((cell) =>
+      cell.name === "kept"
+    );
+    expect(instance.store.docs.get(`state:${kept}:[]`)?.value).toEqual(
+      toResult,
+    );
+    expect(instance.store.read(new Ref(`state:${kept}:[]`, ["title"]))).toBe(
+      "t",
+    );
+  });
+
+  it("is handed to a handler of an element body, over references and over plain values in place", async () => {
+    const instance = new Instance(await artifactOf("self"), {
+      title: "t",
+      pool: { a: { title: "a" } },
+      items: [link("a")],
+      tags: ["x"],
+    });
+    const kept = instance.plan.stateCells.findIndex((cell) =>
+      cell.name === "kept"
+    );
+    const inRows = instance.plan.bindings.flatMap((binding, index) =>
+      binding.name === "keep" && binding.within.length > 0 ? [index] : []
+    );
+    expect(inRows.length).toBe(2);
+
+    for (const binding of inRows) {
+      expect(
+        instance.plan.bindings[binding].state.find(({ path }) =>
+          path[0] === "self"
+        )?.place,
+      ).toEqual({ result: true });
+      instance.writeState("kept", [], null);
+      instance.send(binding, {}, [0]);
+      expect(instance.store.docs.get(`state:${kept}:[]`)?.value).toEqual(
+        toResult,
+      );
+    }
   });
 });
 

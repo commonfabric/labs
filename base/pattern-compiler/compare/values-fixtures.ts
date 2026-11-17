@@ -182,6 +182,15 @@ const WRITTEN: Record<string, Written[]> = {
       { binding: 1, event: {} },
     ],
   }],
+  // Ruling Z27: the argument holds nothing at the two paths, and each
+  // push starts from the default of its path.
+  "push-default": [{
+    argument: {},
+    events: [
+      { binding: 0, event: { text: "x" } },
+      { binding: 1, event: { text: "y" } },
+    ],
+  }],
   "passes-collection": [{
     argument: {
       items: [

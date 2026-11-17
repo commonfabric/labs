@@ -4178,3 +4178,44 @@ export const P = pattern<{ items: Item[]; tags: string[]; chosen: Writable<strin
     assert_eq!(stars_of(&plan, "choose"), [vec!["element"]]);
     assert_eq!(stars_of(&plan, "pick"), [vec!["element"]]);
 }
+
+/// Ruling Z28 (PL §1.1, "The name a pattern binds to `[SELF]`"): the
+/// state entry of a binding that captures the name has `place`
+/// `{ result: true }`, the capture `link`, and the template `const`. The
+/// entry is the same for a binding of an element body, whose collection
+/// the plan has alike over references and over plain values in place.
+#[test]
+fn a_state_path_bound_to_self_names_the_result_of_the_instance() {
+    let analysis = program(
+        r#"import { Writable, handler, pattern, SELF } from "commonfabric";
+const keep = handler<unknown, { self: Writable<{ title: string }>; kept: Writable<unknown> }>(
+  (_, state) => {
+    state.kept.set(state.self);
+  },
+);
+export const P = pattern<{ title: string; items: { title: string }[]; kept: Writable<unknown> }>(
+  ({ title, items, kept, [SELF]: self }) => {
+    return {
+      title,
+      keep: keep({ self, kept }),
+      rows: items.map((item) => ({ title: item.title, keep: keep({ self, kept }) })),
+    };
+  },
+);
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let entries: Vec<&Value> = plan["bindings"]
+        .as_array()
+        .expect("bindings")
+        .iter()
+        .flat_map(|binding| binding["state"].as_array().expect("state"))
+        .filter(|entry| entry["path"] == json!(["self"]))
+        .collect();
+    assert_eq!(entries.len(), 2);
+    for entry in entries {
+        assert_eq!(entry["place"], json!({ "result": true }));
+        assert_eq!(entry["capture"], json!("link"));
+        assert_eq!(entry["template"], json!({ "op": "const" }));
+    }
+}

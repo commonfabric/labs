@@ -559,6 +559,9 @@ struct Emitter<'r, 'm, 'a> {
     /// streams its body placed (PL §1.1, "The stream is reached through a
     /// member of the element").
     member_streams: Vec<Vec<StreamAt>>,
+    /// The names a pattern binds to `[SELF]` of its parameter: each is a
+    /// reference to the result of the instance (ruling Z17).
+    self_names: BTreeSet<String>,
     /// The patterns whose source the plan holds code of, by the module
     /// and the start of the function: the pattern the plan is compiled
     /// from, then each pattern compiled in, in the order of its first
@@ -1743,7 +1746,21 @@ impl<'a> Emitter<'_, '_, 'a> {
                             let member = Self::extend(&place, name);
                             self.bind_pattern(&property.value, member);
                         }
-                        None => self.bind_pattern(&property.value, Place::Unknown),
+                        None => {
+                            // `[SELF]: name`: no record holds the name,
+                            // and a binding that captures it has a place
+                            // that names the result (ruling Z28).
+                            let own = matches!(
+                                property.key.as_expression().map(|key| unwrap(key)),
+                                Some(Expression::Identifier(key)) if key.name == "SELF"
+                            );
+                            if let (true, BindingPattern::BindingIdentifier(identifier)) =
+                                (own, &property.value)
+                            {
+                                self.self_names.insert(identifier.name.to_string());
+                            }
+                            self.bind_pattern(&property.value, Place::Unknown)
+                        }
                     }
                 }
                 if let Some(rest) = &object.rest {
@@ -5473,7 +5490,20 @@ impl<'a> Emitter<'_, '_, 'a> {
                 entry.insert("place".to_string(), json!({ "constant": constant }));
                 entry.insert("template".to_string(), json!({ "op": "const" }));
             }
-            Place::Unknown => {}
+            Place::Unknown => {
+                // The name a pattern binds to `[SELF]`: "`place` is
+                // `{ result: true }`", and "the entry's `capture` is
+                // `link` and its `template` is `const`" (PL §1.1; ruling
+                // Z28).
+                let own = written.is_some_and(|written| {
+                    matches!(unwrap(written), Expression::Identifier(name)
+                        if self.self_names.contains(name.name.as_str()))
+                });
+                if own {
+                    entry.insert("place".to_string(), json!({ "result": true }));
+                    entry.insert("template".to_string(), json!({ "op": "const" }));
+                }
+            }
         }
         state.push(Value::Object(entry));
     }
@@ -7750,6 +7780,7 @@ pub fn emit_module<'a>(
             hints: Vec::new(),
             handle_writes: Vec::new(),
             member_streams: Vec::new(),
+            self_names: BTreeSet::new(),
             patterns: vec![(module, *start)],
             inline_at: Vec::new(),
             given_constants: HashSet::new(),
