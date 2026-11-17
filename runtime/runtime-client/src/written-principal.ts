@@ -84,7 +84,8 @@ const NOTHING_WRITTEN = { value: undefined, principal: undefined } as const;
  * reads the principal with each value it delivers, by the rule
  * `cfc/written-principal.ts` in the runner states: the one principal the
  * label of the cell a write to `cell` lands in names, when the value is the
- * whole of that cell and no link stored there leads elsewhere, and none
+ * whole of that cell, that cell is in the space of the document holding
+ * `cell`'s field, and no link stored there leads elsewhere, and none
  * otherwise.
  *
  * Nothing is reported until the cell delivers the principal the worker read
