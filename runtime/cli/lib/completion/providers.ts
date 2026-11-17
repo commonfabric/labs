@@ -1230,6 +1230,8 @@ const ARGUMENT_PROVIDERS: Readonly<
   "pattern history:entry": patternFiles,
   "pattern rollback:entry": patternFiles,
   "pattern unpublish:entry": patternFiles,
+  "index sharing:state": () =>
+    Promise.resolve(values([{ value: "on" }, { value: "off" }])),
   "index move-root:file": () =>
     Promise.resolve(directive({ kind: "files", glob: "*.json" })),
   "piece setsrc:main": patternFiles,

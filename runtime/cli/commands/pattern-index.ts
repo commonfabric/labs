@@ -1,9 +1,13 @@
-import { Command, ValidationError } from "@cliffy/command";
+import { Command, EnumType, ValidationError } from "@cliffy/command";
 import {
   decodeDelegationChains,
   isCanonicalEd25519DID,
 } from "@commonfabric/identity";
-import { PatternIndexError } from "@commonfabric/pattern-index/client";
+import {
+  PatternIndexError,
+  type PatternIndexSetSharingSettingsRequest,
+  type PatternIndexSharingSettings,
+} from "@commonfabric/pattern-index/client";
 
 import { cliText } from "../lib/cli-name.ts";
 import { loadIdentity } from "../lib/identity.ts";
@@ -118,6 +122,66 @@ async function whoami(options: IndexOptions): Promise<void> {
       : `${member.handle} (${member.role}), signing as ${signer.did()}`,
     { json: options.json },
   );
+}
+
+/** `on` or `off`, as `cf index sharing` takes them, as a boolean. */
+const onOff = (value: string, what: string): boolean => {
+  if (value === "on") return true;
+  if (value === "off") return false;
+  throw new ValidationError(`${what} is on or off, not "${value}".`);
+};
+
+/**
+ * The change `cf index sharing [on|off] [--self-built on|off]` asks for:
+ * only the switches named, or none, which reads the setting.
+ *
+ * @throws ValidationError for a value other than `on` or `off`.
+ */
+export const sharingChange = (
+  state: string | undefined,
+  selfBuilt: string | undefined,
+): PatternIndexSetSharingSettingsRequest => ({
+  ...(state === undefined ? {} : { enabled: onOff(state, "Sharing") }),
+  ...(selfBuilt === undefined
+    ? {}
+    : { selfBuilt: onOff(selfBuilt, "--self-built") }),
+});
+
+/** The setting as lines for a person: what each switch means for them. */
+export const sharingLines = (
+  settings: PatternIndexSharingSettings,
+): string[] => {
+  if (!settings.enabled) {
+    return [
+      "Sharing: off. Nothing of yours is shared anonymously, and you see only patterns published under a name.",
+      "Turn it on with cf index sharing on.",
+    ];
+  }
+  return [
+    "Sharing: on. Patterns agents make for you are shared anonymously once they settle and pass the privacy check, and you see what others share.",
+    settings.selfBuilt
+      ? "Patterns you build yourself (cf, Claude Code): shared the same way. Turn that off with cf index sharing --self-built off."
+      : "Patterns you build yourself (cf, Claude Code): kept private unless you run cf pattern share. Share them by default with cf index sharing --self-built on.",
+  ];
+};
+
+async function sharing(
+  options: IndexOptions & { selfBuilt?: string },
+  state: string | undefined,
+): Promise<void> {
+  const change = sharingChange(state, options.selfBuilt);
+  const signer = await loadIdentity(requireIdentityPath(options));
+  const client = await openPatternIndexClient({
+    baseUrl: resolvePatternIndexUrl(options.patternIndexUrl),
+    signer,
+  });
+  const settings =
+    await (Object.keys(change).length === 0
+      ? client.getSharingSettings()
+      : client.setSharingSettings(change)).catch(rethrowAsNotMember);
+  render(options.json ? settings : sharingLines(settings).join("\n"), {
+    json: options.json,
+  });
 }
 
 async function admit(options: IndexOptions, did: string): Promise<void> {
@@ -244,4 +308,31 @@ export const index = new Command()
       new Command()
         .description("Who the pattern index sees your cf identity as."),
     ).action(whoami),
+  )
+  /* index sharing */
+  .command(
+    "sharing",
+    indexAccessOptions(
+      new Command()
+        .description(
+          "Show or change your give-to-get setting, the same one your " +
+            "loom's settings change. On (the default), your patterns are " +
+            "shared anonymously once they settle and pass the privacy " +
+            "check, and you see what others share; off, nothing of yours " +
+            "is shared and you see only patterns published under a name. " +
+            "--self-built says whether that covers the patterns you build " +
+            "yourself in cf and Claude Code.",
+        )
+        .type("on-off", new EnumType(["on", "off"]))
+        .arguments("[state:on-off]")
+        .option(
+          "--self-built <state:on-off>",
+          "on or off: whether patterns you build yourself are shared too.",
+        )
+        .example(cliText("cf index sharing"), "Show the setting.")
+        .example(
+          cliText("cf index sharing on --self-built off"),
+          "Share and see others' patterns, keeping what you build private.",
+        ),
+    ).action(sharing),
   );
