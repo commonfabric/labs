@@ -87,11 +87,12 @@ Known runtime issues this pattern works around:
 
 1. In a block-bodied `map` callback, `const answer = generateObject({...})` with
    a reactive argument is lowered into a `lift` that calls `generateObject`, and
-   the graph never settles. The hi-fi map is written expression-bodied.
+   the graph never settles. The hi-fi map is written expression-bodied. (Not
+   yet reduced to a minimal repro: a plain block-bodied map settles.)
 2. An action that reads state derived from mapped `generateObject` calls while
    two or more of them are in flight can lose their results for good
    (`contribution-dropped`, a builtin write superseded). Recording the judgement
-   while hi-fi calls are in flight can still hit it.
+   while hi-fi calls are in flight can still hit it. Filed as top/3204.
 
 ## CFC debt
 
