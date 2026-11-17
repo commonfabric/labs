@@ -865,6 +865,36 @@ describe("cell-cache", () => {
       expect(atomsOn(compiled)).toEqual([space, space]);
     });
 
+    it("refuses, and erases nothing, where a stamped compiled record's attested list is stored as a link", async () => {
+      // The loader follows such a link to the identities it grants, which
+      // the repair does not, so it cannot judge the erase safe.
+
+      const program = await writeProgram(PROGRAM);
+      const listDoc = runtime.getCell<string[]>(space, "stamp-repair-list");
+      const tx = runtime.edit();
+      listDoc.withTx(tx).set(["predecessor"]);
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const compiled = idOf(
+        compiledDocKey(RUNTIME_VERSION, program.entryIdentity),
+      );
+      await replaceStored(compiled, (current) => ({
+        value: {
+          ...current.value!,
+          delegatedModuleIdentities: listDoc
+            .getAsLink() as unknown as FabricValue,
+        },
+        entries: [
+          ...(current.cfc?.labelMap.entries ?? []),
+          ...rootPairStamp(space),
+        ],
+      }));
+
+      expect(await repair(program.entryIdentity)).toBe("refused");
+      expect(stored(compiled).value).toBeDefined();
+      expect(atomsOn(compiled)).toEqual([space, space]);
+    });
+
     for (
       const [what, edit] of [
         [

@@ -3015,13 +3015,22 @@ async function planStampRepair(
     }
     // A compiled list is authority where the record's root carries the
     // compiler's attestation, so it is erased only where the source record
-    // still grants every identity it names.
-    const live = metadata.labelMap.entries.some((entry) => attestsAt(entry, []))
-      ? storedStringList(
-        (record.whole?.value as { delegatedModuleIdentities?: unknown })
-          ?.delegatedModuleIdentities,
-      )
-      : undefined;
+    // still grants every identity it names. A stored list that is not an
+    // inline array of strings, such as a link the loader would follow, is
+    // one the repair cannot judge, so the record is refused.
+    const storedList =
+      (record.whole?.value as { delegatedModuleIdentities?: unknown })
+        ?.delegatedModuleIdentities;
+    const rootAttested = metadata.labelMap.entries.some((entry) =>
+      attestsAt(entry, [])
+    );
+    if (
+      rootAttested && storedList !== undefined &&
+      storedStringList(storedList) === undefined
+    ) {
+      return "refused";
+    }
+    const live = rootAttested ? storedStringList(storedList) : undefined;
     if (live !== undefined && live.length > 0) {
       const source = sources.get(identity);
       const granted = stampedSourceIdentities.has(identity)
