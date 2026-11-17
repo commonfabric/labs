@@ -1,6 +1,7 @@
 import {
   type FabricValue,
   isFabricPlainObject,
+  valueEqual,
 } from "@commonfabric/data-model";
 import {
   isCellLink,
@@ -10,6 +11,7 @@ import {
   type PrimitiveCellLink,
 } from "../link-utils.ts";
 import { ignoreReadForScheduling } from "../scheduler.ts";
+import { normalizeCellScope } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { runtimeWritePolicyAuthorization } from "./types.ts";
 
@@ -149,4 +151,45 @@ export function recordReplayedArgumentSlots(
       value: value as FabricValue,
     }, runtimeWritePolicyAuthorization);
   }
+}
+
+/**
+ * The slots of the argument document at `argument` that this transaction
+ * replays, as `recordReplayedArgumentSlots()` recorded them, and that
+ * `staged` still holds with the bytes recorded: those a write of `staged` can
+ * leave as they stand rather than staging them again.
+ */
+export function replayedArgumentSlots(
+  tx: IExtendedStorageTransaction,
+  argument: NormalizedFullLink,
+  staged: unknown,
+): ReadonlySet<string> {
+  const slots = new Set<string>();
+  if (!isFabricPlainObject(staged as FabricValue) || isCellLink(staged)) {
+    return slots;
+  }
+  for (const input of tx.getCfcState().writePolicyInputs) {
+    if (
+      input.kind !== "initialization" || input.mode !== "replay" ||
+      !tx.isRuntimeWritePolicyInput(input)
+    ) continue;
+    const { target } = input;
+    if (
+      target.space !== argument.space || target.id !== argument.id ||
+      normalizeCellScope(target.scope) !== normalizeCellScope(argument.scope) ||
+      target.path.length !== argument.path.length + 1 ||
+      argument.path.some((segment, i) => target.path[i] !== segment)
+    ) continue;
+    const slot = target.path[target.path.length - 1];
+    if (
+      Object.hasOwn(staged as object, slot) &&
+      valueEqual(
+        (staged as Record<string, FabricValue>)[slot],
+        input.value,
+      )
+    ) {
+      slots.add(slot);
+    }
+  }
+  return slots;
 }
