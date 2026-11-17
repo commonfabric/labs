@@ -303,9 +303,11 @@ export const createPatternIndexLedger = (
         const client = await getClient();
         // A predecessor this session sent was answered before this, being
         // ahead of it on the same chain, so what it is and whether the index
-        // took it are known by now.
-        const own = body.description === undefined && revisedFrom !== undefined
-          ? described.get(revisedFrom)
+        // took it are known by now. The predecessor is the iteration this
+        // continues when there is one, and otherwise what it was revised from.
+        const predecessor = body.priorPatternId ?? revisedFrom;
+        const own = body.description === undefined && predecessor !== undefined
+          ? described.get(predecessor)
           : undefined;
         const resolved = revisedFrom === undefined ||
             body.priorPatternId !== undefined

@@ -660,6 +660,26 @@ describe("pattern index ledger", () => {
       );
     });
 
+    it("describes a second undescribed revision of one pattern from the first, which it continues", async () => {
+      const index = stubClient({ patterns: { "x": "mine" } });
+      const ledger = createPatternIndexLedger(index.getClient);
+      const undescribed = (patternId: string) => {
+        const { description: _d, hashtags: _h, ...rest } = request(patternId);
+        return rest;
+      };
+      // Two pieces running the same pattern, each revised in place.
+      ledger.stage(undescribed("y1"), { revisedFrom: "x" });
+      ledger.stage(undescribed("y2"), { revisedFrom: "x" });
+      await ledger.flush();
+
+      const sent = publishes(index.calls);
+      expect(sent.map((call) => call.body.patternId)).toEqual(["y1", "y2"]);
+      expect(sent[1].body.priorPatternId).toBe("y1");
+      expect(sent[1].body.meta).toMatchObject({
+        description: "Sortable table",
+      });
+    });
+
     it("sends no revision nobody can describe, and says so", async () => {
       const index = stubClient();
       const errors: string[] = [];

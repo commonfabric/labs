@@ -28,7 +28,8 @@ export interface RunPatternToolInput {
    * with `read_piece_source`. The pattern published from this run then
    * continues the version history of the pattern that piece runs, or is
    * credited as a remix of it when someone else wrote it. Without it the
-   * published pattern starts a history of its own.
+   * published pattern starts a history of its own, unless it is a later
+   * iteration of a pattern this session already published.
    */
   revises?: string;
 
