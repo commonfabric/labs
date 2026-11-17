@@ -30,8 +30,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "4jJ8Cw_GNZvS_7XZMwKzR_lOOB3iOqiGQ3l6szJFndg",
-              "policyDigest": "nDYPEfHoJ8AEnkbEnAobEv3KcTp0m92eMrU4BbxfVAM",
+              "moduleIdentity": "-0pWHIdnGTtoz4mQxtWv_Nn-G42v-GKAF4iVrLyOafU",
+              "policyDigest": "lAku-p_xz7oVpShwCL-KItYgcyg-ZEtnW25gg8EjLW8",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -196,8 +196,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "4jJ8Cw_GNZvS_7XZMwKzR_lOOB3iOqiGQ3l6szJFndg",
-              "policyDigest": "nDYPEfHoJ8AEnkbEnAobEv3KcTp0m92eMrU4BbxfVAM",
+              "moduleIdentity": "-0pWHIdnGTtoz4mQxtWv_Nn-G42v-GKAF4iVrLyOafU",
+              "policyDigest": "lAku-p_xz7oVpShwCL-KItYgcyg-ZEtnW25gg8EjLW8",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true

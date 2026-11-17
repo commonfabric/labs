@@ -3,10 +3,10 @@
  * shows it: which rules enough distinct contributors hold, and each rule's
  * threshold.
  *
- * Every function here is pure. `releaseConsensus` in `inductor-pool.tsx`, the
- * one function the pool's policy releases, is a call of `releaseFrom`; this
+ * Every function here is pure. `releaseConsensus` in `pool-policy.tsx`, the
+ * one function the pool's policy releases, is a call of `releaseSealed`; this
  * module is part of that function's code, and the runtime's module identity
- * for `inductor-pool.tsx` covers it, since a module's identity is sensitive to
+ * for `pool-policy.tsx` covers it, since a module's identity is sensitive to
  * the modules it imports.
  */
 
