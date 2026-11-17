@@ -559,6 +559,98 @@ describe("run_pattern publish render gate", () => {
     expect(other.body.slot).toBeUndefined();
   });
 
+  describe("a revision named with revises", () => {
+    const REVISED_SORTABLE_TABLE = WORKING_SORTABLE_TABLE.replace(
+      "<th>Score</th>",
+      "<th>Points</th>",
+    );
+
+    /** What `getPattern` answers for an entry, as the caller's or not. */
+    const servedAs = (patternId: string, mine: boolean) => ({
+      [patternId]: {
+        patternId,
+        createdAt: "2026-11-17T00:00:00.000Z",
+        description: "Sortable table",
+        hashtags: ["table"],
+        dependencies: [],
+        mine,
+      },
+    });
+
+    /**
+     * Deploys the table in one run, then revises it in a later run that
+     * names the earlier piece, as a pattern-author does after
+     * read_piece_source. Each run is its own engine and its own ledger.
+     */
+    const reviseAcrossRuns = async (mine: boolean) => {
+      const original = await entryIdentityOf(WORKING_SORTABLE_TABLE);
+      const index = stubIndex(servedAs(original, mine));
+      const first = await createEngine(index, { origin: "agent" })
+        .invokeBuiltinTool("run_pattern", {
+          sourceText: WORKING_SORTABLE_TABLE,
+          inputs: { rows: [{ name: "Avery", score: 12 }] },
+          description: "Sortable table",
+        });
+      const firstOutput = first.output as RunPatternToolSuccessOutput;
+      const later = createEngine(index, { origin: "agent" });
+      const second = await later.invokeBuiltinTool("run_pattern", {
+        sourceText: REVISED_SORTABLE_TABLE,
+        revises: firstOutput.ref,
+        inputs: { rows: [{ name: "Avery", score: 12 }] },
+        description: "Sortable table with points",
+      });
+      await later.flushPatternIndexLedger();
+      const secondOutput = second.output as RunPatternToolSuccessOutput;
+      expect(secondOutput.status).toBe("ok");
+      return {
+        original,
+        body: published(index)[0].body,
+        piece: await deployedPieceRef(pieces.getSpace(), secondOutput.pieceId),
+      };
+    };
+
+    it("continues the history of the caller's own pattern the piece runs", async () => {
+      const { original, body, piece } = await reviseAcrossRuns(true);
+      expect(body.priorPatternId).toBe(original);
+      expect(body.remixedFrom).toBeUndefined();
+      // The new piece's slot would outrank the predecessor and start a new
+      // history; the piece is still named, for the person's use of it.
+      expect(body.slot).toBeUndefined();
+      expect(body.deployedTo).toBe(piece);
+    });
+
+    it("credits someone else's pattern the piece runs as a remix", async () => {
+      const { original, body, piece } = await reviseAcrossRuns(false);
+      expect(body.remixedFrom).toBe(original);
+      expect(body.priorPatternId).toBeUndefined();
+      expect(body.slot).toBe(piece);
+    });
+
+    it("refuses revises beside a patternId, and a token naming no piece, before running anything", async () => {
+      const index = stubIndex();
+      const engine = createEngine(index, { origin: "agent" });
+      const before = (await pieces.getRegisteredPieces()).length;
+      const paired = await engine.invokeBuiltinTool("run_pattern", {
+        patternId: "HOS6wWQmBMK8ewPc239FZc4VS6jMpCKGLMt4rFPTr2k",
+        revises: "/of:baedreinope",
+      });
+      expect(paired.output).toMatchObject({ status: "error" });
+      expect((paired.output as { message: string }).message).toContain(
+        "revises",
+      );
+      const unknown = await engine.invokeBuiltinTool("run_pattern", {
+        sourceText: WORKING_SORTABLE_TABLE,
+        revises: "not a reference",
+        description: "Sortable table",
+      });
+      expect(unknown.output).toMatchObject({ status: "error" });
+      expect((unknown.output as { message: string }).message).toContain(
+        "revises",
+      );
+      expect((await pieces.getRegisteredPieces()).length).toBe(before);
+    });
+  });
+
   it("records automatic and render-gated entries for distinguishable reasons", async () => {
     const index = stubIndex();
     await runAndFlush(index, {
