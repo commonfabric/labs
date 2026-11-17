@@ -279,19 +279,19 @@ export const submitContribution = handler<ContributionEvent, SubmitState>(
 
     const contribution = {
       pseudonym,
-      rules: rules.map((rule) => rule as PrivateRule),
+      rules,
       seal: {
         secret: seal.secret,
         thresholdCenter: seal.thresholdCenter,
         jitter: seal.jitter,
       },
-    } as StoredContribution;
+    };
     // A replacement drops the old entry and appends the new one rather than
     // setting the slot in place: after an in-place set, the slot's
     // `authored-by` reads as no one (README.md, "CFC snags").
     if (mine >= 0) {
       const kept = (linksOf(contributions) ?? []).filter((_, i) => i !== mine);
-      contributions.set([...kept, contribution] as StoredContribution[]);
+      contributions.set([...kept, contribution]);
     } else contributions.push(contribution);
   },
 );
