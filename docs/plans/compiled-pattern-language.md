@@ -580,7 +580,10 @@ that left its collection, what keeps its value where the check of a
 stream fails, the kind of a `*` at a `flatMap` result, and a
 collection among the children of a view node. Questions 174 to 183 are
 what those rulings, the ruling on `asInstance()`, and notes 367 to 382
-leave undetermined.
+leave undetermined. Question 175 is ruled since, by the type marker
+`KeyedBy<T, "field">`, and question 178 in two of the three cases of
+a re-key. Questions 184 to 186 are what that ruling leaves
+undetermined.
 Notes 303 to 306, 321 to 323, 342, 364 and 365, and 383 and 384 are
 the results here.
 Nothing was timed.
@@ -2128,7 +2131,9 @@ is relitigated.
   same handler succeed. References stored elsewhere under the old key
   still read as nothing, because the runtime cannot find them all.
   The case is an array of plain values in place; nothing of it arises
-  over an array of references.
+  over an array of references. Where the items of such an array
+  declare a key field with `KeyedBy<T, "field">`, a write to another
+  member changes no key, and nothing is re-keyed.
 - A function body that reads a plain value holds a copy, and writing
   it elsewhere stores the value, as today. References by key are for
   the nodes of the reactive tier that pass an element on. A handle
@@ -2158,10 +2163,24 @@ is relitigated.
   per element, and the observable result is the same.
 - The key of an element is derived from upstream causes and stays
   stable, for an array of references and for the result of another
-  per-element construct. A declared key field would matter only for
-  an array of plain values that is generated from scratch, where one
-  computation produces the whole array each time. Whether to add such
-  a declaration is not decided (question 175).
+  per-element construct. Over an array of references the key is the
+  identity of the element's cell, which is tied to the cause of adding
+  the item, as where a handler instantiates a pattern and pushes the
+  result. An edit of the item, a rename included, changes no key, and
+  such an array needs no declared key.
+- The element type of a collection may be written
+  `KeyedBy<T, "field">`. It is a type-level marker with no run-time
+  call, and the compiler writes the key field into the schema of the
+  array's items. It applies to plain values: a plain array that is
+  generated from scratch, where one computation produces the whole
+  array each time, as the result of an API call is, and an array of
+  plain values in place. The key of such an element is the value of
+  the field, with the occurrence count where two elements have the
+  same value of it. The result of another per-element construct is
+  keyed by the upstream key, so a declared key is carried through the
+  downstream constructs. An array of references does not need the
+  marker. The marker is not the collection method `keyBy`, which
+  builds an index and changes the key of no element.
 - The key of an element that a `flatMap` contributes is formed from
   the member itself, by the same rule as for any array, together with
   the source element's key: the cell identity for a member that is a
@@ -3332,12 +3351,14 @@ undetermined, written into the documents as an assumption.
      upstream causes and stay stable, over an array of references and
      over the result of another per-element construct, and a declared
      key field would matter only for an array of plain values that
-     one computation produces whole each time. *Assumed:* the
-     language has no such declaration, the elements of such an array
-     are keyed by their whole value with the occurrence count, and an
-     element whose value changes is a new element. The alternative
-     lets the construct or the array's type name a member as the key.
-     The question is about an array of plain values in place alone.
+     one computation produces whole each time. Settled by the ruling
+     on the type marker `KeyedBy<T, "field">`: the author declares
+     the key in the element type, and the key of a plain value is
+     then the value of that field ([Decided](#decided)). Without the
+     marker the elements of such an array are keyed by their whole
+     value with the occurrence count. The ruling is about an array of
+     plain values in place, a plain array generated from scratch
+     included. The entry keeps its number.
 
 176. **A stored reference to the result of a pattern call in a
      per-element body without `asInstance()`** (LS question 41).
@@ -3357,18 +3378,29 @@ undetermined, written into the documents as an assumption.
      and is not compiled in. The alternative refuses it there. Not
      about one case of a per-element source.
 178. **What the rulings on `asInstance()` leave open for the record
-     and the argument** (PL question 123). *Assumed:* the plan
-     records the call as a `Child` with a member `asInstance`; a
-     re-key of a plain value in place (question 160) moves the
-     instance with the rest of what the old key holds, and a link
-     stored elsewhere to its result under the old key reads what it
-     read before; and the argument of an instance whose key is away
-     holds at a path bound to the element what it last held, the
-     reference over an array of references and the value over an
-     array of plain values in place and over the result of another
-     per-element construct. The alternative for the re-key records
-     that the new key continues the old instance, so that a stored
-     link stays current.
+     and the argument** (PL question 123). Three parts. First, the
+     record. *Assumed:* the plan records the call as a `Child` with a
+     member `asInstance`. Second, a re-key against an instance, which
+     by ruling is answered for two cases and open for one. Over an
+     array of references it does not arise: the key is the identity
+     of the element's cell, tied to the cause of adding the item, and
+     an edit does not change it. Over an array of plain values in
+     place whose items declare a key field with `KeyedBy<T, "field">`
+     it is avoided: an edit of another member, and a new array that
+     holds an element with the same value of the field, keep the key
+     and the instance. Open is an array of plain values in place with
+     no declared key, edited through a reference by key. *Assumed:*
+     the instance is re-keyed with the element (question 160), as the
+     rest of what the old key holds is, and a link stored elsewhere
+     to its result under the old key reads what it read before. The
+     owner did not object to this and did not rule it. No record maps
+     a key to an instance. Over the result of another per-element
+     construct the case is that of the upstream source. Third, the
+     argument of an instance whose key is away. *Assumed:* it holds
+     at a path bound to the element what it last held, the reference
+     over an array of references and the value over an array of
+     plain values in place and over the result of another per-element
+     construct.
 
 179. **Which record says that a position of a body's argument holds
      the stream of a binding** (PL question 124). By ruling a stream
@@ -3424,6 +3456,49 @@ undetermined, written into the documents as an assumption.
      where the compiler knows the callee, and the identity in the
      factory value is used for a factory value received as data. Not
      about a per-element construct.
+
+**From the rulings of 2026-11-17 on a declared key.** The ruling on
+`KeyedBy<T, "field">` settles question 175 and two of the three cases
+of the re-key in question 178. These three points it does not rule.
+
+184. **A write to the key field itself of a plain value in place**
+     (PL question 129). The key of a plain value whose items declare
+     a key field is the value of that field, so a write to the field
+     through a reference by key changes the key. *Assumed:* it is the
+     re-key that is ruled for a write that changes the value of a
+     plain value with no declared key (question 160): what the old
+     key holds moves to the new key in the same transaction, and the
+     writer's reference is updated. The alternative refuses the
+     write. The case is an array of plain values in place; nothing of
+     it arises over an array of references, and over the result of
+     another per-element construct it is the case of the upstream
+     source.
+185. **The document of a keyed plain value that a function body
+     pushes elsewhere** (ES question 93). A handler that reads an
+     element whose type declares a key field and pushes it to another
+     list without `asInstance()`, as `saved.push(repo)` does, stores
+     a copy as a document of its own. Whether that document's
+     identity derives from the key is not ruled, and the owner gave
+     no assumption. *Assumed* by the documents: it does not; the
+     document is named as any record that a body writes into a list
+     is (question 168), so two pushes of one
+     element make two documents. The alternative derives the
+     identifier from the destination and the key, so that a second
+     push names the same document. The case is a body that reads an
+     array of plain values in place, or the result of another
+     per-element construct where the upstream position holds such a
+     value; over an array of references the body pushes the link and
+     no document is made.
+186. **`KeyedBy` on an array of references** (LS question 43). By
+     ruling an array of references does not need the marker. Whether
+     the marker written on one is ignored or is an error is not
+     ruled, and the owner gave no assumption. *Assumed* by the
+     documents: it is accepted and ignored, because whether a
+     position holds a link or a plain value is a fact of the stored
+     array that the checker does not always know; a position that
+     holds a link is keyed by its cell. The alternative reports an
+     error or a hint where the compiler can tell that the elements
+     are cells. The question is about an array of references alone.
 
 One question above is restated by the notes 307 to 320. For the
 assumption of ES question 83, in which transaction a first value that is not a

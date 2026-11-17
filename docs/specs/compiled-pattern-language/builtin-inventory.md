@@ -480,7 +480,15 @@ requirement. The goal is that an entry that moves does not cause the map to
 be recomputed, and that its state moves with it.
 
 - An element that is a plain value, stored in the list itself, is keyed by
-  its value.
+  its value. By ruling the element type may declare a key field with
+  the type marker `KeyedBy<T, "field">`, and such an element is then
+  keyed by the value of that field. The marker is for an array of
+  plain values in place, in particular a plain array that one
+  computation generates from scratch, as the `result` of `fetchJson`
+  is. An array of references does not need it, and the result of
+  another per-element construct carries the declared key through the
+  upstream key (`plan-and-label-templates.md` §1.3, "A declared key
+  field").
 - An element that is not a fixed value, a link to a cell, is keyed by the
   identity of that cell. By ruling that identity is the address the
   link resolves to, the path within the document included, so two
@@ -2065,6 +2073,7 @@ Three facts about the builder explain most of the entries.
 | --- | --- | --- |
 | `pattern(fn)` | Runs `fn` eagerly to build a graph and returns a `PatternFactory` (`builder/pattern.ts`). | C. The callback is the reactive tier. |
 | `PatternFactory.asScope(scope)`, `.inSpace(space, options)` | Derived copies of a pattern factory that set the instance's scope, or its target space with grants (`noteDerivedCopy`). | C, as modifiers of an instantiation. |
+| `KeyedBy<T, "field">` | Does not exist. A plain value in place is keyed by its position, and no declaration changes that. The method `keyBy` is unrelated: it builds an index ([`collectionIndex`](#collectionindex-collectionindexmember-collectionindexkeys)). | C, a type-level marker with no run-time call, by ruling. Written as the element type of an array of plain values in place, a plain array generated from scratch included, it makes the value of the named property the element key. The compiler writes the key field into the schema of the array's items. An array of references does not need it, and the result of another per-element construct has the upstream key (`language-subset.md` §4.4.1; [Element keys](#element-keys)). |
 | `PatternFactory.asInstance()` | Does not exist. A pattern called in a pattern body, and each run of a `map` callback, is an instance with a result document of its own. | C, a modifier of an instantiation, by ruling: the call is an instance of its own and is not compiled into the surrounding instance. In an element body it stays when its element leaves the collection (`language-subset.md` §4.4.2). |
 | `handler(fn)` | Mints a `javascript` module with `wrapper: "handler"` (`handlerInternal` in `builder/module.ts`). Applying the factory to its state creates a stream and a node, and returns the stream. | C. Binding a handler to state is legal in the reactive tier and in function bodies. |
 | `action(fn)` | Throws at run time. The transformer lowers it to `handler(fn)(captures)` (`base/ts-transformers/src/closures/utils/capture-scaffold.ts`). | C. A handler whose state is its captures. |
@@ -3499,6 +3508,7 @@ all.
 | --- | --- |
 | `pattern`, `handler`, `action`, `computed`, `lift`, `assert`, inline JSX handlers, JSX | C |
 | `asInstance`, `asScope`, `inSpace` | C (instantiation modifiers) |
+| `KeyedBy` | C (a type-level marker) |
 | Cell constructors, scoped constructors, `.for(...)` | C |
 | `map`, `filter`, `flatMap`, `reduce`, `findIndex`, `some`, `every`, `find`, `count`, `sum`, `min`, `max`, `minBy`, `maxBy`, `groupBy`, `keyBy`, `lookup`, `keys`, `keyEntries` | A |
 | The eight `WithPattern` methods | D |
@@ -3580,7 +3590,11 @@ above already reflect them.
 - **Element keys.** A plain value is keyed by its value, anything else by
   the identity of its cell, and in both cases by the count of earlier
   occurrences of the same value or identity, so two equal elements have
-  two keys. The position is never in the key, also where the callback
+  two keys. A plain value whose element type declares a key field with
+  `KeyedBy<T, "field">` is keyed by the value of that field; the marker
+  is for an array of plain values in place and is not needed over an
+  array of references. The position is never in the key, also where
+  the callback
   uses the index: the index is given to the nodes of the body that read
   it, and a move evaluates those nodes alone. Stored per-element state
   need not stay compatible. Everything an element body holds is per element key,

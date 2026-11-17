@@ -535,6 +535,61 @@ cost. A key derived from a value is salted with a secret of the space
 before it enters a document identifier, so that an identifier does not
 reveal the value (`plan-and-label-templates.md`, §1.3).
 
+**A declared key.** By ruling the element type of a collection may be
+written `KeyedBy<T, "field">`. It is a type-level marker with no
+run-time call: the compiler writes the key field into the schema of
+the array's items, and the key of an element is then the value of
+that field, with the count of earlier elements that have the same
+value of it. What the marker does depends on the case of the
+collection.
+
+- **An array of plain values in place.** The marker applies. Its use
+  is a plain array that is generated from scratch, where one
+  computation produces the whole array each time, as the result of an
+  API call is: nothing upstream identifies an element there, and
+  without the marker an element whose value changes in one member is
+  a new element. With it, an element of a new array that has the same
+  value of the field is the same element, and keeps the state of its
+  row. It applies as well to plain values that are stored in place and
+  edited where they stand, such as the records of a pattern's input:
+  an edit that leaves the field as it was changes no key.
+- **An array of references.** The marker is not needed. The key is the
+  identity of the element's cell, which is tied to the cause of adding
+  the item, as where a handler instantiates a pattern and pushes the
+  result, and an edit of the item changes no key. *Assumed*
+  ([§13](#13-open-questions), question 43): the marker written on such
+  an array is accepted and has no effect.
+- **The result of another per-element construct.** An element has the
+  key of the upstream element it came from, so a declared key is
+  carried through a `filter`, a `map`, and every construct after them.
+  The author declares the key once, on the source.
+
+```tsx
+// Shown for illustration only.
+type Repo = { id: number; name: string; stars: number };
+
+const response = fetchJson<{ items: KeyedBy<Repo, "id">[] }>({ url });
+// A repository keeps its row, and the instance of `RepoRow`, when a
+// new response holds the same `id` with another `stars`.
+const rows = response.result.items
+  .filter((repo) => repo.stars >= minStars)
+  .map((repo) => RepoRow.asInstance()({ repo }));
+```
+
+The marker is written as the element type of an array type, wherever
+the array type is written: in a pattern's input type, in the type
+argument of `fetchJson` or of a cell constructor, in the declared
+result type of a `computed` or a `lift`. *Assumed:* the second
+argument is a string literal type that names a required property of
+`T` at the top level whose type is `string` or `number`, and anything
+else, the marker in a place that is not the element type of an array
+included, is refused (`keyed-by:declaration`). The marker is unrelated
+to the method `keyBy` ([§4.7](#47-cell-and-handle-methods)), which
+builds an index of a collection and declares the key of no element.
+`plan-and-label-templates.md` §1.3 owns the key, and
+`execution-and-storage.md` §2.6 has this example worked through,
+beside one of an array of references.
+
 **The index parameter keeps that property.** A callback that declares
 the index parameter and uses it is keyed as any other. The index is given
 to the nodes of the body that read it: a declaration, the returned
@@ -671,7 +726,10 @@ write two members one after the other. Two things differ from an
 element that is a cell. An edit that is not made through the element,
 such as a `set` of the whole array with a changed value at the
 position, makes a new element, so the callback is evaluated for it
-again, with new state cells. And once the element is removed or
+again, with new state cells; where the element type declares a key
+("A declared key", above) and the edit leaves the key field as it
+was, the element stays the same element. And once the element is
+removed or
 edited, a reference to it that was stored elsewhere, by a node of the
 reactive tier or as a handle a handler was given, reads as
 `undefined`; in the runtime of today such a reference names the
@@ -807,7 +865,14 @@ through its handlers in particular, is there when the same result is
 served again. The key of a result is derived from upstream causes and
 is stable where the results are references or come from a per-element
 construct over a stable source
-(`plan-and-label-templates.md` §1.3).
+(`plan-and-label-templates.md` §1.3). Where the results are a plain
+array generated from scratch, as the result of an API call is, the
+author declares the key with `KeyedBy<T, "field">`, and a result that
+a later response holds again under the same value of the field has
+the same instance ([§4.4.1](#441-collection-callbacks), "A declared
+key"). Without a declared key such a result is keyed by its whole
+value, and a response in which one member of it changed makes a new
+instance.
 
 Three things are not ruled.
 
@@ -2008,6 +2073,7 @@ higher-kinded types to express the same rules to TypeScript.
 | `Reactive<T>` | The same type as `T` |
 | `Default<T, V>`, `DeepDefault<V>` | `T` with a default-value annotation `V`; `V` is a literal-like type, or `typeof` of a constant with a static initializer, and its value is assignable to `T` ([§8.8](#88-defaults-and-scopes)) |
 | `PerSpace<T>`, `PerUser<T>`, `PerSession<T>`, `PerAny<T>`, `Scoped<T, S>` | `T` with a scope annotation ([§8.8](#88-defaults-and-scopes)) |
+| `KeyedBy<T, "field">` | `T` with a key annotation, valid as the element type of an array type: the element key of a plain value of that array is the value of the named property ([§4.4.1](#441-collection-callbacks), "A declared key"). For assignability it is `T`. It is a marker of this design, and `base/api/index.ts` does not export it. It is not the method `keyBy` |
 | The CFC aliases | `T` with label annotations ([§8](#8-labels-as-annotations)) |
 | `VNode`, `JSONSchema`, `JSONValue`, the built-in parameter and state types | Opaque named types or ordinary object types, as the API declares them |
 | `PatternFactory<I, O>`, `HandlerFactory<E, S>` | Factory types, and data types: a value is a reference to a compiled definition, so it may sit in a pattern input or result, a cell, a handler's state, or an event. Calling one follows §4.4.2. The result of `pattern(...)` has the first type and the result of `handler(...)` the second. The result of `lift(...)` is a function, a code type |
@@ -3835,6 +3901,7 @@ none of the other eight.
 | `cfc-flow:ui-contract` | warning | A handler whose write policy requires a UI contract is bound by elements of the pattern, and none of them sits under a surface that carries the pattern and integrity names the contract requires, so no event from this pattern's UI can satisfy the policy (`plan-and-label-templates.md` §4.4) | The handler, the contract, and the elements that bind it. Bind the handler on an element inside the surface the contract names, or name in the policy the handler that the surface's control does bind | new (reserved here, specified there) |
 | `default:not-static` | error | A `Default` value that is neither a literal-like type nor `typeof` of a module-scope constant with a static initializer (§8.8), or that is not assignable to its type. A constant whose initializer is a call or a `new` expression is such a value: `Default<typeof INITIAL>` with `const INITIAL = createInitial()` | Write the value as a literal of the declared type, in the type or as the initializer of the constant | changes (was the warning `schema-default:unresolved`) |
 | `scope:union-member` | error | A scope wrapper on a member of a union that has a member other than `null` and `undefined` | Put the scope around the union: `PerUser<A \| B>` | new |
+| `keyed-by:declaration` | error | *Assumed* (§4.4.1, "A declared key"). A `KeyedBy<T, "field">` whose second argument is not a string literal type that names a required top-level property of `T` of type `string` or `number`, or one written in a place that is not the element type of an array type. The marker concerns an array of plain values in place; on an array of references it is accepted and has no effect (§13, question 43) | Name a required `string` or `number` property of the element: `KeyedBy<Repo, "id">[]` | new |
 
 ## 11. Corpus evidence
 
@@ -4870,3 +4937,20 @@ use, so that the other numbers stay as other documents cite them.
     changes one thing in an element body: the child stays when its
     element leaves. The alternative refuses the modifier outside a
     per-element body. Not about one case of a per-element source.
+43. **`KeyedBy` on an array of references** (to the project owner). By
+    ruling `KeyedBy<T, "field">` declares the key of a plain value,
+    and an array of references does not need it: its key is the
+    identity of the element's cell
+    ([§4.4.1](#441-collection-callbacks), "A declared key"). The
+    ruling does not say what the marker is where it is written on an
+    array of references, and the owner gave no assumption. *Assumed*
+    by this document: it is accepted and has no effect. Whether a
+    position holds a plain value or a link is a fact of the stored
+    collection that the checker does not always know, and a position
+    that holds a link is keyed by its cell whatever the type says.
+    The alternative reports an error, or a hint, where the compiler
+    can tell that the elements are cells, as for an element type that
+    is a cell handle or the result type of a pattern. The question is
+    about an array of references alone. Over an array of plain values
+    in place the marker is ruled, and over the result of another
+    per-element construct the upstream key governs.

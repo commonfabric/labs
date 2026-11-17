@@ -446,8 +446,18 @@ which element keys what they hold is kept
   key holds the element's value when the element is a plain value, and the
   identity of the element's cell when it is not. In both cases it also
   holds the count of earlier occurrences of the same value or identity in
-  the collection, so two equal elements have two keys. The position is
-  never in the key, also where the callback uses the index. An element
+  the collection, so two equal elements have two keys. Over an array
+  of plain values in place, in particular a plain array that one
+  computation generates from scratch, as the result of an API call
+  is, the author can declare the key in the element type with the
+  type marker `KeyedBy<T, "field">`: the key is then the value of
+  that field, and an element of a new array with the same value of
+  the field is the same element. An array of references does not
+  need the marker, because the key is the identity of the element's
+  cell and an edit does not change it, and the result of another
+  per-element construct carries a declared key through the upstream
+  key. The position is never in the key, also where the callback
+  uses the index. An element
   that moves keeps what was evaluated for its key, and its state cells,
   streams, effects, and children. The index is a slot given to the nodes
   of the body that read it, so a move evaluates those nodes alone, and
@@ -836,7 +846,10 @@ its argument holds the reference to the element; over an array of
 plain values in place, and over the result of another per-element
 construct whose upstream position holds a value, it holds the value,
 written again when the element changes while it is in the
-collection. An event for a stream of an element body without the
+collection. Over an array of plain values in place whose element
+type declares a key with `KeyedBy<T, "field">`, a new array that
+holds an element with the same value of the field has the same
+instance. An event for a stream of an element body without the
 modifier is refused once the element has left. Cleanup of instances
 that nothing refers to is deferred
 ([language subset](language-subset.md), §4.4.2). The identifier of an
@@ -1192,12 +1205,23 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   in a per-element body without the modifier is a compile error, and
   that the modifier is legal outside a per-element body
   ([language subset](language-subset.md), §13, questions 41 and 42).
-  Whether an author can declare a key field for an array of plain
-  values that one computation generates whole is not ruled either
+  Each is the same over the three cases of a source. That an author
+  declares the key of an array of plain values in place with the type
+  marker `KeyedBy<T, "field">` is ruled. Four things about it are
+  assumed. Over an array of plain values in place with no declared
+  key, an instance called through `asInstance()` is re-keyed with its
+  element when a write through a reference by key changes the value;
+  over an array of references no edit changes a key, and a declared
+  key avoids the case
   ([plan format and label templates](plan-and-label-templates.md), §8,
-  question 122). Each is the same over the three cases of a source,
-  except the key field, which concerns an array of plain values in
-  place alone.
+  question 123). A write to the key field itself is the same re-key
+  (its question 129). A keyed plain value that a function body pushes
+  to another list is stored in a document whose identity does not
+  derive from the key
+  ([execution and storage](execution-and-storage.md), §11, question
+  93). And the marker written on an array of references is accepted
+  and has no effect
+  ([language subset](language-subset.md), §13, question 43).
 - **Element bodies and equal elements.** The rulings leave five things
   open ([plan format and label templates](plan-and-label-templates.md),
   §8, questions 36, 90, 101, 105, and 111). By ruling each says which case

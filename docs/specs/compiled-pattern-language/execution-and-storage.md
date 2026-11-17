@@ -2015,9 +2015,19 @@ child without the modifier.
     history of every document is kept by default.
 
   The rule is the same in the three cases of a source except for what
-  the argument holds, as stated. What a re-key of a plain value does
-  to the instance is *assumed* (`plan-and-label-templates.md` §8,
-  question 123).
+  the argument holds, as stated. The instance is identified by the
+  key, so what changes a key differs by case
+  (`plan-and-label-templates.md` §3.15, "A change of the key, by
+  case"). Over an array of references an edit of the element changes
+  no key. Over an array of plain values in place whose element type
+  declares a key field with `KeyedBy<T, "field">`, an edit of another
+  member, and a new array with the same value of the field, keep the
+  key and the instance. Over an array of plain values in place with
+  no declared key, an edit through a reference by key re-keys the
+  element, and that the instance is re-keyed with it is *assumed*
+  (its §8, question 123). Over the result of another per-element
+  construct the case is that of the upstream source. Section 2.6 has
+  a worked case of the first two ("Two worked cases").
 
 An author who needs a child to stay with a record across an edit of the
 record makes the elements cells: a position that holds a link keeps its
@@ -2037,8 +2047,9 @@ row's pattern through `asInstance()`.
 | Elements are reordered | The collection's membership | Nothing, unless a cone of the body reads the index. The runtime moves what each key holds (below) | The stored array is rewritten in the new order: the storage links of rows that are parts, and the values of rows stored in place. Label entries only where the label at a position changed |
 | A cone of the body reads the index and an element moves | The cone instances of the moved keys that list the slot of root `index`. No key changes, and state cells, streams, operation state and children stay | Those cone instances | Their changed kept paths |
 | The value behind a linked element changes | That element's cone instances; the key is unchanged | That element | Its changed kept paths |
-| A plain value is edited in place, other than through a reference by key | Membership: the old key leaves and a new key enters | The new key | The position |
-| A plain value is edited through a reference by key | The element is re-keyed: what the old key holds moves to the new key (section 2.5) | The cone instances of the row that read the changed value | The position |
+| A plain value with no declared key field is edited in place, other than through a reference by key | Membership: the old key leaves and a new key enters | The new key | The position |
+| A plain value with no declared key field is edited through a reference by key | The element is re-keyed: what the old key holds moves to the new key (section 2.5) | The cone instances of the row that read the changed value | The position |
+| A plain value whose element type declares a key field (`KeyedBy<T, "field">`) changes in another member, by a write of any kind or by a new array from the computation that produces it | The cone instances of the element's key that read the changed member; the key is unchanged, and state cells, streams, operation state and children stay | Those cone instances | The position, and their changed kept paths |
 
 A cone downstream of a collection, such as a `count` or a `filter` over the
 result of a `map`, is made stale through its own slots and upstream outputs
@@ -2079,7 +2090,8 @@ over the result of another per-element construct.
 - **A key that returns.** The key returns when a link that resolves to
   the same address stands in an array of references again, when the
   same value stands in an array of plain values in place again, with
-  the same occurrence count, and when the upstream key returns in the
+  the same occurrence count, or an element with the same value of a
+  declared key field, and when the upstream key returns in the
   result of another per-element construct, as where an element leaves
   the result of a `filter` and enters it again. New cone instances are
   made for the key and evaluated. A state cell of the key reads what
@@ -2247,13 +2259,124 @@ keeping the results of cone instances per key. This is a choice of the
 implementation and is not observable: the stored values and labels are
 those the per-key evaluation gives, and the state cells, streams,
 operation state and children stay per key. Such an array is the one
-case where no upstream cause identifies an element: the key of each
-is its whole value with the occurrence count, where by ruling the key
-of an element of an array of references, and of the result of another
-per-element construct, derives from upstream causes and stays stable.
-Whether an author can declare a key field for such an array is not
-ruled, and the design has none (`plan-and-label-templates.md` §8,
-question 122).
+case where no upstream cause identifies an element, where by ruling
+the key of an element of an array of references, and of the result of
+another per-element construct, derives from upstream causes and stays
+stable. By ruling the author declares the key of such an array in the
+element type, with the type marker `KeyedBy<T, "field">`, and the key
+of each element is then the value of that field, with the occurrence
+count where two elements have the same value of it
+(`plan-and-label-templates.md` §1.3, "A declared key field"). Without
+the marker the key of each is its whole value with the occurrence
+count, and an element whose value changes in one member is a new
+element.
+
+**Two worked cases: a list that a handler fills, and an API result.**
+The first is an array of references and needs no declared key. The
+second is a plain array generated from scratch, which is an array of
+plain values in place, with a declared key, read through two
+per-element constructs.
+
+*An array of references.* A handler instantiates a pattern and pushes
+the result.
+
+```tsx
+// Shown for illustration only.
+const Note = pattern<{ title: Writable<string> }>(({ title }) => ({
+  title,
+  rename: action<{ title: string }>((event) => title.set(event.title)),
+  [UI]: <cf-input $value={title} />,
+}));
+type NoteResult = ReturnType<typeof Note>;
+
+const addNote = handler<{ title: string }, { notes: Cell<NoteResult[]> }>(
+  ({ title }, { notes }) => {
+    notes.push(Note({ title }));
+  },
+);
+
+const Notebook = pattern<{ notes: NoteResult[] }>(({ notes }) => ({
+  add: addNote({ notes }),
+  [UI]: <ul>{notes.map((note) => <li>{note}</li>)}</ul>,
+}));
+```
+
+- **The stored form.** Each event makes one instance of `Note`, with a
+  result cell that is named from the handling and the ordinal of the
+  request in the handler (section 5.4). `notes` holds a link to that
+  result cell at each position, so it is an array of references.
+- **The key** of a row of `notes.map(...)` is the address the link
+  resolves to, with the occurrence count. It is tied to the cause of
+  adding the item: the event that the handler handled.
+- **A rename** writes `title` in the note's own argument document. No
+  position of `notes` changes, no key changes, and the cone instances
+  of the row that read the title are evaluated again. What the body
+  of the `map` holds for the row stays.
+- **`asInstance()` is not needed for the item itself.** The item is an
+  instance of its own already, made by the handler and by no element
+  body. A handler that stores the item elsewhere, as
+  `pinned.push(note)` does, stores the link to its result cell, and
+  the link reads the note after `notes` no longer holds it. The
+  modifier concerns a pattern that the body of the `map` calls for the
+  row, where that row is to stay when its element leaves (section 2.5,
+  "A child called through `asInstance()`").
+
+*A plain array generated from scratch, with a declared key.* An API
+result is filtered and mapped, and each row is an instance of its own.
+
+```tsx
+// Shown for illustration only.
+// `KeyedBy` is the type marker of this design. `commonfabric` does not
+// export it yet.
+type Repo = { id: number; name: string; stars: number };
+
+const RepoSearch = pattern<{ url: string; minStars: number }>(
+  ({ url, minStars }) => {
+    const response = fetchJson<{ items: KeyedBy<Repo, "id">[] }>({ url });
+    const rows = response.result.items
+      .filter((repo) => repo.stars >= minStars)
+      .map((repo) => RepoRow.asInstance()({ repo }));
+    return { rows };
+  },
+);
+```
+
+- **The stored form.** The result of `fetchJson` is one document
+  (`builtin-inventory.md`, `fetchJson`), and each response replaces
+  `result.items` whole. So `response.result.items` is an array of
+  plain values in place that is generated from scratch. The schema of
+  its items has `keyField: "id"`.
+- **The key** of an element of `response.result.items` is the salted
+  hash of the value of `id`, with the occurrence count, which is 0
+  unless a response holds one `id` twice.
+- **The result of the `filter`** is the result of another per-element
+  construct: an element has the key it has in
+  `response.result.items`. **The result of the `map`** is the same
+  case, over the `filter`, and an element has that same key. The
+  declared key is carried through both.
+- **The instance** of `RepoRow` for a repository is identified by the
+  site of the call, the collection and that key (section 5.2). The
+  upstream position holds a value, so the argument path `repo` holds
+  the value.
+- **A new response with the same `id`,** for the same `url` or for
+  another one, is the same key and the same instance. Where `stars`
+  or `name` changed, the cone instance of the predicate for the key is
+  evaluated again, and the write edge writes `repo` in the instance's
+  argument again. State that the instance accumulated stays.
+- **A response without the `id`** makes the key leave. The instance
+  stays, with its argument as last written, and a link to it that a
+  handler stored elsewhere reads it. When a later response holds the
+  `id` again, the row has the same instance.
+- **Without the marker** the key of an element is the hash of its
+  whole value. A response in which `stars` changed is then a new key
+  and a new instance, and the instance of the old key stays with the
+  old value.
+
+Three points are open for a declared key: a write to the key field
+itself (`plan-and-label-templates.md` §8, question 129), the document
+of a keyed plain value that a body pushes elsewhere (section 11,
+question 93), and the marker on an array of references
+(`language-subset.md` §13, question 43).
 
 ### 2.7 Side-writes and bounded iteration
 
@@ -3915,7 +4038,13 @@ count.
   identifier of the cell the link resolves to, and its path, without the
   link's scope.
 - The element part for a position that holds a plain value is the hash of
-  a secret of the space and the canonical form of the value.
+  a secret of the space and the canonical form of the value. Where the
+  schema of the array's items declares a key field, which the type
+  marker `KeyedBy<T, "field">` writes there, it is the hash of the
+  secret and the canonical form of the value of that field
+  (`plan-and-label-templates.md` §1.3, "A declared key field"). The
+  case is an array of plain values in place, a plain array generated
+  from scratch included.
 - The occurrence count is the number of earlier positions of the
   collection that have the same element part. It is in every key, so no
   two positions of a collection have one key.
@@ -5473,7 +5602,10 @@ bound by reference reads it through the schema the link holds (2.2, 4.4,
 object whole keeps the object's integrity where a default fills one of
 its properties (2.2); a write through a handle bound to a value the
 instance produced is refused, and one bound to a reference lands at the
-reference's target (2.4). The ruling on the keep set
+reference's target (2.4); the element type of an array of plain
+values may declare a key field with `KeyedBy<T, "field">`, and the key
+of an element is then the value of that field (2.6, 5.3). The ruling
+on the keep set
 answers what was question 1 of this list, the size of a result document.
 
 ### 11.1 For the project owner
@@ -5828,6 +5960,25 @@ Added by the ruling that the scheduler is switched per space (section 9):
     prototype's executor starts from the empty array. The same for a
     handle in an element body in each of the three cases of a
     per-element source. The entry keeps its number.
+93. **The document of a keyed plain value that a function body pushes
+    elsewhere** (sections 2.6 and 5.4). A handler that reads an
+    element whose type declares a key field with `KeyedBy<T, "field">`
+    holds a copy, by ruling, and a push of it to another list without
+    `asInstance()`, as `saved.push(repo)`, stores the copy as a
+    document of its own with a link in the list (section 4.8). The
+    ruling on the marker does not say whether the identity of that
+    document derives from the key, and the owner gave no assumption.
+    *Assumed* by this document: it does not. The document is named as
+    a cell that the body creates with no explicit cause is (section
+    5.4; `plan-and-label-templates.md` §8, question 118), so two
+    pushes of one element make two documents, and the declared key is
+    the key of the element in its source alone. The alternative
+    derives the identifier from the destination list and the key, so
+    that a second push of the same element names the same document.
+    The case is a body that reads an array of plain values in place,
+    or the result of another per-element construct where the upstream
+    position holds such a value. Over an array of references the body
+    pushes the link, and no document is made.
 
 ### 11.2 For another document or the prototype
 
