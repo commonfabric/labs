@@ -108,12 +108,14 @@ slightly different spellings count as proposing the same rule.
 **Personal details in rules.** The design calls for personal details to go in
 parameter slots rather than a rule's text. Parameter slots are not built. The
 protection against a published rule carrying someone's details is the pool's
-threshold: a rule that names one person is held by one contributor and is never
-released. Publishing also holds back, cheaply, any rule whose pattern has an `@`
-or a run of six or more digits (`looksPersonal`), a run that spaces, dots,
-dashes, or brackets break (`123-456-7890`) or a count repeats (`1{6}`) included;
-the view says how many it held back. Neither is a guarantee: a rule with a name
-in it is sent, and stays confidential in the pool only by its policy.
+threshold: a rule that names one person is likely held by one contributor, and
+so likely stays below the threshold and unreleased. That is not a guarantee:
+enough contributors submitting the same name-bearing rule would release it.
+Publishing also holds back, cheaply, any rule whose pattern has an `@` or a run
+of six or more digits (`looksPersonal`), a run that spaces, dots, dashes, or
+brackets break (`123-456-7890`) or a count repeats (`1{6}`) included; the view
+says how many it held back. Neither is a guarantee: a rule with a name in it is
+sent, and stays confidential in the pool only by its policy.
 
 **`inductor-pool`** collects contributions and releases consensus.
 
