@@ -607,6 +607,24 @@ describe("pattern index ledger", () => {
       );
     });
 
+    it("supersedes an iteration it revised in place, rather than sending it as a part in its own right", async () => {
+      const index = stubClient();
+      const ledger = createPatternIndexLedger(index.getClient);
+      ledger.stage(agentRequest("before", piece("one")));
+      ledger.stage(agentRequest("after", piece("one")), {
+        revisedFrom: "before",
+      });
+      await ledger.flush();
+
+      const sent = publishes(index.calls);
+      expect(sent.map((call) => call.body.patternId)).toEqual([
+        "before",
+        "after",
+      ]);
+      expect(sent[0].body.discoverabilityReason).toContain("superseded");
+      expect(sent[1].body.priorPatternId).toBe("before");
+    });
+
     it("names no predecessor whose owner it could not learn, and says so", async () => {
       const index = stubClient({ patterns: { "v1": 500 } });
       const errors: string[] = [];

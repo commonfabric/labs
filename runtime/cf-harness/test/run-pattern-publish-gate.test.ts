@@ -653,6 +653,97 @@ describe("run_pattern publish render gate", () => {
     });
   });
 
+  describe("an in-place revision with revise_piece", () => {
+    const REVISED = WORKING_SORTABLE_TABLE.replace(
+      "<th>Score</th>",
+      "<th>Points</th>",
+    );
+
+    /** Deploys the table, as an earlier run would, and returns its piece. */
+    const deploy = async (engine: CfHarnessEngine) => {
+      const result = await engine.invokeBuiltinTool("run_pattern", {
+        sourceText: WORKING_SORTABLE_TABLE,
+        inputs: { rows: [{ name: "Avery", score: 12 }] },
+        description: "Sortable table",
+      });
+      return result.output as RunPatternToolSuccessOutput;
+    };
+
+    it("keeps a later run's revision as the next version of the caller's own pattern", async () => {
+      const original = await entryIdentityOf(WORKING_SORTABLE_TABLE);
+      const index = stubIndex({
+        [original]: {
+          patternId: original,
+          createdAt: "2026-11-17T00:00:00.000Z",
+          description: "Sortable table",
+          hashtags: ["table"],
+          dependencies: [],
+          author: { pseudonym: "quiet-otter", tier: 0 },
+          mine: true,
+        },
+      });
+      const first = createEngine(index, { origin: "agent" });
+      const deployed = await deploy(first);
+      await first.flushPatternIndexLedger();
+
+      const later = createEngine(index, { origin: "agent" });
+      const revised = await later.invokeBuiltinTool("revise_piece", {
+        token: deployed.ref,
+        sourceText: REVISED,
+        description: "Sortable table with points",
+      });
+      expect(revised.output).toMatchObject({ status: "ok" });
+      await later.flushPatternIndexLedger();
+
+      const [, version] = published(index);
+      expect(version.body.patternId).toBe(await entryIdentityOf(REVISED));
+      expect(version.body.priorPatternId).toBe(original);
+      expect(version.body.deployedTo).toBe(
+        await deployedPieceRef(pieces.getSpace(), deployed.pieceId),
+      );
+      expect(version.body.discoverabilityReason).toBeDefined();
+    });
+
+    it("continues the iteration this session made without asking whose it is", async () => {
+      const index = stubIndex();
+      const engine = createEngine(index, { origin: "agent" });
+      const deployed = await deploy(engine);
+      await engine.invokeBuiltinTool("revise_piece", {
+        token: deployed.ref,
+        sourceText: REVISED,
+        description: "Sortable table",
+      });
+      await engine.flushPatternIndexLedger();
+
+      const original = await entryIdentityOf(WORKING_SORTABLE_TABLE);
+      const sent = published(index);
+      expect(sent.map((call) => call.body.patternId)).toEqual([
+        original,
+        await entryIdentityOf(REVISED),
+      ]);
+      expect(sent[1].body.priorPatternId).toBe(original);
+      expect(index.calls.some((call) => call.fn === "getPattern")).toBe(
+        false,
+      );
+    });
+
+    it("records nothing for a revision given no description", async () => {
+      const index = stubIndex();
+      const engine = createEngine(index, { origin: "agent" });
+      const deployed = await deploy(engine);
+      await engine.flushPatternIndexLedger();
+      const before = published(index).length;
+      const later = createEngine(index, { origin: "agent" });
+      const revised = await later.invokeBuiltinTool("revise_piece", {
+        token: deployed.ref,
+        sourceText: REVISED,
+      });
+      expect(revised.output).toMatchObject({ status: "ok" });
+      await later.flushPatternIndexLedger();
+      expect(published(index)).toHaveLength(before);
+    });
+  });
+
   it("records automatic and render-gated entries for distinguishable reasons", async () => {
     const index = stubIndex();
     await runAndFlush(index, {

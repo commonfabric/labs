@@ -309,19 +309,24 @@ export const createPatternIndexLedger = (
     },
     stage(request, options = {}) {
       const { revisedFrom } = options;
+      const key = patternCapabilityKey(request);
       const dependencies = new Set(request.dependencies ?? []);
-      if (revisedFrom !== undefined) dependencies.add(revisedFrom);
-      if (dependencies.size > 0) {
-        for (const [key, pending] of [...held]) {
-          if (dependencies.has(pending.request.patternId)) {
-            held.delete(key);
+      if (dependencies.size > 0 || revisedFrom !== undefined) {
+        for (const [heldKey, pending] of [...held]) {
+          const id = pending.request.patternId;
+          // What this revises is sent first, so the index holds it — unless
+          // it is an iteration of the same capability, which this displaces
+          // below as superseded.
+          if (
+            dependencies.has(id) || (id === revisedFrom && heldKey !== key)
+          ) {
+            held.delete(heldKey);
             // Not superseded: something depends on it or revises it, so it
             // is a part of this session's output in its own right.
-            send(key, pending, false);
+            send(heldKey, pending, false);
           }
         }
       }
-      const key = patternCapabilityKey(request);
       const displaced = held.get(key);
       if (displaced !== undefined) {
         held.delete(key);

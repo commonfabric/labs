@@ -22,6 +22,14 @@
  * here is the kind of content that route exposes — program text a third
  * party authored — rather than the route.
  *
+ * A revision is also a version of the pattern the piece ran. When the run
+ * contributes to the pattern index and the caller says what the revised
+ * pattern is for, it is queued on the session's ledger revised from the
+ * piece's previous pattern, so it joins that pattern's version history (or
+ * is credited as a remix of someone else's) exactly as a `run_pattern` that
+ * names the piece in `revises` does. It is recorded, never offered to
+ * search: no render was checked.
+ *
  * Neither tool undoes anything. A revision is reversible from the piece menu
  * `cf-render` gives every host, which lists the recorded revisions and offers
  * an earlier one; a session that could revert could discard a person's change
@@ -40,7 +48,14 @@ import {
   type PieceSourceState,
   readPieceSourceState,
 } from "@commonfabric/piece/ops";
-import { type Cell, getPatternIdentityRef } from "@commonfabric/runner";
+import {
+  type Cell,
+  getPatternIdentityRef,
+  PatternManager,
+} from "@commonfabric/runner";
+import { deployedPieceRef } from "@commonfabric/pattern-index/client";
+import { patternIndexDependencies } from "@commonfabric/pattern-index/deploy";
+import { PATTERN_DISCOVERABILITY_REASONS } from "../pattern-index/publish-render-gate.ts";
 import { cfcLabelViewForCellFailClosed } from "@commonfabric/runner/cfc";
 import {
   createLLMFriendlyLink,
@@ -124,6 +139,16 @@ export interface RevisePieceToolInput {
   token: string;
   sourceText: string;
   expectedRevisionId?: string;
+
+  /**
+   * What the revised pattern does, in one line. Given, a run that
+   * contributes to the pattern index records the revision as a version of
+   * the pattern the piece ran; without it nothing is recorded.
+   */
+  description?: string;
+
+  /** Tags the recorded version is found under. */
+  hashtags?: readonly string[];
 }
 
 export interface RevisePieceToolSuccessOutput {
@@ -247,6 +272,16 @@ export const revisePieceToolDescriptor: HarnessToolDescriptor = {
         type: "string",
         description:
           "The sourceRevisionId read_piece_source reported. Supplied, a piece that moved since that read refuses this write rather than taking it.",
+      },
+      description: {
+        type: "string",
+        description:
+          "One line on what the revised pattern does; the revision is kept as a version of the piece's pattern only when this is filled in.",
+      },
+      hashtags: {
+        type: "array",
+        items: { type: "string" },
+        description: "Words someone searching for this capability would type.",
       },
     },
     required: ["token", "sourceText"],
@@ -475,6 +510,61 @@ const spaceIsPopulated = async (pieces: PiecesController): Promise<boolean> => {
   }
 };
 
+/**
+ * Queues an applied revision as a version on the session's ledger, under the
+ * same conditions `run_pattern` publishes on: a run contributing to the index
+ * and a description to publish it under. A person's own agent names the piece
+ * as its slot and deployment, as `run_pattern` does for the piece it made.
+ * The pattern the piece ran before is what it was revised from; the ledger
+ * decides from it which history the version joins.
+ */
+const stageRevisedVersion = async (
+  context: HarnessToolContext,
+  input: RevisePieceToolInput,
+  revision: {
+    program: { main: string; files: { name: string; contents: string }[] };
+    space: string;
+    pieceId: string;
+    identity: string;
+    previous: string | undefined;
+  },
+): Promise<void> => {
+  const description = input.description?.trim();
+  const ledger = context.patternIndexLedger;
+  if (
+    ledger === undefined || context.getPatternIndexClient === undefined ||
+    context.patternIndexPublishEnabled !== true ||
+    description === undefined || description === "" ||
+    // Named only within the session that minted it: no other runtime could
+    // ever load an entry published under it.
+    PatternManager.isKeylessPatternIdentity(revision.identity)
+  ) {
+    return;
+  }
+  const pieceRef = context.patternIndexOrigin === "agent"
+    ? await deployedPieceRef(revision.space, revision.pieceId)
+    : undefined;
+  ledger.stage(
+    {
+      patternId: revision.identity,
+      ...(pieceRef !== undefined
+        ? { origin: "agent" as const, slot: pieceRef, deployedTo: pieceRef }
+        : {}),
+      program: revision.program,
+      description,
+      hashtags: input.hashtags ?? [],
+      directQuery: context.taskText ?? description,
+      dependencies: patternIndexDependencies(revision.program.files),
+      nonDiscoverable: {
+        reason: PATTERN_DISCOVERABILITY_REASONS["recorded-automatically"],
+      },
+    },
+    revision.previous !== undefined && revision.previous !== revision.identity
+      ? { revisedFrom: revision.previous }
+      : {},
+  );
+};
+
 export const revisePieceTool: HarnessToolDefinition<
   RevisePieceToolInput,
   RevisePieceToolOutput
@@ -606,6 +696,13 @@ export const revisePieceTool: HarnessToolDefinition<
       controller.getCell().getAsNormalizedFullLink(),
       pieces.getSpace(),
     );
+    await stageRevisedVersion(context, input, {
+      program,
+      space: pieces.getSpace(),
+      pieceId: piece.id,
+      identity: receipt.ref.identity,
+      previous: previousPattern?.identity,
+    });
     return {
       outputId,
       status: "ok",
