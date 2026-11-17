@@ -181,7 +181,7 @@ export const indexAccessOptions = (cmd: Command<any>) =>
 export const index = new Command()
   .name("index")
   .description(
-    "Join the pattern index, where patterns are published and found.",
+    "Join the pattern index, where patterns are kept, shared and found.",
   )
   .default("help")
   /* index join */

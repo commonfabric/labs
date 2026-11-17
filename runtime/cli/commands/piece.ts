@@ -5304,7 +5304,7 @@ export async function newPieceFromCommand(
   // A piece from the index has no local source to update from until it is
   // saved; building on it publishes it as a remix.
   const updateCode = main === undefined
-    ? `\n  → Build on it:     cf piece getsrc --cell ${pieceId} ./src, edit, then cf pattern publish ./src/<entry file>`
+    ? `\n  → Build on it:     cf piece getsrc --cell ${pieceId} ./src, edit, then cf pattern share ./src/<entry file>`
     : `\n  → Update code:     cf piece setsrc --cell ${pieceId} ${main} ...`;
   hint(cliText(`NEXT STEPS:
   → Open in browser: ${spaceConfig.apiUrl}/${spaceConfig.space}/${browserPieceRef}${updateCode}

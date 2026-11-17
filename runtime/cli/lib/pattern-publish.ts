@@ -1,7 +1,9 @@
 /**
- * `cf pattern publish`: compile a pattern on disk, ask the index's privacy
+ * `cf pattern share`: compile a pattern on disk, ask the index's privacy
  * question about it locally, rewrite it into a generalized version when the
- * answer is no, publish it, and ask for it to be listed.
+ * answer is no, record it in the index, and ask for it to be shared
+ * anonymously (listed under its lineage's pseudonym). `cf pattern publish`
+ * runs the same steps before naming its author.
  *
  * The person rarely reads this output; their agent does. So every step says
  * what it did in a line, the `--json` report carries the same, and nothing
@@ -10,9 +12,10 @@
  *
  * A rewrite reaches disk only when it compiled and every file it changes is
  * committed as it stands (`--allow-dirty` overrides), so `git diff` shows the
- * person exactly what changed and `git checkout` takes it back. Otherwise
- * the pattern is published as it is on disk, and the report says why the
- * rewrite was not applied.
+ * person exactly what changed and `git checkout` takes it back, or when the
+ * source as it stood is kept first as a private version, which
+ * `cf pattern rollback` restores. Otherwise nothing is shared, and the
+ * report says why the rewrite was not applied.
  */
 
 import { common, dirname, join, relative, resolve } from "@std/path";
@@ -72,6 +75,15 @@ export interface PublishOptions {
 
   /** Credit this published pattern as the source, overriding the local record. */
   remixedFrom?: string;
+
+  /**
+   * The lineage slot the entry's private versions are kept under
+   * (`entrySlot`). With it, what is shared becomes a version of that
+   * lineage, and a rewrite may go over files git cannot take back: the
+   * source as it was is kept as a private version first, which
+   * `cf pattern rollback` restores.
+   */
+  slot?: string;
 }
 
 /** What publishing reaches the world through, so a test can stand in for it. */
@@ -132,6 +144,12 @@ export type LocalCheckReport =
     /** Why it was not, when it was not. */
     notApplied?: string;
 
+    /**
+     * The private version the source was kept as before the rewrite went
+     * over files git cannot take back.
+     */
+    originalVersion?: number;
+
     /** What the check found before the rewrite. */
     findings: PatternIndexFinding[];
 
@@ -155,14 +173,14 @@ export type ListingReport =
   | { status: "failed"; reason: string };
 
 /**
- * What `cf pattern publish` did, as `--json` prints it. `outcome` says
+ * What `cf pattern share` did, as `--json` prints it. `outcome` says
  * whether anything reached the index: `blocked` means the local check found
  * personal details and a rewrite that removes them which could not be
- * applied, so nothing was published.
+ * applied, so nothing was shared.
  */
 export type PublishReport =
   | {
-    outcome: "published";
+    outcome: "shared";
     patternId: string;
 
     /** False when the index already held this id: nothing was written. */
@@ -170,6 +188,9 @@ export type PublishReport =
 
     /** The author's pseudonym, as the index shows it. */
     handle?: string;
+
+    /** The version of the entry's lineage it was kept as. */
+    version?: number;
 
     priorPatternId?: string;
     remixedFrom?: string;
@@ -293,6 +314,29 @@ export async function publishPatternFromDisk(
   }
   let published = original;
   let publishedMeta = meta;
+  const slot = options.slot;
+  const lineage = slot === undefined
+    ? {}
+    : { slot, origin: "self" as const, keepPrivate: true };
+  // Keeps the source as it stands as a private version, so a rewrite over
+  // files outside git can still be taken back with `cf pattern rollback`.
+  const keepOriginal = slot === undefined
+    ? undefined
+    : async (): Promise<number | undefined> =>
+      (await deps.client.publishPattern({
+        ...publishRequestFor({
+          patternId: original.patternId!,
+          program: original.program,
+          ...meta,
+          ...(original.argumentSchema !== undefined
+            ? { argumentSchema: original.argumentSchema }
+            : {}),
+          ...(original.resultSchema !== undefined
+            ? { resultSchema: original.resultSchema }
+            : {}),
+        }),
+        ...lineage,
+      })).seq;
   const localCheck = await checkLocally(
     options,
     deps,
@@ -303,6 +347,7 @@ export async function publishPatternFromDisk(
       published = rewritten;
       publishedMeta = rewrittenMeta;
     },
+    keepOriginal,
   );
   if (localCheck.status === "rewritten" && !localCheck.applied) {
     // A rewrite that removes what was found exists, and committing is one
@@ -312,7 +357,7 @@ export async function publishPatternFromDisk(
       outcome: "blocked",
       localCheck,
       next:
-        `Commit your edits (or pass --allow-dirty), then run cf pattern publish ${options.entry} again`,
+        `Commit your edits (or pass --allow-dirty), then run cf pattern share ${options.entry} again`,
     };
   }
   const patternId = published.patternId!;
@@ -332,19 +377,22 @@ export async function publishPatternFromDisk(
     }
   }
 
-  const response = await deps.client.publishPattern(publishRequestFor({
-    patternId,
-    program: published.program,
-    ...publishedMeta,
-    ...(published.argumentSchema !== undefined
-      ? { argumentSchema: published.argumentSchema }
-      : {}),
-    ...(published.resultSchema !== undefined
-      ? { resultSchema: published.resultSchema }
-      : {}),
-    ...(priorPatternId !== undefined ? { priorPatternId } : {}),
-    ...(remixedFrom !== undefined ? { remixedFrom } : {}),
-  }));
+  const response = await deps.client.publishPattern({
+    ...publishRequestFor({
+      patternId,
+      program: published.program,
+      ...publishedMeta,
+      ...(published.argumentSchema !== undefined
+        ? { argumentSchema: published.argumentSchema }
+        : {}),
+      ...(published.resultSchema !== undefined
+        ? { resultSchema: published.resultSchema }
+        : {}),
+      ...(priorPatternId !== undefined ? { priorPatternId } : {}),
+      ...(remixedFrom !== undefined ? { remixedFrom } : {}),
+    }),
+    ...(slot === undefined ? {} : { slot, origin: "self" as const }),
+  });
   const stored = await deps.client.getPattern({
     patternId: response.patternId,
   }).catch(() => undefined);
@@ -356,18 +404,19 @@ export async function publishPatternFromDisk(
   }
   if (!response.created) priorPatternId = undefined;
   const listing = await requestListing(deps, response.patternId);
-  const handle = stored?.handle;
+  const handle = stored?.author?.pseudonym ?? stored?.handle;
   return {
-    outcome: "published",
+    outcome: "shared",
     patternId: response.patternId,
     created: response.created,
     ...(handle !== undefined ? { handle } : {}),
+    ...(response.seq !== undefined ? { version: response.seq } : {}),
     ...(priorPatternId !== undefined ? { priorPatternId } : {}),
     ...(remixedFrom !== undefined ? { remixedFrom } : {}),
     localCheck,
     listing,
     next: listing.status === "capped"
-      ? `Run cf pattern publish ${options.entry} again once the limit resets to request the listing. Meanwhile ${
+      ? `Run cf pattern share ${options.entry} again once the limit resets to request the listing. Meanwhile ${
         tryIt(response.patternId)
       }`
       : tryIt(response.patternId),
@@ -411,6 +460,7 @@ async function checkLocally(
     compiled: CompiledPattern,
     meta: { description: string; hashtags: string[]; keywords: string[] },
   ) => void,
+  keepOriginal?: () => Promise<number | undefined>,
 ): Promise<LocalCheckReport> {
   if (options.skipLocalCheck) {
     return { status: "skipped", reason: "--skip-local-check" };
@@ -507,8 +557,15 @@ async function checkLocally(
     changes: outcome.changes,
     paths: shown,
   };
-  if (!options.allowDirty) {
-    const dirty = await deps.uncommitted(diskPaths);
+  let originalVersion: number | undefined;
+  const dirty = options.allowDirty ? [] : await deps.uncommitted(diskPaths);
+  if (
+    (dirty === undefined || dirty.length > 0) && keepOriginal !== undefined
+  ) {
+    // Git cannot take the rewrite back, but a kept version can.
+    originalVersion = await keepOriginal();
+  }
+  if (originalVersion === undefined) {
     if (dirty === undefined) {
       return {
         ...base,
@@ -545,7 +602,11 @@ async function checkLocally(
     await deps.writeTextFile(diskPaths[i], file.contents);
   }
   usePublished(outcome.compiled, rewrittenMeta.get(outcome.compiled) ?? meta);
-  return { ...base, applied: true };
+  return {
+    ...base,
+    applied: true,
+    ...(originalVersion === undefined ? {} : { originalVersion }),
+  };
 }
 
 /** Asks for the listing, reading the daily cap as what it is. */
@@ -603,7 +664,11 @@ const checkLines = (check: LocalCheckReport): string[] => {
         lines.push(
           `Rewrote it to keep personal details out (${
             kinds.join(", ") || "changes"
-          }) in ${check.paths.join(", ")}. Review with \`git diff\`.`,
+          }) in ${check.paths.join(", ")}. ${
+            check.originalVersion === undefined
+              ? "Review with `git diff`."
+              : `Your source as it was is kept as v${check.originalVersion}; cf pattern rollback restores it.`
+          }`,
         );
       } else {
         lines.push(
@@ -615,7 +680,7 @@ const checkLines = (check: LocalCheckReport): string[] => {
     }
     case "held":
       lines.push(
-        "Found personal details the rewrites could not remove. Publishing it as it is; the index checks it too and keeps it out of search until these are fixed:",
+        "Found personal details the rewrites could not remove. Sharing it as it is; the index checks it too and keeps it out of search until these are fixed:",
       );
       for (const line of findingLines(check.findings)) lines.push(line);
       break;
@@ -628,13 +693,13 @@ export const publishReportLines = (report: PublishReport): string[] => {
   const lines: string[] = [];
   for (const line of checkLines(report.localCheck)) lines.push(line);
   if (report.outcome === "blocked") {
-    lines.push(`Nothing was published. Next: ${report.next}.`);
+    lines.push(`Nothing was shared. Next: ${report.next}.`);
     return lines;
   }
   lines.push(
-    `${report.created ? "Published" : "Already published"} ${report.patternId}${
-      report.handle !== undefined ? ` by ${report.handle}` : ""
-    }${
+    `${report.created ? "Shared" : "Already shared"} ${report.patternId}${
+      report.handle !== undefined ? ` as ${report.handle}` : ""
+    }${report.version !== undefined ? ` (v${report.version})` : ""}${
       report.priorPatternId !== undefined
         ? `, a new version of ${report.priorPatternId}`
         : ""

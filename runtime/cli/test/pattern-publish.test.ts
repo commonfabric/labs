@@ -88,9 +88,9 @@ const compiledFrom = (program: RuntimeProgram): CompiledPattern => ({
 /** Publishes, failing the test on a blocked outcome. */
 const publishedReport = async (
   ...args: Parameters<typeof publishPatternFromDisk>
-): Promise<Extract<PublishReport, { outcome: "published" }>> => {
+): Promise<Extract<PublishReport, { outcome: "shared" }>> => {
   const report = await publishPatternFromDisk(...args);
-  if (report.outcome !== "published") {
+  if (report.outcome !== "shared") {
     throw new Error(`blocked: ${report.next}`);
   }
   return report;
@@ -206,7 +206,7 @@ describe("pattern-publish", () => {
         false,
       );
       expect(publishReportLines(report).join("\n")).toContain(
-        "Nothing was published",
+        "Nothing was shared",
       );
     });
 
@@ -233,6 +233,30 @@ describe("pattern-publish", () => {
       expect(index.calls.some((call) => call.fn === "publishPattern")).toBe(
         false,
       );
+    });
+
+    it("keeps the source as a private version, then writes the rewrite, outside a git working tree when it has a lineage", async () => {
+      dirty = undefined;
+      const report = await publishedReport(
+        { entry, slot: "cf-path:abc" },
+        depsWith(scripted([FAIL, PASS], [REWRITE])),
+      );
+
+      expect(report.localCheck).toMatchObject({
+        status: "rewritten",
+        applied: true,
+        originalVersion: 1,
+      });
+      expect(await Deno.readTextFile(entry)).toBe(GENERALIZED);
+      const publishes = index.calls.filter((c) => c.fn === "publishPattern");
+      expect(publishes.map((c) => [c.body.patternId, c.body.keepPrivate]))
+        .toEqual([["id-original", true], ["id-generalized", undefined]]);
+      expect(publishes.every((c) => c.body.slot === "cf-path:abc")).toBe(true);
+      expect(publishes.every((c) => c.body.origin === "self")).toBe(true);
+      expect(report.version).toBe(2);
+      const lines = publishReportLines(report).join("\n");
+      expect(lines).toContain("kept as v1; cf pattern rollback restores it");
+      expect(lines).toContain("(v2)");
     });
 
     it("throws naming cf index join, before compiling, for an identity that is no member", async () => {
