@@ -19,6 +19,8 @@ import {
   getMetaLink,
   type NormalizedFullLink,
   Runtime,
+  setPatternSource,
+  systemPatternSource,
 } from "@commonfabric/runner";
 import {
   EmulatedStorageManager,
@@ -181,6 +183,32 @@ describe("pieces-controller", () => {
 
     expect(called.status).toBe("settled");
     expect(await seen()).toBe(10);
+  });
+
+  it("follows the enclosing piece's origin before starting it, for the piece `openPiece()` opens", async () => {
+    // The enclosing piece records an origin, as a piece a client installed
+    // from a release does; the reader's reconciler records what it is asked
+    // to follow, and follows nothing.
+    {
+      const tx = writerRuntime.edit();
+      setPatternSource(
+        writerRuntime.getCellFromLink(enclosingLink).withTx(tx),
+        tx,
+        systemPatternSource("system/probe/enclosing.tsx"),
+      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await writerRuntime.storageManager.synced();
+    }
+    const reconciled: string[] = [];
+    readerRuntime.sourceReconciler.reconcile = (cell) => {
+      reconciled.push(cell.getAsNormalizedFullLink().id);
+      return Promise.resolve("current");
+    };
+
+    await readerPieces.openPiece(await nested());
+
+    expect(reconciled).toContain(enclosingLink.id);
+    expect(readerRuntime.runner.isRunning(enclosing())).toBe(true);
   });
 
   it("leaves the opened piece running when the enclosing piece its open started stops", async () => {

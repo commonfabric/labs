@@ -137,6 +137,7 @@ async function startInputSources(
           { enclosingSourcesOnly: options.enclosingSourcesOnly }),
       },
       visited,
+      unstarted,
     );
     signal?.throwIfAborted();
     if (!verdict.started && verdict.reason === "origin-pending") return verdict;
@@ -551,13 +552,16 @@ export function ensurePieceRunningVerdict(
  * {@link ensurePieceRunningVerdict} for a piece reached while starting input
  * sources: `visited` holds the owning roots already asked about on the way,
  * by `rootKey()`, which `startInputSources()` skips, so pieces linked to each
- * other's outputs end the walk rather than loop.
+ * other's outputs end the walk rather than loop. Each source the walk from
+ * this piece could not start, at any depth, is added to `unstarted`
+ * (`startInputSources()`).
  */
 async function ensureVerdict(
   runtime: Runtime,
   cellLink: NormalizedFullLink,
   options: EnsurePieceOptions | undefined,
   visited: Set<string>,
+  unstarted?: { source: NormalizedFullLink; verdict: EnsurePieceVerdict }[],
 ): Promise<EnsurePieceVerdict> {
   const observedDocIds: string[] = [];
   const observedDocs: OwningRootAddress[] = [];
@@ -691,6 +695,7 @@ async function ensureVerdict(
           root,
           options,
           visited,
+          unstarted,
         );
         signal?.throwIfAborted();
         // A source still owed its follow holds this piece back with it; the

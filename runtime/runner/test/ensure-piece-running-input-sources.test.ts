@@ -554,6 +554,31 @@ describe("ensure-piece-running", () => {
       expect(openWarnings()).toBe(warned + 1);
     });
 
+    it("warns where a piece enclosing it two levels up cannot start", async () => {
+      const { stream, enclosing } = await stopAfterInputChanges(THREE_LEVEL);
+      const opener = newRuntime();
+      const owner = await nestedOwner(opener, stream);
+      const load = opener.patternManager.loadPatternByIdentity.bind(
+        opener.patternManager,
+      );
+      const enclosingRef = getPatternIdentityRef(
+        opener.getCellFromLink(enclosing),
+      );
+      opener.patternManager.loadPatternByIdentity =
+        ((identity, symbol, ...rest) =>
+          symbol === enclosingRef?.symbol
+            ? Promise.resolve(undefined)
+            : load(identity, symbol, ...rest)) as typeof load;
+      const warned = openWarnings();
+
+      await startWithInputSources(opener, owner, () => opener.start(owner));
+
+      expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
+        false,
+      );
+      expect(openWarnings()).toBe(warned + 1);
+    });
+
     it("warns where a piece that encloses it cannot start", async () => {
       const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
       const opener = newRuntime();
