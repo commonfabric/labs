@@ -52,11 +52,15 @@ agent).
    pseudonym for it. The pool is the `pool` input when one is given, otherwise
    the `#inductorPool` a wish finds (favorites, then this space). A pool serves
    one goal and the wish cannot match on it, so the rules go only to a pool
-   whose goal, trimmed, equals the inductor's; otherwise nothing leaves the
-   piece. The first publish mints the pseudonym, a random string the piece
-   keeps, so it is the same every time this goal is published and unlinkable to
-   the person's other goals. The view says which happened: "Published N rules to
-   the pool for …" or "No pool for … found".
+   whose goal is the inductor's, ignoring case and surrounding or repeated
+   space; otherwise nothing leaves the piece. With no rules there is nothing to
+   publish, and the button is disabled. The first publish mints the pseudonym, a
+   random string the piece keeps, so it is the same every time this goal is
+   published and unlinkable to the person's other goals. The view says which
+   happened: "Sent N rules to the pool for …" or "No pool for … found". It says
+   sent, not published: whether the pool took them is not visible to the piece
+   (a refusal is thrown in the pool's handler, and a contribution is
+   confidential to the pool).
 
 Rules use a restricted regex grammar (no backreferences, no lookaround) and are
 compared by a canonical form, so two people who learned the same rule in

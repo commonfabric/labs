@@ -20,6 +20,7 @@ import {
   newSurprises,
   rewriteRequest,
   rewriteStatus,
+  sameGoal,
   scoreRules,
   settle,
   splitOf,
@@ -422,6 +423,15 @@ describe("rewrite gating", () => {
       training,
     );
     expect(ready.status === "ready" && ready.answered).toEqual(["mail-1"]);
+  });
+});
+
+describe("sameGoal", () => {
+  it("ignores case and surrounding or repeated space, and nothing else", () => {
+    expect(sameGoal("Is this a bill?", "  is THIS   a bill? ")).toBe(true);
+    expect(sameGoal("Is this a bill?", "Is this a bill")).toBe(false);
+    expect(sameGoal("Is this a bill?", "Is this a newsletter?")).toBe(false);
+    expect(sameGoal("", "  ")).toBe(false);
   });
 });
 

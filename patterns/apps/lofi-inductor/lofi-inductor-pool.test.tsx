@@ -2,13 +2,15 @@
  * Publishing reaches a pool only when the pool is for the inductor's goal:
  * the matching pool stores one contribution under the pseudonym the first
  * publish mints, and replaces it when the inductor republishes, and a pool for another
- * goal receives nothing. The first publish mints the pseudonym.
+ * goal receives nothing. The goal matches ignoring case and space, the view
+ * says the rules were sent, and an inductor with no rules publishes nothing.
  *
  * Patterns under test: ./lofi-inductor.tsx publishing into
  * ../inductor-pool/inductor-pool.tsx. Release across contributors is in
  * ./lofi-inductor-pool-multi-user.test.tsx.
  */
-import { assert, pattern, TESTS } from "commonfabric";
+import { assert, pattern, TESTS, UI } from "commonfabric";
+import { hasText } from "../../tools/test-support/vnode-helpers.ts";
 import InductorPool from "../inductor-pool/inductor-pool.tsx";
 import { INVOICE_ONLY } from "./lofi-inductor-test-fixture.ts";
 import LofiInductor from "./lofi-inductor.tsx";
@@ -31,9 +33,9 @@ export default pattern(() => {
       jitter: 0,
     } as Parameters<typeof InductorPool>[0],
   );
-  // The goal matches the pool's, but for surrounding space.
+  // The goal matches the pool's, but for case and space.
   const matching = LofiInductor({
-    goal: `  ${GOAL} `,
+    goal: `  ${GOAL.toUpperCase().replace(" ", "   ")} `,
     items: [],
     rules: INVOICE_ONLY,
     history: [],
@@ -47,6 +49,16 @@ export default pattern(() => {
     history: [],
     published: null,
     pool: newsletterPool,
+  });
+
+  // With no rules, there is nothing to publish.
+  const empty = LofiInductor({
+    goal: GOAL,
+    items: [],
+    rules: [],
+    history: [],
+    published: null,
+    pool: billPool,
   });
 
   return {
@@ -64,6 +76,14 @@ export default pattern(() => {
           billPool.contributions[0]?.rules.length === 1 &&
           billPool.contributions[0]?.rules[0]?.pattern === "invoice" &&
           billPool.consensus.length === 0
+        ),
+      },
+      // The view says the rules were sent: whether the pool took them is not
+      // something the piece can see.
+      { render: matching[UI] },
+      {
+        assertion: assert(() =>
+          hasText(matching[UI], "Sent 1 rules to the pool for")
         ),
       },
       // Republishing replaces the contribution, under the pseudonym the
@@ -91,9 +111,19 @@ export default pattern(() => {
           billPool.contributions.length === 1
         ),
       },
+
+      // An inductor with no rules publishes nothing, and mints nothing.
+      { action: empty.publish },
+      {
+        assertion: assert(() =>
+          empty.published === null && empty.pseudonym === "" &&
+          billPool.contributions.length === 1
+        ),
+      },
     ],
     billPool,
     newsletterPool,
+    empty,
     matching,
     mismatched,
   };

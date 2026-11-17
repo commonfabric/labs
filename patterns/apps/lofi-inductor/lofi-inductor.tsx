@@ -4,8 +4,8 @@
  * case-insensitive regular expressions in a restricted grammar. Where the two
  * disagree the rule set was surprised; once enough surprises are new, the
  * model proposes a whole new rule set, which replaces the current one only if
- * every rule is in grammar and safe and the set scores strictly better on a
- * held-out split. See README.md for the design and its CFC debt.
+ * every rule is in grammar and safe and the set scores clearly better on
+ * enough of a held-out split. See README.md for the design and its CFC debt.
  *
  * State lives in the space (`PerSpace`): the items, the rules learned from
  * them, and the history are the piece's own, and every reader derives the same
@@ -47,6 +47,7 @@ import {
   rewriteRequest,
   type RewriteStatus,
   rewriteStatus,
+  sameGoal,
   scoreRules,
   settle,
   summarize,
@@ -320,15 +321,16 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     const target = pool ?? poolWish.result ?? null;
 
     const publish = action(() => {
+      // An empty set says nothing a pool could count.
+      if (rules.get().length === 0) return;
       // Randomness is allowed in an action, so the first publish mints the
-      // pseudonym. The pool binds it to this principal from then on.
+      // pseudonym. The pool binds this principal, whatever it is called.
       if (!pseudonym.get()) {
         pseudonym.set(`p-${Math.random().toString(36).slice(2, 12)}`);
       }
       const question = goal.get().trim();
       const snapshot = rules.get().map((rule) => ({ ...rule }));
-      const reached = target !== null &&
-        (target.goal ?? "").trim() === question;
+      const reached = target !== null && sameGoal(target.goal ?? "", question);
       published.set({
         goal: question,
         rules: snapshot,
@@ -407,14 +409,23 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         ].join("\n"),
       }))
     );
+    // The pool's answer to a submission is not visible here: a refusal is
+    // thrown in the pool's handler, and a contribution is confidential to the
+    // pool. So the line says what this piece did, which is send.
     const publishedLine = computed(() => {
       const snapshot = published.get();
-      if (!snapshot) return "Not published yet.";
+      if (!snapshot) {
+        return rules.get().length === 0
+          ? "No rules to publish yet."
+          : "Not published yet.";
+      }
       return snapshot.pooled
-        ? `Published ${snapshot.rules.length} rules to the pool for ` +
-          `“${snapshot.goal}”.`
+        ? `Sent ${snapshot.rules.length} rules to the pool for ` +
+          `“${snapshot.goal}”. No one learns a rule from it until enough ` +
+          `others hold it too.`
         : `No pool for “${snapshot.goal}” found; nothing was sent.`;
     });
+    const noRules = computed(() => rules.get().length === 0);
     const itemLines = computed(() =>
       [...rows].reverse().map((row) => ({
         text: Object.values(row.fields).join(" · "),
@@ -464,7 +475,10 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
                     )
                     : null}
                   <cf-hstack gap="2" align="center">
-                    <cf-button onClick={() => publish.send()}>
+                    <cf-button
+                      disabled={noRules}
+                      onClick={() => publish.send()}
+                    >
                       Publish rules
                     </cf-button>
                     <span>{publishedLine}</span>

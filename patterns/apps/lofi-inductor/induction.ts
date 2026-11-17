@@ -620,6 +620,19 @@ export function settle(
 }
 
 // =============================================================================
+// GOALS
+// =============================================================================
+
+/**
+ * Whether two goals ask the same question, as a pool matches an inductor:
+ * ignoring surrounding and repeated space, and letter case.
+ */
+export function sameGoal(a: string, b: string): boolean {
+  const norm = (goal: string) => goal.trim().replace(/\s+/g, " ").toLowerCase();
+  return norm(a) !== "" && norm(a) === norm(b);
+}
+
+// =============================================================================
 // PRESENTATION
 // =============================================================================
 

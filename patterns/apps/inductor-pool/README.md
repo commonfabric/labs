@@ -70,7 +70,7 @@ The lo-fi inductor does this: it takes an optional
 `pool?: Pick<InductorPoolOutput, "goal" | "submit">`, falls back to
 `wish({ query: "#inductorPool", scope: ["~", "."] })`, and its `publish` action
 mints a stable per-goal pseudonym once and sends `submit` only when the pool's
-goal, trimmed, equals its own.
+goal is its own, ignoring case and surrounding or repeated space.
 
 Under the approved cut 2, a random string kept by the inductor piece is the
 idiomatic pseudonym today. It is stable for that piece, so for the person's
