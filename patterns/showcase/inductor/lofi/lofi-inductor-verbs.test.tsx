@@ -1,0 +1,206 @@
+/**
+ * The lo-fi inductor's verbs, as an agent drives them: `addItems` adds a
+ * batch and skips ids already held; `removeItem` takes out the item it is
+ * handed, by reference, and no other, even after the list has moved;
+ * `removeRule` takes out one rule and its adopted mark; `resetRules` empties
+ * the set and keeps the history; the setters write their setting; and each
+ * verb refuses malformed input by throwing rather than doing nothing.
+ *
+ * Pattern under test: ./lofi-inductor.tsx
+ */
+import { action, assert, pattern, TESTS, Writable } from "commonfabric";
+import { HIFI_MOCKS, rule } from "./lofi-inductor-test-fixture.ts";
+import LofiInductor, { type Item } from "./lofi-inductor.tsx";
+
+const GOAL = "Is this email a bill?";
+
+export const llmMocks = HIFI_MOCKS;
+
+/** The message each refused event throws, one per refusal below. */
+const REFUSALS = [
+  "An item needs at least one field.",
+  // The event's schema drops a field that is not a string before the action
+  // sees it, so an item whose only field is a number has none.
+  "An item needs at least one field.",
+  "`items` is a list of items.",
+  "`item` is an item read from `items`.",
+  "`rule` is a rule read from `rules`.",
+  "`goal` is a yes-or-no question, not blank.",
+  "`count` is a whole number, at least 1.",
+  "`percent` is a number above 0 and below 100.",
+  '`model` is a model name, or "" for the default.',
+];
+
+export default pattern(() => {
+  const INVOICE = rule("subject", "invoice");
+  const BILL = rule("subject", "\\bbill\\b");
+  const LUNCH = rule("subject", "lunch", false);
+  const subject = LofiInductor({
+    goal: GOAL,
+    items: [],
+    rules: [INVOICE, BILL, LUNCH],
+    history: [],
+    published: null,
+    adopted: [BILL.key, LUNCH.key],
+    // No rewrite here: the verbs are under test, not the gate.
+    rewriteAfter: 100,
+    heldOutPercent: 30,
+  });
+  const held = new Writable<Item | null>(null);
+
+  // Items seeded with the piece are stored inline, not as links; removing
+  // one by reference works the same.
+  const seeded = LofiInductor({
+    goal: GOAL,
+    items: [
+      { id: "mail-12", fields: { subject: "Lunch?" } },
+      { id: "mail-6", fields: { subject: "Invoice 42" } },
+    ],
+    rules: [],
+  });
+
+  const action_add_batch = action(() => {
+    subject.addItems.send({
+      items: [
+        { id: "mail-1", fields: { subject: "Bill for March" } },
+        { id: "mail-3", fields: { subject: "Weekend plans" } },
+        // Repeated within the batch: added once.
+        { id: "mail-1", fields: { subject: "Bill for April" } },
+        { fields: { subject: "Lunch?" } },
+      ],
+    });
+  });
+  const assert_batch_added = assert(() =>
+    subject.items.length === 3 && subject.items[0]?.id === "mail-1" &&
+    subject.items[0]?.fields.subject === "Bill for March" &&
+    subject.items[1]?.id === "mail-3" &&
+    /^item-[0-9a-z]+$/.test(subject.items[2]?.id ?? "")
+  );
+
+  // An id the list holds adds nothing; a new one is appended.
+  const action_add_repeat = action(() => {
+    subject.addItems.send({
+      items: [
+        { id: "mail-3", fields: { subject: "Something else" } },
+        { id: "mail-2", fields: { subject: "Electricity bill" } },
+      ],
+    });
+  });
+  const assert_repeat_skipped = assert(() =>
+    subject.items.length === 4 &&
+    subject.items[1]?.fields.subject === "Weekend plans" &&
+    subject.items[3]?.id === "mail-2"
+  );
+
+  // Held before the list moves: removing the first item shifts this one
+  // down, and the reference still finds it.
+  const action_stash = action(() => {
+    const item = subject.items[2];
+    if (item) held.set(item);
+  });
+  const action_remove_first = action(() => {
+    const item = subject.items[0];
+    if (item) subject.removeItem.send({ item });
+  });
+  const assert_first_removed = assert(() =>
+    subject.items.length === 3 && subject.items[0]?.id === "mail-3" &&
+    subject.rows.length === 3 && held.get()?.fields.subject === "Lunch?"
+  );
+  const action_remove_held = action(() => {
+    const item = held.get();
+    if (item) subject.removeItem.send({ item });
+  });
+  const assert_held_removed = assert(() =>
+    subject.items.length === 2 && subject.items[0]?.id === "mail-3" &&
+    subject.items[1]?.id === "mail-2"
+  );
+  // Sent again, the reference matches nothing the list holds.
+  const assert_held_removed_once = assert_held_removed;
+
+  const action_remove_seeded = action(() => {
+    const item = seeded.items[0];
+    if (item) seeded.removeItem.send({ item });
+  });
+  const assert_seeded_removed = assert(() =>
+    seeded.items.length === 1 && seeded.items[0]?.id === "mail-6"
+  );
+
+  const action_remove_bill_rule = action(() => {
+    const target = subject.rules[1];
+    if (target) subject.removeRule.send({ rule: target });
+  });
+  const assert_rule_removed = assert(() =>
+    subject.rules.length === 2 && subject.rules[0]?.key === INVOICE.key &&
+    subject.rules[1]?.key === LUNCH.key && subject.adopted.length === 1 &&
+    subject.adopted[0] === LUNCH.key
+  );
+
+  const action_reset_rules = action(() => {
+    subject.resetRules.send();
+  });
+  const assert_rules_reset = assert(() =>
+    subject.rules.length === 0 && subject.adopted.length === 0 &&
+    subject.items.length === 2
+  );
+
+  const action_settings = action(() => {
+    subject.setRewriteAfter.send({ count: 5 });
+    subject.setHeldOutPercent.send({ percent: 50 });
+    subject.setHifiModel.send({ model: "  gateway:claude-opus-5-5 " });
+  });
+  const assert_settings = assert(() =>
+    subject.rewriteAfter === 5 && subject.heldOutPercent === 50 &&
+    subject.hifiModel === "gateway:claude-opus-5-5"
+  );
+  const action_default_model = action(() => {
+    subject.setHifiModel.send({ model: "" });
+  });
+  const assert_default_model = assert(() => subject.hifiModel === "");
+
+  // Every refusal leaves what it would have changed as it was.
+  const assert_unchanged_by_refusals = assert(() =>
+    subject.items.length === 2 && subject.goal === GOAL &&
+    subject.rewriteAfter === 5 && subject.heldOutPercent === 50 &&
+    subject.hifiModel === ""
+  );
+
+  return {
+    [TESTS]: [
+      { action: action_add_batch },
+      { assertion: assert_batch_added },
+      { action: action_add_repeat },
+      { assertion: assert_repeat_skipped },
+      { action: action_stash },
+      { action: action_remove_first },
+      { assertion: assert_first_removed },
+      { action: action_remove_held },
+      { assertion: assert_held_removed },
+      { action: action_remove_held },
+      { assertion: assert_held_removed_once },
+      { action: action_remove_seeded },
+      { assertion: assert_seeded_removed },
+      { action: action_remove_bill_rule },
+      { assertion: assert_rule_removed },
+      { action: action_reset_rules },
+      { assertion: assert_rules_reset },
+      { action: action_settings },
+      { assertion: assert_settings },
+      { action: action_default_model },
+      { assertion: assert_default_model },
+      // The refusals, in the order of `REFUSALS`.
+      { action: subject.addItem, event: { id: "mail-9", fields: {} } },
+      { action: subject.addItem, event: { fields: { subject: 42 } } },
+      { action: subject.addItems, event: { items: "mail-9" } },
+      { action: subject.removeItem, event: {} },
+      { action: subject.removeRule, event: {} },
+      { action: subject.setGoal, event: { goal: "   " } },
+      { action: subject.setRewriteAfter, event: { count: 0 } },
+      { action: subject.setHeldOutPercent, event: { percent: 100 } },
+      { action: subject.setHifiModel, event: { model: 7 } },
+      { assertion: assert_unchanged_by_refusals },
+    ],
+    expectRuntimeErrors: REFUSALS,
+    subject,
+    seeded,
+  };
+});

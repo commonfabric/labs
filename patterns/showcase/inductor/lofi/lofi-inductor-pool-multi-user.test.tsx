@@ -3,12 +3,16 @@
  * to one pool whose threshold is exactly five, the lowest a pool may seal;
  * three more contributors send `invoice` to the pool directly. The rule all
  * five hold is released with its count; the rules only one holds are not;
- * and an inductor with no held-out items is offered none of it.
+ * and an inductor with no held-out items is offered none of it. Then Alice
+ * unpublishes, which takes only her contribution out: the rule falls to four
+ * and is not released, and publishing again brings it back to five. Last,
+ * Alice asks a new question, which withdraws her contribution for the old
+ * one.
  *
  * Patterns under test: ./lofi-inductor.tsx publishing into
  * ../pool/inductor-pool.tsx
  */
-import { assert, multiUserTest, pattern, TESTS } from "commonfabric";
+import { action, assert, multiUserTest, pattern, TESTS } from "commonfabric";
 import { MIN_SEALED_THRESHOLD } from "../pool/consensus.ts";
 import InductorPool, {
   type InductorPoolOutput,
@@ -48,6 +52,9 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
     published: null,
     pool: setup.pool,
   });
+  const askAnotherQuestion = action(() => {
+    inductor.setGoal.send({ goal: "Is this email a newsletter?" });
+  });
   return {
     [TESTS]: [
       { action: inductor.publish },
@@ -65,6 +72,23 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       // Alice's inductor reads the release, but none of her held-out items
       // (she has none) exercises it, so there is nothing to offer her.
       { assertion: assert(() => inductor.poolOffer === null) },
+      { action: inductor.unpublish },
+      {
+        assertion: assert(() =>
+          (setup.pool.consensus ?? []).length === 0 &&
+          inductor.published === null && inductor.pseudonym !== ""
+        ),
+      },
+      // The other four stayed: Alice's return makes five again.
+      { action: inductor.publish },
+      { assertion: assert(() => invoiceReleased(setup.pool)) },
+      { action: askAnotherQuestion },
+      {
+        assertion: assert(() =>
+          (setup.pool.consensus ?? []).length === 0 &&
+          inductor.pseudonym === "" && inductor.rules.length === 0
+        ),
+      },
     ],
     inductor,
   };

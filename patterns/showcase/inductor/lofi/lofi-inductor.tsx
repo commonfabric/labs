@@ -288,6 +288,18 @@ function checkedItem(
 }
 
 /**
+ * Takes the element at `index` out of `list` with mergeable writes. An
+ * element written by `push` is stored as a link, which only the element's
+ * cell matches; one seeded with the piece is stored inline, which only its
+ * value matches. So both are sent, and each removes nothing of the other
+ * kind. `value` is the element's value, copied out of what `get()` read.
+ */
+function removeElement<T>(list: Writable<T[]>, index: number, value: T): void {
+  list.removeByValue(list.key(index));
+  list.removeByValue(value);
+}
+
+/**
  * Asks `target` to withdraw this piece's contribution, if it is the pool for
  * `question`. A pool binds the principal, so it takes out only the sender's.
  */
@@ -492,17 +504,21 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         throw new Error("`item` is an item read from `items`.");
       }
       const index = items.get().findIndex((each) => equals(each, event.item));
-      if (index >= 0) items.removeByValue(items.key(index));
+      if (index < 0) return;
+      const { id, fields } = items.get()[index];
+      removeElement(items, index, { id, fields: { ...fields } });
     });
 
     const removeRule = action((event: RuleRef) => {
       if (event?.rule === undefined || event.rule === null) {
         throw new Error("`rule` is a rule read from `rules`.");
       }
-      const index = rules.get().findIndex((each) => equals(each, event.rule));
+      // A rule is a value, known by its canonical key.
+      const key = event.rule.key;
+      const index = rules.get().findIndex((each) => each.key === key);
       if (index < 0) return;
-      const key = rules.get()[index].key;
-      rules.removeByValue(rules.key(index));
+      const { field, pattern, predicts } = rules.get()[index];
+      removeElement(rules, index, { field, pattern, predicts, key });
       adopted.removeByValue(key);
     });
 
