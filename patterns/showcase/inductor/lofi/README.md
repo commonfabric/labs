@@ -172,7 +172,8 @@ Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
   field at worst, measured. Every rule of a set runs on every item, so a set's
   patterns together may cost at most `MAX_SET_BACKTRACK_COST`, four patterns'
   worth. The pool applies the same grammar and set budget to every contribution,
-  and takes at most `MAX_RULES` (20) rules from one.
+  and refuses a contribution of more than `MAX_RULES` (20) rules whole, taking
+  none of it.
 - A rule set says YES when a YES rule matches and no NO rule does.
 - Scoring all labelled held-out items, not only surprises, is what lets the gate
   see a proposal that fixes the surprises by breaking items the current rules
