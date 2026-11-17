@@ -10,6 +10,7 @@ import {
   isDeepFrozen,
   isKeyableObjectOrArray,
   taggedHashStringOf,
+  valueEqualByWalk,
 } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
@@ -1199,6 +1200,52 @@ const dropMaterializedSuffix = (
   cache.prefixes.length = Math.min(cache.prefixes.length, pendingIndex);
   if (cache.prefixes.length === 0) {
     record.materialized = undefined;
+  }
+};
+
+/**
+ * Keeps what still holds of `record`'s materialization cache now that the
+ * layers at `from` through `through` may replay differently, and drops the
+ * rest.
+ * A cached prefix holds when replaying its layer over the prefix before it
+ * gives an equal document, and the prefix keeps the document it holds, so a
+ * reader sees no new identity for an unchanged value. Each prefix is a
+ * function of the one before it and of its own layer, so once every changed
+ * layer holds, every prefix after them holds too, and the cost of the check
+ * is those layers' replays rather than the whole stack's.
+ *
+ * Under an interleaved wave promotion the cache is not what materialization
+ * reads, so it is dropped from `from` without being checked.
+ */
+const revalidateMaterializedPrefixes = (
+  record: DocumentRecord,
+  logContext: PendingPatchLogContext,
+  from: number,
+  through: number,
+): void => {
+  const cache = record.materialized;
+  if (
+    cache === undefined || cache.confirmed !== record.confirmed ||
+    record.confirmed.localWavePromotion?.entries.length
+  ) {
+    dropMaterializedSuffix(record, from);
+    return;
+  }
+  const last = Math.min(through, cache.prefixes.length - 1);
+  for (let index = from; index <= last; index++) {
+    const base = index === 0 ? record.confirmed : cache.prefixes[index - 1]!;
+    const pending = record.pending[index]!;
+    const replayed = isCoveredPendingVersion(record.confirmed, pending)
+      ? base.value
+      : applyPendingVersion(base.value, pending, logContext);
+    const cached = cache.prefixes[index]!.value;
+    const holds = replayed === undefined || cached === undefined
+      ? replayed === cached
+      : valueEqualByWalk(replayed, cached);
+    if (!holds) {
+      dropMaterializedSuffix(record, index);
+      return;
+    }
   }
 };
 
@@ -12869,7 +12916,9 @@ export class SpaceReplica
       // The verdict is in: a splice shown as the array its writer computed
       // (`displayedPatches`) promotes as the store applied it, which over a
       // moved array is a different value, so the layers are marked accepted
-      // and the view materialized over them is rebuilt.
+      // and the view materialized over them is rebuilt from the first layer
+      // whose accepted replay differs from what the view showed. Over an
+      // array nothing moved, that is none of them, and the view stands.
       if (
         pendingIndexes.some((index) => {
           const entry = record.pending[index]!;
@@ -12882,7 +12931,12 @@ export class SpaceReplica
             ? { ...entry, accepted: true }
             : entry
         );
-        dropMaterializedSuffix(record, firstPendingIndex);
+        revalidateMaterializedPrefixes(
+          record,
+          { space: this.#space, id, scope },
+          firstPendingIndex,
+          lastPendingIndex,
+        );
       }
       const pending = record.pending[lastPendingIndex]!;
       const previousConfirmed = record.confirmed;
