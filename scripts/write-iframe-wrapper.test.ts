@@ -1,5 +1,5 @@
 import { expect } from "@std/expect";
-import { resolve } from "@std/path";
+import { dirname, resolve } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
@@ -952,6 +952,149 @@ export const IFRAME_PATTERN = {
       );
     });
   }
+
+  describe("assets", () => {
+    // These cases read the wrapper's text rather than compiling it: `cf check`
+    // refuses a wrapper that passes `assets` for as long as `cf-iframe`'s JSX
+    // type declares no such attribute.
+    // TODO(seefeld): Compile the wrappers here once `CFIframeAttributes`
+    // declares `assets`.
+
+    it("passes no `assets` for a contract that declares none", async () => {
+      await inTemporaryDirectory(
+        "pattern-iframe-no-assets-",
+        async (directory) => {
+          const { contract, guest, out } = await writeFixture(
+            directory,
+            `{ name: "Plain" }`,
+          );
+
+          const result = await generate(contract, guest, out);
+
+          expect(result.code, decoder.decode(result.stderr)).toBe(0);
+          const generated = await Deno.readTextFile(out);
+          expect(generated).not.toContain("GUEST_ASSETS");
+          expect(generated).not.toContain("assets=");
+        },
+      );
+    });
+
+    it("passes a directory as `dataFile.urls()` of its path from the wrapper", async () => {
+      await inTemporaryDirectory(
+        "pattern-iframe-asset-directory-",
+        async (directory) => {
+          await Deno.mkdir(resolve(directory, "assets"));
+          const { contract, guest, out } = await writeFixture(
+            directory,
+            `{ name: "Sprites", assets: "./assets" }`,
+            "pattern/main.tsx",
+          );
+
+          const result = await generate(contract, guest, out);
+
+          expect(result.code, decoder.decode(result.stderr)).toBe(0);
+          const generated = await Deno.readTextFile(out);
+          expect(generated).toContain(
+            'const GUEST_ASSETS = dataFile.urls("../assets");',
+          );
+          expect(generated).toContain("          assets={GUEST_ASSETS}\n");
+        },
+      );
+    });
+
+    it("passes each named file as `dataFile.url()` of its path from the wrapper", async () => {
+      await inTemporaryDirectory(
+        "pattern-iframe-asset-files-",
+        async (directory) => {
+          for (const file of ["images/glaze.png", "fonts/menu.woff2"]) {
+            await Deno.mkdir(resolve(directory, dirname(file)), {
+              recursive: true,
+            });
+            await Deno.writeFile(resolve(directory, file), new Uint8Array([0]));
+          }
+          const { contract, guest, out } = await writeFixture(
+            directory,
+            `{
+  name: "Glazed",
+  assets: {
+    glaze: "./images/glaze.png",
+    ["menu-font"]: "fonts/menu.woff2",
+    ["__proto__"]: "./images/glaze.png",
+  },
+}`,
+            "pattern/main.tsx",
+          );
+
+          const result = await generate(contract, guest, out);
+
+          expect(result.code, decoder.decode(result.stderr)).toBe(0);
+          const generated = await Deno.readTextFile(out);
+          // A computed key keeps `__proto__` a property of the record.
+          expect(generated).toContain(`const GUEST_ASSETS = {
+  ["glaze"]: dataFile.url("../images/glaze.png"),
+  ["menu-font"]: dataFile.url("../fonts/menu.woff2"),
+  ["__proto__"]: dataFile.url("../images/glaze.png"),
+};
+`);
+          expect(generated).toContain("          assets={GUEST_ASSETS}\n");
+        },
+      );
+    });
+
+    const notAPathOrRecord =
+      "IFRAME_PATTERN.assets must be a directory path or a record from an asset name to a file path.";
+    for (
+      const [assets, message] of [
+        ["42", notAPathOrRecord],
+        [`""`, notAPathOrRecord],
+        [`["./glaze.png"]`, notAPathOrRecord],
+        [
+          `{ "glaze.small": "./glaze.png" }`,
+          `Asset name "glaze.small" must be made of letters, digits, "_", and "-", such as glaze.`,
+        ],
+        [
+          `{ "": "./glaze.png" }`,
+          `Asset name "" must be made of letters, digits, "_", and "-", such as glaze.`,
+        ],
+        [`{ glaze: "" }`, `Asset "glaze" must have a file path string.`],
+        [`{ glaze: 1 }`, `Asset "glaze" must have a file path string.`],
+        [
+          `{ notes: "./notes.txt" }`,
+          `Asset "notes" must name an image, font, or sound file that dataFile.url() reads, such as a .png, .woff2, or .mp3; found "./notes.txt".`,
+        ],
+        [`"./missing"`, "missing, which is not a directory."],
+        [`"./glaze.png"`, "glaze.png, which is not a directory."],
+        [`{ glaze: "./missing.png" }`, "missing.png, which is not a file."],
+      ]
+    ) {
+      it(`writes nothing for the assets ${assets}`, async () => {
+        await inTemporaryDirectory(
+          "pattern-iframe-assets-refused-",
+          async (directory) => {
+            await Deno.writeFile(
+              resolve(directory, "glaze.png"),
+              new Uint8Array([0]),
+            );
+            await Deno.writeTextFile(resolve(directory, "notes.txt"), "notes");
+            const fixture = await writeFixture(
+              directory,
+              `{ name: "Refused", assets: ${assets} }`,
+            );
+
+            const result = await generate(
+              fixture.contract,
+              fixture.guest,
+              fixture.out,
+            );
+
+            expect(result.code).not.toBe(0);
+            expect(decoder.decode(result.stderr)).toContain(message);
+            await expectAbsent(fixture.out, fixture.script, fixture.html);
+          },
+        );
+      });
+    }
+  });
 
   it("bundles D3, Phaser, and Babylon.js guests", async () => {
     const frameworks = [
