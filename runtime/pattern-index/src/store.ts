@@ -67,6 +67,7 @@ const ROOT_KEY = "root.key";
 const MEMBERSHIP = "membership.json";
 const PUBLISHED = "published.json";
 const PENDING_MOVE = "pending-root-move";
+const NOTED_NOT_JOINED = "noted-not-joined";
 
 /**
  * The directory every index's store lives under, one subdirectory per index
@@ -248,6 +249,29 @@ export class PatternIndexStore {
       return;
     }
     await Deno.writeTextFile(path, `${cid}\n`, { mode: 0o600 });
+  }
+
+  /**
+   * Whether `cf` has told the person that it keeps no versions because this
+   * machine never joined the index, which it says only once.
+   */
+  async notedNotJoined(): Promise<boolean> {
+    await this.#checkPrivate();
+    return await Deno.lstat(join(this.#dir, NOTED_NOT_JOINED)).then(
+      () => true,
+      (error) => {
+        if (isNotFound(error)) return false;
+        throw error;
+      },
+    );
+  }
+
+  /** Records that the person has been told. */
+  async recordNotedNotJoined(): Promise<void> {
+    await this.#ensureDir();
+    await Deno.writeTextFile(join(this.#dir, NOTED_NOT_JOINED), "", {
+      mode: 0o600,
+    });
   }
 
   /** The id `entryPath` last published as, or `undefined`. */
