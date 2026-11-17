@@ -34,18 +34,23 @@ debt"); this pattern is its implementation.
   So no one contributes under someone else's pseudonym, and no principal is
   counted twice. (Refusing a principal's new pseudonym instead locked out a
   contributor whose two runs of one publish minted two.)
-- **Withdraw.** `withdraw` takes the sender's entry out, by principal. It sends
-  `submit` `{ withdraw: true }`, so `submitContribution` stays the only code
-  that writes a contribution, which the release's input witness needs. Once
-  every contributor has withdrawn, the next contribution seals afresh. A
-  withdrawn pseudonym is free for anyone to take (see "Not cuts").
+- **Withdraw.** `withdraw` takes the sender's entry out, by principal, and does
+  nothing for a sender who holds none. The pool binds `submitContribution` a
+  second time, set `withdrawing`, and `withdraw` sends to that binding, so
+  `submitContribution` stays the only code that writes a contribution, which the
+  release's input witness and the entries' `WriteAuthorizedBy` need. (`withdraw`
+  is a small action in front of the binding, not the binding itself, because a
+  stream's event type is exact: the binding takes a contribution, and `withdraw`
+  takes nothing.) Once every contributor has withdrawn, the next contribution
+  seals afresh. A withdrawn pseudonym is free for anyone to take (see "Not
+  cuts").
 - **The seal.** The first contribution mints a 128-bit pool secret
   (`Math.random`, the sandbox's, which a handler may call) and copies the
   configured `thresholdCenter` and `jitter` beside it. That seal is stored in
   the contribution, and every later contribution copies the first one's. So the
   secret and threshold are written only by `submitContribution`, like the rules,
   and the release reads them from the contributions alone.
-- **Release.** `releaseConsensus`, a `lift` exported from `inductor-pool.tsx`,
+- **Release.** `releaseConsensus`, a `lift` exported from `pool-policy.tsx`,
   takes the contributions and nothing else. It counts the distinct pseudonyms
   holding each rule. A rule is counted by its field, label and canonical
   pattern, not by its 64-bit `key`, whose FNV hash anyone can collide. Each
@@ -60,12 +65,19 @@ debt"); this pattern is its implementation.
   output, `consensus`, is the pool's public result, with `releasedCount` and the
   view derived from it. It is not stored (see "Workaround: the release is not
   stored").
+- **The view** shows the goal, the configured threshold centre and jitter, and
+  the released rules with their counts. It does not show how many people have
+  contributed: the policy releases nothing about the contributions but the
+  released rules, so the view reads nothing else.
 
-The pure logic is in `consensus.ts`, and the rule grammar in
+The policy, its released function, and its one writer are in `pool-policy.tsx`;
+the pattern and its view are in `inductor-pool.tsx`, which the policy module
+does not import. The pure logic is in `consensus.ts`, and the rule grammar in
 `../shared/rule-grammar.ts`. The policy module's identity covers both, because a
-module's identity covers the modules it imports. Both live in this folder so
-that the policy's identity depends only on the pool's own files; the lo-fi
-inductor imports the grammar from here.
+module's identity covers the modules it imports, and it does not cover the view,
+so a view edit leaves stored contributions releasable. Both live in the inductor
+family's own folders, so that the policy's identity depends only on its files;
+the lo-fi inductor imports the grammar from `../shared`.
 
 ## Discovery and wiring
 
@@ -120,7 +132,7 @@ also show that `tallyEveryRule`, a function of the same module that no rule
 names, is refused by a public store, and so is a contribution copied out raw.
 
 **Editing the policy module strands stored contributions.** The rule names
-`THIS_POLICY.moduleIdentity`, the content identity of `inductor-pool.tsx` with
+`THIS_POLICY.moduleIdentity`, the content identity of `pool-policy.tsx` with
 everything it imports (`consensus.ts`, `../shared/rule-grammar.ts`). Any edit to
 those files, a grammar fix included, gives the module a new identity, and stored
 contributions carry the old one's `PolicyOf` clause and `TransformedBy`
