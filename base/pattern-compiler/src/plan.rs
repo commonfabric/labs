@@ -324,10 +324,10 @@ struct Computed {
     origin: Option<Declared>,
     /// The paths below the value that hold the stream of a binding, and
     /// the binding (PL §1.1, `Binding.result`). A rendered tree has the
-    /// positions that hold a stream. The assembled result of a `map` has
-    /// the paths of what its callback returns below `*`, and so do the
-    /// children of a view node from a spread on, where one collection is
-    /// spread there ("The result paths of a binding in an element body").
+    /// positions that hold a stream. The assembled result of a `map` or
+    /// a `flatMap` has the paths of what its callback returns below `*`,
+    /// and so has an array literal from a spread on ("The result paths
+    /// of a binding in an element body").
     streams: Vec<StreamAt>,
     order: usize,
 }

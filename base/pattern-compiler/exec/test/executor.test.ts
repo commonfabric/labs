@@ -2412,8 +2412,8 @@ describe("a write through a reference by key that changes the value", () => {
     const artifact = structuredClone(await artifactOf("rekey"));
     const instance = new Instance(artifact, inPlace());
     instance.send(NOTE, { text: "mine" }, [1]);
-    // The second write of the handler is refused: the row's element is
-    // gone by then.
+    // The body of the handler is wrapped so that it throws after its two
+    // writes.
     const run = instance.bodies.get(
       artifact.plan.bindings[FINISH_AND_RENAME].handler.body!,
     )!;
