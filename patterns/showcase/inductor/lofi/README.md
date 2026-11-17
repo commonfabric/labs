@@ -225,7 +225,16 @@ Known runtime issues this pattern works around:
 4. `removeByValue` with an element's cell (`list.key(i)`) matches only an
    element stored as a link, which `push` writes; an element seeded with the
    piece is stored inline, and only its value matches it. `removeItem` and
-   `removeRule` send both, and each removes nothing of the other kind.
+   `removeRule` send both, and each removes nothing of the other kind. An inline
+   element also has no document of its own, so a reference held to one names its
+   slot: once an earlier item is removed, that reference matches nothing, and
+   `removeItem` with it does nothing. An item added through `addItem` is a link,
+   and its reference survives the move.
+5. Right after the goal changes, a hi-fi call can still hold the old goal's
+   answer, not yet marked pending, so grading read it as an answer to the new
+   question and could ask for a rewrite on it. Each hi-fi entry carries the
+   prompt it is asked now (`asked`), and an answer counts only if the call's
+   last user message is that prompt.
 
 (Another, a first publish that ran twice under server execution and minted two
 pseudonyms, locked the contributor out of the pool. The pool now binds the

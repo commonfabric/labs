@@ -20,6 +20,10 @@ import { type Item, type ItemRow, verdictText } from "./induction.ts";
 /** An item as `addItem` takes it; an id is minted when none is given. */
 export interface SubmittedItem {
   id?: string;
+  /**
+   * The item's text fields. The event's schema drops a field that is not a
+   * string before `addItem` sees it.
+   */
   fields: Record<string, string>;
 }
 

@@ -120,9 +120,9 @@ export default pattern(() => {
     subject.rows[2]?.hifi === false
   );
 
-  // The same question again changes nothing.
+  // The same question again, but for case and space, changes nothing.
   const action_set_same_goal = action(() => {
-    subject.setGoal.send({ goal: `  ${LUNCH_GOAL} ` });
+    subject.setGoal.send({ goal: `  ${LUNCH_GOAL.toUpperCase()} ` });
   });
   const action_set_lunch_goal = action(() => {
     subject.setGoal.send({ goal: LUNCH_GOAL });

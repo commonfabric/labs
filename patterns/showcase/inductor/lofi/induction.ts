@@ -43,10 +43,18 @@ export interface HifiAnswer {
 /** One item's hi-fi call, as far as grading reads it. */
 export interface HifiState {
   id: string;
+  /**
+   * The prompt the item is asked now. An answer counts only if its call
+   * asked this: right after the goal changes, the call can still hold the
+   * old goal's answer, not yet marked pending.
+   */
+  asked?: string;
   answer: {
     pending: boolean;
     error?: unknown;
     result?: Partial<Record<keyof HifiAnswer, unknown>> | undefined;
+    /** The call's messages: what it asked, and the model's reply. */
+    messages?: ReadonlyArray<{ role?: unknown; content?: unknown }>;
   };
 }
 
@@ -250,10 +258,21 @@ export function labelWith(
   return label(compileRules(rules), fields);
 }
 
+/** What a call asked: its last user message, or undefined if none. */
+function askedOf(
+  messages: HifiState["answer"]["messages"],
+): unknown {
+  const asked = (messages ?? []).filter((message) => message.role === "user");
+  return asked[asked.length - 1]?.content;
+}
+
 /** The hi-fi label in `state`, or null while there is no usable one. */
 function hifiLabel(state: HifiState | undefined): boolean | null {
   const answer = state?.answer;
   if (!answer || answer.pending || answer.error) return null;
+  if (state?.asked !== undefined && askedOf(answer.messages) !== state.asked) {
+    return null;
+  }
   const label = answer.result?.label;
   return typeof label === "boolean" ? label : null;
 }

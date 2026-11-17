@@ -19,6 +19,8 @@ import { type CanonicalRule, describeRule } from "../shared/rule-grammar.ts";
 interface PoolCardInput {
   offer: PoolOffer | null;
   published: Published | null;
+  /** The piece's pseudonym, "" until its first publish. */
+  pseudonym: string;
   rules: CanonicalRule[];
   settlePoolOffer: Stream<void>;
   publish: Stream<void>;
@@ -34,7 +36,15 @@ export interface PoolCardOutput {
 const MONO = "font-family: var(--cf-theme-mono-font-family);";
 
 export default pattern<PoolCardInput, PoolCardOutput>(
-  ({ offer, published, rules, settlePoolOffer, publish, unpublish }) => {
+  ({
+    offer,
+    published,
+    pseudonym,
+    rules,
+    settlePoolOffer,
+    publish,
+    unpublish,
+  }) => {
     const hasOffer = computed(() => offer !== null);
     const offerLine = computed(() =>
       offer === null
@@ -96,7 +106,7 @@ export default pattern<PoolCardInput, PoolCardOutput>(
         : `No pool for “${snapshot.goal}” found; nothing was sent.${withheld}`;
     });
     const noRules = computed(() => rules.length === 0);
-    const notPooled = computed(() => published?.pooled !== true);
+    const neverPublished = computed(() => pseudonym === "");
 
     return {
       [NAME]: "Pool",
@@ -132,7 +142,7 @@ export default pattern<PoolCardInput, PoolCardOutput>(
               </cf-button>
               <cf-button
                 variant="ghost"
-                disabled={notPooled}
+                disabled={neverPublished}
                 onClick={() => unpublish.send()}
               >
                 Unpublish

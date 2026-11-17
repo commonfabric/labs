@@ -23,7 +23,7 @@ import {
 } from "./induction.ts";
 import { type CanonicalRule, describeRule } from "../shared/rule-grammar.ts";
 
-/** The rule `removeRule` takes out: the rule itself, as read from `rules`. */
+/** The rule `removeRule` takes out, known by its canonical key. */
 export interface RuleRef {
   rule: CanonicalRule;
 }

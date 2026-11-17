@@ -1,7 +1,8 @@
 /**
  * The lo-fi inductor's verbs, as an agent drives them: `addItems` adds a
  * batch and skips ids already held; `removeItem` takes out the item it is
- * handed, by reference, and no other, even after the list has moved;
+ * handed, by reference, and no other, even after the list has moved (for
+ * an item added through `addItem`; see below for one seeded inline);
  * `removeRule` takes out one rule and its adopted mark; `resetRules` empties
  * the set and keeps the history; the setters write their setting; and each
  * verb refuses malformed input by throwing rather than doing nothing.
@@ -39,7 +40,18 @@ export default pattern(() => {
     goal: GOAL,
     items: [],
     rules: [INVOICE, BILL, LUNCH],
-    history: [],
+    history: [{
+      round: 1,
+      accepted: true,
+      reason: "it scored better",
+      proposed: [INVOICE],
+      refusals: [],
+      currentF1: 0,
+      proposedF1: 1,
+      heldOut: 5,
+      answered: [],
+      decidedAt: 0,
+    }],
     published: null,
     adopted: [BILL.key, LUNCH.key],
     // No rewrite here: the verbs are under test, not the gate.
@@ -55,6 +67,7 @@ export default pattern(() => {
     items: [
       { id: "mail-12", fields: { subject: "Lunch?" } },
       { id: "mail-6", fields: { subject: "Invoice 42" } },
+      { id: "mail-7", fields: { subject: "Your bill is ready" } },
     ],
     rules: [],
   });
@@ -117,12 +130,29 @@ export default pattern(() => {
   // Sent again, the reference matches nothing the list holds.
   const assert_held_removed_once = assert_held_removed;
 
+  // Held before the first is removed, so the list has moved by the time it
+  // is sent. An inline element has no document of its own: the reference
+  // names its slot, which after the move holds nothing, so the send removes
+  // nothing, and in particular not the item that moved into another slot.
+  // (README.md, "Known runtime issues".)
+  const heldSeeded = new Writable<Item | null>(null);
   const action_remove_seeded = action(() => {
+    const later = seeded.items[2];
+    if (later) heldSeeded.set(later);
     const item = seeded.items[0];
     if (item) seeded.removeItem.send({ item });
   });
   const assert_seeded_removed = assert(() =>
-    seeded.items.length === 1 && seeded.items[0]?.id === "mail-6"
+    seeded.items.length === 2 && seeded.items[0]?.id === "mail-6" &&
+    seeded.items[1]?.id === "mail-7"
+  );
+  const action_remove_held_seeded = action(() => {
+    const item = heldSeeded.get();
+    if (item) seeded.removeItem.send({ item });
+  });
+  const assert_held_seeded_kept = assert(() =>
+    seeded.items.length === 2 && seeded.items[0]?.id === "mail-6" &&
+    seeded.items[1]?.id === "mail-7"
   );
 
   const action_remove_bill_rule = action(() => {
@@ -140,7 +170,7 @@ export default pattern(() => {
   });
   const assert_rules_reset = assert(() =>
     subject.rules.length === 0 && subject.adopted.length === 0 &&
-    subject.items.length === 2
+    subject.items.length === 2 && subject.history.length === 1
   );
 
   const action_settings = action(() => {
@@ -179,6 +209,8 @@ export default pattern(() => {
       { assertion: assert_held_removed_once },
       { action: action_remove_seeded },
       { assertion: assert_seeded_removed },
+      { action: action_remove_held_seeded },
+      { assertion: assert_held_seeded_kept },
       { action: action_remove_bill_rule },
       { assertion: assert_rule_removed },
       { action: action_reset_rules },
@@ -189,7 +221,10 @@ export default pattern(() => {
       { assertion: assert_default_model },
       // The refusals, in the order of `REFUSALS`.
       { action: subject.addItem, event: { id: "mail-9", fields: {} } },
-      { action: subject.addItem, event: { fields: { subject: 42 } } },
+      {
+        action: subject.addItem,
+        event: { fields: { subject: 42 } },
+      },
       { action: subject.addItems, event: { items: "mail-9" } },
       { action: subject.removeItem, event: {} },
       { action: subject.removeRule, event: {} },

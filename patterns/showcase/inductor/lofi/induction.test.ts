@@ -134,6 +134,28 @@ describe("gradeItems", () => {
     expect(rows.some((row) => row.surprise)).toBe(false);
   });
 
+  it("counts an answer only for the prompt the item is asked now", () => {
+    const call = (asked: string) => ({
+      pending: false,
+      result: { label: true, reasoning: "because" },
+      messages: [
+        { role: "user", content: asked },
+        { role: "assistant", content: '{"label": true}' },
+      ],
+    });
+    const rows = gradeItems(
+      items.slice(0, 2),
+      [
+        { id: "mail-1", asked: "new goal", answer: call("new goal") },
+        // The goal changed, and the call still holds the old answer.
+        { id: "mail-2", asked: "new goal", answer: call("old goal") },
+      ],
+      [],
+      30,
+    );
+    expect(rows.map((row) => row.hifi)).toEqual([true, null]);
+  });
+
   it("summarizes agreement over labelled items", () => {
     const rows = gradeItems(items, hifi, [rule("subject", "invoice")], 30);
     expect(summarize(rows)).toEqual({

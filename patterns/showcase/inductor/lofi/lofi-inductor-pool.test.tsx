@@ -10,7 +10,7 @@
  * ../pool/inductor-pool.tsx. Release across contributors is in
  * ./lofi-inductor-pool-multi-user.test.tsx.
  */
-import { assert, pattern, TESTS, UI } from "commonfabric";
+import { action, assert, pattern, TESTS, UI } from "commonfabric";
 import { hasText } from "../../../tools/test-support/vnode-helpers.ts";
 import InductorPool from "../pool/inductor-pool.tsx";
 import { INVOICE_ONLY, rule } from "./lofi-inductor-test-fixture.ts";
@@ -71,6 +71,11 @@ export default pattern(() => {
     history: [],
     published: null,
     pool: personalPool,
+  });
+
+  const removeInvoice = action(() => {
+    const invoice = personal.rules[0];
+    if (invoice) personal.removeRule.send({ rule: invoice });
   });
 
   // With no rules, there is nothing to publish.
@@ -144,6 +149,19 @@ export default pattern(() => {
           personalPool.contributions.length === 1 &&
           personalPool.contributions[0]?.rules.length === 1 &&
           personalPool.contributions[0]?.rules[0]?.pattern === "invoice"
+        ),
+      },
+
+      // With only personal rules left, a publish sends nothing, and takes back
+      // what the earlier publish sent.
+      { action: removeInvoice },
+      { action: personal.publish },
+      {
+        assertion: assert(() =>
+          personal.published?.pooled === false &&
+          personal.published?.rules.length === 0 &&
+          personal.published?.withheld === 2 &&
+          personalPool.contributions.length === 0
         ),
       },
 

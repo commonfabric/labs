@@ -214,7 +214,8 @@ export interface LofiInductorOutput {
   /**
    * Add one item: string fields, at least one, and an optional id that
    * deduplicates (an id the list holds already adds nothing). An item with no
-   * fields, or a field that is not a string, is refused.
+   * fields is refused; the event's schema drops a field that is not a string
+   * before the verb sees it.
    */
   addItem: Stream<SubmittedItem>;
   /** Add several items at once, each as `addItem` takes it. */
@@ -224,7 +225,11 @@ export interface LofiInductorOutput {
    * the list no longer holds changes nothing.
    */
   removeItem: Stream<ItemRef>;
-  /** Take one rule out of the current set, by reference, as read from `rules`. */
+  /**
+   * Take one rule out of the current set: the rule with the given rule's
+   * canonical `key`, as read from `rules`. A rule the set no longer holds
+   * changes nothing; one without a key is refused.
+   */
   removeRule: Stream<RuleRef>;
   /** Empty the current rule set. The history stays. */
   resetRules: Stream<void>;
@@ -271,13 +276,9 @@ function checkedItem(
   if (typeof raw !== "object" || raw === null) {
     throw new Error("An item needs `fields`, an object of strings.");
   }
+  // A copy, so the item stored is plain data rather than the event's.
   const fields: Record<string, string> = {};
-  for (const [name, value] of Object.entries(raw)) {
-    if (typeof value !== "string") {
-      throw new Error(`An item's field \`${name}\` is not a string.`);
-    }
-    fields[name] = value;
-  }
+  for (const [name, value] of Object.entries(raw)) fields[name] = value;
   if (Object.keys(fields).length === 0) {
     throw new Error("An item needs at least one field.");
   }
@@ -288,11 +289,36 @@ function checkedItem(
 }
 
 /**
- * Takes the element at `index` out of `list` with mergeable writes. An
- * element written by `push` is stored as a link, which only the element's
- * cell matches; one seeded with the piece is stored inline, which only its
- * value matches. So both are sent, and each removes nothing of the other
- * kind. `value` is the element's value, copied out of what `get()` read.
+ * Appends the items `events` describe to `items`, skipping an id the list
+ * holds already or the batch repeats. The id is only a dedupe key, so a
+ * connector that sends the same record twice adds it once; nothing addresses
+ * an item by it. Throws, adding none, if any event is malformed.
+ */
+function appendItems(
+  items: Writable<Item[]>,
+  events: readonly SubmittedItem[],
+): void {
+  const checked = events.map(checkedItem);
+  const seen = new Set(items.get().map((existing) => existing.id));
+  const added: Item[] = [];
+  for (const { id, fields } of checked) {
+    const key = id !== ""
+      ? id
+      : `item-${Math.random().toString(36).slice(2, 10)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    added.push({ id: key, fields });
+  }
+  if (added.length > 0) items.pushAll(added);
+}
+
+/**
+ * Takes the element at `index` out of `list`. An element written by `push` is
+ * stored as a link, which only the element's cell matches; one seeded with the
+ * piece is stored inline, which only its value matches. So both are sent, and
+ * each removes nothing of the other kind. `value` is the element's value,
+ * copied out of what `get()` read. The callers read the list to find the
+ * index, so the removal still conflicts with a concurrent change to it.
  */
 function removeElement<T>(list: Writable<T[]>, index: number, value: T): void {
   list.removeByValue(list.key(index));
@@ -335,6 +361,7 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     // in a lift that never settles.
     const hifi = items.map((item) => ({
       id: item.id,
+      asked: computed(() => buildHifiPrompt(goal.get(), item)),
       answer: generateObject<HifiAnswer>({
         prompt: computed(() => buildHifiPrompt(goal.get(), item)),
         system: HIFI_SYSTEM,
@@ -447,8 +474,8 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     const target = pool ?? poolWish.result ?? null;
 
     // The goal changes only here, never per keystroke: every hi-fi call is
-    // asked for the goal, so a live input re-asked about every item on each
-    // key. A new question also gets a new pseudonym, so the pool cannot link
+    // asked for the goal, so each change asks about every item again. A new
+    // question also gets a new pseudonym, so the pool cannot link
     // this piece's contributions for two questions; the old question's
     // contribution is withdrawn first, while the pool for it is still the
     // one the goal names.
@@ -458,7 +485,9 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       }
       const next = event.goal.trim();
       const current = goal.get().trim();
-      if (next === current) return;
+      // The pool compares goals this way too, so a change of case or spacing
+      // is the same question.
+      if (sameGoal(next, current)) return;
       if (pseudonym.get() !== "") withdrawFrom(target, current);
       goal.set(next);
       rules.set([]);
@@ -475,28 +504,15 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       goalDraft.set("");
     });
 
-    // The id is only a dedupe key, so a connector that sends the same record
-    // twice adds it once; nothing addresses an item by it.
     const addItems = action((event: SubmittedItems) => {
       if (!Array.isArray(event?.items)) {
         throw new Error("`items` is a list of items.");
       }
-      const checked = event.items.map(checkedItem);
-      const seen = new Set(items.get().map((existing) => existing.id));
-      const added: Item[] = [];
-      for (const { id, fields } of checked) {
-        const key = id !== ""
-          ? id
-          : `item-${Math.random().toString(36).slice(2, 10)}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        added.push({ id: key, fields });
-      }
-      if (added.length > 0) items.pushAll(added);
+      appendItems(items, event.items);
     });
 
     const addItem = action((event: SubmittedItem) => {
-      addItems.send({ items: [event] });
+      appendItems(items, [event]);
     });
 
     const removeItem = action((event: ItemRef) => {
@@ -510,7 +526,7 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     });
 
     const removeRule = action((event: RuleRef) => {
-      if (event?.rule === undefined || event.rule === null) {
+      if (typeof event?.rule?.key !== "string") {
         throw new Error("`rule` is a rule read from `rules`.");
       }
       // A rule is a value, known by its canonical key.
@@ -596,9 +612,10 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         withheld: own.length - snapshot.length,
         adopted: all.length - own.length,
       });
+      // Nothing to send leaves nothing of an earlier publish behind either.
       if (reached) {
         target.submit.send({ pseudonym: pseudonym.get(), rules: snapshot });
-      }
+      } else withdrawFrom(target, question);
     });
 
     // Nothing to take back before the first publish, which mints the
@@ -641,6 +658,7 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     const poolCard = PoolCard({
       offer,
       published,
+      pseudonym,
       rules,
       settlePoolOffer,
       publish,
