@@ -1552,24 +1552,21 @@ describe("the stream of a binding in a computed value", () => {
     expect((instance.result() as { chosen: string }).chosen).toBe("y");
   });
 
-  // Ruling Z19: the evaluation that fails is the one that stores the
-  // value. The output that holds the position keeps what was stored, and
-  // the other outputs are stored.
+  // Rulings Z19 and Z29: the evaluation that fails is the one that stores
+  // the value. The top-level property of the result that holds the
+  // position keeps what was stored, the other properties are stored, and
+  // an error is recorded on the instance.
   it("fails the evaluation that stores a marker at a position no listed path covers", async () => {
     const artifact = without(await artifactOf("stream-marker"), 0, ["inc"]);
 
     const instance = new Instance(artifact, argument());
 
-    // No output of the plan is at `inc`: what fails is the store of the
-    // position itself.
-    expect(instance.failures).toEqual([{
-      evaluation: "result",
-      held: ["inc"],
-      binding: 0,
-      path: ["inc"],
-    }]);
-    // No link is stored at the position, which held nothing before, and
-    // the other outputs of the result are stored.
+    // The position is the property itself.
+    const error = { property: "inc", binding: 0, path: ["inc"] };
+    expect(instance.failures).toEqual([error]);
+    expect(instance.errors).toEqual([error]);
+    // No link is stored at the property, which held nothing before, and
+    // the other properties of the result are stored.
     const stored = instance.store.docs.get("result")?.value as Record<
       string,
       unknown
@@ -1581,42 +1578,44 @@ describe("the stream of a binding in a computed value", () => {
     });
   });
 
-  it("leaves the output that holds the position with what was stored, and stores the others", async () => {
+  it("leaves the top-level property that holds the position with what was stored, and stores the others", async () => {
     const below = ["$UI", "children", "0", "props", "onClick"];
     const artifact = without(await artifactOf("stream-marker"), 0, below);
     // The other branch is selected, and the position holds its value.
     const instance = new Instance(artifact, argument(false));
     expect(instance.failures).toEqual([]);
     expect(tree(instance).children[0]).toBe(null);
+    const before = structuredClone(tree(instance));
 
     // The branch that writes the stream is selected: the marker is at a
-    // position no listed path covers.
+    // position no listed path covers. A tag is removed in the same
+    // write, which changes another subtree of the tree.
+    instance.store.write(new Ref("argument", ["tags"]), ["x"]);
     instance.writeArgument(["shown"], true);
 
-    // The kept output at `$UI/children/0` holds the position. The cone
-    // that placed the marker computed the whole tree, and the evaluation
-    // that fails is the one that stores that output.
-    const holder = artifact.plan.outputs.findIndex((output) =>
-      JSON.stringify(output.path) === JSON.stringify(below.slice(0, 3))
-    );
-    expect(instance.failures).toEqual([{
-      evaluation: artifact.plan.cones[artifact.plan.outputs[holder].cone]
-        .entry,
-      output: holder,
-      held: below.slice(0, 3),
-      binding: 0,
-      path: below,
-    }]);
-    expect(tree(instance).children[0]).toBe(null);
+    // The whole of `$UI` keeps what was stored: it is not stored with
+    // the subtree of the conditional from the earlier evaluation and the
+    // lists from this one (ruling Z29).
+    const error = { property: "$UI", binding: 0, path: below };
+    expect(instance.errors).toEqual([error]);
+    expect(instance.failures.at(-1)).toEqual(error);
+    expect(tree(instance)).toEqual(before);
+    expect(rowsOf(tree(instance).children[2]).length).toBe(3);
 
-    // An event changes another output, which is stored. The output that
-    // failed keeps what it held.
+    // An event changes another property, which is stored. The property
+    // that failed keeps what it held.
     instance.send(0, { by: 2 });
 
     expect((instance.result() as { count: number }).count).toBe(2);
+    expect(tree(instance)).toEqual(before);
+    expect(instance.errors).toEqual([error]);
+
+    // The next evaluation that stores the property clears the error.
+    instance.writeArgument(["shown"], false);
+
+    expect(instance.errors).toEqual([]);
     expect(tree(instance).children[0]).toBe(null);
-    expect(tree(instance).children[1].children.length).toBe(2);
-    expect(rowsOf(tree(instance).children[1]).length).toBe(2);
+    expect(rowsOf(tree(instance).children[2]).length).toBe(1);
   });
 
   it("matches a `*` of a listed path at any element, in each of the three bodies", async () => {
@@ -1640,10 +1639,11 @@ describe("the stream of a binding in a computed value", () => {
     ]));
     expect(new Instance(artifact, argument()).failures).toEqual([]);
     // Without its path, the marker of each key is at a position no
-    // listed path covers. The output that holds those positions is the
-    // collection, the nested child of the list: it keeps what was stored
-    // for it, which is nothing, and the outputs beside it are stored
-    // (ruling Z19).
+    // listed path covers. The property that holds those positions is
+    // `$UI`: it keeps what was stored for it, which is nothing, and the
+    // other properties are stored (ruling Z29). That is the same over
+    // references, over plain values in place, and over the result of a
+    // `filter`.
     const lengths = [2, 3, 2];
     for (const binding of [1, 2, 3]) {
       const instance = new Instance(
@@ -1651,25 +1651,18 @@ describe("the stream of a binding in a computed value", () => {
         argument(),
       );
       const list = ["$UI", "children", `${binding}`, "children", "0"];
-      expect(instance.failures.map(({ held, path }) => [held, path])).toEqual(
-        Array.from({ length: lengths[binding - 1] }, (_, index) => [
-          list,
-          [...list, `${index}`, "props", "onClick"],
-        ]),
+      expect(instance.errors).toEqual(
+        Array.from({ length: lengths[binding - 1] }, (_, index) => ({
+          property: "$UI",
+          binding,
+          path: [...list, `${index}`, "props", "onClick"],
+        })),
       );
-      expect(instance.failures.every((failure) => failure.binding === binding))
-        .toBe(true);
-      expect(rowsOf(tree(instance).children[binding]) ?? null).toBe(null);
-      // The child written after the collection, and the other lists.
-      if (binding === 1) {
-        expect(tree(instance).children[1].children[1].props.onClick).toEqual({
-          $stream: { binding: 0, keys: [] },
-        });
-      }
-      const other = binding === 2 ? 3 : 2;
-      expect(streamsOf(rowsOf(tree(instance).children[other])).length).toBe(
-        lengths[other - 1],
-      );
+      expect(tree(instance)).toBe(undefined);
+      expect(instance.store.docs.get("result")?.value).toMatchObject({
+        chosen: { $link: {} },
+        inc: { $stream: { binding: 0, keys: [] } },
+      });
     }
   });
 

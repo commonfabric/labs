@@ -1071,6 +1071,13 @@ class NoHost extends Host {
   }
 }
 
+/**
+ * A marker at a position of the result that no listed path of its
+ * binding covers: the binding, the position, and the top-level property
+ * of the result that holds the position.
+ */
+export type StreamError = { property: string; binding: number; path: string[] };
+
 /** How a handled event ended. */
 export type Outcome = {
   binding: number;
@@ -1175,26 +1182,25 @@ export class Instance {
    */
   readonly trace: string[] = [];
   /**
-   * The evaluations that failed the check of where a stream is stored
-   * (rulings Z11 and Z19): one for each marker at a position no listed
-   * path of the marker's binding covers. The evaluation that fails is
-   * the one that stores the value. `output` is the kept output that
-   * holds the position and `held` its path, with the index of the
-   * element in the place of each `*`: that output is not written and
-   * keeps what was stored. `evaluation` is the `entry` of the output's
-   * cone. Where no output of the plan holds the position, `held` is the
-   * position, and `evaluation` is `result`.
+   * The markers that failed the check of where a stream is stored
+   * (rulings Z11, Z19 and Z29): one entry for each marker at a position
+   * no listed path of the marker's binding covers, in each evaluation
+   * that stored the result. The evaluation that fails is the one that
+   * stores the value. `property` is the top-level property of the result
+   * that holds the position: nothing at or below it is written, and it
+   * keeps what was stored.
    */
-  readonly failures: {
-    evaluation: string;
-    output?: number;
-    held: string[];
-    binding: number;
-    path: string[];
-  }[] = [];
+  readonly failures: StreamError[] = [];
+  /**
+   * The errors recorded on the instance (ruling Z29): for each top-level
+   * property of the result that the last evaluation did not store, the
+   * markers that failed the check. The next evaluation that stores the
+   * property clears its errors (ES §2.2, "What fails", assumed there).
+   */
+  errors: StreamError[] = [];
   /** Every such position, over all failed evaluations, once each. */
   readonly misplaced: { binding: number; path: string[] }[] = [];
-  readonly #checked = new WeakMap<Entry, string[][]>();
+  readonly #checked = new WeakMap<Entry, StreamError[]>();
 
   constructor(
     readonly artifact: Artifact,
@@ -2555,9 +2561,11 @@ export class Instance {
       // that holds the position keeps what was stored, and the other
       // outputs are stored (ES §2.2, "The check" and "What fails").
       let stored = this.stored(entry.value);
-      for (const held of this.#check(entry)) {
-        stored = replaced(stored, held, this.#storedAt(held));
+      const failed = this.#check(entry);
+      for (const property of new Set(failed.map((error) => error.property))) {
+        stored = replaced(stored, [property], this.#storedAt([property]));
       }
+      this.errors = failed;
       this.store.write(new Ref(this.doc("result"), []), stored);
       // The instances that function bodies of this one made.
       for (const child of this.#children) child.settle();
@@ -2582,14 +2590,15 @@ export class Instance {
    * selected, so it matches under either selection. The check is of the
    * positions of the result alone: a reference in the value is not
    * followed, and a marker stored in another document is not checked.
-   * Returns the paths of the outputs that fail, each once: the kept
-   * output that holds the position of a marker no listed path covers
-   * (ruling Z19).
+   * Returns one error for each marker that no listed path covers, with
+   * the top-level property of the result that holds its position
+   * (ruling Z29). The property is defined for every position: also for
+   * one that no entry of `Plan.outputs` is at or above.
    */
-  #check(entry: Entry): string[][] {
+  #check(entry: Entry): StreamError[] {
     const known = this.#checked.get(entry);
     if (known !== undefined) return known;
-    const found: { binding: number; path: string[] }[] = [];
+    const found: StreamError[] = [];
     const walk = (
       value: unknown,
       path: string[],
@@ -2599,7 +2608,7 @@ export class Instance {
         const { binding, keys } = streamOf(value);
         const listed = this.plan.bindings[binding]?.result ?? [];
         if (!listed.some((entry) => coversPosition(entry, path, trail, keys))) {
-          found.push({ binding, path });
+          found.push({ property: path[0], binding, path });
         }
       } else if (Array.isArray(value)) {
         const from = origins.get(value);
@@ -2612,57 +2621,19 @@ export class Instance {
         }
       }
     };
-    walk(entry.value, [], []);
-    const failed: string[][] = [];
-    for (const position of found) {
-      const holder = this.#holderOf(position.path);
-      this.failures.push({
-        evaluation: holder.output === undefined
-          ? "result"
-          : this.plan.cones[this.plan.outputs[holder.output].cone].entry,
-        ...holder,
-        ...position,
-      });
-      if (!failed.some((held) => canonical(held) === canonical(holder.held))) {
-        failed.push(holder.held);
-      }
+    // A marker that is the whole result has no property to hold it, and
+    // is not checked: a pattern's result is a record.
+    if (!(entry.value instanceof StreamMarker)) walk(entry.value, [], []);
+    for (const error of found) {
+      this.failures.push(error);
+      const position = { binding: error.binding, path: error.path };
       const id = canonical(position);
       if (!this.misplaced.some((other) => canonical(other) === id)) {
         this.misplaced.push(position);
       }
     }
-    this.#checked.set(entry, failed);
-    return failed;
-  }
-
-  /**
-   * The kept output that holds a position of the result: the entry of
-   * `Plan.outputs` with the longest path that the position is at or
-   * below, with `*` for the index of an element. Where no output of the
-   * plan holds the position, as for a stream at a member of the result,
-   * what is held is the position itself.
-   */
-  #holderOf(path: readonly string[]): { output?: number; held: string[] } {
-    let found: number | undefined;
-    this.plan.outputs.forEach((output, index) => {
-      if (
-        !output.kept || output.path.length === 0 ||
-        !namesPosition(output.path, path.slice(0, output.path.length)) ||
-        output.path.length > path.length
-      ) {
-        return;
-      }
-      if (
-        found === undefined ||
-        output.path.length > this.plan.outputs[found].path.length
-      ) {
-        found = index;
-      }
-    });
-    return found === undefined ? { held: [...path] } : {
-      output: found,
-      held: path.slice(0, this.plan.outputs[found].path.length),
-    };
+    this.#checked.set(entry, found);
+    return found;
   }
 
   /** What the result document stores at a path, with no link followed. */
