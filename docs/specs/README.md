@@ -40,6 +40,9 @@ decision is reversed or superseded).
 - [Piece source lifecycle](piece-source-lifecycle.md)
 - [Hosted pattern authoring](hosted-pattern-authoring.md)
 - [Scoped cell instances](scoped-cell-instances.md)
+- [Static assets for iframe guests](iframe-static-assets.md) (proposed):
+  images, fonts and audio a pattern ships, delivered to its guest as `data:`
+  URLs, with data-file strings stored by reference
 
 ### Agent execution
 
