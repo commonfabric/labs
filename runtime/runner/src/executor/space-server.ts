@@ -81,6 +81,11 @@ import { viewLifetimeKey, ViewPlanPublisher } from "./view-plan-publisher.ts";
  * criterion needs the drop) without racing the creation window. */
 const EVENT_DEFERRAL_REARM_MS = 250;
 
+/** The key of one scoped instance in `SpaceServer`'s not-run waits: its
+ * document id and its instance scope key, which hold no NUL. */
+const notRunWaitKey = (id: string, scopeKey: string): string =>
+  `${id}\0${scopeKey}`;
+
 /**
  * How long a served event waits for the program closure of its piece's
  * pattern to arrive in its space before the absence becomes a
@@ -1654,11 +1659,12 @@ export class SpaceServer implements TransactionSealDestination {
    * the document arrives or the event is covered by a terminal notice. */
   readonly #programClosureWaits = new Map<string, Set<string>>();
 
-  /** The documents events whose served handler did not run wait on
-   * (events.md §5): a scoped instance of each the handler's run read while
-   * the serving loop had not produced it, and a writer that owes it will still
-   * run. By document id, each with the events waiting on it; a commit writing
-   * the document wakes them. */
+  /** The scoped instances events whose served handler did not run wait on
+   * (events.md §5): each one the handler's run read while the serving loop had
+   * not produced it, and a writer that owes it will still run. Keyed by
+   * `notRunWaitKey()` (document id and instance scope key), each with the
+   * events waiting on it; a commit writing that instance wakes them, and a
+   * write to another instance of the document does not. */
   readonly #notRunWaits = new Map<string, Set<string>>();
 
   /** The events in `#notRunWaits` that no commit has woken yet. The drain
@@ -4578,9 +4584,10 @@ export class SpaceServer implements TransactionSealDestination {
       // on re-drains it (events.md §5).
       if (this.#notRunWaits.size > 0) {
         for (const write of record.writes) {
-          const woken = this.#notRunWaits.get(write.id);
+          const waitKey = notRunWaitKey(write.id, write.scopeKey);
+          const woken = this.#notRunWaits.get(waitKey);
           if (woken === undefined) continue;
-          this.#notRunWaits.delete(write.id);
+          this.#notRunWaits.delete(waitKey);
           for (const eventId of woken) this.#notRunWaiting.delete(eventId);
           this.#eventScanOwed = true;
         }
@@ -5427,10 +5434,14 @@ export class SpaceServer implements TransactionSealDestination {
                       // nothing owed, it spends the budget from the start.
                       this.#options.stats.events.handlerNotRunWaits += 1;
                       this.#eventDeferrals.delete(entry.eventId);
-                      let waiting = this.#notRunWaits.get(waitsOn.id);
+                      const waitKey = notRunWaitKey(
+                        waitsOn.id,
+                        waitsOn.scopeKey,
+                      );
+                      let waiting = this.#notRunWaits.get(waitKey);
                       if (waiting === undefined) {
                         waiting = new Set();
-                        this.#notRunWaits.set(waitsOn.id, waiting);
+                        this.#notRunWaits.set(waitKey, waiting);
                       }
                       waiting.add(entry.eventId);
                       this.#notRunWaiting.add(entry.eventId);

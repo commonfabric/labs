@@ -1,5 +1,5 @@
 import { getLogger } from "@commonfabric/logger";
-import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import type { ScopeKey, ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { entityKey } from "./keys.ts";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
@@ -183,17 +183,18 @@ export class EventHandlerRegistry {
 const guardedImplementations = Symbol("guarded event implementations");
 
 /**
- * The document a served handler's withdrawn run waits on, if any: the scoped
- * instance link resolution found unproduced on the run's reads
+ * The scoped instance a served handler's withdrawn run waits on, if any: the
+ * one link resolution found unproduced on the run's reads
  * (`unproducedScopedInstance`), when a writer that owes it will still run
- * (`Scheduler.owedScopedInstanceComing()`). Undefined when the run read no
- * such instance, or when no writer that owes it is coming to produce it, so
- * that nothing the drain could wait on will change what the argument reads.
+ * (`Scheduler.comingOwedScopedInstance()`), as its document and its instance's
+ * scope key. Undefined when the run read no such instance, or when no writer
+ * that owes it is coming to produce it, so that nothing the drain could wait
+ * on will change what the argument reads.
  */
 function servedNotRunWait(
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
-): { space: MemorySpace; id: string } | undefined {
+): { space: MemorySpace; id: string; scopeKey: ScopeKey } | undefined {
   const unproduced = tx.tx.unproducedScopedInstance;
   if (unproduced === undefined) return undefined;
   // Recorded as `<space>/<scope>/<id>`; neither a space DID nor a scope holds
@@ -205,9 +206,10 @@ function servedNotRunWait(
     id: rest.join("/") as IMemorySpaceAddress["id"],
     scope: scope as "user" | "session",
   };
-  return runtime.scheduler.owedScopedInstanceComing(address, tx)
-    ? { space: address.space, id: address.id }
-    : undefined;
+  const scopeKey = runtime.scheduler.comingOwedScopedInstance(address, tx);
+  return scopeKey === undefined
+    ? undefined
+    : { space: address.space, id: address.id, scopeKey };
 }
 
 type GuardedDispatcher = EventHandler & {

@@ -10,7 +10,10 @@ import {
 } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
-import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import {
+  resolveScopeKey,
+  type ScopeKeyIdentity,
+} from "@commonfabric/memory/v2";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 
 /**
@@ -141,12 +144,12 @@ async function fixture(name: string, serving: boolean) {
     },
 
     /**
-     * Whether the scheduler reports a writer that owes `state`'s user
-     * instance as coming to produce it, asked for a transaction of the
-     * consumer's kind.
+     * The key the scheduler reports for `state`'s user instance when a writer
+     * that owes it is coming to produce it, asked for a transaction of the
+     * consumer's kind, and undefined when none is.
      */
     stateComing: () =>
-      runtime.scheduler.owedScopedInstanceComing(
+      runtime.scheduler.comingOwedScopedInstance(
         state.getAsNormalizedFullLink(),
         runtime.edit(),
       ),
@@ -386,7 +389,9 @@ describe("scheduler-derivation-unproduced-instance", () => {
     try {
       f.registerQueuedWriter();
 
-      expect(f.stateComing()).toBe(true);
+      expect(f.stateComing()).toBe(
+        resolveScopeKey("user", f.runtime.scopeKeyIdentity),
+      );
     } finally {
       await f.close();
     }
@@ -397,7 +402,9 @@ describe("scheduler-derivation-unproduced-instance", () => {
     try {
       await f.runFannedOutWriter(() => [f.runtime.scopeKeyIdentity]);
 
-      expect(f.stateComing()).toBe(true);
+      expect(f.stateComing()).toBe(
+        resolveScopeKey("user", f.runtime.scopeKeyIdentity),
+      );
     } finally {
       await f.close();
     }
@@ -415,7 +422,7 @@ describe("scheduler-derivation-unproduced-instance", () => {
         { principal: other.did(), sessionId: "other-session" },
       ]);
 
-      expect(f.stateComing()).toBe(false);
+      expect(f.stateComing()).toBeUndefined();
     } finally {
       await f.close();
     }
@@ -430,7 +437,7 @@ describe("scheduler-derivation-unproduced-instance", () => {
       f.registerWriter();
       await f.runtime.idle();
 
-      expect(f.stateComing()).toBe(false);
+      expect(f.stateComing()).toBeUndefined();
     } finally {
       await f.close();
     }

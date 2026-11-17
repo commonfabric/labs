@@ -695,7 +695,8 @@ loop's duty).
   instance must also be one its current demanders produce and not
   current, since the run supply runs no other. Such a deferral spends no
   deferral budget and arms no backstop: the entry waits on that
-  document and is not dispatched again until a commit writes it, and
+  instance and is not dispatched again until a commit writes it (a write
+  to another instance of the document does not wake it), and
   the drain stops its pass at the waiting entry, so later arrivals in
   the space wait behind it. Time and unrelated commits decide nothing
   about it. A tenure that parks forgets the wait, and the next one

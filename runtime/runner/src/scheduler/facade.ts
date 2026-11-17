@@ -2105,20 +2105,22 @@ export class Scheduler {
   }
 
   /**
-   * Whether some writer that owes `address`'s instance to the run `tx`
-   * carries (`owesScopedInstance()`) will run: it is invalid or has never run,
-   * and it is live, a materializer, or pending, which is what has the
-   * scheduler queue it. A writer nothing demands stays dormant, and one that
-   * has run stays clean until an input changes, so neither is coming to
-   * produce the instance, and a served event waiting on it would wait for
-   * nothing.
+   * The key of `address`'s instance, as the run `tx` carries reads it, when
+   * some writer that owes it (`owesScopedInstance()`) will run for it
+   * (`#willRunForInstance()`); undefined when none will. A writer nothing
+   * demands stays dormant, and one that has run stays clean until an input
+   * changes, so neither is coming to produce the instance, and a served event
+   * waiting on it would wait for nothing.
    */
-  owedScopedInstanceComing(
+  comingOwedScopedInstance(
     address: Pick<IMemorySpaceAddress, "space" | "id" | "scope">,
     tx: IExtendedStorageTransaction,
-  ): boolean {
+  ): ScopeKey | undefined {
     const { owing, instance } = this.#owingWriters(address, tx);
-    return owing.some((writer) => this.#willRunForInstance(writer, instance));
+    return instance !== undefined &&
+        owing.some((writer) => this.#willRunForInstance(writer, instance))
+      ? instance
+      : undefined;
   }
 
   /**
@@ -2165,14 +2167,16 @@ export class Scheduler {
   }
 
   /**
-   * Whether `action` will run for the instance keyed `instance`: the
-   * scheduler's own test for queueing it (invalid or never run, and live, a
-   * materializer, or pending). On a fanned-out node the run supply runs only
-   * the instances its current demanders produce (`fanOutInstances()`, as
-   * `runSchedulerAction()` asks), so the instance must be one of them, and not
-   * current; a principal nothing demands this node for gets no run of it.
+   * Whether `action` will run for the instance keyed `instance`. It must be
+   * live, a materializer, or pending, which is what has the scheduler queue
+   * it. On a node that is not fanned out it must also be invalid or never
+   * have run. On a fanned-out node, whose dirtiness is per instance, the
+   * instance must instead not be current (`fanOut.clean`), and be one its
+   * current demanders produce (`fanOutInstances()`, as `runSchedulerAction()`
+   * asks): the run supply runs no other, so a principal nothing demands this
+   * node for gets no run of it.
    */
-  #willRunForInstance(action: Action, instance: ScopeKey | undefined): boolean {
+  #willRunForInstance(action: Action, instance: ScopeKey): boolean {
     const node = this.#nodes.get(action);
     if (node === undefined) return false;
     const queued = this.#isLiveAction(action) ||
@@ -2180,7 +2184,7 @@ export class Scheduler {
       this.#pending.has(action);
     if (!queued) return false;
     if (node.fanOut === undefined) return this.#isInvalidAction(action);
-    if (instance === undefined || node.fanOut.clean.has(instance)) return false;
+    if (node.fanOut.clean.has(instance)) return false;
     const observation = (action as Partial<TelemetryAnnotations>)
       .schedulerObservationIdentity;
     const roots = observation?.demandRootIds ??
