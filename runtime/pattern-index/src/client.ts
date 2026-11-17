@@ -559,15 +559,15 @@ export function deployedPieceRef(spaceDid: string, pieceId: string): string {
 /** What {@link deployedPieceRef} answers, and nothing else is sent as one. */
 const PIECE_REF = /^piece:[0-9a-f]{64}$/;
 
+/** Whether `ref` is a piece reference as {@link deployedPieceRef} answers one. */
+export const isPieceRef = (ref: string): boolean => PIECE_REF.test(ref);
+
 /**
  * `ref`, checked to be a hashed piece reference, so a raw piece id never
  * reaches the index.
  *
  * @throws Error naming the field for anything else.
  */
-/** Whether `ref` is a piece reference as {@link deployedPieceRef} answers one. */
-export const isPieceRef = (ref: string): boolean => PIECE_REF.test(ref);
-
 const pieceRef = (field: string, ref: string): string => {
   if (!isPieceRef(ref)) {
     throw new Error(
