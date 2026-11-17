@@ -389,12 +389,11 @@ export class Handle {
       // A member that is a plain value in place is named by its key, and
       // one that is a link by the position that holds the link (PL §1.3,
       // assumed there under question 115).
-      const items = typeof schema === "object" ? schema.items : undefined;
       const keys = store.keysOf(
         located.value,
         located.ref,
         undefined,
-        typeof items === "object" ? items.keyField : undefined,
+        located.keyField,
       );
       return located.value.map((held, index) =>
         member(
@@ -1127,8 +1126,18 @@ export class Instance {
         this.valueOfOutput.set(value.output, index);
       }
     });
-    this.store.create(this.doc("argument"), "argument", this.stored(argument));
-    this.store.create(this.doc("result"), "result", undefined);
+    this.store.create(
+      this.doc("argument"),
+      "argument",
+      this.stored(argument),
+      this.schemaOf(this.plan.argumentSchema),
+    );
+    this.store.create(
+      this.doc("result"),
+      "result",
+      undefined,
+      this.schemaOf(this.plan.resultSchema),
+    );
     this.#load();
     this.#sideWriters();
     // A state cell of the pattern's own body exists from the start, and
@@ -1495,6 +1504,7 @@ export class Instance {
         id,
         "state cell",
         typeof schema === "object" ? schema.default : undefined,
+        schema,
       );
       const first = record.first === undefined
         ? undefined
@@ -2556,14 +2566,27 @@ export class Instance {
    * The elements of a stored array. An element whose position holds a
    * link is the cell the link leads to. An element that is a plain value
    * in place is named by the array and its key, and its `source` is that
-   * reference by key (ruling Z12). With `field`, the key field the
-   * element type declares, the key of a plain value is formed from the
-   * value of the field.
+   * reference by key (ruling Z12). The key of a plain value is formed
+   * from the value of the key field that the schema the array is stored
+   * under declares for its items, where it declares one (ruling Z42).
+   * `field` is the copy of the keyword that the collection's record
+   * holds: an array the store knows no schema for is stored under it.
    */
   #stored(array: Ref, host: Host, field?: string): Element[] {
-    const located = this.store.locate(array, true, host.reads);
+    let located = this.store.locate(array, true, host.reads);
+    if (located.place === undefined && field !== undefined) {
+      this.store.learn(located.named.doc, located.named.path, {
+        items: { keyField: field },
+      });
+      located = this.store.locate(array, true);
+    }
     const held = Array.isArray(located.value) ? located.value : [];
-    const keys = this.store.keysOf(held, located.ref, undefined, field);
+    const keys = this.store.keysOf(
+      held,
+      located.ref,
+      undefined,
+      located.keyField,
+    );
     return held.map((member, index) => ({
       key: keys[index],
       index,

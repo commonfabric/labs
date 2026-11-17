@@ -105,30 +105,40 @@ export const keySegment = (key: string): string => `${KEY}${key}`;
 export const isKeySegment = (segment: string): boolean =>
   segment.startsWith(KEY);
 
-const FIELD = "field:";
-
 /**
  * The element part of the key of a plain value
  * (`plan-and-label-templates.md` §1.3): the value of the declared key
  * field, where the array declares one and the value is a record that
- * holds it, and otherwise the whole value. A part formed from a field
- * names the field, so that a key says by itself how it was formed, and a
- * reference by key is resolved with no schema at hand.
+ * holds it, and otherwise the whole value. The part does not say which
+ * of the two it was formed from (ruling Z42): whoever resolves a key
+ * takes the key field from the schema of the array.
  */
-export const valuePart = (value: unknown, field?: string): string => {
-  if (
-    field !== undefined && isPlainRecord(value) && value[field] !== undefined
-  ) {
-    return `${FIELD}${encodeURIComponent(field)}:${canonical(value[field])}`;
-  }
-  return `value:${canonical(value)}`;
-};
+export const valuePart = (value: unknown, field?: string): string =>
+  `value:${
+    canonical(
+      field !== undefined && isPlainRecord(value) && value[field] !== undefined
+        ? value[field]
+        : value,
+    )
+  }`;
 
-/** The key field a key was formed from, where it was formed from one. */
-export const fieldOfKey = (key: string): string | undefined => {
-  if (!key.startsWith(FIELD)) return undefined;
-  const end = key.indexOf(":", FIELD.length);
-  return end < 0 ? undefined : decodeURIComponent(key.slice(FIELD.length, end));
+/**
+ * The schema of a member of what a schema of a stored place describes:
+ * that of the items for a position of an array, named by its index or
+ * by its key.
+ */
+const placeBelow = (
+  schema: Schema | undefined,
+  segment: string,
+): Schema | undefined =>
+  isKeySegment(segment)
+    ? typeof schema === "object" ? schema.items : undefined
+    : schemaBelow(schema, segment);
+
+/** The key field that the schema of an array declares for its items. */
+const keyFieldOf = (schema: Schema | undefined): string | undefined => {
+  const items = typeof schema === "object" ? schema.items : undefined;
+  return typeof items === "object" ? items.keyField : undefined;
 };
 
 /** A reference to a position of a document. */
@@ -255,6 +265,14 @@ export type Located = {
   named: Ref;
   /** A key of the path is held by no position. */
   missing: boolean;
+  /** The schema the place is stored under at the position. */
+  place?: Schema;
+  /**
+   * The key field that the schema of the place declares for the items
+   * of the array at the position, where it declares one: the field the
+   * keys of the array are formed from (ruling Z42).
+   */
+  keyField?: string;
   /**
    * The position is an element of an array of its document, or below
    * one: a plain value in place.
@@ -265,7 +283,13 @@ export type Located = {
    * path of the array in the form that names it, the key the position
    * holds, and the path of the position.
    */
-  crossed: { array: string[]; key: string; position: string[] }[];
+  crossed: {
+    array: string[];
+    key: string;
+    position: string[];
+    /** The key field the key was resolved with. */
+    field?: string;
+  }[];
   /**
    * The default declared nearest the end of the chain of links the read
    * resolved through: that of the last link whose schema declares one,
@@ -357,6 +381,13 @@ export class Store {
    * at (ruling Z43). The entries of a document are in no stated order.
    */
   readonly streams = new Map<string, StreamPosition[]>();
+  /**
+   * The schema each document is stored under, where one is known: the
+   * one it was made with, and otherwise the one it was first read or
+   * linked to under. The key field of an array of the document is taken
+   * from it (ruling Z42).
+   */
+  readonly schemas = new Map<string, Schema>();
 
   /**
    * Records the stream links of a value stored at a path of a document,
@@ -382,16 +413,36 @@ export class Store {
     else this.streams.set(doc, kept);
   }
 
-  create(id: string, kind: string, value: unknown): void {
+  /**
+   * Takes `schema` as what a document is stored under at a path, where
+   * the store knows no schema for the document.
+   */
+  learn(doc: string, path: readonly string[], schema: Schema): void {
+    if (this.schemas.has(doc)) return;
+    this.schemas.set(
+      doc,
+      path.reduceRight(
+        (inner: Schema, segment) =>
+          /^\d+$/.test(segment) || isKeySegment(segment)
+            ? { items: inner }
+            : { properties: { [segment]: inner } },
+        schema,
+      ),
+    );
+  }
+
+  create(id: string, kind: string, value: unknown, schema?: Schema): void {
     this.docs.set(id, { kind, value });
+    if (schema !== undefined) this.schemas.set(id, schema);
     this.#record(id, [], value);
     this.clock += 1;
     this.log.push({ doc: id, path: [], at: this.clock });
   }
 
   /** Names a place that gets its document with the first write. */
-  declare(id: string, kind: string, fallback: unknown): void {
+  declare(id: string, kind: string, fallback: unknown, schema?: Schema): void {
     this.declared.set(id, { kind, default: fallback });
+    if (schema !== undefined) this.schemas.set(id, schema);
   }
 
   /** What a place holds: its document, or its default where it has none. */
@@ -481,6 +532,8 @@ export class Store {
   ): Located {
     let doc = ref.doc;
     let value = this.#held(doc);
+    // The schema of the place at the position the walk is at.
+    let place = this.schemas.get(doc);
     let at: string[] = [];
     let named_: string[] = [];
     let schema = ref.schema;
@@ -515,7 +568,14 @@ export class Store {
         if (typeof below === "object" && below.default !== undefined) {
           fallback = below.default;
         }
+        // A document the store knows no schema for is stored under the
+        // schema of the position that links to it, or of the link.
+        const linked = place ?? value.$link.schema;
+        if (linked !== undefined) {
+          this.learn(value.$link.doc, value.$link.path, linked);
+        }
         doc = value.$link.doc;
+        place = this.schemas.get(doc);
         rest = [...value.$link.path, ...rest];
         at = [];
         named_ = [];
@@ -549,9 +609,12 @@ export class Store {
         }
         // A key that a write of the transaction in progress changed is
         // found under the key the element has now (ruling Z24).
+        // The key field is that of the schema of the array (ruling
+        // Z42).
+        const field = keyFieldOf(place);
         let key = segment.slice(KEY.length);
         const keys = Array.isArray(value)
-          ? this.keysOf(value, new Ref(doc, at), undefined, fieldOfKey(key))
+          ? this.keysOf(value, new Ref(doc, at), undefined, field)
           : [];
         let index = keys.indexOf(key);
         for (let hops = 0; index < 0 && hops < MAX_LINKS; hops++) {
@@ -567,23 +630,39 @@ export class Store {
         } else {
           value = (value as unknown[])[index];
           at = [...at, `${index}`];
-          crossed = [...crossed, { array: named_, key, position: at }];
+          crossed = [...crossed, {
+            array: named_,
+            key,
+            position: at,
+            ...(field === undefined ? {} : { field }),
+          }];
         }
         named_ = [...named_, segment];
+        place = placeBelow(place, segment);
         inPlace = true;
         continue;
       }
       if (Array.isArray(value) && /^\d+$/.test(segment)) inPlace = true;
       value = child(value, segment);
+      place = placeBelow(place, segment);
       at = [...at, segment];
       named_ = [...named_, segment];
     }
     reads?.push({ doc, path: at });
+    // A document the store knows no schema for is stored under the
+    // schema it is read under.
+    if (place === undefined && schema !== undefined && !missing) {
+      this.learn(doc, named_, schema);
+      place = named_.reduce(placeBelow, this.schemas.get(doc));
+    }
+    const keyField = keyFieldOf(place);
     return {
       ref: new Ref(doc, at, schema),
       value,
       named: new Ref(doc, named_, schema),
       missing,
+      ...(place === undefined ? {} : { place }),
+      ...(keyField === undefined ? {} : { keyField }),
       inPlace,
       crossed,
       fallback,
@@ -655,6 +734,10 @@ export class Store {
       this.docs.delete(from);
       this.docs.set(to, document);
     }
+    const schema = this.schemas.get(from);
+    this.schemas.delete(from);
+    this.schemas.delete(to);
+    if (schema !== undefined) this.schemas.set(to, schema);
     const streams = this.streams.get(from);
     this.streams.delete(from);
     this.streams.delete(to);
@@ -704,7 +787,15 @@ export class Store {
     const value = withDefaults(
       located.value === undefined && located.fallback !== undefined
         ? structuredClone(located.fallback)
-        : this.#copy(located.value, reads, open, located.named, copies, copied),
+        : this.#copy(
+          located.value,
+          reads,
+          open,
+          located.named,
+          copies,
+          copied,
+          located.place,
+        ),
       located.ref.schema,
       (from, to) => {
         const address = this.addresses.get(from);
@@ -731,6 +822,8 @@ export class Store {
     at: Ref,
     copies: boolean,
     copied: boolean,
+    /** The schema the place is stored under at the position. */
+    shape?: Schema,
   ): unknown {
     if (isLink(value)) {
       const { doc, path, schema } = value.$link;
@@ -747,11 +840,20 @@ export class Store {
           typeof member === "object" && member !== null && !isLink(member) &&
           !isStream(member)
         );
+      const items = typeof shape === "object" ? shape.items : undefined;
       const copy = value.map((member, index) =>
-        this.#copy(member, reads, open, here.key(`${index}`), copies, copies)
+        this.#copy(
+          member,
+          reads,
+          open,
+          here.key(`${index}`),
+          copies,
+          copies,
+          items,
+        )
       );
       if (containers) {
-        const keys = this.keysOf(value, here, copy);
+        const keys = this.keysOf(value, here, copy, keyFieldOf(shape));
         copy.forEach((member, index) => {
           if (isLink(value[index])) return;
           this.#readdress(
@@ -771,7 +873,15 @@ export class Store {
           [name, member],
         ) => [
           name,
-          this.#copy(member, reads, open, here.key(name), copies, copied),
+          this.#copy(
+            member,
+            reads,
+            open,
+            here.key(name),
+            copies,
+            copied,
+            placeBelow(shape, name),
+          ),
         ]),
       );
       if (copied) this.copies.add(copy);
@@ -862,16 +972,12 @@ export class Store {
     this.log.push({ doc, path, at: this.clock });
     // A position the write went through by key that holds another key
     // now is re-keyed (ruling Z24).
-    for (const { array, key, position } of located.crossed) {
+    for (const { array, key, position, field } of located.crossed) {
       const index = Number(position[position.length - 1]);
       const holder = this.locate(new Ref(doc, position.slice(0, -1)), false);
       if (!Array.isArray(holder.value)) continue;
-      const now = this.keysOf(
-        holder.value,
-        holder.ref,
-        undefined,
-        fieldOfKey(key),
-      )[index];
+      const now =
+        this.keysOf(holder.value, holder.ref, undefined, field)[index];
       if (now !== undefined && now !== key) {
         this.rekeys.push({ doc, array, from: key, to: now });
       }
