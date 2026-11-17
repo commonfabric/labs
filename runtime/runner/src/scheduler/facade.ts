@@ -1,4 +1,9 @@
-import type { CellScope, ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import {
+  type CellScope,
+  resolveScopeKey,
+  type ScopeKey,
+  type ScopeKeyIdentity,
+} from "@commonfabric/memory/v2";
 import { type ArmedTurn, armTurn } from "@commonfabric/async/turn";
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
 import { ensureNotRenderThread } from "@commonfabric/platform/env";
@@ -2088,9 +2093,11 @@ export class Scheduler {
   /**
    * Whether an action registered here, other than the one `tx` runs, declares
    * a write to some instance of `address`'s document, at any scope, and has
-   * not yet produced the instance `tx` reads: no run of it for that instance
-   * (the one its run identity resolves to on a fanned-out writer, any on a
-   * writer that is not fanned out) has finished without being withdrawn. A
+   * not yet produced the instance `tx` reads: it is not a JavaScript
+   * derivation, or no run of it for that instance
+   * (`address`'s scope resolved against the run identity of `tx` on a
+   * fanned-out writer, any on a writer that is not fanned out) has finished
+   * without being withdrawn. A
    * writer whose run finished and left the instance absent has produced it,
    * and its value is `undefined`; one whose run was withdrawn has not.
    *
@@ -2100,18 +2107,27 @@ export class Scheduler {
    * space scope has a writer indexed only at space scope.
    */
   owesScopedInstance(
-    address: Pick<IMemorySpaceAddress, "space" | "id">,
+    address: Pick<IMemorySpaceAddress, "space" | "id" | "scope">,
     tx: IExtendedStorageTransaction,
   ): boolean {
     const reader = tx.tx.sourceAction;
     const identity = waveRunContextOf(tx)?.scopeKeyIdentity ??
       this.runtime.scopeKeyIdentity;
+    let instance: ScopeKey | undefined;
+    try {
+      instance = resolveScopeKey(address.scope, identity);
+    } catch {
+      // An identity that cannot name the instance (a sessionless one read
+      // at session scope) names none any writer has produced.
+    }
     for (const scope of ["space", "user", "session"] as const) {
       const writers = this.#writeIndex.writersByEntity.get(
         entityNameKey({ ...address, scope }),
       );
       for (const writer of writers ?? []) {
-        if (writer !== reader && !this.#hasProducedInstance(writer, identity)) {
+        if (
+          writer !== reader && !this.#hasProducedInstance(writer, instance)
+        ) {
           return true;
         }
       }
@@ -2120,17 +2136,31 @@ export class Scheduler {
   }
 
   /**
-   * Whether `action` has produced the instance `identity` resolves to: a run of
-   * it finished without being withdrawn, for that instance at the current
-   * ratchet on a fanned-out node, and at all on any other.
+   * Whether `action` has produced the instance keyed `instance`: it is a
+   * JavaScript derivation, and a run of it finished without being withdrawn,
+   * for that instance on a fanned-out node and at all on any other. A
+   * JavaScript derivation writes its whole result in its run, so a run that
+   * left the instance absent produced that absence. A builtin can write its
+   * output after its run returns, as a list coordinator does once its element
+   * setups complete, so a finished run of one shows nothing about whether it
+   * has produced the instance. And a fanned-out node's run for another
+   * instance, such as its space-keyed probe before it learned to narrow,
+   * produced that instance and not this one.
    */
-  #hasProducedInstance(action: Action, identity: ScopeKeyIdentity): boolean {
+  #hasProducedInstance(
+    action: Action,
+    instance: ScopeKey | undefined,
+  ): boolean {
+    if (
+      (action as Partial<TelemetryAnnotations>).module?.type !== "javascript"
+    ) {
+      return false;
+    }
     const node = this.#nodes.get(action);
     if (node === undefined) return false;
     if (node.fanOut === undefined) return node.produced === true;
-    const key = keyAtRatchet(node.fanOut, identity);
-    return key !== undefined &&
-      node.fanOut.instances.get(key)?.produced === true;
+    return instance !== undefined &&
+      node.fanOut.instances.get(instance)?.produced === true;
   }
 
   /**

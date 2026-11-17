@@ -206,14 +206,16 @@ currency. The existing overlay and retirement rules below still apply.
      and has not produced yet, so it is transit for that runtime, not
      knowledge. The read still reads `undefined`, but the served run that
      read it commits nothing (serving-loop.md §3d) and runs again once
-     the instance is produced. A writer that has run for the instance
-     has produced it, whether or not anything is there: a run whose
-     result is `undefined` writes nothing, and the absence is then the
-     instance's state (RULED 2026-11-17, owner: "a served run that yields
-     `undefined` counts as having produced its instance"). Only a writer
-     that has not run for a principal's instance holds back its served
-     readers' commits for it; the client's own echo of it persists (§4's
-     arrival gate).
+     the instance is produced. A JavaScript derivation whose run for the
+     instance finished without being withdrawn has produced it, whether
+     or not anything is there: a run whose result is `undefined` writes
+     nothing, and the absence is then the instance's state (RULED
+     2026-11-17, owner: "a served run that yields `undefined` counts as
+     having produced its instance"). A run that was itself withdrawn
+     produced nothing, and a builtin, which can write its output after its
+     run returns, is owed until it writes. Only such a writer holds back
+     its served readers' commits for a principal's instance; the client's
+     own echo of it persists (§4's arrival gate).
   2. **A lift that THROWS the error takes the same disposition.** The
      refusal propagates out of the lift body (the body did not catch
      it) and produces an undefined result through the ordinary result

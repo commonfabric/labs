@@ -108,7 +108,9 @@ async function fixture(name: string, serving: boolean) {
      * of `state`'s document at the user instance and leaves that instance
      * absent. Waits for it to settle.
      */
-    async runEmptyWriter(options: { readsUpstream?: boolean } = {}) {
+    async runEmptyWriter(
+      options: { readsUpstream?: boolean; moduleType?: string } = {},
+    ) {
       const user = state.getAsNormalizedFullLink();
       const slot = { ...user, scope: "space" as const };
       const writer = (tx: IExtendedStorageTransaction) => {
@@ -121,6 +123,11 @@ async function fixture(name: string, serving: boolean) {
           }),
         );
       };
+      // The module annotation a JavaScript derivation's action carries, or a
+      // builtin's when the test names another type.
+      Object.assign(writer, {
+        module: { type: options.moduleType ?? "javascript" },
+      });
       runtime.scheduler.subscribe(writer, {
         reads: [],
         shallowReads: [],
@@ -257,6 +264,22 @@ describe("scheduler-derivation-unproduced-instance", () => {
 
       expect(f.consumerRuns()).toBe(1);
       expect(f.output.get()).toBe("derived from nothing");
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("commits nothing from a served derivation that read a scoped instance a builtin writer ran and left absent", async () => {
+    // A builtin can write its output after its run returns, so its finished
+    // run shows nothing about whether it has produced the instance.
+
+    const f = await fixture("ran-empty-builtin", true);
+    try {
+      await f.runEmptyWriter({ moduleType: "raw" });
+      await f.runConsumer();
+
+      expect(f.consumerRuns()).toBe(1);
+      expect(f.output.get()).toBe("as it was");
     } finally {
       await f.close();
     }
