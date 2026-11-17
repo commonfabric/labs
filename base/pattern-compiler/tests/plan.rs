@@ -4126,3 +4126,55 @@ export const P = pattern<{ items: Writable<Item[]>; tags: Writable<string[]>; fl
         .count();
     assert_eq!(marked, 3);
 }
+
+/// Ruling Z30: a binding of the body of a `flatMap` has a path through
+/// the result, with a `*` of kind `element` at the result. A member that
+/// the callback writes in an array literal is at `*` whichever position
+/// of the segment it has. The source is over records in `items` and over
+/// plain values in `tags`, which the plan has alike, and each segment is
+/// an array of plain values that the callback writes.
+#[test]
+fn a_binding_of_a_flat_map_body_has_a_star_of_kind_element_at_the_result() {
+    let analysis = program(
+        r#"import { Writable, handler, pattern, UI } from "commonfabric";
+interface Item { title: string }
+const pick = handler<unknown, { title: string; chosen: Writable<string> }>((_, state) => {
+  state.chosen.set(state.title);
+});
+export const P = pattern<{ items: Item[]; tags: string[]; chosen: Writable<string> }>(
+  ({ items, tags, chosen }) => {
+    return {
+      [UI]: (
+        <div>
+          <ul>
+            {items.flatMap((item) => {
+              const choose = pick({ title: item.title, chosen });
+              return [<li onClick={choose}>{item.title}</li>, <li onClick={choose}>again</li>];
+            })}
+          </ul>
+          <ol>{tags.flatMap((tag) => <li onClick={pick({ title: tag, chosen })}>{tag}</li>)}</ol>
+        </div>
+      ),
+    };
+  },
+);
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    assert_eq!(
+        results_of(&plan, "choose"),
+        [(
+            r#"[{"element":0}]"#.to_string(),
+            r#"[["$UI","children","0","children","0","*","props","onClick"]]"#.to_string()
+        )]
+    );
+    assert_eq!(
+        results_of(&plan, "pick"),
+        [(
+            r#"[{"element":1}]"#.to_string(),
+            r#"[["$UI","children","1","children","0","*","props","onClick"]]"#.to_string()
+        )]
+    );
+    assert_eq!(stars_of(&plan, "choose"), [vec!["element"]]);
+    assert_eq!(stars_of(&plan, "pick"), [vec!["element"]]);
+}

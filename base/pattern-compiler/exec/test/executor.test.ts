@@ -2939,6 +2939,111 @@ describe("what a `*` of a result path stands for", () => {
   });
 });
 
+// Ruling Z30 on `fixtures/flat-streams.tsx`: a `*` of kind `element` at
+// the result of a `flatMap` matches a position whose key starts with the
+// keys of the binding's enclosing collections.
+describe("the stream of a binding of a `flatMap` body", () => {
+  const link = (name: string) => ({
+    $link: { doc: "argument", path: ["pool", name] },
+  });
+  // The elements of `items` are references to cells, and those of `tags`
+  // plain values stored in place.
+  const argument = () => ({
+    pool: { a: { title: "a" }, b: { title: "b" } },
+    items: [link("a"), link("b")],
+    tags: ["x", "y"],
+  });
+  type Row = { props: { onClick: { $stream: { keys: string[] } } } };
+  const lists = (instance: Instance) =>
+    (instance.store.docs.get("result")?.value as {
+      $UI: { children: { children: Row[][] }[] };
+    }).$UI.children.map((list) => list.children[0]);
+
+  it("is accepted at every member of the segment of its source key", async () => {
+    const artifact = await artifactOf("flat-streams");
+    const instance = new Instance(artifact, argument());
+
+    expect(artifact.plan.bindings.map((binding) => binding.result)).toEqual([
+      [{
+        path: [
+          "$UI",
+          "children",
+          "0",
+          "children",
+          "0",
+          "*",
+          "props",
+          "onClick",
+        ],
+        stars: [{ kind: "element" }],
+      }],
+      [{
+        path: [
+          "$UI",
+          "children",
+          "1",
+          "children",
+          "0",
+          "*",
+          "props",
+          "onClick",
+        ],
+        stars: [{ kind: "element" }],
+      }],
+    ]);
+    expect(instance.failures).toEqual([]);
+    // Over references: the two members of a segment hold the stream of
+    // the one source key.
+    const [a, b] = ["a", "b"].map((name) =>
+      `cell:argument:["pool","${name}"]#0`
+    );
+    expect(lists(instance)[0].map((row) => row.props.onClick.$stream.keys))
+      .toEqual([[a], [a], [b], [b]]);
+    // Over plain values in place.
+    expect(lists(instance)[1].map((row) => row.props.onClick.$stream.keys))
+      .toEqual([['value:"x"#0'], ['value:"y"#0']]);
+
+    // An event for the stream of the second source key.
+    instance.send(0, {}, [1]);
+    expect((instance.result() as { chosen: string }).chosen).toBe("b");
+    instance.send(1, {}, [0]);
+    expect((instance.result() as { chosen: string }).chosen).toBe("x");
+  });
+
+  it("matches by the prefix of the key, and no other key", () => {
+    const listed = {
+      path: ["rows", "*", "pick"],
+      stars: [{ kind: "element" as const }],
+    };
+    const position = ["rows", "3", "pick"];
+    const at = (key: string) => [
+      undefined,
+      { entry: 0, spread: true, key },
+      undefined,
+    ];
+    const source = 'cell:argument:["pool","a"]#0';
+    // A member that is a plain value, a member that is a reference, and
+    // the key itself, as the result of a `map` or a `filter` has it.
+    for (
+      const key of [
+        `${source}/value:"x"#0`,
+        `${source}/cell:argument:["pool","b"]#0`,
+        source,
+      ]
+    ) {
+      expect(coversPosition(listed, position, at(key), [source])).toBe(true);
+    }
+    // Another source key, and a key that begins with the same text and
+    // is no member of the segment.
+    expect(
+      coversPosition(listed, position, at('value:"x"#0/value:"x"#0'), [source]),
+    ).toBe(false);
+    expect(coversPosition(listed, position, at(`${source}0`), [source])).toBe(
+      false,
+    );
+  });
+});
+
 // `fixtures/instantiate.tsx`: a pattern instantiated in a function body
 // and a handler bound in one (ES §2.8; PL §3.14, §3.15). The value code
 // names the callee by its identity, and the executor is given the

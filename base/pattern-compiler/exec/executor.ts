@@ -378,6 +378,14 @@ const namesPosition = (listed: readonly string[], path: readonly string[]) =>
   );
 
 /**
+ * Whether the key of a position starts with the key of an enclosing
+ * collection: the key itself, or the key followed by the part that a
+ * `flatMap` adds for a member of the segment (ruling Z22).
+ */
+const keyStartsWith = (key: string, prefix: string): boolean =>
+  key === prefix || key.startsWith(`${prefix}/`);
+
+/**
  * Whether a path `Binding.result` lists covers a position of the result
  * for a marker (PL §1.1, "What a `*` of a result path stands for"):
  * segment for segment, and at each `*` the position has to be of the
@@ -386,8 +394,11 @@ const namesPosition = (listed: readonly string[], path: readonly string[]) =>
  * `keys` the keys of the marker's stream, one for each `element` step
  * of its binding.
  *
- * - `element`: an element of a collection, at the position that holds
- *   the key of the marker for that step.
+ * - `element`: an element of a collection, at a position whose key
+ *   starts with the key of the marker for that step (ruling Z30). At the
+ *   result of a `map` or a `filter` that is the position that holds the
+ *   key, and at the result of a `flatMap` each member of the segment of
+ *   that source key.
  * - `every` and `inside`: an element of a collection, and no member
  *   written beside it.
  * - `member`: the member written at the stated entry, and no element of
@@ -417,7 +428,10 @@ export const coversPosition = (
       case "element": {
         const key = keys[step];
         step += 1;
-        if (!origin.spread || key === undefined || origin.key !== key) {
+        if (
+          !origin.spread || key === undefined || origin.key === undefined ||
+          !keyStartsWith(origin.key, key)
+        ) {
           return false;
         }
         break;

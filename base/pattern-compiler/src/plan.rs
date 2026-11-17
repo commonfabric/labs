@@ -3554,17 +3554,32 @@ impl<'a> Emitter<'_, '_, 'a> {
             self.values[value].element = Some(element);
             if via == "map" {
                 self.values[value].element_entries = element_entries;
+            }
+            if via == "map" || via == "flatMap" {
                 // "The path of what the callback returns, with `*` at the
-                // position of each enclosing collection" (PL §1.1).
-                self.values[value].streams = element_streams
-                    .into_iter()
-                    .map(|mut stream| {
-                        let star = self.star_of(collection, &mut stream);
-                        stream.path.insert(0, "*".to_string());
-                        stream.stars.insert(0, star);
-                        stream
-                    })
-                    .collect();
+                // position of each enclosing collection" (PL §1.1). A
+                // member of the segment that the callback of a `flatMap`
+                // writes as an array literal is at a position of the
+                // result, so its position in the segment is no segment of
+                // the path. The `*` is of kind `element` for a binding of
+                // the callback's body, and a position matches by the
+                // prefix of its key (ruling Z30).
+                let flat = via == "flatMap";
+                let segment = matches!(&result, Place::Record(fields)
+                    if !fields.is_empty() && fields.keys().all(|name| name.parse::<usize>().is_ok()));
+                let mut streams: Vec<StreamAt> = Vec::new();
+                for mut stream in element_streams {
+                    if flat && segment {
+                        stream.path.remove(0);
+                    }
+                    let star = self.star_of(collection, &mut stream);
+                    stream.path.insert(0, "*".to_string());
+                    stream.stars.insert(0, star);
+                    if !streams.contains(&stream) {
+                        streams.push(stream);
+                    }
+                }
+                self.values[value].streams = streams;
             }
         }
         let place = Place::Value(value, Vec::new());
