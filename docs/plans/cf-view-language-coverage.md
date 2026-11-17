@@ -74,6 +74,10 @@ values and numeric `.dat` tables have syntax highlighting.
 Assembly, which covers the Go assembler's source and GNU assembler source that
 the C preprocessor reads first, has syntax highlighting and a structure tree of
 functions, symbols, macros, and labels.
+SQL, which covers PostgreSQL, SQLite, and MySQL scripts, has syntax
+highlighting, with a PostgreSQL function's dollar-quoted body colored as SQL,
+and a structure tree of the statements that create things or alter tables,
+with the columns each defines.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
@@ -97,7 +101,7 @@ Tree-sitter through a shared, language-neutral adapter, which HTML will use as
 well. Java properties, INI, dotenv, ProGuard rules, Git attributes, Git
 configuration files, XML, makefiles, Org mode, Lean, ignore files, Go's module
 and checksum files, Bazel rc files, Graphviz DOT, Dockerfiles, delimited tables,
-and assembly use focused scanners. The order is provisional because recent
+assembly, and SQL use focused scanners. The order is provisional because recent
 activity was measured in six of the 26 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
@@ -105,8 +109,8 @@ JSON, JSONC, JSON Lines, YAML, Python, Go, Go module file, Go checksum file,
 Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, shell, C, C++, CUDA,
 makefile, Dockerfile, Java properties, INI, dotenv, ProGuard, Git attributes,
 Git configuration, XML, Org mode, directive configuration, ignore-file, Graphviz
-DOT, CSV, TSV, `.dat` table, assembly, and diff support to honest handling of
-every textual syntax in the active `commonfabric` repositories.
+DOT, CSV, TSV, `.dat` table, assembly, SQL, and diff support to honest handling
+of every textual syntax in the active `commonfabric` repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -1541,7 +1545,7 @@ fixture comes from gVisor.
 - [ ] Add Ruby, Rack, ERB, Gemfiles, and Bundler lock files.
 - [ ] Add TeX and BibTeX.
 - [x] Add Org mode.
-- [ ] Add SQL.
+- [x] Add SQL.
 - [x] Add CSV, TSV, and numeric `.dat` tables.
 - [ ] Add structured JSON log records.
 - [x] Add Graphviz DOT.
@@ -1718,6 +1722,61 @@ parse in 29 to 130. The parse is slowest where every token is a node that the
 structure tree lists. In the same runs, INI took 91 to 115 milliseconds to parse
 51,200 keys, and DOT took 90 to 136 to parse 51,200 nodes. The fixture comes
 from gVisor.
+
+SQL is implemented. A November 13, 2026 read of the local checkouts of the
+organization's repositories found 17 `.sql` files in 2 repositories: 16
+PostgreSQL schema migrations in CRM, which the July survey predates, and one
+MySQL test script in gVisor. The six months before the read hold 17 path-change
+events on them, all in CRM. `.sql` selects SQL, as does `--language sql`.
+
+SQL uses a focused scanner rather than Tree-sitter. No official Tree-sitter SQL
+grammar exists. The most used one,
+[`DerekStride/tree-sitter-sql`](https://github.com/DerekStride/tree-sitter-sql),
+ships no WebAssembly build in its npm package, which unpacks to 45.8 MiB of
+generated C source and grammar files, against the 10 MiB maximum for a later
+grammar. Its rules read a function body as SQL statements only, so they cannot
+parse the PL/pgSQL bodies that hold 73 of the 482 lines in the 17 files, and
+they have no `#` comment, which 13 of gVisor's 23 lines are. SQL needs no
+parser to color: a scanner that follows comment nesting and dollar-quote tags
+reads each dialect's lexical syntax.
+
+The scanner reads PostgreSQL's lexical syntax, which SQLite's follows, or
+MySQL's. It reads MySQL's when the source, read in PostgreSQL's, holds syntax
+only MySQL reads outside its strings, comments, and bodies, such as a statement
+that starts with a `#` comment or a `DELIMITER` command, or an executed comment
+such as `/*!40101 … */`. It also reads MySQL's when PostgreSQL's reading leaves
+a string open at the end of the source and MySQL's does not, as `'it\'s'` does.
+The two syntaxes differ in what `#`, `"`, and a backslash in a string mean, in
+whether block comments nest, and in MySQL's `DELIMITER` command and executed
+comments.
+
+A PostgreSQL dollar quote ends at the first copy of its tag. One that follows
+`AS`, `DO`, or a `LANGUAGE` clause holds a function's or a block's body. The
+body is colored as SQL when its statement names no language or names `sql` or
+`plpgsql`, and the variables its `declare` section names are colored as
+declarations. Any other dollar quote is a string, and so are the lines of data
+that follow a `COPY … FROM stdin` statement. A line that starts with `\` is a
+psql command.
+
+Every `create` statement and every `alter table` statement outside a body is a
+structure entry, labeled with the kind of thing it creates and the name it
+declares. An `alter table` statement inside a MySQL executed comment that adds
+no columns is the exception. The columns a `create table` lists and an
+`alter table` adds are entries inside it, colored as declarations, and a
+column's type that SQL does not define is colored as a type name.
+
+A coverage check over the 17 files found every file reconstructed exactly and
+every character other than white space with a token class. Timed in processor
+time on a loaded machine, on 100 kilobytes of the CRM migrations, the
+95th-percentile full highlight took 7 milliseconds, the document parse 9, and
+the re-color after one edit 8. Each input built to slow the scanner that was
+measured, such as unclosed strings, comments, and bodies, nested bodies, or
+thousands of distinct dollar-quote tags, took time in proportion to its length.
+The slowest, 100 kilobytes of nested parentheses, re-colored in 35 to 37
+milliseconds, over the 25-millisecond maximum. Each bracket is a colored run of
+its own, which every language that colors brackets pays for, and the HCL,
+Python, and shell grammars are slower than SQL on that input. The fixtures come
+from CRM and gVisor.
 
 Completion gate: every textual syntax in the survey's 24 active repositories
 has a tested selector and highlighter or an explicit plain-text classification.
