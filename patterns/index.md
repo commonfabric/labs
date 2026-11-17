@@ -139,7 +139,10 @@ are stored, while each viewer's pointer and a shape held mid-drag or mid-resize
 travel through a presence room and are stored nowhere),
 `examples/iframe-verb-list/` (a list in a sandboxed iframe whose guest adds an
 item only by sending the pattern's `addItem` verb, which writes the pattern's
-own state), `product/lobby/`, `apps/lunch-poll/`, `examples/math-note/`,
+own state), `product/lobby/`, `apps/lofi-inductor/` (a model labels a stream of
+items while a regex rule set learns to match it; a proposed rule set replaces
+the current one only when it is in grammar, safe, and better on a held-out
+split), `apps/lunch-poll/`, `examples/math-note/`,
 `examples/profile-group-chat/`, `apps/project-list/`,
 [`apps/recommend-a-book/`](apps/recommend-a-book/README.md) (personal reading
 shelf and private visitor recommendations), `examples/router/`,
