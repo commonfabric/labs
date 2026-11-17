@@ -38,6 +38,7 @@ import {
   parseAliasLine,
   readAliasDirectory,
 } from "@commonfabric/test-support/records";
+import { git } from "./repository-files.ts";
 
 /** What the gate compares: the alias directory now, and at the merge base. */
 export type AliasDirectoryState = {
@@ -138,20 +139,6 @@ export function aliasDirectoryProblems(
   return { problems, aliases };
 }
 
-async function git(...args: string[]): Promise<string> {
-  const { code, stdout, stderr } = await new Deno.Command("git", {
-    args,
-    stdout: "piped",
-    stderr: "piped",
-  }).output();
-  if (code !== 0) {
-    throw new Error(
-      `git ${args.join(" ")} failed: ${new TextDecoder().decode(stderr)}`,
-    );
-  }
-  return new TextDecoder().decode(stdout);
-}
-
 async function main(): Promise<void> {
   const base = Deno.args[0] ?? "origin/main";
   let mergeBase: string;
@@ -195,7 +182,7 @@ async function main(): Promise<void> {
     strayFile: beside.some(({ name }) =>
       name === `${basename(ALIAS_DIRECTORY)}${ALIAS_FILE_SUFFIX}`
     ),
-    pathExists: (path) => existsSync(path),
+    pathExists: existsSync,
   });
 
   if (problems.length > 0) {

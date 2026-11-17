@@ -54,6 +54,10 @@ import { completionProviderKeys } from "../runtime/cli/lib/completion/providers.
  */
 export const NO_CANDIDATES = new Map<string, string>([
   [
+    "pattern rollback:version",
+    "a version number from the index's owner-only history (cf pattern history)",
+  ],
+  [
     "space invite redeem:invite-id",
     "an opaque invitation ID supplied with the code",
   ],
@@ -167,6 +171,20 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   [
     "pattern publish:remixed-from",
     "a published pattern's id, which a pattern-index search answers",
+  ],
+  [
+    "pattern share:description",
+    "prose the caller writes about their pattern",
+  ],
+  ["pattern share:hashtags", "tags the caller coins for their pattern"],
+  ["pattern share:keywords", "words the caller coins for their pattern"],
+  [
+    "pattern share:remixed-from",
+    "a published pattern's id, which a pattern-index search answers",
+  ],
+  [
+    "pattern publish:profile",
+    "a profile space DID, which cf profile ls answers from a live home",
   ],
   ["space invite create:max-uses", "a distinct identity count"],
   ["space invite create:shell", "a caller-selected shell origin"],

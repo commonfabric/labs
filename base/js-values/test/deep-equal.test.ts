@@ -300,6 +300,13 @@ describe("deepEqual()", () => {
       nullProto.a = 1;
       expect(deepEqual(plain, nullProto)).toBe(false);
     });
+
+    it("returns `false` for an array vs a non-array whose constructor is `Array`", () => {
+      const arrayLike = Object.setPrototypeOf({}, Array.prototype);
+
+      expect(deepEqual([], arrayLike)).toBe(false);
+      expect(deepEqual(arrayLike, [])).toBe(false);
+    });
   });
 
   describe("with an `objectEqual` comparator", () => {

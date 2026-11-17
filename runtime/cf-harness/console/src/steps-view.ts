@@ -14,15 +14,8 @@ import {
   consoleStepArguments,
 } from "../steps.ts";
 
-const json = (value: unknown): string => {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    // A payload holding a cycle is not one the run produced, but showing
-    // something beats an empty pane.
-    return String(value);
-  }
-};
+/** A payload as indented JSON. Every payload here arrived as JSON. */
+const json = (value: unknown): string => JSON.stringify(value, null, 2);
 
 /** The one way a cell is drawn, wherever this view draws one. */
 import "./cell-chip.ts";

@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
 
 import { LOOM_REPO, RECENT_WINDOW, REPO, WEAVER_REPO } from "../config.ts";
@@ -440,6 +441,54 @@ describe("recent-commits", () => {
             ]);
           });
 
+          it("lists a repository a delivery said was deleted once a listing has left it out", async () => {
+            const relay = new FakeRelay();
+            await relay.open();
+            const specs = {
+              name: "specs",
+              pushedAt: "2026-09-30T11:00:00Z",
+              commits: [commit(`${ORG}/specs`, "s", "2026-09-30T11:00:00Z")],
+            };
+            let repos = [labs(["l"]), specs];
+            restore = standIn(() => repos, calls);
+            const organization = new OrganizationCommits(relay.webhooks);
+            await organization.refresh(CREDENTIAL);
+            await relay.deliver("repository", {
+              action: "deleted",
+              repository: { full_name: `${ORG}/specs` },
+            });
+            repos = [labs(["l"])];
+            await organization.refresh(CREDENTIAL);
+
+            repos = [labs(["l"]), specs];
+            await relay.deliver(
+              "push",
+              pushPayload(`${ORG}/specs`, "refs/heads/main", "s"),
+            );
+            await organization.refresh(CREDENTIAL);
+
+            expect(organization.commits.map((held) => held.sha).sort()).toEqual([
+              "l",
+              "s",
+            ]);
+          });
+
+          it("drops nothing for a repository delivery whose payload names no action", async () => {
+            const relay = new FakeRelay();
+            await relay.open();
+            restore = standIn(() => [labs(["l"])], calls);
+            const organization = new OrganizationCommits(relay.webhooks);
+            await organization.refresh(CREDENTIAL);
+            await relay.deliver("repository", { repository: { full_name: REPO } });
+            await relay.deliver("repository", ["deleted"]);
+            calls.length = 0;
+
+            await organization.refresh(CREDENTIAL);
+
+            expect(calls).toEqual([`/orgs/${ORG}/repos?per_page=100&page=1`]);
+            expect(organization.commits.map((held) => held.sha)).toEqual(["l"]);
+          });
+
           it("keeps listing a repository a transfer delivery names", async () => {
             const relay = new FakeRelay();
             await relay.open();
@@ -738,6 +787,40 @@ describe("recent-commits", () => {
           expect(calls).toContain(`graphql ${ORG}/garbled`);
         });
 
+        it("logs and throws away a repository's read when a pull request in its history, or the history itself, has the wrong shape", async () => {
+          restore = standIn(() => [
+            {
+              name: "pulled",
+              pushedAt: "2026-09-30T12:00:00Z",
+              others: [{
+                oid: "p",
+                associatedPullRequests: { nodes: [{ number: "9" }] },
+              }],
+            },
+            {
+              name: "nodeless",
+              pushedAt: "2026-09-30T12:00:00Z",
+              answer: {
+                data: {
+                  repository: {
+                    defaultBranchRef: { target: { history: { nodes: 5 } } },
+                  },
+                },
+              },
+            },
+          ], calls);
+          const organization = new OrganizationCommits();
+
+          expect(await organization.refresh(CREDENTIAL)).toBe(false);
+
+          expect(organization.commits).toEqual([]);
+          for (const name of ["pulled", "nodeless"]) {
+            expect(logged).toContain(
+              `recent commits: could not read ${ORG}/${name}'s commits: GitHub commit history returned invalid data`,
+            );
+          }
+        });
+
         it("holds no commits for an empty repository, and logs nothing for it", async () => {
           restore = standIn(() => [{ name: "empty", pushedAt: null }], calls);
           const organization = new OrganizationCommits();
@@ -767,6 +850,27 @@ describe("recent-commits", () => {
           repos[0] = { ...repos[0], archived: true };
           expect(await organization.refresh(CREDENTIAL)).toBe(true);
           expect(organization.commits).toEqual([]);
+        });
+
+        it("forgets a refusal of a repository the listing no longer names, and returns `true`", async () => {
+          const repos: RepoSpec[] = [
+            { name: "secret", pushedAt: "2026-09-30T12:00:00Z", errorType: "FORBIDDEN" },
+            {
+              name: "labs",
+              pushedAt: "2026-09-30T12:00:00Z",
+              commits: [commit(REPO, "l", "2026-09-30T12:00:00Z")],
+            },
+          ];
+          restore = standIn(() => repos, calls);
+          const organization = new OrganizationCommits();
+          await organization.refresh(CREDENTIAL);
+          expect(organization.refused).toEqual(new Set([`${ORG}/secret`]));
+
+          repos.shift();
+
+          expect(await organization.refresh(CREDENTIAL)).toBe(true);
+          expect(organization.refused).toEqual(new Set());
+          expect(organization.commits.map((held) => held.sha)).toEqual(["l"]);
         });
 
         it("throws when the organization's repositories cannot be listed", async () => {
@@ -1040,6 +1144,58 @@ describe("recent-commits", () => {
 
         expect(calls.slice(2)).toEqual([`graphql ${ORG}/labs`]);
         expect(asked).toBe(2);
+      });
+
+      it("reads again once a reading ends when a push to a default branch was delivered during it", async () => {
+        const relay = new FakeRelay();
+        await relay.open();
+        let repos: RepoSpec[] = [{
+          name: "labs",
+          pushedAt: "2026-09-30T12:00:00Z",
+          commits: [commit(REPO, "l", "2026-09-30T12:00:00Z")],
+        }];
+        restore = standIn(() => repos, calls);
+        // The reading waits at its read of the repository's history until the
+        // push has been delivered.
+        const asked = Promise.withResolvers<void>();
+        const history = Promise.withResolvers<void>();
+        const answer = globalThis.fetch;
+        using _fetch = stub(globalThis, "fetch", async (input, init) => {
+          if (init?.method === "POST") {
+            asked.resolve();
+            await history.promise;
+          }
+          return answer(input, init);
+        });
+        const tile = createRecentCommits(
+          new OrganizationCommits(relay.webhooks),
+          relay.webhooks,
+        );
+        const collecting = ctx(() => [], {
+          env: (key) => key === "GH_TOKEN" ? "test-token" : undefined,
+        });
+
+        await tile.collect(collecting);
+        await asked.promise;
+        repos = [{
+          ...repos[0],
+          commits: [
+            commit(REPO, "m", "2026-09-30T13:00:00Z"),
+            ...repos[0].commits ?? [],
+          ],
+        }];
+        await relay.deliver("push", pushPayload(REPO, "refs/heads/main", "m"));
+        history.resolve();
+        await tile.reading();
+        await tile.reading();
+
+        expect(calls).toEqual([
+          `/orgs/${ORG}/repos?per_page=100&page=1`,
+          `graphql ${ORG}/labs`,
+          `graphql ${ORG}/labs`,
+        ]);
+        await tile.reading();
+        expect(calls.length).toBe(3);
       });
 
       it("counts on its sub line the repositories GitHub refused to read, and says when a read found no commits", async () => {

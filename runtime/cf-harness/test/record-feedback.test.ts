@@ -190,6 +190,34 @@ describe("record-feedback", () => {
     expect(output.message).toContain("did not record the thumbs_up event");
   });
 
+  it("returns an error and calls no index when the patternId is empty", async () => {
+    const index = stubIndex();
+    const result = await createEngine(index).invokeBuiltinTool(
+      "record_feedback",
+      { patternId: "", verdict: "up" },
+    );
+    const output = result.output as RecordFeedbackToolErrorOutput;
+    expect(output.status).toBe("error");
+    expect(output.message).toBe("record_feedback requires a patternId");
+    expect(index.calls).toEqual([]);
+  });
+
+  it("returns an error naming the failure when the pattern index cannot be opened", async () => {
+    const engine = new CfHarnessEngine({
+      sandboxRuntime: new FakeSandboxRuntime(),
+      runId: "record-feedback-test-unavailable",
+      patternIndexClientFactory: () =>
+        Promise.reject(new Error("index offline")),
+    });
+    const result = await engine.invokeBuiltinTool("record_feedback", {
+      patternId: "pat-expenses",
+      verdict: "up",
+    });
+    const output = result.output as RecordFeedbackToolErrorOutput;
+    expect(output.status).toBe("error");
+    expect(output.message).toBe("pattern index unavailable: index offline");
+  });
+
   it("refuses a verdict the index has no event for", async () => {
     const index = stubIndex();
     const result = await createEngine(index).invokeBuiltinTool(

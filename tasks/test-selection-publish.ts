@@ -49,6 +49,7 @@ import { duration } from "./test-selection/duration.ts";
 import { join } from "@std/path";
 import { ulid } from "@std/ulid";
 import {
+  type AliasResolver,
   createObject,
   gzipText,
   listObjects,
@@ -65,7 +66,7 @@ import {
   storeBucket,
   storePrefix,
 } from "./test-records-config.ts";
-import { rollupShards } from "./test-records-compact.ts";
+import { rollupShards, writeToken } from "./test-records-compact.ts";
 import { calibrate, laneObservations } from "./test-selection/calibrate.ts";
 import { calibrationHealth, healthLines } from "./test-selection/health.ts";
 import {
@@ -166,14 +167,18 @@ export interface StoreAccess {
   token(): string | undefined;
 }
 
-/** The store as it really is. */
+/**
+ * The store as it really is, reached through `fetchImpl` with the credential
+ * `token` returns.
+ */
 export function liveStore(
   bucket: string,
   fetchImpl: typeof fetch = fetch,
+  token: () => string | undefined = () => writeToken(),
 ): StoreAccess {
   return {
-    list: (prefix) => listObjects({ bucket, prefix }),
-    read: (objectName) => readObject({ bucket, objectName }),
+    list: (prefix) => listObjects({ bucket, prefix, fetch: fetchImpl }),
+    read: (objectName) => readObject({ bucket, objectName, fetch: fetchImpl }),
     readText: async (objectName) => {
       const response = await fetchImpl(objectUrl(bucket, objectName), {
         headers: { "accept-encoding": "identity" },
@@ -184,25 +189,26 @@ export function liveStore(
       return await response.text();
     },
     create: async (name, body) => {
-      const token = writeToken();
-      if (token === undefined) throw new Error("no write credential");
+      const credential = token();
+      if (credential === undefined) throw new Error("no write credential");
       await createObject({
         bucket,
         name,
         body,
         contentType: "application/json",
         contentEncoding: "gzip",
-        token,
+        token: credential,
+        fetch: fetchImpl,
       });
     },
     rollupShards: async (day) => {
       try {
-        return await rollupShards({ bucket, day });
+        return await rollupShards({ bucket, day, fetch: fetchImpl });
       } catch {
         return undefined;
       }
     },
-    token: writeToken,
+    token,
   };
 }
 
@@ -698,28 +704,33 @@ async function aggregateToFold(
   return { aggregate: read.state, name: read.name };
 }
 
-/**
- * An access token for creating a manifest, when one is reachable. Only
- * the workflow has one: the publisher's identity is federated and pinned
- * to that workflow file, and it is the sole principal holding create on
- * the selection area. A person's own reporting key is scoped to their
- * `submissions/local/<username>/` folder and cannot write a manifest, so
- * there is no fallback to offer — `--dry-run --out` is how a person sees
- * what a run would produce.
- */
-export function writeToken(): string | undefined {
-  const federated = Deno.env.get("TEST_RECORDS_GCS_TOKEN");
-  return federated !== undefined && federated.length > 0
-    ? federated
-    : undefined;
+/** What a run of the publisher reaches beyond its own command line. */
+export interface PublishDeps {
+  /** The record store it reads, and creates the manifest in. */
+  store?: StoreAccess;
+
+  /** The moment the run starts at. */
+  now?: Date;
+
+  /** The suites, read from the working tree. */
+  topology?: () => Promise<readonly Suite[]>;
+
+  /** The newest manifest at a moment, whose coverage baselines it carries. */
+  previousManifest?: (now: Date) => Promise<Manifest | undefined>;
+
+  /** The alias file, which joins a renamed test to its own history. */
+  aliases?: () => Promise<AliasResolver>;
 }
 
 export async function publish(
   args: readonly string[],
-  store: StoreAccess = liveStore(storeBucket()),
-  now: Date = new Date(),
-  topology: () => Promise<readonly Suite[]> = () => loadTopology(),
-  previousManifest: (now: Date) => Promise<Manifest | undefined> = livePrevious,
+  {
+    store = liveStore(storeBucket()),
+    now = new Date(),
+    topology = () => loadTopology(),
+    previousManifest = livePrevious,
+    aliases = loadAliasResolver,
+  }: PublishDeps = {},
 ): Promise<number> {
   const options = parseArgs(args);
   if (options === undefined) {
@@ -784,7 +795,7 @@ export async function publish(
         `read`,
     );
   }
-  const resolver = await loadAliasResolver();
+  const resolver = await aliases();
   const fold = new Fold(aggregate, resolver, today);
   if (fold.resolved > 0) {
     console.log(

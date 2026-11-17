@@ -258,6 +258,21 @@ describe("`toMatchObjectIgnoringSymbols()` matcher", () => {
     }).toThrow();
   });
 
+  it("matches a primitive against the same primitive", () => {
+    expect("glaze").toMatchObjectIgnoringSymbols("glaze");
+  });
+
+  it("throws when a primitive meets an object", () => {
+    expect(() => {
+      expect("glaze").toMatchObjectIgnoringSymbols({ value: "glaze" });
+    }).toThrow("expected object to match when ignoring symbols");
+    expect(() => {
+      expect({ value: { nested: 1 } }).toMatchObjectIgnoringSymbols({
+        value: 1,
+      });
+    }).toThrow("expected object to match when ignoring symbols");
+  });
+
   it("matches `NaN` against `NaN`", () => {
     expect({ value: NaN, [testSymbol1]: "ignored" })
       .toMatchObjectIgnoringSymbols({ value: NaN });

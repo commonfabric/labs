@@ -1354,6 +1354,11 @@ Deno.test("command receipt parsing rejects every malformed boundary field", () =
     ["command", null, "must be an object"],
     ["command", { ...receipt, schema: "wrong" }, "schema must be"],
     [" Command ", { ...receipt, commandId: " Command " }, "not normalized"],
+    [
+      "command",
+      { ...receipt, commandId: "other" },
+      "key does not match commandId",
+    ],
     ["command", { ...receipt, sourceId: "" }, "sourceId must be a string"],
     [
       "command",

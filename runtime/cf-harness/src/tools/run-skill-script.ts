@@ -30,6 +30,7 @@ import {
   normalizeSkillScriptPath,
   parseAcquiredSkillPin,
 } from "../skills/scripts.ts";
+import { fileSystemErrorCode } from "./file-errors.ts";
 import { createClearedHostProcessEnv } from "./host-process-env.ts";
 import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
 
@@ -1225,16 +1226,11 @@ export const runSkillScriptTool: HarnessToolDefinition<
       );
       resolvedResourcePath = await Deno.realPath(resource.resourcePath);
     } catch (error) {
-      const code = error instanceof Deno.errors.NotFound
-        ? "script_not_found"
-        : error instanceof Deno.errors.PermissionDenied
-        ? "permission_denied"
-        : "unknown";
       const output = errorOutput({
         outputId,
         skill: skillName,
         path: normalizedPath,
-        code,
+        code: fileSystemErrorCode(error, "script_not_found"),
         message: describeFailure(error),
         resource,
         acquisition,
@@ -1301,16 +1297,11 @@ export const runSkillScriptTool: HarnessToolDefinition<
       }
       content = await Deno.readFile(resolvedResourcePath);
     } catch (error) {
-      const code = error instanceof Deno.errors.NotFound
-        ? "script_not_found"
-        : error instanceof Deno.errors.PermissionDenied
-        ? "permission_denied"
-        : "unknown";
       const output = errorOutput({
         outputId,
         skill: skillName,
         path: normalizedPath,
-        code,
+        code: fileSystemErrorCode(error, "script_not_found"),
         message: describeFailure(error),
         resource,
         acquisition,

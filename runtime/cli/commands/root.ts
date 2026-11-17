@@ -60,7 +60,9 @@ export const TOP_LEVEL_COMMANDS: readonly TopLevelCommand[] = [
   {
     name: "pattern",
     description:
-      "Publish patterns to the pattern index, and see where yours stand.",
+      "Keep, share and publish patterns in the pattern index: each deploy " +
+      "of your own pattern is kept as a private version, with history and " +
+      "rollback.",
     load: async () => (await import("./pattern.ts")).pattern,
   },
   {
@@ -100,7 +102,7 @@ export const TOP_LEVEL_COMMANDS: readonly TopLevelCommand[] = [
   {
     name: "index",
     description:
-      "Join the pattern index, where patterns are published and found.",
+      "Join the pattern index, where patterns are kept, shared and found.",
     load: async () => (await import("./pattern-index.ts")).index,
   },
   {
@@ -220,7 +222,8 @@ function envStatus(): string {
     // here goes wrong without going missing.
     lines.push(
       `  CF_SPACE    = ${space} (set, no need to pass --space on cell, ` +
-        `piece, pattern publish, wish, acl, deps, space recreate-root)`,
+        `piece, pattern share, pattern publish, wish, acl, deps, space ` +
+        `recreate-root)`,
     );
   }
   return lines.join("\n");
@@ -239,8 +242,8 @@ FIRST TIME SETUP:
   export CF_IDENTITY=./claude.key   # Set default identity
   export CF_API_URL=http://localhost:${ports.toolshed}  # Set default API URL
   export CF_SPACE=my-space          # Default space for cell, piece, pattern
-                                    # publish, wish, acl, deps and space
-                                    # recreate-root (--space overrides)
+                                    # share and publish, wish, acl, deps and
+                                    # space recreate-root (--space overrides)
 
 SHELL COMPLETION:
   source <(cf completion zsh)      # add to ~/.zshrc  (bash: completion bash)

@@ -652,6 +652,14 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     section: SECTION_TAG_SYNTAX,
     text: `fvj1:${JSON.stringify([{ [`/${tag}`]: 1 }])}`,
   })),
+  // Type tags holding `_`, which a component treats as a letter.
+  ...["a_b@1", "_x@1", "_@1", "x__y@1", "A.b_c.D_@2"].map((
+    tag,
+  ): Fvj1ConformanceCase => ({
+    name: `unknown tag ${JSON.stringify(tag)}`,
+    section: SECTION_TAG_SYNTAX,
+    text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
+  })),
   ...TYPE_TAGS_AT_THE_LIMITS.map(([has, tag]): Fvj1ConformanceCase => ({
     name: `unknown tag with ${has}`,
     section: SECTION_TAG_SYNTAX,
@@ -679,7 +687,7 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     "sys..Boop@1",
     ".Boop@1",
     "sys.Boop.@1",
-    "sys_x.Boop@1",
+    "sys$x.Boop@1",
     "sys.Boop",
     "core.Globals",
     "sys.Boop@01",
@@ -694,7 +702,7 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
   })),
   // Tags in the general syntax that, having no version, are not type tags.
-  ...["Bytes", "widget", "fid1"].map((tag): Fvj1ConformanceCase => ({
+  ...["Bytes", "widget", "fid1", "my_hash"].map((tag): Fvj1ConformanceCase => ({
     name: `key that is a tag but not a type tag ${JSON.stringify(tag)}`,
     section: SECTION_TAG_SYNTAX,
     text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
@@ -764,7 +772,9 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     section: "3-json-encoding.md section 3, `Hash@1`",
     text: 'fvj1:{"/Hash@1":{"hash":7,"tag":"fid1"}}',
   },
-  ...["sha256", "SHA256", "sys.sha@2"].map((tag): Fvj1ConformanceCase => ({
+  ...["sha256", "SHA256", "sys.sha@2", "my_hash", "_"].map((
+    tag,
+  ): Fvj1ConformanceCase => ({
     name: `hash under the algorithm tag ${JSON.stringify(tag)}`,
     section: SECTION_HASH_TAG,
     make: () => new FabricHash(new Uint8Array([1]), tag),

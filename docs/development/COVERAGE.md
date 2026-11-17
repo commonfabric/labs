@@ -215,7 +215,10 @@ counts, for each file, how many lines no test covered. The top-level `scripts`
 directory is left out, and so is an iframe pattern's `guest.js`: that file is
 the bundle `deno bundle` writes from the `guest.ts` or `guest.tsx` beside it,
 and the metric counts the source instead. [Testing an iframe
-guest](#testing-an-iframe-guest) says how a test loads that source. The same
+guest](#testing-an-iframe-guest) says how a test loads that source. A
+`deno-web-test.config.ts` is left out as well, because it is the
+configuration the browser test runner reads for a package's browser tests,
+not source those tests exercise. The same
 counting serves both readers:
 
 - **The repository-wide figure** merges every report the full run's lanes wrote

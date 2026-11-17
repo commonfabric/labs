@@ -10,41 +10,23 @@ import type {
   PatternIndexSearchRequest,
   PatternIndexSearchResponse,
 } from "@commonfabric/pattern-index/client";
-import type { HarnessChatEventEnvelope } from "../../src/contracts/interactive-chat.ts";
 import { consolePath, pageMount } from "./mount.ts";
 import type {
   ConsoleListedRun,
   ConsoleRunDetail,
   ConsoleRunSource,
 } from "../run-store.ts";
-import type {
-  ConsoleGraph,
-  ConsoleGraphEdge,
-  ConsoleGraphNode,
-} from "../graph.ts";
 import type { ConsoleFlow, ConsoleFlowCell, ConsoleFlowNode } from "../flow.ts";
-import type { ConsoleRunSummary } from "../runs.ts";
-import type { ConsoleSessionSummary } from "../sessions.ts";
-import type {
-  ConsoleChatEventEnvelope,
-  ConsoleTurnResult,
-} from "../turn-result.ts";
+import type { ConsoleChatEventEnvelope } from "../turn-result.ts";
 
 export type {
   ConsoleChatEventEnvelope,
   ConsoleFlow,
   ConsoleFlowCell,
   ConsoleFlowNode,
-  ConsoleGraph,
-  ConsoleGraphEdge,
-  ConsoleGraphNode,
   ConsoleListedRun,
   ConsoleRunDetail,
   ConsoleRunSource,
-  ConsoleRunSummary,
-  ConsoleSessionSummary,
-  ConsoleTurnResult,
-  HarnessChatEventEnvelope,
   PatternIndexListPatternsResponse,
   PatternIndexPattern,
   PatternIndexSearchRequest,
@@ -126,39 +108,14 @@ export const cancelTurn = async (
   );
 };
 
-export const listSessions = async (): Promise<
-  readonly ConsoleSessionSummary[]
-> =>
-  (await json<{ sessions: readonly ConsoleSessionSummary[] }>(
-    await fetch(api("/api/sessions")),
-  )).sessions;
-
 export const listRuns = async (): Promise<readonly ConsoleListedRun[]> =>
   (await json<{ runs: readonly ConsoleListedRun[] }>(
     await fetch(api("/api/runs")),
   )).runs;
 
-/** The durable external result of one completed turn. */
-export const readTurnResult = async (
-  turnId: string,
-): Promise<ConsoleTurnResult> =>
-  await json<ConsoleTurnResult>(
-    await fetch(api(`/api/turns/${encodeURIComponent(turnId)}/result`)),
-  );
-
 export const readRun = async (runId: string): Promise<ConsoleRunDetail> =>
   await json<ConsoleRunDetail>(
     await fetch(api(`/api/runs/${encodeURIComponent(runId)}`)),
-  );
-
-/**
- * The data-flow graph of a run and the children beneath it. Its own request
- * rather than a field of the run, because it reads every descendant's
- * artifacts and the timeline re-reads the run on every completed tool call.
- */
-export const readRunGraph = async (runId: string): Promise<ConsoleGraph> =>
-  await json<ConsoleGraph>(
-    await fetch(api(`/api/runs/${encodeURIComponent(runId)}/graph`)),
   );
 
 /** The conversation map of a run and the children beneath it. */

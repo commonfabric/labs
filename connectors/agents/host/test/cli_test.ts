@@ -1,8 +1,10 @@
 import { assertEquals, assertExists } from "@std/assert";
 import {
   type AgentsHostCliDependencies,
+  defaultAgentsHostCliDependencies,
   runAgentsHostCli,
 } from "../src/cli.ts";
+import { AGENTS_HOST_USAGE } from "../src/cli-options.ts";
 import type { RunningAgentsHost } from "../src/start.ts";
 import { join } from "@std/path";
 
@@ -407,4 +409,178 @@ Deno.test("shutdown starts while an active periodic collection drains", async ()
   } finally {
     await Deno.remove(directory, { recursive: true });
   }
+});
+
+Deno.test("--help prints the usage and starts no host", async () => {
+  const logs: string[] = [];
+  const deps = dependencies({
+    logs,
+    start: (() => {
+      throw new Error("help must not start a host");
+    }) as AgentsHostCliDependencies["start"],
+  });
+
+  assertEquals(await runAgentsHostCli(["--help"], deps), 0);
+  assertEquals(logs, [AGENTS_HOST_USAGE]);
+});
+
+Deno.test("--once publishes one collection and stops without commands", async () => {
+  const { directory, path } = await writeConfig();
+  try {
+    const listeners = new Map<Deno.Signal, () => void>();
+    const logs: string[] = [];
+    const stopped: Array<string | undefined> = [];
+    let acceptCommands: boolean | undefined;
+    const running = fakeRunningHost({
+      stop: (reason) => {
+        stopped.push(reason);
+        return Promise.resolve();
+      },
+    });
+    const deps = dependencies({
+      listeners,
+      logs,
+      scheduleEvery: () => {
+        throw new Error("a single collection must not schedule more");
+      },
+      start: ((options) => {
+        acceptCommands = options.acceptCommands;
+        return Promise.resolve(running);
+      }) as AgentsHostCliDependencies["start"],
+    });
+
+    assertEquals(await runAgentsHostCli([...args(path), "--once"], deps), 0);
+    assertEquals(acceptCommands, false);
+    assertEquals(stopped, ["once-complete"]);
+    assertEquals(logs.includes("Debug view piece: debug-piece"), true);
+    assertEquals(logs.some((line) => line.startsWith("Ready;")), false);
+    assertEquals(listeners.size, 0);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("SIGHUP queues at most one follow-up collection after startup", async () => {
+  const { directory, path } = await writeConfig(0);
+  try {
+    const listeners = new Map<Deno.Signal, () => void>();
+    const startEntered = Promise.withResolvers<void>();
+    const releaseStart = Promise.withResolvers<void>();
+    const ready = Promise.withResolvers<void>();
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const reasons: Array<string | undefined> = [];
+    const firstCollection = Promise.withResolvers<void>();
+    const releaseFirst = Promise.withResolvers<void>();
+    const secondCollection = Promise.withResolvers<void>();
+    const running = fakeRunningHost({
+      stop: () => Promise.resolve(),
+      synchronize: async (reason) => {
+        reasons.push(reason);
+        if (reasons.length === 1) {
+          firstCollection.resolve();
+          await releaseFirst.promise;
+          return 4;
+        }
+        secondCollection.resolve();
+        throw new Error("provider unavailable");
+      },
+    });
+    const deps = dependencies({
+      listeners,
+      logs,
+      errors,
+      start: (async () => {
+        startEntered.resolve();
+        await releaseStart.promise;
+        return running;
+      }) as AgentsHostCliDependencies["start"],
+    });
+    const originalLog = deps.log;
+    deps.log = (...values) => {
+      originalLog(...values);
+      if (String(values[0]).startsWith("Ready;")) ready.resolve();
+    };
+
+    const result = runAgentsHostCli(args(path), deps);
+    await startEntered.promise;
+    listeners.get("SIGHUP")?.();
+    assertEquals(logs, ["Ignoring SIGHUP while startup is still in progress"]);
+    releaseStart.resolve();
+    await ready.promise;
+
+    listeners.get("SIGHUP")?.();
+    await firstCollection.promise;
+    listeners.get("SIGHUP")?.();
+    listeners.get("SIGHUP")?.();
+    assertEquals(
+      logs.filter((line) => line.startsWith("SIGHUP received")),
+      [
+        "SIGHUP received; one follow-up full collection is pending",
+        "SIGHUP received; the pending full collection already covers it",
+      ],
+    );
+    releaseFirst.resolve();
+    await secondCollection.promise;
+    listeners.get("SIGTERM")?.();
+
+    assertEquals(await result, 0);
+    assertEquals(reasons, ["SIGHUP", "SIGHUP"]);
+    assertEquals(
+      logs.includes("SIGHUP collection completed with 4 sessions"),
+      true,
+    );
+    assertEquals(errors, [
+      "SIGHUP collection failed: Error: provider unavailable",
+    ]);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("a failure after startup stops the host and reports both failures", async () => {
+  const { directory, path } = await writeConfig();
+  try {
+    const listeners = new Map<Deno.Signal, () => void>();
+    const errors: string[] = [];
+    const stopped: Array<string | undefined> = [];
+    const running = fakeRunningHost({
+      stop: (reason) => {
+        stopped.push(reason);
+        return Promise.reject(new Error("cleanup rejected"));
+      },
+    });
+    running.host.health = () => {
+      throw new Error("health unavailable");
+    };
+    const deps = dependencies({
+      listeners,
+      errors,
+      start: (() =>
+        Promise.resolve(running)) as AgentsHostCliDependencies["start"],
+    });
+
+    assertEquals(await runAgentsHostCli(args(path), deps), 1);
+    assertEquals(stopped, ["cli-error"]);
+    assertEquals(errors, [
+      "Agent host cleanup failed: Error: cleanup rejected",
+      "Agent host failed: health unavailable",
+    ]);
+    assertEquals(listeners.size, 0);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("the default schedule repeats until it is cancelled", async () => {
+  // The test's resource sanitizer fails the test if the interval outlives
+  // the cancellation.
+  const twoTicks = Promise.withResolvers<void>();
+  let ticks = 0;
+  const cancel = defaultAgentsHostCliDependencies.scheduleEvery(1, () => {
+    ticks++;
+    if (ticks === 2) twoTicks.resolve();
+  });
+  await twoTicks.promise;
+  cancel();
 });

@@ -608,6 +608,36 @@ describe("sync", () => {
       }
     });
 
+    it("opens sessions that declare they are not demand", async () => {
+      const identity = join(dir, "identity.key");
+      await Deno.writeFile(identity, await Identity.generatePkcs8());
+      const demand: unknown[] = [];
+      const source = await openDocSource(
+        { apiUrl: "http://localhost:1", space: SPACE, identity },
+        {
+          settings: () =>
+            Promise.resolve({
+              experimental: {},
+              memoryHost: new URL("https://memory.example"),
+            }),
+          Sessions: class extends board.Sessions {
+            constructor(
+              address: ConstructorParameters<typeof board.Sessions>[0],
+              ...rest: unknown[]
+            ) {
+              super(address);
+              demand.push(rest[3]);
+            }
+          },
+        },
+      );
+      try {
+        expect(demand).toEqual([false]);
+      } finally {
+        await source.close();
+      }
+    });
+
     it("derives the space's DID from a space name", async () => {
       const identity = join(dir, "identity.key");
       await Deno.writeFile(identity, await Identity.generatePkcs8());

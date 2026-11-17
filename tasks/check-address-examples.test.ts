@@ -536,9 +536,13 @@ describe("check-address-examples", () => {
 
       const root = await Deno.makeTempDir({ prefix: "check-address-nogit-" });
       try {
-        await expect(readDocuments(root)).rejects.toThrow(
-          "`git ls-files` failed",
+        // Two `git ls-files` commands run at once, and either may fail first.
+        const failure = await readDocuments(root).then(
+          () => new Error("`readDocuments()` returned"),
+          (error: Error) => error,
         );
+        expect(failure.message).toMatch(/^`git ls-files [^`]*` failed in /);
+        expect(failure.message).toContain(` failed in ${root}: `);
       } finally {
         await Deno.remove(root, { recursive: true });
       }

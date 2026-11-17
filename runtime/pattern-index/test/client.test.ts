@@ -6,6 +6,7 @@ import {
   verifyFirstPartyHttpRequest,
 } from "@commonfabric/runner/toolshed-http-auth";
 import {
+  deployedPieceRef,
   PatternIndexClient,
   PatternIndexError,
 } from "@commonfabric/pattern-index/client";
@@ -518,7 +519,78 @@ describe("PatternIndexClient", () => {
     const error = await client.searchPatterns({ text: "x" })
       .then(() => undefined, (thrown: unknown) => thrown);
     expect(error).toBeInstanceOf(PatternIndexError);
-    expect((error as PatternIndexError).detail).toContain("not JSON");
+    expect(error).toMatchObject({
+      fn: "searchPatterns",
+      status: 200,
+      message:
+        "pattern index searchPatterns answer is malformed: it is not JSON",
+    });
+  });
+
+  it("refuses a getPattern answer whose program lacks what a program holds, naming what and quoting nothing", async () => {
+    const files = [{ name: "/main.tsx", contents: "SOURCE_MARKER" }];
+    const malformed: [unknown, string][] = [
+      ["SOURCE_MARKER", "program is not an object"],
+      [null, "program is not an object"],
+      [{ files }, "program.main is not a string"],
+      [
+        { main: "/main.tsx", mainExport: 1, files },
+        "program.mainExport is not a string",
+      ],
+      [{ main: "/main.tsx" }, "program.files is not an array"],
+      [
+        { main: "/main.tsx", files: [...files, { name: "/b.tsx" }] },
+        "program.files[1].contents is not a string",
+      ],
+      [
+        { main: "/main.tsx", files: [{ contents: "SOURCE_MARKER" }] },
+        "program.files[0].name is not a string",
+      ],
+      [
+        { main: "/main.tsx", files, sourceRoots: "/" },
+        "program.sourceRoots is not an array of strings",
+      ],
+      [
+        { main: "/main.tsx", files, dataFiles: [7] },
+        "program.dataFiles is not an array of strings",
+      ],
+    ];
+    const { client } = createClient(
+      malformed.map(([program]) =>
+        jsonResponse({ patternId: "pat-1", program })
+      ),
+    );
+    for (const [, problem] of malformed) {
+      const error = await client.getPattern({
+        patternId: "pat-1",
+        includeSource: true,
+      }).then(() => undefined, (thrown: unknown) => thrown);
+      expect(error).toBeInstanceOf(PatternIndexError);
+      expect(error).toMatchObject({
+        fn: "getPattern",
+        status: 200,
+        message: `pattern index getPattern answer is malformed: ${problem}`,
+      });
+      expect(error).not.toHaveProperty("detail");
+    }
+  });
+
+  it("answers a getPattern program carrying every optional field it may", async () => {
+    const program = {
+      main: "/main.tsx",
+      mainExport: "pattern",
+      files: [{ name: "/main.tsx", contents: "export default 1;" }],
+      sourceRoots: ["/"],
+      dataFiles: ["/data.json"],
+    };
+    const { client } = createClient([
+      jsonResponse({ patternId: "pat-1", program }),
+    ]);
+    const pattern = await client.getPattern({
+      patternId: "pat-1",
+      includeSource: true,
+    });
+    expect(pattern.program).toEqual(program);
   });
   it("asks for unvetted hits only when the caller does", async () => {
     const { client, requests } = createClient([
@@ -566,6 +638,185 @@ describe("PatternIndexClient", () => {
     expect(body.remixedFrom).toBe("pat-other");
   });
 
+  it("sends a version's lineage, slot, origin and privacy, and omits each when unset", async () => {
+    const { client, requests } = createClient([
+      jsonResponse({
+        patternId: "pat-4",
+        created: true,
+        versionId: "ver-4",
+        lineageId: "lin-1",
+        seq: 4,
+        visibility: "private",
+        share: "none",
+        autoShare: "kept_private",
+      }),
+      jsonResponse({ patternId: "pat-5", created: true }),
+    ]);
+    const program = {
+      main: "/main.tsx",
+      files: [{ name: "/main.tsx", contents: "export default 2;" }],
+    };
+    const response = await client.publishPattern({
+      patternId: "pat-4",
+      description: "Doubles a number",
+      hashtags: [],
+      program,
+      lineageId: "lin-1",
+      slot: "file:/work/main.tsx",
+      origin: "self",
+      keepPrivate: true,
+    });
+    expect(response.versionId).toBe("ver-4");
+    expect(response.autoShare).toBe("kept_private");
+    const body = JSON.parse(requests[0].body);
+    expect([body.lineageId, body.slot, body.origin, body.keepPrivate])
+      .toEqual(["lin-1", "file:/work/main.tsx", "self", true]);
+
+    await client.publishPattern({
+      patternId: "pat-5",
+      description: "Doubles a number",
+      hashtags: [],
+      program,
+      keepPrivate: false,
+    });
+    const bare = JSON.parse(requests[1].body);
+    for (const field of ["lineageId", "slot", "origin", "keepPrivate"]) {
+      expect(Object.hasOwn(bare, field)).toBe(false);
+    }
+  });
+
+  it("sends the piece a version was deployed to, and an event about a piece in place of a pattern id", async () => {
+    const { client, requests } = createClient([
+      jsonResponse({ patternId: "pat-6", created: true }),
+      jsonResponse({ ok: true, recorded: true }),
+    ]);
+    const deployedTo = deployedPieceRef("did:key:z6Mkspace", "of:fid1:p");
+    await client.publishPattern({
+      patternId: "pat-6",
+      description: "Doubles a number",
+      hashtags: [],
+      program: {
+        main: "/main.tsx",
+        files: [{ name: "/main.tsx", contents: "export default 2;" }],
+      },
+      deployedTo,
+    });
+    await client.recordUsageEvent({
+      piece: deployedTo,
+      eventType: "viewed_in_loom",
+    });
+
+    expect(deployedTo).toBe(
+      deployedPieceRef("did:key:z6Mkspace", "fid1:p"),
+    );
+    expect(deployedTo).toMatch(/^piece:[0-9a-f]{64}$/);
+    expect(JSON.parse(requests[0].body).deployedTo).toBe(deployedTo);
+    const event = JSON.parse(requests[1].body);
+    expect(requests[1].url).toBe("https://index.test/api/recordEvent");
+    expect(event.piece).toBe(deployedTo);
+    expect(Object.hasOwn(event, "patternId")).toBe(false);
+  });
+
+  it("refuses to send a raw piece id where a hashed piece reference belongs", async () => {
+    const { client, requests } = createClient([]);
+
+    await expect(client.recordUsageEvent({
+      piece: "fid1:raw",
+      eventType: "viewed_in_loom",
+    })).rejects.toThrow("piece reference");
+    await expect(client.publishPattern({
+      patternId: "pat-7",
+      description: "Doubles a number",
+      hashtags: [],
+      program: { main: "/main.tsx", files: [] },
+      deployedTo: "fid1:raw",
+    })).rejects.toThrow("piece reference");
+    expect(requests).toEqual([]);
+  });
+
+  it("posts each version, visibility and sharing-setting call to its function with only its fields", async () => {
+    const calls: Array<{
+      fn: string;
+      call: (client: PatternIndexClient) => Promise<unknown>;
+      body: Record<string, unknown>;
+    }> = [
+      { fn: "listLineages", call: (c) => c.listLineages(), body: {} },
+      {
+        fn: "listVersions",
+        call: (c) => c.listVersions({ lineageId: "lin-1" }),
+        body: { lineageId: "lin-1" },
+      },
+      {
+        fn: "getVersion",
+        call: (c) => c.getVersion({ versionId: "ver-1", includeSource: true }),
+        body: { versionId: "ver-1", includeSource: true },
+      },
+      {
+        fn: "rollback",
+        call: (c) => c.rollback({ lineageId: "lin-1", toVersionId: "ver-1" }),
+        body: { lineageId: "lin-1", toVersionId: "ver-1" },
+      },
+      {
+        fn: "shareVersion",
+        call: (c) => c.shareVersion({ versionId: "ver-1" }),
+        body: { versionId: "ver-1" },
+      },
+      {
+        fn: "publishLineage",
+        call: (c) =>
+          c.publishLineage({
+            lineageId: "lin-1",
+            profile: { space: "did:key:z6Mkprofile" },
+            displayName: "Sam",
+            profileProof: ["root", "link"],
+          }),
+        body: {
+          lineageId: "lin-1",
+          profile: { space: "did:key:z6Mkprofile" },
+          displayName: "Sam",
+          profileProof: ["root", "link"],
+        },
+      },
+      {
+        fn: "deleteVersion",
+        call: (c) => c.deleteVersion({ versionId: "ver-1" }),
+        body: { versionId: "ver-1" },
+      },
+      {
+        fn: "deleteLineage",
+        call: (c) => c.deleteLineage({ lineageId: "lin-1" }),
+        body: { lineageId: "lin-1" },
+      },
+      {
+        fn: "unshareLineage",
+        call: (c) => c.unshareLineage({ lineageId: "lin-1" }),
+        body: { lineageId: "lin-1" },
+      },
+      {
+        fn: "unpublishLineage",
+        call: (c) => c.unpublishLineage({ lineageId: "lin-1" }),
+        body: { lineageId: "lin-1" },
+      },
+      {
+        fn: "getSharingSettings",
+        call: (c) => c.getSharingSettings(),
+        body: {},
+      },
+      {
+        fn: "setSharingSettings",
+        call: (c) => c.setSharingSettings({ selfBuilt: false }),
+        body: { selfBuilt: false },
+      },
+    ];
+    for (const { fn, call, body } of calls) {
+      const { client, requests } = createClient([jsonResponse({})]);
+      await call(client);
+      expect(requests[0].url).toBe(`https://index.test/api/${fn}`);
+      expect(requests[0].method).toBe("POST");
+      expect(JSON.parse(requests[0].body)).toEqual(body);
+    }
+  });
+
   it("posts each listing, identity and curation call to its function with only its fields", async () => {
     const calls: Array<{
       fn: string;
@@ -573,13 +824,17 @@ describe("PatternIndexClient", () => {
       body: Record<string, unknown>;
     }> = [
       {
-        fn: "recordUsageEvent",
+        fn: "recordEvent",
         call: (c) =>
           c.recordUsageEvent({
             patternId: "pat-1",
             eventType: "viewed_in_loom",
           }),
-        body: { patternId: "pat-1", eventType: "viewed_in_loom" },
+        body: {
+          patternId: "pat-1",
+          eventType: "viewed_in_loom",
+          did: signer.did(),
+        },
       },
       {
         fn: "regarden",

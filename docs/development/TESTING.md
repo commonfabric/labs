@@ -50,7 +50,8 @@ failing tests, which the pull request's checks and `gh run view` show.
 ### Running one test by name
 
 Use `--filter` on a package's `test` task, not on the root one. The root task
-runs `tasks/test.ts`, which takes no arguments and refuses a run given any.
+runs `tasks/workspace-tests.ts`, which takes no arguments and refuses a run
+given any.
 
 ```bash
 cd runtime/runner
@@ -86,9 +87,9 @@ The package's `test` task in its `deno.jsonc` names what it runs, and
 prints each command line as it runs it, which shows where the flag was
 appended.
 
-A package can run a test runner of its own, as `base/identity` does, and
-appended arguments reach whatever that runner does with them, which its own
-source says.
+A package can run a test runner of its own, as `dashboard` does through
+`tasks/run-test-batches.ts`, and appended arguments reach whatever that runner
+does with them, which its own source says.
 
 A test's name is also its identity in the run-record store, so a renamed test
 must be listed in `tasks/test-identity-aliases/` to keep its recorded
@@ -535,8 +536,11 @@ file share a browser with the tests in the others, so a file that only passes
 after some particular sibling has run is relying on something no longer written
 down anywhere. Each file has to stand on its own.
 
-A package whose tests all need a browser, `base/identity` among them, hands
-its whole test directory to `deno-web-test` and has no such split to get wrong.
+A package that runs the files of its `test/` directory in a browser as well as
+in Deno, as `base/identity` and `base/static` do, hands that directory to
+`deno-web-test`. Test files elsewhere in the package, such as `base/static`'s
+`scripts/*.test.ts`, run in Deno only. The name still decides which files the
+plain `deno test` pass leaves out.
 
 Name a test that way whenever it needs a browser, including when its subject is
 not a component.

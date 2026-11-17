@@ -182,6 +182,43 @@ describe("topics-browser-measurement-core", () => {
       );
     });
 
+    it("returns the function of a lift the module exports, which the compiler emits as an assignment to `exports`", () => {
+      const emitted = [
+        '"use strict";',
+        'Object.defineProperty(exports, "__esModule", { value: true });',
+        "exports.glazed = void 0;",
+        'const commonfabric_2 = require("commonfabric");',
+        "exports.glazed = (0, commonfabric_2.lift)(({ rings }) => {",
+        "    return rings.length;",
+        '}, { type: "object" });',
+      ].join("\n");
+
+      expect(compiledLiftText(emitted, "glazed")).toBe(
+        ["({ rings }) => {", "    return rings.length;", "}"].join("\n"),
+      );
+    });
+
+    it("reads no declaration out of an assignment to another name, or to a property of anything but `exports`", () => {
+      const emitted = [
+        "exports.frosted = (0, commonfabric_2.lift)((value) => value);",
+        "tray.glazed = (0, commonfabric_2.lift)((value) => value);",
+        "exports.glazed = void 0;",
+        "exports.glazed = fry((value) => value);",
+      ].join("\n");
+
+      expect(() => compiledLiftText(emitted, "glazed", "/fryer.js"))
+        .toThrow("declaration in /fryer.js, found 0");
+    });
+
+    it("throws for a module declaring the lift as a `const` and again on its exports", () => {
+      const emitted = [
+        "const glazed = (0, commonfabric_2.lift)((value) => value);",
+        "exports.glazed = (0, commonfabric_2.lift)((value) => value);",
+      ].join("\n");
+
+      expect(() => compiledLiftText(emitted, "glazed")).toThrow("found 2");
+    });
+
     it("reads no declaration out of a comma expression whose left operand is not `0`", () => {
       const emitted = [
         "const glazed = (1, commonfabric_2.lift)((value) => value);",

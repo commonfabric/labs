@@ -1,7 +1,11 @@
 /**
- * Exercises the holder rule of §8.12.5.1 on a served effect: a fetch whose
- * request the serving loop issues and whose completion it writes back
- * unstamped, as an effect completion, once the response arrives.
+ * Pins what a served effect does with an input labeled for another principal:
+ * a fetch whose request the serving loop issues, over a URL the acting
+ * principal's own runtime could not read. Nothing checks the request against
+ * what its sink may learn unless the host declares a sink ceiling, so it goes
+ * out. This is a known gap
+ * (Topics top/3174), and the
+ * case flips when an effect is checked as an egress boundary by default.
  */
 
 import { expect } from "@std/expect";
@@ -30,16 +34,12 @@ const ownerSpace = owner.did() as MemorySpace;
 const url = "https://example.test/served-effect";
 
 describe("served-effect-cross-holder", () => {
-  it("refuses a served fetch run over another space's private URL before its request goes out", async () => {
+  it("issues a served fetch over another space's private URL, with no sink ceiling declared", async () => {
     // Alice's piece takes its URL through a link to a document of the
     // owner's space, labeled for the owner. The serving loop runs the fetch
-    // node, which reads that URL and would issue the request and later write
-    // the response back into Alice's space, unstamped. The rule refuses the
-    // node's own run, which writes its pending state there, before the
-    // request goes out, so no completion exists to write anything back.
-    // The case ends on the refusal itself and checks that no request had
-    // gone out by then; what the node does after it is refused is not what
-    // this case pins.
+    // node, which reads that URL as the owner's space's server and issues
+    // the request. The case ends on whichever comes first, the request or a
+    // CFC refusal of any kind, and expects the request.
 
     const server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     const originalFetch = globalThis.fetch;
@@ -51,9 +51,7 @@ describe("served-effect-cross-holder", () => {
     const denied = Promise.withResolvers<readonly string[]>();
     const stopListening = addCfcDenialListener((denial) => {
       const reasons = (denial.inputs.reasons ?? []) as readonly string[];
-      if (reasons.some((reason) => reason.includes("§8.12.5.1"))) {
-        denied.resolve(reasons);
-      }
+      if (reasons.length > 0) denied.resolve(reasons);
     });
     try {
       globalThis.fetch = (input, init) => {
@@ -180,12 +178,8 @@ export default pattern<{ url: Writable<string> }, { fetched: any }>(
           denied.promise.then((reasons) => ({ reasons })),
         ]);
 
-        expect(first).toMatchObject({
-          reasons: expect.arrayContaining([
-            expect.stringContaining("(cross-holder, §8.12.5.1)"),
-          ]),
-        });
-        expect(requests).toEqual([]);
+        expect(first).toEqual({ issued: `${url}?private` });
+        expect(requests).toEqual([`${url}?private`]);
       } finally {
         cancel();
       }

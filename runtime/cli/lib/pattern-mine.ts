@@ -47,7 +47,7 @@ const nextStep = (
   row: Pick<MinePatternRow, "listing" | "listed" | "bucket" | "patternId">,
   entry: string | undefined,
 ): string => {
-  const publish = `cf pattern publish ${
+  const publish = `cf pattern share ${
     entry === undefined ? "<entry file>" : shellWord(entry)
   }`;
   switch (row.listing) {
@@ -143,7 +143,7 @@ export const mineRows = async (
 export const mineLines = (rows: readonly MinePatternRow[]): string[] => {
   if (rows.length === 0) {
     return [
-      "You have published no patterns. Start with: cf pattern publish <entry file>",
+      "You have shared no patterns. Start with: cf pattern share <entry file>",
     ];
   }
   const lines: string[] = [];

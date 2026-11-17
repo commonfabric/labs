@@ -149,6 +149,11 @@ Deno.test("source inventory helpers group tracked files by package", () => {
   assertEquals(shouldTrackSourceFile("base/static/assets/app.js"), false);
   assertEquals(shouldTrackSourceFile("base/static/src/app.js"), true);
   assertEquals(
+    shouldTrackSourceFile("base/static/deno-web-test.config.ts"),
+    false,
+  );
+  assertEquals(shouldTrackSourceFile("runtime/deno-web-test/config.ts"), true);
+  assertEquals(
     shouldTrackSourceFile("patterns/showcase/iframe-board/guest.js"),
     false,
   );
@@ -204,6 +209,19 @@ Deno.test("collectSourceFiles excludes generated and dependency directories", as
     );
   } finally {
     await Deno.remove(rootDir, { recursive: true });
+  }
+});
+
+Deno.test("collectSourceFiles throws where a source root cannot be read, rather than counting it as absent", async () => {
+  // A root whose path runs through a file is a root that exists in no
+  // readable form, which is not the same as a root the checkout lacks.
+  const rootDir = await Deno.makeTempFile({ prefix: "coverage-source-test-" });
+  try {
+    await expect(collectSourceFiles(rootDir)).rejects.toThrow(
+      Deno.errors.NotADirectory,
+    );
+  } finally {
+    await Deno.remove(rootDir);
   }
 });
 

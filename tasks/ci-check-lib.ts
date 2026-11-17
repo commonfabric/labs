@@ -179,6 +179,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** How a retrying request waits between attempts. */
+export interface RetryOptions {
+  /** Waits out the delay before the next attempt, in milliseconds. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
 /**
  * GitHub refusing because the token is over one of its request limits, as
  * against refusing for any other reason. A caller that has to tell the two
@@ -337,15 +343,18 @@ async function readRefusalBody(resp: Response): Promise<string> {
   }
 }
 
-export async function githubGet<T>(path: string): Promise<T> {
+export async function githubGet<T>(
+  path: string,
+  { sleep: wait = sleep }: RetryOptions = {},
+): Promise<T> {
   const url = path.startsWith("http") ? path : `https://api.github.com${path}`;
-  for (let attempt = 1; attempt <= GITHUB_GET_MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1;; attempt++) {
     let resp: Response;
     try {
       resp = await fetch(url, { headers: apiHeaders() });
     } catch (error) {
       if (attempt === GITHUB_GET_MAX_ATTEMPTS) throw error;
-      await sleep(githubRetryDelayMs(attempt));
+      await wait(githubRetryDelayMs(attempt));
       continue;
     }
 
@@ -366,10 +375,8 @@ export async function githubGet<T>(path: string): Promise<T> {
       throw githubApiError(resp, path, "GET", refusal);
     }
 
-    await sleep(githubRetryDelayMs(attempt, resp));
+    await wait(githubRetryDelayMs(attempt, resp));
   }
-
-  throw new Error(`GitHub API GET retry loop exhausted unexpectedly: ${path}`);
 }
 
 export async function githubPost<T>(
@@ -485,6 +492,7 @@ async function extractArtifactZip(
 export async function downloadAndExtractArtifact(
   artifactId: number,
   tmpPrefix: string,
+  { sleep: wait = sleep }: RetryOptions = {},
 ): Promise<string | null> {
   const artifactPath = `/repos/${REPO}/actions/artifacts/${artifactId}/zip`;
   const url = `https://api.github.com${artifactPath}`;
@@ -502,7 +510,7 @@ export async function downloadAndExtractArtifact(
     } catch (error) {
       recordFailure(attempt, `fetch failed: ${error}`);
       if (attempt === GITHUB_GET_MAX_ATTEMPTS) break;
-      await sleep(githubRetryDelayMs(attempt));
+      await wait(githubRetryDelayMs(attempt));
       continue;
     }
 
@@ -531,7 +539,7 @@ export async function downloadAndExtractArtifact(
       ) {
         break;
       }
-      await sleep(githubRetryDelayMs(attempt, resp));
+      await wait(githubRetryDelayMs(attempt, resp));
       continue;
     }
 
@@ -540,7 +548,7 @@ export async function downloadAndExtractArtifact(
     recordFailure(attempt, extraction.error);
 
     if (attempt < GITHUB_GET_MAX_ATTEMPTS) {
-      await sleep(githubRetryDelayMs(attempt));
+      await wait(githubRetryDelayMs(attempt));
     }
   }
 

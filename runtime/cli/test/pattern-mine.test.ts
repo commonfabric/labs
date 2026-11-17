@@ -61,7 +61,7 @@ describe("pattern-mine", () => {
 
       expect(held.findings).toHaveLength(1);
       expect(held.next).toBe(
-        "held: fix the findings, then run cf pattern publish ./bins.tsx",
+        "held: fix the findings, then run cf pattern share ./bins.tsx",
       );
       expect(mineLines([held]).join("\n")).toContain(
         "personal_name in /main.tsx:3",
@@ -75,7 +75,7 @@ describe("pattern-mine", () => {
       );
 
       expect(held.next).toBe(
-        "held: fix the findings, then run cf pattern publish '/work/my patterns/main.tsx'",
+        "held: fix the findings, then run cf pattern share '/work/my patterns/main.tsx'",
       );
     });
 
