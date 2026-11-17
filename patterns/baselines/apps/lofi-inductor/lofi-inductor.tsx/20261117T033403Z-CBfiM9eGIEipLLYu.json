@@ -1,0 +1,739 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "CanonicalRule": {
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "key": {
+            "description": "A hash of field, label, and canonical pattern: equal keys, equal rules.",
+            "type": "string"
+          },
+          "pattern": {
+            "description": "The canonical pattern, run with the `i` flag.",
+            "type": "string"
+          },
+          "predicts": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "field",
+          "pattern",
+          "predicts",
+          "key"
+        ],
+        "type": "object"
+      },
+      "ContributionEvent": {
+        "properties": {
+          "pseudonym": {
+            "type": "string"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/$defs/CanonicalRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "pseudonym",
+          "rules"
+        ],
+        "type": "object"
+      },
+      "HistoryEntry": {
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "answered": {
+            "description": "The surprises this round answered, so the next round counts new ones.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "currentF1": {
+            "type": "number"
+          },
+          "decidedAt": {
+            "type": "number"
+          },
+          "heldOut": {
+            "type": "number"
+          },
+          "proposed": {
+            "items": {
+              "$ref": "#/$defs/CanonicalRule"
+            },
+            "type": "array"
+          },
+          "proposedF1": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "refusals": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "round": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "round",
+          "accepted",
+          "reason",
+          "proposed",
+          "refusals",
+          "currentF1",
+          "proposedF1",
+          "heldOut",
+          "answered",
+          "decidedAt"
+        ],
+        "type": "object"
+      },
+      "Item": {
+        "properties": {
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "Published": {
+        "properties": {
+          "goal": {
+            "type": "string"
+          },
+          "pooled": {
+            "description": "Whether the rules were sent to a pool for this goal.",
+            "type": "boolean"
+          },
+          "publishedAt": {
+            "type": "number"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/$defs/CanonicalRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "goal",
+          "rules",
+          "publishedAt"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "goal": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "description": "The yes-or-no question, such as \"Is this email a bill?\".",
+        "type": "string"
+      },
+      "heldOutPercent": {
+        "default": 30,
+        "description": "The share of items held out to score proposals on, in percent.",
+        "scope": "space",
+        "type": "number"
+      },
+      "hifiModel": {
+        "description": "The model that labels items. Omitted, the deployment's default\n`generateObject` model answers; a stronger one, such as\n`gateway:claude-opus-5-5` where the gateway lists it\n(`/api/ai/llm/models`), can be named.",
+        "scope": "space",
+        "type": "string"
+      },
+      "history": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "description": "Every judged proposal, accepted or not.",
+        "items": {
+          "$ref": "#/$defs/HistoryEntry"
+        },
+        "type": "array"
+      },
+      "items": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "description": "The items to label. Anything can feed them, through `submitItem`.",
+        "items": {
+          "$ref": "#/$defs/Item"
+        },
+        "type": "array"
+      },
+      "pool": {
+        "description": "The pool to publish to. Omitted, the inductor wishes for a\n`#inductorPool`; either way it publishes only to a pool for its goal.",
+        "properties": {
+          "goal": {
+            "type": "string"
+          },
+          "submit": {
+            "$ref": "#/$defs/ContributionEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Contribute (or replace) one pseudonym's rule set."
+          }
+        },
+        "required": [
+          "goal",
+          "submit"
+        ],
+        "type": "object"
+      },
+      "pseudonym": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "description": "This piece's pseudonym in the goal's pool, minted on the first publish.\nOne piece holds one goal, so it is one per goal, and unlinkable to the\nperson's pseudonyms for other goals.",
+        "type": "string"
+      },
+      "published": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Published"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": null,
+        "description": "The rules as last published, or null."
+      },
+      "rewriteAfter": {
+        "default": 3,
+        "description": "How many new surprises start a rewrite.",
+        "scope": "space",
+        "type": "number"
+      },
+      "rules": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "description": "The current rule set, in canonical form.",
+        "items": {
+          "$ref": "#/$defs/CanonicalRule"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "apps/lofi-inductor/lofi-inductor.tsx",
+  "resultSchema": {
+    "$defs": {
+      "CanonicalRule": {
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "key": {
+            "description": "A hash of field, label, and canonical pattern: equal keys, equal rules.",
+            "type": "string"
+          },
+          "pattern": {
+            "description": "The canonical pattern, run with the `i` flag.",
+            "type": "string"
+          },
+          "predicts": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "field",
+          "pattern",
+          "predicts",
+          "key"
+        ],
+        "type": "object"
+      },
+      "HistoryEntry": {
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "answered": {
+            "description": "The surprises this round answered, so the next round counts new ones.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "currentF1": {
+            "type": "number"
+          },
+          "decidedAt": {
+            "type": "number"
+          },
+          "heldOut": {
+            "type": "number"
+          },
+          "proposed": {
+            "items": {
+              "$ref": "#/$defs/CanonicalRule"
+            },
+            "type": "array"
+          },
+          "proposedF1": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "refusals": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "round": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "round",
+          "accepted",
+          "reason",
+          "proposed",
+          "refusals",
+          "currentF1",
+          "proposedF1",
+          "heldOut",
+          "answered",
+          "decidedAt"
+        ],
+        "type": "object"
+      },
+      "Item": {
+        "properties": {
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "ItemRow": {
+        "properties": {
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "hifi": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The hi-fi label, or null until the model has answered usably."
+          },
+          "id": {
+            "type": "string"
+          },
+          "lofi": {
+            "description": "The current rule set's label.",
+            "type": "boolean"
+          },
+          "split": {
+            "$ref": "#/$defs/Split"
+          },
+          "surprise": {
+            "description": "The lo-fi label disagrees with a hi-fi label that has arrived.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "fields",
+          "hifi",
+          "lofi",
+          "surprise",
+          "split"
+        ],
+        "type": "object"
+      },
+      "Judgement": {
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "currentF1": {
+            "type": "number"
+          },
+          "heldOut": {
+            "type": "number"
+          },
+          "proposedF1": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "refusals": {
+            "description": "Why each refused rule was refused.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rules": {
+            "description": "The proposed rules that passed the grammar and the safety check.",
+            "items": {
+              "$ref": "#/$defs/CanonicalRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "accepted",
+          "reason",
+          "rules",
+          "refusals",
+          "currentF1",
+          "proposedF1",
+          "heldOut"
+        ],
+        "type": "object"
+      },
+      "Published": {
+        "properties": {
+          "goal": {
+            "type": "string"
+          },
+          "pooled": {
+            "description": "Whether the rules were sent to a pool for this goal.",
+            "type": "boolean"
+          },
+          "publishedAt": {
+            "type": "number"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/$defs/CanonicalRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "goal",
+          "rules",
+          "publishedAt"
+        ],
+        "type": "object"
+      },
+      "RewriteStatus": {
+        "anyOf": [
+          {
+            "properties": {
+              "status": {
+                "enum": [
+                  "idle"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "status": {
+                "enum": [
+                  "pending"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "judgement": {
+                "$ref": "#/$defs/Judgement"
+              },
+              "status": {
+                "enum": [
+                  "ready"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "judgement"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "Split": {
+        "enum": [
+          "train",
+          "heldout"
+        ]
+      },
+      "SubmittedItem": {
+        "properties": {
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fields"
+        ],
+        "type": "object"
+      },
+      "Summary": {
+        "properties": {
+          "agreementRate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Agreements over labelled items, or null with nothing labelled."
+          },
+          "agreements": {
+            "type": "number"
+          },
+          "heldOut": {
+            "type": "number"
+          },
+          "items": {
+            "type": "number"
+          },
+          "labelled": {
+            "type": "number"
+          },
+          "surprises": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "labelled",
+          "agreements",
+          "surprises",
+          "agreementRate",
+          "heldOut"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Induces cheap regex rules for a yes-or-no question from a model's answers. #classifier #learning",
+    "properties": {
+      "$FS": {
+        "description": "The goal, rules, counts, and proposal history as Markdown.",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "text/markdown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "frontmatter",
+          "content"
+        ],
+        "type": "object"
+      },
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "goal": {
+        "type": "string"
+      },
+      "heldOutF1": {
+        "description": "The current rules' F1 on the held-out items.",
+        "type": "number"
+      },
+      "history": {
+        "items": {
+          "$ref": "#/$defs/HistoryEntry"
+        },
+        "type": "array"
+      },
+      "items": {
+        "items": {
+          "$ref": "#/$defs/Item"
+        },
+        "type": "array"
+      },
+      "pseudonym": {
+        "description": "This piece's pseudonym in the goal's pool, or \"\" before it publishes.",
+        "type": "string"
+      },
+      "publish": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Publish the current rules for the goal."
+      },
+      "published": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Published"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "rewrite": {
+        "$ref": "#/$defs/RewriteStatus",
+        "description": "Where the current rewrite stands."
+      },
+      "rows": {
+        "description": "Every item with its hi-fi and lo-fi labels.",
+        "items": {
+          "$ref": "#/$defs/ItemRow"
+        },
+        "type": "array"
+      },
+      "rules": {
+        "items": {
+          "$ref": "#/$defs/CanonicalRule"
+        },
+        "type": "array"
+      },
+      "settleRewrite": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Record the rewrite's judgement once it is ready: adopt the proposed set if\nit was accepted, and add the round to the history either way."
+      },
+      "submitItem": {
+        "$ref": "#/$defs/SubmittedItem",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Add one item. An id the list holds already adds nothing."
+      },
+      "summary": {
+        "$ref": "#/$defs/Summary"
+      }
+    },
+    "required": [
+      "goal",
+      "items",
+      "rules",
+      "history",
+      "published",
+      "pseudonym",
+      "rows",
+      "summary",
+      "heldOutF1",
+      "rewrite",
+      "submitItem",
+      "settleRewrite",
+      "publish",
+      "$NAME",
+      "$UI",
+      "$FS"
+    ],
+    "type": "object"
+  }
+}
