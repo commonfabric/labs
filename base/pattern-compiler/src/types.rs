@@ -1245,6 +1245,14 @@ impl<'a> Resolver<'_, 'a> {
                     argument_text(arguments.len().saturating_sub(1)),
                 )
             }
+            "KeyedBy" => {
+                // `KeyedBy<T, "field">`: `T` with a key annotation, whose
+                // argument is the name of the property (§7.2; ruling
+                // Z38). For assignability it is `T`.
+                let field = argument_text(1);
+                let field = field.trim().trim_matches(['"', '\'', '`']).to_string();
+                self.annotate_once(module, reference.span, first(), "keyField", field)
+            }
             "PerSpace" | "PerUser" | "PerSession" | "PerAny" | "Scoped" => {
                 let scope = match name {
                     "Scoped" => argument_text(1),

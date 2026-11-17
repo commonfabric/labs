@@ -3522,6 +3522,27 @@ impl<'a> Emitter<'_, '_, 'a> {
         let parameters = &function.params().items;
         if let Some(element) = parameters.first() {
             self.root_type(self.module, Root::Element(collection), element);
+            // `Collection.keyField`: a copy of the key field that the
+            // element type of the receiver declares with
+            // `KeyedBy<T, "field">`, for a source that is a slot or an
+            // output. A construct over another collection has none: its
+            // elements have the upstream key (PL §1.1; ruling Z38).
+            let declared = self
+                .root_types
+                .get(&Root::Element(collection))
+                .and_then(|ty| {
+                    self.resolver
+                        .annotations_of(*ty)
+                        .into_iter()
+                        .find(|annotation| annotation.key == "keyField")
+                })
+                .map(|annotation| annotation.argument);
+            let derived = self.collections[collection]["source"]
+                .get("collection")
+                .is_some();
+            if let (Some(field), false) = (declared, derived) {
+                self.collections[collection]["keyField"] = json!(field);
+            }
             self.bind_pattern(
                 &element.pattern,
                 Place::Slot(Root::Element(collection), Vec::new()),

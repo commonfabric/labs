@@ -9,7 +9,7 @@ use pattern_compiler::diagnostics::{Diagnostic, Severity};
 use pattern_compiler::program::{analyze, SourceFile};
 
 const PRELUDE: &str = "import { action, Cell, computed, eventKey, fetchJson, generateText, wish, \
-handler, grantSpaceAccess, ifElse, lift, llm, pattern, patternTool, SELF, sqliteDatabase, table, Writable, \
+handler, grantSpaceAccess, ifElse, lift, llm, pattern, patternTool, SELF, sqliteDatabase, table, Writable, type KeyedBy, \
 type Confidential, type Default, type PatternFactory, type PerUser, type Reactive, type WriteAuthorizedBy, \
 exchangeRules, UI, UiAction, type Integrity, type MaxConfidentiality, type PolicyOf, type RequiresIntegrity, \
 type TrustedActionWrite, type VNode } from \"commonfabric\";\n";
@@ -1470,6 +1470,34 @@ fn a_call_through_as_instance_is_accepted_in_the_reactive_tier() {
            kept: titles.filter((title) => title !== \"skip\").map((title) => Row.asInstance()({ title })),\n\
            one: Row.asInstance()({ title: first }),\n\
            scoped: Row.asInstance().asScope(\"user\")({ title: first }),\n\
+         }));",
+    );
+    assert_eq!(
+        found
+            .iter()
+            .map(|diagnostic| diagnostic.id)
+            .collect::<Vec<_>>(),
+        Vec::<&str>::new()
+    );
+}
+
+/// Ruling Z38 (`language-subset.md` §7.2): `KeyedBy<T, "field">` is `T`
+/// with a key annotation, written as the element type of an array type.
+/// For assignability it is `T`: an array of it is given where an array
+/// of `T` is declared, and a member of an element is read as one of `T`.
+/// The array is a pattern input, whose elements are plain values in
+/// place or references, and the return type of a `lift`, a plain array
+/// generated from scratch.
+#[test]
+fn keyed_by_is_its_first_argument_with_a_key_annotation() {
+    let found = check(
+        "interface Repo { id: number; name: string }\n\
+         const names = lift((repos: Repo[]) => repos.map((repo) => repo.name));\n\
+         const fetched = lift((count: number): KeyedBy<Repo, \"id\">[] => [{ id: count, name: \"n\" }]);\n\
+         export default pattern<{ saved: KeyedBy<Repo, \"id\">[]; count: number }>(({ saved, count }) => ({\n\
+           names: names(saved),\n\
+           rows: saved.map((repo) => repo.name),\n\
+           fresh: fetched(count).map((repo) => repo.id),\n\
          }));",
     );
     assert_eq!(

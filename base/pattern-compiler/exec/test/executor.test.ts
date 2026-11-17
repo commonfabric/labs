@@ -3804,6 +3804,230 @@ describe("a pattern called through `asInstance()` in an element body", () => {
   });
 });
 
+// Rulings Z37 and Z38 on `fixtures/keyed-by.tsx`: the element type
+// `KeyedBy<T, "field">` declares the key of a plain value. Today's runtime
+// has no such marker, so these tests are of the executor alone.
+describe("a key field declared with `KeyedBy`", () => {
+  const repo = (id: number, name: string, stars: number) => ({
+    id,
+    name,
+    stars,
+  });
+  const argument = (saved: unknown[] = [repo(7, "s", 1), repo(8, "t", 2)]) => ({
+    names: ["ab", "cde"],
+    bonus: 0,
+    minStars: 3,
+    saved,
+  });
+  const start = async (given: unknown = argument()) => {
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL("../../compare/fixtures/keyed-by.emit.json", import.meta.url),
+      ),
+    ) as { patterns: Artifact[] }[];
+    const artifacts = (id: string) =>
+      patterns.find((pattern) => pattern.plan.patterns?.[0] === id);
+    const main = patterns.find((pattern) => pattern.name === "default")!;
+    return new Instance(main, given, { artifacts });
+  };
+  type Row = { name: string; stars: number; noted: string };
+  type Result = { rows: Row[]; starred: Row[]; kept: Row[] };
+  const result = (instance: Instance) => instance.result() as Result;
+  const [NOTE_ROW, NOTE_KEPT] = [0, 1];
+  const [ROWS_CELL, KEPT_CELL] = [0, 1];
+  /** The key of each state cell declared by one record of the plan. */
+  const keysOf = (instance: Instance, cell: number) =>
+    [...instance.store.declared.keys()].filter((id) =>
+      id.startsWith(`state:${cell}:`)
+    ).map((id) => JSON.parse(id.slice(`state:${cell}:`.length))[0]).sort();
+  type Link = { $link: { doc: string; path: string[] } };
+  const starred = (instance: Instance) =>
+    (instance.store.docs.get("result")?.value as { starred: Link[] }).starred;
+  const note = (instance: Instance, row: Link, text: string) => {
+    new Handle(
+      instance,
+      new Ref(row.$link.doc, ["note"]),
+      undefined,
+      undefined,
+      [],
+    ).send({ text });
+    return instance.dispatch();
+  };
+
+  it("is in the plan as `Collection.keyField`, for a source that is an output or a slot", async () => {
+    const instance = await start();
+
+    expect(
+      instance.plan.collections.map(({ construct, keyField }) => [
+        construct,
+        keyField,
+      ]),
+    ).toEqual([
+      ["map", "id"],
+      ["filter", "id"],
+      ["map", undefined],
+      ["map", "id"],
+    ]);
+  });
+
+  it("keys a plain value by the value of the field, in an array generated from scratch and in one in place", async () => {
+    const instance = await start();
+
+    expect(keysOf(instance, ROWS_CELL)).toEqual([
+      "field:id:1#0",
+      "field:id:2#0",
+    ]);
+    expect(keysOf(instance, KEPT_CELL)).toEqual([
+      "field:id:7#0",
+      "field:id:8#0",
+    ]);
+  });
+
+  it("keeps the state of a row when another field of its element changes between evaluations", async () => {
+    const instance = await start();
+    instance.send(NOTE_ROW, { text: "mine" }, [0]);
+    expect(result(instance).rows).toMatchObject([
+      { name: "ab", stars: 2, noted: "mine" },
+      { name: "cde", stars: 3, noted: "" },
+    ]);
+    const cells = instance.stateCells().length;
+    const documents = instance.documents()["state cell"];
+
+    // The computation returns a new array: each element has the `id` it
+    // had and another `stars`.
+    instance.writeArgument(["bonus"], 5);
+
+    expect(result(instance).rows).toMatchObject([
+      { name: "ab", stars: 7, noted: "mine" },
+      { name: "cde", stars: 8, noted: "" },
+    ]);
+    expect(keysOf(instance, ROWS_CELL)).toEqual([
+      "field:id:1#0",
+      "field:id:2#0",
+    ]);
+    expect(instance.stateCells().length).toBe(cells);
+    expect(instance.documents()["state cell"]).toBe(documents);
+  });
+
+  it("keeps the instance of a row over the result of a `filter`, which has the upstream key", async () => {
+    const instance = await start();
+    // One element passes the `filter`.
+    expect(instance.childInstances().map(({ keys }) => keys)).toEqual([
+      ["field:id:2#0"],
+    ]);
+    const [row] = starred(instance);
+    note(instance, row, "kept");
+
+    // A new array: both elements pass, and `cde` has another `stars`.
+    instance.writeArgument(["bonus"], 1);
+
+    expect(starred(instance)[1]).toEqual(row);
+    expect(result(instance).starred).toMatchObject([
+      { name: "ab", stars: 3, noted: "" },
+      { name: "cde", stars: 4, noted: "kept" },
+    ]);
+    // The argument of the instance is written again with the new value.
+    expect(
+      instance.store.docs.get(row.$link.doc.replace(/result$/, "argument"))
+        ?.value,
+    ).toEqual({ repo: repo(2, "cde", 4) });
+    expect(instance.childInstances().map(({ keys }) => keys)).toEqual([
+      ["field:id:2#0"],
+      ["field:id:1#0"],
+    ]);
+
+    // Both leave the result of the `filter` and enter it again: the same
+    // two instances.
+    instance.writeArgument(["bonus"], -5);
+    expect(result(instance).starred).toEqual([]);
+    instance.writeArgument(["bonus"], 2);
+
+    expect(starred(instance)[1]).toEqual(row);
+    expect(result(instance).starred[1]).toMatchObject({
+      name: "cde",
+      stars: 5,
+      noted: "kept",
+    });
+    expect(instance.childInstances().length).toBe(2);
+  });
+
+  it("makes an element with another value of the field another element", async () => {
+    const instance = await start();
+    instance.send(NOTE_ROW, { text: "mine" }, [1]);
+
+    // The array has one element, with the `id` 1.
+    instance.writeArgument(["names"], ["cde"]);
+
+    expect(result(instance).rows).toMatchObject([
+      { name: "cde", stars: 3, noted: "" },
+    ]);
+  });
+
+  it("keeps the key of a plain value in place that is edited in another field, and re-keys nothing", async () => {
+    const instance = await start();
+    instance.send(NOTE_KEPT, { text: "mine" }, [0]);
+
+    // A write through the reference by key of the element.
+    instance.store.write(
+      new Ref("argument", ["saved", keySegment("field:id:7#0"), "name"]),
+      "edited",
+    );
+    expect(instance.store.rekeys).toEqual([]);
+    instance.settle();
+
+    expect(result(instance).kept).toMatchObject([
+      { name: "edited", noted: "mine" },
+      { name: "t", noted: "" },
+    ]);
+    // The reference still names the element.
+    expect(
+      instance.store.read(
+        new Ref("argument", ["saved", keySegment("field:id:7#0"), "name"]),
+      ),
+    ).toBe("edited");
+
+    // The array is written whole, in another order and with another
+    // name: each element has the key of its `id`.
+    instance.writeArgument(["saved"], [repo(8, "t", 2), repo(7, "again", 9)]);
+
+    expect(result(instance).kept).toMatchObject([
+      { name: "t", noted: "" },
+      { name: "again", noted: "mine" },
+    ]);
+    expect(keysOf(instance, KEPT_CELL)).toEqual([
+      "field:id:7#0",
+      "field:id:8#0",
+    ]);
+  });
+
+  it("gives two elements with one value of the field two keys, and keys an element that lacks the field by its value", async () => {
+    const instance = await start(
+      argument([repo(7, "s", 1), repo(7, "t", 2), { name: "n" }]),
+    );
+
+    expect(keysOf(instance, KEPT_CELL)).toEqual([
+      "field:id:7#0",
+      "field:id:7#1",
+      'value:{"name":"n"}#0',
+    ]);
+  });
+
+  it("changes nothing over an array of references, where the key is the cell", async () => {
+    const link = (name: string) => ({
+      $link: { doc: "argument", path: ["pool", name] },
+    });
+    const instance = await start({
+      ...argument([link("a"), link("b")]),
+      pool: { a: repo(7, "s", 1), b: repo(7, "t", 2) },
+    });
+
+    expect(keysOf(instance, KEPT_CELL)).toEqual([
+      'cell:argument:["pool","a"]#0',
+      'cell:argument:["pool","b"]#0',
+    ]);
+  });
+});
+
 // `fixtures/instantiate.tsx`: a pattern instantiated in a function body
 // and a handler bound in one (ES §2.8; PL §3.14, §3.15). The value code
 // names the callee by its identity, and the executor is given the

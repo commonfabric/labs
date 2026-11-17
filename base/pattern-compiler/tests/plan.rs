@@ -4315,3 +4315,92 @@ export const P = pattern<{ items: Item[]; first: Item }>(({ items, first }) => {
         ]
     );
 }
+
+/// Rulings Z37 and Z38 (PL §1.1, `Collection.keyField`; §1.3, "A declared
+/// key field"): the element type `KeyedBy<T, "field">` writes the keyword
+/// `keyField` into the schema of the array's items, and the record of a
+/// collection over the array holds a copy. The source is a slot in
+/// `saved`, an array of plain values in place, and an output in `repos`,
+/// a plain array generated from scratch. A construct over the result of
+/// another construct names that collection and has no copy: its elements
+/// have the upstream key.
+#[test]
+fn a_declared_key_field_is_in_the_items_schema_and_the_collection_record() {
+    let analysis = program(
+        r#"import { lift, pattern, type KeyedBy } from "commonfabric";
+interface Repo { id: number; name: string; stars: number }
+const fetched = lift((input: { names: string[] }): KeyedBy<Repo, "id">[] =>
+  input.names.map((name, index) => ({ id: index, name, stars: 1 })));
+export const P = pattern<{ names: string[]; saved: KeyedBy<Repo, "id">[]; plain: Repo[] }>(
+  ({ names, saved, plain }) => {
+    const repos = fetched({ names });
+    return {
+      rows: repos.map((repo) => repo.name),
+      starred: repos.filter((repo) => repo.stars > 0).map((repo) => repo.name),
+      kept: saved.map((repo) => repo.name),
+      other: plain.map((repo) => repo.name),
+    };
+  },
+);
+"#,
+    );
+    let found = analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.plans)
+        .find(|plan| plan.name.as_deref() == Some("P"))
+        .expect("the plan");
+    assert_eq!(found.unsupported, Vec::<(String, u32)>::new());
+    let plan = &found.plan;
+    let collections: Vec<(String, String, String)> = plan["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .map(|collection| {
+            let source = collection["source"]
+                .as_object()
+                .and_then(|source| source.keys().next().cloned())
+                .unwrap_or_default();
+            (
+                collection["construct"].as_str().unwrap_or("").to_string(),
+                source,
+                collection["keyField"].to_string(),
+            )
+        })
+        .collect();
+    let text = |a: &str, b: &str, c: &str| (a.to_string(), b.to_string(), c.to_string());
+    assert_eq!(
+        collections,
+        [
+            text("map", "output", "\"id\""),
+            text("filter", "output", "\"id\""),
+            text("map", "collection", "null"),
+            text("map", "slot", "\"id\""),
+            text("map", "slot", "null"),
+        ]
+    );
+    // The items schema of the slot of `saved` has the keyword, and that
+    // of `plain` has none.
+    let schemas = serde_json::to_value(&found.schemas).expect("schemas");
+    let items_of = |name: &str| -> Value {
+        let slot = plan["slots"]
+            .as_array()
+            .expect("slots")
+            .iter()
+            .find(|slot| slot["root"]["kind"] == "argument" && slot["path"] == json!([name]))
+            .expect("the slot");
+        schemas
+            .as_array()
+            .expect("schemas")
+            .iter()
+            .find(|schema| schema[0] == slot["schema"])
+            .map(|schema| schema[1]["items"].clone())
+            .expect("the schema of the slot")
+    };
+    assert_eq!(items_of("saved")["keyField"], json!("id"));
+    assert_eq!(
+        items_of("saved")["properties"]["name"]["type"],
+        json!("string")
+    );
+    assert_eq!(items_of("plain")["keyField"], Value::Null);
+}

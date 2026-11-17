@@ -28,6 +28,7 @@ import {
   StreamMarker,
   streamOf,
   StreamRef,
+  valuePart,
   withDefaults,
 } from "./store.ts";
 
@@ -88,6 +89,12 @@ export type Plan = {
     construct: string;
     within: { element?: number; site?: string }[];
     source: { slot?: number; collection?: number; output?: number };
+    /**
+     * The key field that the element type of the receiver declares with
+     * `KeyedBy<T, "field">`, for a source that is a slot or an output
+     * (PL §1.1, `Collection.keyField`; ruling Z38).
+     */
+    keyField?: string;
   }[];
   bodies: {
     kind: string;
@@ -550,7 +557,13 @@ export class Handle {
       // A member that is a plain value in place is named by its key, and
       // one that is a link by the position that holds the link (PL §1.3,
       // assumed there under question 115).
-      const keys = store.keysOf(located.value, located.ref);
+      const items = typeof schema === "object" ? schema.items : undefined;
+      const keys = store.keysOf(
+        located.value,
+        located.ref,
+        undefined,
+        typeof items === "object" ? items.keyField : undefined,
+      );
       return located.value.map((held, index) =>
         member(
           `${index}`,
@@ -1598,6 +1611,19 @@ export class Instance {
           const upstream = host.depend(source.entry, [...source.at, ...path]);
           return host.at(upstream, source.at);
         }
+        // A value with no place, as an element of an array that a
+        // computation returned. Under a declared key field the element
+        // of a key can hold another value in a later array, so the
+        // reader depends on what the element of its key holds at the
+        // path it reads (ruling Z38).
+        const collection = root.collection ?? -1;
+        const held = (context: Context) => {
+          const now = context.get(collection)?.source;
+          return now === undefined || now instanceof Ref || !("value" in now)
+            ? undefined
+            : canonical(this.stored(host.at(now.value, path)));
+        };
+        host.dependencies.push({ stamp: held, seen: held(host.context) });
         return source.value;
       }
       case "index": {
@@ -2645,13 +2671,13 @@ export class Instance {
    * in no key (PL §1.3).
    */
   #table(collection: number, host: Host): Element[] {
-    const { source } = this.plan.collections[collection];
+    const { source, keyField } = this.plan.collections[collection];
     let members: (Ref | { value: unknown })[] = [];
     if (source.slot !== undefined) {
       const slot = this.plan.slots[source.slot];
       host.demand(slot.root, slot.path);
       const base = host.at(this.rootOf(slot.root, host), slot.path);
-      if (base instanceof Ref) return this.#stored(base, host);
+      if (base instanceof Ref) return this.#stored(base, host, keyField);
       if (Array.isArray(base)) {
         members = base.map((member) =>
           member instanceof Ref ? member : { value: member }
@@ -2692,7 +2718,7 @@ export class Instance {
           }));
         }
       }
-      if (held instanceof Ref) return this.#stored(held, host);
+      if (held instanceof Ref) return this.#stored(held, host, keyField);
       members = (Array.isArray(held) ? held : []).map((member) =>
         member instanceof Ref ? member : { value: member }
       );
@@ -2705,7 +2731,9 @@ export class Instance {
         const { named } = this.store.locate(member, true);
         part = `cell:${named.doc}:${canonical(named.path)}`;
       } else {
-        part = `value:${canonical(host.v(member.value))}`;
+        // The value of the declared key field, where the collection has
+        // one, and otherwise the whole value.
+        part = valuePart(host.v(member.value), keyField);
       }
       const count = seen.get(part) ?? 0;
       seen.set(part, count + 1);
@@ -2717,12 +2745,14 @@ export class Instance {
    * The elements of a stored array. An element whose position holds a
    * link is the cell the link leads to. An element that is a plain value
    * in place is named by the array and its key, and its `source` is that
-   * reference by key (ruling Z12).
+   * reference by key (ruling Z12). With `field`, the key field the
+   * element type declares, the key of a plain value is formed from the
+   * value of the field.
    */
-  #stored(array: Ref, host: Host): Element[] {
+  #stored(array: Ref, host: Host, field?: string): Element[] {
     const located = this.store.locate(array, true, host.reads);
     const held = Array.isArray(located.value) ? located.value : [];
-    const keys = this.store.keysOf(held, located.ref);
+    const keys = this.store.keysOf(held, located.ref, undefined, field);
     return held.map((member, index) => ({
       key: keys[index],
       index,

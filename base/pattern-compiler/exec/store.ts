@@ -14,6 +14,12 @@ export type Schema = boolean | {
   properties?: Record<string, Schema>;
   items?: Schema;
   asCell?: unknown;
+  /**
+   * In the schema of the items of an array: the key field that the
+   * element type declares with `KeyedBy<T, "field">`
+   * (`plan-and-label-templates.md` §1.3, "A declared key field").
+   */
+  keyField?: string;
 };
 
 /** The schema of a member of what a schema describes. */
@@ -98,6 +104,32 @@ export const keySegment = (key: string): string => `${KEY}${key}`;
 
 export const isKeySegment = (segment: string): boolean =>
   segment.startsWith(KEY);
+
+const FIELD = "field:";
+
+/**
+ * The element part of the key of a plain value
+ * (`plan-and-label-templates.md` §1.3): the value of the declared key
+ * field, where the array declares one and the value is a record that
+ * holds it, and otherwise the whole value. A part formed from a field
+ * names the field, so that a key says by itself how it was formed, and a
+ * reference by key is resolved with no schema at hand.
+ */
+export const valuePart = (value: unknown, field?: string): string => {
+  if (
+    field !== undefined && isPlainRecord(value) && value[field] !== undefined
+  ) {
+    return `${FIELD}${encodeURIComponent(field)}:${canonical(value[field])}`;
+  }
+  return `value:${canonical(value)}`;
+};
+
+/** The key field a key was formed from, where it was formed from one. */
+export const fieldOfKey = (key: string): string | undefined => {
+  if (!key.startsWith(FIELD)) return undefined;
+  const end = key.indexOf(":", FIELD.length);
+  return end < 0 ? undefined : decodeURIComponent(key.slice(FIELD.length, end));
+};
 
 /** A reference to a position of a document. */
 export class Ref {
@@ -341,12 +373,17 @@ export class Store {
    * the cell where the position holds a link, the value where it holds
    * one, and the count of the earlier positions with the same element
    * part. `copies` gives the values of the positions where the caller has
-   * read them.
+   * read them. With `field`, the key field the element type declares, a
+   * plain value that holds the field is keyed by the value of the field
+   * and not by its whole value: a change of another member changes no
+   * key (ruling Z38). A position that holds a link is keyed by its cell
+   * with or without a declared field.
    */
   keysOf(
     held: readonly unknown[],
     at: Ref,
     copies?: readonly unknown[],
+    field?: string,
   ): string[] {
     const id = `${at.doc}:${canonical(at.path)}`;
     // An element that holds a reference by key into its own array is
@@ -370,13 +407,12 @@ export class Store {
         } else if (reentered) {
           part = `position:${index}`;
         } else {
-          part = `value:${
-            canonical(
-              copies === undefined
-                ? this.read(at.key(`${index}`))
-                : copies[index],
-            )
-          }`;
+          part = valuePart(
+            copies === undefined
+              ? this.read(at.key(`${index}`))
+              : copies[index],
+            field,
+          );
         }
         const count = seen.get(part) ?? 0;
         seen.set(part, count + 1);
@@ -473,12 +509,12 @@ export class Store {
           });
           reads = undefined;
         }
-        const keys = Array.isArray(value)
-          ? this.keysOf(value, new Ref(doc, at))
-          : [];
         // A key that a write of the transaction in progress changed is
         // found under the key the element has now (ruling Z24).
         let key = segment.slice(KEY.length);
+        const keys = Array.isArray(value)
+          ? this.keysOf(value, new Ref(doc, at), undefined, fieldOfKey(key))
+          : [];
         let index = keys.indexOf(key);
         for (let hops = 0; index < 0 && hops < MAX_LINKS; hops++) {
           const next = this.#rekeyed(doc, named_, key);
@@ -784,7 +820,12 @@ export class Store {
       const index = Number(position[position.length - 1]);
       const holder = this.locate(new Ref(doc, position.slice(0, -1)), false);
       if (!Array.isArray(holder.value)) continue;
-      const now = this.keysOf(holder.value, holder.ref)[index];
+      const now = this.keysOf(
+        holder.value,
+        holder.ref,
+        undefined,
+        fieldOfKey(key),
+      )[index];
       if (now !== undefined && now !== key) {
         this.rekeys.push({ doc, array, from: key, to: now });
       }
