@@ -748,7 +748,9 @@ function strictFailures(schema: unknown, path = "$"): string[] {
     if (!closed || keys.join() !== required.join()) failures.push(path);
   }
   for (const [key, value] of Object.entries(schema)) {
-    failures.push(...strictFailures(value, `${path}.${key}`));
+    for (const failure of strictFailures(value, `${path}.${key}`)) {
+      failures.push(failure);
+    }
   }
   return failures;
 }
