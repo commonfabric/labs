@@ -14919,7 +14919,10 @@ export function* prepareBoundaryCommitSteps(
     // at or beneath: they govern a value the setup initializes. Where any are
     // left out, the merged envelope, which declares them, is stored in place
     // of the stored one; in a release it re-describes the claims beneath
-    // links too, as any release's merged envelope does.
+    // links too, as any release's merged envelope does. Where those are left
+    // out, in a release, a position whose write policy the release extended
+    // with alternatives it may append counts as unchanged too, and the merged
+    // envelope, which holds them, is stored.
     let keepsStoredSchema = false;
     // TODO(danfuzz): Leaving out the positions beneath links applies the
     // link-position rule of commonfabric/specs pull request 52, in its
@@ -14952,8 +14955,9 @@ export function* prepareBoundaryCommitSteps(
       //
       // Given `release`, a position whose policy differs from the stored one
       // only by write-policy alternatives that release appended counts as
-      // unchanged (`ifcDiffersOnlyByReleaseAppend()`), except at a position
-      // at, above or beneath a deferred path, which must be as it was.
+      // unchanged (`ifcDiffersOnlyByReleaseAppend()`), except a position
+      // whose path is unknown, or that is at, above or beneath a deferred
+      // path, which is compared exactly.
       const leavesDeferredPaths = (
         omitted: (path: readonly string[]) => boolean,
         release?: WritePolicyRelease,

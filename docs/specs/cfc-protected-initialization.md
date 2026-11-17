@@ -235,15 +235,16 @@ new fields' claims, a position whose write policy the release extended counts as
 unchanged: the stored `writePolicyAnyOf` alternatives begin the derived list, in
 order and each exactly as stored, every alternative after them is one the
 release may append ("Release", `admissible`), and the position's other claims
-are the same. A position at, above or beneath a deferred field is not taken that
-way, and must be exactly as it was. The stored schema document and envelope
-version are then kept where the comparison left out no new field's claims and
-took no position that way. Otherwise the envelope the transaction derives is
-stored. It differs from the stored one at the new fields, whose claims it
-declares, at a position whose write policy the release extended, which holds the
-appended alternatives, and, in a release, beneath links, where it re-describes
-the claims as the specification's link-position rule ("Claims Beneath a Link
-Position", "Release") lets a release do. Labels
+are the same. A position whose logical path the comparison cannot tell, such as
+a rest claim beside named properties, or one at, above or beneath a deferred
+field, is not taken that way, and is compared exactly. The stored schema
+document and envelope version are then kept where the comparison left out no
+new field's claims and took no position that way. Otherwise the envelope the
+transaction derives is stored. It differs from the stored one at the new
+fields, whose claims it declares, at a position whose write policy the release
+extended, which holds the appended alternatives, and, in a release, beneath
+links, where it re-describes the claims as the specification's link-position
+rule ("Claims Beneath a Link Position", "Release") lets a release do. Labels
 elsewhere in the document persist as for any write. An authoritative
 transaction, which commits each document whole, receives no deferral. Any other
 write attempt at a protected field — pattern code setting a whole document with

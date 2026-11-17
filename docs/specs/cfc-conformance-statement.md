@@ -956,13 +956,14 @@ which the pin does not have). A release that appends an alternative changes the
 policy at that position, so the waiver's comparison would refuse every release
 of a piece whose argument holds a value under a lone writer claim beside the
 extended policy. In a release, the comparison that stores the derived envelope
-takes such a position for unchanged where the stored alternatives begin the
+counts such a position as unchanged where the stored alternatives begin the
 derived list, element for element and in order, stamps and files included, each
 further alternative is one `writePolicyAlternativeAdmissible` admits, and every
 other claim there is the same (`ifcDiffersOnlyByReleaseAppend` in
-`cfc/schema-merge.ts`). A position at, above or beneath a deferred field is
-compared exactly. specs#67 as proposed compares every position exactly, so the
-runtime admits more than it as well as more than the pin; @danfuzz ruled on
+`cfc/schema-merge.ts`). A position whose logical path the comparison cannot
+tell, or that is at, above or beneath a deferred field, is compared exactly.
+specs#67 as proposed compares every position exactly, so the runtime admits
+more than it as well as more than the pin; @danfuzz ruled on
 2026-11-17 that this lands at the strict default with no dial, ahead of an
 amendment to specs#67, under its `SPEC-PENDING` marker.
 
