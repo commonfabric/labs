@@ -259,14 +259,7 @@ export class PatternIndexStore {
    * fetch it by id, so `cf` sends a deploy's source only once this is true.
    */
   async keepsVersions(): Promise<boolean> {
-    await this.#checkPrivate();
-    return await Deno.lstat(join(this.#dir, KEEPS_VERSIONS)).then(
-      () => true,
-      (error) => {
-        if (isNotFound(error)) return false;
-        throw error;
-      },
-    );
+    return await this.#hasMarker(KEEPS_VERSIONS);
   }
 
   /** Records that this index keeps private versions. */
@@ -294,15 +287,16 @@ export class PatternIndexStore {
       createNew: true,
       mode: 0o600,
     });
-    try {
-      await Deno.link(temp, path);
-    } catch (error) {
-      if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
-    } finally {
-      await Deno.remove(temp);
-    }
+    const linked = await Deno.link(temp, path).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await Deno.remove(temp);
+    // Linked, or another process linked its key first: either way the key
+    // is there now, and only a link that failed for another reason left
+    // none.
     const key = await this.#readSlotKey(path);
-    if (key === undefined) throw new Error(`${path} vanished as it was made`);
+    if (key === undefined) throw linked;
     return key;
   }
 
@@ -311,14 +305,7 @@ export class PatternIndexStore {
    * machine never joined the index, which it says only once.
    */
   async notedNotJoined(): Promise<boolean> {
-    await this.#checkPrivate();
-    return await Deno.lstat(join(this.#dir, NOTED_NOT_JOINED)).then(
-      () => true,
-      (error) => {
-        if (isNotFound(error)) return false;
-        throw error;
-      },
-    );
+    return await this.#hasMarker(NOTED_NOT_JOINED);
   }
 
   /** Records that the person has been told. */
@@ -413,6 +400,18 @@ export class PatternIndexStore {
     }
     return key;
   }
+  /** Whether the marker file `name` exists in the store. */
+  async #hasMarker(name: string): Promise<boolean> {
+    await this.#checkPrivate();
+    try {
+      await Deno.lstat(join(this.#dir, name));
+      return true;
+    } catch (error) {
+      if (isNotFound(error)) return false;
+      throw error;
+    }
+  }
+
   async #readMembership(): Promise<MembershipFile | undefined> {
     const parsed = await this.#readJson(MEMBERSHIP);
     if (parsed === undefined) return undefined;

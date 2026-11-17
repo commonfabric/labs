@@ -112,6 +112,39 @@ describe("store", () => {
       expect(await store.keepsVersions()).toBe(true);
     });
 
+    it("throws, making no key, when the slot key's place holds a link to nothing", async () => {
+      const store = new PatternIndexStore(join(dir, "dangling"));
+      await store.slotKey();
+      await Deno.remove(join(dir, "dangling", "slot.key"));
+      await Deno.symlink(
+        join(dir, "nowhere"),
+        join(dir, "dangling", "slot.key"),
+      );
+
+      await expect(store.slotKey()).rejects.toThrow(Deno.errors.AlreadyExists);
+      expect([...Deno.readDirSync(join(dir, "dangling"))].map((e) => e.name))
+        .toEqual(["slot.key"]);
+    });
+
+    it("throws, rather than answering no, when its markers or slot key cannot be read", async () => {
+      const store = new PatternIndexStore(join(dir, "locked"));
+      await store.slotKey();
+      await Deno.chmod(join(dir, "locked"), 0o000);
+      try {
+        await expect(store.notedNotJoined()).rejects.toThrow(
+          Deno.errors.PermissionDenied,
+        );
+        await expect(store.keepsVersions()).rejects.toThrow(
+          Deno.errors.PermissionDenied,
+        );
+        await expect(store.slotKey()).rejects.toThrow(
+          Deno.errors.PermissionDenied,
+        );
+      } finally {
+        await Deno.chmod(join(dir, "locked"), 0o700);
+      }
+    });
+
     it("returns the root key it created, and none before", async () => {
       const store = new PatternIndexStore(join(dir, "store"));
       expect(await store.rootKey()).toBeUndefined();
