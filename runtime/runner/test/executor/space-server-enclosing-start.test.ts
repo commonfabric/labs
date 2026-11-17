@@ -479,9 +479,11 @@ describe("SpaceServer", () => {
         const warnedBefore = warned();
         await demand(local);
 
+        // Whichever comes first, so that a nested piece started alone fails
+        // the case rather than leaving it waiting.
         await awaitEach(
           cycles,
-          () => host!.stats().structureLoadFailures > 0,
+          () => host!.stats().structureLoadFailures > 0 || serves(nested),
         );
         expect(failing.left).toBe(0);
         expect(serves(nested)).toBe(false);
@@ -516,9 +518,11 @@ describe("SpaceServer", () => {
         failing.id = nestedArgument.id;
         await demand(local);
 
+        // Whichever comes first, so that a nested piece started alone fails
+        // the case rather than leaving it waiting.
         await awaitEach(
           cycles,
-          () => host!.stats().structureLoadFailures > 0,
+          () => host!.stats().structureLoadFailures > 0 || serves(nested),
         );
         expect(failing.left).toBe(0);
         expect(serves(nested)).toBe(false);
@@ -549,7 +553,10 @@ describe("SpaceServer", () => {
         refusing.id = enclosing.id;
         await demand(local);
 
-        await awaitEach(cycles, () => host!.stats().structureLoadRefused > 0);
+        await awaitEach(
+          cycles,
+          () => host!.stats().structureLoadRefused > 0 || serves(nested),
+        );
         expect(serves(nested)).toBe(false);
         expect(serves(enclosing)).toBe(false);
         expect(host.stats().structureLoadFailures).toBe(0);
