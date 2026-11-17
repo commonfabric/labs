@@ -795,9 +795,11 @@ async function startEnclosingFollowingOrigins(
     }
     for (const source of toFollow) {
       followed.set(rootKey(source), source);
-      await runtime.sourceReconciler.reconcile(
-        runtime.getCellFromLink({ ...source, path: [] }),
-      );
+      // The reconciler reads the piece's pattern pointer and origin off the
+      // loaded document, as the serving loop's follow does.
+      const cell = runtime.getCellFromLink({ ...source, path: [] });
+      await cell.sync();
+      await runtime.sourceReconciler.reconcile(cell);
     }
   }
 }

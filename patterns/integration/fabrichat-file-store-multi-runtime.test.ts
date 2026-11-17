@@ -290,23 +290,33 @@ describe("fabrichat file store across runtimes", () => {
           });
       };
 
-      it("takes the first add of the creator, whose client has never opened the store", async () => {
-        const { creator, add } = await storeTheCreatorMade({
-          creatorAdds: false,
-        });
+      it(
+        `${
+          serverExecution ? "refuses" : "takes"
+        } the first add of the creator, whose client has never opened the store`,
+        async () => {
+          const { creator, add } = await storeTheCreatorMade({
+            creatorAdds: false,
+          });
 
-        if (serverExecution) await expectServedFirstAddRefused(creator, add);
-        else await expectUnopenedAdd(creator, add, 0, "Creator");
-      });
+          if (serverExecution) await expectServedFirstAddRefused(creator, add);
+          else await expectUnopenedAdd(creator, add, 0, "Creator");
+        },
+      );
 
-      it("takes the first add of a member to a store no client has opened", async () => {
-        const { member, add } = await storeTheCreatorMade({
-          creatorAdds: false,
-        });
+      it(
+        `${
+          serverExecution ? "refuses" : "takes"
+        } the first add of a member to a store no client has opened`,
+        async () => {
+          const { member, add } = await storeTheCreatorMade({
+            creatorAdds: false,
+          });
 
-        if (serverExecution) await expectServedFirstAddRefused(member, add);
-        else await expectUnopenedAdd(member, add, 0, "Member");
-      });
+          if (serverExecution) await expectServedFirstAddRefused(member, add);
+          else await expectUnopenedAdd(member, add, 0, "Member");
+        },
+      );
 
       it("takes the first add of a member, whose client has never opened the store", async () => {
         const { member, add } = await storeTheCreatorMade();

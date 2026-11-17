@@ -648,117 +648,130 @@ describe("ensure-piece-running", () => {
       );
     }
 
-    describe("with an enclosing piece whose origin offers another source", () => {
-      // The enclosing pattern's module, as the patterns route serves it: the
-      // stored one doubles, and the one its origin offers triples.
-      const ROUTE_PATH = "/api/patterns/system/input-sources-outer.tsx";
-      const outerSource = (factor: number) =>
-        PROGRAM.files[0].contents.replace("value * 2", `value * ${factor}`);
-      let root: string;
-
-      beforeEach(async () => {
-        root = await Deno.makeTempDir({ prefix: "input-sources-origin-" });
-        await Deno.mkdir(`${root}/system`);
-        await Deno.writeTextFile(
-          `${root}/system/input-sources-outer.tsx`,
-          outerSource(3),
-        );
-      });
-
-      afterEach(async () => {
-        for (const runtime of runtimes) {
-          await runtime.sourceReconciler.idle();
-          await runtime.patternManager.flushCompileCacheWrites();
-        }
-        await Deno.remove(root, { recursive: true });
-      });
-
-      /** A runtime whose patterns route serves `root`. */
-      const routedRuntime = (): Runtime => {
-        const route = new PatternsRoute(root);
-        const runtime = new Runtime({
-          apiUrl: new URL("http://toolshed.test"),
-          storageManager,
-          fetch: async (input, init) =>
-            await route.serve(
-              new Request(
-                input instanceof Request ? input.url : input.toString(),
-                init,
-              ),
-            ) ?? new Response("not found", { status: 404 }),
-        });
-        runtimes.push(runtime);
-        return runtime;
-      };
-
-      /**
-       * `stopAfterInputChanges()` for the stored enclosing source, whose piece
-       * records the `system:` origin the route serves.
-       */
-      const stopAfterInputChangesWithOrigin = async () => {
-        const first = routedRuntime();
-        const compiled = await first.patternManager.compilePattern({
-          main: ROUTE_PATH,
-          files: [{ name: ROUTE_PATH, contents: outerSource(2) }],
-        }, { space });
-        const argument = first.getCell<{ value: number; seen?: number }>(
-          space,
-          ARGUMENT_CAUSE,
-          compiled.argumentSchema,
-        );
-        const result = first.getCell<{ doubled: number }>(
-          space,
-          RESULT_CAUSE,
-          compiled.resultSchema,
-        );
+    // The outermost enclosing pattern's module, as the patterns route serves
+    // it: the stored one doubles, and the one its origin offers triples. A
+    // piece nested two deep records one more than its enclosing piece derives.
+    for (
+      const { where, program, followed, stored } of [
+        { where: "", program: PROGRAM, followed: 15, stored: 10 },
         {
-          const tx = first.edit();
-          argument.withTx(tx).set({ value: 1 });
-          first.run(tx, compiled, argument, result);
-          expect((await tx.commit().settled).error).toBeUndefined();
-        }
-        expect(
-          (await first.editWithRetry((tx) => {
-            setPatternSource(
-              result,
-              tx,
-              systemPatternSource("system/input-sources-outer.tsx"),
-            );
-          })).error,
-        ).toBeUndefined();
-        await result.pull();
-        expect(result.get().doubled).toBe(2);
-        const stream = result.key("record").resolveAsCell()
-          .getAsNormalizedFullLink();
-        first.runner.stop(result);
-        {
-          const tx = first.edit();
-          argument.withTx(tx).key("value").set(5);
-          expect((await tx.commit().settled).error).toBeUndefined();
-        }
-        await first.idle();
-        await first.storageManager.synced();
-        return stream;
-      };
+          where: " two levels up",
+          program: THREE_LEVEL,
+          followed: 16,
+          stored: 11,
+        },
+      ]
+    ) {
+      describe(`with an enclosing piece${where} whose origin offers another source`, () => {
+        const ROUTE_PATH = "/api/patterns/system/input-sources-outer.tsx";
+        const outerSource = (factor: number) =>
+          program.files[0].contents.replace("value * 2", `value * ${factor}`);
+        let root: string;
 
-      it("follows the enclosing piece's origin before starting it, for an open that follows origins", async () => {
-        const stream = await stopAfterInputChangesWithOrigin();
-
-        const { seen } = await openThenEvent(routedRuntime(), stream, {
-          followOrigins: true,
+        beforeEach(async () => {
+          root = await Deno.makeTempDir({ prefix: "input-sources-origin-" });
+          await Deno.mkdir(`${root}/system`);
+          await Deno.writeTextFile(
+            `${root}/system/input-sources-outer.tsx`,
+            outerSource(3),
+          );
         });
 
-        expect(seen).toBe(15);
+        afterEach(async () => {
+          for (const runtime of runtimes) {
+            await runtime.sourceReconciler.idle();
+            await runtime.patternManager.flushCompileCacheWrites();
+          }
+          await Deno.remove(root, { recursive: true });
+        });
+
+        /** A runtime whose patterns route serves `root`. */
+        const routedRuntime = (): Runtime => {
+          const route = new PatternsRoute(root);
+          const runtime = new Runtime({
+            apiUrl: new URL("http://toolshed.test"),
+            storageManager,
+            fetch: async (input, init) =>
+              await route.serve(
+                new Request(
+                  input instanceof Request ? input.url : input.toString(),
+                  init,
+                ),
+              ) ?? new Response("not found", { status: 404 }),
+          });
+          runtimes.push(runtime);
+          return runtime;
+        };
+
+        /**
+         * `stopAfterInputChanges()` for the stored enclosing source, whose piece
+         * records the `system:` origin the route serves.
+         */
+        const stopAfterInputChangesWithOrigin = async () => {
+          const first = routedRuntime();
+          const compiled = await first.patternManager.compilePattern({
+            main: ROUTE_PATH,
+            files: [{ name: ROUTE_PATH, contents: outerSource(2) }],
+          }, { space });
+          const argument = first.getCell<{ value: number; seen?: number }>(
+            space,
+            ARGUMENT_CAUSE,
+            compiled.argumentSchema,
+          );
+          const result = first.getCell<{ doubled: number }>(
+            space,
+            RESULT_CAUSE,
+            compiled.resultSchema,
+          );
+          {
+            const tx = first.edit();
+            argument.withTx(tx).set({ value: 1 });
+            first.run(tx, compiled, argument, result);
+            expect((await tx.commit().settled).error).toBeUndefined();
+          }
+          expect(
+            (await first.editWithRetry((tx) => {
+              setPatternSource(
+                result,
+                tx,
+                systemPatternSource("system/input-sources-outer.tsx"),
+              );
+            })).error,
+          ).toBeUndefined();
+          await result.pull();
+          expect(result.get().doubled).toBe(2);
+          const stream = result.key("record").resolveAsCell()
+            .getAsNormalizedFullLink();
+          first.runner.stop(result);
+          {
+            const tx = first.edit();
+            argument.withTx(tx).key("value").set(5);
+            expect((await tx.commit().settled).error).toBeUndefined();
+          }
+          await first.idle();
+          await first.storageManager.synced();
+          return stream;
+        };
+
+        it("follows the enclosing piece's origin before starting it, for an open that follows origins", async () => {
+          const stream = await stopAfterInputChangesWithOrigin();
+
+          const { seen } = await openThenEvent(routedRuntime(), stream, {
+            followOrigins: true,
+          });
+
+          expect(seen).toBe(followed);
+        });
+
+        it("starts the enclosing piece on its stored source for an open that does not follow origins", async () => {
+          const stream = await stopAfterInputChangesWithOrigin();
+
+          const { seen } = await openThenEvent(routedRuntime(), stream);
+
+          expect(seen).toBe(stored);
+        });
       });
-
-      it("starts the enclosing piece on its stored source for an open that does not follow origins", async () => {
-        const stream = await stopAfterInputChangesWithOrigin();
-
-        const { seen } = await openThenEvent(routedRuntime(), stream);
-
-        expect(seen).toBe(10);
-      });
-    });
+    }
   });
 
   it("starts a source behind a document of the owner's own id in another scope", async () => {

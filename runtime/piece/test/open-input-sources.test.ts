@@ -66,7 +66,7 @@ const PROGRAM = {
   }],
 };
 
-describe("open-input-sources", () => {
+describe("pieces-controller", () => {
   let server: MemoryV2Server.Server;
   let space: MemorySpace;
   let writerStorage: EmulatedStorageManager;
