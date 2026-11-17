@@ -172,8 +172,9 @@ const CREATOR_PROGRAM: RuntimeProgram = {
 };
 
 // A recorder whose only input is a sibling nested instance's output, keeping
-// what it records in a writable of its own, so its argument links into
-// nothing of the instance enclosing them both.
+// what it records in a writable of its own, so its argument links into the
+// instance enclosing them both only through the record of the sibling's
+// output.
 const SIBLING_PROGRAM: RuntimeProgram = {
   main: "/main.tsx",
   files: [{

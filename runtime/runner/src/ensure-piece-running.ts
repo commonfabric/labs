@@ -786,9 +786,9 @@ export type StartWithInputSourcesOptions = {
 /**
  * Starts `piece`, a piece a caller names on its own, as a client's open does,
  * by calling `start`, after starting the pieces that enclose it, where
- * `runtime`'s run of its handlers is the one that counts ({@link
- * handlerRunCounts}): the instance whose graph sets `piece` up as a nested one,
- * and that instance's own enclosing instance, and so on
+ * `runtime`'s run of its handlers is the one that counts
+ * ({@link handlerRunCounts}): the instance whose graph sets `piece` up as a
+ * nested one, and that instance's own enclosing instance, and so on
  * (`EnsurePieceOptions.enclosingSourcesOnly`). A nested instance started on its
  * own runs its handlers against inputs nothing in the runtime derives, and once
  * it runs, no later event starts what encloses it. A piece whose output
