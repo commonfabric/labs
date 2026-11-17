@@ -976,11 +976,13 @@ cell's contents. The cache is designed around this:
     setup is refused as before. A clean closure costs a read of its labels,
     and a sync of each member's compiled record, in the transaction that
     already loaded it.
-  - A refused closure is not tried again in the session; one whose commit
-    lost a race, or failed for another reason, is tried again at the next
-    load. A module that is a non-entry member of one closure and the entry of
-    another is repaired with its own cache-root edges only through the
-    closure it enters: a test program's closure verified before its page's
+  - A refused closure is not tried again in the session. One whose commit lost a
+    race, was refused for want of write access, or failed for another reason is
+    tried again at the next load: a session that may only read the space
+    verifies the closure again at each load of it, about 40 to 50 ms for a
+    28-module closure. A module that is a non-entry member of one closure and
+    the entry of another is repaired with its own cache-root edges only through
+    the closure it enters: a test program's closure verified before its page's
     is refused when the page's dropped edges were the only way to reach a
     member, and is clean once the page's closure is repaired.
   - Not repaired: a stamped compiled record of a module the source closure

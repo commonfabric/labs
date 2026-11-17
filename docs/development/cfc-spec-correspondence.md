@@ -506,7 +506,7 @@ marker. @danfuzz authorized landing this design ahead of the ruling, without a
 flag, on 2026-11-14. The conformance statement's §11 records the gap, what it
 gives up, and what it leaves to a separate repair.
 
-The repair of a compile-cache record a flow stamp labeled
+The repair of compile-cache records that carry a flow stamp
 (`repairCompileCacheStamps()` in `compilation-cache/cell-cache.ts`) implements
 [specs#103](https://github.com/commonfabric/specs/pull/103) ahead of its
 ruling. The load ahead of a setup erases a stamped compiled record and

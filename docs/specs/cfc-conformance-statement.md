@@ -1106,8 +1106,9 @@ procedure's step 4. Its two deciding sites, the recording in
   A record the repair refuses keeps its clause, and a setup that reads it
   keeps refusing. A write-back still re-stamps the root of a record that
   already carries a clause, which a later load repairs again. A closure whose
-  repair lost a race is tried again at its next load; one the repair refused
-  is not tried again in that session. A stamped compiled record of a
+  repair lost a race, or whose commit was refused for want of write access, is
+  tried again at its next load; one the repair refused is not tried again in
+  that session. A stamped compiled record of a
   `fabric:` dependency is not repaired, and a write-back of its importer that
   reads it re-stamps the importer's compiled record, which the next load
   erases again; a setup of the importer still commits, since it reads source
