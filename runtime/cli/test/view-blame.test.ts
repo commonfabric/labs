@@ -9,7 +9,8 @@ import { expect } from "@std/expect";
 import { join } from "@std/path";
 
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
-import { term, visibleWidth } from "../lib/view/ansi.ts";
+import { term } from "../lib/view/ansi.ts";
+import { visibleWidth } from "../lib/view/width.ts";
 import {
   BLAME_WIDTH,
   blameAge,

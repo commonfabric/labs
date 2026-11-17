@@ -30,6 +30,82 @@ Deno.test("editbuffer: up/down keep a goal column over short lines", () => {
   assertEquals(at(b), [2, 6]);
 });
 
+Deno.test("editbuffer: left and right step over a whole character as a reader sees it", () => {
+  // An accented letter written with a combining mark, then an emoji with a
+  // skin tone: two characters of two code points each.
+  const b = new EditBuffer("e\u0301👍🏽x");
+  const cols: number[] = [];
+  for (let i = 0; i < 3; i++) {
+    b.moveRight();
+    cols.push(b.col);
+  }
+  for (let i = 0; i < 3; i++) {
+    b.moveLeft();
+    cols.push(b.col);
+  }
+
+  assertEquals(cols, [2, 4, 5, 4, 2, 0]);
+});
+
+Deno.test("editbuffer: Backspace and Delete remove a whole character as a reader sees it", () => {
+  const backspaced = new EditBuffer("ae\u0301b");
+  backspaced.col = 3;
+  backspaced.deleteBackward();
+  const deleted = new EditBuffer("ae\u0301b");
+  deleted.col = 1;
+  deleted.deleteForward();
+  const plain = new EditBuffer("abc");
+  plain.col = 2;
+  plain.deleteBackward();
+
+  assertEquals([backspaced.lines[0], backspaced.col], ["ab", 1]);
+  assertEquals([deleted.lines[0], deleted.col], ["ab", 1]);
+  assertEquals([plain.lines[0], plain.col], ["ac", 1]);
+});
+
+Deno.test("editbuffer: moving rows past the first row keeps the goal display column", () => {
+  const b = new EditBuffer("漢字ab\nabcdef");
+  b.col = 2;
+  b.moveRows(-3);
+  const stayed = at(b);
+  b.moveDown();
+
+  assertEquals([stayed, at(b)], [[0, 2], [1, 4]]);
+});
+
+Deno.test("editbuffer: a mark in a long line is stepped over by looking only near it", () => {
+  // Plain letters either side of the accented e bound the stretch looked at.
+  const b = new EditBuffer(`${"x".repeat(50)}e\u0301${"y".repeat(50)}`);
+  b.col = 50;
+  b.moveRight();
+  const after = b.col;
+  b.moveLeft();
+
+  assertEquals([after, b.col], [52, 50]);
+});
+
+Deno.test("editbuffer: a mark after a control character joins the control's picture, as it is drawn", () => {
+  const b = new EditBuffer("\x01\u0301z");
+  b.moveRight();
+
+  assertEquals(b.col, 2);
+});
+
+Deno.test("editbuffer: up and down keep the display column, at the start of the character drawn there", () => {
+  // The accented e takes one column, and each Han character two, so the
+  // display column 2 of "abc" falls on the x, and on 字 below.
+  const b = new EditBuffer("abc\nae\u0301x\n漢字ab");
+  b.col = 2;
+  b.moveDown();
+  const accented = at(b);
+  b.moveDown();
+  const han = at(b);
+  b.moveRight();
+  b.moveUp();
+
+  assertEquals([accented, han, at(b)], [[1, 3], [2, 1], [1, 4]]);
+});
+
 Deno.test("editbuffer: line and word motion", () => {
   const b = new EditBuffer("  foo.bar baz");
   b.moveLineEnd();
