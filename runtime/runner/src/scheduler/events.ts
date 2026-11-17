@@ -968,6 +968,12 @@ function startEventPiece(
   runtime: Runtime,
   eventLink: NormalizedFullLink,
 ): Promise<EnsurePieceVerdict> {
+  // TODO(danfuzz): On a serving runtime, require the pieces enclosing a nested
+  // piece (`EnsurePieceOptions.sourcesRequired` with `enclosingSourcesOnly`),
+  // as the serving loop's demand start does, and hold the event while one
+  // cannot start; until then an enclosing piece that fails to start leaves the
+  // nested piece to start alone here, and its handler reads what that piece
+  // derived last. `space-server-enclosing-start.test.ts` pins it.
   return ensurePieceRunningVerdict(runtime, eventLink, {
     startInputSources: handlerRunCounts(runtime),
     originFollowed: runtime.pieceOriginFollowed,

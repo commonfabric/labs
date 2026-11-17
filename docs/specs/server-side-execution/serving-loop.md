@@ -388,6 +388,14 @@ pattern's index entry goes with the release, and so do the watches of the
 documents only the stopped pieces read: the release asks for the pass a stop
 asks for (`docs/features/document-release.md`).
 
+**A nested piece a demand reaches.** A demand that reaches a nested instance's
+values starts the instances that enclose it first, whether or not it reaches
+any of theirs (runtime-mapping.md, N22): the documents of an enclosing
+instance's that a demand reaches may all be ones the demand pass starts nothing
+from, such as its argument and a `computed:` document holding a link to the
+nested instance. The walk does not reach past a piece a handler made to the
+piece whose handler made it.
+
 **Parking.** A park releases the lease and stops the loop. A park for a
 failed loop, a failed initialization or a closing host disposes the runtime. An IDLE park (§3's "on idle") that abandoned no
 open wave and left no effect unretired in its outbox (§4: an effect
@@ -2063,7 +2071,9 @@ started, its demand key stays pending and its served event defers, and the
 loop runs the follow BESIDE its cycles rather than inside one. The pieces
 an event's piece takes its inputs from, which its auto-start starts first
 (runtime-mapping.md), are answered the same way, and a follow still owed
-for one of them defers the event as the piece's own would. The
+for one of them defers the event as the piece's own would. So are the
+pieces enclosing a piece the demand pass starts, which it starts first, and
+a follow still owed for one of them leaves the demanded root pending. The
 reconciler's compile seals the candidate's closure into whatever wave is
 open when it finishes, and its adopting write is a direct commit (below)
 that would read that closure, so the reconciler waits for every wave open
