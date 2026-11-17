@@ -559,6 +559,45 @@ describe("loom-commands tools", () => {
       expect(calls).toHaveLength(0);
     });
 
+    it("delivers a full artifact preflight without trimming its HTML", async () => {
+      const page = "<!doctype html><html><body>" +
+        '<p>Evidence, alternatives, and limits: "résumé" 🧶.</p>\n'.repeat(
+          4_000,
+        ) +
+        "</body></html>";
+      const args = {
+        candidate: {
+          entries: [{
+            title: "Research dossier",
+            artifact: { page, components: { lists: [], notes: false } },
+          }],
+          nothing_because: null,
+        },
+      };
+      const { context, calls } = contextWith({
+        manifest: JSON.stringify({
+          ...MANIFEST,
+          commands: [{
+            id: "preparation.check-preparation",
+            title: "Validate a prepared artifact.",
+            scope: "global",
+            effect: "read",
+            inputs: { type: "object" },
+          }],
+        }),
+      });
+      const output = await runCommandTool.invoke(context, {
+        command: "preparation.check-preparation",
+        args,
+      });
+      expect(output.status).toBe("executed");
+      expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
+      expect(calls.at(-1)?.body).toMatchObject({
+        id: "preparation.check-preparation",
+        args,
+      });
+    });
+
     it("refuses malformed input before sending a request", async () => {
       const inputs = [
         {},
