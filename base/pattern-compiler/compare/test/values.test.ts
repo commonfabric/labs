@@ -2,11 +2,46 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { compareFixtures } from "../values-fixtures.ts";
-import { firstDifference, normalize } from "../values.ts";
+import {
+  firstDifference,
+  inFileForm,
+  normalize,
+  outOfFileForm,
+} from "../values.ts";
 
 // The value comparison (`../values.ts`): the values the executor of
 // `../../exec/` computes for a compiled plan against the values today's
 // runtime computes for the same pattern, argument, and events.
+
+describe("the values of a run, as a results file holds them", () => {
+  it("read back with each member and each position that holds nothing", () => {
+    const values = {
+      settled: {
+        result: { $UI: { children: ["a", undefined, null] } },
+        state: { open: undefined, count: 0 },
+      },
+      events: [undefined, { result: {}, state: {} }],
+    };
+
+    const read = outOfFileForm(
+      JSON.parse(JSON.stringify(inFileForm(values))),
+    ) as typeof values;
+
+    // JSON alone drops `open` and reads the second child as `null`.
+    expect(Object.keys(read.settled.state)).toEqual(["open", "count"]);
+    expect(read.settled.state.open).toBe(undefined);
+    expect(read.settled.result.$UI.children).toEqual(["a", undefined, null]);
+    expect(read.settled.result.$UI.children[1]).toBe(undefined);
+    expect(read.events[0]).toBe(undefined);
+    expect(read.events.length).toBe(2);
+  });
+
+  it("read a file that holds no such member as it is", () => {
+    const stored = { settled: { result: { a: [1, null] }, state: {} } };
+
+    expect(outOfFileForm(stored)).toEqual(stored);
+  });
+});
 
 describe("normalize", () => {
   it("compares the children of a view node as one flat list", () => {

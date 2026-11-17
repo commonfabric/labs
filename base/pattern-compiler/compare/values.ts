@@ -157,6 +157,39 @@ export const normalize = (value: unknown): unknown => {
   return members;
 };
 
+/** What stands for a member or a position that holds nothing in a file. */
+const NOTHING = "$nothing";
+
+/**
+ * A value in the form a results file holds it. JSON leaves out a member
+ * that holds `undefined` and writes a position of an array that holds it
+ * as `null`, so the values of a run read from a file would differ from
+ * the values the run compared: each `undefined` is written as a record
+ * that stands for it.
+ */
+export const inFileForm = (value: unknown): unknown => {
+  if (value === undefined) return { [NOTHING]: true };
+  if (Array.isArray(value)) return Array.from(value, inFileForm);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([name, member]) => [name, inFileForm(member)]),
+  );
+};
+
+/** The value that a results file holds in the form of `inFileForm`. */
+export const outOfFileForm = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(outOfFileForm);
+  if (!isRecord(value)) return value;
+  if (value[NOTHING] === true && Object.keys(value).length === 1) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map((
+      [name, member],
+    ) => [name, outOfFileForm(member)]),
+  );
+};
+
 const show = (value: unknown): string =>
   (JSON.stringify(value) ?? "undefined").slice(0, 120);
 

@@ -36,6 +36,8 @@ import {
   argumentOf,
   compareValues,
   ExecutorRun,
+  inFileForm,
+  outOfFileForm,
   readingValues,
   type ValueComparison,
   type Values,
@@ -111,7 +113,14 @@ const runOne = async (
       committed: outcomes.filter(({ outcome }) => outcome === "committed")
         .length,
     },
-    runtime: { argument, events, outcomes, values },
+    // The values are written so that `again` reads what this run
+    // compared.
+    runtime: {
+      argument,
+      events,
+      outcomes,
+      values: inFileForm(values) as Values,
+    },
   };
 };
 
@@ -134,7 +143,8 @@ const again = async (file: string, to: string) => {
       lines.push(JSON.stringify(earlier));
       continue;
     }
-    const { argument, events, outcomes, values } = earlier.runtime;
+    const { argument, events, outcomes } = earlier.runtime;
+    const values = outOfFileForm(earlier.runtime.values) as Values;
     lines.push(JSON.stringify({
       ...earlier,
       comparison: compareValues(
