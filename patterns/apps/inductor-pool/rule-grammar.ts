@@ -987,7 +987,10 @@ export function checkRule(draft: unknown): RuleCheck {
   if (typeof draft !== "object" || draft === null) {
     return { ok: false, reason: "a rule must be an object" };
   }
-  const { field, pattern, predicts, flags } = draft as Record<string, unknown>;
+  const field = "field" in draft ? draft.field : undefined;
+  const pattern = "pattern" in draft ? draft.pattern : undefined;
+  const predicts = "predicts" in draft ? draft.predicts : undefined;
+  const flags = "flags" in draft ? draft.flags : undefined;
   if (typeof field !== "string" || field.trim() === "") {
     return { ok: false, reason: "a rule needs a field" };
   }
