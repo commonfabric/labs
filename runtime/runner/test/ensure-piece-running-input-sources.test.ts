@@ -787,6 +787,32 @@ describe("ensure-piece-running", () => {
       });
     }
 
+    it("starts the piece that built a row with `map` when the row itself is opened", async () => {
+      const { stream, enclosing } = await stopProgramAfterInputChanges(
+        MAP_PROGRAM,
+        ["rows", 0, "record"],
+      );
+      const opener = newRuntime();
+      const recorder = await nestedOwner(opener, stream);
+      // The row is the instance `map` built, whose graph sets the recorder up
+      // as a nested node; the recorder's argument belongs to it.
+      const recorderArgument = opener.getCellFromLink(
+        getMetaLink(recorder, "argument")!,
+      );
+      await recorderArgument.sync();
+      const row = opener.getCellFromLink({
+        ...getMetaLink(recorderArgument, "result")!,
+        path: [],
+      });
+      await row.sync();
+
+      await startWithInputSources(opener, row, () => opener.start(row));
+
+      expect(opener.runner.isRunning(row)).toBe(true);
+      expect(opener.runner.isRunning(opener.getCellFromLink(enclosing)))
+        .toBe(true);
+    });
+
     it("starts none of the pieces whose results a hub's argument links to", async () => {
       const names = ["hub", ...[0, 1, 2, 3, 4, 5, 6, 7].map((n) => `p${n}`)];
       const { first, producers } = await stoppedProducers(names);
