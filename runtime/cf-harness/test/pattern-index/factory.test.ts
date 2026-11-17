@@ -141,4 +141,30 @@ describe("createHarnessPatternIndexClientFactory()", () => {
       await Deno.remove(root, { recursive: true });
     }
   });
+
+  it("signs without a chain when the store cannot be read, rather than failing", async () => {
+    const root = await Deno.makeTempDir();
+    try {
+      const key = await Identity.generatePkcs8();
+      const keyPath = `${root}/identity.key`;
+      await Deno.writeFile(keyPath, key);
+      const storeDir = `${root}/store`;
+      const store = new PatternIndexStore(storeDir);
+      await store.createRootKey();
+      await Deno.writeTextFile(`${storeDir}/membership.json`, "not json");
+      const { fetchFn, requests } = recordingFetch([
+        jsonResponse({ results: [] }),
+      ]);
+      const client = await createHarnessPatternIndexClientFactory(
+        { baseUrl: "https://index.test/api" },
+        keyPath,
+        fetchFn,
+        store,
+      )();
+      await client.searchPatterns({ text: "reusable components" });
+      expect(JSON.parse(requests[0].body).proofs).toBeUndefined();
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
 });

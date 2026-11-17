@@ -173,7 +173,6 @@ import {
 } from "../src/interactive-chat-service.ts";
 import { OpenAICodexResponsesClient } from "../src/model/openai-codex-responses.ts";
 import {
-  cacheHarnessPatternIndexClientFactory,
   createHarnessPatternIndexClientFactory,
   type HarnessPatternIndexClientFactory,
 } from "../src/pattern-index/factory.ts";
@@ -1641,9 +1640,10 @@ export class ConsoleServer {
           config.fabricSession.identityKeyPath,
         )
         : undefined);
-    this.#patternIndexClientFactory = factory === undefined
-      ? undefined
-      : cacheHarnessPatternIndexClientFactory(factory);
+    // Not cached for the console's life: a client carries the member's chain
+    // as of its building, and the console outlives a chain's renewal, a
+    // join, and a root move. Each run's engine keeps its own for the run.
+    this.#patternIndexClientFactory = factory;
     this.#health = health ?? createConsoleHealth(
       config,
       undefined,
@@ -3103,13 +3103,12 @@ export const startConsoleServer = async (
     sessionStore = config.sessionDbPath === undefined
       ? undefined
       : await openSessionStore(config.sessionDbPath);
+    // Built afresh per use, as in the constructor: see there.
     const indexFactory = config.patternIndex === undefined
       ? undefined
-      : cacheHarnessPatternIndexClientFactory(
-        createHarnessPatternIndexClientFactory(
-          config.patternIndex,
-          config.fabricSession.identityKeyPath,
-        ),
+      : createHarnessPatternIndexClientFactory(
+        config.patternIndex,
+        config.fabricSession.identityKeyPath,
       );
     server = new ConsoleServer(
       config,

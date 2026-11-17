@@ -1,6 +1,6 @@
 /** Harness configuration and identity loading for the shared index client. */
 
-import type { PatternIndexClient } from "@commonfabric/pattern-index/client";
+import { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import { openPatternIndexClient } from "@commonfabric/pattern-index/access";
 import type { PatternIndexStore } from "@commonfabric/pattern-index/store";
 import type { HarnessPatternIndexConfig } from "../config.ts";
@@ -39,12 +39,30 @@ export const createHarnessPatternIndexClientFactory = (
 ): HarnessPatternIndexClientFactory =>
 async () => {
   const identity = await loadHarnessIdentity(identityKeyPath);
-  return await openPatternIndexClient({
-    baseUrl: config.baseUrl,
-    signer: identity,
-    ...(store !== undefined ? { store } : {}),
-    ...(fetchFn !== undefined ? { fetchFn } : {}),
-  });
+  try {
+    return await openPatternIndexClient({
+      baseUrl: config.baseUrl,
+      signer: identity,
+      ...(store !== undefined ? { store } : {}),
+      ...(fetchFn !== undefined ? { fetchFn } : {}),
+    });
+  } catch (error) {
+    // A store this run cannot read (its permissions, a broken file, no
+    // state directory) costs the member's settings, not the index: the run
+    // signs as its key alone, as it did before it presented chains, and
+    // says why. Failing every index call over a local file would buy no
+    // privacy, since sharing settings are not a security boundary.
+    console.error(
+      `pattern index: signing without the membership chain, whose store could not be read: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return new PatternIndexClient({
+      baseUrl: config.baseUrl,
+      signer: identity,
+      ...(fetchFn !== undefined ? { fetchFn } : {}),
+    });
+  }
 };
 
 /**
