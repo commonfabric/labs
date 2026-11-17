@@ -158,7 +158,7 @@ export const sharingLines = (
     ];
   }
   return [
-    "Sharing: on. Patterns agents make for you are shared anonymously once they settle and pass the privacy check, and you see what others share.",
+    "Sharing: on. Patterns agents make for you are shared anonymously once you open them in your loom and they pass the privacy check, and you see what others share.",
     settings.selfBuilt
       ? "Patterns you build yourself (cf, Claude Code): shared the same way. Turn that off with cf index sharing --self-built off."
       : "Patterns you build yourself (cf, Claude Code): kept private unless you run cf pattern share. Share them by default with cf index sharing --self-built on.",
@@ -317,7 +317,8 @@ export const index = new Command()
         .description(
           "Show or change your give-to-get setting, the same one your " +
             "loom's settings change. On (the default), your patterns are " +
-            "shared anonymously once they settle and pass the privacy " +
+            "shared anonymously once you open them in your loom and they " +
+            "pass the privacy " +
             "check, and you see what others share; off, nothing of yours " +
             "is shared and you see only patterns published under a name. " +
             "--self-built says whether that covers the patterns you build " +

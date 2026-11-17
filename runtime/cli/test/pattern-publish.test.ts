@@ -259,6 +259,22 @@ describe("pattern-publish", () => {
       expect(lines).toContain("(v2)");
     });
 
+    it("credits a remix on the version that starts the lineage, and not on a lineage already started", async () => {
+      dirty = undefined;
+      await store.recordSource([entry], "pat-theirs");
+      const first = await publishedReport(
+        { entry, slot: "cf-path:remix" },
+        depsWith(scripted([FAIL, PASS], [REWRITE])),
+      );
+
+      const publishes = index.calls.filter((c) => c.fn === "publishPattern");
+      expect(publishes.map((c) => c.body.remixedFrom)).toEqual([
+        "pat-theirs",
+        undefined,
+      ]);
+      expect(first.remixedFrom).toBe("pat-theirs");
+    });
+
     it("throws naming cf index join, before compiling, for an identity that is no member", async () => {
       index = new FakePatternIndex({ privacyPrompt: PRIVACY_PROMPT });
       let compiled = false;

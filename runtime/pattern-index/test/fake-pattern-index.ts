@@ -127,6 +127,12 @@ export class FakePatternIndex {
         return this.#get(member.handle, body);
       case "listPatterns":
         return this.#list(member.handle, body);
+      case "listLineages":
+        return json(200, {
+          lineages: [...this.#lineageSeqs.keys()]
+            .filter((key) => key.startsWith(`${member.handle}\n`))
+            .map((key) => ({ slot: key.slice(member.handle.length + 1) })),
+        });
       default:
         return json(404, { error: `no function ${fn}` });
     }

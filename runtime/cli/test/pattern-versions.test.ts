@@ -171,7 +171,7 @@ describe("pattern-versions", () => {
       );
       expect(request.hashtags).toEqual(["chores"]);
       expect(request.program.files).toEqual(PROGRAM.files);
-      expect(request.keepPrivate).toBe(true);
+      expect(Object.hasOwn(request, "keepPrivate")).toBe(false);
     });
 
     it("makes no index call and reads no pattern id on a machine that never joined, and says so only the first time", async () => {
@@ -197,32 +197,19 @@ describe("pattern-versions", () => {
       expect(versionLine(second)).toBeUndefined();
     });
 
-    it("keeps the version private and says to share it once it works when the setting shares what the person builds", async () => {
+    it("says the index shares the version once it is opened in a loom, when it answers so", async () => {
       await joinIndex();
-      const { client, published } = stubClient({ selfBuilt: true });
-      const { deps } = depsWith(client);
-
-      const outcome = await recordDeployedVersion(deployed(), deps);
-
-      expect(published[0].keepPrivate).toBe(true);
-      expect(outcome).toMatchObject({
-        status: "recorded",
-        shareWhenReady: true,
+      const { client } = stubClient({
+        publish: () =>
+          Promise.resolve({ ...RECORDED, autoShare: "when_used" as const }),
       });
-      expect(versionLine(outcome)).toContain(
-        `once it works, run cf pattern share ${entry}`,
-      );
-    });
-
-    it("keeps the version private and suggests no share when the setting does not share what the person builds", async () => {
-      await joinIndex();
-      const { client } = stubClient({ selfBuilt: false });
       const { deps } = depsWith(client);
 
       const outcome = await recordDeployedVersion(deployed(), deps);
 
-      expect(outcome).toMatchObject({ shareWhenReady: false });
-      expect(versionLine(outcome)).not.toContain("cf pattern share");
+      expect(versionLine(outcome)).toContain(
+        "shares it anonymously once you open it in a loom",
+      );
     });
 
     it("sends no source to an index that does not keep private versions", async () => {
@@ -404,13 +391,10 @@ describe("pattern-versions", () => {
   describe("versionLine()", () => {
     const recorded = (
       response: Partial<PatternIndexPublishResponse>,
-      shareWhenReady = false,
     ): VersionOutcome => ({
       status: "recorded",
       created: response.created ?? true,
       response: { ...RECORDED, ...response },
-      entry: "./bins.tsx",
-      shareWhenReady,
     });
 
     it("names the private version it kept", () => {
@@ -419,9 +403,9 @@ describe("pattern-versions", () => {
       );
     });
 
-    it("suggests no share for a version that is already shared", () => {
-      expect(versionLine(recorded({ visibility: "shared" }, true))).not
-        .toContain("cf pattern share");
+    it("says nothing about sharing while the setting keeps it private", () => {
+      expect(versionLine(recorded({ autoShare: "sharing_off" }))).not
+        .toContain("loom");
     });
 
     it("says no version was made when the newest already has this source", () => {
@@ -558,8 +542,6 @@ describe("pattern-versions", () => {
                 status: "recorded",
                 created: true,
                 response: RECORDED,
-                entry,
-                shareWhenReady: true,
               }),
             render: (value) => printed.push(value),
             note: () => {},
@@ -573,7 +555,7 @@ describe("pattern-versions", () => {
           status: "recorded",
           version: 3,
           visibility: "private",
-          shareWhenReady: true,
+          autoShare: "sharing_off",
         },
       }]);
     });

@@ -66,11 +66,11 @@ private version, and the deploy prints one line saying which. Nobody runs a save
 command. To undo a bad step, `cf pattern history <entry>` lists the versions and
 `cf pattern rollback <entry> <version>` restores one over the files (then
 `setsrc` to update the piece). Rollback refuses over edits never deployed.
-Deploys never share. When the deploy line says the person's sharing setting
-shares what they build (`version.shareWhenReady` under `--json`), run
-`cf pattern share` as soon as the pattern works: its tests pass and the person
-has seen it do its job. That is the give-to-get they opted into, so do it
-without asking. With the setting off, share only when they ask.
+Deploys never share by themselves. When the person's sharing setting covers what
+they build, the index shares a version anonymously once they open it in a loom,
+and the deploy line says so (`version.autoShare: "when_used"` under `--json`).
+Run `cf pattern share` only when the person asks to share it sooner, or to share
+it with the setting off.
 
 **Sharing**, so others can find it, takes the same identity, API URL, space and
 packaging flags (`--test`, `--datafile`) it was deployed with, so the shared id

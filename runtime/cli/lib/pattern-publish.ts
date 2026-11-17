@@ -112,6 +112,7 @@ export interface PublishDeps {
     | "requestListing"
     | "getPattern"
     | "whoami"
+    | "listLineages"
   >;
 
   /** The model, or `undefined` when none is configured. */
@@ -321,12 +322,20 @@ export async function publishPatternFromDisk(
   const lineage = slot === undefined
     ? {}
     : { slot, origin: "self" as const, keepPrivate: true };
+  // The index takes a remix credit beside a slot only on the version that
+  // starts the slot's lineage, so it is owed until one is sent.
+  let creditOwed = slot === undefined ||
+    !(await deps.client.listLineages()).lineages.some((l) => l.slot === slot);
+  let creditSent: string | undefined;
   // Keeps the source as it stands as a private version, so a rewrite over
   // files outside git can still be taken back with `cf pattern rollback`.
   const keepOriginal = slot === undefined
     ? undefined
-    : async (): Promise<number | undefined> =>
-      (await deps.client.publishPattern({
+    : async (): Promise<number | undefined> => {
+      const credit = creditOwed
+        ? (await remixOf(options, deps, entry, original.patternId!)).remixedFrom
+        : undefined;
+      const kept = await deps.client.publishPattern({
         ...publishRequestFor({
           patternId: original.patternId!,
           program: original.program,
@@ -337,9 +346,14 @@ export async function publishPatternFromDisk(
           ...(original.resultSchema !== undefined
             ? { resultSchema: original.resultSchema }
             : {}),
+          ...(credit === undefined ? {} : { remixedFrom: credit }),
         }),
         ...lineage,
-      })).seq;
+      });
+      creditOwed = false;
+      creditSent = credit;
+      return kept.seq;
+    };
   const localCheck = await checkLocally(
     options,
     deps,
@@ -366,19 +380,15 @@ export async function publishPatternFromDisk(
   const patternId = published.patternId!;
 
   const lastPublished = await deps.store.lastPublished(entry);
-  let priorPatternId = lastPublished !== patternId ? lastPublished : undefined;
-  let remixedFrom = options.remixedFrom ?? await deps.store.sourceOf(entry);
-  if (remixedFrom === patternId) remixedFrom = undefined;
-  if (remixedFrom !== undefined && options.remixedFrom === undefined) {
-    // Source fetched from one's own pattern continues it; only someone
-    // else's is a remix, which the index refuses as a predecessor.
-    const source = await deps.client.getPattern({ patternId: remixedFrom })
-      .catch(() => undefined);
-    if (source?.mine === true) {
-      priorPatternId ??= remixedFrom;
-      remixedFrom = undefined;
-    }
-  }
+  const remix = await remixOf(options, deps, entry, patternId);
+  let priorPatternId =
+    (lastPublished !== patternId ? lastPublished : undefined) ??
+      remix.priorPatternId;
+  // Beside a slot, a lineage already started keeps the credit its first
+  // version carried, and refuses another.
+  const remixedFrom = slot === undefined || creditOwed
+    ? remix.remixedFrom
+    : undefined;
 
   const response = await deps.client.publishPattern({
     ...publishRequestFor({
@@ -418,7 +428,9 @@ export async function publishPatternFromDisk(
       ? { lineageId: response.lineageId }
       : {}),
     ...(priorPatternId !== undefined ? { priorPatternId } : {}),
-    ...(remixedFrom !== undefined ? { remixedFrom } : {}),
+    ...((remixedFrom ?? creditSent) !== undefined
+      ? { remixedFrom: remixedFrom ?? creditSent }
+      : {}),
     localCheck,
     listing,
     next: listing.status === "capped"
@@ -427,6 +439,33 @@ export async function publishPatternFromDisk(
       }`
       : tryIt(response.patternId),
   };
+}
+
+/**
+ * Whose pattern `entry` builds on: someone else's it was fetched from, as
+ * `remixedFrom`, or the person's own, as the predecessor it continues.
+ * Neither for source identical to what it was fetched from.
+ */
+async function remixOf(
+  options: PublishOptions,
+  deps: PublishDeps,
+  entry: string,
+  patternId: string,
+): Promise<{ remixedFrom?: string; priorPatternId?: string }> {
+  if (options.remixedFrom !== undefined) {
+    return options.remixedFrom === patternId
+      ? {}
+      : { remixedFrom: options.remixedFrom };
+  }
+  const source = await deps.store.sourceOf(entry);
+  if (source === undefined || source === patternId) return {};
+  // Source fetched from one's own pattern continues it; only someone
+  // else's is a remix, which the index refuses as a predecessor.
+  const stored = await deps.client.getPattern({ patternId: source })
+    .catch(() => undefined);
+  return stored?.mine === true
+    ? { priorPatternId: source }
+    : { remixedFrom: source };
 }
 
 /** How to use a published pattern: from cf, or in a loom. */

@@ -728,9 +728,13 @@ export interface PatternIndexSetSharingSettingsRequest {
   selfBuilt?: boolean;
 }
 
-/** What a publish did about sharing the version it recorded. */
+/**
+ * What a publish did about sharing the version it recorded. A publish never
+ * shares by itself: `when_used` means the index shares the version once its
+ * owner opens it in a loom, while the sharing setting allows.
+ */
 export type PatternIndexAutoShare =
-  | "requested"
+  | "when_used"
   | "sharing_off"
   | "kept_private"
   | "already_shared"
