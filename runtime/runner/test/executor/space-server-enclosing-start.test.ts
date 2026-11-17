@@ -37,10 +37,12 @@ const aliceSigner = await Identity.fromPassphrase(
 
 // A handler a nested pattern defines, whose input the pattern enclosing it
 // derives: the event's stream belongs to the nested instance, and `doubled` is
-// written only by the enclosing instance's `computed`, so the handler records
-// -1 where no run of that `computed` has given it a value to read. `local` is
-// a document of the nested instance alone, which a demand can name without
-// naming anything of the enclosing instance's.
+// written only by the enclosing instance's `computed`. The handler records -1
+// where it finds no `doubled`, and what the store holds where nothing in the
+// serving runtime derives `doubled` again. `local` is a document of the nested
+// instance alone, which a demand can name without naming anything of the
+// enclosing instance's, and `shown` is a value of the nested instance's
+// derived from `doubled`.
 const NESTED_PROGRAM: RuntimeProgram = {
   main: "/main.tsx",
   files: [{
@@ -58,15 +60,16 @@ const NESTED_PROGRAM: RuntimeProgram = {
       "",
       "const recorder = pattern<",
       "  { doubled?: number; seen: Seen },",
-      "  { record: Stream<unknown>; local: number }",
+      "  { record: Stream<unknown>; local: number; shown: number }",
       ">(({ doubled, seen }) => ({",
       "  record: record({ doubled, seen }),",
       "  local: Writable.of<number>(7),",
+      "  shown: computed(() => (doubled ?? -1) + 1000),",
       "}));",
       "",
       "export default pattern<",
       "  { value: number; seen?: Seen },",
-      "  { record: Stream<unknown>; local: number }",
+      "  { record: Stream<unknown>; local: number; shown: number }",
       ">(({ value, seen }) => {",
       "  const doubled = computed(() => value * 2);",
       "  return recorder({ doubled, seen: seen! });",
@@ -282,6 +285,9 @@ describe("SpaceServer", () => {
       stream: NormalizedFullLink;
       nestedArgument: NormalizedFullLink;
       enclosingPattern: { identity: string; symbol: string };
+
+      /** `NESTED_PROGRAM`'s nested `shown`, for that program alone. */
+      shown?: NormalizedFullLink;
     }
   > => {
     const setup = openRuntime(false, setupSigner);
@@ -321,6 +327,10 @@ describe("SpaceServer", () => {
     } as NormalizedFullLink;
     const local = setup.getCellFromLink(nested).key("local" as never)
       .resolveAsCell().getAsNormalizedFullLink();
+    const shown = program === NESTED_PROGRAM
+      ? setup.getCellFromLink(nested).key("shown" as never).resolveAsCell()
+        .getAsNormalizedFullLink()
+      : undefined;
     const nestedArgument = getMetaLink(
       setup.getCellFromLink(nested),
       "argument",
@@ -345,6 +355,7 @@ describe("SpaceServer", () => {
       local,
       nestedArgument,
       enclosingPattern,
+      shown,
     };
   };
 
@@ -615,20 +626,27 @@ describe("SpaceServer", () => {
           };
         };
         host = newHost();
-        const { enclosing, nested, local } = await setUpNested();
-        await demand(local);
+        const { enclosing, nested, local, shown } = await setUpNested();
+        await demand(local, shown!);
 
-        // No event is queued, whose sender would be a demander of its own.
+        // No event is queued, whose sender would be a demander of its own:
+        // the runs are the ones `shown`, which alice demands, pulls.
         await awaitEach(
           cycles,
           () =>
             serves(nested) &&
-            supplied.some(({ roots, principals }) =>
-              roots.length === 1 && roots[0] === enclosing.id &&
-              principals.includes(aliceSigner.did())
+            supplied.some(({ roots }) =>
+              roots.length === 1 && roots[0] === enclosing.id
             ),
         );
-        expect(serves(enclosing)).toBe(true);
+        const forEnclosing = supplied.filter(({ roots }) =>
+          roots.length === 1 && roots[0] === enclosing.id
+        );
+        expect(
+          forEnclosing.some(({ principals }) =>
+            principals.includes(aliceSigner.did())
+          ),
+        ).toBe(true);
       });
 
       it("holds a nested piece back for good while its enclosing piece's pattern never loads, warning that it is stuck, and starts it alone for an event", async () => {
@@ -667,8 +685,9 @@ describe("SpaceServer", () => {
           `(pattern-unloadable at ${enclosing.id}, a piece enclosing it)`,
         );
         // An event to the nested piece's stream starts it alone, as the event
-        // path starts a piece whose sources do not start.
-        expect(await recordedOnEvent(stream)).toBe(-1);
+        // path starts a piece whose sources do not start, and its handler
+        // reads what the enclosing piece derived last.
+        expect(await recordedOnEvent(stream)).toBe(2);
         expect(serves(nested)).toBe(true);
         expect(serves(enclosing)).toBe(false);
       });
