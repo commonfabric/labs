@@ -1,0 +1,320 @@
+/**
+ * The inductor pool's release decision, apart from the pattern that stores and
+ * shows it: which rules enough distinct pseudonyms hold, and each rule's
+ * threshold.
+ *
+ * Every function here is pure. `releaseConsensus` in `inductor-pool.tsx`, the
+ * one function the pool's policy releases, is a call of `releaseFrom`; this
+ * module is part of that function's code, and the runtime's module identity
+ * for `inductor-pool.tsx` covers it, since a module's identity is sensitive to
+ * the modules it imports.
+ */
+
+import {
+  type CanonicalRule,
+  checkRule,
+} from "../lofi-inductor/rule-grammar.ts";
+
+export type { CanonicalRule } from "../lofi-inductor/rule-grammar.ts";
+
+// =============================================================================
+// TYPES
+// =============================================================================
+
+/** What one pseudonym contributes: its whole current rule set. */
+export interface Contribution {
+  /** The contributor's one stable pseudonym for this pool's goal. */
+  pseudonym: string;
+  rules: CanonicalRule[];
+}
+
+/** A rule enough distinct pseudonyms hold, and how many hold it. */
+export interface ReleasedRule {
+  field: string;
+  pattern: string;
+  predicts: boolean;
+  key: string;
+  count: number;
+}
+
+/** The release threshold's centre and spread. */
+export interface PoolConfig {
+  /** The threshold a rule has before its offset. */
+  thresholdCenter: number;
+  /** The offset's bound `k`: each rule's offset is in `[-k, +k]`. */
+  jitter: number;
+}
+
+/** The pool's defaults (README.md). */
+export const DEFAULT_THRESHOLD_CENTER = 15;
+export const DEFAULT_JITTER = 5;
+
+/**
+ * The lowest threshold any rule has, whatever the centre and offset say. One
+ * pseudonym's rule released alone would publish that person's rule, which is
+ * exactly what the pool exists to prevent, so the floor is two.
+ */
+export const MIN_THRESHOLD = 2;
+
+// =============================================================================
+// RULE IDENTITY
+// =============================================================================
+
+/**
+ * What two rules must share to count as one: field, label, and canonical
+ * pattern, written out. A rule's `key` is a 64-bit FNV hash of this same text,
+ * which identifies but does not protect: anyone can search for a rule whose
+ * key collides with someone else's. Counting by the text itself means a
+ * crafted collision is a different rule.
+ */
+export function ruleIdentity(
+  rule: Pick<CanonicalRule, "field" | "pattern" | "predicts">,
+): string {
+  return `${rule.field}\u0000${rule.predicts ? "1" : "0"}\u0000${rule.pattern}`;
+}
+
+// =============================================================================
+// KEYED HASH
+// =============================================================================
+
+const K = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+  0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+  0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+  0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+  0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+  0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+  0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+  0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+  0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+];
+
+const rotr = (x: number, n: number): number => (x >>> n) | (x << (32 - n));
+
+/** `text` as UTF-8 bytes; an unpaired surrogate becomes U+FFFD. */
+function utf8(text: string): number[] {
+  const out: number[] = [];
+  for (const char of text) {
+    let c = char.codePointAt(0)!;
+    if (c >= 0xd800 && c <= 0xdfff) c = 0xfffd;
+    if (c < 0x80) out.push(c);
+    else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
+    else if (c < 0x10000) {
+      out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    } else {
+      out.push(
+        0xf0 | (c >> 18),
+        0x80 | ((c >> 12) & 63),
+        0x80 | ((c >> 6) & 63),
+        0x80 | (c & 63),
+      );
+    }
+  }
+  return out;
+}
+
+/** SHA-256 of `bytes` (FIPS 180-4). */
+export function sha256(bytes: readonly number[]): number[] {
+  const h = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c,
+    0x1f83d9ab, 0x5be0cd19,
+  ];
+  const bitLength = bytes.length * 8;
+  const padded = [...bytes, 0x80];
+  while (padded.length % 64 !== 56) padded.push(0);
+  const high = Math.floor(bitLength / 0x100000000);
+  for (const word of [high, bitLength >>> 0]) {
+    padded.push(word >>> 24, (word >>> 16) & 255, (word >>> 8) & 255, word & 255);
+  }
+  const w = new Array<number>(64);
+  for (let offset = 0; offset < padded.length; offset += 64) {
+    for (let i = 0; i < 16; i++) {
+      const j = offset + i * 4;
+      w[i] = (padded[j] << 24) | (padded[j + 1] << 16) | (padded[j + 2] << 8) |
+        padded[j + 3];
+    }
+    for (let i = 16; i < 64; i++) {
+      const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+      const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+    }
+    let [a, b, c, d, e, f, g, hh] = h;
+    for (let i = 0; i < 64; i++) {
+      const s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+      const ch = (e & f) ^ (~e & g);
+      const t1 = (hh + s1 + ch + K[i] + w[i]) | 0;
+      const s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const t2 = (s0 + maj) | 0;
+      hh = g;
+      g = f;
+      f = e;
+      e = (d + t1) | 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (t1 + t2) | 0;
+    }
+    h[0] = (h[0] + a) | 0;
+    h[1] = (h[1] + b) | 0;
+    h[2] = (h[2] + c) | 0;
+    h[3] = (h[3] + d) | 0;
+    h[4] = (h[4] + e) | 0;
+    h[5] = (h[5] + f) | 0;
+    h[6] = (h[6] + g) | 0;
+    h[7] = (h[7] + hh) | 0;
+  }
+  const out: number[] = [];
+  for (const word of h) {
+    out.push(word >>> 24, (word >>> 16) & 255, (word >>> 8) & 255, word & 255);
+  }
+  return out;
+}
+
+/** HMAC-SHA-256 (RFC 2104) of `message` under `key`, both as UTF-8. */
+export function hmacSha256(key: string, message: string): number[] {
+  let keyBytes = utf8(key);
+  if (keyBytes.length > 64) keyBytes = sha256(keyBytes);
+  const block = [...keyBytes];
+  while (block.length < 64) block.push(0);
+  const inner = sha256([...block.map((b) => b ^ 0x36), ...utf8(message)]);
+  return sha256([...block.map((b) => b ^ 0x5c), ...inner]);
+}
+
+// =============================================================================
+// THRESHOLD
+// =============================================================================
+
+/** `value` as a whole number at least `min`, or a thrown error naming it. */
+function wholeAtLeast(name: string, value: number, min: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < min) {
+    throw new Error(`${name} must be a whole number of at least ${min}`);
+  }
+  return value;
+}
+
+/**
+ * The rule's offset from the threshold's centre, in `[-jitter, +jitter]`: the
+ * first 32 bits of HMAC-SHA-256(secret, rule identity), reduced to the range.
+ * The same secret and rule always give the same offset, so a rule's threshold
+ * never moves; without the secret it cannot be predicted. The reduction's bias
+ * is under `(2k + 1) / 2^32`.
+ */
+export function thresholdOffset(
+  secret: string,
+  identity: string,
+  jitter: number,
+): number {
+  const k = wholeAtLeast("jitter", jitter, 0);
+  if (secret === "") throw new Error("the pool has no secret yet");
+  if (k === 0) return 0;
+  const [a, b, c, d] = hmacSha256(secret, identity);
+  const word = ((a << 24) | (b << 16) | (c << 8) | d) >>> 0;
+  return (word % (2 * k + 1)) - k;
+}
+
+/**
+ * How many distinct pseudonyms must hold the rule before it is released: the
+ * centre plus the rule's offset, and never under `MIN_THRESHOLD`.
+ */
+export function thresholdFor(
+  secret: string,
+  identity: string,
+  config: PoolConfig,
+): number {
+  const center = wholeAtLeast("thresholdCenter", config.thresholdCenter, 1);
+  return Math.max(
+    MIN_THRESHOLD,
+    center + thresholdOffset(secret, identity, config.jitter),
+  );
+}
+
+// =============================================================================
+// COUNTING
+// =============================================================================
+
+/** One rule and the distinct pseudonyms that hold it. */
+export interface Support {
+  rule: CanonicalRule;
+  pseudonyms: Set<string>;
+}
+
+/**
+ * Each rule and the distinct pseudonyms holding it. A pseudonym's later
+ * contribution replaces its earlier one, so only its latest rule set counts,
+ * and a rule a set holds twice counts once. Rules are checked against the
+ * grammar again and counted by their canonical form, so a stored rule whose
+ * pattern is not canonical, or whose key does not match its text, cannot
+ * stand apart from or in for another; one that fails the check is skipped.
+ * An entry without a pseudonym is skipped too.
+ */
+export function supportOf(
+  contributions: readonly (Contribution | undefined)[] | undefined,
+): Map<string, Support> {
+  const latest = new Map<string, readonly CanonicalRule[]>();
+  for (const contribution of contributions ?? []) {
+    const pseudonym = contribution?.pseudonym;
+    if (typeof pseudonym !== "string" || pseudonym === "") continue;
+    latest.set(
+      pseudonym,
+      Array.isArray(contribution?.rules) ? contribution.rules : [],
+    );
+  }
+  const support = new Map<string, Support>();
+  for (const [pseudonym, rules] of latest) {
+    for (const stored of rules) {
+      const checked = checkRule(stored);
+      if (!checked.ok) continue;
+      const identity = ruleIdentity(checked.rule);
+      const entry = support.get(identity) ??
+        { rule: checked.rule, pseudonyms: new Set<string>() };
+      entry.pseudonyms.add(pseudonym);
+      support.set(identity, entry);
+    }
+  }
+  return support;
+}
+
+/**
+ * The rules at or above their threshold, each with its count, most-held
+ * first. Nothing is said of any other rule: not the rule, not its count, not
+ * that it exists, and not how many there are. With no secret yet, nothing is
+ * released.
+ */
+export function releaseFrom(
+  contributions: readonly (Contribution | undefined)[] | undefined,
+  secret: string | undefined,
+  config: PoolConfig,
+): ReleasedRule[] {
+  if (typeof secret !== "string" || secret === "") return [];
+  const released: ReleasedRule[] = [];
+  for (const [identity, { rule, pseudonyms }] of supportOf(contributions)) {
+    if (pseudonyms.size < thresholdFor(secret, identity, config)) continue;
+    released.push({
+      field: rule.field,
+      pattern: rule.pattern,
+      predicts: rule.predicts,
+      key: rule.key,
+      count: pseudonyms.size,
+    });
+  }
+  return released.sort((a, b) =>
+    b.count - a.count ||
+    (ruleIdentity(a) < ruleIdentity(b) ? -1 : 1)
+  );
+}
+
+/**
+ * A fresh pool secret: 128 bits from `random`, which must return values in
+ * `[0, 1)` (in a handler, the sandbox's `Math.random`). Callable only where
+ * randomness is allowed, which is why the pool mints it in a handler.
+ */
+export function mintSecret(random: () => number): string {
+  let out = "";
+  for (let i = 0; i < 8; i++) {
+    out += Math.floor(random() * 0x10000).toString(16).padStart(4, "0");
+  }
+  return out;
+}
