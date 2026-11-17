@@ -1,6 +1,8 @@
 /** Harness configuration and identity loading for the shared index client. */
 
-import { PatternIndexClient } from "@commonfabric/pattern-index/client";
+import type { PatternIndexClient } from "@commonfabric/pattern-index/client";
+import { openPatternIndexClient } from "@commonfabric/pattern-index/access";
+import type { PatternIndexStore } from "@commonfabric/pattern-index/store";
 import type { HarnessPatternIndexConfig } from "../config.ts";
 import type { HarnessFetch } from "../contracts/http-fetch.ts";
 import { loadHarnessIdentity } from "../identity-key.ts";
@@ -20,17 +22,27 @@ export type HarnessPatternIndexClientFactory = () => Promise<
  * identity — the index authorizes the same principal the run writes to its
  * space as — so the keyfile path comes from the fabric session config, which
  * is why a pattern index without one is a configuration error.
+ *
+ * The key acts for its member as `cf` does: it presents the `/index` chain
+ * this machine's membership store keeps for it (renewing it there when the
+ * root is kept here), so the index applies that member's settings, such as
+ * whether they share, to the run's searches and publishes. A machine that
+ * never joined presents nothing, and the key signs as its own root.
+ * `store` defaults to the store for the index's host in the user's state
+ * directory, which is where `cf index join` put it.
  */
 export const createHarnessPatternIndexClientFactory = (
   config: HarnessPatternIndexConfig,
   identityKeyPath: string,
   fetchFn?: HarnessFetch,
+  store?: PatternIndexStore,
 ): HarnessPatternIndexClientFactory =>
 async () => {
   const identity = await loadHarnessIdentity(identityKeyPath);
-  return new PatternIndexClient({
+  return await openPatternIndexClient({
     baseUrl: config.baseUrl,
     signer: identity,
+    ...(store !== undefined ? { store } : {}),
     ...(fetchFn !== undefined ? { fetchFn } : {}),
   });
 };

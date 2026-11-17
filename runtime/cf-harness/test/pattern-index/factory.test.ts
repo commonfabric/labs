@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { verifyFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
+import { PatternIndexStore } from "@commonfabric/pattern-index/store";
 import { createHarnessPatternIndexClientFactory } from "../../src/pattern-index/factory.ts";
 
 import type { HarnessFetch } from "../../src/contracts/http-fetch.ts";
@@ -55,10 +56,12 @@ describe("createHarnessPatternIndexClientFactory()", () => {
         jsonResponse({ results: [] }),
       ]);
       const config = { baseUrl: "https://index.test/api" };
+      const store = new PatternIndexStore(`${root}/store`);
       const client = await createHarnessPatternIndexClientFactory(
         config,
         keyPath,
         fetchFn,
+        store,
       )();
       await client.searchPatterns({ text: "reusable components" });
       const request = requests[0];
@@ -75,8 +78,65 @@ describe("createHarnessPatternIndexClientFactory()", () => {
         await createHarnessPatternIndexClientFactory(
           config,
           keyPath,
+          undefined,
+          store,
         )();
       expect(defaultTransportClient.did).toBe(identity.did());
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("presents the chain this machine keeps for the key, so it acts for its member", async () => {
+    const root = await Deno.makeTempDir();
+    try {
+      const key = await Identity.generatePkcs8();
+      const keyPath = `${root}/identity.key`;
+      await Deno.writeFile(keyPath, key);
+      const store = new PatternIndexStore(`${root}/store`);
+      const member = await store.createRootKey();
+      await store.recordMembership({
+        handle: "p-1",
+        role: "user",
+        root: member.did(),
+      });
+      const { fetchFn, requests } = recordingFetch([
+        jsonResponse({ results: [] }),
+      ]);
+      const client = await createHarnessPatternIndexClientFactory(
+        { baseUrl: "https://index.test/api" },
+        keyPath,
+        fetchFn,
+        store,
+      )();
+      await client.searchPatterns({ text: "reusable components" });
+      const proofs = JSON.parse(requests[0].body).proofs;
+      expect(Array.isArray(proofs) && proofs.length > 0).toBe(true);
+      // the chain was issued by the member's root to this key, and kept
+      const signer = (await Identity.fromPkcs8(key)).did();
+      expect(await store.chainFor(signer)).toBeDefined();
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("presents no chain on a machine that never joined", async () => {
+    const root = await Deno.makeTempDir();
+    try {
+      const key = await Identity.generatePkcs8();
+      const keyPath = `${root}/identity.key`;
+      await Deno.writeFile(keyPath, key);
+      const { fetchFn, requests } = recordingFetch([
+        jsonResponse({ results: [] }),
+      ]);
+      const client = await createHarnessPatternIndexClientFactory(
+        { baseUrl: "https://index.test/api" },
+        keyPath,
+        fetchFn,
+        new PatternIndexStore(`${root}/store`),
+      )();
+      await client.searchPatterns({ text: "reusable components" });
+      expect(JSON.parse(requests[0].body).proofs).toBeUndefined();
     } finally {
       await Deno.remove(root, { recursive: true });
     }
