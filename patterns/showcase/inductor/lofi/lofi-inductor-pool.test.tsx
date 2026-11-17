@@ -102,12 +102,15 @@ export default pattern(() => {
       { assertion: assert(() => billPool.contributions.length === 0) },
       // Connected to a pool for its goal, with a rule to send, the inductor
       // can publish; with nothing published, it cannot unpublish. One with no
-      // rules, or with a pool for another goal, cannot publish.
+      // rules, or with a pool for another goal, cannot publish. Nothing has
+      // been published yet (`published` is null), and the view says so.
       { render: matching[UI] },
       { render: empty[UI] },
       { render: mismatched[UI] },
       {
         assertion: assert(() =>
+          hasText(matching[UI], "Not published yet.") &&
+          hasText(empty[UI], "No rules to publish yet.") &&
           hasText(matching[UI], "A pool for this question is connected.") &&
           disabled(matching[UI], "Publish rules") === false &&
           disabled(matching[UI], "Unpublish") === true &&
