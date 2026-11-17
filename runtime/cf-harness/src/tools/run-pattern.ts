@@ -3,6 +3,7 @@ import type {
   PatternIndexEventType,
   PatternIndexPublishRequest,
 } from "@commonfabric/pattern-index/client";
+import { deployedPieceRef } from "@commonfabric/pattern-index/client";
 import type { JSONSchema } from "@commonfabric/api";
 import {
   type Cell,
@@ -2005,8 +2006,24 @@ export const runPatternTool: HarnessToolDefinition<
         // class that root already holds and cannot be recovered any other way.
         probeThrown = verdict.thrown;
         {
+          // A person's own agent (`--pattern-index-origin agent`) says so,
+          // and names the piece it deployed to: the index shares the version
+          // under the person's sharing setting once they use that piece in a
+          // loom. The piece is the lineage, so its iterations are versions of
+          // one pattern. Any other run names neither, and is never shared on
+          // its own.
+          const madeForPerson = context.patternIndexOrigin === "agent"
+            ? await deployedPieceRef(space, piece.id)
+            : undefined;
           const request: PatternIndexPublishRequest = {
             patternId: entryIdentity,
+            ...(madeForPerson !== undefined
+              ? {
+                origin: "agent" as const,
+                slot: madeForPerson,
+                deployedTo: madeForPerson,
+              }
+              : {}),
             program: {
               main: program.main,
               files: program.files.map((file) => ({

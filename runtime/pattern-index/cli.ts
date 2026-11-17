@@ -183,6 +183,33 @@ const answerRequest = async (
       }
       case "join":
         return await join(context, body);
+      case "view": {
+        // A person used something in a loom: a piece (sharing settles the
+        // version of theirs deployed to it) or a pattern they placed from
+        // the index (it ranks). Exactly one.
+        const { patternId, piece } = body;
+        const subject = typeof patternId === "string" && patternId !== "" &&
+            piece === undefined
+          ? { patternId }
+          : typeof piece === "string" && piece.startsWith("piece:") &&
+              patternId === undefined
+          ? { piece }
+          : undefined;
+        if (subject === undefined) {
+          return {
+            ok: false,
+            status: 400,
+            error: "view needs a patternId or a piece, exactly one",
+          };
+        }
+        return {
+          ok: true,
+          value: await client.recordUsageEvent({
+            ...subject,
+            eventType: "viewed_in_loom",
+          }),
+        };
+      }
       case "getSharing":
         return { ok: true, value: await client.getSharingSettings() };
       case "setSharing": {
@@ -215,7 +242,7 @@ const answerRequest = async (
           ok: false,
           status: 400,
           error:
-            "op must be search, feedback, whoami, admit, join, getSharing or setSharing",
+            "op must be search, feedback, whoami, admit, join, view, getSharing or setSharing",
         };
     }
   } catch (error) {

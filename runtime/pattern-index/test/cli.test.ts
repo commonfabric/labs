@@ -179,11 +179,11 @@ describe("cli", () => {
         [{ op: "feedback", verdict: "up" }, "patternId is required"],
         [
           { op: "getPattern", includeSource: true },
-          "op must be search, feedback, whoami, admit, join, getSharing or setSharing",
+          "op must be search, feedback, whoami, admit, join, view, getSharing or setSharing",
         ],
         [
           null,
-          "op must be search, feedback, whoami, admit, join, getSharing or setSharing",
+          "op must be search, feedback, whoami, admit, join, view, getSharing or setSharing",
         ],
         ["{", "request body is not JSON"],
       ]
@@ -339,6 +339,41 @@ describe("cli", () => {
       ok: true,
       value: { handle: "p-1", role: "user", signer: did },
     });
+  });
+
+  it("sends a view of a piece or of a pattern as the member's viewed_in_loom", async () => {
+    reply = () => Response.json({ ok: true, recorded: false });
+    for (
+      const [request, sent] of [
+        [{ op: "view", piece: "piece:abc" }, { piece: "piece:abc" }],
+        [{ op: "view", patternId: "pat-1" }, { patternId: "pat-1" }],
+      ] as const
+    ) {
+      const output = await callHelper(directory, baseUrl, request);
+      expect(JSON.parse(output.stdout)).toMatchObject({ ok: true });
+      expect(calls.at(-1)?.fn).toBe("recordEvent");
+      expect(calls.at(-1)?.body).toMatchObject({
+        ...sent,
+        eventType: "viewed_in_loom",
+      });
+    }
+  });
+
+  it("refuses a view naming both, neither, or a piece that is not a piece key, calling nothing", async () => {
+    for (
+      const request of [
+        { op: "view" },
+        { op: "view", piece: "piece:a", patternId: "p" },
+        { op: "view", piece: "did:key:z/fid1:raw" },
+      ]
+    ) {
+      const output = await callHelper(directory, baseUrl, request);
+      expect(JSON.parse(output.stdout)).toMatchObject({
+        ok: false,
+        status: 400,
+      });
+    }
+    expect(calls).toEqual([]);
   });
 
   it("reads the member's sharing settings", async () => {
