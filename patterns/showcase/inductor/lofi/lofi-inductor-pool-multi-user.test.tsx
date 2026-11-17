@@ -52,12 +52,18 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
     published: null,
     pool: setup.pool,
   });
+  // Each send comes from an action rather than naming the stream as the
+  // step's: a step's `inductor.publish` compiles to a computed that holds the
+  // stream, and with server execution off nothing reads that computed before
+  // the send, so the send would find no handler.
+  const publish = action(() => inductor.publish.send());
+  const unpublish = action(() => inductor.unpublish.send());
   const askAnotherQuestion = action(() => {
     inductor.setGoal.send({ goal: "Is this email a newsletter?" });
   });
   return {
     [TESTS]: [
-      { action: inductor.publish },
+      { action: publish },
       // Alone, nothing is released.
       {
         assertion: assert(() =>
@@ -72,7 +78,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       // Alice's inductor reads the release, but none of her held-out items
       // (she has none) exercises it, so there is nothing to offer her.
       { assertion: assert(() => inductor.poolOffer === null) },
-      { action: inductor.unpublish },
+      { action: unpublish },
       {
         assertion: assert(() =>
           (setup.pool.consensus ?? []).length === 0 &&
@@ -80,7 +86,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
         ),
       },
       // The other four stayed: Alice's return makes five again.
-      { action: inductor.publish },
+      { action: publish },
       { assertion: assert(() => invoiceReleased(setup.pool)) },
       { action: askAnotherQuestion },
       {
@@ -103,10 +109,13 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     published: null,
     pool: setup.pool,
   });
+  // Sent from an action, as Alice's is, so that it reaches the stream
+  // without server execution.
+  const publish = action(() => inductor.publish.send());
   return {
     [TESTS]: [
       { await: "alice-published" },
-      { action: inductor.publish },
+      { action: publish },
       { assertion: assert(() => (setup.pool.consensus ?? []).length === 0) },
       { label: "bob-published" },
     ],

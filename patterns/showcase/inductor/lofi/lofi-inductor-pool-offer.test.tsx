@@ -131,6 +131,11 @@ export default pattern(() => {
     dismisser.settlePoolOffer.send();
     elsewhere.settlePoolOffer.send();
   });
+  // Sent from an action rather than named as the step's stream: a step's
+  // `adopter.publish` compiles to a computed that holds the stream, and with
+  // server execution off nothing reads that computed before the send, so the
+  // send would find no handler.
+  const action_publish = action(() => adopter.publish.send());
 
   // Judged on the inductor's own held-out items, before anything changes.
   const assert_offered = assert(() =>
@@ -189,7 +194,7 @@ export default pattern(() => {
       { assertion: assert_view_offers },
       { action: action_settle },
       { assertion: assert_adopted },
-      { action: adopter.publish },
+      { action: action_publish },
       { assertion: assert_adopted_not_published },
       { assertion: assert_dismissed },
       { assertion: assert_elsewhere_untouched },
