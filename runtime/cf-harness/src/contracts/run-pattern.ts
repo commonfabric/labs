@@ -52,7 +52,7 @@ export const RUN_PATTERN_INPUT_SCHEMA = {
     revises: {
       type: "string",
       description:
-        "With sourceText: the handle token of the piece whose source (from read_piece_source) this source revises, so the published pattern joins that pattern's version history. Omit for a new pattern.",
+        "With sourceText: the handle token of the piece whose source (from read_piece_source) this source revises. The published pattern continues that pattern's version history when it is yours, and is credited as a remix of it when someone else wrote it. Omit for a new pattern.",
     },
     description: {
       type: "string",

@@ -681,6 +681,42 @@ describe("pattern index ledger", () => {
       expect(() => ledger.stage(undescribed)).toThrow("no description");
     });
 
+    it("asks the index about a predecessor this session sent but the index refused", async () => {
+      const index = stubClient({ fail: true });
+      const ledger = createPatternIndexLedger(index.getClient, {
+        onError: () => {},
+      });
+      ledger.stage(agentRequest("refused", piece("one")));
+      ledger.stage(
+        request("revision", {
+          description: "Sortable table, revised",
+          origin: "agent",
+          slot: piece("two"),
+          deployedTo: piece("two"),
+        }),
+        { revisedFrom: "refused" },
+      );
+      await ledger.flush();
+
+      const revision = publishes(index.calls).find((call) =>
+        call.body.patternId === "revision"
+      );
+      // Not known to be stored, so not named as a predecessor on trust.
+      expect(revision?.body.priorPatternId).toBeUndefined();
+      expect(index.calls.some((call) => call.fn === "getPattern")).toBe(true);
+    });
+
+    it("publishes a described request that names no hashtags under none", async () => {
+      const index = stubClient();
+      const ledger = createPatternIndexLedger(index.getClient);
+      const { hashtags: _h, ...untagged } = request("v1");
+      ledger.stage(untagged);
+      await ledger.flush();
+
+      const [sent] = publishes(index.calls);
+      expect(sent.body.meta).toMatchObject({ hashtags: [] });
+    });
+
     it("names no predecessor whose owner it could not learn, and says so", async () => {
       const index = stubClient({ patterns: { "v1": 500 } });
       const errors: string[] = [];

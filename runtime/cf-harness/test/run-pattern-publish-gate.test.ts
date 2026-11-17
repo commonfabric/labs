@@ -752,6 +752,18 @@ describe("run_pattern publish render gate", () => {
       });
     });
 
+    it("reads a description of the wrong type as none, after the revision applied", async () => {
+      const { served } = await servedOriginal(true);
+      const { versions: [version] } = await reviseInLaterRun(served, {
+        description: 42,
+        hashtags: "points",
+      });
+      expect(version.body.meta).toMatchObject({
+        description: "Sortable table",
+        hashtags: ["table"],
+      });
+    });
+
     it("credits someone else's pattern the piece ran as a remix", async () => {
       const { original, served } = await servedOriginal(false);
       const { versions: [version] } = await reviseInLaterRun(served);

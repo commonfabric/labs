@@ -535,7 +535,14 @@ const stageRevisedVersion = async (
     previous: string | undefined;
   },
 ): Promise<void> => {
-  const description = input.description?.trim();
+  // Model input: a field of the wrong type is no description, rather than a
+  // throw after the revision has already been applied.
+  const description = typeof input.description === "string"
+    ? input.description.trim()
+    : undefined;
+  const hashtags = Array.isArray(input.hashtags)
+    ? input.hashtags.filter((tag) => typeof tag === "string")
+    : [];
   const ledger = context.patternIndexLedger;
   if (
     ledger === undefined || context.getPatternIndexClient === undefined ||
@@ -559,7 +566,7 @@ const stageRevisedVersion = async (
         : {}),
       program: revision.program,
       ...(description !== undefined && description !== ""
-        ? { description, hashtags: input.hashtags ?? [] }
+        ? { description, hashtags }
         : {}),
       ...(context.taskText !== undefined
         ? { directQuery: context.taskText }

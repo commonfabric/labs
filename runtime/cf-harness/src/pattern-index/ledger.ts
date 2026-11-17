@@ -77,8 +77,8 @@ import { PATTERN_DISCOVERABILITY_REASONS } from "./publish-render-gate.ts";
  *   revised — continues the caller's own pattern the same way, and is
  *   credited as `remixedFrom` someone else's, starting a new history, which
  *   is what a revision of a pattern the caller did not write is. A pattern
- *   this session sent is known to be the caller's (one still held is sent
- *   first, so the index holds it). For any other the index is asked when the
+ *   this session sent, once the index confirms it, is known to be the
+ *   caller's (one still held is sent first, so the index holds it). For any other the index is asked when the
  *   request is sent. A pattern it does not hold, or a deployment that does
  *   not say whose a pattern is, leaves the request as it was: the index is
  *   told nothing about a predecessor nobody could confirm.
@@ -264,7 +264,9 @@ export const createPatternIndexLedger = (
     string,
     { patternId: string; revisedFrom?: string }
   >();
-  const sentIds = new Set<string>();
+  // Entries the index confirmed it holds: the caller's own, so a revision of
+  // one continues it without asking. A publication that failed is not one.
+  const stored = new Set<string>();
   // What each entry this session staged is described as, for a revision of
   // it that brings no description of its own.
   const described = new Map<string, Described>();
@@ -281,7 +283,6 @@ export const createPatternIndexLedger = (
       patternId: request.patternId,
       ...(revisedFrom !== undefined ? { revisedFrom } : {}),
     });
-    sentIds.add(request.patternId);
     // A render-gate reason is more informative than displacement and stays on
     // a superseded entry. The generic automatic-recording reason is replaced:
     // supersession specifically explains why an earlier iteration is not the
@@ -300,14 +301,17 @@ export const createPatternIndexLedger = (
     chain = chain.then(async () => {
       try {
         const client = await getClient();
-        // A predecessor of this session's is described by now: it was sent
-        // ahead of this on the same chain.
+        // A predecessor this session sent was answered before this, being
+        // ahead of it on the same chain, so what it is and whether the index
+        // took it are known by now.
         const own = body.description === undefined && revisedFrom !== undefined
           ? described.get(revisedFrom)
           : undefined;
         const resolved = revisedFrom === undefined ||
             body.priorPatternId !== undefined
           ? { ...body, ...own }
+          : stored.has(revisedFrom)
+          ? continuing({ ...body, ...own }, revisedFrom)
           : await withPredecessor(client, body, revisedFrom, onError);
         if (resolved.description === undefined) {
           onError(
@@ -323,6 +327,7 @@ export const createPatternIndexLedger = (
           description,
           hashtags,
         });
+        stored.add(response.patternId);
         if (response.created) {
           await client.recordEvent({
             patternId: response.patternId,
@@ -369,17 +374,15 @@ export const createPatternIndexLedger = (
       // An entry whose description is still to come from the index is its
       // own capability: nothing else this session staged can be described the
       // way it will be until the index says.
-      const key = request.description !== undefined
-        ? patternCapabilityKey({
-          description: request.description,
-          hashtags: request.hashtags ?? [],
-        })
+      const describedAs = request.description === undefined ? undefined : {
+        description: request.description,
+        hashtags: request.hashtags ?? [],
+      };
+      const key = describedAs !== undefined
+        ? patternCapabilityKey(describedAs)
         : JSON.stringify(["revised-from", revisedFrom]);
-      if (request.description !== undefined) {
-        described.set(request.patternId, {
-          description: request.description,
-          hashtags: request.hashtags ?? [],
-        });
+      if (describedAs !== undefined) {
+        described.set(request.patternId, describedAs);
       }
       const dependencies = new Set(request.dependencies ?? []);
       if (dependencies.size > 0 || revisedFrom !== undefined) {
@@ -411,8 +414,6 @@ export const createPatternIndexLedger = (
           prior.patternId !== request.patternId &&
           (revisedFrom === undefined || revisedFrom === prior.revisedFrom)
         ? prior.patternId
-        : revisedFrom !== undefined && sentIds.has(revisedFrom)
-        ? revisedFrom
         : undefined;
       held.set(key, {
         request: predecessor === undefined
