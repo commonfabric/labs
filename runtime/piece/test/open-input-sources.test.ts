@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import { createSession, Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import type { Stream } from "@commonfabric/api";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { type Cell, Runtime } from "@commonfabric/runner";
 import {
@@ -121,15 +122,18 @@ describe("open-input-sources", () => {
     await server?.close();
   });
 
+  /** What the reader piece's result holds. */
+  type ReaderResult = { seen?: number; record: Stream<unknown> };
+
   /** The reader piece's result, as the reader's runtime holds it. */
-  const readerCell = async (): Promise<Cell<{ seen?: number }>> =>
-    await readerPieces.getPieceCell<{ seen?: number }>(readerId, false);
+  const readerCell = async (): Promise<Cell<ReaderResult>> =>
+    await readerPieces.getPieceCell<ReaderResult>(readerId, false);
 
   /** Sends the reader's `record` and returns what it recorded. */
   const recordThenRead = async (): Promise<number | undefined> => {
     const reader = await readerCell();
     const tx = readerRuntime.edit();
-    reader.withTx(tx).key("record" as never).send({} as never);
+    reader.withTx(tx).key("record").send({});
     expect((await tx.commit().settled).error).toBeUndefined();
     await readerRuntime.idle();
     return await reader.key("seen").pull();
