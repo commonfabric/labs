@@ -12,7 +12,11 @@ this pattern is its implementation.
 
 ## How it works
 
-- **Config.** `thresholdCenter` (default 15) and `jitter` `k` (default 5).
+- **Config.** `thresholdCenter` (default 15) and `jitter` `k` (default 5), set
+  when the pool is made. The first contribution seals them (below), so anything
+  that can write the pool's inputs, a contributor included, cannot lower the
+  threshold once there is something to release
+  (`inductor-pool-config.test.tsx`).
 - **Contribute.** `submit` takes `{pseudonym, rules}`, the rules in canonical
   form (`CanonicalRule` from `apps/lofi-inductor/rule-grammar.ts`). The handler
   checks every rule against the grammar again, stores it in canonical form, and
@@ -145,10 +149,10 @@ release that outlives a change to the inputs, say). Until then nothing does.
 
 **Not cuts, but worth Berni's eye:**
 
-- `thresholdCenter` and `jitter` are ordinary inputs. Lowering them after
-  contributions exist releases more. The floor of 2 bounds that, and a
-  principled version would fix the threshold into the policy when the pool is
-  made.
+- `thresholdCenter` and `jitter` are ordinary inputs until the first
+  contribution copies them into the seal, which only `submitContribution`
+  writes. Before that, whoever can write the inputs chooses them. A principled
+  version would fix the threshold into the policy when the pool is made.
 - The keyed offset is computed in pattern code from a secret any runtime that
   runs the pool can read. That is the platform limit the lo-fi inductor README
   names: labels are enforced by the client.

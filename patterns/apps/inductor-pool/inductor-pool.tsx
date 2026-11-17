@@ -285,7 +285,10 @@ export const submitContribution = handler<ContributionEvent, SubmitState>(
 interface InductorPoolInput {
   /** The yes-or-no question this pool collects rules for. */
   goal: Default<string, "">;
-  /** The threshold a rule has before its offset. */
+  /**
+   * The threshold a rule has before its offset. The first contribution seals
+   * it, with `jitter`; the release never reads it again.
+   */
   thresholdCenter: Default<number, typeof DEFAULT_THRESHOLD_CENTER>;
   /** The bound `k` of each rule's offset, in `[-k, +k]`. */
   jitter: Default<number, typeof DEFAULT_JITTER>;
@@ -342,7 +345,8 @@ export default pattern<InductorPoolInput, InductorPoolOutput>(
     const configLine = computed(() =>
       `A rule is released once ${thresholdCenter} ± ${jitter} distinct ` +
       `contributors hold it (never fewer than ${MIN_THRESHOLD}); each ` +
-      `rule's exact threshold is hidden.`
+      `rule's exact threshold is hidden. The first contribution fixes ` +
+      `these numbers; changing them afterwards changes nothing.`
     );
     const countLine = computed(() => {
       const n = consensus.length;
