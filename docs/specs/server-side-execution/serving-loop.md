@@ -1592,7 +1592,11 @@ or dropped meanwhile; that refusal is retried like a stale read.
   tx the same way: the serving loop has not produced that instance yet, so
   the absence is not its state (speculation.md §2's serving-runtime
   corollary to the scoped first-write carve-out). Its read of the instance
-  stays subscribed, so it runs again once the instance is produced.
+  stays subscribed, so it runs again once the instance is produced. A run
+  that threw after such a read is withdrawn the same way and its error is
+  not reported: the throw came from the same absence its writes did. A
+  throw from the run once the instance is produced is reported as any
+  other.
 - On a client (OFF arm, and speculation in the ON arm) seal == commit /
   overlay-apply as today — one abstraction, two destinations. Anchor:
   `runtime/runner/src/storage/extended-storage-transaction.ts`.
