@@ -5,6 +5,8 @@
  * in, which is the one the diff workspace reads files from.
  */
 
+import { repositoryIndependentEnv } from "./gitenv.ts";
+
 /** Runs git for its standard output, which it returns, or null when git
  * fails. Nothing is shown. */
 export type GitQuery = (args: readonly string[]) => string | null;
@@ -280,18 +282,11 @@ export function realPushIo({
     const result = git(args, commandEnv).outputSync();
     return result.success ? decoder.decode(result.stdout) : null;
   };
-  // Git exports variables such as `GIT_DIR` to the pager it starts. Without
-  // them, git finds the repository from the working directory.
-  const local = new Set(
-    capture(["rev-parse", "--local-env-vars"], { ...env })?.split("\n"),
-  );
   // The viewer holds the terminal, so git and ssh ask for nothing there: a
   // question goes to the user's own askpass program when they have one, and
   // otherwise fails.
   const repoEnv = {
-    ...Object.fromEntries(
-      Object.entries(env).filter(([name]) => !local.has(name)),
-    ),
+    ...repositoryIndependentEnv(env),
     GIT_TERMINAL_PROMPT: "0",
     SSH_ASKPASS: env.SSH_ASKPASS ?? "false",
     SSH_ASKPASS_REQUIRE: "force",

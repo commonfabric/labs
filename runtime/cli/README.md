@@ -851,9 +851,14 @@ text, so edited lines read `uncommitted` before they are saved. In a diff, a
 file that follows a commit header is blamed as it stands in that commit. Any
 other hunk is blamed as its file stands in the working tree, and only while that
 file still holds the hunk's added and context lines where the hunk places them.
-Removed lines show nothing. The column fills in as `git blame` finishes for each
-file in view. When git cannot blame a file, the status line says why, and the
-viewer does not try that file again.
+A commit header, and the lines after it that are not part of the diff, such as
+the commit's author, date, and message, show the commit's own entry when the
+viewer can find the commit's repository: when the commit was authored, and its
+author. Such a line edited since the view was loaded or last saved shows
+nothing. Removed lines show nothing. The column fills in as git finishes reading
+each file and commit in view. Turning the column on when no line on the screen
+can be blamed says so in the status line. When git cannot blame a file, the
+status line says why, and the viewer does not try that file again.
 
 Press `\` in the interactive pager to cycle through unwrapped lines, hard
 wrapping, and word wrapping. Hard wrapping fills every screen row before it
