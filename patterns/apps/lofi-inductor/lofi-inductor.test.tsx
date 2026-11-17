@@ -6,7 +6,7 @@
  *
  * Pattern under test: ./lofi-inductor.tsx
  */
-import { action, assert, FS, pattern, TESTS } from "commonfabric";
+import { action, assert, FS, pattern, TESTS, UI } from "commonfabric";
 import {
   HIFI_MOCKS,
   INVOICE_ONLY,
@@ -54,7 +54,6 @@ export default pattern(() => {
     });
     subject.submitItem.send({ id: "mail-99", fields: {} });
   });
-  const action_publish = action(() => subject.publish.send());
 
   const assert_starts_empty = assert(() =>
     subject.summary.items === 0 && subject.summary.agreementRate === null &&
@@ -110,10 +109,12 @@ export default pattern(() => {
       { action: action_submit_disagreeing },
       { settle: true },
       { assertion: assert_disagreement_is_a_surprise },
+      // The view renders over items, rules, and an empty history
+      { render: subject[UI] },
       { action: action_submit_repeat_and_empty },
       { assertion: assert_repeat_and_empty_ignored },
       { assertion: assert_rules_unchanged },
-      { action: action_publish },
+      { press: subject[UI], control: "Publish rules" },
       { assertion: assert_published },
       { assertion: assert_text_projection },
     ],

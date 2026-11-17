@@ -8,7 +8,8 @@
  *
  * Pattern under test: ./lofi-inductor.tsx
  */
-import { action, assert, pattern, TESTS } from "commonfabric";
+import { action, assert, pattern, TESTS, UI } from "commonfabric";
+import { hasText } from "../../tools/test-support/vnode-helpers.ts";
 import {
   HELD_OUT_ITEMS,
   HIFI_MOCKS,
@@ -140,6 +141,11 @@ export default pattern(() => {
     outOfGrammar.rewrite.status === "idle"
   );
 
+  const assert_view_shows_refusal = assert(() =>
+    hasText(unsafe[UI], "Round 1: rejected") &&
+    hasText(unsafe[UI], "could backtrack catastrophically")
+  );
+
   return {
     [TESTS]: [
       { action: action_submit_items },
@@ -154,6 +160,9 @@ export default pattern(() => {
       { assertion: assert_unsafe_rejected },
       { assertion: assert_out_of_grammar_rejected },
       { assertion: assert_rejected_rounds_idle },
+      // The view lists the rejected round with the rule that sank it
+      { render: unsafe[UI] },
+      { assertion: assert_view_shows_refusal },
     ],
   };
 });
