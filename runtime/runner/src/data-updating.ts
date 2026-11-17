@@ -2596,7 +2596,14 @@ export function normalizeAndDiff(
         // `Object.prototype.valueOf`, and the diff below then fails with
         // "Cannot compare a function value" — a write refused because of a
         // method the data never had. Absent means absent.
-        Object.hasOwn(currentRecord, key) ? currentRecord[key] : undefined,
+        // Where this walk leaves some of the record's slots as they stand,
+        // its read of the record is no attempt at the others, so each of
+        // them reads what it holds itself, as an attempt at that slot.
+        leftSlots !== undefined
+          ? NO_PRECOMPUTED
+          : Object.hasOwn(currentRecord, key)
+          ? currentRecord[key]
+          : undefined,
         requiredProps === undefined ? undefined : requiredProps.has(key),
       );
       for (const change of nestedChanges) changes.push(change);

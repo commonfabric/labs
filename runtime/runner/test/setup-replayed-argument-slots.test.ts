@@ -6,6 +6,10 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { runtimePresets } from "../src/runtime-presets.ts";
+import {
+  recordReplayedArgumentSlots,
+  replayedArgumentSlots,
+} from "../src/cfc/reference-initialization.ts";
 
 // A piece whose argument holds a value under another writer's lone claim
 // takes a successor that adds an argument field, and declares a claim where
@@ -156,6 +160,14 @@ describe("runner", () => {
       expect(cell.get().roster).toEqual(["Ada"]);
     });
 
+    it("refuses a successor whose setup restates the claimed slot with the bytes it holds", async () => {
+      const cell = await storePiece("restates");
+
+      expect(await update(cell, { roster: ["Ada"] })).toContain(
+        "writeAuthorizedBy requires a trusted verified binding identity at /roster",
+      );
+    });
+
     it("removes a stored slot the setup leaves out, leaving the claimed slot as it was", async () => {
       const cell = await storePiece("drops");
 
@@ -165,6 +177,47 @@ describe("runner", () => {
       const stored = argument.getRaw() ?? {};
       expect(Object.hasOwn(stored, "topic")).toBe(false);
       expect(stored.roster).toEqual(["Ada"]);
+    });
+  });
+
+  describe("replayedArgumentSlots", () => {
+    let storageManager: ReturnType<typeof StorageManager.emulate>;
+    let runtime: Runtime;
+
+    beforeEach(() => {
+      storageManager = StorageManager.emulate({ as: signer });
+      runtime = new Runtime(runtimePresets.patternTest({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+        experimental: {},
+      }));
+    });
+    afterEach(async () => {
+      await runtime?.dispose();
+      await storageManager?.close();
+    });
+
+    it("returns the slots replayed with the bytes staged, and no slot staged with other bytes", () => {
+      const argument = runtime.getCell(space, "replayed slots")
+        .getAsNormalizedFullLink();
+      const tx = runtime.edit();
+      try {
+        recordReplayedArgumentSlots(tx, argument, { named: 1 }, {
+          named: 0,
+          kept: ["a"],
+          changed: "before",
+        });
+
+        expect(
+          [...replayedArgumentSlots(tx, argument, {
+            named: 1,
+            kept: ["a"],
+            changed: "after",
+          })],
+        ).toEqual(["kept"]);
+      } finally {
+        tx.abort("replayed slots read");
+      }
     });
   });
 });
