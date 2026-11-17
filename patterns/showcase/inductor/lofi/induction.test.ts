@@ -13,6 +13,7 @@ import {
   type Item,
   type ItemRow,
   judgeProposal,
+  labellingCount,
   labelWith,
   looksPersonal,
   markdownOf,
@@ -460,7 +461,17 @@ describe("rewrite gating", () => {
       request: { prompt: string; answered: string[] } | null,
       generation: { pending: boolean; error?: unknown; result?: unknown },
       rewriteAfter = 2,
-    ) => rewriteStatus(request, generation, [], training, [], rewriteAfter);
+      labelling = 0,
+    ) =>
+      rewriteStatus(
+        request,
+        generation,
+        [],
+        training,
+        [],
+        rewriteAfter,
+        labelling,
+      );
     // Idle, it counts the new surprises it still waits for, and 0 once it
     // waits only for labels
     const surprises = newSurprises(training, []).length;
@@ -481,6 +492,23 @@ describe("rewrite gating", () => {
     });
     const ready = status(request, { pending: false, result: { rules: [] } });
     expect(ready.status === "ready" && ready.answered).toEqual(["mail-1"]);
+    // Answered, it still waits while any hi-fi call is in flight: a later
+    // label can change the held-out score, and recording then can lose it
+    expect(
+      status(request, { pending: false, result: { rules: [] } }, 2, 1),
+    ).toEqual({ status: "pending", labelling: 1 });
+    // Idle stays idle: there is nothing to settle
+    expect(status(null, { pending: false }, 2, 1).status).toBe("idle");
+  });
+
+  it("counts the hi-fi calls still in flight", () => {
+    expect(labellingCount([])).toBe(0);
+    expect(labellingCount([
+      { id: "mail-1", answer: { pending: true } },
+      answered("mail-2", true),
+      { id: "mail-3", answer: { pending: false, error: "down" } },
+      { id: "mail-4", answer: { pending: true } },
+    ])).toBe(2);
   });
 });
 
@@ -494,7 +522,7 @@ describe("poolOffer", () => {
   };
 
   it("judges the pool's rules on the held-out items, as a rewrite", () => {
-    const offer = poolOffer(current, [better], heldOut, []);
+    const offer = poolOffer(current, [better], heldOut, [], 0);
     expect(offer?.judgement.accepted).toBe(true);
     expect(offer?.judgement.proposedF1).toBe(1);
     const worse = poolOffer(
@@ -502,8 +530,13 @@ describe("poolOffer", () => {
       [{ field: "subject", pattern: "lunch", predicts: true }],
       heldOut,
       [],
+      0,
     );
     expect(worse?.judgement.accepted).toBe(false);
+  });
+
+  it("offers nothing while a hi-fi call is in flight", () => {
+    expect(poolOffer(current, [better], heldOut, [], 1)).toBeNull();
   });
 
   it("leaves out a released rule no held-out item exercises", () => {
@@ -513,7 +546,7 @@ describe("poolOffer", () => {
       pattern: "billing@bank\\.example",
       predicts: false,
     };
-    const offer = poolOffer(current, [better, planted], heldOut, [])!;
+    const offer = poolOffer(current, [better, planted], heldOut, [], 0)!;
     expect(offer.judgement.rules.map((r) => r.pattern)).toEqual([
       "\\bbill\\b|invoice",
     ]);
@@ -522,18 +555,18 @@ describe("poolOffer", () => {
     ]);
     expect(offer.judgement.accepted).toBe(true);
     // A release of nothing but such rules offers nothing
-    expect(poolOffer(current, [planted], heldOut, [])).toBeNull();
+    expect(poolOffer(current, [planted], heldOut, [], 0)).toBeNull();
   });
 
   it("offers nothing empty, nothing current, and nothing already judged", () => {
-    expect(poolOffer(current, [], heldOut, [])).toBeNull();
-    expect(poolOffer(current, undefined, heldOut, [])).toBeNull();
-    expect(poolOffer(current, [current[0]], heldOut, [])).toBeNull();
-    const offer = poolOffer(current, [better], heldOut, [])!;
+    expect(poolOffer(current, [], heldOut, [], 0)).toBeNull();
+    expect(poolOffer(current, undefined, heldOut, [], 0)).toBeNull();
+    expect(poolOffer(current, [current[0]], heldOut, [], 0)).toBeNull();
+    const offer = poolOffer(current, [better], heldOut, [], 0)!;
     const judged = settle(current, 1, offer.judgement, [], 0, offer.key).entry;
     expect(judged.poolOffer).toBe(offer.key);
     expect(judged.reason).toMatch(/^the pool's rules: /);
-    expect(poolOffer(current, [better], heldOut, [judged])).toBeNull();
+    expect(poolOffer(current, [better], heldOut, [judged], 0)).toBeNull();
     // A different release, exercised, is a new offer
     expect(
       poolOffer(
@@ -543,6 +576,7 @@ describe("poolOffer", () => {
         [
           judged,
         ],
+        0,
       ),
     ).not.toBeNull();
   });

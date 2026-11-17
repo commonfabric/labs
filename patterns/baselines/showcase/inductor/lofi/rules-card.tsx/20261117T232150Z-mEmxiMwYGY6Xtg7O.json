@@ -90,6 +90,9 @@
           },
           {
             "properties": {
+              "labelling": {
+                "type": "number"
+              },
               "status": {
                 "enum": [
                   "pending"

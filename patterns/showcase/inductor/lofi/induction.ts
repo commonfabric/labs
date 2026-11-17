@@ -118,7 +118,12 @@ export type RewriteStatus =
    * or absent, the hi-fi labels of the items so far.
    */
   | { status: "idle"; missing?: number }
-  | { status: "pending" }
+  /**
+   * The model is proposing, or, with `labelling`, has proposed but that many
+   * hi-fi calls are still in flight. Their labels can change the held-out
+   * score, and recording while they are in flight can lose them (top/3204).
+   */
+  | { status: "pending"; labelling?: number }
   | { status: "failed"; reason: string }
   | { status: "ready"; judgement: Judgement; answered: string[] };
 
@@ -279,6 +284,16 @@ function hifiLabel(state: HifiState | undefined): boolean | null {
   }
   const label = answer.result?.label;
   return typeof label === "boolean" ? label : null;
+}
+
+/**
+ * How many hi-fi calls are still in flight. Nothing is judged or recorded
+ * until this is zero: a judgement scores held-out labels that may still
+ * arrive, and an action that reads state derived from in-flight calls can lose
+ * their results (top/3204).
+ */
+export function labellingCount(hifi: readonly HifiState[]): number {
+  return hifi.filter((state) => state.answer?.pending === true).length;
 }
 
 /**
@@ -646,8 +661,9 @@ export interface RewriteGeneration {
 /**
  * Where the rewrite stands: idle with no request, counting the new surprises
  * it still waits for against `rewriteAfter`, pending while the model
- * works, failed when the call failed, and ready with a judgement once it
- * answers. A failed call is not a rejection: nothing is recorded and its
+ * works or while `labelling` hi-fi calls are still in flight, failed when the
+ * call failed, and ready with a judgement once it answers and every hi-fi call
+ * has finished. A failed call is not a rejection: nothing is recorded and its
  * surprises stay new, so retrying asks the same question again.
  */
 export function rewriteStatus(
@@ -657,6 +673,7 @@ export function rewriteStatus(
   rows: readonly ItemRow[],
   history: readonly HistoryEntry[],
   rewriteAfter: number,
+  labelling: number,
 ): RewriteStatus {
   if (request === null || request.prompt === "") {
     const fresh = newSurprises(rows, history).length;
@@ -665,6 +682,7 @@ export function rewriteStatus(
       missing: Math.max(0, Math.max(1, rewriteAfter) - fresh),
     };
   }
+  if (labelling > 0) return { status: "pending", labelling };
   if (generation.pending) return { status: "pending" };
   if (generation.error) {
     return {
@@ -740,7 +758,8 @@ export function settle(
  * pool releases nothing this person's items exercise, when the set is the
  * current one, or when a recorded round already judged this very set. The
  * pool releases its most-held rules first, so a release past `MAX_RULES` is
- * cut to its first `MAX_RULES`.
+ * cut to its first `MAX_RULES`. Null too while `labelling` hi-fi calls are in
+ * flight, for the reasons `labellingCount` gives.
  *
  * A released rule that matches none of the held-out items is left out before
  * the set is judged (`unexercised`). The gate scores only what the held-out
@@ -753,7 +772,9 @@ export function poolOffer(
   released: readonly PoolRule[] | undefined,
   heldOut: ReadonlyArray<{ fields: Record<string, string>; label: boolean }>,
   history: readonly HistoryEntry[],
+  labelling: number,
 ): PoolOffer | null {
+  if (labelling > 0) return null;
   const unexercised: CanonicalRule[] = [];
   const drafts = (released ?? []).slice(0, MAX_RULES).map((rule) => ({
     field: rule?.field,

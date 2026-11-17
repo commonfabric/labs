@@ -248,8 +248,11 @@ Known runtime issues this pattern works around:
 
 1. An action that reads state derived from mapped `generateObject` calls while
    two or more of them are in flight can lose their results for good
-   (`contribution-dropped`, a builtin write superseded). Recording the judgement
-   while hi-fi calls are in flight can still hit it. Filed as top/3204.
+   (`contribution-dropped`, a builtin write superseded). Filed as top/3204. A
+   rewrite reads as ready, and the pool offers a set, only once no hi-fi call is
+   in flight (`labellingCount`), so `settleRewrite` and `settlePoolOffer` sent
+   sooner write nothing. They still read the derived state to learn that;
+   whether a read alone, with no write, can lose a result is not known.
 2. A sub-pattern instance per item that owns the item's `generateObject` (an
    `ItemLabel({goal, item})` mapped over the items, returning `{id, answer}`)
    never delivers a label: every row stays unlabelled. The hi-fi calls stay in

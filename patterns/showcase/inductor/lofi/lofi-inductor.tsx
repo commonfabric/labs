@@ -44,6 +44,7 @@ import {
   type HistoryEntry,
   type Item,
   type ItemRow,
+  labellingCount,
   markdownOf,
   percent,
   type PoolOffer,
@@ -374,6 +375,7 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     const rows = computed(() =>
       gradeItems(items.get(), hifi, rules.get(), heldOutPercent.get())
     );
+    const labelling = computed(() => labellingCount(hifi));
     const summary = computed(() => summarize(rows));
     const heldOutF1 = computed(() =>
       scoreRules(rules.get(), heldOutExamples(rows)).f1
@@ -409,13 +411,15 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         rows,
         history.get(),
         rewriteAfter.get(),
+        labelling,
       )
     );
 
     // A computed cannot write, so a person or an agent records the judgement
     // by sending `settleRewrite`. Recording on every new item would read
     // `rewrite` while hi-fi calls are in flight, which can lose their results
-    // (README.md, "Known runtime issues").
+    // (README.md, "Known runtime issues"); `rewrite` is ready only once every
+    // hi-fi call has finished, so a settle sent sooner writes nothing.
     const settleRewrite = action(() => {
       const status = rewrite;
       if (status.status !== "ready") return;
@@ -563,6 +567,7 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         releasedHere,
         heldOutExamples(rows),
         history.get(),
+        labelling,
       )
     );
 

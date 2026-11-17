@@ -71,7 +71,12 @@ export default pattern<RulesCardInput, RulesCardOutput>(
             "new rules."
           : "Waiting for the hi-fi model to label the items so far.";
       }
-      if (status.status === "pending") return "Proposing a new rule set…";
+      if (status.status === "pending") {
+        return status.labelling
+          ? `Waiting for the hi-fi model to label ${status.labelling} more ` +
+            "items before judging the proposal."
+          : "Proposing a new rule set…";
+      }
       if (status.status === "failed") {
         return `Proposing failed (${status.reason}); nothing was recorded.`;
       }
