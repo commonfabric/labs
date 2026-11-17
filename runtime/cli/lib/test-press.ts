@@ -171,13 +171,18 @@ export async function pressRenderedControl(
   target: PressTarget,
   settle: () => Promise<void>,
 ): Promise<void> {
-  const mock = new MockDoc(
-    '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
+  const { document, renderOptions } = new MockDoc(
+    "<!DOCTYPE html><html><body></body></html>",
   );
-  const { document, renderOptions } = mock;
-  const container = document.getElementById("root");
-  if (!container) throw new Error("Could not find the press step's root");
+  const container = document.createElement("div");
   const errors: Error[] = [];
+  const failIfErrored = (what: string) => {
+    if (errors.length > 0) {
+      throw new Error(`A press step's ${what} failed: ${errors[0].message}`, {
+        cause: errors[0],
+      });
+    }
+  };
   const render = renderInProcess(container, vdomCell, {
     document,
     setProp: renderOptions.setProp,
@@ -187,11 +192,7 @@ export async function pressRenderedControl(
   try {
     await settle();
     render.flush();
-    if (errors.length > 0) {
-      throw new Error(`A press step's view failed: ${errors[0].message}`, {
-        cause: errors[0],
-      });
-    }
+    failIfErrored("view");
     const control = findPressTarget(
       container as unknown as RenderedNode,
       target,
@@ -215,11 +216,7 @@ export async function pressRenderedControl(
     };
     for (const node of path) node.dispatchEvent?.(click);
     // A handler that throws on the click is reported here, as a render error.
-    if (errors.length > 0) {
-      throw new Error(`A press step's click failed: ${errors[0].message}`, {
-        cause: errors[0],
-      });
-    }
+    failIfErrored("click");
   } finally {
     render.cancel();
   }

@@ -5,11 +5,13 @@ import { Identity } from "@commonfabric/identity";
 import {
   PatternIndexClient,
   PatternIndexError,
+  type PatternIndexListing,
 } from "@commonfabric/pattern-index/client";
 import type { ObjectGenerator } from "@commonfabric/pattern-index/privacy";
 import type { CompiledPattern } from "@commonfabric/pattern-index/publish";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import {
+  type ListingReport,
   type PublishDeps,
   PublishError,
   publishPatternFromDisk,
@@ -569,6 +571,153 @@ describe("pattern-publish", () => {
         publishPatternFromDisk({ entry }, depsWith(undefined)),
       ).rejects.toThrow(PublishError);
       expect(index.calls).toHaveLength(0);
+    });
+
+    it("reports a listing state this cf does not know by its own name", async () => {
+      const deps = depsWith(undefined);
+      const report = await publishedReport({ entry }, {
+        ...deps,
+        client: new PatternIndexClient({
+          baseUrl: "https://index.test",
+          signer,
+          fetchFn: (input, init) =>
+            String(input).endsWith("/requestListing")
+              ? Promise.resolve(
+                Response.json({ patternId: "id-original", listing: "queued" }),
+              )
+              : index.fetchFn(input, init),
+        }),
+      });
+
+      expect(publishReportLines(report)).toContain("Listing: queued.");
+    });
+
+    it("throws, publishing nothing, for an entry that compiles to no durable pattern id", async () => {
+      const deps = depsWith(undefined);
+      await expect(publishPatternFromDisk({ entry }, {
+        ...deps,
+        compileEntry: async (path, program) => ({
+          ...(await deps.compileEntry(path, program)),
+          patternId: undefined,
+        }),
+      })).rejects.toThrow("compiled to no durable pattern id");
+      expect(index.calls.some((call) => call.fn === "publishPattern")).toBe(
+        false,
+      );
+    });
+
+    it("throws the index's own failure, not the join advice, when asking who the identity is fails otherwise", async () => {
+      const deps = depsWith(undefined);
+      const failing = new PatternIndexClient({
+        baseUrl: "https://index.test",
+        signer,
+        fetchFn: () => Promise.resolve(new Response("down", { status: 500 })),
+      });
+      const thrown = await publishPatternFromDisk({ entry }, {
+        ...deps,
+        client: failing,
+      }).catch((error) => error);
+      expect(thrown).toBeInstanceOf(PatternIndexError);
+      expect(thrown).not.toBeInstanceOf(PublishError);
+      expect(thrown.status).toBe(500);
+    });
+
+    it("skips the local check without asking the model under skipLocalCheck", async () => {
+      const report = await publishedReport(
+        { entry, skipLocalCheck: true },
+        depsWith(scripted([], [])),
+      );
+
+      expect(report.localCheck).toEqual({
+        status: "skipped",
+        reason: "--skip-local-check",
+      });
+      expect(index.calls.some((call) => call.fn === "getGardenerPrompt"))
+        .toBe(false);
+    });
+
+    it("skips the local check when the index serves no privacy prompt", async () => {
+      index = new FakePatternIndex();
+      index.admit(signer.did(), "p-me");
+      const report = await publishedReport(
+        { entry },
+        depsWith(scripted([FAIL], [])),
+      );
+
+      expect(report.localCheck).toMatchObject({ status: "skipped" });
+      if (report.localCheck.status !== "skipped") return;
+      expect(report.localCheck.reason).toContain(
+        "the index served no privacy prompt",
+      );
+      expect(report.patternId).toBe("id-original");
+    });
+
+    it("publishes the original as held when each rewrite compiles to no durable id", async () => {
+      const deps = depsWith(scripted([FAIL], [REWRITE, REWRITE]));
+      const report = await publishedReport({ entry }, {
+        ...deps,
+        compileProgram: async (program) => ({
+          ...(await deps.compileProgram(program)),
+          patternId: undefined,
+        }),
+      });
+
+      expect(report.localCheck).toEqual({
+        status: "held",
+        findings: FAIL.findings,
+        reasons: ["rewrite 1: did not compile", "rewrite 2: did not compile"],
+      });
+      expect(report.patternId).toBe("id-original");
+      expect(written.size).toBe(0);
+    });
+
+    it("skips the local check, publishing the original, when the model's first answer is not a verdict", async () => {
+      const report = await publishedReport(
+        { entry },
+        depsWith(scripted([{ verdict: 7 }], [])),
+      );
+
+      expect(report.localCheck).toMatchObject({ status: "skipped" });
+      if (report.localCheck.status !== "skipped") return;
+      expect(report.localCheck.reason).toContain(
+        "the local check could not finish",
+      );
+      expect(report.patternId).toBe("id-original");
+    });
+  });
+
+  describe("publishReportLines()", () => {
+    const shared = (listing: ListingReport): PublishReport => ({
+      outcome: "shared",
+      patternId: "id-1",
+      created: true,
+      localCheck: { status: "passed" },
+      listing,
+      next: "open it",
+    });
+
+    it("returns what each listing state means to the author", () => {
+      const meaning = (listing: PatternIndexListing) =>
+        publishReportLines(shared({ status: "requested", listing }))[2];
+      expect(meaning("passed")).toBe("Listing: listed: others can find it.");
+      expect(meaning("held")).toBe(
+        "Listing: held: the index found something identifying; see cf pattern mine.",
+      );
+      expect(meaning("error")).toBe(
+        "Listing: error: the check failed to run and waits for an admin re-run.",
+      );
+      expect(meaning("not_requested")).toBe("Listing: unlisted.");
+    });
+
+    it("returns why the listing was not requested when the request failed", () => {
+      expect(publishReportLines(
+        shared({ status: "failed", reason: "HTTP 503" }),
+      )).toEqual([
+        "Local privacy check: passed.",
+        "Shared id-1.",
+        "Listing not requested: HTTP 503.",
+        "Next: open it.",
+      ]);
     });
   });
 });

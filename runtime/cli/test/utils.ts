@@ -156,6 +156,43 @@ export async function captureStderr(
   return lines;
 }
 
+/**
+ * Collects what `body` writes through `Deno.stdout.writeSync`, which is where
+ * `render()` writes, restoring it afterwards even where `body` throws. A file
+ * that calls this replaces process-wide state, so name it `*.serial.test.ts`.
+ */
+export async function captureStdout(
+  body: () => Promise<void>,
+): Promise<string> {
+  let captured = "";
+  const original = Deno.stdout.writeSync;
+  Deno.stdout.writeSync = (data: Uint8Array): number => {
+    captured += decode(data);
+    return data.length;
+  };
+  try {
+    await body();
+  } finally {
+    Deno.stdout.writeSync = original;
+  }
+  return captured;
+}
+
+/**
+ * Whether anything, a dangling symbolic link included, exists at `path`.
+ *
+ * @throws Whatever `Deno.lstat` throws other than `Deno.errors.NotFound`.
+ */
+export async function exists(path: string): Promise<boolean> {
+  try {
+    await Deno.lstat(path);
+    return true;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return false;
+    throw error;
+  }
+}
+
 export interface CliResult {
   code: number;
   stdout: string[];

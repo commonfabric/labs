@@ -10,6 +10,7 @@ import {
   type ViewState,
 } from "../lib/view/render.ts";
 import { lineBg, styleFor, ui } from "../lib/view/theme.ts";
+import { buildWrapPlan } from "../lib/view/wrap.ts";
 import { bgCode, fgCode, parseDocument, SAMPLE } from "./view-helpers.ts";
 
 function baseView(over: Partial<ViewState> = {}): ViewState {
@@ -1084,6 +1085,29 @@ Deno.test("renderFrame: a selected empty line keeps its wrapped guide", () => {
     }),
   ).map(stripAnsi);
   assertEquals(rows[1][0], "│");
+});
+
+Deno.test("renderFrame: a wrapped guide marks the end of a node on a line its wrap plan leaves out", () => {
+  const doc = parseDocument("ab\ncd");
+  const selected = {
+    ...doc.flatStructure[0]!,
+    startLine: 0,
+    endLine: 1,
+    startCol: 0,
+    endCol: 2,
+  };
+  const rows = renderFrame(
+    doc,
+    baseView({
+      width: 6,
+      height: 4,
+      color: false,
+      selected,
+      wrapMode: "hard",
+      wrapPlan: buildWrapPlan(parseDocument("ab").lines, "pictures", 5),
+    }),
+  ).map(stripAnsi);
+  assertEquals(rows.slice(0, 2).map((row) => row[0]), ["╭", "╰"]);
 });
 
 Deno.test("renderFrame: a wrapped guide is blank outside the selected node", () => {

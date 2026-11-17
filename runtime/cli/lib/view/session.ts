@@ -140,6 +140,13 @@ export interface SessionOptions {
   now?: () => number;
 }
 
+/** A frame that shows a prompt button pushed: the dialog with that button
+ * drawn mid-press. */
+export interface PushedFrame {
+  readonly doc: Document;
+  readonly view: ViewState;
+}
+
 /** A `git blame` the session asks its driver to run, which the driver hands
  * back with the result to {@link Session.finishBlameLoad}. */
 export interface BlameLoad {
@@ -485,7 +492,7 @@ export class Session {
    * the dialog with that button drawn mid-press — so the driver can play the
    * press for a moment before the action's result appears. The next key clears
    * it. */
-  pendingPush: { doc: Document; view: ViewState } | null = null;
+  pendingPush: PushedFrame | null = null;
 
   /** The last key asked for the checked-out branch to be pushed. The driver
    * starts the push, calls {@link beginBranchPush}, and clears this. */
@@ -970,17 +977,17 @@ export class Session {
     const sel = view.selected;
     const expandRow = view.expandRow;
     const diffAnnotations = view.diffAnnotations;
-    const projectedAnnotations = diffAnnotations?.flatMap(
-      (annotation): DiffAnnotation[] => {
-        if (annotation.line < from || annotation.line >= to) {
-          return [{ ...annotation, line: back(annotation.line) }];
-        }
-        if (annotation.kind === "diffMetadata") return [];
-        return [{
-          ...annotation,
-          line: rev.up ? from : Math.max(0, from - 1),
-        }];
-      },
+    // Diff metadata is never among the lines still to come, which are revealed
+    // context; only a triangle can sit there, and it waits at their edge.
+    const projectedAnnotations = diffAnnotations?.map(
+      (annotation): DiffAnnotation => ({
+        ...annotation,
+        line: annotation.line < from || annotation.line >= to
+          ? back(annotation.line)
+          : rev.up
+          ? from
+          : Math.max(0, from - 1),
+      }),
     );
     const projectedTriangle = projectedAnnotations?.find((annotation) =>
       annotation.kind !== "diffMetadata"
@@ -1700,7 +1707,10 @@ export class Session {
     return { title: "Revert", body: ["Revert which changes?"], buttons };
   }
 
-  handleKey(key: Key, beforeButtonAction?: () => void): void {
+  handleKey(
+    key: Key,
+    beforeButtonAction?: (pushed: PushedFrame) => void,
+  ): void {
     // A reveal is animated by the driver over the frames after the key that
     // caused it, so the next key ends it whatever it was. A message that takes
     // itself away goes now rather than waiting out its moment, before this key
@@ -3590,8 +3600,7 @@ export class Session {
 
   /** Keep source-owned transport outside the text cursor. */
   #clampToLogicalLine(): void {
-    const b = this.#buffer;
-    if (!b) return;
+    const b = this.#buffer!;
     const end = this.#logicalLineEnd();
     if (b.col > end) b.place(b.row, end);
   }
@@ -3733,10 +3742,9 @@ export class Session {
     markerLen: number,
     parsed: { model: DiffModel; hunk: DiffHunk } | null,
   ): void {
-    if (!this.#buffer || markerLen <= 1 || parsed === null) return;
-    const b = this.#buffer;
+    const b = this.#buffer!;
     const prefix = [...b.lines[b.row]].slice(1, markerLen).join("");
-    if (prefix.length === 0) return;
+    if (prefix === "" || parsed === null) return;
     const { model, hunk } = parsed;
     for (let row = b.row + 1; row <= hunk.endLine; row++) {
       const kind = model.lines[row]?.kind;
@@ -4190,11 +4198,9 @@ export class Session {
     );
     if (this.#cornerTotalsWidth() > 0) constrained.add(0);
     for (const lineIdx of constrained) {
-      const line = lines[lineIdx];
-      if (!line) continue;
       width = Math.max(
         width,
-        displayWidth(line, this.#displayMode) -
+        displayWidth(lines[lineIdx], this.#displayMode) -
           this.#lineContentWidth(lineIdx, annotations, contentWidth),
       );
     }
@@ -4592,7 +4598,7 @@ export class Session {
    * it, and a button's activates it. Any other key leaves the prompt up. */
   #handleDialogKey(
     key: Key,
-    beforeButtonAction?: () => void,
+    beforeButtonAction?: (pushed: PushedFrame) => void,
   ): void {
     // Reached only from the prompt modes, each of which builds a dialog with at
     // least one button, so the dialog is present and its row is non-empty.
@@ -4700,7 +4706,7 @@ export class Session {
   #handleClick(
     mouse: MouseButton,
     held: HeldButton | null,
-    beforeButtonAction?: () => void,
+    beforeButtonAction?: (pushed: PushedFrame) => void,
   ): void {
     const dialog = this.#promptDialog();
     if (!dialog) return;
@@ -4750,17 +4756,18 @@ export class Session {
   #activateButton(
     dialog: DialogState,
     index: number,
-    beforeButtonAction?: () => void,
+    beforeButtonAction?: (pushed: PushedFrame) => void,
   ): void {
     this.#dialogFocus = (dialog.fields?.length ?? 0) + index;
-    this.pendingPush = {
+    const pushed = {
       doc: this.displayDoc(),
       view: {
         ...this.view(),
         dialog: { ...dialog, focus: index, fieldFocus: -1, pushed: index },
       },
     };
-    beforeButtonAction?.();
+    this.pendingPush = pushed;
+    beforeButtonAction?.(pushed);
     const button = dialog.buttons[index];
     if (this.#mode === "savePrompt") this.#applySaveButton(button);
     else if (this.#mode === "amendPrompt") this.#applyAmendButton(button);

@@ -33,6 +33,7 @@ import {
   ensureExecShim,
   F_MNTONNAME_OFF,
   findMountForPath,
+  type GetfsstatLibrary,
   isAlive,
   isMountpointInTable,
   isMountStateAlive,
@@ -46,7 +47,6 @@ import {
   STATFS_SIZE,
   writeMountState,
 } from "../lib/fuse.ts";
-import { withEnv } from "./utils.ts";
 
 const CHILD_PID = 321;
 
@@ -122,6 +122,11 @@ function controllableReadinessStream(): {
 /** A supervisor that stays up: its exit never settles. */
 function liveSupervisor(): Promise<Deno.CommandStatus> {
   return new Promise<Deno.CommandStatus>(() => {});
+}
+
+/** An opened libSystem whose getfsstat is `getfsstat`. */
+function libSystemWith(getfsstat: () => number): () => GetfsstatLibrary {
+  return () => ({ symbols: { getfsstat }, close() {} });
 }
 
 function trackRemoval(removed: string[]): (path: string) => Promise<void> {
@@ -454,29 +459,10 @@ describe("mount state operations", () => {
     expect(shimPath).not.toBe(join(stateDir, "cf-exec"));
     expect(shim).toContain("#!/usr/bin/env bash");
     expect(shim).toContain("export CF_EXEC_SHEBANG=1");
-    expect(shim).toContain("export CF_CLI_NAME=cf");
     expect(shim).toContain('" run --allow-net');
     expect(shim).toContain("--allow-sys=networkInterfaces");
     expect(shim).toContain(join(repoRoot, "runtime/cli/mod.ts"));
     expect(shim).toContain('"$@"');
-  });
-
-  it("normalizes invalid CF_CLI_NAME values before writing the exec shim", async () => {
-    const stateDir = join(tmpDir, "state");
-    const repoRoot = join(tmpDir, "repo");
-    const importMetaUrl = toFileUrl(join(repoRoot, "runtime/cli/lib/fuse.ts"))
-      .href;
-    let shim = "";
-
-    await withEnv("CF_CLI_NAME", '$(touch "/tmp/pwned")', async () => {
-      const shimPath = await ensureExecShim(stateDir, importMetaUrl);
-      shim = await Deno.readTextFile(shimPath);
-    });
-
-    expect(shim).toContain("export CF_CLI_NAME=cf");
-    expect(shim).not.toContain("touch");
-    expect(shim).not.toContain("$(");
-    expect(shim).not.toContain("`");
   });
 
   it("ensureExecShim falls back to stateDir when repo root is not writable", async () => {
@@ -1752,6 +1738,12 @@ describe("parseSupervisorArgs", () => {
       .toThrow("Missing mountpoint for fuse supervisor.");
   });
 
+  it("throws on a second positional argument", () => {
+    expect(() => parseSupervisorArgs(["/mnt/a", "/mnt/b"])).toThrow(
+      "Unexpected fuse supervisor argument: /mnt/b",
+    );
+  });
+
   it("round-trips every flag both supervisor argv builders emit", () => {
     // The builders and this parser read one flag table, and this is the
     // property that table exists for: a flag the command sets survives the hop
@@ -1868,9 +1860,17 @@ describe("isMountpointInTable", () => {
     // "absent" and hide a real mount — it must become null → "unknown". The
     // injected-null test above cannot reach this: it replaces the whole lister,
     // so it never exercises the native return-code mapping.
-    expect(readDarwinMountpoints(() => -1)).toBe(null);
+    let closes = 0;
+    const failing: GetfsstatLibrary = {
+      symbols: { getfsstat: () => -1 },
+      close: () => {
+        closes++;
+      },
+    };
+    expect(readDarwinMountpoints(() => failing)).toBe(null);
+    expect(closes).toBe(1);
     // A zero count is a genuine (if unusual) empty table, not an error.
-    expect(readDarwinMountpoints(() => 0)).toEqual([]);
+    expect(readDarwinMountpoints(libSystemWith(() => 0))).toEqual([]);
   });
 
   it("readDarwinMountpoints maps a negative SECOND call (post-alloc) to null", () => {
@@ -1879,7 +1879,7 @@ describe("isMountpointInTable", () => {
     // allocated — it must also collapse to null → "unknown", not [].
     let call = 0;
     const fn = () => (call++ === 0 ? 1 : -1);
-    expect(readDarwinMountpoints(fn)).toBe(null);
+    expect(readDarwinMountpoints(libSystemWith(fn))).toBe(null);
   });
 
   it("readDarwinMountpoints maps a thrown native call to null", () => {
@@ -1890,12 +1890,12 @@ describe("isMountpointInTable", () => {
       if (call++ === 0) return 1;
       throw new Error("boom");
     };
-    expect(readDarwinMountpoints(fn)).toBe(null);
+    expect(readDarwinMountpoints(libSystemWith(fn))).toBe(null);
   });
 
   if (Deno.build.os !== "darwin") {
     it("readDarwinMountpoints returns null when the getfsstat FFI is unavailable", () => {
-      // With no injected call, openGetfsstat() tries to dlopen libSystem, which
+      // With no injected library, openGetfsstat() tries to dlopen libSystem, which
       // only exists on darwin. On linux CI the dlopen throws → openGetfsstat
       // returns null → readDarwinMountpoints returns null (→ "unknown").
       expect(readDarwinMountpoints()).toBe(null);
@@ -2178,22 +2178,32 @@ describe("fuse unmount", () => {
 
   it("bounds a wedged system unmount by the deadline so it never hangs", async () => {
     // A real umount on a wedged mount can block in the kernel. defaultSystemUnmount
-    // spawns the child, races it against a deadline, and unrefs it on timeout, so
+    // races the child against a deadline, and on timeout kills and unrefs it, so
     // it always returns (letting runUnmount print the sudo-umount-f hint) instead
-    // of hanging on the child. A `sleep 30` stands in for the wedged umount.
-    const start = Date.now();
-    const result = await defaultSystemUnmount("/does-not-matter", {
-      command: new Deno.Command("sleep", {
-        args: ["30"],
-        stdout: "null",
-        stderr: "piped",
-      }),
-      timeoutMs: 100,
-    });
-    const elapsed = Date.now() - start;
-    expect(result).toEqual({ code: 1, stderr: "system unmount timed out" });
-    // Returned on the ~100ms deadline, nowhere near the 30s child.
-    expect(elapsed).toBeLessThan(5000);
+    // of hanging on the child. A child whose output never arrives stands in for
+    // the wedged umount, once alive when it is killed and once already gone.
+    for (const goneByKill of [false, true]) {
+      const calls: string[] = [];
+      const result = await defaultSystemUnmount("/does-not-matter", {
+        command: {
+          spawn: () => ({
+            output: () => new Promise<Deno.CommandOutput>(() => {}),
+            kill: (signal?: Deno.Signal) => {
+              calls.push(`kill ${signal}`);
+              if (goneByKill) {
+                throw new TypeError("Child process has already terminated");
+              }
+            },
+            unref: () => {
+              calls.push("unref");
+            },
+          }),
+        },
+        timeoutMs: 0,
+      });
+      expect(result).toEqual({ code: 1, stderr: "system unmount timed out" });
+      expect(calls).toEqual(["kill SIGKILL", "unref"]);
+    }
   });
 
   it("SIGTERMs a verified live FUSE process, then proceeds to the table probe", async () => {

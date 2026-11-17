@@ -106,10 +106,12 @@ async function getDid(_: void, keypath: string) {
 // process argument list (which is visible to other local processes via `ps`).
 // File and stdin input have a single trailing newline stripped so that an
 // editor- or `echo`-produced value matches the equivalent inline argument.
-async function resolveSecret(
+// `stdin` is the standard input read, `Deno.stdin` by default.
+export async function resolveSecret(
   arg: string | undefined,
   literalArgs: string[],
   label: string,
+  stdin: Pick<typeof Deno.stdin, "isTerminal" | "readable"> = Deno.stdin,
 ): Promise<string> {
   if (literalArgs.length > 0) {
     if (arg !== undefined) {
@@ -128,11 +130,11 @@ async function resolveSecret(
     );
   }
   if (arg !== undefined && arg !== "-") return arg;
-  if (Deno.stdin.isTerminal()) {
+  if (stdin.isTerminal()) {
     console.error(`Reading ${label} from stdin; type it and press Ctrl-D...`);
   }
   return requireNonEmpty(
-    stripTrailingNewline(await new Response(Deno.stdin.readable).text()),
+    stripTrailingNewline(await new Response(stdin.readable).text()),
     label,
     "stdin",
   );

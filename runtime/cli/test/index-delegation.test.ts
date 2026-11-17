@@ -152,6 +152,39 @@ describe("index-delegation", () => {
       expect(member.chain).toHaveLength(1);
     });
 
+    it("throws naming --identity where the root is kept elsewhere and no identity is named", async () => {
+      await store.recordMembership({
+        handle: "p-1",
+        role: "user",
+        root: elsewhereRoot.did(),
+      });
+      await expect(issueIndexDelegation({
+        kind: "member",
+        baseUrl: BASE,
+        to: loom.did(),
+        store,
+      })).rejects.toThrow(
+        "name the identity that issues behind its chain with --identity",
+      );
+    });
+
+    it("throws where the root is kept elsewhere and the identity holds no chain from it", async () => {
+      await store.recordMembership({
+        handle: "p-1",
+        role: "user",
+        root: elsewhereRoot.did(),
+      });
+      await expect(issueIndexDelegation({
+        kind: "member",
+        baseUrl: BASE,
+        identity: cfKey,
+        to: loom.did(),
+        store,
+      })).rejects.toThrow(
+        `${cfKey.did()} holds no chain to issue onward from`,
+      );
+    });
+
     it("throws before any join", async () => {
       await expect(issueIndexDelegation({
         kind: "member",

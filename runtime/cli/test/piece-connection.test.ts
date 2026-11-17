@@ -585,6 +585,7 @@ describe("piece-connection", () => {
                 Promise.resolve({
                   id: PIECE,
                   name: () => "Notes",
+                  getCell: () => runtime.getCell(space, "piece"),
                   getPatternRef: () => Promise.resolve(undefined),
                   input: {
                     get: () => Promise.resolve({}),
