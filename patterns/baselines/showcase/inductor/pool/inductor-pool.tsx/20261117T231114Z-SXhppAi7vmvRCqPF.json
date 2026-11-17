@@ -52,8 +52,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "BmLWT9TP2QgPgVUNRLEDR-qcvrk4n9B6BqdyfjOKveY",
-              "policyDigest": "Eclln5A9b_FunevtDo4frBu-dN_MQJ0Hgm0Yu7UQZdY",
+              "moduleIdentity": "sFYzWiv5xO2Z0N1-Tl_8JWeNsQIge1xgahMIOpOiK34",
+              "policyDigest": "UzNpgh9Q8Tu_Nu3me7Ud9qfBmndmNMju_l7hmAv5w0Q",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -64,6 +64,9 @@
           ]
         },
         "properties": {
+          "contributor": {
+            "type": "string"
+          },
           "pseudonym": {
             "type": "string"
           },
@@ -78,6 +81,7 @@
           }
         },
         "required": [
+          "contributor",
           "pseudonym",
           "rules",
           "seal"
@@ -89,8 +93,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "BmLWT9TP2QgPgVUNRLEDR-qcvrk4n9B6BqdyfjOKveY",
-              "policyDigest": "Eclln5A9b_FunevtDo4frBu-dN_MQJ0Hgm0Yu7UQZdY",
+              "moduleIdentity": "sFYzWiv5xO2Z0N1-Tl_8JWeNsQIge1xgahMIOpOiK34",
+              "policyDigest": "UzNpgh9Q8Tu_Nu3me7Ud9qfBmndmNMju_l7hmAv5w0Q",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -114,8 +118,8 @@
           ],
           "confidentiality": [
             {
-              "moduleIdentity": "BmLWT9TP2QgPgVUNRLEDR-qcvrk4n9B6BqdyfjOKveY",
-              "policyDigest": "Eclln5A9b_FunevtDo4frBu-dN_MQJ0Hgm0Yu7UQZdY",
+              "moduleIdentity": "sFYzWiv5xO2Z0N1-Tl_8JWeNsQIge1xgahMIOpOiK34",
+              "policyDigest": "UzNpgh9Q8Tu_Nu3me7Ud9qfBmndmNMju_l7hmAv5w0Q",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -127,7 +131,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/showcase/inductor/pool/pool-policy.tsx",
-              "moduleIdentity": "BmLWT9TP2QgPgVUNRLEDR-qcvrk4n9B6BqdyfjOKveY",
+              "moduleIdentity": "sFYzWiv5xO2Z0N1-Tl_8JWeNsQIge1xgahMIOpOiK34",
               "path": [
                 "submitContribution"
               ]
@@ -201,13 +205,27 @@
         "type": "object"
       },
       "ContributionEvent": {
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "sFYzWiv5xO2Z0N1-Tl_8JWeNsQIge1xgahMIOpOiK34",
+              "policyDigest": "UzNpgh9Q8Tu_Nu3me7Ud9qfBmndmNMju_l7hmAv5w0Q",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "poolRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        },
         "properties": {
           "pseudonym": {
             "type": "string"
           },
           "rules": {
             "items": {
-              "$ref": "#/$defs/CanonicalRule"
+              "$ref": "#/$defs/PrivateRule"
             },
             "type": "array"
           }
@@ -244,8 +262,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "BmLWT9TP2QgPgVUNRLEDR-qcvrk4n9B6BqdyfjOKveY",
-              "policyDigest": "Eclln5A9b_FunevtDo4frBu-dN_MQJ0Hgm0Yu7UQZdY",
+              "moduleIdentity": "sFYzWiv5xO2Z0N1-Tl_8JWeNsQIge1xgahMIOpOiK34",
+              "policyDigest": "UzNpgh9Q8Tu_Nu3me7Ud9qfBmndmNMju_l7hmAv5w0Q",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -256,6 +274,9 @@
           ]
         },
         "properties": {
+          "contributor": {
+            "type": "string"
+          },
           "pseudonym": {
             "type": "string"
           },
@@ -270,6 +291,7 @@
           }
         },
         "required": [
+          "contributor",
           "pseudonym",
           "rules",
           "seal"
@@ -281,8 +303,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "BmLWT9TP2QgPgVUNRLEDR-qcvrk4n9B6BqdyfjOKveY",
-              "policyDigest": "Eclln5A9b_FunevtDo4frBu-dN_MQJ0Hgm0Yu7UQZdY",
+              "moduleIdentity": "sFYzWiv5xO2Z0N1-Tl_8JWeNsQIge1xgahMIOpOiK34",
+              "policyDigest": "UzNpgh9Q8Tu_Nu3me7Ud9qfBmndmNMju_l7hmAv5w0Q",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -333,8 +355,8 @@
           ],
           "confidentiality": [
             {
-              "moduleIdentity": "BmLWT9TP2QgPgVUNRLEDR-qcvrk4n9B6BqdyfjOKveY",
-              "policyDigest": "Eclln5A9b_FunevtDo4frBu-dN_MQJ0Hgm0Yu7UQZdY",
+              "moduleIdentity": "sFYzWiv5xO2Z0N1-Tl_8JWeNsQIge1xgahMIOpOiK34",
+              "policyDigest": "UzNpgh9Q8Tu_Nu3me7Ud9qfBmndmNMju_l7hmAv5w0Q",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -346,7 +368,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/showcase/inductor/pool/pool-policy.tsx",
-              "moduleIdentity": "BmLWT9TP2QgPgVUNRLEDR-qcvrk4n9B6BqdyfjOKveY",
+              "moduleIdentity": "sFYzWiv5xO2Z0N1-Tl_8JWeNsQIge1xgahMIOpOiK34",
               "path": [
                 "submitContribution"
               ]
@@ -355,7 +377,7 @@
         }
       }
     },
-    "description": "A #inductorPool: collects lo-fi rules for one goal under per-goal\npseudonyms and releases a rule, with its count, once enough distinct\npseudonyms hold it. Lo-fi inductors find one with\n`wish({ query: \"#inductorPool\" })`.",
+    "description": "A #inductorPool: collects lo-fi rules for one goal under per-goal\npseudonyms and releases a rule, with its count, once enough distinct\ncontributors hold it. Lo-fi inductors find one with\n`wish({ query: \"#inductorPool\" })`.",
     "properties": {
       "$FS": {
         "properties": {

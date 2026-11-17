@@ -26,6 +26,38 @@
         ],
         "type": "object"
       },
+      "ContributionEvent": {
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "sFYzWiv5xO2Z0N1-Tl_8JWeNsQIge1xgahMIOpOiK34",
+              "policyDigest": "UzNpgh9Q8Tu_Nu3me7Ud9qfBmndmNMju_l7hmAv5w0Q",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "poolRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        },
+        "properties": {
+          "pseudonym": {
+            "type": "string"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/$defs/PrivateRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "pseudonym",
+          "rules"
+        ],
+        "type": "object"
+      },
       "HistoryEntry": {
         "properties": {
           "accepted": {
@@ -125,24 +157,6 @@
         ],
         "type": "object"
       },
-      "PoolSubmission": {
-        "properties": {
-          "pseudonym": {
-            "type": "string"
-          },
-          "rules": {
-            "items": {
-              "$ref": "#/$defs/CanonicalRule"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "pseudonym",
-          "rules"
-        ],
-        "type": "object"
-      },
       "PoolTarget": {
         "properties": {
           "consensus": {
@@ -156,7 +170,7 @@
             "type": "string"
           },
           "submit": {
-            "$ref": "#/$defs/PoolSubmission",
+            "$ref": "#/$defs/ContributionEvent",
             "asCell": [
               "stream"
             ]
@@ -176,6 +190,23 @@
           "consensus"
         ],
         "type": "object"
+      },
+      "PrivateRule": {
+        "$ref": "#/$defs/CanonicalRule",
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "sFYzWiv5xO2Z0N1-Tl_8JWeNsQIge1xgahMIOpOiK34",
+              "policyDigest": "UzNpgh9Q8Tu_Nu3me7Ud9qfBmndmNMju_l7hmAv5w0Q",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "poolRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        }
       },
       "Published": {
         "properties": {
