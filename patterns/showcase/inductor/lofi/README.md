@@ -167,8 +167,11 @@ Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
 - `unpublish` takes this piece's contribution back out of the goal's pool (the
   pool's `withdraw`, which removes only the sender's) and clears `published`.
   The pseudonym stays, so publishing again comes back under it.
-- Choose the hi-fi model with `hifiModel` or `setHifiModel`; empty, the
-  deployment's default `generateObject` model answers.
+- One model labels the items and proposes rules: `hifiModel`, set with
+  `setHifiModel`. Empty, the deployment's default `generateObject` model
+  answers; a stronger model the gateway lists can be named. Both calls pass an
+  explicit JSON schema in the strict form (no extra properties, every property
+  required), which strict providers such as OpenAI's structured outputs take.
 
 **Layout.** `lofi-inductor.tsx` holds the state, the verbs, and the judgements
 (`rows`, `summary`, `heldOutF1`, `rewrite`, `poolOffer`), and lays out four

@@ -7,6 +7,7 @@ import {
   buildRewritePrompt,
   gradeItems,
   heldOutExamples,
+  HIFI_SCHEMA,
   type HifiState,
   type HistoryEntry,
   type Item,
@@ -21,6 +22,7 @@ import {
   MIN_HELD_OUT,
   newSurprises,
   poolOffer,
+  PROPOSAL_SCHEMA,
   REWRITE_SYSTEM,
   rewriteRequest,
   rewriteStatus,
@@ -672,7 +674,48 @@ describe("settle", () => {
   });
 });
 
+/**
+ * The paths of the objects in `schema` that strict structured outputs refuse:
+ * one that allows extra properties, or does not require every property.
+ */
+function strictFailures(schema: unknown, path = "$"): string[] {
+  if (typeof schema !== "object" || schema === null) return [];
+  const failures: string[] = [];
+  if ("type" in schema && schema.type === "object") {
+    const properties = "properties" in schema ? schema.properties : {};
+    const keys = Object.keys(properties ?? {}).sort();
+    const required = "required" in schema && Array.isArray(schema.required)
+      ? [...schema.required].sort()
+      : [];
+    const closed = "additionalProperties" in schema &&
+      schema.additionalProperties === false;
+    if (!closed || keys.join() !== required.join()) failures.push(path);
+  }
+  for (const [key, value] of Object.entries(schema)) {
+    failures.push(...strictFailures(value, `${path}.${key}`));
+  }
+  return failures;
+}
+
 describe("prompts and text", () => {
+  it("gives both model calls schemas strict providers take", () => {
+    expect(strictFailures(HIFI_SCHEMA)).toEqual([]);
+    expect(strictFailures(PROPOSAL_SCHEMA)).toEqual([]);
+    // The check refuses a schema with an optional or an open object.
+    expect(strictFailures({
+      type: "object",
+      properties: { a: { type: "string" } },
+      required: [],
+      additionalProperties: false,
+    })).toEqual(["$"]);
+    expect(strictFailures({
+      type: "object",
+      properties: { rules: { type: "array", items: { type: "object" } } },
+      required: ["rules"],
+      additionalProperties: false,
+    })).toEqual(["$.properties.rules.items"]);
+  });
+
   it("tells the rewrite model the backtracking limit", () => {
     expect(REWRITE_SYSTEM).toContain("unbounded quantifier");
     expect(REWRITE_SYSTEM).toContain("\\s*\\$");

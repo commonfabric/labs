@@ -176,11 +176,11 @@ export default pattern(() => {
   const action_settings = action(() => {
     subject.setRewriteAfter.send({ count: 5 });
     subject.setHeldOutPercent.send({ percent: 50 });
-    subject.setHifiModel.send({ model: "  gateway:claude-opus-5-5 " });
+    subject.setHifiModel.send({ model: "  gateway:stronger-model " });
   });
   const assert_settings = assert(() =>
     subject.rewriteAfter === 5 && subject.heldOutPercent === 50 &&
-    subject.hifiModel === "gateway:claude-opus-5-5"
+    subject.hifiModel === "gateway:stronger-model"
   );
   const action_default_model = action(() => {
     subject.setHifiModel.send({ model: "" });

@@ -8,6 +8,7 @@
  * the one action that writes what a judgement decided.
  */
 
+import type { JSONSchema } from "commonfabric";
 import {
   calculateF1,
   calculatePrecisionRecall,
@@ -405,6 +406,22 @@ Respond with:
 - label: true for YES, false for NO
 - reasoning: one short sentence saying why`;
 
+/**
+ * The JSON schema of a `HifiAnswer`, in the form strict structured outputs
+ * take: no extra properties, and every property required.
+ */
+// TODO(alex-claude): drop the explicit schema once generateObject's inferred
+// schemas pass strict providers (top/3218)
+export const HIFI_SCHEMA = {
+  type: "object",
+  properties: {
+    label: { type: "boolean" },
+    reasoning: { type: "string" },
+  },
+  required: ["label", "reasoning"],
+  additionalProperties: false,
+} as const satisfies JSONSchema;
+
 /** The prompt asking the hi-fi model about `item`, or "" with no goal. */
 export function buildHifiPrompt(goal: string, item: Item): string {
   const question = goal.trim();
@@ -426,6 +443,31 @@ Use only plain regular expressions: no backreferences, no lookahead or lookbehin
 Keep every pattern cheap to run, or it is refused: at most one unbounded quantifier (*, + or {n,}) in a pattern, counting all its alternatives, unless the character after the quantifier can never be one it repeats (as in \\s*\\$ or \\d+\\s*items); never put quantifiers over the same characters side by side (as in \\s*\\s? or .*.*); and keep a whole rule set to a few such quantifiers.
 Never put personal details (names, addresses, account numbers) in a pattern; rules must generalise.
 Also give a one-sentence reasoning.`;
+
+/** The JSON schema of a `Proposal`, in the strict form `HIFI_SCHEMA` takes. */
+// TODO(alex-claude): drop the explicit schema once generateObject's inferred
+// schemas pass strict providers (top/3218)
+export const PROPOSAL_SCHEMA = {
+  type: "object",
+  properties: {
+    rules: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          field: { type: "string" },
+          pattern: { type: "string" },
+          predicts: { type: "boolean" },
+        },
+        required: ["field", "pattern", "predicts"],
+        additionalProperties: false,
+      },
+    },
+    reasoning: { type: "string" },
+  },
+  required: ["rules", "reasoning"],
+  additionalProperties: false,
+} as const satisfies JSONSchema;
 
 function exampleLine(row: ItemRow): string {
   return `- ${JSON.stringify(row.fields)} → ${row.hifi ? "YES" : "NO"}${

@@ -38,6 +38,7 @@ import {
   buildHifiPrompt,
   gradeItems,
   heldOutExamples,
+  HIFI_SCHEMA,
   HIFI_SYSTEM,
   type HifiAnswer,
   type HistoryEntry,
@@ -50,6 +51,7 @@ import {
   poolOffer,
   type PoolRule,
   type Proposal,
+  PROPOSAL_SCHEMA,
   type Published,
   REWRITE_SYSTEM,
   rewriteRequest,
@@ -152,10 +154,9 @@ interface LofiInductorInput {
    */
   pool?: PoolTarget;
   /**
-   * The model that labels items. Empty, the deployment's default
-   * `generateObject` model answers; a stronger one, such as
-   * `gateway:claude-opus-5-5` where the gateway lists it
-   * (`/api/ai/llm/models`), can be named.
+   * The model that labels items and proposes rules. Empty, the deployment's
+   * default `generateObject` model answers; any model the gateway lists
+   * (`/api/ai/llm/models`) can be named.
    */
   hifiModel?: PerSpace<Writable<string | Default<"">>>;
   /** How many new surprises start a rewrite. */
@@ -190,7 +191,7 @@ export interface LofiInductorOutput {
   pseudonym: string;
   /** The keys of the current rules adopted from the pool, never published. */
   adopted: string[];
-  /** The model that labels items, or "" for the deployment's default. */
+  /** The model that labels items and proposes rules, or "" for the default. */
   hifiModel: string;
   /** How many new surprises start a rewrite. */
   rewriteAfter: number;
@@ -244,7 +245,7 @@ export interface LofiInductorOutput {
   setRewriteAfter: Stream<RewriteAfterEvent>;
   /** Set the held-out share: a number above 0 and below 100. */
   setHeldOutPercent: Stream<HeldOutPercentEvent>;
-  /** Name the hi-fi model, or "" for the default. Every item is asked again. */
+  /** Name the model, or "" for the default. Every item is asked again. */
   setHifiModel: Stream<HifiModelEvent>;
   /**
    * The pool's released rules for this goal, judged as a candidate set on
@@ -365,6 +366,7 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       answer: generateObject<HifiAnswer>({
         prompt: computed(() => buildHifiPrompt(goal.get(), item)),
         system: HIFI_SYSTEM,
+        schema: HIFI_SCHEMA,
         model: hifiModelName,
       }),
     }));
@@ -392,6 +394,8 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     const proposal = generateObject<Proposal>({
       prompt: rewritePrompt,
       system: REWRITE_SYSTEM,
+      schema: PROPOSAL_SCHEMA,
+      model: hifiModelName,
     });
     const rewrite = computed(() =>
       rewriteStatus(
