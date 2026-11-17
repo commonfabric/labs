@@ -4,6 +4,7 @@ import { Identity } from "@commonfabric/identity";
 
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
+import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { runtimePresets } from "../src/runtime-presets.ts";
 import {
@@ -123,7 +124,7 @@ describe("runner", () => {
      * stored slots `dropped` names; the commit's error.
      */
     const update = async (
-      cell: ReturnType<typeof runtime.getCell<Piece>>,
+      cell: Cell<Piece>,
       argument: unknown,
       dropped: readonly string[] = [],
     ) => {
