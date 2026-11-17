@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { checkRule, MAX_RULES } from "../lofi-inductor/rule-grammar.ts";
+import { checkRule, MAX_RULES } from "./rule-grammar.ts";
 import {
   agreedSeal,
   type CanonicalRule,

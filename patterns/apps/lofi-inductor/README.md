@@ -90,12 +90,13 @@ Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
 
 ## Building `lofi-inductor`
 
-- `rule-grammar.ts` holds the grammar and the canonical form. The canonical form
-  keeps what `RegExp.test` answers with the `i` flag and rewrites only what
-  cannot change it: alternation order, laziness, capturing groups, letter case,
-  equivalent spellings of one character or class, and quantifier spelling. When
-  unsure it leaves a pattern as written, so two rules may compare different that
-  mean the same, but never the reverse.
+- `../inductor-pool/rule-grammar.ts` holds the grammar and the canonical form.
+  It lives with the pool, whose policy module imports it, and the inductor
+  imports it from there. The canonical form keeps what `RegExp.test` answers
+  with the `i` flag and rewrites only what cannot change it: alternation order,
+  laziness, capturing groups, letter case, equivalent spellings of one character
+  or class, and quantifier spelling. When unsure it leaves a pattern as written,
+  so two rules may compare different that mean the same, but never the reverse.
 - The grammar is also the safety check, and it runs on the canonical form, which
   is what runs, so `(a|b)+` is accepted as `[ab]+`. It refuses a repeated group
   holding a choice (`(a|aa)+`, exponential), and bounds polynomial backtracking:

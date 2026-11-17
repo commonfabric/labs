@@ -28,7 +28,6 @@ import {
   wish,
   Writable,
 } from "commonfabric";
-import type { InductorPoolOutput } from "../inductor-pool/inductor-pool.tsx";
 import {
   buildHifiPrompt,
   gradeItems,
@@ -54,9 +53,12 @@ import {
   type Summary,
   verdictText,
 } from "./induction.ts";
-import { type CanonicalRule, describeRule } from "./rule-grammar.ts";
+import {
+  type CanonicalRule,
+  describeRule,
+} from "../inductor-pool/rule-grammar.ts";
 
-export type { CanonicalRule } from "./rule-grammar.ts";
+export type { CanonicalRule } from "../inductor-pool/rule-grammar.ts";
 export type {
   HistoryEntry,
   Item,
@@ -66,8 +68,22 @@ export type {
   Summary,
 } from "./induction.ts";
 
-/** What the inductor needs of a pool: its goal, and where to contribute. */
-export type PoolTarget = Pick<InductorPoolOutput, "goal" | "submit">;
+/**
+ * What the inductor needs of a pool: its goal, and where to contribute. It is
+ * written out here rather than picked from the pool's output type, so the
+ * inductor depends on the pool's shape, not its module.
+ */
+export interface PoolTarget {
+  goal: string;
+  submit: Stream<PoolSubmission>;
+}
+
+/** What a pool's `submit` takes: a rule set under a pseudonym. */
+export interface PoolSubmission {
+  pseudonym?: string;
+  rules?: CanonicalRule[];
+  withdraw?: boolean;
+}
 
 /** A new goal, as `setGoal` takes it. */
 export interface GoalEvent {

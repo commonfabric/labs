@@ -18,7 +18,7 @@ this pattern is its implementation.
   threshold once there is something to release
   (`inductor-pool-config.test.tsx`).
 - **Contribute.** `submit` takes `{pseudonym, rules}`, the rules in canonical
-  form (`CanonicalRule` from `apps/lofi-inductor/rule-grammar.ts`). The handler
+  form (`CanonicalRule` from `rule-grammar.ts`, beside the pool). The handler
   checks every rule against the grammar again, stores it in canonical form, and
   keeps a rule given twice once. A rule out of grammar refuses the whole set.
 - **One pseudonym per person per goal.** Each stored contribution is labelled
@@ -55,8 +55,11 @@ this pattern is its implementation.
   is the pool's public result, with `releasedCount` and the view derived from
   it. It is not stored (see "Workaround: the release is not stored").
 
-The pure logic is in `consensus.ts`. The policy module's identity covers it
-because a module's identity covers the modules it imports.
+The pure logic is in `consensus.ts`, and the rule grammar in `rule-grammar.ts`.
+The policy module's identity covers both, because a module's identity covers the
+modules it imports. Both live in this folder so that the policy's identity
+depends only on the pool's own files; the lo-fi inductor imports the grammar
+from here.
 
 ## Discovery and wiring
 
@@ -66,8 +69,8 @@ aggregator. A pool serves one goal. Until the wish can match on the goal, an
 inductor should take a `pool` input directly, or check that `pool.goal` equals
 its own goal before it submits.
 
-The lo-fi inductor does this: it takes an optional
-`pool?: Pick<InductorPoolOutput, "goal" | "submit">`, falls back to
+The lo-fi inductor does this: it takes an optional `pool?: PoolTarget`, a
+structural type of its own (`goal`, `submit`), falls back to
 `wish({ query: "#inductorPool", scope: ["~", "."] })`, and its `publish` action
 mints a stable per-goal pseudonym once and sends `submit` only when the pool's
 goal is its own, ignoring case and surrounding or repeated space.
@@ -109,6 +112,18 @@ public input does not constrain a witness, so the secret and threshold are not
 inputs of the release: they travel inside the witnessed contributions. The tests
 also show that `tallyEveryRule`, a function of the same module that no rule
 names, is refused by a public store, and so is a contribution copied out raw.
+
+**Editing the policy module strands stored contributions.** The rule names
+`THIS_POLICY.moduleIdentity`, the content identity of `inductor-pool.tsx` with
+everything it imports (`consensus.ts`, `rule-grammar.ts`). Any edit to those
+files, a grammar fix included, gives the module a new identity, and stored
+contributions carry the old one's `PolicyOf` clause and `TransformedBy`
+witnesses. As far as we can tell, the new release rule matches neither, so a
+pool updated in place releases nothing from contributions made before the update
+until each contributor submits again. **Question for Berni:** is that the
+intended consequence of content-addressed policy identity, and is there an
+idiomatic way for a policy to name its successor (the attested-succession path
+`WritePolicyAnyOf` has for writers)?
 
 **What the witness does not cover.** It pins one level: whoever wrote the
 contributions was `submitContribution`. It says nothing about who called it.

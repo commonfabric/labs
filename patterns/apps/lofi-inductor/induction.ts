@@ -19,9 +19,9 @@ import {
   MAX_RULES,
   MAX_TESTED_LENGTH,
   stableHash,
-} from "./rule-grammar.ts";
+} from "../inductor-pool/rule-grammar.ts";
 
-export { MAX_RULES, MAX_TESTED_LENGTH } from "./rule-grammar.ts";
+export { MAX_RULES, MAX_TESTED_LENGTH } from "../inductor-pool/rule-grammar.ts";
 
 // =============================================================================
 // TYPES

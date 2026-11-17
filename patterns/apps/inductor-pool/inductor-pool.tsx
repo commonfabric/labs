@@ -41,7 +41,7 @@ import {
   type PolicyOf,
   THIS_POLICY,
 } from "commonfabric/cfc";
-import { describeRule } from "../lofi-inductor/rule-grammar.ts";
+import { describeRule } from "./rule-grammar.ts";
 import {
   type CanonicalRule,
   canonicalSet,

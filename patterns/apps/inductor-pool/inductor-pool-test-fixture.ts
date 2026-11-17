@@ -2,10 +2,7 @@
  * Rules and stores the inductor pool's tests share.
  */
 import type { MaxConfidentiality } from "commonfabric";
-import {
-  type CanonicalRule,
-  checkRule,
-} from "../lofi-inductor/rule-grammar.ts";
+import { type CanonicalRule, checkRule } from "./rule-grammar.ts";
 import type { ReleasedRule } from "./consensus.ts";
 
 function rule(

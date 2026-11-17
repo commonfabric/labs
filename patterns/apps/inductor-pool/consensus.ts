@@ -10,13 +10,9 @@
  * the modules it imports.
  */
 
-import {
-  type CanonicalRule,
-  checkRule,
-  MAX_RULES,
-} from "../lofi-inductor/rule-grammar.ts";
+import { type CanonicalRule, checkRule, MAX_RULES } from "./rule-grammar.ts";
 
-export type { CanonicalRule } from "../lofi-inductor/rule-grammar.ts";
+export type { CanonicalRule } from "./rule-grammar.ts";
 
 // =============================================================================
 // TYPES
