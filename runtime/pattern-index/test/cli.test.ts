@@ -179,9 +179,12 @@ describe("cli", () => {
         [{ op: "feedback", verdict: "up" }, "patternId is required"],
         [
           { op: "getPattern", includeSource: true },
-          "op must be search, feedback, whoami, admit or join",
+          "op must be search, feedback, whoami, admit, join, getSharing or setSharing",
         ],
-        [null, "op must be search, feedback, whoami, admit or join"],
+        [
+          null,
+          "op must be search, feedback, whoami, admit, join, getSharing or setSharing",
+        ],
         ["{", "request body is not JSON"],
       ]
     ) {
@@ -336,6 +339,51 @@ describe("cli", () => {
       ok: true,
       value: { handle: "p-1", role: "user", signer: did },
     });
+  });
+
+  it("reads the member's sharing settings", async () => {
+    const settings = { enabled: false, selfBuilt: true, updatedAt: null };
+    reply = () => Response.json(settings);
+
+    const output = await callHelper(directory, baseUrl, { op: "getSharing" });
+
+    expect(JSON.parse(output.stdout)).toEqual({ ok: true, value: settings });
+    expect(calls.map((call) => call.fn)).toEqual(["getSharingSettings"]);
+  });
+
+  it("changes only the sharing switches the request set", async () => {
+    reply = () =>
+      Response.json({ enabled: false, selfBuilt: true, updatedAt: "t" });
+
+    const output = await callHelper(directory, baseUrl, {
+      op: "setSharing",
+      enabled: false,
+    });
+
+    expect(JSON.parse(output.stdout)).toMatchObject({
+      ok: true,
+      value: { enabled: false, selfBuilt: true },
+    });
+    expect(calls.map((call) => call.fn)).toEqual(["setSharingSettings"]);
+    expect(calls[0].body.enabled).toBe(false);
+    expect("selfBuilt" in calls[0].body).toBe(false);
+  });
+
+  it("refuses a sharing change that sets nothing, or a switch that is not a boolean, calling nothing", async () => {
+    for (
+      const request of [
+        { op: "setSharing" },
+        { op: "setSharing", enabled: "false" },
+        { op: "setSharing", enabled: true, selfBuilt: 0 },
+      ]
+    ) {
+      const output = await callHelper(directory, baseUrl, request);
+      expect(JSON.parse(output.stdout)).toMatchObject({
+        ok: false,
+        status: 400,
+      });
+    }
+    expect(calls).toEqual([]);
   });
 
   it("returns 400 for admit without a did:key, calling nothing", async () => {

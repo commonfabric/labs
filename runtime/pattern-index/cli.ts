@@ -183,11 +183,39 @@ const answerRequest = async (
       }
       case "join":
         return await join(context, body);
+      case "getSharing":
+        return { ok: true, value: await client.getSharingSettings() };
+      case "setSharing": {
+        // Only the switches the caller set, so changing one never writes
+        // the other from a value the caller guessed.
+        const change: { enabled?: boolean; selfBuilt?: boolean } = {};
+        for (const name of ["enabled", "selfBuilt"] as const) {
+          const value = body[name];
+          if (value === undefined) continue;
+          if (typeof value !== "boolean") {
+            return {
+              ok: false,
+              status: 400,
+              error: `${name} must be true or false`,
+            };
+          }
+          change[name] = value;
+        }
+        if (Object.keys(change).length === 0) {
+          return {
+            ok: false,
+            status: 400,
+            error: "setSharing needs enabled or selfBuilt",
+          };
+        }
+        return { ok: true, value: await client.setSharingSettings(change) };
+      }
       default:
         return {
           ok: false,
           status: 400,
-          error: "op must be search, feedback, whoami, admit or join",
+          error:
+            "op must be search, feedback, whoami, admit, join, getSharing or setSharing",
         };
     }
   } catch (error) {
