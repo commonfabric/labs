@@ -1092,8 +1092,9 @@ procedure's step 4. Its two deciding sites, the recording in
   to record:
   - When it runs: in `PatternManager.prepareSourceClosureVerification()`,
     ahead of a setup that verifies the closure, once a check of the closure's
-    labels finds a stamp. A setup whose closure is prepared elsewhere is not
-    repaired first (`module-loading.md` names them).
+    labels finds a stamp. A child a pattern's own graph places in another
+    space is created without that preparation, and is not repaired first
+    (`module-loading.md`).
   - The identity it writes under: the `compile-cache-repair` builtin, through
     `writeRepairedCompileCacheRecord()`, which refuses any other identity and
     any key but a compile-cache record's.
