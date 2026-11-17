@@ -738,18 +738,19 @@ function unregisterDependentEdgeImpl(
     // recounts the region when the writer may have died, but returns at once
     // where it has not, so drop the reference here to keep the count equal
     // to the number of live direct readers either way.
+    // A reader that was not live held no reference, so its departure
+    // leaves the writer's count, and its liveness, as they were.
     const writerRecord = state.nodes.get(writer);
     const dependentRecord = state.nodes.get(dependent);
-    const writerWasLive = writerRecord !== undefined &&
-      isLive(state, writerRecord);
-    if (
-      writerRecord && isRegisteredNode(state, writerRecord) &&
-      dependentRecord && isLive(state, dependentRecord)
-    ) {
-      livenessWork.nodeWrites++;
-      writerRecord.liveRefs--;
+    if (dependentRecord && isLive(state, dependentRecord)) {
+      const writerWasLive = writerRecord !== undefined &&
+        isLive(state, writerRecord);
+      if (writerRecord && isRegisteredNode(state, writerRecord)) {
+        livenessWork.nodeWrites++;
+        writerRecord.liveRefs--;
+      }
+      withdrawDemandFrom(state, writer, writerWasLive);
     }
-    withdrawDemandFrom(state, writer, writerWasLive);
   }
   return hadDependent;
 }

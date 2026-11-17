@@ -334,6 +334,35 @@ describe("dependency-graph", () => {
       expect(isLive(state, nodes.get(reader)!)).toBe(false);
       expectMatchesFullRebuild(state, "released cycle");
     });
+
+    it("does no work when a reader that was not live stops reading a node", () => {
+      // The writer stays live through an effect, above an upstream chain of
+      // `upstream` nodes. The departing reader was never live, so it held no
+      // reference and its departure can change nothing.
+      const removeWork = (upstream: number) => {
+        const { nodes, state } = createGraph();
+        const writer = named("writer");
+        const dormant = named("dormant");
+        const sink = named("sink");
+        nodes.register(writer, "computation");
+        nodes.register(dormant, "computation");
+        nodes.register(sink, "effect");
+        registerDependentEdge(state, writer, dormant);
+        registerDependentEdge(state, writer, sink);
+        addUpstreamChain(nodes, state, writer, upstream, "writer");
+        expect(isLive(state, nodes.get(dormant)!)).toBe(false);
+
+        resetLivenessWork();
+        unregisterDependentEdge(state, writer, dormant);
+        const work = livenessWork.edgeVisits;
+        expect(isLive(state, nodes.get(writer)!)).toBe(true);
+        expectMatchesFullRebuild(state, `${upstream} upstream`);
+        return work;
+      };
+
+      expect(removeWork(400)).toBe(0);
+      expect(removeWork(4)).toBe(0);
+    });
   });
 
   describe("setNodeProvisionalDemand()", () => {
