@@ -1,28 +1,26 @@
 /**
  * The publish step of a repository sync: reads the plan the plan step wrote
- * and publishes what changed. The action at
- * `.github/actions/pattern-index-sync` runs it; `src/repo-sync.ts` says why a
- * sync runs as two steps in two jobs.
+ * and sends it to the index, which makes a version of each entry whose
+ * source changed. The action at `.github/actions/pattern-index-sync` runs it;
+ * `src/repo-sync.ts` says why a sync runs as two steps in two jobs.
  *
  *   deno run --frozen --allow-read --allow-write --allow-env --allow-net \
  *     runtime/pattern-index/sync-publish.ts --plan <plan.json> \
  *     --repository owner/name --commit <sha> [--index-url <url>] \
  *     [--summary <file>]
  *
- * It loads no compiler and evaluates no pattern code. It makes a key for
- * this run alone and signs with it, and a GitHub OIDC token whose audience
- * names that key tells the index which repository, and so which brand, the
- * run acts for (`src/github-oidc.ts`). A token is minted for each call,
- * since one lives only minutes.
+ * It loads no compiler and evaluates no pattern code. Its credential is a
+ * GitHub OIDC token whose audience is the index's base URL, minted for each
+ * call since one lives only minutes (`src/github-oidc.ts`); the index reads
+ * from it which repository, and so which brand, the run acts for.
  *
  * Exits 1 when any entry failed to compile or publish, or when it could not
  * run, after writing the report; exits 2 for a usage error.
  */
 
 import { parseArgs } from "@std/cli/parse-args";
-import { Identity } from "@commonfabric/identity";
 import { resolvePatternIndexUrl } from "./src/access.ts";
-import { PatternIndexClient } from "./src/client.ts";
+import { syncBrandPatterns } from "./src/brand-sync-client.ts";
 import { mintGithubOidcToken } from "./src/github-oidc.ts";
 import {
   planProblem,
@@ -55,19 +53,23 @@ const main = async (): Promise<number> => {
     const plan: unknown = JSON.parse(await Deno.readTextFile(planPath));
     const problem = planProblem(plan);
     if (problem !== undefined) throw new Error(`Unreadable plan: ${problem}`);
-    const signer = await Identity.generate();
-    const indexUrl = resolvePatternIndexUrl(flags["index-url"]);
+    // The index checks the token's audience against its own base URL, which
+    // it writes without a trailing slash.
+    const indexUrl = resolvePatternIndexUrl(flags["index-url"]).replace(
+      /\/+$/,
+      "",
+    );
     const result = await publishPlan(
-      // Checked above, as far as this step trusts it: the publish requests
+      // Checked above, as far as this step trusts it: the patterns
       // themselves are the index's to judge.
       plan as RepoSyncPlan,
       { repository, commit },
-      new PatternIndexClient({
-        baseUrl: indexUrl,
-        signer,
-        githubOidc: () =>
-          mintGithubOidcToken(indexUrl, signer.did(), Deno.env.get),
-      }),
+      async (request) =>
+        syncBrandPatterns(
+          indexUrl,
+          await mintGithubOidcToken(indexUrl, Deno.env.get),
+          request,
+        ),
     );
     await report(reportMarkdown(result));
     return syncFailed(result) ? 1 : 0;

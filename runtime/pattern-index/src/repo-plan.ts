@@ -1,8 +1,8 @@
 /**
  * The plan phase of a repository sync: finding a repository's pattern entries
- * and compiling each one into a publish request. `repo-sync.ts` says why a
- * sync runs in two phases; this one evaluates the repository's code and runs
- * where there is no credential to take.
+ * and compiling each one into the pattern the index is sent. `repo-sync.ts`
+ * says why a sync runs in two phases; this one evaluates the repository's
+ * code and runs where there is no credential to take.
  */
 
 import { globToRegExp, join, relative, resolve, SEPARATOR } from "@std/path";
@@ -13,12 +13,7 @@ import {
   patternDocMetadata,
   publishRequestFor,
 } from "./publish.ts";
-import {
-  type PlannedEntry,
-  programSourceHash,
-  reasonOf,
-  type RepoSyncPlan,
-} from "./repo-sync.ts";
+import { type PlannedEntry, reasonOf, type RepoSyncPlan } from "./repo-sync.ts";
 
 /** Which files are a repository's pattern entries, and how to read them. */
 export interface RepoEntryOptions {
@@ -53,16 +48,15 @@ export interface PlanDeps {
   compileProgram: (program: RuntimeProgram) => Promise<CompiledPattern>;
 
   /**
-   * The experimental flags the compile runs under. Part of the hash, since a
-   * flag such as `contentAddressedSchemas` changes the id the same source
-   * compiles to.
+   * The paths the push being synced deleted, relative to the repository
+   * root; empty for a run no push started.
    */
-  experimental: object;
+  deletedPaths: readonly string[];
 }
 
-/** Whether a repository-relative path is a test module rather than an entry. */
-const isTestModule = (path: string): boolean =>
-  /(?:\.test|_test)\.tsx?$/.test(path);
+/** Whether a path names a TypeScript module that may be an entry. */
+const isModuleCandidate = (path: string): boolean =>
+  /\.tsx?$/.test(path) && !/(?:\.test|_test)\.tsx?$/.test(path);
 
 /**
  * A top-level default export, written either way: what makes a module a
@@ -73,12 +67,19 @@ const isTestModule = (path: string): boolean =>
 const DEFAULT_EXPORT =
   /^export\s+default\b|^export\s*\{[^}]*\bas\s+default\b[^}]*\}/m;
 
-/** The globs as one test on a repository-relative path. */
-const globMatcher = (globs: readonly string[]): (path: string) => boolean => {
-  const patterns = globs.map((glob) =>
-    globToRegExp(glob, { extended: true, globstar: true })
-  );
-  return (path) => patterns.some((pattern) => pattern.test(path));
+/** Whether `options`' globs select `path`. */
+const selector = (
+  options: Pick<RepoEntryOptions, "include" | "exclude">,
+): (path: string) => boolean => {
+  const matcher = (globs: readonly string[]) => {
+    const patterns = globs.map((glob) =>
+      globToRegExp(glob, { extended: true, globstar: true })
+    );
+    return (path: string) => patterns.some((pattern) => pattern.test(path));
+  };
+  const included = matcher(options.include);
+  const excluded = matcher(options.exclude);
+  return (path) => isModuleCandidate(path) && included(path) && !excluded(path);
 };
 
 /**
@@ -107,19 +108,17 @@ export const findEntries = async (
   options: Pick<RepoEntryOptions, "repoRoot" | "include" | "exclude">,
   deps: Pick<PlanDeps, "trackedFiles" | "readTextFile">,
 ): Promise<string[]> => {
-  const included = globMatcher(options.include);
-  const excluded = globMatcher(options.exclude);
+  const selects = selector(options);
   const entries: string[] = [];
   for (const path of await deps.trackedFiles()) {
-    if (!/\.tsx?$/.test(path) || isTestModule(path)) continue;
-    if (!included(path) || excluded(path)) continue;
+    if (!selects(path)) continue;
     const source = await deps.readTextFile(join(options.repoRoot, path));
     if (DEFAULT_EXPORT.test(source)) entries.push(path);
   }
   return entries.sort();
 };
 
-/** Resolves, hashes and compiles one entry. */
+/** Resolves and compiles one entry. */
 const planEntry = async (
   path: string,
   root: string,
@@ -128,7 +127,6 @@ const planEntry = async (
 ): Promise<PlannedEntry> => {
   const entry = join(options.repoRoot, path);
   const program = await deps.resolveProgram(entry, root);
-  const sourceHash = await programSourceHash(program, deps.experimental);
   // An entry with no description is still compiled, so a broken one fails
   // the sync whether or not it would have been published.
   const compiled = await deps.compileProgram(program);
@@ -138,28 +136,57 @@ const planEntry = async (
   const doc = patternDocMetadata(await deps.readTextFile(entry));
   // The index finds patterns by what their description says, so one with
   // none would be found by nothing; the report asks for the doc comment.
-  if (doc.description === undefined) {
-    return { path, status: "undescribed", sourceHash };
-  }
+  if (doc.description === undefined) return { path, status: "undescribed" };
+  // The same request `cf pattern publish` sends, so the two agree on the
+  // program, the schemas and the dependencies.
+  const request = publishRequestFor({
+    patternId: compiled.patternId,
+    program: compiled.program,
+    description: doc.description,
+    hashtags: normalizeHashtags(doc.hashtags),
+    keywords: doc.keywords,
+    argumentSchema: compiled.argumentSchema,
+    resultSchema: compiled.resultSchema,
+  });
+  const schemas = {
+    ...(request.argumentSchema === undefined
+      ? {}
+      : { argumentSchema: request.argumentSchema }),
+    ...(request.resultSchema === undefined
+      ? {}
+      : { resultSchema: request.resultSchema }),
+  };
   return {
     path,
     status: "compiled",
-    sourceHash,
-    request: publishRequestFor({
-      patternId: compiled.patternId,
-      program: compiled.program,
-      description: doc.description,
-      hashtags: normalizeHashtags(doc.hashtags),
-      keywords: doc.keywords,
-      argumentSchema: compiled.argumentSchema,
-      resultSchema: compiled.resultSchema,
-    }),
+    pattern: {
+      path,
+      patternId: request.patternId,
+      program: request.program,
+      meta: {
+        description: request.description,
+        hashtags: request.hashtags,
+        ...(request.keywords === undefined
+          ? {}
+          : { keywords: request.keywords }),
+      },
+      ...(Object.keys(schemas).length === 0 ? {} : { schemas }),
+      ...(request.dependencies === undefined
+        ? {}
+        : { dependencies: request.dependencies }),
+    },
   };
 };
 
 /**
- * The plan phase: compiles every entry. An entry that fails to resolve or
- * compile is recorded and the rest still run.
+ * The plan phase: compiles every entry, and names the deleted paths that
+ * could have been entries. An entry that fails to resolve or compile is
+ * recorded and the rest still run.
+ *
+ * A deleted file can no longer say whether it had a default export, so every
+ * deleted path the globs select is named; the index withdraws only those
+ * that are lineages. A path deleted and added again in one push is not
+ * named, since it is still tracked.
  *
  * @throws Error when the program root lies outside the repository.
  */
@@ -176,5 +203,10 @@ export const planRepo = async (
       entries.push({ path, status: "failed", reason: reasonOf(error) });
     }
   }
-  return { entries };
+  const tracked = new Set(await deps.trackedFiles());
+  const selects = selector(options);
+  const removed = [...new Set(deps.deletedPaths)]
+    .filter((path) => selects(path) && !tracked.has(path))
+    .sort();
+  return { entries, removed };
 };

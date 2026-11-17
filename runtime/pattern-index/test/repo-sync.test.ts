@@ -1,11 +1,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { RuntimeProgram } from "@commonfabric/runner";
-import type {
-  PatternIndexClient,
-  PatternIndexPublishRequest,
-  PatternIndexRepoHead,
-} from "../src/client.ts";
+import {
+  BrandSyncError,
+  type BrandSyncPattern,
+  type BrandSyncRequest,
+} from "../src/brand-sync-client.ts";
 import {
   findEntries,
   type PlanDeps,
@@ -13,9 +13,9 @@ import {
   type RepoEntryOptions,
 } from "../src/repo-plan.ts";
 import {
+  type BrandSync,
   type PlannedEntry,
   planProblem,
-  programSourceHash,
   publishPlan,
   reportMarkdown,
   syncFailed,
@@ -36,8 +36,6 @@ export default pattern(() => ({}));
 `;
 
 const HELPER = `export const twice = (n: number) => n * 2;\n`;
-
-const FLAGS = { contentAddressedSchemas: true };
 
 const OPTIONS: RepoEntryOptions = {
   repoRoot: "/repo",
@@ -60,7 +58,8 @@ const programFor = (entry: string, contents: string): RuntimeProgram => {
  */
 const planDeps = (
   files: Record<string, string>,
-  brokenCompile: readonly string[] = [],
+  { brokenCompile = [] as readonly string[], deletedPaths = [] as string[] } =
+    {},
 ): PlanDeps => ({
   trackedFiles: () => Promise.resolve(Object.keys(files)),
   readTextFile: (path) => {
@@ -75,53 +74,55 @@ const planDeps = (
     brokenCompile.some((path) => program.main.endsWith(path))
       ? Promise.reject(new Error("type error at main.tsx:3"))
       : Promise.resolve({ patternId: `id:${program.main}`, program }),
-  experimental: FLAGS,
+  deletedPaths,
 });
 
-/** A compiled plan entry for `path`, as the plan phase writes one. */
-const compiledEntry = (path: string, sourceHash = `hash:${path}`) => ({
+/** A compiled plan entry for `path`. */
+const compiled = (path: string): PlannedEntry & { status: "compiled" } => ({
   path,
-  status: "compiled" as const,
-  sourceHash,
-  request: {
+  status: "compiled",
+  pattern: {
+    path,
     patternId: `id:${path}`,
-    description: "Doubles a number.",
-    hashtags: [],
     program: { main: "/a.tsx", files: [{ name: "/a.tsx", contents: "" }] },
+    meta: { description: "Doubles a number.", hashtags: [] },
   },
 });
 
 /**
- * Publish-phase stand-in for an index holding `heads`. `listingRefused`
- * makes every listing request fail.
+ * An index stand-in. It records each call, answers `created: true` for every
+ * pattern unless `unchanged` names its path, withdraws every removed path,
+ * and refuses with 400 any call carrying a path in `malformed`.
  */
 const fakeIndex = (
-  heads: PatternIndexRepoHead[] = [],
-  { listingRefused = false } = {},
+  { malformed = [] as string[], unchanged = [] as string[] } = {},
 ) => {
-  const published: PatternIndexPublishRequest[] = [];
-  const listed: string[] = [];
-  const client: Pick<
-    PatternIndexClient,
-    "listRepoHeads" | "publishPattern" | "requestListing"
-  > = {
-    listRepoHeads: () => Promise.resolve({ heads }),
-    publishPattern: (request) => {
-      published.push(request);
-      return Promise.resolve({ patternId: request.patternId, created: true });
-    },
-    requestListing: (request) => {
-      if (listingRefused) {
-        return Promise.reject(new Error("pattern index requestListing 429"));
-      }
-      listed.push(request.patternId);
-      return Promise.resolve({
-        patternId: request.patternId,
-        listing: "pending",
-      });
-    },
+  const calls: BrandSyncRequest[] = [];
+  const sync: BrandSync = (request) => {
+    calls.push(request);
+    const patterns = request.patterns ?? [];
+    const bad = patterns.find((pattern) => malformed.includes(pattern.path));
+    if (bad !== undefined) {
+      const index = patterns.indexOf(bad);
+      return Promise.reject(
+        new BrandSyncError(400, `patterns[${index}].program is malformed`),
+      );
+    }
+    return Promise.resolve({
+      brand: { githubOrg: "acme", displayName: "Acme" },
+      results: patterns.map((pattern: BrandSyncPattern) => ({
+        path: pattern.path,
+        patternId: pattern.patternId,
+        lineageId: `lineage:${pattern.path}`,
+        created: !unchanged.includes(pattern.path),
+      })),
+      removed: (request.removed ?? []).map((path) => ({
+        path,
+        withdrawn: true,
+      })),
+    });
   };
-  return { client, published, listed };
+  return { sync, calls };
 };
 
 describe("repo-sync", () => {
@@ -160,79 +161,49 @@ describe("repo-sync", () => {
     });
   });
 
-  describe("programSourceHash()", () => {
-    const program: RuntimeProgram = {
-      main: "/a.tsx",
-      files: [
-        { name: "/a.tsx", contents: "a" },
-        { name: "/b.ts", contents: "b" },
-      ],
-    };
-
-    it("returns the same hash whatever order the files and flags are in", async () => {
-      expect(
-        await programSourceHash(
-          { ...program, files: [...program.files].reverse() },
-          { b: true, a: false },
-        ),
-      ).toBe(await programSourceHash(program, { a: false, b: true }));
-    });
-
-    it("returns a different hash when an imported file's contents change", async () => {
-      expect(
-        await programSourceHash(
-          {
-            ...program,
-            files: [program.files[0], { name: "/b.ts", contents: "B" }],
-          },
-          FLAGS,
-        ),
-      ).not.toBe(await programSourceHash(program, FLAGS));
-    });
-
-    it("returns a different hash when the export the program runs changes", async () => {
-      expect(await programSourceHash({ ...program, mainExport: "x" }, FLAGS))
-        .not.toBe(await programSourceHash(program, FLAGS));
-    });
-
-    it("returns a different hash when the files attached as data change", async () => {
-      expect(
-        await programSourceHash({ ...program, dataFiles: ["/b.ts"] }, FLAGS),
-      ).not.toBe(await programSourceHash(program, FLAGS));
-    });
-
-    it("returns a different hash when a compiler flag changes", async () => {
-      expect(
-        await programSourceHash(program, { contentAddressedSchemas: false }),
-      ).not.toBe(await programSourceHash(program, FLAGS));
-    });
-  });
-
   describe("planRepo()", () => {
-    it("returns a publish request carrying the doc comment's metadata", async () => {
+    it("returns the pattern the index is sent, with the doc comment's metadata", async () => {
       const plan = await planRepo(
         OPTIONS,
         planDeps({ "patterns/a/main.tsx": DESCRIBED }),
       );
-      const sourceHash = await programSourceHash(
-        programFor("/repo/patterns/a/main.tsx", DESCRIBED),
-        FLAGS,
+      expect(plan.entries).toEqual([{
+        path: "patterns/a/main.tsx",
+        status: "compiled",
+        pattern: {
+          path: "patterns/a/main.tsx",
+          patternId: "id:/a/main.tsx",
+          program: {
+            main: "/a/main.tsx",
+            files: [{ name: "/a/main.tsx", contents: DESCRIBED }],
+          },
+          meta: {
+            description: "Doubles a number.",
+            hashtags: ["math"],
+            keywords: ["double"],
+          },
+          dependencies: [],
+        },
+      }]);
+    });
+
+    it("returns an entry with no description as undescribed", async () => {
+      const plan = await planRepo(
+        OPTIONS,
+        planDeps({ "patterns/a/main.tsx": UNDESCRIBED }),
       );
-      expect(plan.entries).toHaveLength(1);
-      const [entry] = plan.entries;
-      expect(entry.status).toBe("compiled");
-      if (entry.status !== "compiled") return;
-      expect(entry.sourceHash).toBe(sourceHash);
-      expect(entry.request.patternId).toBe("id:/a/main.tsx");
-      expect(entry.request.description).toBe("Doubles a number.");
-      expect(entry.request.hashtags).toEqual(["math"]);
-      expect(entry.request.priorPatternId).toBeUndefined();
+      expect(plan.entries).toEqual([{
+        path: "patterns/a/main.tsx",
+        status: "undescribed",
+      }]);
     });
 
     it("returns an entry with no description as failed when it does not compile", async () => {
       const plan = await planRepo(
         OPTIONS,
-        planDeps({ "patterns/a/main.tsx": UNDESCRIBED }, ["/a/main.tsx"]),
+        planDeps({ "patterns/a/main.tsx": UNDESCRIBED }, {
+          brokenCompile: ["/a/main.tsx"],
+        }),
       );
       expect(plan.entries).toEqual([{
         path: "patterns/a/main.tsx",
@@ -246,13 +217,30 @@ describe("repo-sync", () => {
         OPTIONS,
         planDeps({
           "patterns/a/main.tsx": DESCRIBED,
-          "patterns/b/main.tsx": UNDESCRIBED,
-        }, ["/a/main.tsx"]),
+          "patterns/b/main.tsx": DESCRIBED,
+        }, { brokenCompile: ["/a/main.tsx"] }),
       );
       expect(plan.entries.map((entry) => [entry.path, entry.status])).toEqual([
         ["patterns/a/main.tsx", "failed"],
-        ["patterns/b/main.tsx", "undescribed"],
+        ["patterns/b/main.tsx", "compiled"],
       ]);
+    });
+
+    it("returns as removed the deleted paths the globs select and the tree no longer holds", async () => {
+      const plan = await planRepo(
+        OPTIONS,
+        planDeps({ "patterns/back/main.tsx": DESCRIBED }, {
+          deletedPaths: [
+            "patterns/gone/main.tsx",
+            "patterns/gone/main.tsx",
+            "patterns/back/main.tsx",
+            "patterns/dev/old.tsx",
+            "patterns/gone/main.test.tsx",
+            "patterns/gone/README.md",
+          ],
+        }),
+      );
+      expect(plan.removed).toEqual(["patterns/gone/main.tsx"]);
     });
 
     it("throws when the program root lies outside the repository", async () => {
@@ -269,220 +257,177 @@ describe("repo-sync", () => {
         planDeps({
           "patterns/a/main.tsx": DESCRIBED,
           "patterns/b/main.tsx": UNDESCRIBED,
-        }, ["/b/main.tsx"]),
+          "patterns/c/main.tsx": DESCRIBED,
+        }, { brokenCompile: ["/c/main.tsx"] }),
       );
       expect(planProblem(JSON.parse(JSON.stringify(plan)))).toBeUndefined();
     });
 
     it("returns what is wrong with a malformed plan", () => {
       expect(planProblem([])).toBe("the plan has no list of entries");
-      expect(planProblem({ entries: [{ status: "compiled" }] })).toBe(
-        "entries[0] has no path",
+      expect(planProblem({ entries: [] })).toBe(
+        "the plan has no list of removed paths",
       );
-      expect(planProblem({ entries: [{ path: "a", status: "compiled" }] }))
-        .toBe("entries[0] has no source hash");
+      expect(planProblem({ entries: [{ status: "compiled" }], removed: [] }))
+        .toBe("entries[0] has no path");
       expect(
         planProblem({
-          entries: [{ path: "a", status: "compiled", sourceHash: "h" }],
-        }),
-      ).toBe("entries[0] has no publish request");
-      expect(
-        planProblem({
-          entries: [{ path: "a", status: "shipped", sourceHash: "h" }],
+          entries: [{ path: "a", status: "shipped" }],
+          removed: [],
         }),
       ).toBe("entries[0] has an unknown status");
+      expect(
+        planProblem({
+          entries: [{ ...compiled("a"), pattern: compiled("b").pattern }],
+          removed: [],
+        }),
+      ).toBe("entries[0] has no pattern for its path");
     });
   });
 
   describe("publishPlan()", () => {
-    it("publishes a changed entry with the job's repository and commit as its source, and asks for listing", async () => {
-      const { client, published, listed } = fakeIndex();
+    it("sends the job's repository and commit, with the removals in the first call", async () => {
+      const { sync, calls } = fakeIndex();
       const report = await publishPlan(
-        { entries: [compiledEntry("patterns/a/main.tsx")] },
+        { entries: [compiled("p/a.tsx")], removed: ["p/gone.tsx"] },
         PUBLISH_OPTIONS,
-        client,
+        sync,
       );
-      expect(report.entries).toEqual([{
-        path: "patterns/a/main.tsx",
-        status: "published",
-        patternId: "id:patterns/a/main.tsx",
-      }]);
-      expect(published[0].source).toEqual({
+      expect(calls).toEqual([{
         repository: "acme/patterns",
-        path: "patterns/a/main.tsx",
         commit: "c0ffee",
-        sourceHash: "hash:patterns/a/main.tsx",
-      });
-      expect(listed).toEqual(["id:patterns/a/main.tsx"]);
-    });
-
-    it("publishes nothing for an entry whose hash matches its head", async () => {
-      const { client, published } = fakeIndex([{
-        path: "patterns/a/main.tsx",
-        patternId: "old",
-        sourceHash: "same",
-        commit: "beef",
+        patterns: [compiled("p/a.tsx").pattern],
+        removed: ["p/gone.tsx"],
       }]);
-      const report = await publishPlan(
-        { entries: [compiledEntry("patterns/a/main.tsx", "same")] },
-        PUBLISH_OPTIONS,
-        client,
-      );
+      expect(report.brand).toBe("Acme");
       expect(report.entries).toEqual([{
-        path: "patterns/a/main.tsx",
-        status: "unchanged",
-        patternId: "old",
+        path: "p/a.tsx",
+        status: "published",
+        patternId: "id:p/a.tsx",
       }]);
-      expect(published).toEqual([]);
+      expect(report.withdrawn).toEqual(["p/gone.tsx"]);
     });
 
-    it("returns an entry as unchanged when the index says its head already has the id", async () => {
-      const { client } = fakeIndex();
-      client.publishPattern = (request) =>
-        Promise.resolve({
-          patternId: request.patternId,
-          created: false,
-          unchanged: true,
-        });
+    it("sends at most 25 patterns a call", async () => {
+      const { sync, calls } = fakeIndex();
+      const entries = Array.from(
+        { length: 26 },
+        (_, i) => compiled(`p/${String(i).padStart(2, "0")}.tsx`),
+      );
+      await publishPlan({ entries, removed: [] }, PUBLISH_OPTIONS, sync);
+      expect(calls.map((call) => call.patterns?.length)).toEqual([25, 1]);
+    });
+
+    it("returns an entry the lineage already had as unchanged", async () => {
+      const { sync } = fakeIndex({ unchanged: ["p/a.tsx"] });
       const report = await publishPlan(
-        { entries: [compiledEntry("patterns/a/main.tsx")] },
+        { entries: [compiled("p/a.tsx")], removed: [] },
         PUBLISH_OPTIONS,
-        client,
+        sync,
       );
       expect(report.entries[0].status).toBe("unchanged");
     });
 
-    it("returns a publish the index dropped the source from as failed", async () => {
-      const { client } = fakeIndex();
-      client.publishPattern = (request) =>
-        Promise.resolve({
-          patternId: request.patternId,
-          created: true,
-          ignored: ["source"],
-        });
-      const report = await publishPlan(
-        { entries: [compiledEntry("patterns/a/main.tsx")] },
-        PUBLISH_OPTIONS,
-        client,
-      );
-      expect(report.entries[0]).toEqual({
-        path: "patterns/a/main.tsx",
-        status: "failed",
-        reason: "the index ignored the repository source",
-      });
-    });
-
-    it("returns a refused publish as failed and still publishes the other entries", async () => {
-      const { client, published } = fakeIndex();
-      const publishPattern = client.publishPattern;
-      client.publishPattern = (request) =>
-        request.patternId === "id:patterns/a/main.tsx"
-          ? Promise.reject(new Error("pattern index publishPattern 403"))
-          : publishPattern(request);
+    it("sends a refused call's patterns one to a call, failing only the malformed one", async () => {
+      const { sync, calls } = fakeIndex({ malformed: ["p/b.tsx"] });
       const report = await publishPlan(
         {
-          entries: [
-            compiledEntry("patterns/a/main.tsx"),
-            compiledEntry("patterns/b/main.tsx"),
-          ],
+          entries: [compiled("p/a.tsx"), compiled("p/b.tsx")],
+          removed: ["p/gone.tsx"],
         },
         PUBLISH_OPTIONS,
-        client,
+        sync,
       );
-      expect(report.entries.map((entry) => entry.status)).toEqual([
-        "failed",
-        "published",
+      expect(calls.map((call) => [
+        call.patterns?.map((pattern) => pattern.path),
+        call.removed,
+      ])).toEqual([
+        [["p/a.tsx", "p/b.tsx"], ["p/gone.tsx"]],
+        [[], ["p/gone.tsx"]],
+        [["p/a.tsx"], undefined],
+        [["p/b.tsx"], undefined],
       ]);
-      expect(published.map((request) => request.source?.path)).toEqual([
-        "patterns/b/main.tsx",
+      expect(report.entries).toEqual([
+        { path: "p/a.tsx", status: "published", patternId: "id:p/a.tsx" },
+        {
+          path: "p/b.tsx",
+          status: "failed",
+          reason:
+            "pattern index syncBrandPatterns 400: patterns[0].program is malformed",
+        },
       ]);
+      expect(report.withdrawn).toEqual(["p/gone.tsx"]);
       expect(syncFailed(report)).toBe(true);
     });
 
-    it("carries the plan's failed and undescribed entries into the report, publishing neither", async () => {
+    it("sends removals alone when there is no pattern to send", async () => {
+      const { sync, calls } = fakeIndex();
+      await publishPlan(
+        { entries: [], removed: ["p/gone.tsx"] },
+        PUBLISH_OPTIONS,
+        sync,
+      );
+      expect(calls.map((call) => call.removed)).toEqual([["p/gone.tsx"]]);
+    });
+
+    it("makes no call when there is nothing to send", async () => {
+      const { sync, calls } = fakeIndex();
+      await publishPlan(
+        { entries: [{ path: "p/a.tsx", status: "undescribed" }], removed: [] },
+        PUBLISH_OPTIONS,
+        sync,
+      );
+      expect(calls).toEqual([]);
+    });
+
+    it("throws when the index refuses the caller", async () => {
+      await expect(
+        publishPlan(
+          { entries: [compiled("p/a.tsx")], removed: [] },
+          PUBLISH_OPTIONS,
+          () => Promise.reject(new BrandSyncError(403, "repo not enrolled")),
+        ),
+      ).rejects.toThrow("403");
+    });
+
+    it("returns an entry the index answered nothing for as failed", async () => {
+      const report = await publishPlan(
+        { entries: [compiled("p/a.tsx")], removed: [] },
+        PUBLISH_OPTIONS,
+        () =>
+          Promise.resolve({
+            brand: { githubOrg: "acme", displayName: "Acme" },
+            results: [],
+            removed: [],
+          }),
+      );
+      expect(report.entries).toEqual([{
+        path: "p/a.tsx",
+        status: "failed",
+        reason: "the index returned no result for it",
+      }]);
+    });
+
+    it("carries the plan's failed and undescribed entries into the report", async () => {
       const failed: PlannedEntry = {
-        path: "patterns/a/main.tsx",
+        path: "p/a.tsx",
         status: "failed",
         reason: "type error",
       };
-      const { client, published } = fakeIndex();
+      const { sync } = fakeIndex();
       const report = await publishPlan(
         {
-          entries: [failed, {
-            path: "patterns/b/main.tsx",
-            status: "undescribed",
-            sourceHash: "h",
-          }],
+          entries: [failed, { path: "p/b.tsx", status: "undescribed" }],
+          removed: [],
         },
         PUBLISH_OPTIONS,
-        client,
+        sync,
       );
       expect(report.entries).toEqual([failed, {
-        path: "patterns/b/main.tsx",
+        path: "p/b.tsx",
         status: "undescribed",
       }]);
-      expect(published).toEqual([]);
       expect(syncFailed(report)).toBe(true);
-    });
-
-    it("returns a refused listing request without failing the entry", async () => {
-      const { client } = fakeIndex([], { listingRefused: true });
-      const report = await publishPlan(
-        { entries: [compiledEntry("patterns/a/main.tsx")] },
-        PUBLISH_OPTIONS,
-        client,
-      );
-      expect(report.entries[0].status).toBe("published");
-      expect(report.listingFailures).toEqual([{
-        path: "patterns/a/main.tsx",
-        reason: "pattern index requestListing 429",
-      }]);
-      expect(syncFailed(report)).toBe(false);
-    });
-
-    it("throws, publishing nothing, when the index refuses to list the heads", async () => {
-      const { client, published } = fakeIndex();
-      client.listRepoHeads = () =>
-        Promise.reject(new Error("pattern index listRepoHeads 401"));
-      await expect(
-        publishPlan(
-          { entries: [compiledEntry("patterns/a/main.tsx")] },
-          PUBLISH_OPTIONS,
-          client,
-        ),
-      ).rejects.toThrow("401");
-      expect(published).toEqual([]);
-    });
-
-    it("returns the head paths that are no longer entries, and the gate findings heads carry", async () => {
-      const finding = {
-        file: "/gone.tsx",
-        line: 4,
-        category: "contact",
-        why: "names a | person",
-      };
-      const { client } = fakeIndex([{
-        path: "patterns/gone.tsx",
-        patternId: "g",
-        sourceHash: "h",
-        commit: "c",
-        gates: {
-          privacy: { status: "failed", attempt: 1, findings: [finding] },
-          quality: { status: "passed", attempt: 1, findings: [] },
-        },
-      }]);
-      const report = await publishPlan(
-        { entries: [] },
-        PUBLISH_OPTIONS,
-        client,
-      );
-      expect(report.gone).toEqual(["patterns/gone.tsx"]);
-      expect(report.gardeners).toEqual([{
-        path: "patterns/gone.tsx",
-        gardener: "privacy",
-        status: "failed",
-        findings: [finding],
-      }]);
     });
   });
 
@@ -491,29 +436,20 @@ describe("repo-sync", () => {
       const markdown = reportMarkdown({
         repository: "acme/patterns",
         commit: "0123456789abcdef",
+        brand: "Acme",
         entries: [
           { path: "p/a.tsx", status: "published", patternId: "A" },
           { path: "p/b.tsx", status: "unchanged", patternId: "B" },
           { path: "p/c.tsx", status: "undescribed" },
           { path: "p/d.tsx", status: "failed", reason: "bad | thing\nhere" },
         ],
-        listingFailures: [],
-        gone: ["p/e.tsx"],
-        gardeners: [{
-          path: "p/b.tsx",
-          gardener: "privacy",
-          status: "failed",
-          findings: [{ category: "contact", why: "a | b" }],
-        }],
+        withdrawn: ["p/e.tsx"],
       });
       expect(markdown).toContain(
-        "At `0123456789ab`: 4 entries, 1 published, 1 unchanged, 1 without a description, 1 failed.",
+        "At `0123456789ab`, as Acme: 4 entries, 1 published, 1 unchanged, 1 without a description, 1 failed.",
       );
       expect(markdown).toContain("| `p/d.tsx` | bad \\| thing here |");
       expect(markdown).toContain("| `p/a.tsx` | `A` |");
-      expect(markdown).toContain(
-        "| `p/b.tsx` | privacy | failed | contact |  | a \\| b |",
-      );
       expect(markdown).toContain("- `p/c.tsx`");
       expect(markdown).toContain("- `p/e.tsx`");
     });
