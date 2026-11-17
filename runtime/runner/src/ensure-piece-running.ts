@@ -114,12 +114,9 @@ async function startInputSources(
   unstarted?: { source: NormalizedFullLink; verdict: EnsurePieceVerdict }[],
 ): Promise<EnsurePieceVerdict | undefined> {
   const signal = options?.signal;
-  const sources = await inputSourcesOf(
-    runtime,
-    owner,
-    signal,
-    options?.enclosingSourcesOnly === true,
-  );
+  const sources = options?.enclosingSourcesOnly === true
+    ? await enclosingPieceOf(runtime, owner, signal)
+    : await inputSourcesOf(runtime, owner, signal);
   for (const source of sources) {
     const key = rootKey(source);
     if (visited.has(key)) continue;
@@ -138,13 +135,10 @@ async function startInputSources(
         ...(options?.forEvent !== undefined && { forEvent: options.forEvent }),
         ...(options?.enclosingSourcesOnly !== undefined &&
           { enclosingSourcesOnly: options.enclosingSourcesOnly }),
-        ...(options?.onSourceStarted !== undefined &&
-          { onSourceStarted: options.onSourceStarted }),
       },
       visited,
     );
     signal?.throwIfAborted();
-    if (verdict.started) options?.onSourceStarted?.(verdict.root ?? source);
     if (!verdict.started && verdict.reason === "origin-pending") return verdict;
     if (!verdict.started && verdict.reason !== "no-pattern-meta") {
       unstarted?.push({ source, verdict });
@@ -158,15 +152,12 @@ async function startInputSources(
  * that `owner`'s stored argument links to, at any depth. Each argument and
  * derived document a setup writes carries a `result` backlink to the piece it
  * belongs to, which `followResultCellChain()` follows, once for each document
- * however many links name it. With `enclosingOnly`, a linked document that is
- * its own owning root is left out, so what remains are the pieces enclosing
- * `owner` (`EnsurePieceOptions.enclosingSourcesOnly` says why).
+ * however many links name it.
  */
 async function inputSourcesOf(
   runtime: Runtime,
   owner: OwningRootAddress,
   signal: AbortSignal | undefined,
-  enclosingOnly: boolean,
 ): Promise<NormalizedFullLink[]> {
   const tx = runtime.edit();
   tx.tx.immediate = true;
@@ -199,7 +190,6 @@ async function inputSourcesOf(
       if (root === undefined) continue;
       const source = root.getAsNormalizedFullLink();
       const key = rootKey(source);
-      if (enclosingOnly && key === document) continue;
       if (key !== ownerKey) sources.set(key, { ...source, path: [] });
     }
     return [...sources.values()];
@@ -207,6 +197,89 @@ async function inputSourcesOf(
     runtime.prepareTxForCommit(tx);
     await tx.commit().settled;
   }
+}
+
+/**
+ * Helper for `startInputSources()`, which returns the piece that encloses the
+ * piece at `owner`, the one recording it as the output of a nested node of
+ * its own graph ({@link enclosesAsNested}), as a list of that one piece, or
+ * an empty list where no piece does. The search starts from the pieces
+ * `owner`'s argument links into (`inputSourcesOf()`) and goes up through
+ * theirs in turn, so a nested instance whose argument links only a sibling's
+ * output finds the instance enclosing them both; each piece is asked once.
+ */
+async function enclosingPieceOf(
+  runtime: Runtime,
+  owner: OwningRootAddress,
+  signal: AbortSignal | undefined,
+): Promise<NormalizedFullLink[]> {
+  const asked = new Set([rootKey(owner)]);
+  let frontier = await inputSourcesOf(runtime, owner, signal);
+  while (frontier.length > 0) {
+    const next: NormalizedFullLink[] = [];
+    for (const candidate of frontier) {
+      const key = rootKey(candidate);
+      if (asked.has(key)) continue;
+      asked.add(key);
+      const tx = runtime.edit();
+      tx.tx.immediate = true;
+      try {
+        if (await enclosesAsNested(runtime, candidate, owner, tx, signal)) {
+          return [candidate];
+        }
+      } finally {
+        runtime.prepareTxForCommit(tx);
+        await tx.commit().settled;
+      }
+      for (const source of await inputSourcesOf(runtime, candidate, signal)) {
+        next.push(source);
+      }
+    }
+    frontier = next;
+  }
+  return [];
+}
+
+/**
+ * Helper for `enclosingPieceOf()`, which indicates whether the piece at
+ * `candidate` records the piece at `owner` as the output of a nested node of
+ * its own graph: one of its `internal` documents holds, as its whole value, a
+ * link to `owner`'s root.
+ */
+async function enclosesAsNested(
+  runtime: Runtime,
+  candidate: NormalizedFullLink,
+  owner: OwningRootAddress,
+  tx: IExtendedStorageTransaction,
+  signal: AbortSignal | undefined,
+): Promise<boolean> {
+  const root = runtime.getCellFromLink(candidate, undefined, tx);
+  await root.sync();
+  signal?.throwIfAborted();
+  const internal = root.getMetaRaw("internal");
+  if (!Array.isArray(internal)) return false;
+  const ownerKey = rootKey(owner);
+  for (const entry of internal) {
+    const link = isKeyableObjectOrArray(entry)
+      ? parseLink((entry as { link?: unknown }).link, root)
+      : undefined;
+    if (link === undefined || link.space !== owner.space) continue;
+    const document = runtime.getCellFromLink(
+      { ...link, path: [] },
+      undefined,
+      tx,
+    );
+    await document.sync();
+    signal?.throwIfAborted();
+    const value = parseLink(document.getRaw(), document);
+    if (
+      value !== undefined && value.path.length === 0 &&
+      rootKey(value) === ownerKey
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -410,22 +483,24 @@ export type EnsurePieceOptions = {
 
   /**
    * With `startInputSources`, start only the pieces that ENCLOSE the owning
-   * piece, the instances whose graphs set it up as a nested one, and theirs
-   * in turn, not every piece whose output its argument links to. A nested
-   * instance's stored argument links into its enclosing instance's argument
-   * and internal documents, each of which carries a `result` backlink naming
-   * that instance, and the nested root stores no other pointer to it; a piece
-   * wired to another's output links that piece's result root, which carries
-   * none. So a link whose document is not its own owning root names an
-   * enclosing piece, and a link to a root is left to the event path.
+   * piece, the instances whose graphs set it up as a nested node, and theirs
+   * in turn, not every piece whose output its argument links to. The nested
+   * root stores no pointer to its enclosing instance; what the runtime stores
+   * is the other direction. Setup records each nested node's output among the
+   * enclosing instance's `internal` documents, as a document whose whole
+   * value is a link to the nested instance's root. So the walk looks for the
+   * piece that records the owning piece that way, starting from the pieces
+   * the owning piece's argument links into and going up through theirs, as a
+   * nested instance fed only by a sibling's output needs, and starts that one
+   * piece; the walk then does the same for it. A child a handler made is held behind a value-link slot, never
+   * named that way, so its creator is left to the event path, as is a piece
+   * wired to another's output, and the owner of any other document the
+   * argument links into. A pattern that itself stores a link straight to a
+   * piece's root as the whole value of a document it owns reads as enclosing
+   * that piece; a nested instance whose argument links into its enclosing
+   * instance only at that instance's result root, or not at all, is not found.
    */
   enclosingSourcesOnly?: boolean;
-
-  /**
-   * Called with the root of each piece the walk started as a source of
-   * another (`startInputSources`), at any depth, after its start.
-   */
-  onSourceStarted?: (root: OwningRootAddress) => void;
 
   /**
    * The walk delivers an event, so each piece it starts, the pieces its
@@ -683,12 +758,6 @@ export type StartWithInputSourcesOptions = {
    * what it has, as it leaves an opened piece.
    */
   followOrigins?: boolean;
-
-  /**
-   * Called with the root of each enclosing piece the open started, at any
-   * depth, so a caller can release it once the opened piece stops.
-   */
-  onSourceStarted?: (root: OwningRootAddress) => void;
 };
 
 /**
@@ -704,7 +773,10 @@ export type StartWithInputSourcesOptions = {
  * auto-load starts it, as before. `start` runs whether or not an enclosing
  * piece's graph set `piece` up as its child, so the opened piece has a
  * lifetime of its own: an enclosing piece that stops or re-instantiates leaves
- * it running, as it leaves a piece opened before what encloses it.
+ * it running, as it leaves a piece opened before what encloses it. Each
+ * enclosing piece this starts is started in its own right too, and runs until
+ * it is stopped itself or the runtime ends, outliving the opened piece, as a
+ * piece an event's auto-load starts does.
  *
  * Starting what encloses `piece` is best effort. An enclosing piece that
  * cannot start, one whose origin's follow cannot be settled, and an argument
@@ -747,7 +819,7 @@ export async function startWithInputSources(
 async function startEnclosingFollowingOrigins(
   runtime: Runtime,
   root: OwningRootAddress,
-  { followOrigins = false, onSourceStarted }: StartWithInputSourcesOptions,
+  { followOrigins = false }: StartWithInputSourcesOptions,
 ): Promise<void> {
   const followed = new Map<string, OwningRootAddress>();
   let owed: OwningRootAddress[] = [];
@@ -771,7 +843,6 @@ async function startEnclosingFollowingOrigins(
         startInputSources: true,
         enclosingSourcesOnly: true,
         ...(originFollowed !== undefined && { originFollowed }),
-        ...(onSourceStarted !== undefined && { onSourceStarted }),
       },
       new Set([rootKey(root)]),
       unstarted,

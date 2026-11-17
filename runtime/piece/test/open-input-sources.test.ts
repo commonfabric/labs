@@ -4,8 +4,7 @@
  * what they derived last. The piece here is a nested instance whose input its
  * enclosing instance derives, and the enclosing instance's input changes
  * while no runtime runs it, so only an enclosing instance that starts again
- * derives the current value. The controller stops an enclosing piece its open
- * started once the opened piece stops, and not before.
+ * derives the current value.
  */
 
 import { expect } from "@std/expect";
@@ -184,26 +183,14 @@ describe("pieces-controller", () => {
     expect(await seen()).toBe(10);
   });
 
-  it("stops the enclosing piece its open started once the opened piece stops", async () => {
+  it("leaves the opened piece running when the enclosing piece its open started stops", async () => {
     const opened = await nested();
     await readerPieces.startPiece(opened);
     expect(readerRuntime.runner.isRunning(enclosing())).toBe(true);
-
-    await readerPieces.stopPiece(opened);
-
-    expect(readerRuntime.runner.isRunning(opened)).toBe(false);
-    expect(readerRuntime.runner.isRunning(enclosing())).toBe(false);
-  });
-
-  it("leaves running an enclosing piece its open started while the opened piece runs", async () => {
-    const opened = await nested();
-    await readerPieces.startPiece(opened);
 
     await readerPieces.stopPiece(enclosing());
 
-    expect(readerRuntime.runner.isRunning(enclosing())).toBe(true);
-    expect(await recordThenRead()).toBe(10);
-    await readerPieces.stopPiece(opened);
     expect(readerRuntime.runner.isRunning(enclosing())).toBe(false);
+    expect(readerRuntime.runner.isRunning(opened)).toBe(true);
   });
 });

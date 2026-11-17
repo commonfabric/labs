@@ -4,6 +4,8 @@ import { Identity } from "@commonfabric/identity";
 import { getLogger } from "@commonfabric/logger";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import type { Cell } from "../src/cell.ts";
+
 import {
   ensurePieceRunningVerdict,
   type OwningRootAddress,
@@ -134,6 +136,74 @@ const THREE_LEVEL: RuntimeProgram = {
       "  const doubled = computed(() => value * 2);",
       "  const between = middle({ doubled, seen: seen! });",
       "  return { doubled, record: between.record };",
+      "});",
+    ].join("\n"),
+  }],
+};
+
+// A creator that sets `Child` up as a nested node of its own graph, and makes
+// another `Child` from a handler, each from the creator's `label`.
+const CREATOR_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, handler, pattern, Writable } from 'commonfabric';",
+      "",
+      "const Child = pattern<{ label: string }, { shown: string }>(",
+      "  ({ label }) => ({ shown: computed(() => label + '!') }),",
+      ");",
+      "",
+      "const spawn = handler<",
+      "  unknown,",
+      "  { label: string; spawned: Writable<unknown[]> }",
+      ">((_event, { label, spawned }) => {",
+      "  spawned.push(Child({ label }));",
+      "});",
+      "",
+      "export default pattern<{ name: string }>(({ name }) => {",
+      "  const label = computed(() => name + ' label');",
+      "  const spawned = new Writable<unknown[]>([]).for('spawned');",
+      "  const nested = Child({ label });",
+      "  return { nested, spawned, spawn: spawn({ label, spawned }) };",
+      "});",
+    ].join("\n"),
+  }],
+};
+
+// `PROGRAM` with the recorder fed by a sibling nested instance's output, so
+// the recorder's argument links only into that sibling.
+const SIBLING_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, Default, handler, pattern, Stream, Writable } from 'commonfabric';",
+      "",
+      "type Seen = Writable<number | Default<0>>;",
+      "",
+      "const producer = pattern<{ value: number }, { doubled: number }>(",
+      "  ({ value }) => ({ doubled: computed(() => value * 2) }),",
+      ");",
+      "",
+      "const record = handler<unknown, { doubled?: number; seen: Seen }>(",
+      "  (_event, { doubled, seen }) => {",
+      "    seen.set(doubled ?? -1);",
+      "  },",
+      ");",
+      "",
+      "const recorder = pattern<",
+      "  { doubled?: number; seen: Seen },",
+      "  { record: Stream<unknown> }",
+      ">(({ doubled, seen }) => ({ record: record({ doubled, seen }) }));",
+      "",
+      "export default pattern<",
+      "  { value: number; seen?: Seen },",
+      "  { doubled: number; record: Stream<unknown> }",
+      ">(({ value, seen }) => {",
+      "  const sibling = producer({ value });",
+      "  const nested = recorder({ doubled: sibling.doubled, seen: seen! });",
+      "  return { doubled: sibling.doubled, record: nested.record };",
       "});",
     ].join("\n"),
   }],
@@ -545,46 +615,76 @@ describe("ensure-piece-running", () => {
       return { first, producers };
     };
 
-    it("starts a piece whose argument or internal document another's argument links into, and not one whose result root it links to", async () => {
-      const { first, producers } = await stoppedProducers([
-        "linked root",
-        "linked argument",
-        "opened",
-      ]);
-      const [rootLinked, argumentLinked, opened] = producers;
-      // The opened piece's stored argument gains a link to one producer's
-      // result root, as `cf piece link` writes one, and one into another's
-      // stored argument, as a nested instance's links into what encloses it.
+    it("starts the creator of a nested child opened on its own, and not the creator of a child a handler made", async () => {
+      const first = newRuntime();
+      const compiled = await first.patternManager.compilePattern(
+        CREATOR_PROGRAM,
+        { space },
+      );
+      const creator = first.getCell<Record<string, unknown>>(
+        space,
+        "input sources creator",
+        undefined,
+      );
       {
         const tx = first.edit();
-        const stored = first.getCellFromLink(
-          getMetaLink(opened, "argument")!,
-        ).withTx(tx);
-        stored.key("root").set(rootLinked);
-        stored.key("inner").set(
-          first.getCellFromLink(getMetaLink(argumentLinked, "argument")!),
-        );
+        first.run(tx, compiled, { name: "n" }, creator);
         expect((await tx.commit().settled).error).toBeUndefined();
       }
-      for (const producer of producers) first.runner.stop(producer);
+      await creator.pull();
+      await first.idle();
+      {
+        const tx = first.edit();
+        creator.withTx(tx).key("spawn").send({});
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      await first.idle();
+      await creator.pull();
+      const nestedLink = creator.key("nested").resolveAsCell()
+        .getAsNormalizedFullLink();
+      const [spawned] = creator.key("spawned").asSchema({
+        type: "array",
+        items: { type: "unknown", asCell: ["cell"] },
+      }).get() as Cell<unknown>[];
+      const spawnedLink = spawned.resolveAsCell().getAsNormalizedFullLink();
+      // Both children's stored arguments link the creator's `label`.
+      expect(spawnedLink.id).not.toBe(nestedLink.id);
+      first.runner.stop(creator);
       await first.idle();
       await first.storageManager.synced();
 
-      const opener = newRuntime();
-      const [openedRoot, openedArgument, openedPiece] = producers.map((
-        producer,
-      ) => opener.getCellFromLink(producer.getAsNormalizedFullLink()));
-      await openedPiece.sync();
-      const started = await startWithInputSources(
-        opener,
-        openedPiece,
-        () => opener.start(openedPiece),
-      );
+      for (
+        const [child, startsCreator] of [[spawnedLink, false], [
+          nestedLink,
+          true,
+        ]] as const
+      ) {
+        const opener = newRuntime();
+        const opened = opener.getCellFromLink({ ...child, path: [] });
+        await opened.sync();
 
-      expect(started).toBe(true);
-      expect(opener.runner.isRunning(openedPiece)).toBe(true);
-      expect(opener.runner.isRunning(openedArgument)).toBe(true);
-      expect(opener.runner.isRunning(openedRoot)).toBe(false);
+        await startWithInputSources(opener, opened, () => opener.start(opened));
+
+        expect(opener.runner.isRunning(opened)).toBe(true);
+        expect(
+          opener.runner.isRunning(
+            opener.getCellFromLink(creator.getAsNormalizedFullLink()),
+          ),
+        ).toBe(startsCreator);
+      }
+    });
+
+    it("starts the piece enclosing a nested piece whose argument links only a sibling's output", async () => {
+      const { stream, enclosing } = await stopAfterInputChanges(
+        SIBLING_PROGRAM,
+      );
+      const opener = newRuntime();
+
+      const { seen } = await openThenEvent(opener, stream);
+
+      expect(seen).toBe(10);
+      expect(opener.runner.isRunning(opener.getCellFromLink(enclosing)))
+        .toBe(true);
     });
 
     it("starts none of the pieces whose results a hub's argument links to", async () => {
