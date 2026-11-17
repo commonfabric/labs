@@ -43,9 +43,6 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
     rules: [rule("subject", "invoice"), rule("subject", "lunch", false)],
     history: [],
     published: null,
-    // Given, not minted: a pseudonym minted in the event that sends it makes
-    // the test flaky (README.md, "Known runtime issues", 3).
-    pseudonym: "p-alice-bills",
     pool: setup.pool,
   });
   return {
@@ -74,7 +71,6 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     rules: [rule("subject", "invoice"), rule("subject", "bill")],
     history: [],
     published: null,
-    pseudonym: "p-bob-bills",
     pool: setup.pool,
   });
   return {

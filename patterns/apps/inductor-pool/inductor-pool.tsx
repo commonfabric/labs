@@ -174,30 +174,23 @@ export const tallyEveryRule = lift(
 // =============================================================================
 
 /**
- * The index of the contribution `actor` already holds under `pseudonym`, or
- * -1 when they hold none. Throws when `actor` holds one under another
- * pseudonym, or another principal holds `pseudonym`: a pseudonym is one
- * principal's, and a principal has one.
+ * The index of the contribution `actor` holds, or -1 when they hold none.
+ * Throws when another principal holds `pseudonym`, if one is given: a
+ * pseudonym is one principal's.
  */
 function slotOf(
   contributions: Writable<StoredContribution[]>,
   actor: string,
-  pseudonym: string,
+  pseudonym?: string,
 ): number {
   const stored = contributions.get();
   let mine = -1;
   for (let i = 0; i < stored.length; i++) {
     const author = principalOf(contributions.key(i), "authored-by");
-    const sameName = stored[i]?.pseudonym === pseudonym;
-    if (author === actor && !sameName) {
-      throw new Error(
-        "You already contribute to this pool under another pseudonym.",
-      );
-    }
-    if (author !== actor && sameName) {
+    if (author === actor) mine = i;
+    else if (pseudonym !== undefined && stored[i]?.pseudonym === pseudonym) {
       throw new Error("That pseudonym belongs to another contributor.");
     }
-    if (author === actor) mine = i;
   }
   return mine;
 }
@@ -214,21 +207,31 @@ export interface SubmitState {
   jitter: number;
 }
 
-/** A contribution as `submit` takes it. */
+/**
+ * A contribution as `submit` takes it, or, with `withdraw`, the sender's
+ * request to take theirs out (`withdraw` sends that).
+ */
 export interface ContributionEvent {
-  pseudonym: string;
-  rules: CanonicalRule[];
+  pseudonym?: string;
+  rules?: CanonicalRule[];
+  withdraw?: boolean;
 }
 
 /**
- * Takes one pseudonym's whole rule set, replacing any set it gave before.
+ * Takes a contributor's whole rule set, replacing any set they gave before,
+ * or, for `{ withdraw: true }`, removes theirs.
  *
- * The pool binds a pseudonym to the principal who first used it here and a
- * principal to one pseudonym: the stored contribution's `authored-by` label is
- * the runtime's, so a contributor cannot submit under someone else's
- * pseudonym, or under a second one of their own to be counted twice. A
- * refused submission throws and stores nothing. Every rule is checked against
- * the grammar again and stored in canonical form.
+ * A contributor is the principal the runtime labels their contribution
+ * `authored-by`, not the pseudonym they send: each principal holds one entry,
+ * so no one is counted twice. A principal who sends a pseudonym other than the
+ * one they hold replaces their entry under the new one; nothing links the two
+ * that the `authored-by` label did not already. A pseudonym another principal
+ * holds is refused, so no one contributes under someone else's. A refused
+ * submission throws and stores nothing. Every rule is checked against the
+ * grammar again and stored in canonical form.
+ *
+ * Withdrawing is the same handler, so every write to the contributions is
+ * this one function's, which is what the release's input witness requires.
  *
  * CFC DEBT, cut 2 (pseudonym linkability): the `authored-by` label, and the
  * commit that writes the contribution, name the contributor's core identity,
@@ -245,6 +248,11 @@ export const submitContribution = handler<ContributionEvent, SubmitState>(
     if (actor === undefined) {
       throw new Error("A contribution needs an authenticated contributor.");
     }
+    if (event?.withdraw === true) {
+      const mine = slotOf(contributions, actor);
+      if (mine >= 0) contributions.removeByValue(contributions.key(mine));
+      return;
+    }
     const pseudonym = typeof event?.pseudonym === "string"
       ? event.pseudonym.trim()
       : "";
@@ -255,7 +263,8 @@ export const submitContribution = handler<ContributionEvent, SubmitState>(
     // Randomness is allowed only in a handler, so the first contribution mints
     // the secret, and seals the threshold beside it; every later one copies
     // that seal. A concurrent first contribution conflicts on the list, which
-    // this handler read, and, retried, copies the seal that landed.
+    // this handler read, and, retried, copies the seal that landed. Once every
+    // contributor has withdrawn, the next contribution seals afresh.
     const seal = contributions.get()[0]?.seal ??
       mintSeal(Math.random, { thresholdCenter, jitter });
 
@@ -277,6 +286,18 @@ export const submitContribution = handler<ContributionEvent, SubmitState>(
     } else contributions.push(contribution);
   },
 );
+
+/**
+ * Takes the sender's contribution out of the pool, whatever pseudonym it is
+ * under. It asks `submitContribution` to, so that handler stays the only code
+ * that writes a contribution.
+ */
+export const withdrawContribution = handler<
+  void,
+  { submit: Stream<ContributionEvent> }
+>((_, { submit }) => {
+  submit.send({ withdraw: true });
+});
 
 // =============================================================================
 // PATTERN
@@ -324,8 +345,10 @@ export interface InductorPoolOutput {
   consensus: ReleasedRule[];
   /** How many rules are released. */
   releasedCount: number;
-  /** Contribute (or replace) one pseudonym's rule set. */
+  /** Contribute (or replace) the sender's rule set, under a pseudonym. */
   submit: Stream<ContributionEvent>;
+  /** Take the sender's contribution out, whatever pseudonym it is under. */
+  withdraw: Stream<void>;
 }
 
 export default pattern<InductorPoolInput, InductorPoolOutput>(
@@ -419,6 +442,7 @@ export default pattern<InductorPoolInput, InductorPoolOutput>(
       consensus,
       releasedCount,
       submit,
+      withdraw: withdrawContribution({ submit }),
     };
   },
 );

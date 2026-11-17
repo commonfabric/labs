@@ -116,13 +116,11 @@ Known runtime issues this pattern works around:
    two or more of them are in flight can lose their results for good
    (`contribution-dropped`, a builtin write superseded). Recording the judgement
    while hi-fi calls are in flight can still hit it. Filed as top/3204.
-3. Under server execution an event runs twice, on the client and served, and
-   `Math.random` gives each run a different value. Only one run commits, and in
-   every run we watched the pool held the pseudonym the piece kept. But the
-   losing run's follow-up `submit` still runs, and when it runs after the winner
-   landed, the pool refuses the second pseudonym and logs the throw as a runtime
-   error. So the first publish to a pool can log a spurious error, and the pool
-   tests give their inductors a pseudonym rather than mint one.
+
+(A third, a first publish that ran twice under server execution and minted two
+pseudonyms, locked the contributor out of the pool. The pool now binds the
+principal rather than the pseudonym, so the second run's submission replaces the
+first's.)
 
 ## CFC debt
 

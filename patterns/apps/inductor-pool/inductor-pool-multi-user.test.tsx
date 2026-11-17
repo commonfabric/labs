@@ -1,9 +1,12 @@
 /**
  * Three contributors, each in their own runtime and under their own
  * principal, share one pool whose threshold is exactly two. A rule two of
- * them hold is released with its count; a rule only one holds never appears;
- * no one can submit under another's pseudonym; and a contributor who
- * resubmits without a rule takes their count off it.
+ * them hold is released with its count, and a public store takes it; a rule
+ * only one holds never appears; no one can submit under another's
+ * pseudonym; a contributor who resubmits, under a new pseudonym too,
+ * replaces their own entry and is still counted once, even after another
+ * contributor's replacement rewrote the list; and a contributor who
+ * withdraws takes their count off every rule.
  *
  * Pattern under test: ./inductor-pool.tsx
  */
@@ -133,9 +136,19 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
           reader.first[0]?.count === 2
         ),
       },
-      { label: "alice-saw-release" },
-      { await: "bob-resubmitted" },
-      // Bob withdrew `invoice` and added `lunch`.
+      // Alice replaces her set, which rewrites the list around Bob's entry.
+      {
+        action: setup.pool.submit,
+        event: { pseudonym: "alice-bills", rules: [INVOICE, LUNCH, BILL] },
+      },
+      {
+        assertion: assert(() =>
+          releasedIs(setup.pool, [["bill", 2], ["invoice", 2]])
+        ),
+      },
+      { label: "alice-replaced" },
+      { await: "bob-renamed" },
+      // Bob's new pseudonym replaced his entry: he holds only `lunch` now.
       { assertion: assert(() => releasedIs(setup.pool, [["lunch", 2]])) },
       // A replaced contribution is still the pool's own, so the release
       // after it is public too.
@@ -143,6 +156,15 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       {
         assertion: assert(() =>
           reader.later.length === 1 && reader.later[0]?.pattern === "lunch"
+        ),
+      },
+      // Withdrawing takes Alice's count off every rule.
+      { action: setup.pool.withdraw },
+      {
+        assertion: assert(() =>
+          releasedIs(setup.pool, []) &&
+          setup.pool.contributions.length === 1 &&
+          setup.pool.contributions[0]?.pseudonym === "bob-new"
         ),
       },
     ],
@@ -159,13 +181,20 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => ({
     },
     { assertion: assert(() => releasedIs(setup.pool, [["invoice", 2]])) },
     { label: "bob-submitted" },
-    { await: "alice-saw-release" },
+    { await: "alice-replaced" },
+    // A new pseudonym from Bob replaces his entry rather than adding one or
+    // being refused: the principal, read after Alice's rewrite, is still his.
     {
       action: setup.pool.submit,
-      event: { pseudonym: "bob-bills", rules: [LUNCH] },
+      event: { pseudonym: "bob-new", rules: [LUNCH] },
     },
-    { assertion: assert(() => releasedIs(setup.pool, [["lunch", 2]])) },
-    { label: "bob-resubmitted" },
+    {
+      assertion: assert(() =>
+        setup.pool.contributions.length === 2 &&
+        releasedIs(setup.pool, [["lunch", 2]])
+      ),
+    },
+    { label: "bob-renamed" },
   ],
 }));
 

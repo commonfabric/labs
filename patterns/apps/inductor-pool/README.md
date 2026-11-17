@@ -24,10 +24,16 @@ this pattern is its implementation.
 - **One pseudonym per person per goal.** Each stored contribution is labelled
   `authored-by` the principal it acted for, by the runtime
   (`AuthoredByCurrentUser`), and only `submitContribution` may write one
-  (`WriteAuthorizedBy`). The handler refuses a pseudonym another principal
-  holds, and refuses a second pseudonym from a principal who already holds one.
+  (`WriteAuthorizedBy`). The principal, not the pseudonym, is the binding: each
+  principal holds one entry, and a resubmission replaces it, under whatever
+  pseudonym it names. The handler refuses a pseudonym another principal holds.
   So no one contributes under someone else's pseudonym, and no principal is
-  counted twice. Resubmitting under the same pseudonym replaces the earlier set.
+  counted twice. (Refusing a principal's new pseudonym instead locked out a
+  contributor whose two runs of one publish minted two.)
+- **Withdraw.** `withdraw` takes the sender's entry out, by principal. It sends
+  `submit` `{ withdraw: true }`, so `submitContribution` stays the only code
+  that writes a contribution, which the release's input witness needs. Once
+  every contributor has withdrawn, the next contribution seals afresh.
 - **The seal.** The first contribution mints a 128-bit pool secret
   (`Math.random`, the sandbox's, which a handler may call) and copies the
   configured `thresholdCenter` and `jitter` beside it. That seal is stored in

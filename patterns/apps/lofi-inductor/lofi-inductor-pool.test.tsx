@@ -1,7 +1,7 @@
 /**
  * Publishing reaches a pool only when the pool is for the inductor's goal:
- * the matching pool stores one contribution under the inductor's pseudonym,
- * and again under the same one when it republishes, and a pool for another
+ * the matching pool stores one contribution under the pseudonym the first
+ * publish mints, and replaces it when the inductor republishes, and a pool for another
  * goal receives nothing. The first publish mints the pseudonym.
  *
  * Patterns under test: ./lofi-inductor.tsx publishing into
@@ -15,7 +15,6 @@ import LofiInductor from "./lofi-inductor.tsx";
 
 const GOAL = "Is this email a bill?";
 const OTHER_GOAL = "Is this email a newsletter?";
-const PSEUDONYM = "p-bills-test";
 
 export default pattern(() => {
   const billPool = InductorPool(
@@ -32,16 +31,13 @@ export default pattern(() => {
       jitter: 0,
     } as Parameters<typeof InductorPool>[0],
   );
-  // The goal matches the pool's, but for surrounding space. Its pseudonym
-  // is given: one minted in the same event that sends it to a pool makes
-  // the test flaky (README.md, "Known runtime issues", 3).
+  // The goal matches the pool's, but for surrounding space.
   const matching = LofiInductor({
     goal: `  ${GOAL} `,
     items: [],
     rules: INVOICE_ONLY,
     history: [],
     published: null,
-    pseudonym: PSEUDONYM,
     pool: billPool,
   });
   const mismatched = LofiInductor({
@@ -57,25 +53,28 @@ export default pattern(() => {
     [TESTS]: [
       { assertion: assert(() => billPool.contributions.length === 0) },
       { action: matching.publish },
-      // One contribution, under the inductor's pseudonym, holding its rules.
-      // One contributor is below threshold, so nothing is public.
+      // One contribution, under a pseudonym the publish minted, holding its
+      // rules. One contributor is below threshold, so nothing is public.
       {
         assertion: assert(() =>
           matching.published?.pooled === true &&
-          matching.pseudonym === PSEUDONYM &&
+          /^p-[0-9a-z]+$/.test(matching.pseudonym) &&
           billPool.contributions.length === 1 &&
-          billPool.contributions[0]?.pseudonym === PSEUDONYM &&
+          /^p-[0-9a-z]+$/.test(billPool.contributions[0]?.pseudonym ?? "") &&
           billPool.contributions[0]?.rules.length === 1 &&
           billPool.contributions[0]?.rules[0]?.pattern === "invoice" &&
           billPool.consensus.length === 0
         ),
       },
-      // Republishing keeps the pseudonym, so it replaces the contribution.
+      // Republishing replaces the contribution, under the pseudonym the
+      // piece kept. (A first publish runs twice under server execution, and
+      // the run that did not commit can send a pseudonym of its own; the
+      // pool binds the principal, so it replaces rather than adds either way.)
       { action: matching.publish },
       {
         assertion: assert(() =>
           billPool.contributions.length === 1 &&
-          billPool.contributions[0]?.pseudonym === PSEUDONYM
+          billPool.contributions[0]?.pseudonym === matching.pseudonym
         ),
       },
 

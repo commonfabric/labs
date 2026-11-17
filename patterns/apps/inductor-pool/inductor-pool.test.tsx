@@ -1,8 +1,9 @@
 /**
  * One contributor's view of the pool: a rule set below threshold is stored
- * but nothing is released, a resubmission replaces the set, a second
- * pseudonym and an out-of-grammar rule are refused, and a public store
- * refuses both a computation the policy does not name and a raw contribution.
+ * but nothing is released, a resubmission replaces the set, under a new
+ * pseudonym too, an out-of-grammar rule is refused, a public store refuses
+ * both a computation the policy does not name and a raw contribution, and
+ * withdrawing takes the contribution out.
  *
  * Pattern under test: ./inductor-pool.tsx. Release itself takes two
  * contributors, so it is in ./inductor-pool-multi-user.test.tsx.
@@ -146,23 +147,31 @@ export default pattern(() => {
         ),
       },
 
-      // A second pseudonym for the same contributor is refused.
+      // A new pseudonym from the same contributor replaces their entry: the
+      // principal is the binding, so they are still counted once.
       {
         action: pool.submit,
-        event: { pseudonym: "me-again", rules: [INVOICE] },
+        event: { pseudonym: "me-again", rules: [LUNCH] },
       },
-      // So is a rule out of grammar.
+      {
+        assertion: assert(() =>
+          pool.contributions.length === 1 &&
+          pool.contributions[0]?.pseudonym === "me-again" &&
+          pool.contributions[0]?.rules[0]?.pattern === "lunch"
+        ),
+      },
+      // A rule out of grammar refuses the whole set.
       {
         action: pool.submit,
         event: {
-          pseudonym: "me-for-bills",
+          pseudonym: "me-again",
           rules: [{ ...INVOICE, pattern: "(a)\\1" }],
         },
       },
       {
         assertion: assert(() =>
           pool.contributions.length === 1 &&
-          pool.contributions[0]?.pseudonym === "me-for-bills" &&
+          pool.contributions[0]?.pseudonym === "me-again" &&
           pool.contributions[0]?.rules[0]?.pattern === "lunch"
         ),
       },
@@ -194,13 +203,13 @@ export default pattern(() => {
           pool.consensus.length === 0 && pool.releasedCount === 0
         ),
       },
+      // Withdrawing takes the contributor's entry out.
+      { action: pool.withdraw },
+      { assertion: assert(() => pool.contributions.length === 0) },
     ],
     // Each refused publish logs the CFC refusal; the refusals are the point.
     allowConsoleWarnings: true,
-    expectRuntimeErrors: [
-      "under another pseudonym",
-      "Refused a rule",
-    ],
+    expectRuntimeErrors: ["Refused a rule"],
     pool,
     probe,
   };
