@@ -65,8 +65,9 @@ export default pattern<RulesCardInput, RulesCardOutput>(
     const rewriteLine = computed(() => {
       const status = rewrite;
       if (status.status === "idle") {
-        return status.missing > 0
-          ? `Waiting for ${status.missing} more surprises before proposing ` +
+        const missing = status.missing ?? 0;
+        return missing > 0
+          ? `Waiting for ${missing} more surprises before proposing ` +
             "new rules."
           : "Waiting for the hi-fi model to label the items so far.";
       }

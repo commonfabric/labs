@@ -114,10 +114,10 @@ export interface RewriteRequest {
 /** Where the current rewrite stands. */
 export type RewriteStatus =
   /**
-   * No rewrite asked for: `missing` more new surprises are needed, or, at 0,
-   * the hi-fi labels of the items so far.
+   * No rewrite asked for: `missing` more new surprises are needed, or, at 0
+   * or absent, the hi-fi labels of the items so far.
    */
-  | { status: "idle"; missing: number }
+  | { status: "idle"; missing?: number }
   | { status: "pending" }
   | { status: "failed"; reason: string }
   | { status: "ready"; judgement: Judgement; answered: string[] };

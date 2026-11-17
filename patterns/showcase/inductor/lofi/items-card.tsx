@@ -8,6 +8,7 @@
 import {
   action,
   computed,
+  type Default,
   NAME,
   pattern,
   type Stream,
@@ -38,7 +39,7 @@ interface ItemsCardInput {
   items: Item[];
 
   /** Each item's labels, by id (`verdictsOf`). */
-  verdicts: Record<string, Verdict>;
+  verdicts?: Default<Record<string, Verdict>, Record<string, never>>;
 
   addItem: Stream<SubmittedItem>;
   removeItem: Stream<ItemRef>;

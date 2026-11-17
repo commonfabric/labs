@@ -7,6 +7,7 @@
 
 import {
   computed,
+  type Default,
   NAME,
   pattern,
   type Stream,
@@ -28,10 +29,10 @@ interface PoolCardInput {
   rules: CanonicalRule[];
 
   /** How many of the rules a publish would send (`shareable`). */
-  sendable: number;
+  sendable?: number | Default<0>;
 
   /** Whether a pool for the inductor's goal is connected. */
-  connected: boolean;
+  connected?: boolean | Default<false>;
 
   settlePoolOffer: Stream<void>;
   publish: Stream<void>;
