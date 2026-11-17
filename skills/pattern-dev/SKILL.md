@@ -16,7 +16,8 @@ every entry with repeatable `--test` flags on `piece new` and every later
 automated tests. Deployment packages and type-checks attached tests but does not
 run them. A file the pattern ships with that is not code — a fixture, a lookup
 table — is read with `dataFile(path)` from `commonfabric` and stored verbatim
-rather than compiled. The path resolves against the module that reads it, as an
+rather than compiled; an image, a font, or a sound is read as a `data:` URL
+with `dataFile.url(path)`, or a directory of them with `dataFile.urls(path)`. The path resolves against the module that reads it, as an
 import specifier does, so `./data/cities.json` is the file beside the pattern.
 That call is the whole declaration: store the file where the call points, and
 every command that builds the pattern attaches it, so a pattern that reads one

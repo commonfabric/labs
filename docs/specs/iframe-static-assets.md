@@ -2,9 +2,9 @@
 
 ## Status
 
-Proposed. Nothing in this document is built. It covers files that ship with a
-pattern: images, fonts, and audio. Files people add while using a pattern are
-out of scope.
+Parts 1 to 3 are built. Parts 4 to 6 are being built, and part 7 is
+proposed. The document covers files that ship with a pattern: images, fonts,
+and audio. Files people add while using a pattern are out of scope.
 
 ## The problem
 
@@ -40,14 +40,14 @@ one that is not, so a PNG cannot be attached today.
 **A JSX prop is stored with every instance.** Setup writes a piece's result
 document from the pattern's result template (`#nextResultProjection` in
 `runtime/runner/src/runner.ts`), and a string passed as a JSX prop is written
-into that document whole. An iframe pattern passes its guest as
-`src={dataFile("./guest.html")}` and `script={dataFile("./guest.js")}`, so each
-piece stores its own copy of both files. Measured on
+into that document whole, unless part 1 applies to it. An iframe pattern passes
+its guest as `src={dataFile("./guest.html")}` and
+`script={dataFile("./guest.js")}`. Written inline, as for
 `patterns/examples/iframe-verb-list/`, whose `guest.js` is 137 KB, each further
 instance adds 147 KB of revision data, and the commit log holds the same again.
 The program's source set already holds one copy of each file, as a code
 document (`docs/specs/content-addressed-schemas.md`, "Code documents"), shared
-by every piece in the space. Passing images the same way would add each image
+by every piece in the space. Images passed the same way would add each image
 to every piece.
 
 ## Design
@@ -120,22 +120,26 @@ already holds. For a string built when it is read, such as an SVG file's
 `data:` URL, the first piece set up in a space writes it and every later piece
 links to it.
 
-- **Which strings.** The readers record each string they return in a
-  per-runtime set, keyed by content. The projection write looks up each string
-  leaf of at least 1 KiB; a shorter one stays inline, since a link would cost
-  as much. The rule applies to the result projection only. A computed value
-  derived from a data file is written by its computation, inline, as today.
+- **Which strings.** The readers record each string they return in the
+  engine's `DataFileStrings` (`runtime/runner/src/data-file-strings.ts`), keyed
+  by content. The projection write looks up each string leaf of at least 1,024
+  characters; a shorter one stays inline, since a link would cost about as
+  much. The rule applies to the result projection only. A computed value
+  derived from a data file is written by its computation, inline.
 - **Why it is keyed to `dataFile`.** A code document carries no CFC envelope.
   Program files are already stored that way, so linking to one exposes nothing
   the space did not already hold unlabeled. A rule that moved every long
   string into a code document would take labeled values out from under their
   labels.
 - **Reading.** Readers of the result document follow the link as they follow
-  any sigil link, and the code-document reader checks the string against the
-  id. The worker reconciler subscribes to a prop whose value is a cell
+  any sigil link, and the commit boundary refuses a code document whose
+  content does not hash to its id. A render read returns a linked prop as a
+  cell, and the worker reconciler subscribes to a prop whose value is a cell
   (`runtime/html/src/worker/reconciler.ts`, the `isCell(value)` branch of prop
-  updates), so a top-level prop such as `script` reaches the element as its
-  string either way.
+  updates), so a prop such as `script` reaches the element as its string. A
+  render read does not descend into an object-valued prop, which would leave a
+  link inside one unread, so `rendererVDOMSchema`
+  (`runtime/runner/src/schemas.ts`) names `assets` with string values.
 - **Comparison.** The projection's no-op check compares what a write would
   store, so a stored link compares equal to the link a later setup builds. A
   piece whose stored projection holds the string inline differs from the new
@@ -237,10 +241,19 @@ out, and subdirectories are not read.
   `glaze.small.png`, throws, naming the file.
 - Two files that would get the same name, such as `glaze.png` and
   `glaze.webp`, throw, naming both.
-- The scan reports the directory, and the resolver lists it and attaches each
-  file it holds in the table. A resolver over a file system or over a stored
-  source set can list a directory. One that reads over HTTP cannot, and refuses
-  the call, naming it.
+- The scan reports the directory (`ModuleDeclarations.dataDirectories`), and
+  building the program lists it through the resolver's `listDataFiles()` and
+  attaches each file it holds in the table. The file-system and in-memory
+  resolvers list a directory. One that cannot — the HTTP resolver, and
+  `resolveEntryIdentity`, which reads one file at a time so that it works in
+  a compiled binary's embedded file system — refuses such a program, naming
+  the module and the directory.
+- The module that reads a directory owns the edges to the assets in it, as a
+  module owns the file a `dataFile()` call names (`sourcePackageOwners`), and
+  `cf piece getsrc` counts them as declared.
+- `dataFileAssets()` in `base/text/src/data-file.ts` is the one rule for what a
+  directory holds, used by the build, the ownership scan, the CLI, and the
+  runtime reader alike.
 
 A record mixes with single files by spreading:
 `assets={{ ...dataFile.urls("./sprites"), logo: dataFile.url("./logo.svg") }}`.
@@ -404,10 +417,6 @@ uses when it writes a source set itself. The details are open.
 
 ## Open questions
 
-- Whether the view-tree read hands a linked prop to the reconciler as a cell or
-  as the resolved string. Either works for a top-level prop. A link nested in
-  the `assets` record may reach `cf-iframe` as a cell inside an object, which
-  `cf-iframe` would then resolve itself.
 - How `runtime/fuse` presents a binary data file in a piece's source: as its
   decoded bytes, or read-only in its stored form. It presents and accepts text
   today.
