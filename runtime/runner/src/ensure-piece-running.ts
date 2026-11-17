@@ -153,7 +153,9 @@ async function startInputSources(
  * derived document a setup writes carries a `result` backlink to the piece it
  * belongs to, which `followResultCellChain()` follows, once for each document
  * however many links name it. With `internalOnly`, a linked document that is
- * its own owning root, another piece's result root, is left out.
+ * its own owning root, another piece's result root, is left out, and the
+ * pieces each chain passes through on the way to its owning root are
+ * included beside it.
  */
 async function inputSourcesOf(
   runtime: Runtime,
@@ -180,12 +182,13 @@ async function inputSourcesOf(
       const document = rootKey(link);
       if (followed.has(document)) continue;
       followed.add(document);
+      const chain: OwningRootAddress[] = [];
       const root = await followResultCellChain(
         runtime,
         runtime.getCellFromLink({ ...link, path: [] }, undefined, tx),
         tx,
         [],
-        [],
+        chain,
         signal,
       );
       signal?.throwIfAborted();
@@ -193,7 +196,25 @@ async function inputSourcesOf(
       const source = root.getAsNormalizedFullLink();
       const key = rootKey(source);
       if (internalOnly && key === document) continue;
-      if (key !== ownerKey) sources.set(key, { ...source, path: [] });
+      if (!internalOnly) {
+        if (key !== ownerKey) sources.set(key, { ...source, path: [] });
+        continue;
+      }
+      // Each piece the chain passes through on its way to its owning root is
+      // a candidate too: a piece a list builtin builds carries a `result`
+      // backlink to the piece that built it.
+      for (const visited of chain.slice(1)) {
+        const visitedKey = rootKey(visited);
+        if (visitedKey === ownerKey) continue;
+        const cell = runtime.getCellFromLink(
+          { ...visited, path: [] },
+          undefined,
+          tx,
+        );
+        if (asPatternIdentityRef(cell.getMetaRaw("patternIdentity"))) {
+          sources.set(visitedKey, { ...visited, path: [] });
+        }
+      }
     }
     return [...sources.values()];
   } finally {
@@ -206,53 +227,40 @@ async function inputSourcesOf(
  * Helper for `startInputSources()`, which returns the piece that encloses the
  * piece at `owner`, the one recording it as the output of a nested node of
  * its own graph ({@link enclosesAsNested}), as a list of that one piece, or
- * an empty list where no piece does. The search starts from the pieces
- * whose argument or internal documents `owner`'s argument links into
- * (`inputSourcesOf()`) and goes up through theirs in turn, so a nested
- * instance whose argument links only a sibling's output finds the instance
- * enclosing them both; each piece is asked once. A link to another piece's
- * result root is not followed, so the search does not walk the producers a
- * piece is wired to.
+ * an empty list where no piece does. The candidates are the pieces whose
+ * argument or internal documents `owner`'s argument links into
+ * (`inputSourcesOf()`), each asked at once; a link to another piece's result
+ * root names no candidate, so the producers a piece is wired to are not
+ * asked.
  */
 async function enclosingPieceOf(
   runtime: Runtime,
   owner: OwningRootAddress,
   signal: AbortSignal | undefined,
 ): Promise<NormalizedFullLink[]> {
-  const asked = new Set([rootKey(owner)]);
-  let frontier = await inputSourcesOf(runtime, owner, signal, true);
-  while (frontier.length > 0) {
-    const next: NormalizedFullLink[] = [];
-    for (const candidate of frontier) {
-      const key = rootKey(candidate);
-      if (asked.has(key)) continue;
-      asked.add(key);
-      const tx = runtime.edit();
-      tx.tx.immediate = true;
-      try {
-        if (await enclosesAsNested(runtime, candidate, owner, tx, signal)) {
-          return [candidate];
-        }
-      } finally {
-        runtime.prepareTxForCommit(tx);
-        await tx.commit().settled;
-      }
-      for (
-        const source of await inputSourcesOf(runtime, candidate, signal, true)
-      ) {
-        next.push(source);
-      }
+  const candidates = await inputSourcesOf(runtime, owner, signal, true);
+  const encloses = await Promise.all(candidates.map(async (candidate) => {
+    const tx = runtime.edit();
+    tx.tx.immediate = true;
+    try {
+      return await enclosesAsNested(runtime, candidate, owner, tx, signal);
+    } finally {
+      runtime.prepareTxForCommit(tx);
+      await tx.commit().settled;
     }
-    frontier = next;
-  }
-  return [];
+  }));
+  const found = candidates.find((_, index) => encloses[index]);
+  return found === undefined ? [] : [found];
 }
 
 /**
  * Helper for `enclosingPieceOf()`, which indicates whether the piece at
  * `candidate` records the piece at `owner` as the output of a nested node of
- * its own graph: one of its `internal` documents holds, as its whole value, a
- * link to `owner`'s root.
+ * its own graph, in one of its `internal` documents: as that document's whole
+ * value, a link to `owner`'s root, which is what a nested call writes; or a
+ * link to a list one of whose elements is a link to `owner`'s root, which is
+ * what a list builtin such as `map` writes for the instances it builds. A
+ * match compares documents by `rootKey()`, so the scope counts too.
  */
 async function enclosesAsNested(
   runtime: Runtime,
@@ -267,22 +275,31 @@ async function enclosesAsNested(
   const internal = root.getMetaRaw("internal");
   if (!Array.isArray(internal)) return false;
   const ownerKey = rootKey(owner);
+  const namesOwner = (link: NormalizedFullLink | undefined) =>
+    link !== undefined && link.path.length === 0 && rootKey(link) === ownerKey;
+  /** The whole-value link `document` holds, once it is loaded. */
+  const valueLink = async (document: Cell<any>) => {
+    await document.sync();
+    signal?.throwIfAborted();
+    const value = document.getRaw();
+    return { value, link: parseLink(value, document) };
+  };
   for (const entry of internal) {
     const link = isKeyableObjectOrArray(entry)
       ? parseLink((entry as { link?: unknown }).link, root)
       : undefined;
     if (link === undefined || link.space !== owner.space) continue;
-    const document = runtime.getCellFromLink(
-      { ...link, path: [] },
-      undefined,
-      tx,
+    const { link: held } = await valueLink(
+      runtime.getCellFromLink({ ...link, path: [] }, undefined, tx),
     );
-    await document.sync();
-    signal?.throwIfAborted();
-    const value = parseLink(document.getRaw(), document);
+    if (held === undefined) continue;
+    if (namesOwner(held)) return true;
+    if (held.path.length !== 0 || held.space !== owner.space) continue;
+    const list = runtime.getCellFromLink(held, undefined, tx);
+    const { value } = await valueLink(list);
     if (
-      value !== undefined && value.path.length === 0 &&
-      rootKey(value) === ownerKey
+      Array.isArray(value) &&
+      value.some((element) => namesOwner(parseLink(element, list)))
     ) {
       return true;
     }
@@ -491,32 +508,34 @@ export type EnsurePieceOptions = {
 
   /**
    * With `startInputSources`, start only the pieces that ENCLOSE the owning
-   * piece, the instances whose graphs set it up as a nested node, and theirs
-   * in turn, not every piece whose output its argument links to. The nested
-   * root stores no pointer to its enclosing instance; what the runtime stores
-   * is the other direction. Setup records each nested node's output among the
-   * enclosing instance's `internal` documents, as a document whose whole
-   * value is a link to the nested instance's root. So the walk looks for the
-   * piece that records the owning piece that way, starting from the pieces
-   * whose argument or internal documents the owning piece's argument links
-   * into and going up through theirs, as a nested instance fed only by a
-   * sibling's output needs, and starts that one piece; the walk then does the
-   * same for it. A link to a piece's result root is not climbed through, so
-   * the search does not walk the producers a piece is wired to. A child a
-   * handler made is held behind a value-link slot, never named that way, so its creator is left to the event path, as is a piece
-   * wired to another's output, and the owner of any other document the
-   * argument links into. Found this way: a named nested node, a pattern
-   * returning a nested instance's result whole, and nested instances fed by
-   * a sibling under one parent. Not found: the rows `map` builds, which the
-   * parent records through the builtin's list of row documents rather than
-   * as whole values; a nested instance whose argument links into its
-   * enclosing instance only at that instance's result root, or not at all;
-   * and children `ifElse` builds and wish results, which are unprobed. A
+   * piece, the instances whose graphs set it up as a nested node, and theirs in
+   * turn, not every piece whose output its argument links to. The nested root
+   * stores no pointer to its enclosing instance; what the runtime stores is the
+   * other direction. Setup records each nested node's output among the
+   * enclosing instance's `internal` documents, as a document whose whole value
+   * is a link to the nested instance's root, or, for the instances a list
+   * builtin such as `map` builds, a link to the builtin's list, one of whose
+   * elements links the instance's root; such an instance carries a `result`
+   * backlink to its creator, so each piece a backlink chain passes through is a
+   * candidate too. So the walk looks for the piece that records the owning
+   * piece that way among the pieces whose argument or internal documents the
+   * owning piece's argument links into, and starts that one piece; the walk
+   * then does the same for it. A link to a piece's result root names no
+   * candidate, so the producers a piece is wired to are not asked. A child a
+   * handler made is held behind a value-link slot, never named that way, so its
+   * creator is left to the event path, as is a piece wired to another's output,
+   * and the owner of any other document the argument links into. Found this
+   * way: a named nested node, a pattern returning a nested instance's result
+   * whole, nested instances fed by a sibling under one parent, and the rows
+   * `map` builds, which the parent records as the elements of the builtin's
+   * list. Not found: a nested instance whose argument links into its enclosing
+   * instance only at that instance's result root, or not at all; and, unprobed,
+   * the instances `filter`, `flatMap` and `ifElse` build, and wish results. A
    * pattern that itself stores a link straight to a piece's root as the whole
    * value of a document it owns reads as enclosing that piece. Where no
-   * enclosing piece is found, the owning piece starts alone, as it did
-   * before, and silently: a piece nothing encloses and one whose enclosing
-   * piece is not found look the same to the walk.
+   * enclosing piece is found, the owning piece starts alone, and silently: a
+   * piece nothing encloses and one whose enclosing piece is not found look the
+   * same to the walk.
    */
   enclosingSourcesOnly?: boolean;
 
@@ -781,20 +800,20 @@ export type StartWithInputSourcesOptions = {
 /**
  * Starts `piece`, a piece a caller names on its own, as a client's open does,
  * by calling `start`, after starting the pieces that enclose it, where
- * `runtime`'s run of its handlers is the one that counts
- * ({@link handlerRunCounts}): the instance whose graph sets `piece` up as a
- * nested one, and that instance's own enclosing instance, and so on
- * (`EnsurePieceOptions.enclosingSourcesOnly`). A nested instance started on
- * its own runs its handlers against inputs nothing in the runtime derives,
- * and once it runs, no later event starts what encloses it. A piece whose
- * output `piece`'s argument links to is not started here; an event's
- * auto-load starts it, as before. `start` runs whether or not an enclosing
- * piece's graph set `piece` up as its child, so the opened piece has a
- * lifetime of its own: an enclosing piece that stops or re-instantiates leaves
- * it running, as it leaves a piece opened before what encloses it. Each
- * enclosing piece this starts is started in its own right too, and runs until
- * it is stopped itself or the runtime ends, outliving the opened piece, as a
- * piece an event's auto-load starts does.
+ * `runtime`'s run of its handlers is the one that counts ({@link
+ * handlerRunCounts}): the instance whose graph sets `piece` up as a nested one,
+ * and that instance's own enclosing instance, and so on
+ * (`EnsurePieceOptions.enclosingSourcesOnly`). A nested instance started on its
+ * own runs its handlers against inputs nothing in the runtime derives, and once
+ * it runs, no later event starts what encloses it. A piece whose output
+ * `piece`'s argument links to is not started here; an event's auto-load of a
+ * piece that is not running starts it. `start` runs whether or not an enclosing
+ * piece's graph set `piece` up as its child, so the opened piece has a lifetime
+ * of its own: an enclosing piece that stops or re-instantiates leaves it
+ * running, as it leaves a piece opened before what encloses it. Each enclosing
+ * piece this starts is started in its own right too, and runs until it is
+ * stopped itself or the runtime ends, outliving the opened piece, as a piece an
+ * event's auto-load starts does.
  *
  * Starting what encloses `piece` is best effort. An enclosing piece that
  * cannot start, one whose origin's follow cannot be settled, and an argument

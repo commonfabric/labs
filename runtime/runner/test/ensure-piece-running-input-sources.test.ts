@@ -171,39 +171,78 @@ const CREATOR_PROGRAM: RuntimeProgram = {
   }],
 };
 
-// `PROGRAM` with the recorder fed by a sibling nested instance's output, so
-// the recorder's argument links only into that sibling.
+// A recorder whose only input is a sibling nested instance's output, keeping
+// what it records in a writable of its own, so its argument links into
+// nothing of the instance enclosing them both.
 const SIBLING_PROGRAM: RuntimeProgram = {
   main: "/main.tsx",
   files: [{
     name: "/main.tsx",
     contents: [
-      "import { computed, Default, handler, pattern, Stream, Writable } from 'commonfabric';",
-      "",
-      "type Seen = Writable<number | Default<0>>;",
+      "import { computed, handler, pattern, Stream, Writable } from 'commonfabric';",
       "",
       "const producer = pattern<{ value: number }, { doubled: number }>(",
       "  ({ value }) => ({ doubled: computed(() => value * 2) }),",
       ");",
       "",
-      "const record = handler<unknown, { doubled?: number; seen: Seen }>(",
-      "  (_event, { doubled, seen }) => {",
-      "    seen.set(doubled ?? -1);",
-      "  },",
-      ");",
+      "const record = handler<",
+      "  unknown,",
+      "  { doubled?: number; seen: Writable<number> }",
+      ">((_event, { doubled, seen }) => {",
+      "  seen.set(doubled ?? -1);",
+      "});",
       "",
       "const recorder = pattern<",
-      "  { doubled?: number; seen: Seen },",
-      "  { record: Stream<unknown> }",
-      ">(({ doubled, seen }) => ({ record: record({ doubled, seen }) }));",
+      "  { doubled?: number },",
+      "  { record: Stream<unknown>; seen: number }",
+      ">(({ doubled }) => {",
+      "  const seen = new Writable<number>(0);",
+      "  return { record: record({ doubled, seen }), seen };",
+      "});",
       "",
       "export default pattern<",
-      "  { value: number; seen?: Seen },",
-      "  { doubled: number; record: Stream<unknown> }",
-      ">(({ value, seen }) => {",
+      "  { value: number },",
+      "  { doubled: number; record: Stream<unknown>; seen: number }",
+      ">(({ value }) => {",
       "  const sibling = producer({ value });",
-      "  const nested = recorder({ doubled: sibling.doubled, seen: seen! });",
-      "  return { doubled: sibling.doubled, record: nested.record };",
+      "  const nested = recorder({ doubled: sibling.doubled });",
+      "  return { doubled: sibling.doubled, record: nested.record, seen: nested.seen };",
+      "});",
+    ].join("\n"),
+  }],
+};
+
+// The same recorder as each row `map` builds from what the enclosing
+// instance derives.
+const MAP_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, handler, pattern, Stream, Writable } from 'commonfabric';",
+      "",
+      "const record = handler<",
+      "  unknown,",
+      "  { doubled?: number; seen: Writable<number> }",
+      ">((_event, { doubled, seen }) => {",
+      "  seen.set(doubled ?? -1);",
+      "});",
+      "",
+      "const recorder = pattern<",
+      "  { doubled?: number },",
+      "  { record: Stream<unknown>; seen: number }",
+      ">(({ doubled }) => {",
+      "  const seen = new Writable<number>(0);",
+      "  return { record: record({ doubled, seen }), seen };",
+      "});",
+      "",
+      "export default pattern<",
+      "  { value: number },",
+      "  { rows: { record: Stream<unknown>; seen: number }[] }",
+      ">(({ value }) => {",
+      "  const doubled = computed(() => [value * 2]);",
+      "  const rows = doubled.map((each) => recorder({ doubled: each }));",
+      "  return { rows };",
       "});",
     ].join("\n"),
   }],
@@ -674,18 +713,79 @@ describe("ensure-piece-running", () => {
       }
     });
 
-    it("starts the piece enclosing a nested piece whose argument links only a sibling's output", async () => {
-      const { stream, enclosing } = await stopAfterInputChanges(
-        SIBLING_PROGRAM,
+    /**
+     * Runs `program` with `value` 1, then stops it and moves `value` to 5
+     * with nothing running, and returns the stream `streamPath` names in its
+     * result and the enclosing instance's result.
+     */
+    const stopProgramAfterInputChanges = async (
+      program: RuntimeProgram,
+      streamPath: (string | number)[],
+    ) => {
+      const first = newRuntime();
+      const compiled = await first.patternManager.compilePattern(program, {
+        space,
+      });
+      const argument = first.getCell<{ value: number }>(
+        space,
+        ARGUMENT_CAUSE,
+        compiled.argumentSchema,
       );
-      const opener = newRuntime();
+      const result = first.getCell<Record<string, unknown>>(
+        space,
+        RESULT_CAUSE,
+        compiled.resultSchema,
+      );
+      {
+        const tx = first.edit();
+        argument.withTx(tx).set({ value: 1 });
+        first.run(tx, compiled, argument, result);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      await result.pull();
+      let streamCell: Cell<unknown> = result;
+      for (const segment of streamPath) {
+        streamCell = streamCell.key(segment as never);
+      }
+      const stream = streamCell.resolveAsCell().getAsNormalizedFullLink();
+      first.runner.stop(result);
+      {
+        const tx = first.edit();
+        argument.withTx(tx).key("value").set(5);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      await first.idle();
+      await first.storageManager.synced();
+      return { stream, enclosing: result.getAsNormalizedFullLink() };
+    };
 
-      const { seen } = await openThenEvent(opener, stream);
+    for (
+      const [shape, program, streamPath] of [
+        [
+          "whose argument links only a sibling's output",
+          SIBLING_PROGRAM,
+          ["record"],
+        ],
+        ["that `map` builds as a row", MAP_PROGRAM, ["rows", 0, "record"]],
+      ] as const
+    ) {
+      it(`starts the piece enclosing a nested piece ${shape}`, async () => {
+        const { stream, enclosing } = await stopProgramAfterInputChanges(
+          program,
+          [...streamPath],
+        );
+        const opener = newRuntime();
+        const owner = await nestedOwner(opener, stream);
 
-      expect(seen).toBe(10);
-      expect(opener.runner.isRunning(opener.getCellFromLink(enclosing)))
-        .toBe(true);
-    });
+        await startWithInputSources(opener, owner, () => opener.start(owner));
+        opener.scheduler.queueEvent(stream, {});
+        await opener.idle();
+
+        expect(await owner.key("seen" as never).pull()).toBe(10);
+        expect(opener.runner.isRunning(opener.getCellFromLink(enclosing)))
+          .toBe(true);
+      });
+    }
 
     it("starts none of the pieces whose results a hub's argument links to", async () => {
       const names = ["hub", ...[0, 1, 2, 3, 4, 5, 6, 7].map((n) => `p${n}`)];
