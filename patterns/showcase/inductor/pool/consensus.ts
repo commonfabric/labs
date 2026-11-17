@@ -19,9 +19,9 @@ import {
 
 export type { CanonicalRule } from "../shared/rule-grammar.ts";
 
-// =============================================================================
-// TYPES
-// =============================================================================
+//
+// Types
+//
 
 /** What one pseudonym contributes: its whole current rule set. */
 export interface Contribution {
@@ -90,9 +90,9 @@ export const MIN_THRESHOLD = 2;
  */
 export const MIN_SEALED_THRESHOLD = 5;
 
-// =============================================================================
-// RULE IDENTITY
-// =============================================================================
+//
+// Rule identity
+//
 
 /**
  * What two rules must share to count as one: field, label, and canonical
@@ -107,9 +107,9 @@ export function ruleIdentity(
   return `${rule.field}\u0000${rule.predicts ? "1" : "0"}\u0000${rule.pattern}`;
 }
 
-// =============================================================================
-// KEYED HASH
-// =============================================================================
+//
+// Keyed hash
+//
 
 const K = [
   0x428a2f98,
@@ -281,9 +281,9 @@ export function hmacSha256(key: string, message: string): number[] {
   return sha256([...block.map((b) => b ^ 0x5c), ...inner]);
 }
 
-// =============================================================================
-// THRESHOLD
-// =============================================================================
+//
+// Threshold
+//
 
 /** `value` as a whole number at least `min`, or a thrown error naming it. */
 function wholeAtLeast(name: string, value: number, min: number): number {
@@ -329,9 +329,9 @@ export function thresholdFor(
   );
 }
 
-// =============================================================================
-// COUNTING
-// =============================================================================
+//
+// Counting
+//
 
 /** One rule and the distinct pseudonyms that hold it. */
 export interface Support {
