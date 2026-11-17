@@ -327,8 +327,8 @@ describe("SpaceServer", () => {
         await demand(local);
 
         await awaitEach(cycles, () => serves(nested));
-        expect(serves(enclosing)).toBe(true);
         expect(await recordedOnEvent(stream)).toBe(10);
+        expect(serves(enclosing)).toBe(true);
       });
 
       it("starts the enclosing piece again in the tenure after a park, and leaves none running in the parked one", async () => {
