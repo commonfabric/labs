@@ -1022,6 +1022,10 @@ export class Scheduler {
         ? { demandRootIds: identity.demandRootIds }
         : {}),
     };
+    // The registry files a node under its demand roots when it joins the
+    // active set, so an identity set on a node that is already active has to
+    // be told to it. This is the only place an identity is set.
+    this.#nodes.noteObservationIdentity(action);
   }
 
   unsubscribe(
@@ -1367,17 +1371,11 @@ export class Scheduler {
    * whenever it comes. Returns the number of nodes re-armed.
    */
   invalidateActionsForDemandRoots(rootIds: readonly string[]): number {
-    const roots = new Set(rootIds);
     let rearmed = 0;
-    for (const record of this.#nodes.nodes()) {
-      const identity = (record.action as Partial<TelemetryAnnotations>)
-        .schedulerObservationIdentity;
-      const demandRootIds = identity?.demandRootIds ??
-        (identity?.pieceRootId !== undefined
-          ? [identity.pieceRootId]
-          : undefined);
-      if (demandRootIds === undefined) continue;
-      if (!demandRootIds.some((id) => roots.has(id))) continue;
+    // Read from the registry's index by demand root rather than by walking
+    // every node: the space server calls this once for each demand key it
+    // maps to a piece, and a session on a large space brings thousands.
+    for (const record of this.#nodes.nodesUnderDemandRoots(rootIds)) {
       if (record.fanOut === undefined) {
         if (record.status === "never-ran") continue;
       } else if (!record.fanOut.narrowed) continue;
