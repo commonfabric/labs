@@ -659,49 +659,110 @@ describe("run_pattern publish render gate", () => {
       "<th>Points</th>",
     );
 
+    /** What `getPattern` answers for the original table, as the index does. */
+    const servedOriginal = async (mine: boolean) => {
+      const original = await entryIdentityOf(WORKING_SORTABLE_TABLE);
+      return {
+        original,
+        served: {
+          [original]: {
+            patternId: original,
+            createdAt: "2026-11-17T00:00:00.000Z",
+            description: "Sortable table",
+            hashtags: ["table"],
+            dependencies: [],
+            author: { pseudonym: "quiet-otter", tier: 0 },
+            ...(mine ? { mine: true } : {}),
+          },
+        },
+      };
+    };
+
     /** Deploys the table, as an earlier run would, and returns its piece. */
     const deploy = async (engine: CfHarnessEngine) => {
       const result = await engine.invokeBuiltinTool("run_pattern", {
         sourceText: WORKING_SORTABLE_TABLE,
         inputs: { rows: [{ name: "Avery", score: 12 }] },
         description: "Sortable table",
+        hashtags: ["table"],
       });
       return result.output as RunPatternToolSuccessOutput;
     };
 
-    it("keeps a later run's revision as the next version of the caller's own pattern", async () => {
-      const original = await entryIdentityOf(WORKING_SORTABLE_TABLE);
-      const index = stubIndex({
-        [original]: {
-          patternId: original,
-          createdAt: "2026-11-17T00:00:00.000Z",
-          description: "Sortable table",
-          hashtags: ["table"],
-          dependencies: [],
-          author: { pseudonym: "quiet-otter", tier: 0 },
-          mine: true,
-        },
-      });
+    /**
+     * Deploys in one run, then revises in place in a later one, with no
+     * description of its own: what most revisions are.
+     */
+    const reviseInLaterRun = async (
+      served: Record<string, unknown>,
+      extra: Record<string, unknown> = {},
+    ) => {
+      const index = stubIndex(served);
       const first = createEngine(index, { origin: "agent" });
       const deployed = await deploy(first);
       await first.flushPatternIndexLedger();
-
+      const before = published(index).length;
       const later = createEngine(index, { origin: "agent" });
       const revised = await later.invokeBuiltinTool("revise_piece", {
         token: deployed.ref,
         sourceText: REVISED,
-        description: "Sortable table with points",
+        ...extra,
       });
       expect(revised.output).toMatchObject({ status: "ok" });
       await later.flushPatternIndexLedger();
+      return {
+        versions: published(index).slice(before),
+        piece: await deployedPieceRef(pieces.getSpace(), deployed.pieceId),
+      };
+    };
 
-      const [, version] = published(index);
+    it("keeps a later run's revision as the next version of the caller's own pattern, described as it was", async () => {
+      const { original, served } = await servedOriginal(true);
+      const { versions: [version], piece } = await reviseInLaterRun(served);
       expect(version.body.patternId).toBe(await entryIdentityOf(REVISED));
       expect(version.body.priorPatternId).toBe(original);
-      expect(version.body.deployedTo).toBe(
-        await deployedPieceRef(pieces.getSpace(), deployed.pieceId),
-      );
+      expect(version.body.meta).toMatchObject({
+        description: "Sortable table",
+      });
+      expect(version.body.meta).toMatchObject({
+        hashtags: [
+          "table",
+        ],
+      });
+      expect(version.body.deployedTo).toBe(piece);
+      // The piece's previous pattern finds the history; its key would outrank
+      // that and file the version wherever the key was first bound.
+      expect(version.body.slot).toBeUndefined();
       expect(version.body.discoverabilityReason).toBeDefined();
+    });
+
+    it("takes a new description when the revision gives one", async () => {
+      const { served } = await servedOriginal(true);
+      const { versions: [version] } = await reviseInLaterRun(served, {
+        description: "Sortable table with points",
+        hashtags: ["points"],
+      });
+      expect(version.body.meta).toMatchObject({
+        description: "Sortable table with points",
+      });
+      expect(version.body.meta).toMatchObject({
+        hashtags: [
+          "points",
+        ],
+      });
+    });
+
+    it("credits someone else's pattern the piece ran as a remix", async () => {
+      const { original, served } = await servedOriginal(false);
+      const { versions: [version] } = await reviseInLaterRun(served);
+      expect(version.body.remixedFrom).toBe(original);
+      expect(version.body.priorPatternId).toBeUndefined();
+      expect(version.body.slot).toBeUndefined();
+    });
+
+    it("keeps no version of a revision whose predecessor nobody can describe", async () => {
+      const { versions } = await reviseInLaterRun({});
+      expect(versions).toEqual([]);
     });
 
     it("continues the iteration this session made without asking whose it is", async () => {
@@ -711,7 +772,6 @@ describe("run_pattern publish render gate", () => {
       await engine.invokeBuiltinTool("revise_piece", {
         token: deployed.ref,
         sourceText: REVISED,
-        description: "Sortable table",
       });
       await engine.flushPatternIndexLedger();
 
@@ -722,25 +782,12 @@ describe("run_pattern publish render gate", () => {
         await entryIdentityOf(REVISED),
       ]);
       expect(sent[1].body.priorPatternId).toBe(original);
+      expect(sent[1].body.meta).toMatchObject({
+        description: "Sortable table",
+      });
       expect(index.calls.some((call) => call.fn === "getPattern")).toBe(
         false,
       );
-    });
-
-    it("records nothing for a revision given no description", async () => {
-      const index = stubIndex();
-      const engine = createEngine(index, { origin: "agent" });
-      const deployed = await deploy(engine);
-      await engine.flushPatternIndexLedger();
-      const before = published(index).length;
-      const later = createEngine(index, { origin: "agent" });
-      const revised = await later.invokeBuiltinTool("revise_piece", {
-        token: deployed.ref,
-        sourceText: REVISED,
-      });
-      expect(revised.output).toMatchObject({ status: "ok" });
-      await later.flushPatternIndexLedger();
-      expect(published(index)).toHaveLength(before);
     });
   });
 

@@ -86,13 +86,19 @@ import { PATTERN_DISCOVERABILITY_REASONS } from "./publish-render-gate.ts";
  * An entry staged with neither names nothing earlier, so a new pattern never
  * joins a history it is unrelated to.
  *
+ * A request revised in place may come with no description of its own: what
+ * it does is what its predecessor did, unless the caller says otherwise. It
+ * takes its predecessor's description and hashtags, from this session when
+ * the predecessor is one of its own and from the index's answer otherwise.
+ * One whose predecessor nobody can describe is not sent, and is reported.
+ *
  * Dropping the slot has a cost, stated rather than discovered: the new piece's
  * key is then bound to no history, so a later publication naming that piece
- * as its slot would start another one. Nothing sends one today — every
- * `run_pattern` deploys a new piece, and an in-place `revise_piece` publishes
- * nothing. The index binding an unbound slot to the history a
- * `priorPatternId` finds, as it already does for a remix, would let this keep
- * the slot.
+ * as its slot would start another one. Nothing sends one: every `run_pattern`
+ * deploys a new piece, and an in-place `revise_piece` names its piece as
+ * `deployedTo` only, never as a slot. The index binding an unbound slot to the
+ * history a `priorPatternId` finds, as it already does for a remix, would let
+ * this keep the slot.
  *
  * ## What this costs, stated rather than discovered
  *
@@ -111,11 +117,13 @@ import { PATTERN_DISCOVERABILITY_REASONS } from "./publish-render-gate.ts";
 export interface PatternIndexLedger {
   /**
    * Holds `request` as this session's offer for its capability, publishing
-   * anything it displaces as non-discoverable. Never throws and never awaits:
-   * a contribution to a shared catalog does not bear on the run that made it.
+   * anything it displaces as non-discoverable. Never awaits, and throws only
+   * for a request that names neither a description nor a pattern to take one
+   * from, which is a caller's mistake: a contribution to a shared catalog
+   * does not bear on the run that made it.
    */
   stage(
-    request: PatternIndexPublishRequest,
+    request: PatternIndexStageRequest,
     options?: PatternIndexStageOptions,
   ): void;
 
@@ -140,6 +148,20 @@ export interface PatternIndexLedger {
   flush(): Promise<void>;
 }
 
+/**
+ * A publication as staged: one with no description takes its predecessor's,
+ * so it must name `revisedFrom`.
+ */
+export type PatternIndexStageRequest =
+  & Omit<PatternIndexPublishRequest, "description" | "hashtags">
+  & { description?: string; hashtags?: readonly string[] };
+
+/** What a staged publication is found under: its description and hashtags. */
+interface Described {
+  description: string;
+  hashtags: readonly string[];
+}
+
 export interface PatternIndexStageOptions {
   /**
    * The index pattern the request's source was revised from. Whether it
@@ -155,7 +177,7 @@ export interface PatternIndexStageOptions {
  * `priorPatternId`.
  */
 interface StagedPublication {
-  request: PatternIndexPublishRequest;
+  request: PatternIndexStageRequest;
   revisedFrom?: string;
 }
 
@@ -166,9 +188,9 @@ interface StagedPublication {
  * one.
  */
 const continuing = (
-  request: PatternIndexPublishRequest,
+  request: PatternIndexStageRequest,
   priorPatternId: string,
-): PatternIndexPublishRequest => {
+): PatternIndexStageRequest => {
   const { slot: _slot, remixedFrom: _remixedFrom, ...rest } = request;
   return { ...rest, priorPatternId };
 };
@@ -180,14 +202,15 @@ const continuing = (
  * A deployment that says answers with `author`, and with `mine: true` only to
  * the author: it leaves `mine` out rather than send `false`.
  * A read that fails is reported and leaves the request unchanged too, since
- * a guess at a predecessor's owner is the one thing this must not send.
+ * a guess at a predecessor's owner is the one thing this must not send. A
+ * request with no description takes the one the index answers.
  */
 const withPredecessor = async (
   client: PatternIndexClient,
-  request: PatternIndexPublishRequest,
+  staged: PatternIndexStageRequest,
   revisedFrom: string,
   onError: (message: string) => void,
-): Promise<PatternIndexPublishRequest> => {
+): Promise<PatternIndexStageRequest> => {
   let answer;
   try {
     answer = await client.getPattern({
@@ -197,13 +220,18 @@ const withPredecessor = async (
   } catch (error) {
     if (!(error instanceof PatternIndexError && error.status === 404)) {
       onError(
-        `run_pattern could not ask the pattern index whose pattern "${revisedFrom}" is, so the pattern revised from it starts a version history of its own: ${
+        `could not ask the pattern index whose pattern "${revisedFrom}" is, so the pattern revised from it is not filed in its version history: ${
           describeFailure(error)
         }`,
       );
     }
-    return request;
+    return staged;
   }
+  const request = staged.description !== undefined ? staged : {
+    ...staged,
+    description: answer.description,
+    hashtags: answer.hashtags,
+  };
   if (answer.mine === true) return continuing(request, revisedFrom);
   if (answer.author !== undefined) {
     return { ...request, remixedFrom: revisedFrom };
@@ -215,9 +243,7 @@ const withPredecessor = async (
  * What counts as one capability: the description and hashtags the model gave,
  * normalized for case and whitespace, with hashtags order-independent.
  */
-export const patternCapabilityKey = (
-  request: PatternIndexPublishRequest,
-): string =>
+export const patternCapabilityKey = (request: Described): string =>
   JSON.stringify([
     request.description.trim().toLowerCase().replace(/\s+/g, " "),
     [...request.hashtags]
@@ -239,6 +265,9 @@ export const createPatternIndexLedger = (
     { patternId: string; revisedFrom?: string }
   >();
   const sentIds = new Set<string>();
+  // What each entry this session staged is described as, for a revision of
+  // it that brings no description of its own.
+  const described = new Map<string, Described>();
   // Every write is serialized behind one chain, so a write is sent once the
   // write before it has been answered, without any caller awaiting either.
   let chain: Promise<void> = Promise.resolve();
@@ -271,11 +300,29 @@ export const createPatternIndexLedger = (
     chain = chain.then(async () => {
       try {
         const client = await getClient();
-        const response = await client.publishPattern(
-          revisedFrom === undefined || body.priorPatternId !== undefined
-            ? body
-            : await withPredecessor(client, body, revisedFrom, onError),
-        );
+        // A predecessor of this session's is described by now: it was sent
+        // ahead of this on the same chain.
+        const own = body.description === undefined && revisedFrom !== undefined
+          ? described.get(revisedFrom)
+          : undefined;
+        const resolved = revisedFrom === undefined ||
+            body.priorPatternId !== undefined
+          ? { ...body, ...own }
+          : await withPredecessor(client, body, revisedFrom, onError);
+        if (resolved.description === undefined) {
+          onError(
+            `pattern "${request.patternId}" was not kept as a version: it was revised in place from "${revisedFrom}", which the pattern index could not describe`,
+          );
+          return;
+        }
+        const description = resolved.description;
+        const hashtags = resolved.hashtags ?? [];
+        described.set(request.patternId, { description, hashtags });
+        const response = await client.publishPattern({
+          ...resolved,
+          description,
+          hashtags,
+        });
         if (response.created) {
           await client.recordEvent({
             patternId: response.patternId,
@@ -284,7 +331,7 @@ export const createPatternIndexLedger = (
         }
       } catch (error) {
         onError(
-          `run_pattern could not publish the pattern it ran to the pattern index: ${
+          `could not publish pattern "${request.patternId}" to the pattern index: ${
             describeFailure(error)
           }`,
         );
@@ -300,16 +347,40 @@ export const createPatternIndexLedger = (
           await client.recordEvent({ patternId, eventType });
         } catch (error) {
           onError(
-            `run_pattern could not record the ${eventType} event for pattern index entry "${patternId}": ${
+            `could not record the ${eventType} event for pattern index entry "${patternId}": ${
               describeFailure(error)
             }`,
           );
         }
       });
     },
-    stage(request, options = {}) {
+    stage(staged, options = {}) {
       const { revisedFrom } = options;
-      const key = patternCapabilityKey(request);
+      if (staged.description === undefined && revisedFrom === undefined) {
+        throw new Error(
+          `pattern index ledger: "${staged.patternId}" has no description and names no pattern to take one from`,
+        );
+      }
+      const inherited = staged.description === undefined &&
+          revisedFrom !== undefined
+        ? described.get(revisedFrom)
+        : undefined;
+      const request: PatternIndexStageRequest = { ...staged, ...inherited };
+      // An entry whose description is still to come from the index is its
+      // own capability: nothing else this session staged can be described the
+      // way it will be until the index says.
+      const key = request.description !== undefined
+        ? patternCapabilityKey({
+          description: request.description,
+          hashtags: request.hashtags ?? [],
+        })
+        : JSON.stringify(["revised-from", revisedFrom]);
+      if (request.description !== undefined) {
+        described.set(request.patternId, {
+          description: request.description,
+          hashtags: request.hashtags ?? [],
+        });
+      }
       const dependencies = new Set(request.dependencies ?? []);
       if (dependencies.size > 0 || revisedFrom !== undefined) {
         for (const [heldKey, pending] of [...held]) {

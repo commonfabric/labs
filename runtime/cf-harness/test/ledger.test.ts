@@ -625,6 +625,62 @@ describe("pattern index ledger", () => {
       expect(sent[1].body.priorPatternId).toBe("before");
     });
 
+    it("describes a revision that brings no description as its predecessor was", async () => {
+      const index = stubClient({ patterns: { "v1": "mine" } });
+      const ledger = createPatternIndexLedger(index.getClient);
+      const { description: _d, hashtags: _h, ...undescribed } = request("v2");
+      ledger.stage(undescribed, { revisedFrom: "v1" });
+      await ledger.flush();
+
+      const [sent] = publishes(index.calls);
+      expect(sent.body.meta).toMatchObject({ description: "Sortable table" });
+      expect(sent.body.meta).toMatchObject({
+        hashtags: [
+          "table",
+        ],
+      });
+      expect(sent.body.priorPatternId).toBe("v1");
+    });
+
+    it("describes a revision of this session's own entry from what it staged, without asking", async () => {
+      const index = stubClient();
+      const ledger = createPatternIndexLedger(index.getClient);
+      ledger.stage(request("v1", { description: "Doubles a number" }));
+      const { description: _d, hashtags: _h, ...undescribed } = request("v2");
+      ledger.stage(undescribed, { revisedFrom: "v1" });
+      await ledger.flush();
+
+      const sent = publishes(index.calls);
+      expect(sent[1].body.meta).toMatchObject({
+        description: "Doubles a number",
+      });
+      expect(sent[1].body.priorPatternId).toBe("v1");
+      expect(index.calls.some((call) => call.fn === "getPattern")).toBe(
+        false,
+      );
+    });
+
+    it("sends no revision nobody can describe, and says so", async () => {
+      const index = stubClient();
+      const errors: string[] = [];
+      const ledger = createPatternIndexLedger(index.getClient, {
+        onError: (message) => errors.push(message),
+      });
+      const { description: _d, hashtags: _h, ...undescribed } = request("v2");
+      ledger.stage(undescribed, { revisedFrom: "never-indexed" });
+      await ledger.flush();
+
+      expect(publishes(index.calls)).toEqual([]);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain("v2");
+    });
+
+    it("refuses a request with no description and nothing to take one from", () => {
+      const ledger = createPatternIndexLedger(stubClient().getClient);
+      const { description: _d, hashtags: _h, ...undescribed } = request("v2");
+      expect(() => ledger.stage(undescribed)).toThrow("no description");
+    });
+
     it("names no predecessor whose owner it could not learn, and says so", async () => {
       const index = stubClient({ patterns: { "v1": 500 } });
       const errors: string[] = [];
