@@ -1583,6 +1583,8 @@ describe("cell-cache", () => {
 
       expect(await storeAndLoad(["./util.ts"])).toEqual(["./util.ts"]);
       expect(await storeAndLoad(["./util.ts", 7])).toBeUndefined();
+      expect(await storeAndLoad("./util.ts")).toBeUndefined();
+      expect(await storeAndLoad({ 0: "./util.ts" })).toBeUndefined();
     });
 
     it("persists and cold-loads verified policy manifests without module evaluation", async () => {

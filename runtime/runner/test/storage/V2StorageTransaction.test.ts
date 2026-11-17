@@ -17,7 +17,7 @@ import type {
 } from "../../src/storage/interface.ts";
 import { pendingWriteElisionRead } from "../../src/storage/reactivity-log.ts";
 import { V2StorageTransaction } from "../../src/storage/v2-transaction.ts";
-import { captureLogs } from "../support/log-capture.ts";
+import { captureLogs } from "../support/captured-logs.ts";
 
 const signer = await Identity.fromPassphrase("V2StorageTransaction");
 const space = signer.did();
@@ -131,7 +131,7 @@ describe("V2StorageTransaction", () => {
 
         expect(read.ok?.value).toBeUndefined();
         expect(loads).toEqual([{ id: "of:unseen", principal: other }]);
-        expect(logs.lines("tracked-work-rejected")).toEqual([]);
+        expect(logs.textsOf("tracked-work-rejected")).toEqual([]);
       });
     });
 
@@ -478,7 +478,7 @@ describe("V2StorageTransaction", () => {
             name: "StoreError",
             message: expect.stringContaining("store went away"),
           });
-          expect(logs.lines("multi-space-commit-rejected")).toHaveLength(1);
+          expect(logs.textsOf("multi-space-commit-rejected")).toHaveLength(1);
           expect(edit().read(at("of:a", ["value"])).ok?.value).toBe(1);
         });
       });
@@ -499,7 +499,7 @@ describe("V2StorageTransaction", () => {
           name: "StoreError",
           message: expect.stringContaining("wave closed"),
         });
-        expect(logs.lines("seal-space-commit-rejected")).toHaveLength(1);
+        expect(logs.textsOf("seal-space-commit-rejected")).toHaveLength(1);
         expect(tx.status().status).toBe("error");
       });
 

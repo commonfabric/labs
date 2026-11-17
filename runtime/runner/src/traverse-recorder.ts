@@ -482,6 +482,21 @@ export class TraverseCaptureRecorder {
 
 let active: TraverseCaptureRecorder | undefined;
 
+/**
+ * Writes `recorder`'s capture to `path`, logging a write that fails rather
+ * than throwing, for a flush no caller is waiting on.
+ */
+export function flushCaptureReportingFailure(
+  recorder: TraverseCaptureRecorder,
+  path: string,
+): void {
+  try {
+    recorder.flush(path);
+  } catch (error) {
+    logger.warn("capture", () => ["periodic flush failed", error]);
+  }
+}
+
 function capturePathFromEnv(): string | undefined {
   try {
     // Not available (or not permitted) in browser/sandboxed builds.
@@ -516,13 +531,12 @@ if (capturePath !== undefined) {
   // Long-running processes (e.g. a local toolshed) rarely exit cleanly, so
   // "unload" alone would lose the capture. Flush periodically too; the timer
   // is unref'd so it never keeps a process alive.
-  const flushTimer = setInterval(() => {
-    try {
-      active!.flush(capturePath);
-    } catch (error) {
-      logger.warn("capture", () => ["periodic flush failed", error]);
-    }
-  }, 30_000);
+  const flushTimer = setInterval(
+    flushCaptureReportingFailure,
+    30_000,
+    active,
+    capturePath,
+  );
   Deno.unrefTimer(flushTimer);
 }
 

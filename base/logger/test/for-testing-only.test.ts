@@ -41,13 +41,89 @@ describe("captureLogsForTestingOnly()", () => {
     logger.error("plain", "again");
 
     expect(captured.logs).toEqual([
-      { level: "debug", key: "lazy", text: "built { n: 1 }" },
-      { level: "info", key: "plain", text: "said" },
-      { level: "warn", key: "failed", text: "broke" },
-      { level: "error", key: "plain", text: "again" },
+      {
+        level: "debug",
+        key: "lazy",
+        text: "built { n: 1 }",
+        messages: ["built", { n: 1 }],
+      },
+      { level: "info", key: "plain", text: "said", messages: ["said"] },
+      {
+        level: "warn",
+        key: "failed",
+        text: "broke",
+        messages: [new Error("broke")],
+      },
+      { level: "error", key: "plain", text: "again", messages: ["again"] },
     ]);
     expect(captured.textsOf("plain")).toEqual(["said", "again"]);
     expect(printed.calls).toEqual([]);
+  });
+
+  it("keeps each line's messages as they were, not rendered", () => {
+    using captured = captureLogsForTestingOnly("capture-test");
+    const error = new Error("broke");
+    const detail = { n: 1 };
+
+    logger.warn("failed", error, detail);
+
+    const { text, messages } = captured.logs[0]!;
+    expect(text).toBe("broke { n: 1 }");
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toBe(error);
+    expect(messages[1]).toBe(detail);
+  });
+
+  it("resolves `first()` at once with the first line already logged under the key", async () => {
+    using captured = captureLogsForTestingOnly("capture-test");
+
+    logger.info("early", "first");
+    logger.info("early", "second");
+
+    expect((await captured.first("early")).text).toBe("first");
+    expect((await captured.first("early")).text).toBe("first");
+  });
+
+  it("resolves `first()` when the logger logs the key, not for another key", async () => {
+    using captured = captureLogsForTestingOnly("capture-test");
+    let resolved = false;
+    const waiting = captured.first("later").then((log) => {
+      resolved = true;
+      return log;
+    });
+
+    logger.info("elsewhere", "not this one");
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    logger.info("later", "this one");
+    logger.info("later", "and again");
+    expect((await waiting).text).toBe("this one");
+  });
+
+  it("rejects a pending `first()` naming its key once disposed, leaving a settled one resolved", async () => {
+    const captured = captureLogsForTestingOnly("capture-test");
+    logger.info("logged", "here");
+    const settled = captured.first("logged");
+    const pending = captured.first("never");
+
+    captured[Symbol.dispose]();
+
+    expect((await settled).text).toBe("here");
+    await expect(pending).rejects.toThrow(
+      'The capture of "capture-test" ended before a line was logged under "never".',
+    );
+  });
+
+  it("rejects `first()` at once on a disposed capture without the key, and resolves it with one", async () => {
+    const captured = captureLogsForTestingOnly("capture-test");
+    logger.info("logged", "here");
+    captured[Symbol.dispose]();
+
+    expect((await captured.first("logged")).text).toBe("here");
+    await expect(captured.first("never")).rejects.toThrow(
+      'The capture of "capture-test" ended before a line was logged under "never".',
+    );
   });
 
   it("leaves another logger's lines to reach `console`", () => {
@@ -86,8 +162,8 @@ describe("captureLogsForTestingOnly()", () => {
 
     expect(counted.counts.total).toBe(102);
     expect(captured.logs).toEqual([
-      { level: "info", key: "real", text: "line" },
-      { level: "debug", key: "real", text: "again" },
+      { level: "info", key: "real", text: "line", messages: ["line"] },
+      { level: "debug", key: "real", text: "again", messages: ["again"] },
     ]);
     expect(printed.calls).toEqual([]);
   });
@@ -108,7 +184,7 @@ describe("captureLogsForTestingOnly()", () => {
       logger.warn("failed", "loudly");
 
       expect(captured.logs).toEqual([
-        { level: "warn", key: "failed", text: "loudly" },
+        { level: "warn", key: "failed", text: "loudly", messages: ["loudly"] },
       ]);
       expect(written.calls).toEqual([]);
     });

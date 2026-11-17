@@ -937,7 +937,7 @@ export async function runSchedulerAction(
 /** B7: the causes a fanned-out instance run carries as its CFC trigger
  * reads — those that dirtied ITS instance (a keyed cause resolving on the
  * instance identity's own chain) plus every untargeted one. */
-function causesForInstance(
+export function causesForInstance(
   causes: readonly IMemorySpaceAddress[],
   instance: FanOutInstance,
 ): IMemorySpaceAddress[] {
@@ -1626,10 +1626,6 @@ export function schedulerImplementationFingerprint(
     telemetry?.moduleName,
   ].filter((part): part is string => !!part).join(":") || `action:${actionId}`;
   return `action:${telemetryId}:${actionId}`;
-}
-
-export function schedulerRuntimeFingerprint(): string {
-  return "runner:scheduler:v3";
 }
 
 function recordOptionalActionRunDiagnostics(

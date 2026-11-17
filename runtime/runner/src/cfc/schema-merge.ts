@@ -1611,10 +1611,11 @@ function resolveConfidentialSchema(
   const resolved = typeof schema.$ref === "string"
     ? resolveKeepingBodyClaims(schema, root)
     : schema;
-  if (resolved === undefined) {
+  // A reference resolving to a boolean schema reaches no confidentiality, so
+  // the return above took it; only an unresolved reference remains.
+  if (!isObjectNotArray(resolved)) {
     throw new Error("Confidentiality merging requires resolved schemas");
   }
-  if (!isObjectNotArray(resolved)) return resolved;
   const childRoot = resolved !== schema
     ? cfcSchemaResolvedRoot(resolved, resolveCfcSchemaRefRoot(schema, root))
     : root;

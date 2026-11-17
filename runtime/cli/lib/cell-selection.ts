@@ -35,6 +35,7 @@ import {
   type Runtime,
   sanitizeSchemaForLinks,
   SchemaNotDecomposableError,
+  SchemaNotRecomposableError,
 } from "@commonfabric/runner";
 import type { IfcKey } from "@commonfabric/runner/cfc";
 import {
@@ -1708,8 +1709,9 @@ function ifcForSelection(
  * document outside itself.
  *
  * A schema holding no such reference comes back as the same object, and so
- * does one the decomposition refuses: a schema naming a document the registry
- * does not hold, or a shape the decomposition cannot represent.
+ * does one the decomposition refuses, a schema naming a document the registry
+ * does not hold or a shape the decomposition cannot represent, and one naming
+ * a document that does not fit the reference to it.
  */
 function selfContainedSchema(schema: JSONSchema): JSONSchema {
   if (!isObjectNotArray(schema) || !containsExternalSchemaRef(schema)) {
@@ -1721,7 +1723,12 @@ function selfContainedSchema(schema: JSONSchema): JSONSchema {
     });
     return recomposeSchema(rootRef, (hash) => documents.get(hash));
   } catch (error) {
-    if (error instanceof SchemaNotDecomposableError) return schema;
+    if (
+      error instanceof SchemaNotDecomposableError ||
+      error instanceof SchemaNotRecomposableError
+    ) {
+      return schema;
+    }
     throw error;
   }
 }
