@@ -37,8 +37,21 @@ describe("fuse-commands", () => {
   });
 
   it("prints that a directory nothing is mounted on is unmounted for `fuse unmount`", async () => {
+    // Linux reads the mount table from `/proc/mounts`, which a sandboxed
+    // runner may not let a process read; an empty table states the case on
+    // every machine. macOS reads its table through `getfsstat`, where nothing
+    // is mounted on a new temporary directory.
     const mountpoint = join(home, "never-mounted");
     await Deno.mkdir(mountpoint);
+    const readTextFile = Deno.readTextFile;
+    using _mounts = stub(
+      Deno,
+      "readTextFile",
+      (path: string | URL, options?: Deno.ReadFileOptions) =>
+        path === "/proc/mounts"
+          ? Promise.resolve("")
+          : readTextFile(path, options),
+    );
     const logs: string[] = [];
     using _log = stub(console, "log", (...args: unknown[]) => {
       logs.push(args.join(" "));
