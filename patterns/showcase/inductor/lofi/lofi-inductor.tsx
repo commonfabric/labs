@@ -65,6 +65,7 @@ import {
   verdictsOf,
 } from "./induction.ts";
 import type { CanonicalRule } from "../shared/rule-grammar.ts";
+import type { ContributionEvent } from "../pool/pool-policy.tsx";
 import ItemsCard, { type ItemRef, type SubmittedItem } from "./items-card.tsx";
 import RulesCard, { type RuleRef } from "./rules-card.tsx";
 import PoolCard from "./pool-card.tsx";
@@ -87,8 +88,9 @@ export type { ItemRef, RuleRef, SubmittedItem };
 /**
  * What the inductor needs of a pool: its goal, where to contribute, and how
  * to take a contribution back. It is written out here rather than picked from
- * the pool's output type, so the inductor depends on the pool's shape, not its
- * module.
+ * the pool's output type, so the inductor depends on the pool's shape and its
+ * policy, not on the pattern: anything of this shape may receive what the
+ * inductor publishes, and the policy's label decides what it can do with it.
  */
 export interface PoolTarget {
   goal: string;
@@ -99,11 +101,14 @@ export interface PoolTarget {
   consensus: PoolRule[];
 }
 
-/** What a pool's `submit` takes: a rule set under a pseudonym. */
-export interface PoolSubmission {
-  pseudonym: string;
-  rules: CanonicalRule[];
-}
+/**
+ * What a pool's `submit` takes: a rule set under a pseudonym, labelled with
+ * the real pool's policy (`../pool/pool-policy.tsx`). The label, not the
+ * receiver, is what keeps the rules private: any pattern with a pool's shape
+ * and this goal receives them, but only the real pool's `releaseConsensus`
+ * may make them public.
+ */
+export type PoolSubmission = ContributionEvent;
 
 /** A new goal, as `setGoal` takes it. */
 export interface GoalEvent {

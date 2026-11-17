@@ -206,11 +206,21 @@ export interface SubmitState {
   withdrawing?: boolean;
 }
 
-/** A contribution as `submit` takes it. */
-export interface ContributionEvent {
-  pseudonym: string;
-  rules: CanonicalRule[];
-}
+/**
+ * A contribution as `submit` takes it, labelled with the pool's policy as the
+ * stored contribution is. A sender types what it sends this way, so the rules
+ * it sends carry the policy wherever they land: a pool that is not this one
+ * receives them, but nothing it writes them into is public, since only this
+ * module's `releaseConsensus` may drop the clause. Each rule is a document of
+ * its own, so it carries the label too.
+ */
+export type ContributionEvent = Confidential<
+  {
+    pseudonym: string;
+    rules: PrivateRule[];
+  },
+  readonly [PolicyOf<typeof poolRules>]
+>;
 
 /**
  * Takes a contributor's whole rule set, replacing any set they gave before,
