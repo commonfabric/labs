@@ -67,7 +67,7 @@ debt"); this pattern is its implementation.
   seals disagree, or one has none, it emits nothing at all. That output,
   `consensus`, is the pool's public result, with `releasedCount` and the view
   derived from it. It is not stored (see "Workaround: the release is not
-  stored").
+  stored"), and today a public store refuses it (CFC snag 6, top/3226).
 - **The view** shows the goal, the configured threshold centre and jitter, and
   the released rules with their counts. It does not show how many people have
   contributed: the policy releases nothing about the contributions but the
@@ -127,12 +127,25 @@ submit handler (`docs/specs/cfc-transformed-by-input-witnesses.md`, as
 `examples/cfc-exchange-rules/witnessed-chain.tsx` uses it). Without the witness,
 any code could run `releaseConsensus` over contributions of its own making, such
 as the pool's doubled under made-up pseudonyms, and the rule would bless the
-output. `inductor-pool-replay.test.tsx` shows a public store refusing exactly
-that; `inductor-pool-multi-user.test.tsx` shows it taking the honest release. A
-public input does not constrain a witness, so the secret and threshold are not
-inputs of the release: they travel inside the witnessed contributions. The tests
-also show that `tallyEveryRule`, a function of the same module that no rule
-names, is refused by a public store, and so is a contribution copied out raw.
+output. A public input does not constrain a witness, so the secret and threshold
+are not inputs of the release: they travel inside the witnessed contributions.
+
+What the tests show, and what they cannot yet. Each probe writes a scalar (a
+rule's pattern, a count, a pseudonym, the secret) into a scalar public store,
+through a handler that types the store with its ceiling, and a literal lands in
+a store of the same shape beside it (`inductor-pool-test-fixture.ts`). A public
+store refuses the unthresholded tally (`tallyEveryRule`, a function of the same
+module that no rule names), the release over forged contributions, and a
+contribution's rule, pseudonym, seal secret, or the number of contributions,
+read raw (`inductor-pool-multi-user.test.tsx`, `inductor-pool-replay.test.tsx`).
+The genuine release should land in such a store, and today it does not: the
+runtime does not match an input witness naming a handler that wrote what its
+event carried (top/3226). Until it does, the tally and forgery refusals show
+only that those values are not public, not that the policy tells them apart from
+the release; dropping the witness from the rule does let the forgeries through.
+And a handler that types the same store plainly writes the tally in, because the
+runtime checks a store's ceiling only against the writing handler's own type for
+it (top/3219, kept as a probe in `inductor-pool.test.tsx`).
 
 **Editing the policy module strands stored contributions.** The rule names
 `THIS_POLICY.moduleIdentity`, the content identity of `pool-policy.tsx` with
@@ -178,8 +191,8 @@ in the pool's argument document, writing an array of objects into a
 /released"), even a literal array (top/3205; related, top/2502). So the pool
 stores no release. Its public result is `consensus`, the blessed function's own
 output, read where it is computed, and `releasedCount` and the view count and
-render from it. The refusal tests bring their own small public stores, which is
-enough for what they assert: that the store refuses.
+render from it. The refusal tests bring their own public stores, scalar ones,
+since an array of objects is refused there whatever it holds.
 
 When top/3205 is fixed, a stored release can come back if something needs one (a
 release that outlives a change to the inputs, say). Until then nothing does.
@@ -269,12 +282,18 @@ release that outlives a change to the inputs, say). Until then nothing does.
    event's payload is delivered unlabelled (top/3175), so a submission cannot
    bring its sender's clauses in; a labelled `thresholdCenter` or `jitter`,
    copied into the seal, is the path left.
-5. **Question for Berni: which schema's `maxConfidentiality` binds a write?**
-   The ceiling looks to be judged against the schema the writer's binding
-   declares for the store. In the tests, the probe's handlers declare their
-   target as a plain `Writable<ReleasedRule[]>`, and the refusal names the probe
-   pattern's `/leakedRaw`, whose input schema carries the ceiling. If a pattern
-   that declared the same store without the ceiling could write confidential
-   data into it, a public store's ceiling holds only together with
-   `WriteAuthorizedBy` (which is why the old `released` had both). Is that the
-   intended reading, or should the ceiling travel with the store?
+5. **A store's ceiling binds only a writer that repeats it** (top/3219). A
+   handler that types a `MaxConfidentiality<…, []>` store as plain
+   `Writable<string>` writes a confidential value into it. The earlier probes
+   typed their stores that way, and wrote arrays of objects, which top/3205
+   refuses whatever they hold, so their refusals proved nothing and the release
+   they showed landing was unchecked. The probes now type every destination with
+   its ceiling, and one plain-typed probe asserts the leak as it stands, to flip
+   when the runtime is fixed.
+6. **The witnessed release is refused** (top/3226). An exchange rule whose
+   `inputWitness` names a handler that wrote what its event carried, and read
+   nothing confidential, does not match, so a public store refuses the honest
+   release; the same rule naming a handler that read a confidential value
+   matches. `submitContribution` is the first kind for the first contribution at
+   least, so `consensus` is not public under an enforced ceiling today. The
+   multi-user test asserts the refusal, to flip when the runtime is fixed.

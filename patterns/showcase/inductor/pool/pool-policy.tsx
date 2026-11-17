@@ -154,7 +154,9 @@ export const releaseConsensus = lift(
 /**
  * Every rule with its count, threshold or not. Defined beside
  * `releaseConsensus` but named by no rule, so what it computes stays
- * confidential: the pool's tests show a public store refuses it.
+ * confidential. The pool's tests check a public store refuses it when the
+ * writing handler types the store with its ceiling; one that does not is not
+ * checked today (top/3219).
  */
 export const tallyEveryRule = lift(
   (contributions: Contribution[] | undefined): ReleasedRule[] =>

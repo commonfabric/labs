@@ -2,21 +2,26 @@
  * Five contributors, each in their own runtime and under their own
  * principal, share one pool whose threshold is exactly five, the lowest a
  * pool may seal (`MIN_SEALED_THRESHOLD`). A rule five of them hold is
- * released with its count, and a public store takes it; a rule four hold
- * never appears; no one can submit under another's pseudonym; a contributor
- * who resubmits, under a new pseudonym too, replaces their own entry and is
- * still counted once, even after another contributor's replacement rewrote
- * the list; and a contributor who withdraws takes their own entry out, and
- * their count off every rule, leaving everyone else's, and withdrawing again
- * with no entry takes nothing. Carol, Dave, and Erin each hold all three rules, so Alice's and
- * Bob's choices decide which reach five.
+ * released with its count; a rule four hold never appears; no one can submit
+ * under another's pseudonym; a contributor who resubmits, under a new
+ * pseudonym too, replaces their own entry and is still counted once, even
+ * after another contributor's replacement rewrote the list; and a contributor
+ * who withdraws takes their own entry out, and their count off every rule,
+ * leaving everyone else's, and withdrawing again with no entry takes nothing.
+ * Carol, Dave, and Erin each hold all three rules, so Alice's and Bob's
+ * choices decide which reach five.
+ *
+ * Alice also reads the pool into public scalar stores of her own: the
+ * unthresholded tally, the release over forged copies of her entry, and a
+ * contribution's leaves read raw are refused, and a literal lands beside
+ * them. The genuine release should land too, and today does not (top/3226).
  *
  * Pattern under test: ./inductor-pool.tsx
  */
 import {
   assert,
+  computed,
   type Default,
-  handler,
   multiUserTest,
   NAME,
   pattern,
@@ -30,14 +35,26 @@ import {
   BILL,
   INVOICE,
   LUNCH,
-  type OpenPublic,
-  type Untouched,
+  type PublicCount,
+  type PublicText,
+  publishContributionCount,
+  publishContributionLeaf,
+  publishLiteral,
+  publishPatterns,
+  publishRuleCount,
+  UNTOUCHED,
 } from "./inductor-pool-test-fixture.ts";
 import { MIN_SEALED_THRESHOLD } from "./consensus.ts";
 import InductorPool, {
+  type Contribution,
   type InductorPoolOutput,
   type ReleasedRule,
 } from "./inductor-pool.tsx";
+import {
+  releaseConsensus,
+  type StoredContribution,
+  tallyEveryRule,
+} from "./pool-policy.tsx";
 
 interface Setup {
   pool: InductorPoolOutput;
@@ -53,49 +70,127 @@ export const setup = pattern<Record<string, never>, Setup>(() => ({
   ),
 }));
 
-/** Copies the pool's release into a public store, as a reader might. */
-const publishRelease = handler<
-  void,
-  { from: ReleasedRule[]; to: Writable<ReleasedRule[]> }
->((_, { from, to }) => {
-  to.set(
-    (from ?? []).map((rule) => ({
-      field: rule.field,
-      pattern: rule.pattern,
-      predicts: rule.predicts,
-      key: rule.key,
-      count: rule.count,
-    })),
-  );
-});
+type Text = Writable<Default<PublicText, typeof UNTOUCHED>>;
+type Count = Writable<Default<PublicCount, -1>>;
 
 interface ReaderInput {
   consensus: ReleasedRule[];
-  // Public stores with no write binding, so only their label can refuse.
-  first: Writable<Default<OpenPublic, Untouched>>;
-  later: Writable<Default<OpenPublic, Untouched>>;
+  contributions: StoredContribution[];
+  // Public scalar stores with no write binding, so only their ceiling can
+  // refuse. Each publish below writes one scalar through a handler that types
+  // its store with the ceiling (inductor-pool-test-fixture.ts).
+  released: Text;
+  releasedCount: Count;
+  literal: Text;
+  tallied: Text;
+  talliedCount: Count;
+  forged: Text;
+  rawPattern: Text;
+  rawPseudonym: Text;
+  rawSecret: Text;
+  rawCount: Count;
 }
 
 interface ReaderOutput {
   [NAME]: string;
   [UI]: VNode;
-  first: OpenPublic;
-  later: OpenPublic;
-  publishFirst: Stream<void>;
-  publishLater: Stream<void>;
+  tally: ReleasedRule[];
+  forgedRelease: ReleasedRule[];
+  released: PublicText;
+  releasedCount: PublicCount;
+  literal: PublicText;
+  tallied: PublicText;
+  talliedCount: PublicCount;
+  forged: PublicText;
+  rawPattern: PublicText;
+  rawPseudonym: PublicText;
+  rawSecret: PublicText;
+  rawCount: PublicCount;
+  publishReleased: Stream<void>;
+  publishReleasedCount: Stream<void>;
+  publishLiteral: Stream<void>;
+  publishTallied: Stream<void>;
+  publishTalliedCount: Stream<void>;
+  publishForged: Stream<void>;
+  publishRawPattern: Stream<void>;
+  publishRawPseudonym: Stream<void>;
+  publishRawSecret: Stream<void>;
+  publishRawCount: Stream<void>;
 }
 
-/** Someone reading the pool's public result into public stores of their own. */
-const Reader = pattern<ReaderInput, ReaderOutput>(
-  ({ consensus, first, later }) => ({
+/**
+ * Someone given the pool's public result and its stored contributions,
+ * publishing scalars derived from each into public stores of their own. The
+ * genuine release and a literal must land; everything else derived from the
+ * contributions must not.
+ */
+const Reader = pattern<ReaderInput, ReaderOutput>((input) => {
+  const { consensus, contributions } = input;
+  // A function of the pool's module that no rule names.
+  const tally = tallyEveryRule(contributions);
+  // The released function over a list this pattern wrote: the first
+  // contribution, carrying the pool's real seal, copied under made-up
+  // contributors enough times to pass the sealed threshold.
+  const forgedRelease = releaseConsensus(
+    computed((): Contribution[] => {
+      const first = (contributions ?? [])[0];
+      if (first === undefined) return [];
+      return Array.from({ length: MIN_SEALED_THRESHOLD }, (_, i) => ({
+        contributor: `forged-${i}`,
+        pseudonym: `forged-${i}`,
+        rules: (first.rules ?? []).map((rule) => ({ ...rule })),
+        seal: { ...first.seal },
+      }));
+    }),
+  );
+  return {
     [NAME]: "Reader",
     [UI]: <div />,
-    first,
-    later,
-    publishFirst: publishRelease({ from: consensus, to: first }),
-    publishLater: publishRelease({ from: consensus, to: later }),
-  }),
-);
+    tally,
+    forgedRelease,
+    released: input.released,
+    releasedCount: input.releasedCount,
+    literal: input.literal,
+    tallied: input.tallied,
+    talliedCount: input.talliedCount,
+    forged: input.forged,
+    rawPattern: input.rawPattern,
+    rawPseudonym: input.rawPseudonym,
+    rawSecret: input.rawSecret,
+    rawCount: input.rawCount,
+    publishReleased: publishPatterns({ from: consensus, to: input.released }),
+    publishReleasedCount: publishRuleCount({
+      from: consensus,
+      to: input.releasedCount,
+    }),
+    publishLiteral: publishLiteral({ to: input.literal }),
+    publishTallied: publishPatterns({ from: tally, to: input.tallied }),
+    publishTalliedCount: publishRuleCount({
+      from: tally,
+      to: input.talliedCount,
+    }),
+    publishForged: publishPatterns({ from: forgedRelease, to: input.forged }),
+    publishRawPattern: publishContributionLeaf({
+      contributions,
+      leaf: "pattern",
+      to: input.rawPattern,
+    }),
+    publishRawPseudonym: publishContributionLeaf({
+      contributions,
+      leaf: "pseudonym",
+      to: input.rawPseudonym,
+    }),
+    publishRawSecret: publishContributionLeaf({
+      contributions,
+      leaf: "secret",
+      to: input.rawSecret,
+    }),
+    publishRawCount: publishContributionCount({
+      contributions,
+      to: input.rawCount,
+    }),
+  };
+});
 
 /**
  * Whether the pool's public result, `consensus`, is exactly these patterns
@@ -121,7 +216,10 @@ function othersRemain(pool: InductorPoolOutput): boolean {
 
 export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const reader = Reader(
-    { consensus: setup.pool.consensus } as Parameters<typeof Reader>[0],
+    {
+      consensus: setup.pool.consensus,
+      contributions: setup.pool.contributions,
+    } as Parameters<typeof Reader>[0],
   );
   return {
     [TESTS]: [
@@ -136,15 +234,75 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       // Five hold `invoice`: released, with its count. `bill` and `lunch`,
       // four each, do not appear.
       { assertion: assert(() => releasedIs(setup.pool, [["invoice", 5]])) },
-      // The release is public: the policy lets it into a public store.
-      { action: reader.publishFirst },
+
+      // The control: a literal lands in a public store of the same shape,
+      // beside the same inputs, so a refusal below is the value's label and
+      // not the store (top/3205).
+      { action: reader.publishLiteral },
+      { assertion: assert(() => reader.literal === "literal") },
+
+      // The genuine release should land too: it is what the policy releases.
+      // Today it is refused, because the release's input witness names
+      // `submitContribution`, which writes what its event carried, and the
+      // runtime does not match such a witness (top/3226). Until it lands, the
+      // tally and forgery refusals below show only that those values are not
+      // public, not that the policy tells them apart from the release.
+      { action: reader.publishReleased },
+      { action: reader.publishReleasedCount },
       {
         assertion: assert(() =>
-          reader.first.length === 1 &&
-          reader.first[0]?.pattern === "invoice" &&
-          reader.first[0]?.count === 5
+          // top/3226: flip to "invoice" and 1 when the runtime matches the
+          // input witness.
+          reader.released === UNTOUCHED && reader.releasedCount === -1
         ),
       },
+
+      // Every rule's count, threshold or not, is computed by a function of
+      // the pool's module that no rule names...
+      {
+        assertion: assert(() =>
+          reader.tally.map((rule) => `${rule?.pattern}:${rule?.count}`)
+            .sort().join() === "bill:4,invoice:5,lunch:4"
+        ),
+      },
+      // ...so neither its rules nor how many there are reach a public store.
+      { action: reader.publishTallied },
+      { action: reader.publishTalliedCount },
+      {
+        assertion: assert(() =>
+          reader.tallied === UNTOUCHED && reader.talliedCount === -1
+        ),
+      },
+
+      // The released function over Alice's entry copied under made-up
+      // contributors computes `lunch`, which four real contributors hold, as
+      // released...
+      {
+        assertion: assert(() =>
+          reader.forgedRelease.map((rule) => rule?.pattern).sort().join() ===
+            "invoice,lunch"
+        ),
+      },
+      // ...but `submitContribution` did not write its inputs, so a public
+      // store refuses it.
+      { action: reader.publishForged },
+      { assertion: assert(() => reader.forged === UNTOUCHED) },
+
+      // A contribution read raw: its rule, its pseudonym, the pool's secret,
+      // and how many contributions there are, each refused.
+      { action: reader.publishRawPattern },
+      { action: reader.publishRawPseudonym },
+      { action: reader.publishRawSecret },
+      { action: reader.publishRawCount },
+      {
+        assertion: assert(() =>
+          reader.rawPattern === UNTOUCHED &&
+          reader.rawPseudonym === UNTOUCHED &&
+          reader.rawSecret === UNTOUCHED &&
+          reader.rawCount === -1
+        ),
+      },
+
       // Alice replaces her set, which rewrites the list around the others'.
       {
         action: setup.pool.submit,
@@ -159,14 +317,6 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       { await: "bob-renamed" },
       // Bob's new pseudonym replaced his entry: he holds only `lunch` now.
       { assertion: assert(() => releasedIs(setup.pool, [["lunch", 5]])) },
-      // A replaced contribution is still the pool's own, so the release
-      // after it is public too.
-      { action: reader.publishLater },
-      {
-        assertion: assert(() =>
-          reader.later.length === 1 && reader.later[0]?.pattern === "lunch"
-        ),
-      },
       // Withdrawing takes Alice's entry out, and her count off every rule,
       // and leaves everyone else's entry where it was.
       { action: setup.pool.withdraw },
@@ -179,6 +329,8 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       { action: setup.pool.withdraw },
       { assertion: assert(() => othersRemain(setup.pool)) },
     ],
+    // Each refused publish logs the CFC refusal.
+    allowConsoleWarnings: true,
     reader,
   };
 });
