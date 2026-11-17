@@ -493,6 +493,13 @@ function simplify(node: Node): Node {
     case "repeat": {
       const body = simplify(node.body);
       if (node.min === 1 && node.max === 1) return body;
+      // A repeated assertion (only reachable through a group, `(?:^)?`)
+      // matches nothing wider than itself: optional, it always holds;
+      // required, once is as many times as any. Printed bare, `^?` would not
+      // compile.
+      if (body.kind === "assert") {
+        return node.min === 0 ? { kind: "seq", items: [] } : body;
+      }
       return { ...node, body };
     }
     default:
@@ -680,6 +687,16 @@ export function canonicalizePattern(
     const canonical = print(tree);
     if (canonical === "") {
       return { ok: false, reason: "a pattern must match something" };
+    }
+    // What is accepted must run: a canonical form that does not compile is a
+    // canonicalizer bug, refused here rather than dropped where rules run.
+    try {
+      new RegExp(canonical, "i");
+    } catch {
+      return {
+        ok: false,
+        reason: `the canonical form /${canonical}/ does not compile`,
+      };
     }
     return { ok: true, pattern: canonical };
   } catch (e) {

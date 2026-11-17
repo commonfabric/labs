@@ -83,6 +83,10 @@ const SAME: string[][] = [
   ["x-y", "x\\-y", "x[-]y"],
   ["pay(?:ment)? due", "pay(ment)? due", "pay(?:ment)?? due"],
   ["a|a", "a"],
+  // A repeated assertion: optional, it always holds; required, once is enough
+  ["(?:^)?x", "x", "(^)*x", "(?:\\b){0}x"],
+  ["(?:\\b)+x", "\\bx", "(?:\\b){2}x", "(\\b){1,3}x"],
+  ["(?:$){2}", "$", "($)+"],
   ["(?:ab|cd)|ef", "ef|cd|ab", "ab|(?:cd|ef)"],
 ];
 
@@ -128,6 +132,7 @@ const OUT_OF_GRAMMAR: Array<[string, RegExp]> = [
   ["a{", /needs a count/],
   ["*a", /nothing to repeat/],
   ["^*", /cannot be repeated/],
+  ["(?:^)*", /match something/],
   ["a]", /escaped/],
   ["[z-a]", /out of order/],
   ["[\\d-z]", /cannot start a range/],
@@ -238,6 +243,8 @@ describe("canonicalizePattern", () => {
       " ",
       "\\W",
       "[A-B1]",
+      "(?:\\b)",
+      "(^)",
     ];
     const quantifiers = ["", "", "", "*", "+", "?", "{2}", "{1,2}", "*?"];
     const anchors = ["", "", "", "^", "\\b"];
