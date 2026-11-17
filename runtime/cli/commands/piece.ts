@@ -5320,7 +5320,12 @@ export async function newPieceFromCommand(
       ? undefined
       : await loadVersionModules().then(
         ({ versions }) => versions.versionJson,
-        () => undefined,
+        // The modules failing to load made the outcome a failure, which a
+        // script still reads as one.
+        () => (outcome: VersionOutcome) => ({
+          status: outcome.status,
+          ...("reason" in outcome ? { reason: outcome.reason } : {}),
+        }),
       );
     print(
       {
