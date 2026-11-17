@@ -10,10 +10,6 @@
  *     [--include ...] [--exclude '<glob>' ...] --out <plan.json> \
  *     [--summary <file>]
  *
- * `PATTERN_INDEX_PUSH_COMMITS`, when set, is the push event's `commits` list
- * as JSON (`toJSON(github.event.commits)`): the plan names the entry paths
- * those commits deleted, whose lineages the index then withdraws.
- *
  * It holds no credential and contacts no index, so it is also the dry run.
  * It compiles in a runtime with in-memory storage, writing nothing to any
  * fabric. The flags that bear on a pattern's identity are the ones this Labs
@@ -34,21 +30,6 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { compileProgram } from "./src/publish.ts";
 import { planRepo } from "./src/repo-plan.ts";
 import type { RepoSyncPlan } from "./src/repo-sync.ts";
-
-/**
- * The paths the push's commits deleted, from the push event's `commits`
- * list as JSON; none when it is absent, as for a manual or scheduled run.
- */
-const deletedInPush = (json: string | undefined): string[] => {
-  if (json === undefined || json.trim() === "" || json === "null") return [];
-  const commits: unknown = JSON.parse(json);
-  if (!Array.isArray(commits)) return [];
-  return commits.flatMap((commit) =>
-    Array.isArray(commit?.removed)
-      ? commit.removed.filter((path: unknown) => typeof path === "string")
-      : []
-  );
-};
 
 /** The repository's tracked files, relative to its root. */
 const gitTrackedFiles = async (repoRoot: string): Promise<string[]> => {
@@ -76,7 +57,7 @@ const planMarkdown = (plan: RepoSyncPlan): string => {
     "",
     `${plan.entries.length} entries: ${withStatus("compiled")} compiled, ` +
     `${withStatus("undescribed")} without a description, ` +
-    `${withStatus("failed")} failed; ${plan.removed.length} deleted.`,
+    `${withStatus("failed")} failed.`,
   ];
   for (const entry of plan.entries) {
     if (entry.status === "failed") {
@@ -135,7 +116,7 @@ const main = async (): Promise<number> => {
           ),
         compileProgram: (program) =>
           compileProgram(runtime, signer.did(), program),
-        deletedPaths: deletedInPush(Deno.env.get("PATTERN_INDEX_PUSH_COMMITS")),
+        experimental: runtime.experimental,
       },
     );
     await Deno.writeTextFile(out, JSON.stringify(plan));

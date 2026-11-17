@@ -105,9 +105,6 @@ runs:
         EXCLUDE: ${{ inputs.exclude }}
         PROGRAM_ROOT: ${{ inputs.program-root }}
         PLAN: ${{ runner.temp }}/pattern-index-plan/plan.json
-        # The files the push deleted, so their lineages are withdrawn; null
-        # for a run no push started.
-        PATTERN_INDEX_PUSH_COMMITS: ${{ toJSON(github.event.commits) }}
       run: |
         if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
           echo "::error::The plan step evaluates the repository's code, so its job must not grant id-token: write."

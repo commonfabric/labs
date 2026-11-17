@@ -40,11 +40,12 @@ for an artifact or an operator log.
 
 A GitHub repository's pattern entries are published to the index, one lineage
 per entry file, in two steps that run in two jobs. `sync-plan.ts` compiles every
-entry and writes a plan, holding no credential. `sync-publish.ts` sends the plan
-to the index's `syncBrandPatterns` (`src/brand-sync-client.ts`), which makes a
-version of each entry whose source changed, with a GitHub OIDC token
-(`src/github-oidc.ts`) as its only credential. `src/repo-sync.ts` says why the
-two are kept apart, and `src/repo-plan.ts` decides which files are entries.
+entry and writes a plan, holding no credential. `sync-publish.ts` reads the
+plan, compares each entry's hash with the one `listRepoHeads` returns for its
+path, publishes what changed, and withdraws the lineages of paths that are gone
+(`withdrawRepoPaths`). Its only credential is a GitHub OIDC token bound to a key
+made for the run (`src/github-oidc.ts`). `src/repo-sync.ts` says why the two
+steps are kept apart, and `src/repo-plan.ts` decides which files are entries.
 Other repositories adopt it through the composite action in
 `.github/actions/pattern-index-sync`, whose README covers adoption and the run
 step by step. This repository's own patterns sync through
