@@ -3951,6 +3951,27 @@ describe("a key field declared with `KeyedBy`", () => {
     expect(instance.childInstances().length).toBe(2);
   });
 
+  it("evaluates nothing again where nothing changed, for a body and a fold over elements that have no place", async () => {
+    // The elements of an array that a computation returned have no
+    // place, and a reader depends on what the element of its key holds.
+    const keyed = await start();
+    const before = { ...keyed.counts };
+    keyed.settle();
+    expect(keyed.counts).toEqual(before);
+
+    // The step of a `reduce` over the result of a `map` reads such an
+    // element under the fold, which is checked outside the collection.
+    const folded = new Instance(await artifactOf("reduce"), {
+      items: [{ title: "a", amount: 3 }, { title: "b", amount: 4 }],
+      amounts: [5, 6, 7],
+      bonus: 1,
+    });
+    const settled = { ...folded.counts };
+    folded.settle();
+    folded.settle();
+    expect(folded.counts).toEqual(settled);
+  });
+
   it("makes an element with another value of the field another element", async () => {
     const instance = await start();
     instance.send(NOTE_ROW, { text: "mine" }, [1]);

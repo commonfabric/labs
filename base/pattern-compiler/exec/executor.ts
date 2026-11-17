@@ -1615,15 +1615,23 @@ export class Instance {
         // computation returned. Under a declared key field the element
         // of a key can hold another value in a later array, so the
         // reader depends on what the element of its key holds at the
-        // path it reads (ruling Z38).
+        // path it reads (ruling Z38). The element is found in the table
+        // of the collection by the key, whichever context the entry is
+        // later checked under.
         const collection = root.collection ?? -1;
-        const held = (context: Context) => {
-          const now = context.get(collection)?.source;
-          return now === undefined || now instanceof Ref || !("value" in now)
+        const table = `a${collection}|${
+          this.#contextKey(this.#outerOf(collection), host.context)
+        }`;
+        const held = () => {
+          const now =
+            this.#tables.get(table)?.find((member) =>
+              member.key === element.key
+            )?.source ?? source;
+          return now instanceof Ref || !("value" in now)
             ? undefined
             : canonical(this.stored(host.at(now.value, path)));
         };
-        host.dependencies.push({ stamp: held, seen: held(host.context) });
+        host.dependencies.push({ stamp: held, seen: held() });
         return source.value;
       }
       case "index": {
