@@ -31,7 +31,6 @@ import {
 import type { InductorPoolOutput } from "../inductor-pool/inductor-pool.tsx";
 import {
   buildHifiPrompt,
-  buildRewritePrompt,
   gradeItems,
   heldOutExamples,
   HIFI_SYSTEM,
@@ -45,6 +44,7 @@ import {
   type Proposal,
   type Published,
   REWRITE_SYSTEM,
+  rewriteRequest,
   type RewriteStatus,
   rewriteStatus,
   scoreRules,
@@ -112,6 +112,8 @@ interface LofiInductorInput {
   rewriteAfter?: PerSpace<number | Default<3>>;
   /** The share of items held out to score proposals on, in percent. */
   heldOutPercent?: PerSpace<number | Default<30>>;
+  /** Retries of the current rewrite's failed model call. */
+  rewriteAttempt?: PerSpace<Writable<number | Default<0>>>;
 }
 
 /** Induces cheap regex rules for a yes-or-no question from a model's answers. #classifier #learning */
@@ -151,6 +153,8 @@ export interface LofiInductorOutput {
    * it was accepted, and add the round to the history either way.
    */
   settleRewrite: Stream<void>;
+  /** Ask the model again after the rewrite's call failed. */
+  retryRewrite: Stream<void>;
   /** Publish the current rules for the goal. */
   publish: Stream<void>;
 }
@@ -167,6 +171,7 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     hifiModel,
     rewriteAfter,
     heldOutPercent,
+    rewriteAttempt,
   }) => {
     const draft = new Writable.perSession("");
     const goalDraft = new Writable.perSession("");
@@ -202,22 +207,24 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     // REWRITE: a whole new rule set once enough surprises are new
     // ========================================================================
 
-    const rewritePrompt = computed(() =>
-      buildRewritePrompt(
+    const request = computed(() =>
+      rewriteRequest(
         goal.get(),
         rules.get(),
         rows,
         history.get(),
         rewriteAfter,
+        rewriteAttempt.get(),
       )
     );
+    const rewritePrompt = computed(() => request?.prompt ?? "");
     const proposal = generateObject<Proposal>({
       prompt: rewritePrompt,
       system: REWRITE_SYSTEM,
     });
     const rewrite = computed(() =>
       rewriteStatus(
-        rewritePrompt,
+        request,
         {
           pending: proposal.pending,
           error: proposal.error,
@@ -236,15 +243,24 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     const settleRewrite = action(() => {
       const status = rewrite;
       if (status.status !== "ready") return;
+      // Only the surprises the request was frozen on are answered; any that
+      // arrived since stay new for the next round.
       const next = settle(
         rules.get(),
         history.get().length + 1,
         status.judgement,
-        newSurprises(rows, history.get()),
+        status.answered,
         Date.now(),
       );
       if (status.judgement.accepted) rules.set(next.rules);
       history.push(next.entry);
+      rewriteAttempt.set(0);
+    });
+
+    // A failed model call records nothing; this asks the same question again.
+    const retryRewrite = action(() => {
+      if (rewrite.status !== "failed") return;
+      rewriteAttempt.set(rewriteAttempt.get() + 1);
     });
 
     // The goal changes only here, never per keystroke: every hi-fi call is
@@ -346,17 +362,39 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     );
     const ruleLines = computed(() => rules.get().map(describeRule));
     const rewriteLine = computed(() => {
-      const status = rewrite.status;
-      if (status === "idle") {
-        return `Waiting for ${
-          Math.max(1, rewriteAfter) -
-          newSurprises(rows, history.get()).length
-        } more surprises before proposing new rules.`;
+      const status = rewrite;
+      if (status.status === "idle") {
+        const missing = Math.max(1, rewriteAfter) -
+          newSurprises(rows, history.get()).length;
+        return missing > 0
+          ? `Waiting for ${missing} more surprises before proposing new rules.`
+          : "Waiting for the hi-fi model to label the items so far.";
       }
-      if (status === "pending") return "Proposing a new rule set…";
-      return "A proposal has been judged and is ready to record.";
+      if (status.status === "pending") return "Proposing a new rule set…";
+      if (status.status === "failed") {
+        return `Proposing failed (${status.reason}); nothing was recorded.`;
+      }
+      return `Proposed: ${status.judgement.reason}.`;
     });
     const rewriteReady = computed(() => rewrite.status === "ready");
+    const rewriteFailed = computed(() => rewrite.status === "failed");
+    // What the ready proposal holds: its rules, and why any were refused.
+    const proposalLines = computed(() => {
+      const status = rewrite;
+      if (status.status !== "ready") return [];
+      return [
+        ...status.judgement.rules.map(describeRule),
+        ...status.judgement.refusals,
+      ];
+    });
+    const settleLabel = computed(() => {
+      const status = rewrite;
+      if (status.status !== "ready") return "";
+      const { accepted, currentF1, proposedF1 } = status.judgement;
+      return accepted
+        ? `Apply new rules (F1 ${percent(currentF1)} → ${percent(proposedF1)})`
+        : "Dismiss rejected proposal";
+    });
     const historyLines = computed(() =>
       [...history.get()].reverse().map((entry) => ({
         round: `Round ${entry.round}: ${
@@ -410,10 +448,18 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
                   <cf-heading level={5}>{rulesHeading}</cf-heading>
                   {ruleLines.map((line) => <code>{line}</code>)}
                   <span>{rewriteLine}</span>
+                  {proposalLines.map((line) => <code>{line}</code>)}
                   {rewriteReady
                     ? (
                       <cf-button onClick={() => settleRewrite.send()}>
-                        Record the judgement
+                        {settleLabel}
+                      </cf-button>
+                    )
+                    : null}
+                  {rewriteFailed
+                    ? (
+                      <cf-button onClick={() => retryRewrite.send()}>
+                        Try again
                       </cf-button>
                     )
                     : null}
@@ -478,6 +524,7 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       setGoal,
       submitItem,
       settleRewrite,
+      retryRewrite,
       publish,
     };
   },

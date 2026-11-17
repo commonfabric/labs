@@ -4,7 +4,9 @@
  * grammar, safe, and strictly better on the held-out items replaces the
  * current rules. A worse set, a set with one unsafe rule, and a set with one
  * rule outside the grammar are each recorded as rejected and change nothing.
- * Judging is derived: nothing changes until `settleRewrite` records it.
+ * Judging is derived: nothing changes until `settleRewrite` records it, and
+ * the view says what recording does before it is done. A failed model call
+ * records nothing and is retried.
  *
  * Pattern under test: ./lofi-inductor.tsx
  */
@@ -23,6 +25,7 @@ const BETTER = "Is this email a bill?";
 const WORSE = "Is this email a bill? (worse)";
 const UNSAFE = "Is this email a bill? (unsafe)";
 const OUT_OF_GRAMMAR = "Is this email a bill? (out of grammar)";
+const FLAKY = "Is this email a bill? (flaky)";
 
 const GOOD_RULE = {
   field: "subject",
@@ -44,6 +47,22 @@ export const llmMocks = [
     pattern: "(?<=re: )bill",
     predicts: true,
   }]),
+  // The first call fails; the retry, which says it is one, succeeds.
+  {
+    when: {
+      systemContains: "You write lo-fi rules",
+      lastMessageContains: `Question: ${FLAKY}\n`,
+    },
+    error: "the model is down",
+  },
+  {
+    when: {
+      systemContains: "You write lo-fi rules",
+      messagesContain: [`Question: ${FLAKY}\n`, "(Attempt 2.)"],
+    },
+    object: { rules: [GOOD_RULE], reasoning: "Bills say bill or invoice." },
+    repeat: true,
+  },
 ];
 
 const ITEMS = [...HELD_OUT_ITEMS, ...TRAINING_ITEMS];
@@ -64,6 +83,7 @@ export default pattern(() => {
   const worse = inductor(WORSE);
   const unsafe = inductor(UNSAFE);
   const outOfGrammar = inductor(OUT_OF_GRAMMAR);
+  const flaky = inductor(FLAKY);
 
   // Straight-line, one statement per inductor: a test's action is pattern
   // code, which keeps loops out of callbacks
@@ -72,6 +92,7 @@ export default pattern(() => {
     ITEMS.forEach((item) => worse.submitItem.send(item));
     ITEMS.forEach((item) => unsafe.submitItem.send(item));
     ITEMS.forEach((item) => outOfGrammar.submitItem.send(item));
+    ITEMS.forEach((item) => flaky.submitItem.send(item));
   });
   const action_settle = action(() => {
     better.settleRewrite.send();
@@ -141,6 +162,38 @@ export default pattern(() => {
     outOfGrammar.rewrite.status === "idle"
   );
 
+  // Before recording, the view shows each proposal and says what recording
+  // it does: apply an accepted set, with the F1 it brings, or dismiss one.
+  const assert_view_offers_proposal = assert(() =>
+    hasText(better[UI], "subject: /\\bbill\\b|invoice/i → YES") &&
+    hasText(better[UI], "Apply new rules (F1 67% → 100%)") &&
+    hasText(worse[UI], "Dismiss rejected proposal")
+  );
+
+  // A failed call is not a rejection: nothing is recorded, and the surprises
+  // stay new for the retry.
+  const assert_flaky_failed = assert(() =>
+    flaky.rewrite.status === "failed" && flaky.history.length === 0 &&
+    flaky.rules[0]?.pattern === "invoice"
+  );
+  const action_settle_flaky = action(() => {
+    flaky.settleRewrite.send();
+  });
+  const action_retry_flaky = action(() => {
+    flaky.retryRewrite.send();
+  });
+  const assert_flaky_retried = assert(() =>
+    flaky.rewrite.status === "ready" &&
+    flaky.rewrite.judgement.accepted === true && flaky.history.length === 0
+  );
+  // The round answers the two surprises its request was frozen on, which
+  // is `rewriteAfter`, not every surprise there is.
+  const assert_flaky_accepted = assert(() =>
+    flaky.history.length === 1 && flaky.history[0]?.accepted === true &&
+    flaky.history[0]?.answered.length === 2 &&
+    flaky.rules[0]?.pattern === "\\bbill\\b|invoice"
+  );
+
   const assert_view_shows_refusal = assert(() =>
     hasText(unsafe[UI], "Round 1: rejected") &&
     hasText(unsafe[UI], "could backtrack exponentially")
@@ -153,6 +206,17 @@ export default pattern(() => {
       { settle: true },
       { assertion: assert_surprised },
       { assertion: assert_judged_not_recorded },
+      { render: better[UI] },
+      { render: worse[UI] },
+      { assertion: assert_view_offers_proposal },
+      { assertion: assert_flaky_failed },
+      { action: action_settle_flaky },
+      { assertion: assert_flaky_failed },
+      { action: action_retry_flaky },
+      { settle: true },
+      { assertion: assert_flaky_retried },
+      { action: action_settle_flaky },
+      { assertion: assert_flaky_accepted },
       { action: action_settle },
       { assertion: assert_better_accepted },
       { assertion: assert_better_settled },

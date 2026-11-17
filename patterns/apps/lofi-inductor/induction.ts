@@ -92,11 +92,22 @@ export interface Judgement {
   heldOut: number;
 }
 
+/**
+ * What one rewrite asks the model, frozen once enough surprises are new: the
+ * prompt, and the new surprises it was frozen on, which recording the round
+ * marks answered.
+ */
+export interface RewriteRequest {
+  prompt: string;
+  answered: string[];
+}
+
 /** Where the current rewrite stands. */
 export type RewriteStatus =
   | { status: "idle" }
   | { status: "pending" }
-  | { status: "ready"; judgement: Judgement };
+  | { status: "failed"; reason: string }
+  | { status: "ready"; judgement: Judgement; answered: string[] };
 
 /** One judged proposal, as the history keeps it. */
 export interface HistoryEntry {
@@ -360,33 +371,55 @@ function exampleLine(row: ItemRow): string {
 }
 
 /**
- * The prompt asking for a new rule set, or "" while fewer than `rewriteAfter`
- * surprises are new since the last judged round. It shows the model only
- * training examples, so the held-out score stays an honest test.
+ * The rewrite to ask for, or null while fewer than `rewriteAfter` surprises
+ * are new since the last recorded round.
+ *
+ * The request is frozen on the item where the `rewriteAfter`-th new surprise
+ * arrived: it reads only the items up to that one, and waits until the hi-fi
+ * model has labelled each of them. Items arrive at the end of the list, so
+ * later ones never change it, and the model is asked once per round rather
+ * than again for every item that arrives while it answers. `attempt` counts
+ * retries of a failed call; a retry changes the prompt, which asks again.
+ *
+ * The prompt shows the model only training examples, so the held-out score
+ * stays an honest test. It shows every new training surprise the request was
+ * frozen on, then the most recent older ones.
  */
-export function buildRewritePrompt(
+export function rewriteRequest(
   goal: string,
   rules: readonly CanonicalRule[],
   rows: readonly ItemRow[],
   history: readonly HistoryEntry[],
   rewriteAfter: number,
-): string {
+  attempt = 0,
+): RewriteRequest | null {
   const question = goal.trim();
-  if (question === "") return "";
-  if (newSurprises(rows, history).length < Math.max(1, rewriteAfter)) {
-    return "";
+  if (question === "") return null;
+  const fresh = new Set(newSurprises(rows, history));
+  const wanted = Math.max(1, rewriteAfter);
+  const answered: string[] = [];
+  let cutoff = -1;
+  for (let i = 0; i < rows.length && cutoff < 0; i++) {
+    if (fresh.has(rows[i].id)) answered.push(rows[i].id);
+    if (answered.length === wanted) cutoff = i;
   }
-  const training = rows.filter((row) =>
-    row.split === "train" && row.hifi !== null
-  );
-  const surprises = training.filter((row) => row.surprise).slice(
-    -PROMPT_SURPRISES,
-  );
+  if (cutoff < 0) return null;
+  const seen = rows.slice(0, cutoff + 1);
+  if (seen.some((row) => row.hifi === null)) return null;
+
+  const training = seen.filter((row) => row.split === "train");
+  const isNew = (row: ItemRow) => answered.includes(row.id);
+  const surprises = [
+    ...training.filter((row) => row.surprise && !isNew(row)).slice(
+      -PROMPT_SURPRISES,
+    ),
+    ...training.filter(isNew),
+  ];
   const agreements = training.filter((row) => !row.surprise).slice(
     -PROMPT_AGREEMENTS,
   );
-  const fields = new Set(rows.flatMap((row) => Object.keys(row.fields)));
-  return [
+  const fields = new Set(seen.flatMap((row) => Object.keys(row.fields)));
+  const prompt = [
     `Question: ${question}`,
     `Fields items have: ${[...fields].sort().join(", ")}`,
     `Current rules:\n${
@@ -400,7 +433,21 @@ export function buildRewritePrompt(
         ? "(none)"
         : agreements.map(exampleLine).join("\n")
     }`,
+    ...(attempt > 0 ? [`(Attempt ${attempt + 1}.)`] : []),
   ].join("\n\n");
+  return { prompt, answered };
+}
+
+/** The prompt `rewriteRequest` would send, or "" when there is none. */
+export function buildRewritePrompt(
+  goal: string,
+  rules: readonly CanonicalRule[],
+  rows: readonly ItemRow[],
+  history: readonly HistoryEntry[],
+  rewriteAfter: number,
+): string {
+  return rewriteRequest(goal, rules, rows, history, rewriteAfter)?.prompt ??
+    "";
 }
 
 // =============================================================================
@@ -483,33 +530,23 @@ export interface RewriteGeneration {
 }
 
 /**
- * Where the rewrite stands: idle while the prompt is empty, pending while the
- * model works, and ready with a judgement once it answers. A failed call is
- * judged too, as a refusal, so the round is recorded and its surprises are
- * answered rather than asked about again.
+ * Where the rewrite stands: idle with no request, pending while the model
+ * works, failed when the call failed, and ready with a judgement once it
+ * answers. A failed call is not a rejection: nothing is recorded and its
+ * surprises stay new, so retrying asks the same question again.
  */
 export function rewriteStatus(
-  prompt: string,
+  request: RewriteRequest | null,
   generation: RewriteGeneration,
   current: readonly CanonicalRule[],
   rows: readonly ItemRow[],
 ): RewriteStatus {
-  if (prompt === "") return { status: "idle" };
+  if (request === null || request.prompt === "") return { status: "idle" };
   if (generation.pending) return { status: "pending" };
-  const heldOut = heldOutExamples(rows);
   if (generation.error) {
-    const currentF1 = scoreRules(current, heldOut).f1;
     return {
-      status: "ready",
-      judgement: {
-        accepted: false,
-        reason: `the model call failed: ${String(generation.error)}`,
-        rules: [],
-        refusals: [],
-        currentF1,
-        proposedF1: 0,
-        heldOut: heldOut.length,
-      },
+      status: "failed",
+      reason: `the model call failed: ${String(generation.error)}`,
     };
   }
   if (generation.result === undefined || generation.result === null) {
@@ -517,7 +554,8 @@ export function rewriteStatus(
   }
   return {
     status: "ready",
-    judgement: judgeProposal(current, generation.result, heldOut),
+    judgement: judgeProposal(current, generation.result, heldOutExamples(rows)),
+    answered: [...request.answered],
   };
 }
 

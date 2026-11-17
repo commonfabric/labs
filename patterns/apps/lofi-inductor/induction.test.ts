@@ -16,6 +16,7 @@ import {
   MAX_RULES,
   MAX_TESTED_LENGTH,
   newSurprises,
+  rewriteRequest,
   rewriteStatus,
   scoreRules,
   settle,
@@ -292,7 +293,13 @@ describe("rewrite gating", () => {
     const prompt = buildRewritePrompt("Is it a bill?", [], training, [], 3);
     expect(prompt).toContain("Question: Is it a bill?");
     expect(prompt).toContain('{"subject":"bill due"} → YES');
-    expect(prompt).toContain('{"subject":"hi"} → NO');
+    // mail-4 arrived after the third surprise, so this request leaves it out
+    expect(prompt).not.toContain('{"subject":"hi"}');
+    const withAgreement = rows([["mail-4", "hi", false], ...[
+      ["mail-1", "invoice", true],
+    ] as Array<[string, string, boolean]>]);
+    expect(buildRewritePrompt("Is it a bill?", [], withAgreement, [], 1))
+      .toContain('{"subject":"hi"} → NO');
     expect(buildRewritePrompt("  ", [], training, [], 1)).toBe("");
   });
 
@@ -326,23 +333,54 @@ describe("rewrite gating", () => {
     );
   });
 
+  it("freezes the request on the surprise that crossed the threshold", () => {
+    const request = rewriteRequest("Is it a bill?", [], training, [], 2);
+    expect(request?.answered).toEqual(["mail-1", "mail-2"]);
+    // A later surprise, and a later agreement, change nothing it asks
+    const more = [
+      ...training,
+      ...rows([["mail-5", "bill", true], ["mail-8", "hello", false]]),
+    ];
+    expect(rewriteRequest("Is it a bill?", [], more, [], 2)).toEqual(request);
+    expect(request?.prompt).not.toContain("statement");
+    // It waits while an item before the threshold is unlabelled
+    const unlabelled = gradeItems(
+      [item("mail-9", "bill"), item("mail-1", "invoice"), item("mail-2", "x")],
+      [
+        { id: "mail-9", answer: { pending: true } },
+        answered("mail-1", true),
+        answered("mail-2", true),
+      ],
+      [],
+      30,
+    );
+    expect(rewriteRequest("Is it a bill?", [], unlabelled, [], 2)).toBeNull();
+    // A retry asks again, with a different prompt
+    const retry = rewriteRequest("Is it a bill?", [], training, [], 2, 1);
+    expect(retry?.answered).toEqual(request?.answered);
+    expect(retry?.prompt).not.toBe(request?.prompt);
+  });
+
   it("reports where the rewrite stands", () => {
-    expect(rewriteStatus("", { pending: false }, [], training)).toEqual({
+    const request = { prompt: "p", answered: ["mail-1"] };
+    expect(rewriteStatus(null, { pending: false }, [], training)).toEqual({
       status: "idle",
     });
-    expect(rewriteStatus("p", { pending: true }, [], training).status).toBe(
-      "pending",
-    );
-    expect(rewriteStatus("p", { pending: false }, [], training).status).toBe(
-      "pending",
-    );
-    const failed = rewriteStatus(
-      "p",
-      { pending: false, error: "down" },
+    expect(rewriteStatus(request, { pending: true }, [], training).status)
+      .toBe("pending");
+    expect(rewriteStatus(request, { pending: false }, [], training).status)
+      .toBe("pending");
+    // A failed call is not a judgement: nothing to record, nothing answered
+    expect(
+      rewriteStatus(request, { pending: false, error: "down" }, [], training),
+    ).toEqual({ status: "failed", reason: "the model call failed: down" });
+    const ready = rewriteStatus(
+      request,
+      { pending: false, result: { rules: [] } },
       [],
       training,
     );
-    expect(failed.status === "ready" && failed.judgement.accepted).toBe(false);
+    expect(ready.status === "ready" && ready.answered).toEqual(["mail-1"]);
   });
 });
 

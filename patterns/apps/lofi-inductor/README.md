@@ -28,11 +28,21 @@ agent).
    fixed by a hash of its id; surprises are what start a rewrite.
 3. After enough new surprises (`rewriteAfter`, default 3), another LLM call sees
    the current rules and the training examples and proposes a whole new rule
-   set. It replaces the current one only if every rule is in the grammar and
-   passes the grammar's backtracking check, and the set's F1 on the held-out
-   examples is strictly higher; a tie keeps the current set. No one has to
-   approve rules one by one. Every judged proposal goes into the history,
-   accepted or not.
+   set. The request is frozen on the items up to the surprise that crossed the
+   threshold, so items arriving while the model answers do not ask it again;
+   they count toward the next round. The gate judges the answer at once: it
+   would replace the current rules only if every rule is in the grammar (which
+   includes the backtracking check) and the set's F1 on the held-out examples is
+   strictly higher; a tie keeps the current set. No one approves rules one by
+   one, but **recording the judgement takes a send** of `settleRewrite`: the
+   view's button, labelled with what it does ("Apply new rules (F1 62% → 81%)"
+   or "Dismiss rejected proposal", under the proposed rules), or an agent. A
+   computed cannot write, and an action that recorded on its own whenever an
+   item arrived would read the rewrite while hi-fi calls are in flight, which
+   can lose their results (the second runtime issue below). Every recorded
+   proposal goes into the history, accepted or not, and marks answered only the
+   surprises its request was frozen on. A failed model call is not a proposal:
+   nothing is recorded, and "Try again" (`retryRewrite`) asks again.
 4. Some goals never settle into rules. That is a valid outcome: they stay on the
    hi-fi model.
 5. Publishing sends the accepted rules to a pool for the goal, under the piece's
@@ -96,10 +106,8 @@ Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
 - Scoring all labelled held-out items, not only surprises, is what lets the gate
   see a proposal that fixes the surprises by breaking items the current rules
   got right.
-- A computed cannot write, so the judgement is derived and recorded by the
-  `settleRewrite` stream, which the view's "Record the judgement" button and
-  agents send. The gate decides; sending only records what it decided. Adding an
-  item does not record as well, because of the second issue below.
+- The gate decides; sending `settleRewrite` only records what it decided (step
+  3).
 - `publish` records `{goal, rules, publishedAt, pooled}` in `published`, where
   `pooled` says whether the rules were sent to a pool, and sends them to the
   pool's `submit` (see step 5 and `apps/inductor-pool`).
