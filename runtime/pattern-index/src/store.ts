@@ -67,6 +67,9 @@ const ROOT_KEY = "root.key";
 const MEMBERSHIP = "membership.json";
 const PUBLISHED = "published.json";
 const PENDING_MOVE = "pending-root-move";
+const NOTED_NOT_JOINED = "noted-not-joined";
+const SLOT_KEY = "slot.key";
+const KEEPS_VERSIONS = "keeps-versions";
 
 /**
  * The directory every index's store lives under, one subdirectory per index
@@ -250,6 +253,69 @@ export class PatternIndexStore {
     await Deno.writeTextFile(path, `${cid}\n`, { mode: 0o600 });
   }
 
+  /**
+   * Whether this index has answered as one that keeps private versions. An
+   * index from before them stores whatever it is sent where anyone may
+   * fetch it by id, so `cf` sends a deploy's source only once this is true.
+   */
+  async keepsVersions(): Promise<boolean> {
+    return await this.#hasMarker(KEEPS_VERSIONS);
+  }
+
+  /** Records that this index keeps private versions. */
+  async recordKeepsVersions(): Promise<void> {
+    await this.#ensureDir();
+    await Deno.writeTextFile(join(this.#dir, KEEPS_VERSIONS), "", {
+      mode: 0o600,
+    });
+  }
+
+  /**
+   * The secret this machine keys lineage slots of files outside a git
+   * checkout with, made on first use, so the index cannot confirm a guessed
+   * path from a slot. It never leaves this directory.
+   */
+  async slotKey(): Promise<Uint8Array> {
+    await this.#ensureDir();
+    const path = join(this.#dir, SLOT_KEY);
+    const existing = await this.#readSlotKey(path);
+    if (existing !== undefined) return existing;
+    // Written beside and linked into place, so the key appears only once
+    // whole; a process that loses the race to make it reads the winner's.
+    const temp = `${path}.${crypto.randomUUID()}.tmp`;
+    await Deno.writeFile(temp, crypto.getRandomValues(new Uint8Array(32)), {
+      createNew: true,
+      mode: 0o600,
+    });
+    const linked = await Deno.link(temp, path).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await Deno.remove(temp);
+    // Linked, or another process linked its key first: either way the key
+    // is there now, and only a link that failed for another reason left
+    // none.
+    const key = await this.#readSlotKey(path);
+    if (key === undefined) throw linked;
+    return key;
+  }
+
+  /**
+   * Whether `cf` has told the person that it keeps no versions because this
+   * machine never joined the index, which it says only once.
+   */
+  async notedNotJoined(): Promise<boolean> {
+    return await this.#hasMarker(NOTED_NOT_JOINED);
+  }
+
+  /** Records that the person has been told. */
+  async recordNotedNotJoined(): Promise<void> {
+    await this.#ensureDir();
+    await Deno.writeTextFile(join(this.#dir, NOTED_NOT_JOINED), "", {
+      mode: 0o600,
+    });
+  }
+
   /** The id `entryPath` last published as, or `undefined`. */
   async lastPublished(entryPath: string): Promise<string | undefined> {
     return (await this.#readPublished()).entries[resolve(entryPath)]?.at(-1);
@@ -313,6 +379,37 @@ export class PatternIndexStore {
    */
   async sourceOf(entryPath: string): Promise<string | undefined> {
     return (await this.#readPublished()).sources[resolve(entryPath)];
+  }
+
+  /**
+   * The slot key at `path`, `undefined` where there is none.
+   *
+   * @throws Error for a key file that is not 32 bytes, which no version of
+   *   this store wrote.
+   */
+  async #readSlotKey(path: string): Promise<Uint8Array | undefined> {
+    let key: Uint8Array;
+    try {
+      key = await Deno.readFile(path);
+    } catch (error) {
+      if (isNotFound(error)) return undefined;
+      throw error;
+    }
+    if (key.length !== 32) {
+      throw new Error(`${path} is not a slot key; remove it to make a new one`);
+    }
+    return key;
+  }
+  /** Whether the marker file `name` exists in the store. */
+  async #hasMarker(name: string): Promise<boolean> {
+    await this.#checkPrivate();
+    try {
+      await Deno.lstat(join(this.#dir, name));
+      return true;
+    } catch (error) {
+      if (isNotFound(error)) return false;
+      throw error;
+    }
   }
 
   async #readMembership(): Promise<MembershipFile | undefined> {

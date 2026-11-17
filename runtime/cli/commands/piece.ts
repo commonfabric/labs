@@ -87,6 +87,7 @@ import {
   applyPieceInput,
   checkPiecePattern,
   createSpace,
+  type DeployedProgram,
   describePiece,
   type EntryConfig,
   executePieceCallable,
@@ -150,6 +151,11 @@ import {
   patternIndexStoreDir,
 } from "@commonfabric/pattern-index/store";
 import { noteWroteTo } from "../lib/write-receipt.ts";
+import { loadIdentity } from "../lib/identity.ts";
+import type {
+  DeployedSource,
+  VersionOutcome,
+} from "../lib/pattern-versions.ts";
 
 // Hint system: print helpful next-step suggestions after operations. The
 // posture is the process's rather than one call's, so it stands as the last
@@ -5066,11 +5072,105 @@ export async function restoreFromCommand(
   }
 }
 
+/** The modules recording a version needs, loaded on first use. */
+const loadVersionModules = async () => ({
+  // deno-lint-ignore cf-imports/no-inline-module-import
+  access: await import("@commonfabric/pattern-index/access"),
+  // deno-lint-ignore cf-imports/no-inline-module-import
+  versions: await import("../lib/pattern-versions.ts"),
+});
+
+/**
+ * Keeps a deploy of the person's own source as a private version in the
+ * pattern index `CF_PATTERN_INDEX_URL` names, else the default index,
+ * signing as the deploying identity. Never throws, synchronously or not:
+ * the deploy it follows has committed, and an index that is misconfigured
+ * or unreachable must not turn that into a failure.
+ */
+export async function recordVersionInIndex(
+  identity: string,
+  deployed: DeployedSource,
+): Promise<VersionOutcome> {
+  // Loaded here rather than with the command: recording reaches the
+  // compiler's identity code, which starting `cf piece` must not load.
+  let modules;
+  let baseUrl: string;
+  let store: PatternIndexStore;
+  try {
+    modules = await loadVersionModules();
+    baseUrl = modules.access.resolvePatternIndexUrl(undefined);
+    store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
+  } catch (error) {
+    return { status: "failed", reason: describeFailure(error) };
+  }
+  const { openPatternIndexClient } = modules.access;
+  return await modules.versions.recordDeployedVersion(deployed, {
+    store,
+    openClient: async () =>
+      openPatternIndexClient({
+        baseUrl,
+        signer: await loadIdentity(identity),
+        store,
+      }),
+    readTextFile: (path) => Deno.readTextFile(path),
+  });
+}
+
+/**
+ * The version a deploy is recording, started from `onDeployed` once the
+ * deploy commits; `settle` waits for it, prints its one line, if any, and
+ * answers the outcome (`undefined` when nothing was deployed). The deploy
+ * has committed by then, so the index adds latency to the command's exit
+ * and never changes its outcome; a hung index connection holds the exit
+ * for as long as the operating system keeps the connection open.
+ */
+function versionRecorder(
+  record: (deployed: DeployedSource) => Promise<VersionOutcome>,
+  entry: string,
+  origin: string | undefined,
+  print: (line: string) => void,
+): {
+  onDeployed: (deployed: DeployedProgram) => void;
+  settle: () => Promise<VersionOutcome | undefined>;
+} {
+  let pending: Promise<VersionOutcome> | undefined;
+  return {
+    onDeployed: (deployed) => {
+      pending = record({
+        entry,
+        ...deployed,
+        ...(origin === undefined ? {} : { origin }),
+      });
+    },
+    settle: async () => {
+      if (pending === undefined) return undefined;
+      const outcome = await pending;
+      // A module that failed to load already made the outcome a failure;
+      // reporting it must not fail the deploy either.
+      const line = await loadVersionModules().then(
+        ({ versions }) => versions.versionLine(outcome),
+        () =>
+          outcome.status === "failed"
+            ? `Version not kept: ${outcome.reason}. The deploy itself succeeded.`
+            : undefined,
+      );
+      if (line !== undefined) print(line);
+      return outcome;
+    },
+  };
+}
+
 export interface NewPieceCommandDependencies {
   newPiece?: typeof newPieceWithReceipt;
 
   /** Where the receipt goes, stdout unless the caller says otherwise. */
   render?: typeof render;
+
+  /** Keeps a deploy as a private version; the pattern index by default. */
+  recordVersion?: (deployed: DeployedSource) => Promise<VersionOutcome>;
+
+  /** Where the version's line goes, stderr unless the caller says otherwise. */
+  note?: (message: string) => void;
 
   /** Records which published pattern a piece came from; the local store by default. */
   recordIndexedPiece?: (
@@ -5189,10 +5289,18 @@ export async function newPieceFromCommand(
   ) {
     throw new Error("`--input-file` must contain a JSON object.");
   }
+  const version = main === undefined ? undefined : versionRecorder(
+    deps.recordVersion ??
+      ((deployed) => recordVersionInIndex(spaceConfig.identity, deployed)),
+    absPath(main),
+    undefined,
+    deps.note ?? note,
+  );
   const { pieceId, name } = await (deps.newPiece ?? newPieceWithReceipt)(
     spaceConfig,
     entry,
     {
+      ...(version === undefined ? {} : { onDeployed: version.onDeployed }),
       start: options.start,
       slug: options.slug,
       force: !!options.force,
@@ -5203,15 +5311,35 @@ export async function newPieceFromCommand(
     },
   );
   // `--json` is the machine surface: one object naming the piece and, for a
-  // piece from the index that has one, the pattern's display name.
+  // piece from the index that has one, the pattern's display name, and for
+  // one from a file, what became of its private version.
   const print = deps.render ?? render;
   if (options.json) {
+    const kept = await version?.settle();
+    const versionJson = kept === undefined
+      ? undefined
+      : await loadVersionModules().then(
+        ({ versions }) => versions.versionJson,
+        // The modules failing to load made the outcome a failure, which a
+        // script still reads as one.
+        () => (outcome: VersionOutcome) => ({
+          status: outcome.status,
+          ...("reason" in outcome ? { reason: outcome.reason } : {}),
+        }),
+      );
     print(
-      { pieceId, ...(name === undefined ? {} : { name }) },
+      {
+        pieceId,
+        ...(name === undefined ? {} : { name }),
+        ...(kept === undefined || versionJson === undefined
+          ? {}
+          : { version: versionJson(kept) }),
+      },
       { json: true },
     );
   } else {
     print(pieceId);
+    await version?.settle();
   }
   if ("patternId" in entry) {
     await (deps.recordIndexedPiece ?? recordIndexedPiece)(
@@ -5224,7 +5352,7 @@ export async function newPieceFromCommand(
   // A piece from the index has no local source to update from until it is
   // saved; building on it publishes it as a remix.
   const updateCode = main === undefined
-    ? `\n  → Build on it:     cf piece getsrc --cell ${pieceId} ./src, edit, then cf pattern publish ./src/<entry file>`
+    ? `\n  → Build on it:     cf piece getsrc --cell ${pieceId} ./src, edit, then cf pattern share ./src/<entry file>`
     : `\n  → Update code:     cf piece setsrc --cell ${pieceId} ${main} ...`;
   hint(cliText(`NEXT STEPS:
   → Open in browser: ${spaceConfig.apiUrl}/${spaceConfig.space}/${browserPieceRef}${updateCode}
@@ -5305,6 +5433,9 @@ export async function searchPiecesFromCommand(
 /** Injectable dependencies for testing the `piece setsrc` command boundary. */
 export interface SetPieceSourceCommandDependencies {
   setPiecePattern?: typeof setPiecePattern;
+
+  /** Told what was deployed once storage accepted it. */
+  onDeployed?: (deployed: DeployedProgram) => void;
 }
 
 /** Injectable effects for testing the `piece setsrc` action. */
@@ -5315,6 +5446,9 @@ export interface ApplyPieceSourceCommandDependencies {
   hint?: (message: string) => void;
   /** Exit-status seam for a committed source whose running refresh failed. */
   setExitCode?: (code: number) => void;
+
+  /** Keeps a deploy as a private version; the pattern index by default. */
+  recordVersion?: (deployed: DeployedSource) => Promise<VersionOutcome>;
 }
 
 /** Injectable dependencies for testing `piece setsrc --check`. */
@@ -5391,6 +5525,7 @@ export async function setPieceSourceFromCommand(
       dangerouslyAllowIncompatibleSchema:
         options.dangerouslyAllowIncompatibleSchema,
       ...(options.origin === undefined ? {} : { origin: options.origin }),
+      ...(deps.onDeployed === undefined ? {} : { onDeployed: deps.onDeployed }),
     },
   );
   return { config, update };
@@ -5544,10 +5679,19 @@ export async function applyPieceSourceCommandAction(
   mainPath: string,
   deps: ApplyPieceSourceCommandDependencies = {},
 ): Promise<void> {
+  const version = versionRecorder(
+    deps.recordVersion ??
+      ((deployed) =>
+        recordVersionInIndex(parseSpaceOptions(options).identity, deployed)),
+    absPath(mainPath),
+    options.origin,
+    deps.warn ?? note,
+  );
   const { config, update } = await (
     deps.setPieceSourceFromCommand ?? setPieceSourceFromCommand
-  )(options, mainPath);
+  )(options, mainPath, { onDeployed: version.onDeployed });
   (deps.render ?? render)(setsrcSuccessLine(config, update));
+  await version.settle();
   const refreshWarning = setsrcRefreshWarning(update);
   if (refreshWarning !== undefined) {
     (deps.warn ?? note)(refreshWarning);
