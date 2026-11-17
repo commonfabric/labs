@@ -246,6 +246,9 @@ pub(crate) enum Root {
     Operation(usize),
     Binding(usize),
     Cause,
+    /// The result of a child instance (`Plan.children`): "it refers to
+    /// the child's result through slots with root `child`" (PL §3.15).
+    Child(usize),
 }
 
 /// What a name or an expression of the reactive tier denotes.
@@ -724,6 +727,7 @@ fn root_json(root: &Root) -> Value {
         Root::Operation(operation) => json!({ "kind": "operation", "operation": operation }),
         Root::Binding(handler) => json!({ "kind": "binding", "handler": handler }),
         Root::Cause => json!({ "kind": "cause" }),
+        Root::Child(child) => json!({ "kind": "child", "child": child }),
     }
 }
 
@@ -3051,6 +3055,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                 let receiver = self.eval(&member.object, hint);
                 self.method(call, &receiver, name, &arguments, hint)
             }
+            Expression::CallExpression(inner) if self.as_instance(inner).is_some() => {
+                let (home, start, callee) = self.as_instance(inner).expect("checked above");
+                let name = base_name(hint, &callee).to_string();
+                self.child_instance(home, start, &name, &arguments, at)
+            }
             Expression::CallExpression(inner) if self.resolver.is_lift_call(self.module, inner) => {
                 match inner.arguments.first().and_then(FunctionLike::of_argument) {
                     Some(function) => {
@@ -3069,6 +3078,95 @@ impl<'a> Emitter<'_, '_, 'a> {
                 Place::Unknown
             }
         }
+    }
+
+    /// The pattern that the callee of a call names through the factory
+    /// modifier `asInstance()`, alone or composed with `asScope(scope)`
+    /// and `inSpace(space, options)`: where the pattern is written, and
+    /// its name (ruling Z36). `None` where `asInstance()` is not among
+    /// the modifiers, or the modified value is not a pattern the compiler
+    /// can see.
+    fn as_instance(&mut self, modifier: &CallExpression<'a>) -> Option<(usize, u32, String)> {
+        let mut call = modifier;
+        let mut marked = false;
+        loop {
+            let Expression::StaticMemberExpression(member) = unwrap(&call.callee) else {
+                return None;
+            };
+            match member.property.name.as_str() {
+                "asInstance" => marked = true,
+                "asScope" | "inSpace" => {}
+                _ => return None,
+            }
+            match unwrap(&member.object) {
+                Expression::CallExpression(inner) => call = inner,
+                Expression::Identifier(identifier) => {
+                    if !marked || self.env.contains_key(identifier.name.as_str()) {
+                        return None;
+                    }
+                    return match self.def_function(identifier) {
+                        Some((home, start, DefKind::Pattern)) => {
+                            Some((home, start, identifier.name.to_string()))
+                        }
+                        _ => None,
+                    };
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// A call of a pattern through `asInstance()` (PL §3.15, "A call
+    /// through `asInstance()`"; rulings Z35 and Z36): a `Child` with the
+    /// mark, whose callee is the compiled pattern. Nothing of the callee
+    /// is compiled into this plan, and no `site` step stands for the
+    /// call. The `within` of the record is that of the site, so in an
+    /// element body the instance is identified by the site, the
+    /// collection and the element key. The cone the call is written in
+    /// has one write edge with target `argument` per path of the
+    /// argument, and the result is read through slots of root `child`.
+    /// The record is the same over an array of references, over an array
+    /// of plain values in place, and over the result of another
+    /// per-element construct.
+    fn child_instance(
+        &mut self,
+        home: usize,
+        start: u32,
+        name: &str,
+        arguments: &[&Expression<'a>],
+        at: u32,
+    ) -> Place {
+        let argument = match arguments.first() {
+            Some(argument) => self.eval(argument, name),
+            None => Place::Const,
+        };
+        let child = self.children.len();
+        self.children.push(json!({
+            "callee": { "compiled": self.pattern_identity(home, start) },
+            "asInstance": true,
+            "name": name,
+            "within": self.within_json(),
+        }));
+        let (cone, made) = self.computing(name, at);
+        let mut paths = Vec::new();
+        request_paths(&argument, &mut Vec::new(), &mut paths);
+        for (path, member) in paths {
+            let template = self.one("identity", |_| member).1;
+            let mut write = Map::new();
+            write.insert(
+                "target".to_string(),
+                json!({ "kind": "argument", "child": child, "path": path }),
+            );
+            if let Some(template) = template {
+                write.insert("template".to_string(), template);
+            }
+            write.insert("constraints".to_string(), json!([]));
+            self.cones[cone].writes.push(Value::Object(write));
+        }
+        if made {
+            self.cone = None;
+        }
+        Place::Slot(Root::Child(child), Vec::new())
     }
 
     fn method(

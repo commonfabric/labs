@@ -223,6 +223,7 @@ fn root_json(root: &Root) -> Value {
         Root::Operation(operation) => json!({ "kind": "operation", "operation": operation }),
         Root::Binding(handler) => json!({ "kind": "binding", "handler": handler }),
         Root::Cause => json!({ "kind": "cause" }),
+        Root::Child(child) => json!({ "kind": "child", "child": child }),
     }
 }
 
@@ -344,6 +345,8 @@ struct Generator<'r, 'm, 'a> {
     registered_states: Vec<usize>,
     /// The `reduce` operations whose functions are registered.
     registered_reduces: Vec<usize>,
+    /// The children whose argument function is registered.
+    registered_children: Vec<usize>,
     counter: usize,
 }
 
@@ -737,6 +740,14 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 }
                 self.place_code(&fact.place, want)
             }
+            Place::Slot(Root::Child(child), path) => {
+                // A call through `asInstance()` registers the function of
+                // its argument where it is written.
+                if let (true, Expression::CallExpression(call)) = (path.is_empty(), inner) {
+                    self.child_instance(call, *child);
+                }
+                self.place_code(&fact.place, want)
+            }
             Place::Accumulator(..) => self.place_code(&fact.place, want),
             Place::Slot(..) | Place::Read(..) => self.place_code(&fact.place, want),
             Place::Value(value, path) => {
@@ -911,6 +922,50 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
     /// written in computes, and the step, a cone the runtime evaluates
     /// once per element, in order, with the accumulator as a slot of root
     /// `operation` (PL §3.13).
+    /// The function of the argument of a child instance that a call
+    /// through `asInstance()` makes (PL §3.15): the runtime evaluates it
+    /// for the element keys of the site, writes what it returns to the
+    /// argument document of the instance, and gives a reader of the
+    /// child's result the reference to its result document. The function
+    /// passes on what the call binds, so a reference stays one.
+    fn child_instance(&mut self, call: &CallExpression<'a>, child: usize) {
+        if !matches!(unwrap(&call.callee), Expression::CallExpression(_))
+            || self.generator.registered_children.contains(&child)
+        {
+            return;
+        }
+        self.generator.registered_children.push(child);
+        // The cone that holds the write edges of the argument, in the
+        // order the plan emitter made the cones.
+        let cone = self.generator.plan["cones"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .position(|cone| {
+                cone["writes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|write| {
+                        write["target"]["kind"] == json!("argument")
+                            && write["target"]["child"] == json!(child)
+                    })
+            })
+            .and_then(|cone| {
+                self.generator
+                    .finished
+                    .position
+                    .iter()
+                    .position(|index| *index == cone)
+            });
+        let code = match call.arguments.first().and_then(Argument::as_expression) {
+            Some(argument) => self.in_cone(cone, |rewriter| rewriter.render(argument, Want::Pass)),
+            None => "undefined".to_string(),
+        };
+        self.generator
+            .hoist(format!("$rt.child({child}, ($h) => ({code}));"));
+    }
+
     fn reduce_construct(&mut self, call: &CallExpression<'a>, operation: usize) {
         let record = &self.generator.plan["operations"][operation];
         if record["kind"] != json!("reduce")
@@ -2355,6 +2410,7 @@ pub(crate) fn generate(
         registered_elements: Vec::new(),
         registered_states: Vec::new(),
         registered_reduces: Vec::new(),
+        registered_children: Vec::new(),
         counter: 0,
     };
     let mut rewriter = Rewriter {

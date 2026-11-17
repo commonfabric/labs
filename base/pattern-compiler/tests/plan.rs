@@ -4219,3 +4219,99 @@ export const P = pattern<{ title: string; items: { title: string }[]; kept: Writ
         assert_eq!(entry["template"], json!({ "op": "const" }));
     }
 }
+
+/// Rulings Z35 and Z36 (PL §1.1, `Child.asInstance`; §3.15, "A call
+/// through `asInstance()`"): a call of a pattern through the modifier is
+/// a `Child` with `asInstance: true` and the identity of the compiled
+/// pattern as its callee. The enclosing plan holds none of the callee's
+/// bodies, bindings or state cells and has no `site` step for the call.
+/// The `within` of the record has the `element` step of the collection.
+/// The record has the same form over an array of references and over an
+/// array of plain values in place, which the plan does not tell apart,
+/// and over the result of a `filter`. Outside an element body the record
+/// has no `element` step.
+#[test]
+fn a_call_through_as_instance_is_a_child_with_the_mark() {
+    let analysis = program(
+        r#"import { Writable, handler, pattern } from "commonfabric";
+interface Item { title: string }
+const note = handler<{ text: string }, { noted: Writable<string> }>((event, state) => {
+  state.noted.set(event.text);
+});
+const Row = pattern<{ item: Item }>(({ item }) => {
+  const noted = Writable.of("");
+  return { title: item.title, noted, note: note({ noted }) };
+});
+export const P = pattern<{ items: Item[]; first: Item }>(({ items, first }) => {
+  return {
+    rows: items.map((item) => Row.asInstance()({ item })),
+    kept: items.filter((item) => item.title !== "skip").map((item) => Row.asInstance()({ item })),
+    one: Row.asInstance()({ item: first }),
+  };
+});
+"#,
+    );
+    let found = analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.plans)
+        .find(|plan| plan.name.as_deref() == Some("P"))
+        .expect("the plan");
+    assert_eq!(found.unsupported, Vec::<(String, u32)>::new());
+    let plan = &found.plan;
+    let children: Vec<(String, String, String)> = plan["children"]
+        .as_array()
+        .expect("children")
+        .iter()
+        .map(|child| {
+            (
+                child["callee"].to_string(),
+                child["asInstance"].to_string(),
+                child["within"].to_string(),
+            )
+        })
+        .collect();
+    let callee = r#"{"compiled":"unhashed:pattern/case.tsx#Row"}"#.to_string();
+    assert_eq!(
+        children,
+        [
+            (
+                callee.clone(),
+                "true".to_string(),
+                r#"[{"element":0}]"#.to_string()
+            ),
+            (
+                callee.clone(),
+                "true".to_string(),
+                r#"[{"element":2}]"#.to_string()
+            ),
+            (callee, "true".to_string(), "[]".to_string()),
+        ]
+    );
+    // Nothing of the callee is in the enclosing plan.
+    assert_eq!(plan["patterns"].as_array().expect("patterns").len(), 1);
+    assert_eq!(plan["bindings"], json!([]));
+    assert_eq!(plan["stateCells"], json!([]));
+    for table in ["cones", "collections"] {
+        for record in plan[table].as_array().expect("a table") {
+            assert!(!record["within"].to_string().contains("site"), "{record}");
+        }
+    }
+    // One write edge with target `argument` for the path the call binds.
+    let targets: Vec<String> = plan["cones"]
+        .as_array()
+        .expect("cones")
+        .iter()
+        .flat_map(|cone| cone["writes"].as_array().expect("writes"))
+        .filter(|write| write["target"]["kind"] == "argument")
+        .map(|write| write["target"].to_string())
+        .collect();
+    assert_eq!(
+        targets,
+        [
+            r#"{"child":0,"kind":"argument","path":["item"]}"#,
+            r#"{"child":1,"kind":"argument","path":["item"]}"#,
+            r#"{"child":2,"kind":"argument","path":["item"]}"#,
+        ]
+    );
+}

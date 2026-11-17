@@ -14,6 +14,7 @@
  */
 import {
   canonical,
+  isKeySegment,
   isLink,
   isStream,
   isStreamSchema,
@@ -36,6 +37,7 @@ type Root = {
   collection?: number;
   handler?: number;
   operation?: number;
+  child?: number;
 };
 
 /** The members of a plan the executor reads (PL §1.1). */
@@ -112,6 +114,24 @@ export type Plan = {
     /** The cone and its write edge that give a first value that is not
      * a constant. */
     first?: { cone: number; write: number };
+  }[];
+  /**
+   * The patterns instantiated with a plan of their own (PL §1.1,
+   * `Child`). The executor instantiates the ones called through the
+   * factory modifier `asInstance()`, whose callee is a compiled pattern,
+   * named by its identity.
+   */
+  children?: {
+    callee: { compiled?: string | null; factory?: unknown };
+    /**
+     * `asInstance()`: under an `element` step of `within` the instance
+     * is not torn down when its key leaves the collection, and an event
+     * for one of its streams is handled while the key is away (rulings
+     * Z35 and Z36).
+     */
+    asInstance?: true;
+    name: string;
+    within: { element?: number; site?: string }[];
   }[];
   operations: {
     kind: string;
@@ -313,7 +333,8 @@ type Writer = (context: Context) => void;
 
 const sameRoot = (a: Root, b: Root): boolean =>
   a.kind === b.kind && a.cell === b.cell && a.collection === b.collection &&
-  a.handler === b.handler && a.operation === b.operation;
+  a.handler === b.handler && a.operation === b.operation &&
+  a.child === b.child;
 
 /** What an executed instance counted. */
 export type Counts = {
@@ -1178,6 +1199,17 @@ export class Instance {
     stepCone: number;
     step: (host: Host) => unknown;
   }>();
+  /** The function of the argument of each child instance, by the child. */
+  readonly #childArguments = new Map<number, (host: Host) => unknown>();
+  /**
+   * The instances that calls through `asInstance()` made, by the child
+   * and the element keys of the site (ruling Z35). An entry stays when
+   * its key leaves the collection.
+   */
+  readonly #asInstances = new Map<
+    string,
+    { child: number; keys: string[]; instance: Instance }
+  >();
   /** The function of a handler written in place, by its binding. */
   readonly #handlers = new Map<number, (...given: unknown[]) => unknown>();
   readonly #setups: ((given: unknown, host: Host) => unknown)[] = [];
@@ -1416,6 +1448,9 @@ export class Instance {
       state: (cell: number, run: (host: Host) => unknown) => {
         this.#states.set(cell, run);
       },
+      child: (child: number, run: (host: Host) => unknown) => {
+        this.#childArguments.set(child, run);
+      },
       reduce: (
         operation: number,
         initialCone: number | undefined,
@@ -1573,6 +1608,11 @@ export class Instance {
         host.indexes.set(root.collection ?? -1, element.index);
         return element.index;
       }
+      case "child":
+        // The result of a child instance: the reader depends on the
+        // evaluation that writes the child's argument, and reads the
+        // result through the reference.
+        return host.depend(this.#childResult(root.child ?? -1));
       case "operation": {
         const operation = root.operation ?? -1;
         if (this.#reduces.has(operation)) {
@@ -1628,6 +1668,127 @@ export class Instance {
       }
     }
     return new Ref(id, []);
+  }
+
+  /**
+   * The instance of a call through `asInstance()` for the element keys
+   * of a context, as the reference to its result document (PL §3.15, "A
+   * call through `asInstance()`"; rulings Z35 and Z36). The instance is
+   * one of the callee's own plan, with an argument document and a result
+   * document of its own, identified by the child, which stands for the
+   * site, and the key of each enclosing collection. It is made when the
+   * key first appears. The evaluation writes the argument, and is made
+   * again when what the argument holds changed. Nothing here is undone
+   * when the key leaves: the memo entry of the evaluation is dropped
+   * with the key, and the instance and its documents stay, so the key
+   * that returns has the same instance.
+   *
+   * The argument, by case: a path bound to a reference to a cell holds
+   * the link, which is the element over an array of references. A path
+   * bound to a plain value in place, which the body names by a
+   * reference by key, holds the value, and so does a path bound to a
+   * value of the result of another per-element construct.
+   */
+  #childResult(child: number): Lazy {
+    const record = this.plan.children?.[child];
+    if (record === undefined || record.asInstance !== true) {
+      throw new Unsupported(
+        "a child that is not called through `asInstance()`",
+      );
+    }
+    const within = record.within.flatMap((step) =>
+      step.element === undefined ? [] : [step.element]
+    );
+    // The cone that holds the write edges of the argument.
+    const found = this.plan.cones.findIndex((cone) =>
+      (cone as { writes?: { target: { kind: string; child?: number } }[] })
+        .writes?.some(({ target }) =>
+          target.kind === "argument" && target.child === child
+        )
+    );
+    const cone = found < 0 ? undefined : found;
+    return (context) =>
+      this.#ensure(
+        `c${child}|${this.#contextKey(within, context)}`,
+        context,
+        cone,
+        within.length > 0
+          ? "element"
+          : cone === undefined
+          ? "assembly"
+          : "value",
+        (host) => {
+          const run = this.#childArguments.get(child);
+          const given = (value: unknown): unknown => {
+            if (value instanceof Ref) {
+              const { named } = this.store.locate(
+                value,
+                false,
+                undefined,
+                true,
+              );
+              return named.path.some(isKeySegment) ? host.v(value) : value;
+            }
+            if (Array.isArray(value)) return value.map(given);
+            if (isRecord(value)) {
+              return Object.fromEntries(
+                Object.entries(value).map((
+                  [name, member],
+                ) => [name, given(member)]),
+              );
+            }
+            return value;
+          };
+          const argument = this.stored(given(run?.(host)));
+          const keys = within.map((collection) =>
+            context.get(collection)?.key ?? "?"
+          );
+          const id = `${child}|${canonical(keys)}`;
+          let held = this.#asInstances.get(id);
+          if (held === undefined) {
+            const artifact = typeof record.callee.compiled === "string"
+              ? this.options.artifacts?.(record.callee.compiled)
+              : undefined;
+            if (artifact === undefined) {
+              throw new Unsupported(
+                "a child whose compiled pattern the executor was not given",
+              );
+            }
+            // The name holds the key the instance was made under. An
+            // instance that was re-keyed keeps its documents, so a later
+            // instance of the same key gets a name beside it.
+            const name = `${this.prefix}child:${child}:${canonical(keys)}`;
+            let prefix = `${name}:`;
+            for (let other = 1; this.root.#instances.has(prefix); other++) {
+              prefix = `${name}~${other}:`;
+            }
+            const instance = new Instance(artifact, argument, {
+              ...this.options,
+              parent: this,
+              prefix,
+            });
+            this.root.#instances.set(prefix, instance);
+            this.#children.push(instance);
+            held = { child, keys, instance };
+            this.#asInstances.set(id, held);
+          } else {
+            this.store.write(
+              new Ref(held.instance.doc("argument"), []),
+              argument,
+            );
+          }
+          return new Ref(held.instance.doc("result"), []);
+        },
+        within,
+      );
+  }
+
+  /**
+   * The instances that calls through `asInstance()` made, in the order
+   * they were made, each with its child and the element keys it has now.
+   */
+  childInstances(): { child: number; keys: string[]; instance: Instance }[] {
+    return [...this.#asInstances.values()];
   }
 
   /**
@@ -2974,15 +3135,21 @@ export class Instance {
   /**
    * Handles the events that are queued, as one that a writer outside the
    * instance sent through a stored link to a stream, and evaluates what
-   * read a position their handlers wrote.
+   * read a position their handlers wrote. Returns how each ended.
    */
-  dispatch(): void {
-    this.root.#drain(undefined, -1);
+  dispatch(): Outcome[] {
+    const outcomes: Outcome[] = [];
+    this.root.#drain(undefined, -1, outcomes);
     this.root.settle();
+    return outcomes;
   }
 
   /** Handles the queued events, each in the instance its stream is of. */
-  #drain(first: Context | undefined, binding: number): Outcome {
+  #drain(
+    first: Context | undefined,
+    binding: number,
+    outcomes?: Outcome[],
+  ): Outcome {
     let outcome: Outcome = { binding, committed: true };
     let context: Context | undefined = first;
     for (let next = this.#queue.shift(); next; next = this.#queue.shift()) {
@@ -3000,6 +3167,7 @@ export class Instance {
           next.event,
           context ?? target.#contextOf(next.stream),
         );
+      outcomes?.push(handled);
       if (context !== undefined) outcome = handled;
       context = undefined;
     }
@@ -3040,6 +3208,21 @@ export class Instance {
         };
       }
       return this.#run(binding, undefined, bound.run, event, bound.state);
+    }
+    // A binding of an element body has its stream while its key is in
+    // the collection: an event for the stream of a key that left is
+    // refused (ES §2.6; ruling Z35). An instance called through
+    // `asInstance()` has its bindings in its own plan, with no step of
+    // the enclosing collection, and is not concerned.
+    const away = record.within.some((step) =>
+      step.element !== undefined && !context.has(step.element)
+    );
+    if (away) {
+      return {
+        binding,
+        committed: false,
+        error: "no element holds the stream",
+      };
     }
     const body = record.handler.body;
     const run = body === undefined
@@ -3247,6 +3430,23 @@ export class Instance {
           };
         }),
       );
+    }
+    // An instance called through `asInstance()` is re-keyed with the
+    // element, as the rest of what the old key holds is (PL §3.15,
+    // assumed there under question 123). It keeps its documents.
+    for (const [id, held] of [...this.#asInstances]) {
+      const steps = (this.plan.children?.[held.child].within ?? []).flatMap((
+        step,
+      ) => step.element === undefined ? [] : [step.element]);
+      const moved = held.keys.map((key, index) =>
+        over.has(steps[index]) ? renamed(key) : key
+      );
+      if (canonical(moved) === canonical(held.keys)) continue;
+      this.#asInstances.delete(id);
+      this.#asInstances.set(`${held.child}|${canonical(moved)}`, {
+        ...held,
+        keys: moved,
+      });
     }
     for (const [id, { cell, keys }] of [...this.#cells]) {
       const steps = this.plan.stateCells[cell].within.flatMap((step) =>

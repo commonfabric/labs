@@ -293,6 +293,7 @@ fn is_reactive_handle_method(name: &str) -> bool {
             | "keys"
             | "keyEntries"
             | "query"
+            | "asInstance"
             | "asScope"
             | "inSpace"
     )

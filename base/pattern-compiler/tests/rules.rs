@@ -1453,3 +1453,30 @@ fn wish_in_an_authored_function_and_in_a_computation_is_refused() {
     let lifted = "const find = lift((tag: string) => wish({ query: tag }));\n";
     assert_eq!(ids(&check(lifted)), ["function-body:wish"]);
 }
+
+/// Ruling Z36 (`language-subset.md` §4.4.2): `asInstance()` is a modifier
+/// of a pattern factory beside `asScope(scope)` and
+/// `inSpace(space, options)`, and a call through it is legal where the
+/// instantiation is: in the reactive tier, in an element body over an
+/// array of records, which the front end has alike for references and
+/// for plain values in place, and over the result of a `filter`, and
+/// outside an element body.
+#[test]
+fn a_call_through_as_instance_is_accepted_in_the_reactive_tier() {
+    let found = check(
+        "const Row = pattern<{ title: string }>(({ title }) => ({ title }));\n\
+         export default pattern<{ titles: string[]; first: string }>(({ titles, first }) => ({\n\
+           rows: titles.map((title) => Row.asInstance()({ title })),\n\
+           kept: titles.filter((title) => title !== \"skip\").map((title) => Row.asInstance()({ title })),\n\
+           one: Row.asInstance()({ title: first }),\n\
+           scoped: Row.asInstance().asScope(\"user\")({ title: first }),\n\
+         }));",
+    );
+    assert_eq!(
+        found
+            .iter()
+            .map(|diagnostic| diagnostic.id)
+            .collect::<Vec<_>>(),
+        Vec::<&str>::new()
+    );
+}

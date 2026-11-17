@@ -772,7 +772,7 @@ impl<'a> Resolver<'_, 'a> {
                     _ => Err(Origin::UnlistedMember),
                 },
             },
-            (Shape::PatternFactory(..), "asScope" | "inSpace") => Ok(receiver),
+            (Shape::PatternFactory(..), "asInstance" | "asScope" | "inSpace") => Ok(receiver),
             (Shape::Code(code), _) if code.ends_with("Map") || code.ends_with("Set") => {
                 let arguments = self.code_arguments(receiver);
                 let argument = |index: usize| {

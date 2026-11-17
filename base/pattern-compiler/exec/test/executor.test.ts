@@ -8,7 +8,7 @@ import {
   Host,
   Instance,
 } from "../executor.ts";
-import { keySegment, Ref, Store } from "../store.ts";
+import { keySegment, Ref, Store, StreamRef } from "../store.ts";
 
 // The executor of `execution-and-storage.md` (ES) on the artifacts of the
 // fixtures of the comparison: `compare/fixtures/<name>.emit.json` is the
@@ -3428,6 +3428,379 @@ describe("the stream of a binding of a `flatMap` body", () => {
     expect(coversPosition(listed, position, at(`${source}0`), [source])).toBe(
       false,
     );
+  });
+});
+
+// Rulings Z35 and Z36 on `fixtures/as-instance.tsx`: a pattern called
+// through the factory modifier `asInstance()` in an element body is an
+// instance of its own. Today's runtime has no `asInstance()`, so these
+// tests are of the executor alone.
+describe("a pattern called through `asInstance()` in an element body", () => {
+  const link = (name: string) => ({
+    $link: { doc: "argument", path: ["pool", name] },
+  });
+  const references = () => ({
+    pool: { a: { title: "a" }, b: { title: "b" } },
+    items: [link("a"), link("b")],
+    tags: ["x", "y"],
+  });
+  const inPlace = () => ({
+    items: [{ title: "a" }, { title: "b" }],
+    tags: ["x", "y"],
+  });
+  const start = async (argument: unknown) => {
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL(
+          "../../compare/fixtures/as-instance.emit.json",
+          import.meta.url,
+        ),
+      ),
+    ) as { patterns: Artifact[] }[];
+    const artifacts = (id: string) =>
+      patterns.find((pattern) => pattern.plan.patterns?.[0] === id);
+    const main = patterns.find((pattern) => pattern.name === "default")!;
+    return new Instance(main, argument, { artifacts });
+  };
+  type Row = { title: string; noted: string };
+  type Result = {
+    rows: Row[];
+    words: { tag: string; noted: string }[];
+    kept: Row[];
+    plain: Row[];
+  };
+  const result = (instance: Instance) => instance.result() as Result;
+  type Link = { $link: { doc: string; path: string[] } };
+  const stored = (instance: Instance) =>
+    instance.store.docs.get("result")?.value as Record<
+      "rows" | "words" | "kept",
+      Link[]
+    >;
+  /** The document of the child that a stored row links to, by its name. */
+  const docOf = (row: Link, name: string) =>
+    row.$link.doc.replace(/result$/, name);
+  const valueOf = (instance: Instance, id: string) =>
+    instance.store.docs.get(id)?.value;
+  /** Sends an event through the stream a document holds at `note`. */
+  const note = (instance: Instance, row: Link, text: string) => {
+    new Handle(
+      instance,
+      new Ref(row.$link.doc, ["note"]),
+      undefined,
+      undefined,
+      [],
+    ).send({ text });
+    return instance.dispatch();
+  };
+  const [ROWS, WORDS, KEPT, LEAD] = [0, 1, 2, 3];
+
+  it("is a child of the plan with the mark, and no code of the callee is compiled in for it", async () => {
+    const instance = await start(references());
+
+    expect(
+      instance.plan.children?.map((child) => [
+        child.asInstance,
+        child.callee.compiled?.split("#")[1],
+        child.within,
+      ]),
+    ).toEqual([
+      [true, "Row", [{ element: 0 }]],
+      [true, "Word", [{ element: 1 }]],
+      [true, "Row", [{ element: 3 }]],
+      [true, "Row", []],
+    ]);
+    // The one binding of the plan is that of `plain`, which is compiled
+    // in under a `site` step.
+    expect(instance.plan.bindings.map((binding) => binding.within)).toEqual([
+      [{ element: 4 }, { site: "map" }],
+    ]);
+  });
+
+  it("has an argument and a result document of its own, named by the site and the element key, over references", async () => {
+    const instance = await start(references());
+
+    expect(result(instance).rows).toMatchObject([
+      { title: "a", noted: "" },
+      { title: "b", noted: "" },
+    ]);
+    // One instance per key of each of the three sites.
+    expect(instance.childInstances().map(({ child, keys }) => [child, keys]))
+      .toEqual([
+        [ROWS, ['cell:argument:["pool","a"]#0']],
+        [ROWS, ['cell:argument:["pool","b"]#0']],
+        [WORDS, ['value:"x"#0']],
+        [WORDS, ['value:"y"#0']],
+        [KEPT, ['cell:argument:["pool","a"]#0']],
+        [KEPT, ['cell:argument:["pool","b"]#0']],
+        [LEAD, []],
+      ]);
+    expect(instance.documents()).toMatchObject({ argument: 8, result: 8 });
+    // The row of the enclosing result is a link to the result document
+    // of the child, and the argument of the child holds the reference to
+    // the element's cell.
+    const [first] = stored(instance).rows;
+    expect(first.$link.path).toEqual([]);
+    expect(valueOf(instance, docOf(first, "argument"))).toMatchObject({
+      item: link("a"),
+    });
+
+    // A change of the element's value changes no key and writes no
+    // argument: the instance reads through the reference.
+    const before = instance.store.log.length;
+    instance.writeArgument(["pool", "a", "title"], "renamed");
+    expect(result(instance).rows[0].title).toBe("renamed");
+    expect(
+      instance.store.log.slice(before).some((write) =>
+        write.doc === docOf(first, "argument")
+      ),
+    ).toBe(false);
+    expect(instance.childInstances().length).toBe(7);
+  });
+
+  it("holds the value of the element in its argument, over plain values in place", async () => {
+    const instance = await start(inPlace());
+
+    const [first] = stored(instance).rows;
+    const [word] = stored(instance).words;
+    // The value, and no reference by key.
+    expect(valueOf(instance, docOf(first, "argument"))).toEqual({
+      item: { title: "a" },
+    });
+    expect(valueOf(instance, docOf(word, "argument"))).toEqual({ tag: "x" });
+    expect(result(instance).words).toMatchObject([
+      { tag: "x", noted: "" },
+      { tag: "y", noted: "" },
+    ]);
+  });
+
+  it("holds the value in its argument over the result of a `filter` of plain values, and the reference over one of references", async () => {
+    const plain = await start(inPlace());
+    expect(valueOf(plain, docOf(stored(plain).kept[1], "argument"))).toEqual({
+      item: { title: "b" },
+    });
+    expect(
+      plain.childInstances().filter(({ child }) => child === KEPT).map((
+        { keys },
+      ) => keys),
+    ).toEqual([['value:{"title":"a"}#0'], ['value:{"title":"b"}#0']]);
+
+    const linked = await start(references());
+    expect(valueOf(linked, docOf(stored(linked).kept[1], "argument")))
+      .toMatchObject({ item: link("b") });
+  });
+
+  it("is not torn down when its key leaves, and is the same instance when the key returns, over references", async () => {
+    const instance = await start(references());
+    const second = stored(instance).rows[1];
+    expect(note(instance, second, "mine").map(({ committed }) => committed))
+      .toEqual([true]);
+    expect(result(instance).rows[1].noted).toBe("mine");
+    const documents = instance.documents();
+
+    // The element leaves: nothing of the instance is written or removed.
+    const before = instance.store.log.length;
+    instance.writeArgument(["items"], [link("a")]);
+
+    expect(result(instance).rows.length).toBe(1);
+    expect(instance.documents()).toEqual(documents);
+    expect(
+      instance.store.log.slice(before).some((write) =>
+        write.doc.startsWith(docOf(second, ""))
+      ),
+    ).toBe(false);
+    expect(instance.childInstances().length).toBe(7);
+    expect(valueOf(instance, docOf(second, "argument"))).toMatchObject({
+      item: link("b"),
+    });
+
+    // The key returns, at another position: the row has the instance it
+    // had, with its state.
+    instance.writeArgument(["items"], [link("b"), link("a")]);
+
+    expect(stored(instance).rows[0]).toEqual(second);
+    expect(result(instance).rows).toMatchObject([
+      { title: "b", noted: "mine" },
+      { title: "a", noted: "" },
+    ]);
+    expect(instance.documents()).toEqual(documents);
+  });
+
+  it("is not torn down when its value leaves, and is the same instance when the value returns, over plain values in place", async () => {
+    const instance = await start(inPlace());
+    const second = stored(instance).words[1];
+    note(instance, second, "mine");
+    const children = instance.childInstances().length;
+
+    instance.writeArgument(["tags"], ["x"]);
+
+    expect(instance.childInstances().length).toBe(children);
+    // The instance reads the value it was last given.
+    expect(instance.store.read(new Ref(second.$link.doc, []))).toMatchObject({
+      tag: "y",
+      noted: "mine",
+    });
+
+    instance.writeArgument(["tags"], ["y", "x"]);
+
+    expect(result(instance).words).toMatchObject([
+      { tag: "y", noted: "mine" },
+      { tag: "x", noted: "" },
+    ]);
+    expect(instance.childInstances().length).toBe(children);
+  });
+
+  it("is kept while its upstream key is out of the result of a `filter`, and is the same instance when it enters again", async () => {
+    const instance = await start(references());
+    const second = stored(instance).kept[1];
+    note(instance, second, "kept");
+    const children = instance.childInstances().length;
+
+    // The `filter` drops the element.
+    instance.writeArgument(["pool", "b", "title"], "skip");
+    expect(result(instance).kept.map((row) => row.title)).toEqual(["a"]);
+    expect(instance.childInstances().length).toBe(children);
+
+    instance.writeArgument(["pool", "b", "title"], "back");
+
+    expect(stored(instance).kept[1]).toEqual(second);
+    expect(result(instance).kept[1]).toMatchObject({
+      title: "back",
+      noted: "kept",
+    });
+  });
+
+  it("handles an event for one of its streams while its key is away, over references and over plain values in place", async () => {
+    const linked = await start(references());
+    const row = stored(linked).rows[1];
+    linked.writeArgument(["items"], [link("a")]);
+
+    expect(note(linked, row, "late")).toEqual([{
+      binding: 0,
+      committed: true,
+    }]);
+    expect(linked.store.read(new Ref(row.$link.doc, ["noted"]))).toBe("late");
+
+    const plain = await start(inPlace());
+    const word = stored(plain).words[1];
+    plain.writeArgument(["tags"], ["x"]);
+
+    expect(note(plain, word, "late")).toEqual([{
+      binding: 0,
+      committed: true,
+    }]);
+    expect(plain.store.read(new Ref(word.$link.doc, ["noted"]))).toBe("late");
+    // The key returns, and the row shows what the event wrote.
+    plain.writeArgument(["tags"], ["x", "y"]);
+    expect(result(plain).words[1]).toMatchObject({ tag: "y", noted: "late" });
+  });
+
+  it("refuses an event for a stream of an element body without the modifier after the key left", async () => {
+    const instance = await start(references());
+    const plain = (instance.store.docs.get("result")?.value as {
+      plain: { note: { $stream: { binding: number; keys: string[] } } }[];
+    }).plain;
+    const { binding, keys } = plain[1].note.$stream;
+    const send = (text: string) => {
+      new Handle(
+        instance,
+        new StreamRef(binding, keys),
+        undefined,
+        undefined,
+        [],
+      ).send({ text });
+      return instance.dispatch();
+    };
+    // While the key is in the collection the event is handled.
+    expect(send("here")).toEqual([{ binding, committed: true }]);
+    expect(result(instance).plain[1].noted).toBe("here");
+    const cells = instance.stateCells().length;
+
+    instance.writeArgument(["items"], [link("a")]);
+
+    expect(send("late")).toEqual([{
+      binding,
+      committed: false,
+      error: "no element holds the stream",
+    }]);
+    expect(instance.stateCells().length).toBe(cells);
+    // The key returns with the state it had, and not what the refused
+    // event carried (ruling Z18).
+    instance.writeArgument(["items"], [link("a"), link("b")]);
+    expect(result(instance).plain[1].noted).toBe("here");
+  });
+
+  it("keeps the instance with the element when a write through a reference by key re-keys it, over plain values in place", async () => {
+    const instance = await start(inPlace());
+    const first = stored(instance).rows[0];
+    note(instance, first, "mine");
+    const children = instance.childInstances().length;
+
+    // A write through the reference by key of the element, as a handler
+    // of the row or a member bound both ways makes.
+    instance.store.write(
+      new Ref("argument", [
+        "items",
+        keySegment('value:{"title":"a"}#0'),
+        "title",
+      ]),
+      "edited",
+    );
+    instance.settle();
+
+    // The row keeps its instance, whose argument is written again with
+    // the new value (PL §3.15, assumed there under question 123).
+    expect(stored(instance).rows[0]).toEqual(first);
+    expect(result(instance).rows[0]).toMatchObject({
+      title: "edited",
+      noted: "mine",
+    });
+    expect(valueOf(instance, docOf(first, "argument"))).toEqual({
+      item: { title: "edited" },
+    });
+    expect(instance.childInstances().length).toBe(children);
+  });
+
+  it("is an instance with no element key outside an element body, whose argument holds the reference", async () => {
+    const instance = await start({ ...references(), lead: { title: "l" } });
+    const lead = (instance.store.docs.get("result")?.value as { lead: Link })
+      .lead;
+
+    expect(lead.$link.doc).toBe("child:3:[]:result");
+    expect(valueOf(instance, docOf(lead, "argument"))).toMatchObject({
+      item: { $link: { doc: "argument", path: ["lead"] } },
+    });
+    expect(note(instance, lead, "led")).toEqual([{
+      binding: 0,
+      committed: true,
+    }]);
+    instance.writeArgument(["lead", "title"], "m");
+    expect((instance.result() as unknown as { lead: Row }).lead).toMatchObject({
+      title: "m",
+      noted: "led",
+    });
+  });
+
+  it("makes another instance for a plain value that is written anew with another value", async () => {
+    const instance = await start(inPlace());
+    const first = stored(instance).rows[0];
+    note(instance, first, "mine");
+    const children = instance.childInstances().length;
+
+    // No write through a reference by key: the array is written whole.
+    instance.writeArgument(["items"], [{ title: "other" }, { title: "b" }]);
+
+    expect(stored(instance).rows[0]).not.toEqual(first);
+    expect(result(instance).rows[0]).toMatchObject({
+      title: "other",
+      noted: "",
+    });
+    // The instance of the old key stays as that of a key that left.
+    expect(instance.store.read(new Ref(first.$link.doc, []))).toMatchObject({
+      title: "a",
+      noted: "mine",
+    });
+    // One more for `rows` and one more for `kept`.
+    expect(instance.childInstances().length).toBe(children + 2);
   });
 });
 

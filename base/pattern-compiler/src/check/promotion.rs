@@ -537,7 +537,10 @@ impl<'a> Checker<'_, 'a> {
                 }
                 match api::method_name(name) {
                     MethodName::Reactive
-                        if !matches!(name, "for" | "query" | "asScope" | "inSpace") =>
+                        if !matches!(
+                            name,
+                            "for" | "query" | "asInstance" | "asScope" | "inSpace"
+                        ) =>
                     {
                         self.pure_arguments(call, shape)
                     }

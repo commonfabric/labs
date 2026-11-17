@@ -716,7 +716,7 @@ impl<'p, 'a> Checker<'p, 'a> {
                 self.api_of(&inner.callee)
                     .is_some_and(|api| api.value() == ApiValue::Builder(Builder::Pattern))
                     || matches!(unwrap(&inner.callee), Expression::StaticMemberExpression(member)
-                        if matches!(member.property.name.as_str(), "asScope" | "inSpace"))
+                        if matches!(member.property.name.as_str(), "asInstance" | "asScope" | "inSpace"))
             }
             Expression::StaticMemberExpression(member) => {
                 // A member of a namespace import of another module.
@@ -1850,7 +1850,7 @@ impl<'p, 'a> Checker<'p, 'a> {
 
     fn is_modifier_call(&self, call: &CallExpression<'a>) -> bool {
         matches!(unwrap(&call.callee), Expression::StaticMemberExpression(member)
-            if matches!(member.property.name.as_str(), "asScope" | "inSpace"))
+            if matches!(member.property.name.as_str(), "asInstance" | "asScope" | "inSpace"))
     }
 
     /// Visits the arguments of a call. In the reactive tier a function among
