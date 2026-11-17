@@ -724,12 +724,17 @@ identified by the handling or by an explicit cause, and by no element
 key. And a statically resolved pattern called in the body is compiled
 into the surrounding instance: it has no result cell of its own, and a
 state cell it declares is a state cell of the body, per occurrence as
-any other.
+any other. A statically resolved pattern that is called through
+`asInstance()` is not compiled in: it is an instance of its own, named
+through the element key, that stays when its element leaves the
+collection ([§4.4.2](#442-patterns-and-handlers-as-callees), "A call
+that is an instance of its own").
 
 #### 4.4.2 Patterns and handlers as callees
 
 A pattern is called with one object argument, optionally through the
-modifiers `asScope(scope)` and `inSpace(space, options)`. There are two
+modifiers `asInstance()`, `asScope(scope)` and
+`inSpace(space, options)`. There are two
 kinds of callee, and they differ in what the compiler can do.
 
 - **A statically resolved pattern.** The callee is a `pattern(...)`
@@ -749,6 +754,80 @@ kinds of callee, and they differ in what the compiler can do.
   argument against the first, and gives the call the second. What the plan
   records for such a child, and the label rule of its result, are defined in
   `plan-and-label-templates.md` (§3.15).
+
+**A call that is an instance of its own.** By ruling `asInstance()` is
+a modifier of a pattern factory, beside `asScope(scope)` and
+`inSpace(space, options)`. It takes no argument and returns a factory
+of the same input and result types. A call through it, as
+`Row.asInstance()({ r })`, is an instance of its own, with an argument
+document and a result document of its own. It is not compiled into the
+surrounding instance, also where the callee is statically resolved.
+The three modifiers compose, in any order. A call through `inSpace` is
+such an instance already, so `asInstance()` adds nothing to it.
+
+```tsx
+// Shown for illustration only.
+// Each donut has a `DonutCard` instance of its own. A note that a
+// handler of the card stores stays with the donut's key when the
+// donut leaves `matches`, and is there when it returns.
+const cards = matches.map((donut) => DonutCard.asInstance()({ donut }));
+```
+
+In the body of a per-element construct the modifier decides what
+survives the element. This is the rule, with the case of the source
+named in each part.
+
+- **Without the modifier.** A statically resolved pattern called in the
+  body is compiled into the body. What it declares is kept per element
+  key, and its cone instances and its bindings exist while the key is
+  in the collection. When the key leaves, the stored state stays and
+  nothing runs: an event for a stream of the body is refused until the
+  key returns. That is the same over an array of references, over an
+  array of plain values in place, and over the result of another
+  per-element construct.
+- **With the modifier.** The call is an instance of its own from the
+  moment the element first appears. It is identified by the site of the
+  call, the collection, and the element key, in each of the three
+  cases. Over an array of references the argument holds the reference
+  to the element. Over an array of plain values in place, and over the
+  result of another per-element construct whose upstream position
+  holds a value, the argument holds the value, and the runtime writes
+  it again when the element changes while it is in the collection.
+  When the element leaves, nothing is written and the instance stays:
+  no copy is made, at that time or when a handler stores a reference
+  to the instance somewhere else. When the same key returns, the row
+  has the same instance. An event for a stream of the instance is
+  handled whether or not the element is in the collection.
+
+So a list of search results that changes with the query, with an
+action that collects a result into another list, is written with
+`asInstance()` on the row: the collected reference names an instance
+that stays when the query changes, and any state the row accumulated,
+through its handlers in particular, is there when the same result is
+served again. The key of a result is derived from upstream causes and
+is stable where the results are references or come from a per-element
+construct over a stable source
+(`plan-and-label-templates.md` §1.3).
+
+Three things are not ruled.
+
+- *Assumed* ([§13](#13-open-questions), question 41): a handler that
+  stores a reference to the result of a pattern call written in a
+  per-element body, anywhere outside the collection that the body is
+  over, is a compile error unless the call has `asInstance()` or
+  `inSpace(...)` (`element-body:result-stored-outside`). Without the
+  modifier such a result has no result cell that a reference could
+  name once the element has left. The rule is the same over the three
+  cases of a source.
+- *Assumed* ([§13](#13-open-questions), question 42): `asInstance()` is
+  legal outside the body of a per-element construct, wherever the
+  instantiation it modifies is legal, with the same meaning: the call
+  is an instance of its own and is not compiled in.
+- Nothing in the design removes an instance that no element and no
+  stored reference refers to any more. Cleanup of such instances is
+  deferred. It is the question of reclaiming storage that a removed
+  element's state cells already raise
+  (`execution-and-storage.md` §2.6).
 
 **Handlers** have the same two kinds of callee. A `handler(...)` definition
 called by the name it is declared or imported under is statically resolved:
@@ -1083,7 +1162,7 @@ to the handle's cell: reads its value, writes it, or neither.
 | `new X(value)`, `X.of(value)`, `X.for(cause)`, and the same three under `X.perSpace`, `X.perUser`, `X.perSession`, for `X` among `Cell`, `Writable`, `OpaqueCell`, `Stream`, `ComparableCell`, `ReadonlyCell`, `WriteonlyCell` | The constructor | R, F. In tier R the argument of `X.for` is a string literal | Creates a cell. In tier R it is a state cell of the plan. In tier F it is the cell-creation call of §5.2 |
 | `sqliteDatabase(options?)` | The function | R | Declares a SQLite database and yields its handle, of type `SqliteDb` (note below) |
 | `X.equals(a, b)`, `X.equalLinks(a, b)` | The constructor | R, F | Neither. Compares identity |
-| `asScope(scope)`, `inSpace(space, options)` | A pattern factory | Where the instantiation they modify is legal | Neither |
+| `asInstance()`, `asScope(scope)`, `inSpace(space, options)` | A pattern factory | Where the instantiation they modify is legal | Neither |
 
 Thirteen notes on the table.
 
@@ -3650,6 +3729,7 @@ none of the other eight.
 | `reactive:unsupported-expression` | error | `new` of a non-cell constructor other than `new Date()` with no argument (which is `function-body:ambient-read`), `await`, `yield`, `this`, `instanceof`, a tagged template whose tag is not `debugStr` (§4.4.4), `void`, or the comma operator in tier R. Also an object literal with a computed key that is not static (§4.3), and a default value or a rest element in a `const` destructuring whose initializer is not a constant expression (§4.2). An expression that is an expression statement, such as `void x;`, is `pattern-context:statement` and is not reported here | Wrap the expression in `computed(() => ...)`. For a default in a destructuring, write it as an expression: `const glaze = donut.glaze ?? "plain"` | new (replaces the remaining cases of `pattern-context:computation`) |
 | `opaque-get:invalid-call` | error | `.get()` on a value of a data type that is not `Cell`, `Writable`, or `ReadonlyCell`, a `Stream` included: to test that a stream is stored, read the position through a view typed `unknown` ([§12.9](#129-test-that-a-stream-is-present-through-a-view-typed-unknown)). A call of a `get` method that the value's own type declares, as on a `Map` or on a local object typed `{ get(): T }`, is an ordinary method call and is not reported (§4.4) | Read the value directly: `donut.name`, not `donut.get().name`. Only `Cell<T>`, `Writable<T>`, and `ReadonlyCell<T>` are read with `.get()` | carries |
 | `pattern-context:self-access` | error | `x[SELF]` where `x` is not the pattern's own input parameter, or anywhere in tier F | Read `const self = input[SELF]` in the pattern body, or destructure `[SELF]: self`, and capture `self` | carries |
+| `element-body:result-stored-outside` | error | *Assumed* (§13, question 41). A function body stores, outside the collection, a reference to the result of a pattern call that is written in the body of a per-element construct without `asInstance()` or `inSpace(...)` (§4.4.2). The same over an array of references, an array of plain values in place, and the result of another per-element construct | Call the pattern through `asInstance()`: `Row.asInstance()({ r })`. The row is then an instance of its own, which stays when its element leaves the collection | new |
 | `ses-callback:callable-capture` | error | A tier-F body inside tier R captures a function value from an enclosing function scope. In a function body: the state of a handler binding, in either spelling of §5.2, or an inline `pattern(...)` used as a callee (§4.4.2) holds or captures a function value or a value of another code type, such as a `Map`, a `Set`, a `Date`, or an `Error` | Move the function to module scope. For a value of another code type, capture data, such as an array of entries or a timestamp, and build the value inside the body that uses it | changes (now also covers a handler binding and an inline pattern in a function body, and a code type other than a function) |
 | `removed-form:helper` | warning | A direct call of `ifElse`, `when`, or `unless`, or a `str` tagged template, in tier R (§4.4.3). An error once the builder form is retired | The rewrite: `c ? a : b` for `ifElse(c, a, b)`, `c && v` for `when(c, v)`, `c \|\| f` for `unless(c, f)`, a plain template literal for `str` | new |
 | `removed-form:helper-unsupported` | error | One of those four in any other form: with schema arguments, passed as a value, or through an alias. Also one of the four, in any form, in a function body or at module scope (§4.4.3) | The same rewrite. In a function body the operator is ordinary JavaScript | new |
@@ -4759,3 +4839,34 @@ use, so that the other numbers stay as other documents cite them.
     alternative reports in the module of the inner binding, which reports a
     pattern for what one of its callers gives it. A pattern compiled by itself
     is not reported for the path, since the path is its input there.
+41. **A stored reference to the result of a pattern call in a
+    per-element body** (to the project owner). By ruling a pattern call
+    through `asInstance()` is an instance of its own, which stays when
+    its element leaves the collection, and a call without it is
+    compiled into the body, where an event for one of its streams is
+    refused once the element has left
+    ([§4.4.2](#442-patterns-and-handlers-as-callees)). *Assumed:* a
+    function body that stores, outside the collection, a reference to
+    the result of a pattern call written in a per-element body is a
+    compile error unless the call has `asInstance()` or `inSpace(...)`
+    (`element-body:result-stored-outside`). The rule was proposed to
+    the owner, who did not object, and it is not ruled. Not settled
+    with it: how the compiler finds such a store, since the reference
+    can reach a handler through its state, through a child's argument,
+    or through a value a `computed` returns; *assumed:* the error is
+    reported where the compiler can follow the result to a write edge
+    whose target is outside the collection, and nothing is reported
+    where it cannot. The alternative allows the store and lets the
+    reference read as nothing after the element leaves. The same over
+    an array of references, over an array of plain values in place,
+    and over the result of another per-element construct.
+42. **`asInstance()` outside a per-element body** (to the project
+    owner). The ruling gives the modifier for a pattern call in the
+    body of a per-element construct. *Assumed:* it is legal wherever
+    the instantiation it modifies is legal, with the same meaning: the
+    call is an instance of its own, with its own argument and result
+    documents, and is not compiled into the surrounding instance. On a
+    pattern factory value, whose call is such an instance already, it
+    changes one thing in an element body: the child stays when its
+    element leaves. The alternative refuses the modifier outside a
+    per-element body. Not about one case of a per-element source.

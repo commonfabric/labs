@@ -1830,8 +1830,24 @@ An event that cannot be routed is treated as today.
     earliest pending entry always spends the budget.
   - When the budget is spent, the event is dropped: the entry records
     the dropped-event notice, and the `eventWatermark` passes it.
-- **A key no position holds.** An event on a stream of an element whose key
-  left its collection is unrunnable, and is dropped in the same way.
+- **A key no position holds.** By ruling an event on a stream of a
+  binding of an element body whose key left its collection is refused:
+  it is unrunnable, and is dropped in the same way, also where a link
+  to the stream is stored outside the collection. Once the key
+  returns, the binding has the stream it had, and a later event is
+  handled. That is the same over an array of references, over an array
+  of plain values in place, and over the result of another per-element
+  construct.
+- **A stream of an instance called through `asInstance()`** is not such
+  a stream. By ruling a pattern call through `asInstance()` in an
+  element body is an instance of its own, which stays when its key
+  leaves the collection (`execution-and-storage.md` §2.5, "Children of
+  an element body"). Its bindings are bindings of its own plan, and
+  the row of each of its streams names that instance. An event for
+  one is routed and handled as for any instance, whether or not the
+  element is in the collection, and the enclosing instance is not
+  loaded on its account. The same in each of the three cases of a
+  source.
 - **A binding the plan does not have.** After a source update, a row can
   name a binding that the plan the instance runs does not have. An event
   on its stream is unrunnable.

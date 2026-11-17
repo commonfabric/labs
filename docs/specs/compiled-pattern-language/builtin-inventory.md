@@ -593,7 +593,10 @@ the element is keyed by the identity of that cell.
   moves with its element
   (`plan-and-label-templates.md` §1.3). A statically resolved pattern
   called in the body is compiled into the body and is no child, and a
-  state cell it declares is a state cell of the body.
+  state cell it declares is a state cell of the body. Called through
+  `asInstance()`, it is a child that stays when its element leaves the
+  collection, in each of the three cases of a source
+  (`language-subset.md` §4.4.2).
 - *The same cell twice is two elements.* Two positions that link to one
   cell have the same identity and different occurrence counts, as today,
   and share nothing.
@@ -2062,6 +2065,7 @@ Three facts about the builder explain most of the entries.
 | --- | --- | --- |
 | `pattern(fn)` | Runs `fn` eagerly to build a graph and returns a `PatternFactory` (`builder/pattern.ts`). | C. The callback is the reactive tier. |
 | `PatternFactory.asScope(scope)`, `.inSpace(space, options)` | Derived copies of a pattern factory that set the instance's scope, or its target space with grants (`noteDerivedCopy`). | C, as modifiers of an instantiation. |
+| `PatternFactory.asInstance()` | Does not exist. A pattern called in a pattern body, and each run of a `map` callback, is an instance with a result document of its own. | C, a modifier of an instantiation, by ruling: the call is an instance of its own and is not compiled into the surrounding instance. In an element body it stays when its element leaves the collection (`language-subset.md` §4.4.2). |
 | `handler(fn)` | Mints a `javascript` module with `wrapper: "handler"` (`handlerInternal` in `builder/module.ts`). Applying the factory to its state creates a stream and a node, and returns the stream. | C. Binding a handler to state is legal in the reactive tier and in function bodies. |
 | `action(fn)` | Throws at run time. The transformer lowers it to `handler(fn)(captures)` (`base/ts-transformers/src/closures/utils/capture-scaffold.ts`). | C. A handler whose state is its captures. |
 | `computed(fn)` | The transformer lowers it to `lift(fn)(captures)` (`base/ts-transformers/src/lift/transformer.ts`). | C. Promoted to the reactive tier when its body meets the criterion of `language-subset.md` §6.1: a pure expression that, among other conditions, instantiates no pattern and binds no handler. |
@@ -3494,7 +3498,7 @@ all.
 | Entry | Class |
 | --- | --- |
 | `pattern`, `handler`, `action`, `computed`, `lift`, `assert`, inline JSX handlers, JSX | C |
-| `asScope`, `inSpace` | C (instantiation modifiers) |
+| `asInstance`, `asScope`, `inSpace` | C (instantiation modifiers) |
 | Cell constructors, scoped constructors, `.for(...)` | C |
 | `map`, `filter`, `flatMap`, `reduce`, `findIndex`, `some`, `every`, `find`, `count`, `sum`, `min`, `max`, `minBy`, `maxBy`, `groupBy`, `keyBy`, `lookup`, `keys`, `keyEntries` | A |
 | The eight `WithPattern` methods | D |
@@ -3637,10 +3641,19 @@ above already reflect them.
 - **`asScope` and `inSpace`** are part of the instantiation syntax. This
   entry is stated by the documents (`language-subset.md` §4.4 and
   `plan-and-label-templates.md` §3.14) and is not a ruling of the project
-  owner. Where the two modifiers are legal is open in two cases: on a
-  statically resolved callee in the reactive tier (the continuation plan,
-  question 17) and on an instantiation in a computation (its question
-  50).
+  owner. Where the two modifiers are legal is open on an instantiation
+  in a computation (the continuation plan, question 50). On a
+  statically resolved callee in the reactive tier a call through
+  `inSpace` is an instance of its own, by the ruling on `asInstance()`
+  (its question 17).
+- **`asInstance()`** is a third modifier of a pattern factory, by
+  ruling. A call through it is an instance of its own, with its own
+  argument and result documents. In the body of a per-element
+  construct, over an array of references, an array of plain values in
+  place, or the result of another per-element construct, the instance
+  is identified by the site, the collection and the element key, stays
+  when the element leaves, and is the same instance when the key
+  returns (`language-subset.md` §4.4.2).
 - **Migration is out of scope** for this document.
 
 ## Open questions

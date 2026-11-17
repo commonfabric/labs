@@ -809,8 +809,24 @@ and the callee must be one of:
 - a pattern received as a factory value
   ([first-class serializable factories](../pattern-construction/node-factory-shipping.md)).
 
-A callee may carry the modifiers `asScope(scope)` and
-`inSpace(space, options)`. The identifier of an instance an `inSpace` request
+A callee may carry the modifiers `asInstance()`, `asScope(scope)` and
+`inSpace(space, options)`. A call through `asInstance()` is an
+instance of its own, with an argument document and a result document
+of its own, and is not compiled into the surrounding instance; a call
+through `inSpace` is such an instance already. In the body of a
+per-element construct such an instance is identified by the site, the
+collection and the element key. It stays when its element leaves the
+collection, it is the same instance when the key returns, and events
+for its streams are handled in between. Over an array of references
+its argument holds the reference to the element; over an array of
+plain values in place, and over the result of another per-element
+construct whose upstream position holds a value, it holds the value,
+written again when the element changes while it is in the
+collection. An event for a stream of an element body without the
+modifier is refused once the element has left. Cleanup of instances
+that nothing refers to is deferred
+([language subset](language-subset.md), §4.4.2). The identifier of an
+instance an `inSpace` request
 makes is known when the body makes the request. The identifier of a space
 the request creates is obtained and is not derived from the request. The
 runtime records the allocation in the calling space, in a step that commits

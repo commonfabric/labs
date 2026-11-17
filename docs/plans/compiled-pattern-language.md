@@ -1918,6 +1918,34 @@ is relitigated.
   is added, and a reader of the list's label does not cover it before
   that. The list holds references to its records, so a per-element
   construct over it is the case of an array of references.
+- An event for the stream of a binding of an element body whose key
+  has left its collection is refused, also where a link to the stream
+  is stored outside the collection. The same over an array of
+  references, over an array of plain values in place, and over the
+  result of another per-element construct. A row that is to take
+  events after its element has left is called through `asInstance()`.
+- `asInstance()` is a modifier of a pattern factory, beside
+  `asScope(scope)` and `inSpace(space, options)`, written
+  `Row.asInstance()({ r })`. It returns a factory of the same types.
+  The call is an instance of its own, with its own argument and
+  result documents, and is not compiled into the surrounding
+  instance. It composes with the other modifiers, and a call through
+  `inSpace` is such an instance already.
+- A pattern call through `asInstance()` in a per-element body is an
+  instance of its own from the moment the element first appears,
+  identified by the site of the call, the collection and the element
+  key. Over an array of references its argument holds the reference
+  to the element. Over an array of plain values in place, and over
+  the result of another per-element construct, its argument holds the
+  value, written again when the element changes while it is in the
+  collection. When the element leaves, nothing is written and the
+  instance stays; no copy is made then or when a reference to the
+  instance is stored elsewhere. When the same key returns it is the
+  same instance, so state within it survives a change of a query and
+  back. Events for its streams are handled whether or not the element
+  is in the collection. Cleanup of instances that nothing refers to
+  is deferred; the history of documents is kept by default, so it is
+  not a new issue.
 - Stored per-element state is not carried over from the current runtime.
 
 **Labels**
@@ -1983,9 +2011,10 @@ answer goes to the specification with the document.
 16. **Demand across spaces** (SS question 5). *Assumed:* a serving
     runtime's session on another space counts as demand there.
 17. **`inSpace` on a statically resolved callee in the reactive tier**
-    (A9). Such a callee is compiled into the surrounding instance and
-    cannot be in another space. It either always makes a child instance or
-    is refused.
+    (A9). Settled with the ruling on `asInstance()`: a call through
+    `inSpace` is an instance of its own, with its own argument and
+    result documents, and is not compiled into the surrounding
+    instance ([Decided](#decided)). The entry keeps its number.
 <!-- The list restarts so that the numbers below stay as cited. -->
 
 21. **Event order per space** (SS question 10). *Assumed:* the proposal of
@@ -2090,7 +2119,9 @@ assumption.
     upstream key stands in the collection again. The alternative for
     the child of an element body keeps its documents as the state cells
     of the body are kept, so that a child made again always finds its
-    state.
+    state. By ruling a child of an element body that is called through
+    `asInstance()` is not torn down when its key leaves, in each of the
+    three cases, so the assumption covers a child without the modifier.
 43. **A failed evaluation of a computation that makes instances** (PL
     §3.14). *Assumed:* the instances of the last evaluation stay, and
     their arguments take the error state.
@@ -3018,6 +3049,37 @@ undetermined, written into the documents as an assumption.
      lets the construct or the array's type name a member as the key.
      The question is about an array of plain values in place alone.
 
+176. **A stored reference to the result of a pattern call in a
+     per-element body without `asInstance()`** (LS question 41).
+     *Assumed:* a function body that stores such a reference outside
+     the collection is a compile error unless the call has
+     `asInstance()` or `inSpace(...)`
+     (`element-body:result-stored-outside`), reported where the
+     compiler can follow the result to a write outside the
+     collection. The rule was proposed to the owner, who did not
+     object, and is not ruled. The alternative allows the store, and
+     the reference reads as nothing once the element has left. The
+     same over an array of references, over an array of plain values
+     in place, and over the result of another per-element construct.
+177. **`asInstance()` outside a per-element body** (LS question 42).
+     *Assumed:* legal wherever the instantiation it modifies is
+     legal, with the same meaning: the call is an instance of its own
+     and is not compiled in. The alternative refuses it there. Not
+     about one case of a per-element source.
+178. **What the rulings on `asInstance()` leave open for the record
+     and the argument** (PL question 123). *Assumed:* the plan
+     records the call as a `Child` with a member `asInstance`; a
+     re-key of a plain value in place (question 160) moves the
+     instance with the rest of what the old key holds, and a link
+     stored elsewhere to its result under the old key reads what it
+     read before; and the argument of an instance whose key is away
+     holds at a path bound to the element what it last held, the
+     reference over an array of references and the value over an
+     array of plain values in place and over the result of another
+     per-element construct. The alternative for the re-key records
+     that the new key continues the old instance, so that a stored
+     link stays current.
+
 One question above is restated by the notes 307 to 320. For the
 assumption of ES question 83, in which transaction a first value that is not a
 constant is written, the prototype does the alternative: it computes
@@ -3035,9 +3097,12 @@ is when the key enters the element table, in all three cases.
   rest on it, and specs pull request #91 refers to a contract rule for a
   language-model effect that no chapter states.
 - **A statically resolved pattern called with `inSpace`** in the reactive
-  tier of an element body is addressed by no document. The gap is the
-  same over an array of references, an array of plain values in place,
-  and the result of another per-element construct.
+  tier of an element body is an instance of its own, by the ruling on
+  `asInstance()`. No document says how the request of a space, which a
+  handler makes in its transaction, is made by an element body of the
+  reactive tier. The gap is the same over an array of references, an
+  array of plain values in place, and the result of another
+  per-element construct.
 - **`execution-and-storage.md` leaves two things unspecified:** how the
   arrangement of part documents is computed again when a conflict
   withdraws writes at the commit, after the size rule ran; and how the

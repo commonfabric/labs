@@ -985,7 +985,9 @@ export interface Operation {
 
 /**
  * A pattern instantiated with a plan of its own: a pattern received as a
- * factory value, or any pattern a function body instantiates (section 3.15).
+ * factory value, any pattern a function body instantiates, or a pattern
+ * called through `asInstance()` or `inSpace(...)` in the reactive tier
+ * (section 3.15).
  */
 export interface Child {
   /**
@@ -1005,6 +1007,14 @@ export interface Child {
   /** The cause the instance's identifier derives from. */
   readonly name: string;
   readonly within: readonly WithinStep[];
+  /**
+   * `asInstance()`: the call is an instance of its own by the author's
+   * declaration. Under an `element` step of `within` the instance is
+   * not torn down when its key leaves the collection, and an event for
+   * one of its streams is handled while the key is away (section
+   * 3.15). The form of the member is assumed.
+   */
+  readonly asInstance?: true;
   /** `asScope`: the scope of the state the instance declares. */
   readonly scope?: "space" | "user" | "session";
   /** `inSpace`: the target space and the options of the request. */
@@ -2547,6 +2557,20 @@ stored are those of section 2.6, unchanged by the removal. Reclaiming
 the storage would be a separate mechanism, which this design does not
 have. `execution-and-storage.md` §2.6 has what is dropped and what
 stays, and its question 33 what is assumed for a child of the body.
+
+While a key is away, the bindings of its body do not exist: by ruling
+an event for the stream of a binding of an element body whose key has
+left the collection is refused, also where a link to the stream is
+stored outside the collection. Once the key returns, the binding has
+the stream it had. A pattern call in the body that is to outlast its
+element is written with `asInstance()`. By ruling such a call is an
+instance of its own, identified by the site, the collection and the
+element key, which stays when the key leaves, is the same instance
+when the key returns, and handles the events of its streams whether or
+not the key is in the collection (section 3.15, "A call through
+`asInstance()`"). Both rules are the same over an array of references,
+over an array of plain values in place, and over the result of another
+per-element construct.
 
 Keeping the identifiers of per-element state that is already stored is
 not a goal. The runtime of today forms a key from the identity of the
@@ -6949,6 +6973,7 @@ pattern factory value. The runtime creates the child instance (section
 | The captures of an inline `pattern(...)` written at the call | The private parameters of the child (section 3.15). Each path is bound as a path of a handler's state is bound in a function body (below), and is stored with the instance |
 | A link to an instance requested earlier in the same invocation, passed as an argument | A reference like any other: it carries its own identity label, `T_b`. It is legal before either instance exists, because both are created by the same commit |
 | `.for(tag)` | The tag's value is part of the footprint. The instance's existence label is frozen when it is first created (§8.12.8, `08-12-store-label-monotonicity.md`); a later event that names the same instance creates nothing. *Assumed:* it does not write the argument again either, so the instance keeps the argument the creating event wrote, as a cell created under an explicit cause keeps its initial value (section 8, question 39) |
+| `asInstance()` | A constant of the site, with no argument and no label. An instance that a function body makes is an instance of its own without it, so the modifier changes nothing there (`Child.asInstance`, section 3.15) |
 | `asScope(scope)` | A constant of the site. It sets the scope of the state the child declares |
 | `inSpace(space, options)` | The target is a space identifier, the space of a given cell, a name, or anonymous. `Child.space` records which of the four it is, and the options `grants`, `root`, `spaceKind` and `selfOwned` where the site writes them. The target and each option is a constant of the site, a slot, or a value the body computes at the request (`RequestValue`). A computed one carries `T_b`. The argument is written into another space, so the write-side checks of that space apply to the argument's templates joined with `T_b`. The instance's identifier is known at the request, as for any instantiation. The identifier of a space the request creates is obtained when the request is made, and is not derived from the request (below) |
 
@@ -7501,11 +7526,14 @@ on. A link that a handler writes for a reference it passes on carries
 
 ### 3.15 Child instances
 
-A `Child` is a pattern instantiated with a plan of its own. There are two
-cases: a pattern received as a factory value and called in the reactive
-tier, whose plan the compiler cannot see, and any pattern a function body
-instantiates, whose instantiation is a run-time event even when the callee
-is known.
+A `Child` is a pattern instantiated with a plan of its own. There are
+three cases: a pattern received as a factory value and called in the
+reactive tier, whose plan the compiler cannot see; any pattern a
+function body instantiates, whose instantiation is a run-time event
+even when the callee is known; and a pattern that the author calls
+through the modifier `asInstance()` or `inSpace(...)` in the reactive
+tier, which by ruling is an instance of its own also where the callee
+is statically resolved ("A call through `asInstance()`", below).
 
 **What the enclosing plan records** (`Child`): the callee, as a compiled
 pattern's identity, as the slot that holds the factory, as the entry of
@@ -7522,6 +7550,69 @@ result schema.
 cause, and an argument document. Its keep set is its own plan's. The
 enclosing plan cannot inline it, so the two meet only at those two
 documents.
+
+**A call through `asInstance()`.** By ruling `asInstance()` is a
+modifier of a pattern factory, beside `asScope(scope)` and
+`inSpace(space, options)`, that returns a factory of the same types
+(`language-subset.md` §4.4.2). A call through it is an instance of its
+own, with an argument document and a result document of its own, and
+is not compiled into the surrounding instance. The modifiers compose,
+and a call through `inSpace` is such an instance already.
+
+- **The record.** The call is a `Child`. Where the callee is
+  statically resolved, `callee` is `{ compiled }`, the hash of the
+  compiled pattern, and the enclosing plan holds none of the callee's
+  slots, bodies or cones: no `site` step stands for the call, and
+  `Plan.patterns` does not list the callee on its account. The record
+  has `asInstance: true`. Its `name` and `within` are those of the
+  site, as for any child of the reactive tier. *Assumed:* the form of
+  the member; and that a `Child` with `asInstance` and a `factory`
+  callee is the same record with the mark.
+- **In an element body.** The `within` of the record has the `element`
+  step of each enclosing collection, so the instance is identified by
+  the site, the collection and the element key (section 1.3). It
+  exists from the moment the element first appears. It is not torn
+  down when the key leaves: nothing is written then, and the instance
+  stays, with its argument document as it was. When the same key
+  returns, the row has the same instance. No copy is made when the
+  element leaves or when a reference to the result is stored
+  elsewhere.
+- **The argument, by case.** The enclosing plan has one `WriteEdge`
+  with target `argument` per argument path, as for any child. Over an
+  array of references a path bound to the element holds the reference,
+  the link to the element's cell, which a change of the element's
+  value does not change. Over an array of plain values in place, and
+  over the result of another per-element construct where the upstream
+  position holds a value, a path bound to the element holds the
+  value: the edge writes the value, with its instantiated template,
+  and writes it again when the element changes while its key is in
+  the collection. It does not hold a reference by key, so the instance
+  reads the value it was last given after the element has left. Over
+  the result of another per-element construct where the upstream
+  position holds a link, the path holds that link.
+- **Events.** A binding of the instance is a binding of the child's own
+  plan, with no `element` step of the enclosing collection in its own
+  `within`. An event for its stream is routed to the instance and
+  handled whether or not the key is in the collection.
+- **Labels.** Those of any child: "Labels going in", "Labels inside"
+  and "Labels coming back", below. While the key is away the stored
+  result and its labels stay as they are, and a reader that holds a
+  link to the result reads them.
+- **A child without the mark.** A child of an element body whose callee
+  is a factory value and whose call has no `asInstance()` is torn down
+  when its key leaves (`execution-and-storage.md` §2.5, "Children of
+  an element body").
+
+Not ruled, and assumed: that a function body which stores a reference
+to the result of a pattern call written in an element body without the
+modifier is refused at compile time, and that `asInstance()` is legal
+outside an element body (`language-subset.md` §13, questions 41 and
+42). Outside an element body the record is the same `Child`, with no
+`element` step. Cleanup of an instance that no element and no stored
+reference refers to is deferred (`execution-and-storage.md` §2.6).
+Open (section 8, question 123): what a re-key of the element does to
+the instance, and what the instance of a key that is away reads
+through an argument path that names the collection.
 
 **Labels going in.** An argument path that is a reference is written as a
 reference and carries the reference's label. The link written holds the
@@ -12232,3 +12323,26 @@ this document made.
      construct, or the type of the array, name a member of the
      element as its key, and `Collection` then records that member.
      The question is about an array of plain values in place alone.
+123. **What the rulings on `asInstance()` leave open for the record
+     and the argument** (for the project owner). By ruling a pattern
+     call through `asInstance()` in a per-element body is an instance
+     of its own, identified by the site, the collection and the
+     element key, which stays when the element leaves (section 3.15).
+     Three things are assumed. First, the record: a `Child` with the
+     member `asInstance: true`, whose form no ruling gives. Second, a
+     re-key. By another ruling a write through a reference by key
+     that changes the value moves what the old key holds to the new
+     key (section 1.3), and the instance is identified by the key.
+     *Assumed:* the instance is moved with the rest, so the row keeps
+     it, and a link stored elsewhere to its result under the old key
+     reads what it read before the write and no later value. The
+     alternative records that the new key continues the instance of
+     the old one, so that a stored link stays current. The case is an
+     array of plain values in place, where over the value the
+     argument is rewritten as well; it does not arise over an array
+     of references or over an upstream key. Third, the argument of an
+     instance whose key is away. *Assumed:* a path bound to the
+     element holds what it last held, the reference over an array of
+     references and the value otherwise, and a path bound to a slot
+     outside the element stays bound and is read as current. The
+     alternative freezes the whole argument when the key leaves.

@@ -1797,7 +1797,15 @@ position is in no key.
   identifier holds the key (section 5.2), so two rows that show equal
   values have two streams. An event names one key, and the handler's
   element slots resolve at the position that holds the key
-  (`scheduler-and-serving-loop.md` §5.1).
+  (`scheduler-and-serving-loop.md` §5.1). By ruling an event for the
+  stream of a key that has left the collection is refused, also where
+  a link to the stream is stored outside the collection: the binding
+  of an element body exists while its key is in the collection. That
+  is the same over an array of references, over an array of plain
+  values in place, and over the result of another per-element
+  construct. A row that is to take events after its element has left
+  is a pattern called through `asInstance()` ("Children of an element
+  body", below).
 - **The index.** A cone of the body that reads the index lists the slot
   of root `index` that names the collection
   (`plan-and-label-templates.md` §1.3), and `host.slot` yields the
@@ -1901,7 +1909,12 @@ element. An instance that only a handler requests is identified by no
 element key. And a statically resolved pattern called in the body is
 compiled into the body: the call is no `Child`, and a state cell it
 declares is a state cell of the body, per key as any other
-(`language-subset.md` §4.4.1).
+(`language-subset.md` §4.4.1). A pattern that is called in the body
+through the modifier `asInstance()` is a child, whatever kind its
+callee is of, and by ruling it is one that stays when its key leaves
+("A child called through `asInstance()`", below). The items that
+follow say of a removal, of an edit and of teardown what holds for a
+child without the modifier.
 
 - **The key.** The child's `within` has the `element` step with the key
   of the body's cone instances (section 5.3): the element part and the
@@ -1921,7 +1934,8 @@ declares is a state cell of the body, per key as any other
   collection, the key that enters is the one with the highest count,
   whatever the position of the insertion, and each of those elements has
   the child of its place in their order.
-- **A removal.** The child of the key that left is torn down. Where two
+- **A removal.** The child of the key that left is torn down, unless it
+  was called through `asInstance()`. Where two
   equal values stand in the collection and the first is removed, the
   one that remains becomes occurrence 0 and has the child and the state
   of the first occurrence. The key that left is that of the last
@@ -1954,9 +1968,51 @@ declares is a state cell of the body, per key as any other
   again by ruling. What the child finds of its own state is *assumed*
   (section 11, question 33).
 
+- **A child called through `asInstance()`.** By ruling a pattern call
+  through `asInstance()` in an element body is an instance of its own
+  from the moment the element first appears, with an argument
+  document and a result document of its own, identified by the site
+  of the call, the collection and the element key (section 5.2;
+  `plan-and-label-templates.md` §3.15, `Child.asInstance`). It is in
+  the instances document of the enclosing instance under its key, as
+  any child of an element body is.
+  - **While the key is in the collection** the enclosing instance
+    writes the child's argument. Over an array of references a path
+    bound to the element holds the link to the element's cell, and a
+    change of the cell's value writes nothing. Over an array of plain
+    values in place, and over the result of another per-element
+    construct where the upstream position holds a value, the path
+    holds the value, and the write edge writes it again when the
+    element changes while it is in the collection.
+  - **When the key leaves** nothing is written and nothing is torn
+    down. The cone instances of the body for the key are dropped, as
+    for any key, and with them the cone instance that writes the
+    child's argument, so the argument stays as it was last written.
+    The child stays a set-up instance: its documents are not retired,
+    it is evaluated on demand as any instance is, and an event for one
+    of its streams is routed to it and handled
+    (`scheduler-and-serving-loop.md` §5.1). A link to its result that
+    a handler stored elsewhere reads the instance. No copy is made,
+    when the key leaves or when such a link is stored.
+  - **When the key returns** the row has the same instance, with the
+    state it accumulated, and the enclosing instance writes its
+    argument again.
+  - **Cleanup.** Nothing removes an instance that no element and no
+    stored link refers to any more. Cleanup of such instances is
+    deferred. It is not a new issue: the state cells of a key that
+    left stay stored under the same ruling (section 2.6), and the
+    history of every document is kept by default.
+
+  The rule is the same in the three cases of a source except for what
+  the argument holds, as stated. What a re-key of a plain value does
+  to the instance is *assumed* (`plan-and-label-templates.md` §8,
+  question 123).
+
 An author who needs a child to stay with a record across an edit of the
 record makes the elements cells: a position that holds a link keeps its
-element part when the value behind the link changes.
+element part when the value behind the link changes. An author who
+needs a row to stay when its element leaves the collection calls the
+row's pattern through `asInstance()`.
 
 ### 2.6 What a change re-evaluates
 
@@ -2018,6 +2074,8 @@ over the result of another per-element construct.
   made for the key and evaluated. A state cell of the key reads what
   it held, an operation of the key finds its state, and a binding of
   the key has the stream it had, because each is named from the key.
+  While the key is away an event for that stream is refused, by
+  ruling (section 2.5, "State, handlers and children").
   Over an array of plain values in place the key is formed from the
   value. A value that is removed and written back finds the cells it
   had. A value that was edited through a reference by key was
@@ -2037,9 +2095,11 @@ over the result of another per-element construct.
   has none: the state under a key that does not return stays stored.
 
 The ruling names the state cells and the operation state under the
-key. A child of the body under the key is torn down (section 2.5,
-"Children of an element body"), and what becomes of its documents is
-*assumed* (section 11, question 33).
+key. A child of the body under the key that was called through
+`asInstance()` stays, by ruling, and is the same instance when the key
+returns. Another child of the body under the key is torn down (section
+2.5, "Children of an element body"), and what becomes of its documents
+is *assumed* (section 11, question 33).
 
 For an element that is a plain value stored in place, the place the
 element is read from is its position in the collection's document. A
@@ -3114,8 +3174,10 @@ to anything stored.
 ### 4.6 Child instances
 
 A `Child` is a pattern with a plan of its own: a pattern received as a
-factory value and called in the reactive tier, or any pattern a function
-body instantiates (`plan-and-label-templates.md` §3.15).
+factory value and called in the reactive tier, any pattern a function
+body instantiates, or a pattern that the author calls through
+`asInstance()` or `inSpace(...)` in the reactive tier
+(`plan-and-label-templates.md` §3.15).
 
 - **Its documents** are the kinds of section 4.1, under its own result
   cell. The parent and the child share nothing but the child's argument
@@ -3152,6 +3214,17 @@ body instantiates (`plan-and-label-templates.md` §3.15).
   another
   factory at the position is another key, so the earlier child is torn
   down and the new one has a result cell of its own.
+- **A child called through `asInstance()`** is such a child of the
+  reactive tier, also where its callee is statically resolved: the
+  callee is not compiled into the enclosing plan, and the child has
+  the documents of section 4.1 under its own result cell. Inside an
+  element body it is not torn down when its key leaves the collection,
+  and it is the same instance when the key returns (section 2.5,
+  "Children of an element body"), over an array of references, over an
+  array of plain values in place, and over the result of another
+  per-element construct. *Assumed*, with `language-subset.md` §13,
+  question 42: outside an element body the modifier has the same
+  meaning and nothing else follows from it.
 - **A child a handler requested** has a result cell named from the handling
   and the request's ordinal, or, with `.for(tag)`, from the handler's
   instance and the tag, so that every event names the same child and
@@ -3782,7 +3855,14 @@ to state stored under today's identifiers for the same declarations.
 A child instance of the reactive tier keeps today's two steps where it is
 declared directly in the pattern body: its output spot is the internal cell
 of the call's name, and its result cell is `{ resultFor: <spot> }`. Declared
-anywhere else, its result cell has the second form with type `child`.
+anywhere else, its result cell has the second form with type `child`. A
+pattern called through `asInstance()` in an element body is such a
+child: its result cell has the second form, with the call's name as
+the cause and the `element` step of each enclosing collection in
+`within`, which is the site, the collection and the element key that
+the ruling identifies it by. The identifier does not depend on whether
+the key is in the collection, so the instance is found again when the
+key returns, in each of the three cases of a source.
 
 Three consequences of the naming rule for what is stored.
 
@@ -5433,7 +5513,11 @@ computation makes:
     writes `.for(cause)`. That is assumed for an instance a `lift` or a
     `computed` makes, which is not about a per-element construct, and
     for a child of an element body whose key left, in each of the three
-    cases. The alternatives: delete a torn-down instance's documents
+    cases. By ruling a child of an element body that was called
+    through `asInstance()` is not torn down when its key leaves and is
+    the same instance when the key returns, so the assumption covers
+    a child without the modifier alone. The alternatives: delete a
+    torn-down instance's documents
     in the transaction that tears it down, which needs them to be
     listed; or, for a child of an element body, keep its documents as
     the ruling keeps the state cells of the body, so that a child made
