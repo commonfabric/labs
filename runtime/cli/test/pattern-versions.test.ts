@@ -175,7 +175,7 @@ describe("pattern-versions", () => {
       expect(request.program.files).toEqual(PROGRAM.files);
       expect(Object.hasOwn(request, "keepPrivate")).toBe(false);
       expect(request.deployedTo).toBe(
-        await deployedPieceRef("did:key:z6Mkspace", "fid1:piece"),
+        deployedPieceRef("did:key:z6Mkspace", "fid1:piece"),
       );
     });
 
@@ -367,6 +367,21 @@ describe("pattern-versions", () => {
       expect(first).toMatch(/^cf-git:[0-9a-f]{64}$/);
       expect(second).toBe(first);
       expect(other).not.toBe(first);
+    });
+
+    it("tells apart repositories whose paths differ only in case, but not hosts that do", async () => {
+      const slotFor = (remote: string) =>
+        entrySlot(join(dir, "bins.tsx"), {
+          pathKey: () => Promise.reject(new Error("unused in a checkout")),
+          checkoutOf: () => Promise.resolve({ root: dir, remote }),
+        });
+
+      expect(await slotFor("git@GitHub.com:acme/Patterns.git")).toBe(
+        await slotFor("https://github.com/acme/Patterns"),
+      );
+      expect(await slotFor("https://github.com/acme/Patterns")).not.toBe(
+        await slotFor("https://github.com/acme/patterns"),
+      );
     });
 
     it("keys the path outside a checkout with the machine's key, so the slot cannot confirm a guessed path", async () => {

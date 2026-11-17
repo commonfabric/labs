@@ -20,6 +20,8 @@ import {
 } from "@commonfabric/js-values/types";
 import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
 import type { PatternIndexFetch } from "./http-fetch.ts";
+import { encodeHex } from "@std/encoding/hex";
+import { sha256 } from "@commonfabric/content-hash";
 
 /** Own and publication-bounded inherited evidence computed by the index. */
 export interface PatternIndexSignals {
@@ -532,20 +534,30 @@ export interface PatternIndexRetractResponse {
  * index learns neither. `pieceId` is the bare `fid1:…` form; an `of:` prefix
  * is taken off.
  */
-export async function deployedPieceRef(
-  spaceDid: string,
-  pieceId: string,
-): Promise<string> {
+export function deployedPieceRef(spaceDid: string, pieceId: string): string {
   const bare = pieceId.startsWith("of:") ? pieceId.slice(3) : pieceId;
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(`${spaceDid}/${bare}`),
-  );
   return `piece:${
-    [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0"))
-      .join("")
+    encodeHex(sha256(new TextEncoder().encode(`${spaceDid}/${bare}`)))
   }`;
 }
+
+/** What {@link deployedPieceRef} answers, and nothing else is sent as one. */
+const PIECE_REF = /^piece:[0-9a-f]{64}$/;
+
+/**
+ * `ref`, checked to be a hashed piece reference, so a raw piece id never
+ * reaches the index.
+ *
+ * @throws Error naming the field for anything else.
+ */
+const pieceRef = (field: string, ref: string): string => {
+  if (!PIECE_REF.test(ref)) {
+    throw new Error(
+      `${field} must be a piece reference from deployedPieceRef, not a piece id`,
+    );
+  }
+  return ref;
+};
 
 /**
  * Who may read a version: its owner alone, any member who shares (under the
@@ -1407,7 +1419,7 @@ export class PatternIndexClient {
     });
   }
 
-  publishPattern(
+  async publishPattern(
     request: PatternIndexPublishRequest,
   ): Promise<PatternIndexPublishResponse> {
     const schemas = {
@@ -1418,7 +1430,7 @@ export class PatternIndexClient {
         ? { resultSchema: request.resultSchema }
         : {}),
     };
-    return this.#call<PatternIndexPublishResponse>("publishPattern", {
+    return await this.#call<PatternIndexPublishResponse>("publishPattern", {
       patternId: request.patternId,
       program: request.program,
       meta: {
@@ -1456,7 +1468,7 @@ export class PatternIndexClient {
       ...(request.origin !== undefined ? { origin: request.origin } : {}),
       ...(request.keepPrivate === true ? { keepPrivate: true } : {}),
       ...(request.deployedTo !== undefined
-        ? { deployedTo: request.deployedTo }
+        ? { deployedTo: pieceRef("deployedTo", request.deployedTo) }
         : {}),
     });
   }
@@ -1467,13 +1479,13 @@ export class PatternIndexClient {
    * same function as a run's outcome, which is why the two are kept apart
    * here by type.
    */
-  recordUsageEvent(
+  async recordUsageEvent(
     request: PatternIndexRecordUsageEventRequest,
   ): Promise<PatternIndexRecordEventResponse> {
-    return this.#call("recordEvent", {
+    return await this.#call("recordEvent", {
       ...(request.patternId !== undefined
         ? { patternId: request.patternId }
-        : { piece: request.piece }),
+        : { piece: pieceRef("piece", request.piece) }),
       eventType: request.eventType,
       did: this.did,
     });

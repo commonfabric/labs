@@ -285,20 +285,25 @@ export class PatternIndexStore {
   async slotKey(): Promise<Uint8Array> {
     await this.#ensureDir();
     const path = join(this.#dir, SLOT_KEY);
+    const existing = await this.#readSlotKey(path);
+    if (existing !== undefined) return existing;
+    // Written beside and linked into place, so the key appears only once
+    // whole; a process that loses the race to make it reads the winner's.
+    const temp = `${path}.${crypto.randomUUID()}.tmp`;
+    await Deno.writeFile(temp, crypto.getRandomValues(new Uint8Array(32)), {
+      createNew: true,
+      mode: 0o600,
+    });
     try {
-      return await Deno.readFile(path);
+      await Deno.link(temp, path);
     } catch (error) {
-      if (!isNotFound(error)) throw error;
-    }
-    const key = crypto.getRandomValues(new Uint8Array(32));
-    try {
-      await Deno.writeFile(path, key, { createNew: true, mode: 0o600 });
-      return key;
-    } catch (error) {
-      // Another process made it first; theirs is the one kept.
       if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
-      return await Deno.readFile(path);
+    } finally {
+      await Deno.remove(temp);
     }
+    const key = await this.#readSlotKey(path);
+    if (key === undefined) throw new Error(`${path} vanished as it was made`);
+    return key;
   }
 
   /**
@@ -389,6 +394,25 @@ export class PatternIndexStore {
     return (await this.#readPublished()).sources[resolve(entryPath)];
   }
 
+  /**
+   * The slot key at `path`, `undefined` where there is none.
+   *
+   * @throws Error for a key file that is not 32 bytes, which no version of
+   *   this store wrote.
+   */
+  async #readSlotKey(path: string): Promise<Uint8Array | undefined> {
+    let key: Uint8Array;
+    try {
+      key = await Deno.readFile(path);
+    } catch (error) {
+      if (isNotFound(error)) return undefined;
+      throw error;
+    }
+    if (key.length !== 32) {
+      throw new Error(`${path} is not a slot key; remove it to make a new one`);
+    }
+    return key;
+  }
   async #readMembership(): Promise<MembershipFile | undefined> {
     const parsed = await this.#readJson(MEMBERSHIP);
     if (parsed === undefined) return undefined;
