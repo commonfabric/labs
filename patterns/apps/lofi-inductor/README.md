@@ -32,8 +32,11 @@ agent).
    threshold, so items arriving while the model answers do not ask it again;
    they count toward the next round. The gate judges the answer at once: it
    would replace the current rules only if every rule is in the grammar (which
-   includes the backtracking check) and the set's F1 on the held-out examples is
-   strictly higher; a tie keeps the current set. No one approves rules one by
+   includes the backtracking check), there are at least `MIN_HELD_OUT` (5)
+   held-out examples, and the set's F1 on them beats the current set's by at
+   least `MIN_F1_GAIN` (two points). Below five examples one example moves F1 by
+   twenty points, so a win is mostly luck; the margin keeps a set that only ties
+   from churning the rules and what was published. No one approves rules one by
    one, but **recording the judgement takes a send** of `settleRewrite`: the
    view's button, labelled with what it does ("Apply new rules (F1 62% → 81%)"
    or "Dismiss rejected proposal", under the proposed rules), or an agent. A
