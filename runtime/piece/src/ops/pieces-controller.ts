@@ -171,6 +171,12 @@ export type PieceOpen = { reconcile: boolean; start: boolean };
 const normalizePieceOpen = (open: boolean | PieceOpen): PieceOpen =>
   typeof open === "boolean" ? { reconcile: open, start: open } : open;
 
+/** The document `cell` names, as a key: its space, scope and id. */
+const documentKeyOf = (cell: Cell<unknown>): string => {
+  const { space, scope, id } = cell.getAsNormalizedFullLink();
+  return `${space}/${scope}/${id}`;
+};
+
 // Timing stats record even while the logger is disabled, so every phase is
 // visible in the load summaries (browser worker included, where the
 // CF_CLI_TRACE_TIMINGS console path cannot run) as `piece/phase/<label>`.
@@ -242,6 +248,18 @@ export class PiecesController<T = unknown> {
   #spaceCell: Cell<SpaceCellContents>;
 
   #diagnosticConsole: RuntimeConsole;
+
+  /**
+   * The enclosing pieces this controller's opens started
+   * (`startWithInputSources()`), by document, each with the opened pieces
+   * that hold it, by document. A held piece runs while any of them does:
+   * stopping the last stops it, and stopping it directly leaves it to them.
+   * A piece opened directly is no longer held.
+   */
+  #enclosingHolds = new Map<
+    string,
+    { cell: Cell<unknown>; holders: Set<string> }
+  >();
 
   /**
    * Promise resolved when the controller is ready.
@@ -1110,18 +1128,17 @@ export class PiecesController<T = unknown> {
     }
     if (start && !viewScoped) {
       // start() handles pattern loading and running. It's idempotent - no
-      // effect if already running. The pieces the piece's inputs come from
-      // start first, each following its origin where this open follows the
+      // effect if already running. The pieces that enclose the piece start
+      // first, each following its origin where this open follows the
       // piece's, so that a nested instance opened on its own runs against
       // what its enclosing instance derives.
       await timePiecePhase(
         "get.runtime.start",
         () =>
-          startWithInputSources(
-            this.runtime,
+          this.#startOpened(
             piece,
             () => this.runtime.start(piece),
-            { followOrigins: reconcile },
+            reconcile,
           ),
       );
       // A start that was in flight before the pointer moved may have
@@ -2030,12 +2047,12 @@ export class PiecesController<T = unknown> {
    * retained root watch demands server execution, while mounted renderers
    * own local graph registration.
    *
-   * The pieces the piece's inputs come from start first
+   * The pieces that enclose the piece start first
    * (`startWithInputSources()`). With `awaitSetupCommit`, the start waits for
    * the commit of the setup writes of the graph it instantiates, and this
    * rejects when that commit failed, which leaves the piece stopped.
    * Otherwise such a failure reaches only the runtime's log; see
-   * `Runner.startWithCommit()`. A piece one of those sources sets up as its
+   * `Runner.startWithCommit()`. A piece an enclosing piece sets up as its
    * child is running when the start begins, so the start installs nothing
    * and waits for nothing, as for any piece already running.
    */
@@ -2060,13 +2077,13 @@ export class PiecesController<T = unknown> {
     await timePiecePhase(
       "startPiece.runtime.start",
       () =>
-        startWithInputSources(
-          this.runtime,
+        this.#startOpened(
           piece,
           () =>
             options.awaitSetupCommit
               ? this.runtime.startWithCommit(piece)
               : this.runtime.start(piece),
+          false,
         ),
     );
     await timePiecePhase(
@@ -2079,7 +2096,10 @@ export class PiecesController<T = unknown> {
   /**
    * Stop a running piece (no-op if not running). `scope` completes an id into
    * a document address and defaults to the space, as it does for
-   * {@link getPieceCell}; a `Cell` argument already carries one.
+   * {@link getPieceCell}; a `Cell` argument already carries one. A piece an
+   * open of a piece it encloses started keeps running while that opened piece
+   * does, and the enclosing pieces only this piece's open started stop with
+   * it.
    */
   async stopPiece<T = unknown>(
     pieceOrId: string | Cell<T>,
@@ -2088,8 +2108,45 @@ export class PiecesController<T = unknown> {
     const piece = typeof pieceOrId === "string"
       ? await this.getPieceCell<T>(pieceOrId, false, undefined, scope)
       : pieceOrId;
-    this.runtime.runner.stop(piece);
+    const key = documentKeyOf(piece);
+    if ((this.#enclosingHolds.get(key)?.holders.size ?? 0) === 0) {
+      this.runtime.runner.stop(piece);
+    }
+    for (const [held, hold] of this.#enclosingHolds) {
+      if (!hold.holders.delete(key) || hold.holders.size > 0) continue;
+      this.#enclosingHolds.delete(held);
+      this.runtime.runner.stop(hold.cell);
+    }
     await this.runtime.idle();
+  }
+
+  /**
+   * Helper for the starts of a piece this controller opens, which starts
+   * `piece` with `start` after the pieces that enclose it
+   * (`startWithInputSources()`), following their origins with
+   * `followOrigins`, and records each enclosing piece the open started as one
+   * `piece` holds (`#enclosingHolds`).
+   */
+  #startOpened(
+    piece: Cell<unknown>,
+    start: () => Promise<boolean>,
+    followOrigins: boolean,
+  ): Promise<boolean> {
+    const holder = documentKeyOf(piece);
+    this.#enclosingHolds.delete(holder);
+    return startWithInputSources(this.runtime, piece, start, {
+      followOrigins,
+      onSourceStarted: (root) => {
+        const cell = this.runtime.getCellFromLink({ ...root, path: [] });
+        const key = documentKeyOf(cell);
+        let hold = this.#enclosingHolds.get(key);
+        if (hold === undefined) {
+          hold = { cell, holders: new Set() };
+          this.#enclosingHolds.set(key, hold);
+        }
+        hold.holders.add(holder);
+      },
+    });
   }
 
   /**
@@ -2280,10 +2337,10 @@ export class PiecesController<T = unknown> {
     }
 
     if (targetIsPiece && start) {
-      await startWithInputSources(
-        this.runtime,
+      await this.#startOpened(
         targetCell,
         () => this.runtime.start(targetCell),
+        false,
       );
       await this.getResult(targetCell).pull();
     }

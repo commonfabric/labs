@@ -278,17 +278,22 @@ client under server execution runs the handler only as its speculative
 echo, which the served run replaces, so its auto-start starts the nested
 instance alone. A start that names a piece on its own, as a client's open,
 a `cf` command's and the agent harness's start of a piece do, starts the
-pieces its inputs come from the same way wherever the runtime's run of a
-handler counts (`startWithInputSources()` in `ensure-piece-running.ts`):
-once a nested instance runs, no event starts its enclosing instance, so a
-nested instance opened alone would run every later event's handler against
-inputs nothing in the runtime derives. An open that follows the opened
-piece's origin follows each of those pieces' origins first. The opened piece
+pieces that ENCLOSE it first wherever the runtime's run of a handler counts
+(`startWithInputSources()` in `ensure-piece-running.ts`), with the same walk
+restricted to them (`EnsurePieceOptions.enclosingSourcesOnly`): once a
+nested instance runs, no event starts its enclosing instance, so a nested
+instance opened alone would run every later event's handler against inputs
+nothing in the runtime derives. A piece whose output the opened piece's
+argument links to, as `cf piece link` wires one, is not started by the open;
+an event's auto-load starts it, as before. An open that follows the opened
+piece's origin follows each enclosing piece's origin first. The opened piece
 is started in its own right after them, so it keeps running when one of them
-stops. That start is best effort: a source that cannot start, and an
-argument whose links cannot be read, leave the opened piece to start alone,
-with a warning naming both, so an open fails only where the piece's own
-start does. A serving runtime's demand start passes no
+stops, and a client's controller stops the enclosing pieces its open started
+once no piece it opened holds them. That start is best effort: an enclosing
+piece that cannot start, one whose origin's follow cannot be settled, and an
+argument whose links cannot be read leave the opened piece to start alone,
+with a warning naming it, so an open fails only where the piece's own start
+does. A serving runtime's demand start passes no
 `startInputSources`: the demand a session hands it reaches the documents
 upstream of what the session watches, the enclosing instance's among them,
 so the demand pass starts that instance itself.

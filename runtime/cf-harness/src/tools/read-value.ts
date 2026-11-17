@@ -280,8 +280,8 @@ export const readValueTool: HarnessToolDefinition<
             `${entry.token} holds a value its piece derives, and the piece has not run; running it is a side effect this run is not authorized for. A run under a direct command reads it, which runs the piece`,
           );
         }
-        // The pieces its inputs come from start first, as they do for an
-        // open, so a nested instance derives from what they derive now.
+        // The pieces that enclose it start first, as they do for an open,
+        // so a nested instance derives from what they derive now.
         await startWithInputSources(
           runtime,
           piece,
