@@ -125,13 +125,19 @@ Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
   the top-level alternatives together, since `RegExp.test` tries each of them at
   every position. In practice that is one unbounded quantifier with a few small
   choices beside it: `invoice.*due` passes, `.*.*!` does not (seconds on a
-  thousand characters, measured). A rule tests only a field's first
-  `MAX_TESTED_LENGTH` (1000) code units, which turns that count into a bound on
-  time: about fifteen milliseconds per rule and field at worst, measured. Every
-  rule of a set runs on every item, so a set's patterns together may cost at
-  most `MAX_SET_BACKTRACK_COST`, four patterns' worth. The pool applies the same
-  grammar and set budget to every contribution, and takes at most `MAX_RULES`
-  (20) rules from one.
+  thousand characters, measured). Three things the count sees through, so
+  ordinary rules fit (`order\s*#?\s*\d+`, `total:?\s*\$\d+`): a quantifier over
+  one character set whose characters cannot start what must follow, or that ends
+  the pattern, scans its run once rather than giving characters back; an
+  alternation whose branches start on different characters sends only one on;
+  and a leading character that nothing after it can consume gates the start
+  positions, so their scans do not overlap. The rewrite prompt states the limit.
+  A rule tests only a field's first `MAX_TESTED_LENGTH` (1000) code units, which
+  turns that count into a bound on time: about fifteen milliseconds per rule and
+  field at worst, measured. Every rule of a set runs on every item, so a set's
+  patterns together may cost at most `MAX_SET_BACKTRACK_COST`, four patterns'
+  worth. The pool applies the same grammar and set budget to every contribution,
+  and takes at most `MAX_RULES` (20) rules from one.
 - A rule set says YES when a YES rule matches and no NO rule does.
 - Scoring all labelled held-out items, not only surprises, is what lets the gate
   see a proposal that fixes the surprises by breaking items the current rules

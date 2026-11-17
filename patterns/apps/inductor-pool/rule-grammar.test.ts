@@ -172,10 +172,31 @@ const OUT_OF_GRAMMAR: Array<[string, RegExp]> = [
   [alternatives("\\s{0,88}\\s{0,88}", 16), /backtrack too long/],
   [alternatives("\\s{0,19}\\s{0,19}\\s{0,19}", 11), /backtrack too long/],
   [alternatives(".*", 60), /backtrack too long/],
+  // An unbounded quantifier followed by an optional item and another of the
+  // same characters is ambiguous on a run of them: a quarter of a second on
+  // a thousand spaces. A leading character only gates the starts when
+  // nothing after it can consume that character too.
+  ["\\s*#?\\s*\\d+", /backtrack too long/],
+  ["x.*.*!", /backtrack too long/],
+  ["(?:a|ab)\\s*\\s*x", /backtrack too long/],
   // Exponential backtracking, as isRegexSafe refuses it
   ["(a|aa)+", /exponentially/],
   ["(a+)+", /exponentially/],
   ["(?:ab?){3}", /exponentially/],
+];
+
+/**
+ * Ordinary rules the budget lets through only because it sees how they
+ * cannot backtrack: a quantifier whose characters cannot start what follows
+ * never gives any back usefully, so it scans once; an alternation whose
+ * branches start on different characters sends only one on; a leading
+ * character nothing after it consumes gates the start positions.
+ */
+const ORDINARY = [
+  "order\\s*#?\\s*\\d+",
+  "total:?\\s*\\$\\d+",
+  "\\d+\\s*(?:items?|pcs)",
+  "\\b(?:invoice|receipt)\\s+#?\\d+",
 ];
 
 /** Patterns the backtracking budget lets through. */
@@ -341,6 +362,10 @@ describe("canonicalizePattern", () => {
     // A repeat of a fixed count is no choice, so a group holding one may
     // repeat, which isRegexSafe, reading text, refuses
     expect(canon("\\d{1,3}(?:,\\d{3})*")).toBe("\\d{1,3}(?:,\\d{3})*");
+  });
+
+  it("accepts ordinary rules that cannot backtrack far", () => {
+    for (const pattern of ORDINARY) expect(canon(pattern)).toBe(pattern);
   });
 
   it("prices a pattern as the sum of its alternatives", () => {

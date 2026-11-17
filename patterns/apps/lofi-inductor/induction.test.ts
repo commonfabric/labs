@@ -20,6 +20,7 @@ import {
   MIN_HELD_OUT,
   newSurprises,
   poolOffer,
+  REWRITE_SYSTEM,
   rewriteRequest,
   rewriteStatus,
   sameGoal,
@@ -555,6 +556,11 @@ describe("settle", () => {
 });
 
 describe("prompts and text", () => {
+  it("tells the rewrite model the backtracking limit", () => {
+    expect(REWRITE_SYSTEM).toContain("unbounded quantifier");
+    expect(REWRITE_SYSTEM).toContain("\\s*\\$");
+  });
+
   it("asks the hi-fi model nothing without a goal", () => {
     expect(buildHifiPrompt("", item("a", "x"))).toBe("");
     expect(buildHifiPrompt("Is it a bill?", item("a", "x"))).toContain(

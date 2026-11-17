@@ -614,25 +614,207 @@ function holdsChoice(node: Node): boolean {
   }
 }
 
+/** The code units a set matches. */
+function membersOf(node: { negated: boolean; ranges: Ranges }): Ranges {
+  return node.negated ? complement(node.ranges) : node.ranges;
+}
+
+/** Whether two sorted range lists share a code unit. */
+function intersects(a: Ranges, b: Ranges): boolean {
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i][1] < b[j][0]) i++;
+    else if (b[j][1] < a[i][0]) j++;
+    else return true;
+  }
+  return false;
+}
+
+/** Whether `node` can match without consuming anything. */
+function nullable(node: Node): boolean {
+  switch (node.kind) {
+    case "set":
+      return false;
+    case "assert":
+      return true;
+    case "seq":
+      return node.items.every(nullable);
+    case "alt":
+      return node.branches.some(nullable);
+    case "repeat":
+      return node.min === 0 || nullable(node.body);
+  }
+}
+
+/** The code units `items`, in sequence, can consume first. */
+function firstOf(items: readonly Node[]): Ranges {
+  const out: Ranges = [];
+  for (const item of items) {
+    for (const range of firstSet(item)) out.push(range);
+    if (!nullable(item)) break;
+  }
+  return normalizeRanges(out);
+}
+
+function firstSet(node: Node): Ranges {
+  switch (node.kind) {
+    case "set":
+      return membersOf(node);
+    case "assert":
+      return [];
+    case "seq":
+      return firstOf(node.items);
+    case "alt":
+      return normalizeRanges(node.branches.flatMap(firstSet));
+    case "repeat":
+      return firstSet(node.body);
+  }
+}
+
+/** Every code unit `node` can consume anywhere. */
+function consumable(node: Node): Ranges {
+  switch (node.kind) {
+    case "set":
+      return membersOf(node);
+    case "assert":
+      return [];
+    case "seq":
+      return normalizeRanges(node.items.flatMap(consumable));
+    case "alt":
+      return normalizeRanges(node.branches.flatMap(consumable));
+    case "repeat":
+      return consumable(node.body);
+  }
+}
+
 /**
- * An upper bound on how many ways `node` can match one span, with an
- * unbounded quantifier counted as `MAX_TESTED_LENGTH` ways: a sequence
+ * Whether no two of `branches` can start on the same code unit, and each must
+ * consume one: at any position, at most one of them gets past its first.
+ */
+function exclusive(branches: readonly Node[]): boolean {
+  if (branches.some(nullable)) return false;
+  const firsts = branches.map(firstSet);
+  return firsts.every((a, i) =>
+    firsts.every((b, j) => j <= i || !intersects(a, b))
+  );
+}
+
+/**
+ * The paths `node` takes at a position where it cannot consume the next code
+ * unit: how many die there (`fails`), and how many pass it by matching
+ * nothing (`passes`).
+ */
+function stuckPaths(node: Node): { fails: number; passes: number } {
+  switch (node.kind) {
+    case "set":
+      return { fails: 1, passes: 0 };
+    case "assert":
+      return { fails: 1, passes: 1 };
+    case "seq":
+      return node.items.reduce(
+        (acc, item) => {
+          const next = stuckPaths(item);
+          return {
+            fails: acc.fails + acc.passes * next.fails,
+            passes: acc.passes * next.passes,
+          };
+        },
+        { fails: 0, passes: 1 },
+      );
+    case "alt":
+      return node.branches.map(stuckPaths).reduce(
+        (acc, next) => ({
+          fails: acc.fails + next.fails,
+          passes: acc.passes + next.passes,
+        }),
+        { fails: 0, passes: 0 },
+      );
+    case "repeat": {
+      // The body holds no choice when it may repeat (else it is refused), so
+      // one attempt at a further iteration, or none
+      const body = stuckPaths(node.body);
+      return node.min === 0
+        ? { fails: body.fails, passes: 1 + body.passes }
+        : body;
+    }
+  }
+}
+
+/**
+ * The attempts `items` make at a position where none of them can consume the
+ * next code unit, each dying there or passing them all by matching nothing.
+ */
+function leadOf(items: readonly Node[]): number {
+  const { fails, passes } = stuckPaths({ kind: "seq", items: [...items] });
+  return fails + passes;
+}
+
+/**
+ * An upper bound on how many ways `node` can match one span of `span` code
+ * units, with an unbounded quantifier counted as `span` ways: a sequence
  * multiplies its items' ways, an alternation adds its branches', and a
- * quantifier adds its body's ways at each count it allows. Throws a grammar
- * error on a group that holds a choice repeated more than once (`(a|aa)+`,
- * `(a+)+`, `(?:ab?){3}`), which backtracks exponentially, as
+ * quantifier adds its body's ways at each count it allows. `tail` says
+ * nothing follows `node` in the pattern.
+ *
+ * One exception makes ordinary rules fit: an unbounded quantifier of one
+ * character set whose set shares no code unit with what must come next
+ * (`\s*\$`, `\d+\s*items`), or that ends the pattern, behaves
+ * possessively. Giving back a character can never let what follows match,
+ * since what follows would have to start on a character of the set, so it
+ * scans its run once and what follows is tried in full once: `span` attempts
+ * of what follows's lead, plus what follows, rather than `span` times what
+ * follows.
+ *
+ * Likewise, an alternation in a sequence whose branches each must consume and
+ * no two can start on the same character (`(?:invoice|receipt)`) sends at
+ * most one branch on to what follows, so it costs its dearest branch times
+ * what follows, plus one attempt at each other branch, rather than the sum.
+ *
+ * Throws a grammar error on a group that holds a choice repeated more than
+ * once (`(a|aa)+`, `(a+)+`, `(?:ab?){3}`), which backtracks exponentially, as
  * `isRegexSafe` in the self-improving classifier refuses it.
  */
-function backtrackCost(node: Node): number {
+function backtrackCost(node: Node, span: number, tail: boolean): number {
   switch (node.kind) {
     case "set":
     case "assert":
       return 1;
-    case "seq":
-      return node.items.reduce((ways, item) => ways * backtrackCost(item), 1);
+    case "seq": {
+      let rest = 1;
+      for (let i = node.items.length - 1; i >= 0; i--) {
+        const item = node.items[i];
+        const after = node.items.slice(i + 1);
+        const last = after.length === 0;
+        if (
+          item.kind === "repeat" && item.max === null &&
+          item.body.kind === "set" &&
+          (last ? tail : !after.every(nullable) &&
+            !intersects(membersOf(item.body), firstOf(after)))
+        ) {
+          rest = span * leadOf(after) + rest;
+        } else if (item.kind === "alt" && exclusive(item.branches)) {
+          // At most one branch gets past its first code unit, so only one
+          // goes on to what follows; the others die at once
+          const ways = item.branches.reduce(
+            (most, branch) =>
+              Math.max(most, backtrackCost(branch, span, tail && last)),
+            0,
+          );
+          const dying = item.branches.reduce(
+            (sum, branch) => sum + leadOf([branch]),
+            0,
+          );
+          rest = ways * rest + dying;
+        } else {
+          rest *= backtrackCost(item, span, tail && last);
+        }
+      }
+      return rest;
+    }
     case "alt":
       return node.branches.reduce(
-        (ways, branch) => ways + backtrackCost(branch),
+        (ways, branch) => ways + backtrackCost(branch, span, tail),
         0,
       );
     case "repeat": {
@@ -641,12 +823,48 @@ function backtrackCost(node: Node): number {
           "a repeated group holding a quantifier or an alternation could backtrack exponentially",
         );
       }
-      if (node.max === null) return MAX_TESTED_LENGTH;
+      if (node.max === null) return span;
       // With no choice inside, the body matches one way at each count
-      const body = backtrackCost(node.body);
+      const body = backtrackCost(node.body, span, false);
       return body === 1 ? node.max - node.min + 1 : 1 + body;
     }
   }
+}
+
+/**
+ * Whether `alternative` is gated: it starts, after any assertions, with one
+ * character set that nothing after it can consume (`order\s*#?\s*\d+`
+ * starts with `o`). A start position where it does more than fail at once
+ * holds a character of that set, and what it consumes from there stops
+ * before the next such character, so the spans its starts scan do not
+ * overlap: together they cost about what one start over the whole text
+ * would, not that times the text's length.
+ */
+function gated(alternative: Node): boolean {
+  const items = alternative.kind === "seq" ? alternative.items : [alternative];
+  const first = items.findIndex((item) => item.kind !== "assert");
+  const gate = items[first];
+  if (gate === undefined || gate.kind !== "set") return false;
+  const rest = normalizeRanges(items.slice(first + 1).flatMap(consumable));
+  return !intersects(membersOf(gate), rest);
+}
+
+/**
+ * The pattern's backtracking cost in the budget's units, ways per start
+ * position: the sum over its top-level alternatives, since `RegExp.test`
+ * tries every one at every position. A gated alternative's starts scan
+ * disjoint spans, so its cost is its ways over the whole tested length
+ * shared among the positions, plus one way's worth at each.
+ */
+function patternCostOf(tree: Node): number {
+  const alternatives = tree.kind === "alt" ? tree.branches : [tree];
+  return alternatives.reduce((sum, alternative) => {
+    const whole = backtrackCost(alternative, MAX_TESTED_LENGTH, true);
+    return sum +
+      (gated(alternative)
+        ? whole / MAX_TESTED_LENGTH + backtrackCost(alternative, 1, true)
+        : whole);
+  }, 0);
 }
 
 /**
@@ -656,7 +874,7 @@ function backtrackCost(node: Node): number {
  * quarter of a second on a thousand spaces.
  */
 function checkBacktracking(tree: Node): void {
-  if (backtrackCost(tree) > MAX_BACKTRACK_COST) {
+  if (patternCostOf(tree) > MAX_BACKTRACK_COST) {
     fail(
       "the pattern could backtrack too long: it may hold one unbounded " +
         "quantifier (*, + or {n,}), with few other choices beside it, " +
@@ -671,7 +889,7 @@ function checkBacktracking(tree: Node): void {
  */
 export function patternCost(pattern: string): number {
   try {
-    return backtrackCost(simplify(parse(pattern)));
+    return patternCostOf(simplify(parse(pattern)));
   } catch (e) {
     if (e instanceof Error && e.name === GRAMMAR_ERROR) return Infinity;
     throw e;

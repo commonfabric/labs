@@ -397,6 +397,7 @@ Each rule has:
 - predicts: true if a match means YES, false if a match means NO even when a YES rule matches
 An item is YES when some YES rule matches and no NO rule matches.
 Use only plain regular expressions: no backreferences, no lookahead or lookbehind, no named groups, no nested repetition such as (a+)+.
+Keep every pattern cheap to run, or it is refused: at most one unbounded quantifier (*, + or {n,}) in a pattern, counting all its alternatives, unless the character after the quantifier can never be one it repeats (as in \\s*\\$ or \\d+\\s*items); never put quantifiers over the same characters side by side (as in \\s*\\s? or .*.*); and keep a whole rule set to a few such quantifiers.
 Never put personal details (names, addresses, account numbers) in a pattern; rules must generalise.
 Also give a one-sentence reasoning.`;
 
