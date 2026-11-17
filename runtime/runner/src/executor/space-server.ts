@@ -6712,13 +6712,15 @@ export class SpaceServer implements TransactionSealDestination {
    * can reach a nested instance's documents without reaching any of its
    * enclosing instance's that would start it, and a nested instance running
    * alone runs its handlers against inputs nothing in the runtime derives.
-   * The owning piece then runs as the child the outermost enclosing piece's
-   * graph sets up, and lives as long as that piece does, where an open starts
-   * it in its own right. An enclosing piece that does not start holds the
-   * owning piece back with it, its verdict standing for the owning piece's,
-   * and an error starting it or reading the links that name it is the owning
-   * piece's error (`EnsurePieceOptions.sourcesRequired`), so the pass retries,
-   * parks and reports it as it does the owning piece's own. */
+   * A nested node of an enclosing piece's graph then runs as that graph's
+   * child, where an open starts it in its own right; an instance a builtin
+   * builds starts in its own right after the piece that built it. An enclosing
+   * piece that does not start holds the owning piece back with it, its verdict
+   * standing for the owning piece's, and an error starting it or reading the
+   * links that name it is the owning piece's error
+   * (`EnsurePieceOptions.sourcesRequired`), so the pass retries, parks and
+   * reports it as it does the owning piece's own. The roots the walk finds are
+   * reported through `onSourceRoot`. */
   async #attemptStructureLoad(
     runtime: Runtime,
     root: { id: string; scope?: string },

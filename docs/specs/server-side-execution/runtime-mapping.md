@@ -303,23 +303,30 @@ piece from, as when the session reads through a link that names the nested
 instance's result and never opens the enclosing instance, and the nested
 instance would then run alone. Unlike an open's, the walk there is not best
 effort (`EnsurePieceOptions.sourcesRequired`): an enclosing piece that does not
-start holds the demanded root back with it, as an enclosing piece owed its
-origin's follow does (serving-loop.md §3e), and an error starting it or reading
-the links that name it is the demanded root's error, so the demand pass
-retries, parks and reports it as it does a piece of its own. An enclosing piece
-that can never start leaves the demanded root pending for good, with the stuck
-warning a root deferred that long gets, though an event to one of the nested
-instance's streams still starts it alone (`startEventPiece()`). Every key whose
-owning piece runs nested is indexed under each piece enclosing it, as the
-runner records them (`Runner.enclosingPiecesOf()`): the runs of an enclosing
-piece, and of every piece nested in it, are then supplied that key's demanders,
-as a demand of the enclosing piece itself would supply them, each computing
-only the demanders' own instances; and a failed start commit of an enclosing
-piece parks the key. A demand-started nested instance runs as the child its
-outermost enclosing piece's graph sets up and lives as long as that piece does,
-where an opened one is started in its own right; each enclosing piece runs for
-the rest of the tenure. Where the walk finds no enclosing piece, as for a child
-a handler made, the demanded instance starts alone, as it does for an open.
+start, or a link whose `result` chain the walk cannot follow, holds the
+demanded root back, as an enclosing piece owed its origin's follow does
+(serving-loop.md §3e), and an error starting that piece or reading the links
+that name it is the demanded root's error, so the demand pass retries, parks
+and reports it as it does a piece of its own. An enclosing piece that can never
+start leaves the demanded root pending for good, with the stuck warning a root
+deferred that long gets. The pieces the walk finds enclosing a piece are
+recorded for the tenure (`EnsurePieceOptions.onSourceRoot`), and every key
+resolving to that piece is indexed under them, whenever it arrives: the runs of
+an enclosing piece, and of every piece nested in it, are supplied that key's
+demanders, as a demand of the enclosing piece itself would supply them, each
+computing only the demanders' own instances, a demander arriving later re-arms
+them, and a failed start commit of an enclosing piece parks the key. A nested
+node the enclosing piece's graph sets up runs as that graph's child and lives
+as long as that piece does, where an opened one is started in its own right; an
+instance a builtin such as `map` builds starts in its own right after the piece
+that built it; each enclosing piece runs for the rest of the tenure. Two routes
+still start a nested instance alone on a serving runtime: a demand of a piece
+the walk finds no enclosing piece for, as for a child a handler made, and an
+event's auto-load (`startEventPiece()`), which is best effort, so an event to a
+nested instance whose enclosing piece cannot start runs its handler alone. A
+key whose owning piece started some other way than through a walk, by an event
+or as the child of an enclosing piece demanded itself, is indexed under
+nothing.
 The derivation path needs no analog: a commit dirtying docs read by
 unmaterialized nodes leaves them dirty-unmaterialized until a
 value-granular client pull (a subscription) demands them and their
