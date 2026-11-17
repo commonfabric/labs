@@ -206,13 +206,13 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       if (status.status !== "ready") return;
       const next = settle(
         rules.get(),
-        history.get(),
+        history.get().length + 1,
         status.judgement,
         newSurprises(rows, history.get()),
         Date.now(),
       );
-      rules.set(next.rules);
-      history.set(next.history);
+      if (status.judgement.accepted) rules.set(next.rules);
+      history.push(next.entry);
     });
 
     const submitItem = action((event: SubmittedItem) => {

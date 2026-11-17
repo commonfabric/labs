@@ -350,9 +350,9 @@ describe("settle", () => {
   }, heldOutExamples(HELD_OUT_ROWS));
 
   it("adopts an accepted set and records the round", () => {
-    const next = settle(current, [], judgement, ["mail-1"], 1000);
+    const next = settle(current, 1, judgement, ["mail-1"], 1000);
     expect(next.rules).toEqual(judgement.rules);
-    expect(next.history).toEqual([{
+    expect(next.entry).toEqual({
       round: 1,
       accepted: true,
       reason: judgement.reason,
@@ -363,19 +363,21 @@ describe("settle", () => {
       heldOut: 4,
       answered: ["mail-1"],
       decidedAt: 1000,
-    }]);
+    });
   });
 
   it("keeps the current set when the round was rejected", () => {
-    const next = settle(
-      current,
-      [],
-      { ...judgement, accepted: false },
-      [],
-      0,
-    );
+    const next = settle(current, 2, { ...judgement, accepted: false }, [], 0);
     expect(next.rules).toEqual(current);
-    expect(next.history[0].accepted).toBe(false);
+    expect(next.entry.accepted).toBe(false);
+    expect(next.entry.round).toBe(2);
+  });
+
+  it("copies what it records rather than sharing it", () => {
+    const next = settle(current, 1, judgement, ["mail-1"], 0);
+    expect(next.entry.proposed[0]).not.toBe(judgement.rules[0]);
+    expect(next.entry.refusals).not.toBe(judgement.refusals);
+    expect(next.rules[0]).not.toBe(next.entry.proposed[0]);
   });
 });
 

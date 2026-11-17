@@ -520,33 +520,45 @@ export function rewriteStatus(
   };
 }
 
+/** A plain copy of `rule`, detached from any cell it was read from. */
+function copyRule(rule: CanonicalRule): CanonicalRule {
+  return {
+    field: rule.field,
+    pattern: rule.pattern,
+    predicts: rule.predicts,
+    key: rule.key,
+  };
+}
+
 /**
- * The rules and history after recording `judgement`: the history gains an
- * entry naming the surprises it answered, and the rules become the proposed
- * set only when it was accepted.
+ * What recording `judgement` as round `round` writes: the history entry,
+ * naming the surprises it answered, and the rule set that follows it, which is
+ * the proposed set only when it was accepted. Everything is a plain copy: the
+ * judgement is read from a computed that goes idle once the round is recorded,
+ * so a stored reference into it would come to read as nothing.
  */
 export function settle(
   rules: readonly CanonicalRule[],
-  history: readonly HistoryEntry[],
+  round: number,
   judgement: Judgement,
   answered: readonly string[],
   decidedAt: number,
-): { rules: CanonicalRule[]; history: HistoryEntry[] } {
-  const entry: HistoryEntry = {
-    round: history.length + 1,
-    accepted: judgement.accepted,
-    reason: judgement.reason,
-    proposed: judgement.rules,
-    refusals: judgement.refusals,
-    currentF1: judgement.currentF1,
-    proposedF1: judgement.proposedF1,
-    heldOut: judgement.heldOut,
-    answered: [...answered],
-    decidedAt,
-  };
+): { rules: CanonicalRule[]; entry: HistoryEntry } {
+  const proposed = judgement.rules.map(copyRule);
   return {
-    rules: judgement.accepted ? [...judgement.rules] : [...rules],
-    history: [...history, entry],
+    rules: judgement.accepted ? proposed.map(copyRule) : rules.map(copyRule),
+    entry: {
+      round,
+      accepted: judgement.accepted,
+      reason: judgement.reason,
+      proposed,
+      refusals: [...judgement.refusals],
+      currentF1: judgement.currentF1,
+      proposedF1: judgement.proposedF1,
+      heldOut: judgement.heldOut,
+      answered: [...answered],
+      decidedAt,
+    },
   };
 }
 
