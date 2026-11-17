@@ -1072,6 +1072,44 @@ procedure's step 4. Its two deciding sites, the recording in
   link, into a field the granting module protects after the failed staging is
   refused the grant, since that runtime registers it only from the records, and
   is granted nothing more.
-- Records an earlier transition stamped keep their clause, and the setups
-  that read them keep refusing, until a separate repair. A write-back still
-  re-stamps the root of a record that already carries a clause.
+- Records an earlier transition stamped keep their clause until the load
+  ahead of a setup repairs them (`module-loading.md`, "Repairing a stamped
+  record"). The repair erases a stamped compiled record and rewrites a stamped
+  source record to the value the compile-cache writer stores for its identity,
+  which lowers a stored label at strict ahead of the specification's ruling
+  (commonfabric/specs#103, §18.6.2.1). What §18.6.4 asks a repairing runtime
+  to record:
+  - When it runs: in `PatternManager.prepareSourceClosureVerification()`,
+    ahead of a setup that verifies the closure, once a check of the closure's
+    labels finds a stamp. A child a pattern's own graph places in another
+    space is created without that preparation, and is not repaired first
+    (`module-loading.md`).
+  - The identity it writes under: the `compile-cache-repair` builtin, through
+    `writeRepairedCompileCacheRecord()`, which refuses any other identity and
+    any key but a compile-cache record's.
+  - How the attestation at a delegation list is kept to lists the
+    compile-cache writer wrote: the writer mints it only on a list it writes
+    in an attempt of its own, and a write by another identity strips it at
+    the path it reaches, before or after the writer's write
+    (`module-loading.md`, "Per-space containment"). That cannot be
+    established for records a runtime before #9868 wrote, which staged the
+    lists in the update's own transaction. Nor does it hold for a write at
+    the `disabled` rung, which leaves the attestation over a list another
+    writer chose; no shipped host runs `disabled`.
+  - The four residuals it releases: the attested delegation list, carried
+    unlabeled; the cache-root edge set of the entry's record, kept as a set
+    of verified members; existence, since a reader not cleared for the
+    removed clauses learns that the record was once written under a label;
+    and program text a writer chose under a label below strict, released as
+    the canonical value of the record's key.
+
+  A record the repair refuses keeps its clause, and a setup that reads it
+  keeps refusing. A write-back still re-stamps the root of a record that
+  already carries a clause, which a later load repairs again. A closure whose
+  repair lost a race, or whose commit was refused for want of write access, is
+  tried again at its next load; one the repair refused is not tried again in
+  that session. A stamped compiled record of a
+  `fabric:` dependency is not repaired, and a write-back of its importer that
+  reads it re-stamps the importer's compiled record, which the next load
+  erases again; a setup of the importer still commits, since it reads source
+  records only.

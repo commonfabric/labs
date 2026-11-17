@@ -1218,6 +1218,15 @@ export class SourceReconciler {
         ]);
         return undefined;
       }
+      // A piece created from this source records a creation revision, which
+      // reads the closure in the creating transaction: a wish's, which cannot
+      // wait. So the closure is repaired here, ahead of it, when an earlier
+      // runtime left a flow stamp on it.
+      await this.#runtime.patternManager.prepareSourceClosureVerification(
+        space,
+        [advertised],
+      );
+      signal.throwIfAborted();
       // A pattern compiled across a registry clear carries references the
       // clear retired, so it is answered but not kept.
       if (schemaRegistryEpoch() === epoch) {

@@ -38,6 +38,13 @@ import { isObjectOrArray, isPlainObject } from "@commonfabric/js-values/types";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import {
+  COMPILE_CACHE_COMPILED_KEY_PREFIX,
+  COMPILE_CACHE_REPAIR_WRITER,
+  COMPILE_CACHE_SOURCE_KEY_PREFIX,
+} from "../compilation-cache/writer-identity.ts";
+import { createRef } from "../create-ref.ts";
+import { toURI } from "../uri-utils.ts";
+import {
   type CfcConfidentialityRelease,
   type CfcConfidentialityReleaseByIntent,
   type CfcConfidentialityReleaseByIntentInput,
@@ -2873,6 +2880,59 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return { space: prepared.space, id: prepared.id };
   }
 
+  writeRepairedCompileCacheRecord(
+    target: { space: MemorySpace; key: string },
+    replacement: { value: FabricValue; cfc: CfcMetadata } | undefined,
+  ): void {
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/103
+    this.#assertWritable("writeRepairedCompileCacheRecord()");
+    // The repair writes a stored label the commit boundary did not derive, so
+    // it takes the repair's own builtin identity, as a release takes the
+    // release writer's. Pattern and handler code runs under a `verified`
+    // identity or none, and is refused.
+    const identity = this.#cfcState.implementationIdentity;
+    if (
+      identity?.kind !== "builtin" ||
+      identity.builtinId !== COMPILE_CACHE_REPAIR_WRITER
+    ) {
+      throw new Error(
+        "compile-cache repair: `writeRepairedCompileCacheRecord()` requires " +
+          `the \`${COMPILE_CACHE_REPAIR_WRITER}\` builtin implementation ` +
+          "identity",
+      );
+    }
+    // The document is the one a compile-cache record's key names, and no
+    // other: the repair writes value and label over whatever it names.
+    if (
+      !target.key.startsWith(COMPILE_CACHE_SOURCE_KEY_PREFIX) &&
+      !target.key.startsWith(COMPILE_CACHE_COMPILED_KEY_PREFIX)
+    ) {
+      throw new Error(
+        `compile-cache repair: ${target.key} is not a compile-cache record key`,
+      );
+    }
+    const record = {
+      space: target.space,
+      id: toURI(createRef({}, target.key)),
+      scope: normalizeCellScope(undefined),
+    };
+    const address = { ...record, type: "application/json" as const };
+    // Deliberately NOT marked CFC-relevant, like a release: the caller's
+    // verification is the whole of the decision, and the record's new label
+    // is the one it computed, which a preparation would derive again from
+    // the label the repair removes.
+    this.#runPrivilegedSystemWrite(() => {
+      if (replacement === undefined) {
+        this.writeOrThrow({ ...address, path: [] }, undefined, {
+          delete: true,
+        });
+        return;
+      }
+      this.writeOrThrow({ ...address, path: ["value"] }, replacement.value);
+      writeStoredCfcEnvelope(this, record, replacement.cfc);
+    });
+  }
+
   releaseCfcConfidentiality(
     input: CfcConfidentialityReleaseInput,
   ): CfcConfidentialityRelease {
@@ -5419,6 +5479,13 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   writeCfcGrant(input: CfcGrantWriteInput): { space: MemorySpace; id: string } {
     return this.#wrapped.writeCfcGrant(input);
+  }
+
+  writeRepairedCompileCacheRecord(
+    target: { space: MemorySpace; key: string },
+    replacement: { value: FabricValue; cfc: CfcMetadata } | undefined,
+  ): void {
+    this.#wrapped.writeRepairedCompileCacheRecord(target, replacement);
   }
 
   releaseCfcConfidentiality(

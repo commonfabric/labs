@@ -1061,16 +1061,13 @@ describe("fabrichat-four-writer-room-update", () => {
 
   describe("with the released program's records storing another member's label", () => {
     // The labels a source update of a room whose own data carries another
-    // member's personal space left on the released program's records, at the
-    // delegation field and at the root, on a runtime that stamped them. A room
-    // set up from that program in the same space reads them, and its writes
-    // misfit; the room's own next update commits. Nothing rewrites what is
-    // stored. Last in the file, so that no other case here runs over the
-    // planted labels.
-    // TODO(danfuzz): The fresh-room cases pin a refusal that is wrong for the
-    // room (see the `TODO` on `stageModuleDelegations()`): flip them to a set
-    // up room once a repair drops the stamps the compile-cache builtin's writes
-    // left.
+    // member's personal space left on the released program's records, on a
+    // runtime that staged the update's delegations in its transition: the
+    // entries such a runtime was measured to leave at the delegation field,
+    // and those a later write-back of the record left at its root. A room set
+    // up from that program in the same space reads them, and the load ahead
+    // of the setup repairs them, warm or cold. Last in the file, so that no
+    // other case here runs over the planted labels.
 
     const personalSpaceOf = async (passphrase: string) => ({
       type: "https://commonfabric.org/cfc/atom/PersonalSpace",
@@ -1135,14 +1132,40 @@ describe("fabrichat-four-writer-room-update", () => {
               ...cfc.labelMap,
               entries: [
                 ...cfc.labelMap.entries,
-                ...[["delegatedModuleIdentities"], []].flatMap((path) =>
-                  ["shape", "value"].map((observes) => ({
-                    path,
-                    origin: "derived",
-                    observes,
-                    label: { confidentiality: [otherMember] },
-                  }))
-                ),
+                ...([
+                  [["delegatedModuleIdentities"], "structure", "enumerate"],
+                  [["delegatedModuleIdentities"], "structure", "shape"],
+                  [
+                    ["delegatedModuleIdentities", "*"],
+                    "structure",
+                    "followRef",
+                  ],
+                  [["delegatedModuleIdentities", "*"], "structure", "shape"],
+                  [["delegatedModuleIdentities", "*"], "structure", "value"],
+                  [["delegatedModuleIdentities", "0"], "derived", "shape"],
+                  [["delegatedModuleIdentities", "0"], "derived", "value"],
+                  [[], "derived", "shape"],
+                  [[], "derived", "value"],
+                ] as const).map(([path, origin, observes]) => ({
+                  path: [...path],
+                  origin,
+                  observes,
+                  label: {
+                    confidentiality: [otherMember],
+                    ...(path.length === 0 && observes === "value"
+                      ? {
+                        integrity: [{
+                          type:
+                            "https://commonfabric.org/cfc/atom/TransformedBy",
+                          identity: {
+                            kind: "builtin",
+                            builtinId: "compile-cache",
+                          },
+                        }],
+                      }
+                      : {}),
+                  },
+                })),
               ],
             },
           },
@@ -1170,13 +1193,14 @@ describe("fabrichat-four-writer-room-update", () => {
       return fresh;
     };
 
-    it("refuses a fresh room from the released program", async () => {
-      await expect(freshRoom(runtime, roomController)).rejects.toThrow(
-        "writer-fit confidentiality misfit",
-      );
+    it("sets up a fresh room from the released program", async () => {
+      const fresh = await freshRoom(runtime, roomController);
+
+      expect(getPatternIdentityRef(await fresh.withTx().sync())?.identity)
+        .toBe(releasedIdentity);
     });
 
-    it("refuses a fresh room from the released program on a runtime that starts cold", async () => {
+    it("sets up a fresh room from the released program on a runtime that starts cold", async () => {
       const coldStorage = EmulatedStorageManager.connectTo(server, {
         as: owner,
       });
@@ -1191,9 +1215,10 @@ describe("fabrichat-four-writer-room-update", () => {
       try {
         await coldPieces.synced();
 
-        await expect(freshRoom(cold, coldPieces)).rejects.toThrow(
-          "writer-fit confidentiality misfit",
-        );
+        const fresh = await freshRoom(cold, coldPieces);
+
+        expect(getPatternIdentityRef(await fresh.withTx().sync())?.identity)
+          .toBe(releasedIdentity);
       } finally {
         await coldPieces.dispose();
         await cold.dispose();
@@ -1211,7 +1236,12 @@ describe("fabrichat-four-writer-room-update", () => {
       expect(updated?.identity).not.toBe(releasedIdentity);
     });
 
-    it("leaves the planted label stored on every released record", () => {
+    it("leaves the planted label on no released record once a load verifies the program", async () => {
+      await runtime.patternManager.prepareSourceClosureVerification(
+        roomSpace,
+        [releasedIdentity],
+      );
+
       const tx = runtime.edit();
       try {
         for (const record of records) {
@@ -1222,7 +1252,7 @@ describe("fabrichat-four-writer-room-update", () => {
                 entry.label.confidentiality ?? []
               ),
             id,
-          ).toContainEqual(otherMember);
+          ).not.toContainEqual(otherMember);
         }
       } finally {
         tx.abort("planted labels read");

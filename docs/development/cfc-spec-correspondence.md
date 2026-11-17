@@ -506,6 +506,20 @@ marker. @danfuzz authorized landing this design ahead of the ruling, without a
 flag, on 2026-11-14. The conformance statement's §11 records the gap, what it
 gives up, and what it leaves to a separate repair.
 
+The repair of compile-cache records that carry a flow stamp
+(`repairCompileCacheStamps()` in `compilation-cache/cell-cache.ts`) implements
+[specs#103](https://github.com/commonfabric/specs/pull/103) ahead of its
+ruling. The load ahead of a setup erases a stamped compiled record and
+rewrites a stamped source record to the value the compile-cache writer stores
+for its identity, removing every `derived` and `structure` entry, existence
+entries included, under an implementation identity reserved for the repair. It
+lowers stored labels at strict, with no default-off dial, so it is not
+fail-closed and does not satisfy step 4 above. Its two deciding sites, the
+computation of what to write and the transaction method that writes it, carry
+the `SPEC-PENDING` marker. @danfuzz authorized landing it ahead of the ruling,
+without a flag, on 2026-11-14 and 2026-11-15. The conformance statement's §11
+records it.
+
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
 `runtime/runner/src/cfc/kernel/spec-header.ts`. The hash is the snapshot's
