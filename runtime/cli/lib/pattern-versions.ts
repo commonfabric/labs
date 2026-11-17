@@ -30,6 +30,7 @@ import { encodeHex } from "@std/encoding/hex";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import {
+  deployedPieceRef,
   type PatternIndexClient,
   PatternIndexError,
   type PatternIndexLineage,
@@ -164,6 +165,12 @@ export interface DeployedSource {
   patternId: () => Promise<string | undefined>;
 
   /**
+   * The space (a DID) and piece the deploy wrote, so the person's use of
+   * that piece in a loom finds this version.
+   */
+  piece: { space: string; id: string };
+
+  /**
    * The origin `setsrc --origin` recorded: the piece follows a system or
    * repository pattern, which is not the person's own work.
    */
@@ -287,6 +294,10 @@ export async function recordDeployedVersion(
       }),
       slot,
       origin: "self",
+      deployedTo: await deployedPieceRef(
+        deployed.piece.space,
+        deployed.piece.id,
+      ),
     });
     return { status: "recorded", created: response.created, response };
   } catch (error) {

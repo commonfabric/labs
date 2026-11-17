@@ -456,12 +456,25 @@ export type PatternIndexUsageEventType =
   | "viewed_in_loom"
   | "removed";
 
-export interface PatternIndexRecordUsageEventRequest {
-  patternId: string;
+/**
+ * A usage event and what it is about. The owner's `viewed_in_loom` about the
+ * piece a version was deployed to settles that version: the index shares it
+ * then, while the sharing setting covers it.
+ */
+export type PatternIndexRecordUsageEventRequest = PatternIndexEventSubject & {
   eventType: PatternIndexUsageEventType;
-}
+};
 
 /** Signed event payload; the client supplies the author from its identity. */
+/**
+ * What an event is about: a pattern by id, or, for its owner's own use of a
+ * version in a loom, the piece the version was deployed to
+ * ({@link deployedPieceRef}), which is what a loom knows.
+ */
+export type PatternIndexEventSubject =
+  | { patternId: string; piece?: never }
+  | { piece: string; patternId?: never };
+
 export interface PatternIndexRecordEventRequest {
   patternId: string;
   eventType: PatternIndexEventType;
@@ -479,6 +492,19 @@ export interface PatternIndexRecordEventRequest {
 
 export interface PatternIndexRecordEventResponse {
   ok: boolean;
+
+  /**
+   * `false` for an event the index keeps no record of, such as one about a
+   * piece the caller has no version for.
+   */
+  recorded?: boolean;
+
+  /** What the owner's use of a version did about sharing it. */
+  settled?: {
+    autoShare: PatternIndexAutoShare;
+    shared?: boolean;
+    reason?: string;
+  };
 }
 
 /** An owner's request to retire a generation in favor of its direct successor. */
@@ -498,6 +524,27 @@ export interface PatternIndexRetractResponse {
   retractedAt: string;
   discoverable: false;
   changed: boolean;
+}
+
+/**
+ * How a client names a piece a version was deployed to, for `deployedTo`
+ * and for an event about it: a hash of the space and the piece's id, so the
+ * index learns neither. `pieceId` is the bare `fid1:…` form; an `of:` prefix
+ * is taken off.
+ */
+export async function deployedPieceRef(
+  spaceDid: string,
+  pieceId: string,
+): Promise<string> {
+  const bare = pieceId.startsWith("of:") ? pieceId.slice(3) : pieceId;
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${spaceDid}/${bare}`),
+  );
+  return `piece:${
+    [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0"))
+      .join("")
+  }`;
 }
 
 /**
@@ -817,6 +864,13 @@ export interface PatternIndexPublishRequest {
 
   /** Keep this version private whatever the sharing setting says. */
   keepPrivate?: boolean;
+
+  /**
+   * The piece this version was deployed to ({@link deployedPieceRef}), so
+   * the owner's later use of that piece in a loom finds the version. Owner
+   * only; the index keeps a keyed hash of it.
+   */
+  deployedTo?: string;
 
   /**
    * Explicitly offers this entry to search on publication. Deployments with
@@ -1401,17 +1455,28 @@ export class PatternIndexClient {
       ...(request.slot !== undefined ? { slot: request.slot } : {}),
       ...(request.origin !== undefined ? { origin: request.origin } : {}),
       ...(request.keepPrivate === true ? { keepPrivate: true } : {}),
+      ...(request.deployedTo !== undefined
+        ? { deployedTo: request.deployedTo }
+        : {}),
     });
   }
 
   /**
    * Reports what a person did with a pattern in their loom. Only Loom calls
-   * this; a harness or agent run never does.
+   * this; a harness or agent run never does. The index takes it through the
+   * same function as a run's outcome, which is why the two are kept apart
+   * here by type.
    */
   recordUsageEvent(
     request: PatternIndexRecordUsageEventRequest,
   ): Promise<PatternIndexRecordEventResponse> {
-    return this.#call("recordUsageEvent", { ...request });
+    return this.#call("recordEvent", {
+      ...(request.patternId !== undefined
+        ? { patternId: request.patternId }
+        : { piece: request.piece }),
+      eventType: request.eventType,
+      did: this.did,
+    });
   }
 
   /** Asks that an owned pattern be checked and, if it passes, listed. */

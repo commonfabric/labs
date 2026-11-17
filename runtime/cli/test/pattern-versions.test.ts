@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import {
+  deployedPieceRef,
   type PatternIndexClient,
   PatternIndexError,
   type PatternIndexLineage,
@@ -144,6 +145,7 @@ describe("pattern-versions", () => {
     entry,
     program: PROGRAM,
     patternId: () => Promise.resolve("pat-1"),
+    piece: { space: "did:key:z6Mkspace", id: "fid1:piece" },
     ...more,
   });
 
@@ -172,6 +174,9 @@ describe("pattern-versions", () => {
       expect(request.hashtags).toEqual(["chores"]);
       expect(request.program.files).toEqual(PROGRAM.files);
       expect(Object.hasOwn(request, "keepPrivate")).toBe(false);
+      expect(request.deployedTo).toBe(
+        await deployedPieceRef("did:key:z6Mkspace", "fid1:piece"),
+      );
     });
 
     it("makes no index call and reads no pattern id on a machine that never joined, and says so only the first time", async () => {
@@ -445,6 +450,7 @@ describe("pattern-versions", () => {
             deps?.onDeployed?.({
               program: PROGRAM,
               patternId: () => Promise.resolve("pat-1"),
+              piece: { space: "did:key:z6Mkspace", id: "fid1:p" },
             });
             return Promise.resolve({
               config: { piece: "fid1:p" },
@@ -488,6 +494,7 @@ describe("pattern-versions", () => {
             deps?.onDeployed?.({
               program: PROGRAM,
               patternId: () => Promise.resolve("pat-1"),
+              piece: { space: "did:key:z6Mkspace", id: "fid1:p" },
             });
             return Promise.resolve({
               config: { piece: "fid1:p" },
@@ -534,6 +541,7 @@ describe("pattern-versions", () => {
               options?.onDeployed?.({
                 program: PROGRAM,
                 patternId: () => Promise.resolve("pat-1"),
+                piece: { space: "did:key:z6Mkspace", id: "fid1:created" },
               });
               return Promise.resolve({ pieceId: "fid1:created" });
             },
@@ -570,12 +578,14 @@ describe("pattern-versions", () => {
             onDeployed?: (d: {
               program: RuntimeProgram;
               patternId: () => Promise<string | undefined>;
+              piece: { space: string; id: string };
             }) => void;
           },
         ) => {
           options?.onDeployed?.({
             program: PROGRAM,
             patternId: () => Promise.resolve("pat-1"),
+            piece: { space: "did:key:z6Mkspace", id: "fid1:created" },
           });
           return Promise.resolve({ pieceId: "fid1:created" });
         },

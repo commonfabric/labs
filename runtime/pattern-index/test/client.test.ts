@@ -6,6 +6,7 @@ import {
   verifyFirstPartyHttpRequest,
 } from "@commonfabric/runner/toolshed-http-auth";
 import {
+  deployedPieceRef,
   PatternIndexClient,
   PatternIndexError,
 } from "@commonfabric/pattern-index/client";
@@ -684,6 +685,38 @@ describe("PatternIndexClient", () => {
     }
   });
 
+  it("sends the piece a version was deployed to, and an event about a piece in place of a pattern id", async () => {
+    const { client, requests } = createClient([
+      jsonResponse({ patternId: "pat-6", created: true }),
+      jsonResponse({ ok: true, recorded: true }),
+    ]);
+    const deployedTo = await deployedPieceRef("did:key:z6Mkspace", "of:fid1:p");
+    await client.publishPattern({
+      patternId: "pat-6",
+      description: "Doubles a number",
+      hashtags: [],
+      program: {
+        main: "/main.tsx",
+        files: [{ name: "/main.tsx", contents: "export default 2;" }],
+      },
+      deployedTo,
+    });
+    await client.recordUsageEvent({
+      piece: deployedTo,
+      eventType: "viewed_in_loom",
+    });
+
+    expect(deployedTo).toBe(
+      await deployedPieceRef("did:key:z6Mkspace", "fid1:p"),
+    );
+    expect(deployedTo).toMatch(/^piece:[0-9a-f]{64}$/);
+    expect(JSON.parse(requests[0].body).deployedTo).toBe(deployedTo);
+    const event = JSON.parse(requests[1].body);
+    expect(requests[1].url).toBe("https://index.test/api/recordEvent");
+    expect(event.piece).toBe(deployedTo);
+    expect(Object.hasOwn(event, "patternId")).toBe(false);
+  });
+
   it("posts each version, visibility and sharing-setting call to its function with only its fields", async () => {
     const calls: Array<{
       fn: string;
@@ -774,13 +807,17 @@ describe("PatternIndexClient", () => {
       body: Record<string, unknown>;
     }> = [
       {
-        fn: "recordUsageEvent",
+        fn: "recordEvent",
         call: (c) =>
           c.recordUsageEvent({
             patternId: "pat-1",
             eventType: "viewed_in_loom",
           }),
-        body: { patternId: "pat-1", eventType: "viewed_in_loom" },
+        body: {
+          patternId: "pat-1",
+          eventType: "viewed_in_loom",
+          did: signer.did(),
+        },
       },
       {
         fn: "regarden",

@@ -316,6 +316,9 @@ export interface DeployedProgram {
    * read back. Lazy, so a caller that records nothing never pays the read.
    */
   patternId: () => Promise<string | undefined>;
+
+  /** The space the deploy wrote to, as a DID, and the piece it wrote. */
+  piece: { space: string; id: string };
 }
 
 export interface GetCellValueOptions {
@@ -2175,6 +2178,7 @@ export async function newPieceWithReceipt(
       "patternId" in entry
     ) return;
     options.onDeployed({
+      piece: { space: pieces.getSpace(), id: pieceId },
       program: indexed.program,
       patternId: () =>
         pieces.get(pieceId, false).then(
@@ -2742,6 +2746,7 @@ export async function setPiecePattern(
     );
     const patternId = served.ref.identity;
     options.onDeployed?.({
+      piece: { space: served.space, id: resolvedConfig.piece },
       program,
       patternId: () => Promise.resolve(patternId),
     });
@@ -2763,6 +2768,7 @@ export async function setPiecePattern(
   noteWroteTo(config.space);
   const patternId = receipt.ref.identity;
   options.onDeployed?.({
+    piece: { space: receipt.space, id: resolvedConfig.piece },
     program,
     patternId: () => Promise.resolve(patternId),
   });
