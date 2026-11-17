@@ -227,5 +227,31 @@ describe("data-file-strings", () => {
       };
       expect(renderedProp(view.props.get().src)).toBe(PAGE);
     });
+
+    it("hands a render read the strings of an `assets` record", async () => {
+      // A render read stops at an object-valued prop, so a link inside one
+      // reads as nothing unless the schema names the prop. `assets` is named.
+
+      const result = await setUp(
+        [
+          'import { dataFile, pattern, UI } from "commonfabric";',
+          'const PAGE = dataFile("./page.html");',
+          "export default pattern(() => ({",
+          "  [UI]: {",
+          '    type: "vnode",',
+          '    name: "cf-iframe",',
+          "    props: { assets: { page: PAGE } },",
+          "    children: [],",
+          "  },",
+          "}));",
+        ].join("\n"),
+        "rendered-assets",
+      );
+
+      const view = result.key(UI).asSchema(rendererVDOMSchema).get() as {
+        props: { get(): { assets: { page: unknown } } };
+      };
+      expect(renderedProp(view.props.get().assets.page)).toBe(PAGE);
+    });
   });
 });

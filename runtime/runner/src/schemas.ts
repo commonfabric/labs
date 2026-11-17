@@ -37,6 +37,10 @@ export const rendererVDOMSchema = internSchema(
             properties: {
               style: { anyOf: [{ type: "object" }, { type: "string" }] },
               $value: { asCell: ["cell"], type: "unknown" },
+              assets: {
+                type: "object",
+                additionalProperties: { type: "string" },
+              },
             },
             additionalProperties: {
               anyOf: [{
