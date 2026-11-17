@@ -12,7 +12,8 @@ import { runtimePresets } from "../src/runtime-presets.ts";
 // the earlier program declared none, so that the document's envelope changes
 // beside the claimed slot. The successor's setup replays the claimed slot with
 // the bytes it holds and writes only what it adds, so the update commits. A
-// successor whose setup writes another value at the claimed slot is refused.
+// successor whose setup writes another value at the claimed slot is refused,
+// and a setup that leaves a stored slot out removes it.
 
 const signer = await Identity.fromPassphrase("setup-replayed-argument-slots");
 const space = signer.did();
@@ -50,6 +51,7 @@ interface Input {
         ? 'Default<WriteAuthorizedBy<string, typeof setNote>, "">'
         : 'Default<string, "">'
     };
+  topic?: string;
   ${successor ? 'extra?: Default<string, "">;' : ""}
 }
 
@@ -98,7 +100,7 @@ describe("runner", () => {
         { space, tx },
       );
       const cell = runtime.getCell<Piece>(space, name, undefined, tx);
-      const running = runtime.run(tx, pattern, {}, cell);
+      const running = runtime.run(tx, pattern, { topic: "Lunch" }, cell);
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit().settled).error).toBeUndefined();
       await running.pull();
@@ -112,17 +114,23 @@ describe("runner", () => {
       return cell;
     };
 
-    /** Sets `cell` up from the successor, given `argument`; the commit's error. */
+    /**
+     * Sets `cell` up from the successor, given `argument` and leaving out the
+     * stored slots `dropped` names; the commit's error.
+     */
     const update = async (
       cell: ReturnType<typeof runtime.getCell<Piece>>,
       argument: unknown,
+      dropped: readonly string[] = [],
     ) => {
       const tx = runtime.edit();
       const pattern = await runtime.patternManager.compilePattern(
         program(true),
         { space, tx },
       );
-      runtime.run(tx, pattern, argument, cell.withTx(tx));
+      runtime.run(tx, pattern, argument, cell.withTx(tx), {
+        droppedArgumentFields: dropped,
+      });
       runtime.prepareTxForCommit(tx);
       return (await tx.commit().settled).error?.message;
     };
@@ -146,6 +154,17 @@ describe("runner", () => {
       );
       await cell.pull();
       expect(cell.get().roster).toEqual(["Ada"]);
+    });
+
+    it("removes a stored slot the setup leaves out, leaving the claimed slot as it was", async () => {
+      const cell = await storePiece("drops");
+
+      expect(await update(cell, {}, ["topic"])).toBeUndefined();
+      await runtime.idle();
+      const argument = cell.getArgumentCell<Record<string, unknown>>()!;
+      const stored = argument.getRaw() ?? {};
+      expect(Object.hasOwn(stored, "topic")).toBe(false);
+      expect(stored.roster).toEqual(["Ada"]);
     });
   });
 });

@@ -4141,52 +4141,43 @@ export class Runner {
       projection,
       [],
     );
-    // The argument document is the piece's own, and this writes it whole: a
-    // binding it already holds stays where the argument names the same cell,
-    // and is replaced where the argument binds the slot another way. A write
-    // through the old binding would land in the cell it names, which is the
-    // caller's.
+    // The argument document is the piece's own, and this writes it whole but
+    // for the slots it replays: a binding it already holds stays where the
+    // argument names the same cell, and is replaced where the argument binds
+    // the slot another way. A write through the old binding would land in the
+    // cell it names, which is the caller's.
     //
-    // Where this setup replays slots the stored document holds, as a setup
-    // of a piece that already exists does, those slots are left as they
-    // stand and each other slot is written at its own path. A write of the
-    // whole document is an attempt at every path in it, the replayed slots
-    // among them, and a replayed slot under another writer's claim then
-    // needs that writer whenever the document's envelope changes, as a
-    // release that adds a writer elsewhere in it changes it.
-    const replayed = replayedArgumentSlots(tx, argumentLink, storable);
-    const written = replayed.size === 0
-      ? [{ link: argumentLink, value: storable as unknown }]
-      : this.#unreplayedArgumentSlots(
-        tx,
-        argumentLink,
-        storable as Record<string, unknown>,
-        replayed,
+    // The slots this setup replays from the stored document hold the bytes it
+    // would write there, so they are left as they stand, and each other slot
+    // is attempted at its own path. An attempt at the whole document would
+    // reach every path in it, the replayed slots among them, and a replayed
+    // slot under another writer's claim would then need that writer wherever
+    // the document's envelope changes elsewhere, as a release that adds a
+    // writer to another of its positions changes it.
+    const changed = diffAndUpdate(
+      this.#runtime,
+      tx,
+      argumentLink,
+      storable,
+      argumentLink,
+      {
+        replacesBindings: true,
+        leavesSlots: replayedArgumentSlots(tx, argumentLink, storable),
+      },
+    );
+    // The document now holds the value supplied here, so flow labels may
+    // stamp it as a whole write, as they may a `Cell.set()`; and a mergeable
+    // op on a list in it resolves against this value rather than the store.
+    if (changed) {
+      tx.recordCfcAssertedValueRoot(
+        {
+          space: argumentLink.space,
+          id: argumentLink.id,
+          scope: argumentLink.scope,
+          path: [...argumentLink.path],
+        },
+        runtimeWritePolicyAuthorization,
       );
-    for (const { link, value } of written) {
-      const changed = diffAndUpdate(
-        this.#runtime,
-        tx,
-        link,
-        value,
-        link,
-        { replacesBindings: true },
-      );
-      // What was written now holds the value supplied here, so flow labels
-      // may stamp it as a whole write, as they may a `Cell.set()`; and a
-      // mergeable op on a list in it resolves against this value rather than
-      // the store.
-      if (changed) {
-        tx.recordCfcAssertedValueRoot(
-          {
-            space: link.space,
-            id: link.id,
-            scope: link.scope,
-            path: [...link.path],
-          },
-          runtimeWritePolicyAuthorization,
-        );
-      }
     }
     tx.poisonMergeableOp?.(argumentLink);
     initializeScopedArgumentSlots(
@@ -4195,49 +4186,6 @@ export class Runner {
       argumentLink,
       argumentSchema,
     );
-  }
-
-  /**
-   * Helper for `#updateArgument()`: the slots of the argument document at
-   * `argumentLink` to write so that it holds `staged`, each at its own path,
-   * leaving out the slots in `replayed`, which it holds already. A slot the
-   * document holds and `staged` does not is written as `undefined`, which
-   * removes it, as a write of the whole document would.
-   */
-  #unreplayedArgumentSlots(
-    tx: IExtendedStorageTransaction,
-    argumentLink: NormalizedFullLink,
-    staged: Record<string, unknown>,
-    replayed: ReadonlySet<string>,
-  ): { link: NormalizedFullLink; value: unknown }[] {
-    const stored = this.#runtime.getCellFromLink(
-      { ...argumentLink, schema: undefined },
-      undefined,
-      tx,
-    ).getRaw({ meta: ignoreReadForScheduling, nonRecursive: true });
-    const storedSlots = isFabricPlainObject(stored as FabricValue) &&
-        !isCellLink(stored)
-      ? Object.keys(stored as object)
-      : [];
-    // Each slot is written under the schema the document's link carries for
-    // it, as the write of the whole document would have.
-    const slotLink = (slot: string): NormalizedFullLink => {
-      const schema = argumentLink.schema === undefined
-        ? undefined
-        : ContextualFlowControl.getSchemaAtPath(argumentLink.schema, [slot]);
-      const link = { ...argumentLink, path: [...argumentLink.path, slot] };
-      if (schema === undefined) delete link.schema;
-      else link.schema = schema;
-      return link;
-    };
-    return [
-      ...Object.keys(staged).filter((slot) => !replayed.has(slot)).map((
-        slot,
-      ) => ({ link: slotLink(slot), value: staged[slot] })),
-      ...storedSlots.filter((slot) => !Object.hasOwn(staged, slot)).map((
-        slot,
-      ) => ({ link: slotLink(slot), value: undefined })),
-    ];
   }
 
   /** Stage an argument write, materialize aliases in the same transaction, and

@@ -121,8 +121,9 @@ function recordStagedLink(
 /**
  * Records the slots a runtime replaying a piece's setup carries over from the
  * stored argument document: every slot `stored` holds that `supplied` does not
- * name, with the bytes it holds. The replay stages the whole document again,
- * so these slots are staged with what they already hold. The commit verifier
+ * name, with the bytes it holds. The replay stages the document again with
+ * these slots holding what they already hold, and its write of the document
+ * leaves them as they stand (`replayedArgumentSlots()`). The commit verifier
  * independently checks that the transaction leaves each one unchanged, and a
  * slot it changes receives nothing from this record.
  */
