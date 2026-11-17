@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
+  deployedPieceRef,
   PatternIndexClient,
   type PatternIndexPublishRequest,
 } from "@commonfabric/pattern-index/client";
@@ -27,7 +28,17 @@ interface RecordedCall {
  * `docs/development/waiting-in-tests.md` asks for in place of a sleep.
  */
 const stubClient = (
-  options: { fail?: boolean; created?: boolean; failFirstEvent?: boolean } = {},
+  options: {
+    fail?: boolean;
+    created?: boolean;
+    failFirstEvent?: boolean;
+    /**
+     * What `getPattern` answers per id: whether the caller wrote it, or an
+     * HTTP status for an id it cannot answer for. An id not listed is one
+     * the index does not hold.
+     */
+    patterns?: Record<string, { mine?: boolean } | number>;
+  } = {},
 ) => {
   const calls: RecordedCall[] = [];
   const waiters: { fn: string; count: number; resolve: () => void }[] = [];
@@ -60,6 +71,26 @@ const stubClient = (
         new Response(JSON.stringify({ error: "index is down" }), {
           status: 500,
         }),
+      );
+    }
+    if (fn === "getPattern") {
+      const known = options.patterns?.[String(body.patternId)] ?? 404;
+      return answer(
+        typeof known === "number"
+          ? new Response(JSON.stringify({ error: "no answer" }), {
+            status: known,
+          })
+          : new Response(
+            JSON.stringify({
+              patternId: body.patternId,
+              createdAt: "2026-11-17T00:00:00.000Z",
+              description: "Sortable table",
+              hashtags: ["table"],
+              dependencies: [],
+              ...known,
+            }),
+            { status: 200 },
+          ),
       );
     }
     if (fn === "publishPattern" && options.fail === true) {
@@ -396,6 +427,172 @@ describe("pattern index ledger", () => {
       ledger.record("pat-doubler", "run_succeeded");
       await ledger.flush();
       expect(eventTypes(calls)).toEqual(["instantiated", "run_succeeded"]);
+    });
+  });
+
+  describe("version history", () => {
+    /**
+     * Which history the index files each publication in, by the order
+     * pattern-index `docs/visibility-contract.md` ("Lineages and versions")
+     * states for a current client: a slot, then a `priorPatternId` naming one
+     * of the caller's own versions, with a remix always starting a new one.
+     * `foreign` are versions someone else wrote. The model binds the tests to
+     * that contract rather than to the request fields that satisfy it.
+     */
+    const historiesOf = (
+      sent: RecordedCall[],
+      foreign: readonly string[] = [],
+    ): Map<string, string> => {
+      const bySlot = new Map<string, string>();
+      const byPattern = new Map<string, string>();
+      let next = 0;
+      for (const { body } of sent) {
+        const slot = typeof body.slot === "string" ? body.slot : undefined;
+        const prior = typeof body.priorPatternId === "string"
+          ? body.priorPatternId
+          : undefined;
+        let history: string;
+        if (slot !== undefined) {
+          history = bySlot.get(slot) ?? `history-${next++}`;
+          bySlot.set(slot, history);
+        } else if (
+          body.remixedFrom === undefined && prior !== undefined &&
+          !foreign.includes(prior) && byPattern.has(prior)
+        ) {
+          history = byPattern.get(prior)!;
+        } else {
+          history = `history-${next++}`;
+        }
+        byPattern.set(String(body.patternId), history);
+      }
+      return byPattern;
+    };
+
+    /** The key `run_pattern` sends for a piece, one per piece. */
+    const piece = (name: string) =>
+      deployedPieceRef("did:key:z6MkLedgerTestSpace", `fid1:${name}`);
+
+    const agentRequest = (patternId: string, deployedTo: string) =>
+      request(patternId, { origin: "agent", slot: deployedTo, deployedTo });
+
+    it("files a later run's revision of the caller's own pattern in that pattern's history", async () => {
+      const index = stubClient({ patterns: { "v1": { mine: true } } });
+      const firstRun = createPatternIndexLedger(index.getClient);
+      firstRun.stage(agentRequest("v1", piece("one")));
+      await firstRun.flush();
+
+      const laterRun = createPatternIndexLedger(index.getClient);
+      laterRun.stage(agentRequest("v2", piece("two")), { revisedFrom: "v1" });
+      await laterRun.flush();
+
+      const sent = publishes(index.calls);
+      const histories = historiesOf(sent);
+      expect(histories.get("v2")).toBe(histories.get("v1"));
+      const revision = sent[1].body;
+      expect(revision.priorPatternId).toBe("v1");
+      expect(revision.remixedFrom).toBeUndefined();
+      // Still names the piece it was deployed to, which is how the person's
+      // use of that piece finds this version.
+      expect(revision.deployedTo).toBe(piece("two"));
+    });
+
+    it("credits a revision of someone else's pattern as a remix with a history of its own", async () => {
+      const index = stubClient({ patterns: { "theirs": { mine: false } } });
+      const ledger = createPatternIndexLedger(index.getClient);
+      ledger.stage(agentRequest("mine", piece("one")), {
+        revisedFrom: "theirs",
+      });
+      await ledger.flush();
+
+      const [remix] = publishes(index.calls);
+      expect(remix.body.remixedFrom).toBe("theirs");
+      expect(remix.body.priorPatternId).toBeUndefined();
+      expect(remix.body.slot).toBe(piece("one"));
+      expect(historiesOf([remix], ["theirs"]).get("mine")).toBeDefined();
+    });
+
+    it("starts a new history for a new pattern, beside an existing one", async () => {
+      const index = stubClient({ patterns: { "v1": { mine: true } } });
+      const firstRun = createPatternIndexLedger(index.getClient);
+      firstRun.stage(agentRequest("v1", piece("one")));
+      await firstRun.flush();
+
+      const laterRun = createPatternIndexLedger(index.getClient);
+      laterRun.stage(agentRequest("unrelated", piece("two")));
+      await laterRun.flush();
+
+      const sent = publishes(index.calls);
+      const histories = historiesOf(sent);
+      expect(histories.get("unrelated")).not.toBe(histories.get("v1"));
+      expect(sent[1].body.priorPatternId).toBeUndefined();
+      expect(sent[1].body.remixedFrom).toBeUndefined();
+      // Nothing was revised, so nothing was asked about.
+      expect(index.calls.some((call) => call.fn === "getPattern")).toBe(
+        false,
+      );
+    });
+
+    it("names no predecessor the index does not hold", async () => {
+      const index = stubClient();
+      const ledger = createPatternIndexLedger(index.getClient);
+      ledger.stage(agentRequest("v2", piece("two")), {
+        revisedFrom: "never-indexed",
+      });
+      await ledger.flush();
+
+      const [sent] = publishes(index.calls);
+      expect(sent.body.priorPatternId).toBeUndefined();
+      expect(sent.body.remixedFrom).toBeUndefined();
+      expect(sent.body.slot).toBe(piece("two"));
+    });
+
+    it("names no predecessor whose owner it could not learn, and says so", async () => {
+      const index = stubClient({ patterns: { "v1": 500 } });
+      const errors: string[] = [];
+      const ledger = createPatternIndexLedger(index.getClient, {
+        onError: (message) => errors.push(message),
+      });
+      ledger.stage(agentRequest("v2", piece("two")), { revisedFrom: "v1" });
+      await ledger.flush();
+
+      const [sent] = publishes(index.calls);
+      expect(sent.body.priorPatternId).toBeUndefined();
+      expect(sent.body.remixedFrom).toBeUndefined();
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain("v1");
+    });
+
+    it("files every iteration of one session's capability in one history, each deployed to its own piece", async () => {
+      const index = stubClient({ patterns: { "theirs": { mine: false } } });
+      const ledger = createPatternIndexLedger(index.getClient);
+      ledger.stage(agentRequest("first", piece("one")), {
+        revisedFrom: "theirs",
+      });
+      ledger.stage(agentRequest("second", piece("two")), {
+        revisedFrom: "theirs",
+      });
+      ledger.stage(agentRequest("third", piece("three")));
+      await ledger.flush();
+
+      const sent = publishes(index.calls);
+      const histories = historiesOf(sent, ["theirs"]);
+      expect(histories.get("second")).toBe(histories.get("first"));
+      expect(histories.get("third")).toBe(histories.get("first"));
+      // The first iteration carries the remix credit; the rest continue it.
+      expect(sent[0].body.remixedFrom).toBe("theirs");
+      expect(sent.slice(1).map((call) => call.body.remixedFrom)).toEqual([
+        undefined,
+        undefined,
+      ]);
+      expect(sent.map((call) => call.body.deployedTo)).toEqual([
+        piece("one"),
+        piece("two"),
+        piece("three"),
+      ]);
+      // Only the first was revised from something outside this session.
+      expect(
+        index.calls.filter((call) => call.fn === "getPattern"),
+      ).toHaveLength(1);
     });
   });
 });

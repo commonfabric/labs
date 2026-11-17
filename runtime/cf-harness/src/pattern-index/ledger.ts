@@ -1,7 +1,9 @@
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
-import type {
-  PatternIndexEventType,
-  PatternIndexPublishRequest,
+import {
+  type PatternIndexClient,
+  PatternIndexError,
+  type PatternIndexEventType,
+  type PatternIndexPublishRequest,
 } from "@commonfabric/pattern-index/client";
 import type { HarnessPatternIndexClientFactory } from "./factory.ts";
 import { PATTERN_DISCOVERABILITY_REASONS } from "./publish-render-gate.ts";
@@ -56,6 +58,31 @@ import { PATTERN_DISCOVERABILITY_REASONS } from "./publish-render-gate.ts";
  * which is the one case where two entries from one session both reach the
  * index through the front door.
  *
+ * ## Which version history an entry joins
+ *
+ * The index files every publication into a lineage, one pattern's history of
+ * versions, and finds it from what the request names: a `slot` before a
+ * `priorPatternId`, and a `remixedFrom` always starting a new one
+ * (pattern-index `docs/visibility-contract.md`, "Lineages and versions"). An
+ * agent run names the new piece it deployed to as the slot, so without more
+ * every run's pattern would start a history of its own. Two things say more:
+ *
+ * - A later iteration of a capability this session already sent continues
+ *   that entry's history: it names the entry as `priorPatternId` and drops
+ *   its own slot and remix credit, which would otherwise outrank the
+ *   predecessor and start another history.
+ * - A request staged with `revisedFrom` — the pattern a run's source was
+ *   revised from, which the run knows only when the model named the piece it
+ *   revised — asks the index whose that pattern is before it is sent. The
+ *   caller's own continues its history the same way; someone else's is
+ *   credited as `remixedFrom` and starts a new one, which is what a revision
+ *   of a pattern the caller did not write is. A pattern the index does not
+ *   hold, or whose owner it does not say, leaves the request as it was: the
+ *   index is told nothing about a predecessor nobody could confirm.
+ *
+ * An entry staged with neither names nothing earlier, so a new pattern never
+ * joins a history it is unrelated to.
+ *
  * ## What this costs, stated rather than discovered
  *
  * **A session that dies before its flush loses the latest iteration of each
@@ -76,7 +103,10 @@ export interface PatternIndexLedger {
    * anything it displaces as non-discoverable. Never throws and never awaits:
    * a contribution to a shared catalog does not bear on the run that made it.
    */
-  stage(request: PatternIndexPublishRequest): void;
+  stage(
+    request: PatternIndexPublishRequest,
+    options?: PatternIndexStageOptions,
+  ): void;
 
   /**
    * Sends `eventType` for `patternId`, behind everything written before it.
@@ -99,6 +129,69 @@ export interface PatternIndexLedger {
   flush(): Promise<void>;
 }
 
+export interface PatternIndexStageOptions {
+  /**
+   * The index pattern the request's source was revised from. Whether it
+   * continues that pattern's history or is credited as a remix of it is
+   * decided when the request is sent, by asking the index whose it is.
+   */
+  revisedFrom?: string;
+}
+
+/** A request as held: what was staged, and what it was revised from. */
+interface StagedPublication {
+  request: PatternIndexPublishRequest;
+  revisedFrom?: string;
+}
+
+/**
+ * `request` as the next version of `priorPatternId`, one of the caller's
+ * own. Its slot and remix credit go: either one outranks a predecessor when
+ * the index looks for the history to file it in, and both would start a new
+ * one.
+ */
+const continuing = (
+  request: PatternIndexPublishRequest,
+  priorPatternId: string,
+): PatternIndexPublishRequest => {
+  const { slot: _slot, remixedFrom: _remixedFrom, ...rest } = request;
+  return { ...rest, priorPatternId };
+};
+
+/**
+ * `request` with what the index says about `revisedFrom` applied: continuing
+ * it when the caller wrote it, crediting it when someone else did, and
+ * unchanged when the index does not hold it or does not say whose it is.
+ * A read that fails is reported and leaves the request unchanged too, since
+ * a guess at a predecessor's owner is the one thing this must not send.
+ */
+const withPredecessor = async (
+  client: PatternIndexClient,
+  request: PatternIndexPublishRequest,
+  revisedFrom: string,
+  onError: (message: string) => void,
+): Promise<PatternIndexPublishRequest> => {
+  let mine: boolean | undefined;
+  try {
+    ({ mine } = await client.getPattern({
+      patternId: revisedFrom,
+      includeSource: false,
+    }));
+  } catch (error) {
+    if (!(error instanceof PatternIndexError && error.status === 404)) {
+      onError(
+        `run_pattern could not ask the pattern index whose pattern "${revisedFrom}" is, so the pattern revised from it starts a version history of its own: ${
+          describeFailure(error)
+        }`,
+      );
+    }
+    return request;
+  }
+  if (mine === true) return continuing(request, revisedFrom);
+  if (mine === false) return { ...request, remixedFrom: revisedFrom };
+  return request;
+};
+
 /**
  * What counts as one capability: the description and hashtags the model gave,
  * normalized for case and whitespace, with hashtags order-independent.
@@ -119,7 +212,7 @@ export const createPatternIndexLedger = (
 ): PatternIndexLedger => {
   const onError = options.onError ??
     ((message: string) => console.error(message));
-  const held = new Map<string, PatternIndexPublishRequest>();
+  const held = new Map<string, StagedPublication>();
   const publishedByKey = new Map<string, string>();
   // Every write is serialized behind one chain, so a write is sent once the
   // write before it has been answered, without any caller awaiting either.
@@ -127,7 +220,7 @@ export const createPatternIndexLedger = (
 
   const send = (
     key: string,
-    request: PatternIndexPublishRequest,
+    { request, revisedFrom }: StagedPublication,
     supersede: boolean,
   ): void => {
     publishedByKey.set(key, request.patternId);
@@ -149,7 +242,11 @@ export const createPatternIndexLedger = (
     chain = chain.then(async () => {
       try {
         const client = await getClient();
-        const response = await client.publishPattern(body);
+        const response = await client.publishPattern(
+          revisedFrom === undefined
+            ? body
+            : await withPredecessor(client, body, revisedFrom, onError),
+        );
         if (response.created) {
           await client.recordEvent({
             patternId: response.patternId,
@@ -181,11 +278,11 @@ export const createPatternIndexLedger = (
         }
       });
     },
-    stage(request) {
+    stage(request, options = {}) {
       const dependencies = new Set(request.dependencies ?? []);
       if (dependencies.size > 0) {
         for (const [key, pending] of [...held]) {
-          if (dependencies.has(pending.patternId)) {
+          if (dependencies.has(pending.request.patternId)) {
             held.delete(key);
             // Not superseded: something depends on it, so it is a part of
             // this session's output in its own right.
@@ -199,12 +296,19 @@ export const createPatternIndexLedger = (
         held.delete(key);
         send(key, displaced, true);
       }
+      // An earlier iteration this session sent is already in the history
+      // this one belongs to, whatever that iteration was revised from.
       const prior = publishedByKey.get(key);
       held.set(
         key,
         prior === undefined || prior === request.patternId
-          ? request
-          : { ...request, priorPatternId: prior },
+          ? {
+            request,
+            ...(options.revisedFrom !== undefined
+              ? { revisedFrom: options.revisedFrom }
+              : {}),
+          }
+          : { request: continuing(request, prior) },
       );
     },
     async flush() {
@@ -222,13 +326,15 @@ export const createPatternIndexLedger = (
       // property of the shape rather than a claim about the input.
       const pending = [...held];
       held.clear();
-      const heldIds = new Set(pending.map(([, request]) => request.patternId));
-      const depth = ([, request]: [string, PatternIndexPublishRequest]) =>
+      const heldIds = new Set(
+        pending.map(([, { request }]) => request.patternId),
+      );
+      const depth = ([, { request }]: [string, StagedPublication]) =>
         (request.dependencies ?? []).filter((id) => heldIds.has(id)).length;
       for (
-        const [key, request] of pending.sort((a, b) => depth(a) - depth(b))
+        const [key, staged] of pending.sort((a, b) => depth(a) - depth(b))
       ) {
-        send(key, request, false);
+        send(key, staged, false);
       }
       await chain;
     },
