@@ -299,6 +299,13 @@ export interface SetPiecePatternOptions {
    * absent, the update detaches the piece.
    */
   origin?: string;
+
+  /**
+   * Told the program read from the entry's files, as it will be committed,
+   * before the update is sent; a caller that records what was deployed
+   * reads it here.
+   */
+  onProgram?: (program: RuntimeProgram) => void;
 }
 
 export interface GetCellValueOptions {
@@ -2057,6 +2064,12 @@ export async function newPieceWithReceipt(
     slug?: string;
     force?: boolean;
     requestKey?: string;
+
+    /**
+     * Told the program read from a local entry's files, before the piece is
+     * created; never called for a piece from the index or a replay.
+     */
+    onProgram?: (program: RuntimeProgram) => void;
   },
   deps: PieceOperationDependencies = {},
 ): Promise<NewPieceReceipt> {
@@ -2143,6 +2156,9 @@ export async function newPieceWithReceipt(
           ),
       ),
     };
+  if (indexed !== undefined && !("patternId" in entry)) {
+    options?.onProgram?.(indexed.program);
+  }
   const source: ServedPatternSource = indexed === undefined
     ? { pattern: replayed!.pattern }
     : { program: indexed.program };
@@ -2688,6 +2704,7 @@ export async function setPiecePattern(
   );
   const program = await (deps.getPinnedProgramFromFile ??
     getPinnedProgramFromFile)(pieces, entry);
+  options.onProgram?.(program);
   if (servesLifecycleVerbs(pieces)) {
     return await updateOnServer(
       config,
