@@ -763,6 +763,19 @@ and a line that starts with `\` is a psql command. The structure tree lists each
 declares, and each `alter table` statement, with the columns each defines, apart
 from one inside a MySQL executed comment that adds no columns.
 
+The linker script language covers the scripts that tell GNU `ld` how to lay out
+its output, named `.ld` or `.lds`, and those named `.lds.S` or `.ld.S`, which
+pass through the C preprocessor before `ld` reads them, as do scripts with a
+line that opens with `#include`, `#include_next`, or `#import` followed by `<`
+or `"`, or with `#define`, `#undef`, `#ifdef`, or `#ifndef`, or with `#else` or
+`#endif` and nothing after it but a comment. In such a script, the `#` and name
+that open a preprocessor directive are colored as a directive, every branch of a
+conditional directive is colored with only the first listed in the structure
+tree, and `//` starts a comment. Elsewhere, `#` starts a comment, as it does for
+`ld`. The structure tree lists the `SECTIONS`, `MEMORY`, `PHDRS`, and `VERSION`
+blocks, the output sections, memory regions, program headers, and version nodes
+each one declares, and the symbols the script assigns.
+
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
 16 bytes per hex-dump row. Printable ASCII bytes appear at the right of each

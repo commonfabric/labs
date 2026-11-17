@@ -78,6 +78,10 @@ SQL, which covers PostgreSQL, SQLite, and MySQL scripts, has syntax
 highlighting, with a PostgreSQL function's dollar-quoted body colored as SQL,
 and a structure tree of the statements that create things or alter tables,
 with the columns each defines.
+GNU linker scripts, including those that the C preprocessor reads first, have
+syntax highlighting and a structure tree of their `SECTIONS`, `MEMORY`, `PHDRS`,
+and `VERSION` blocks, what each block declares, and the symbols the script
+assigns.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
@@ -101,16 +105,18 @@ Tree-sitter through a shared, language-neutral adapter, which HTML will use as
 well. Java properties, INI, dotenv, ProGuard rules, Git attributes, Git
 configuration files, XML, makefiles, Org mode, Lean, ignore files, Go's module
 and checksum files, Bazel rc files, Graphviz DOT, Dockerfiles, delimited tables,
-assembly, and SQL use focused scanners. The order is provisional because recent
-activity was measured in six of the 26 active organization repositories.
+assembly, SQL, and linker scripts use focused scanners. The order is provisional
+because recent activity was measured in six of the 26 active organization
+repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Go, Go module file, Go checksum file,
 Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, shell, C, C++, CUDA,
 makefile, Dockerfile, Java properties, INI, dotenv, ProGuard, Git attributes,
 Git configuration, XML, Org mode, directive configuration, ignore-file, Graphviz
-DOT, CSV, TSV, `.dat` table, assembly, SQL, and diff support to honest handling
-of every textual syntax in the active `commonfabric` repositories.
+DOT, CSV, TSV, `.dat` table, assembly, SQL, linker script, and diff support to
+honest handling of every textual syntax in the active `commonfabric`
+repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -1430,7 +1436,7 @@ without claiming the unrelated gVisor and Infra configurations.
 
 - [x] Add C, C++, headers, and CUDA.
 - [x] Add assembly.
-- [ ] Add linker scripts.
+- [x] Add linker scripts.
 - [ ] Add Protocol Buffers and protobuf text format.
 - [ ] Add Packetdrill.
 - [x] Use a neutral C-family mode for ambiguous headers.
@@ -1539,6 +1545,51 @@ quotes, parsed in under 21 milliseconds of processor time at the 95th
 percentile. The slowest was 33,000 labels, at 44, whose cost is in the structure
 building the languages share: 33,000 INI keys took 37 in the same run. The
 fixture comes from gVisor.
+
+A November 13, 2026 read of the local checkouts of the organization's
+repositories found three GNU linker scripts, all in gVisor's active `cfc_v2`
+branch: the two virtual dynamic shared object scripts, `vdso/vdso_amd64.lds` and
+`vdso/vdso_arm64.lds`, and `pkg/sentry/platform/systrap/sysmsg/pie.lds.S`, which
+the C preprocessor reads before `ld` does. Together they hold 234 lines. The six
+months before the read hold no path-change events on them. `.ld`, `.lds`,
+`.lds.S`, and `.ld.S` select the language. Assembly source also ends in `.S`,
+so the linker script language comes ahead of assembly in selection order.
+
+Linker scripts use a focused scanner rather than Tree-sitter. The one
+Tree-sitter grammar, `amaanq/tree-sitter-linkerscript`, is not an official
+grammar, and its npm package ships only C source, without a WebAssembly build,
+so using it would add a parser-specific build step. The scanner colors each
+token from its spelling, and a walk over the tokens recognizes the grammar of
+each `SECTIONS`, `MEMORY`, `PHDRS`, and `VERSION` block. That walk colors the
+names that output sections, memory regions, program headers, version nodes, and
+symbol assignments declare, and lists them as structure. Several of `ld`'s
+statements end without a `;`, such as `ENTRY(_start)`, an input section
+description, and a macro that a `.lds.S` script calls, so a name right after an
+operand starts a statement: no expression puts two operands side by side.
+A script passes through the C preprocessor when its name ends in `.S`, or when a
+line opens with `#include`, `#include_next`, or `#import` followed by `<` or
+`"`; with `#define`, `#undef`, `#ifdef`, or `#ifndef`; or with `#else` or
+`#endif` and nothing after it but a comment. In such a script, a preprocessor
+directive is colored as one, and `//` starts a comment. Each branch of a
+conditional directive is read from the blocks open at its `#if`, and only the
+first branch's declarations are listed in the structure tree. In any other
+script, `#` starts a comment, as it does for `ld`. Every character other than
+white space in the three files has a token class, and each file reconstructs
+exactly. The fixtures come from gVisor.
+
+On 100 kilobytes built from the amd64 script, on an idle machine, the fastest
+of 60 runs took 2.2 milliseconds for the full highlight, 2.8 for the document
+parse, and 2.2 for the re-color after one edit; ProGuard rules took 2.8 to
+highlight the same text. Inputs built to slow the scanner were measured at
+sizes from 25 to 200 kilobytes, such as 100,000 opening braces, an unclosed
+parenthesis before every `;`, a stray `)` after every name, a second `:` in
+every output section's head, conditional directives inside 100,000 open
+braces, a directive continued onto every line, and a directive full of quoted
+`#` characters. Each one's time roughly doubled when its size doubled. The
+slowest at 100 kilobytes, a call left open before each of 34,000 commas on one
+line, took 18.0 milliseconds for the full highlight, 18.7 for the document
+parse, and 18.1 for the re-color, inside the maximums for a parser-backed
+language; ProGuard rules took 7.4 on the same input.
 
 ## Stage 13: remaining active text formats
 
