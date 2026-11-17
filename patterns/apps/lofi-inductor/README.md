@@ -34,7 +34,15 @@ agent).
    by one. Every judged proposal goes into the history, accepted or not.
 4. Some goals never settle into rules. That is a valid outcome: they stay on the
    hi-fi model.
-5. Publishing sends the accepted rules to a pool under the goal's pseudonym.
+5. Publishing sends the accepted rules to a pool for the goal, under the piece's
+   pseudonym for it. The pool is the `pool` input when one is given, otherwise
+   the `#inductorPool` a wish finds (favorites, then this space). A pool serves
+   one goal and the wish cannot match on it, so the rules go only to a pool
+   whose goal, trimmed, equals the inductor's; otherwise nothing leaves the
+   piece. The first publish mints the pseudonym, a random string the piece
+   keeps, so it is the same every time this goal is published and unlinkable to
+   the person's other goals. The view says which happened: "Published N rules to
+   the pool for …" or "No pool for … found".
 
 Rules use a restricted regex grammar (no backreferences, no lookaround) and are
 compared by a canonical form, so two people who learned the same rule in
@@ -78,8 +86,9 @@ the enricher-ecosystem PRD (§6.8–6.10).
   `settleRewrite` stream, which the view's "Record the judgement" button and
   agents send. The gate decides; sending only records what it decided. Adding an
   item does not record as well, because of the second issue below.
-- `publish` records `{goal, rules, publishedAt}` in `published`, which the pool
-  will take.
+- `publish` records `{goal, rules, publishedAt, pooled}` in `published`, where
+  `pooled` says whether the rules were sent to a pool, and sends them to the
+  pool's `submit` (see step 5 and `apps/inductor-pool`).
 - Choose the hi-fi model with `hifiModel`; omitted, the deployment's default
   `generateObject` model answers.
 
@@ -87,12 +96,19 @@ Known runtime issues this pattern works around:
 
 1. In a block-bodied `map` callback, `const answer = generateObject({...})` with
    a reactive argument is lowered into a `lift` that calls `generateObject`, and
-   the graph never settles. The hi-fi map is written expression-bodied. (Not
-   yet reduced to a minimal repro: a plain block-bodied map settles.)
+   the graph never settles. The hi-fi map is written expression-bodied. (Not yet
+   reduced to a minimal repro: a plain block-bodied map settles.)
 2. An action that reads state derived from mapped `generateObject` calls while
    two or more of them are in flight can lose their results for good
    (`contribution-dropped`, a builtin write superseded). Recording the judgement
    while hi-fi calls are in flight can still hit it. Filed as top/3204.
+3. Under server execution an event runs twice, on the client and served, and
+   `Math.random` gives each run a different value. Only one run commits, and in
+   every run we watched the pool held the pseudonym the piece kept. But the
+   losing run's follow-up `submit` still runs, and when it runs after the winner
+   landed, the pool refuses the second pseudonym and logs the throw as a runtime
+   error. So the first publish to a pool can log a spurious error, and the pool
+   tests give their inductors a pseudonym rather than mint one.
 
 ## CFC debt
 

@@ -115,6 +115,8 @@ export interface Published {
   goal: string;
   rules: CanonicalRule[];
   publishedAt: number;
+  /** Whether the rules were sent to a pool for this goal. */
+  pooled?: boolean;
 }
 
 /** The most rules a set may hold. */

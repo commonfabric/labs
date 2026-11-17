@@ -2,7 +2,8 @@
  * The lo-fi inductor watching the hi-fi model: an item both label alike is no
  * surprise, an item they label differently is one, a rewrite waits for enough
  * new surprises, `submitItem` ignores a repeated id and an item without
- * fields, and publishing records the current rules for the goal.
+ * fields, and publishing records the current rules for the goal, with no
+ * pool to send them to.
  *
  * Pattern under test: ./lofi-inductor.tsx
  */
@@ -89,7 +90,9 @@ export default pattern(() => {
   const assert_published = assert(() =>
     subject.published?.goal === GOAL &&
     subject.published?.rules.length === 1 &&
-    subject.published?.rules[0]?.key === subject.rules[0]?.key
+    subject.published?.rules[0]?.key === subject.rules[0]?.key &&
+    // No pool is given or found, so nothing left the piece.
+    subject.published?.pooled === false
   );
 
   const assert_text_projection = assert(() =>

@@ -25,8 +25,10 @@ import {
   type Stream,
   UI,
   type VNode,
+  wish,
   Writable,
 } from "commonfabric";
+import type { InductorPoolOutput } from "../inductor-pool/inductor-pool.tsx";
 import {
   buildHifiPrompt,
   buildRewritePrompt,
@@ -63,6 +65,9 @@ export type {
   Summary,
 } from "./induction.ts";
 
+/** What the inductor needs of a pool: its goal, and where to contribute. */
+export type PoolTarget = Pick<InductorPoolOutput, "goal" | "submit">;
+
 /** An item as `submitItem` takes it; an id is minted when none is given. */
 export interface SubmittedItem {
   id?: string;
@@ -80,6 +85,17 @@ interface LofiInductorInput {
   history?: PerSpace<Writable<HistoryEntry[] | Default<[]>>>;
   /** The rules as last published, or null. */
   published?: PerSpace<Writable<Published | null | Default<null>>>;
+  /**
+   * This piece's pseudonym in the goal's pool, minted on the first publish.
+   * One piece holds one goal, so it is one per goal, and unlinkable to the
+   * person's pseudonyms for other goals.
+   */
+  pseudonym?: PerSpace<Writable<string | Default<"">>>;
+  /**
+   * The pool to publish to. Omitted, the inductor wishes for a
+   * `#inductorPool`; either way it publishes only to a pool for its goal.
+   */
+  pool?: PoolTarget;
   /**
    * The model that labels items. Omitted, the deployment's default
    * `generateObject` model answers; a stronger one, such as
@@ -108,6 +124,8 @@ export interface LofiInductorOutput {
   rules: CanonicalRule[];
   history: HistoryEntry[];
   published: Published | null;
+  /** This piece's pseudonym in the goal's pool, or "" before it publishes. */
+  pseudonym: string;
   /** Every item with its hi-fi and lo-fi labels. */
   rows: ItemRow[];
   summary: Summary;
@@ -133,6 +151,8 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     rules,
     history,
     published,
+    pseudonym,
+    pool,
     hifiModel,
     rewriteAfter,
     heldOutPercent,
@@ -236,17 +256,39 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       draft.set("");
     });
 
-    // TODO(inductor-pool): publishing is where the rules leave this piece.
-    // The `inductor-pool` pattern (README.md) will take `published` under the
-    // goal's pseudonym and release a rule once enough distinct contributors
-    // hold it. Until the CFC cuts it needs are approved, this only records
-    // the snapshot.
+    // ========================================================================
+    // PUBLISH: the rules leave this piece only into a pool for its goal
+    // ========================================================================
+
+    // A pool serves one goal, and the wish cannot yet match on it, so
+    // `publish` checks the goal before it sends.
+    const poolWish = wish<PoolTarget>({
+      query: "#inductorPool",
+      scope: ["~", "."],
+    });
+    // Null, not undefined, when there is none: an action whose context
+    // holds an undefined value does not run.
+    const target = pool ?? poolWish.result ?? null;
+
     const publish = action(() => {
+      // Randomness is allowed in an action, so the first publish mints the
+      // pseudonym. The pool binds it to this principal from then on.
+      if (!pseudonym.get()) {
+        pseudonym.set(`p-${Math.random().toString(36).slice(2, 12)}`);
+      }
+      const question = goal.get().trim();
+      const snapshot = rules.get().map((rule) => ({ ...rule }));
+      const reached = target !== null &&
+        (target.goal ?? "").trim() === question;
       published.set({
-        goal: goal.get().trim(),
-        rules: rules.get().map((rule) => ({ ...rule })),
+        goal: question,
+        rules: snapshot,
         publishedAt: Date.now(),
+        pooled: reached,
       });
+      if (reached) {
+        target.submit.send({ pseudonym: pseudonym.get(), rules: snapshot });
+      }
     });
 
     // ========================================================================
@@ -296,9 +338,11 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     );
     const publishedLine = computed(() => {
       const snapshot = published.get();
-      return snapshot
-        ? `Published ${snapshot.rules.length} rules for “${snapshot.goal}”.`
-        : "Not published yet.";
+      if (!snapshot) return "Not published yet.";
+      return snapshot.pooled
+        ? `Published ${snapshot.rules.length} rules to the pool for ` +
+          `“${snapshot.goal}”.`
+        : `No pool for “${snapshot.goal}” found; nothing was sent.`;
     });
     const itemLines = computed(() =>
       [...rows].reverse().map((row) => ({
@@ -389,6 +433,7 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       rules,
       history,
       published,
+      pseudonym,
       rows,
       summary,
       heldOutF1,
