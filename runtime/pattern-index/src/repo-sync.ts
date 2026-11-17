@@ -234,14 +234,14 @@ const gardenerReports = (
   heads: readonly PatternIndexRepoHead[],
 ): GardenerReport[] =>
   heads.flatMap((head) =>
-    Object.entries(head.gates ?? {})
-      .filter(([, verdict]) => (verdict.findings?.length ?? 0) > 0)
-      .map(([gardener, verdict]) => ({
+    Object.entries(head.gates ?? {}).flatMap(([gardener, verdict]) =>
+      verdict.findings === undefined || verdict.findings.length === 0 ? [] : [{
         path: head.path,
         gardener,
         status: verdict.status,
-        findings: verdict.findings ?? [],
-      }))
+        findings: verdict.findings,
+      }]
+    )
   );
 
 /**
@@ -334,8 +334,11 @@ const cell = (text: string): string =>
  * which is whoever can read the source the findings are about.
  */
 export const reportMarkdown = (report: RepoSyncReport): string => {
-  const withStatus = (status: EntryOutcome["status"]) =>
-    report.entries.filter((entry) => entry.status === status);
+  const withStatus = <S extends EntryOutcome["status"]>(status: S) =>
+    report.entries.filter((entry): entry is Extract<
+      EntryOutcome,
+      { status: S }
+    > => entry.status === status);
   const published = withStatus("published");
   const failed = withStatus("failed");
   const undescribed = withStatus("undescribed");
@@ -355,7 +358,6 @@ export const reportMarkdown = (report: RepoSyncReport): string => {
   if (failed.length > 0) {
     lines.push("", "### Failed", "", "| Entry | Reason |", "| --- | --- |");
     for (const entry of failed) {
-      if (entry.status !== "failed") continue;
       lines.push(`| \`${entry.path}\` | ${cell(entry.reason)} |`);
     }
   }
@@ -372,7 +374,6 @@ export const reportMarkdown = (report: RepoSyncReport): string => {
   if (published.length > 0) {
     lines.push("", "### Published", "", "| Entry | Pattern |", "| --- | --- |");
     for (const entry of published) {
-      if (entry.status !== "published") continue;
       lines.push(`| \`${entry.path}\` | \`${entry.patternId}\` |`);
     }
   }

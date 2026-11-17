@@ -256,6 +256,17 @@ describe("repo-sync", () => {
       }]);
     });
 
+    it("returns an entry whose compile produced no pattern id as failed", async () => {
+      const deps = planDeps({ "patterns/a/main.tsx": DESCRIBED });
+      deps.compileProgram = (program) => Promise.resolve({ program });
+      const plan = await planRepo(OPTIONS, deps);
+      expect(plan.entries).toEqual([{
+        path: "patterns/a/main.tsx",
+        status: "failed",
+        reason: "the compile produced no durable pattern id",
+      }]);
+    });
+
     it("returns a failed compile beside the entries that compiled", async () => {
       const plan = await planRepo(
         OPTIONS,
@@ -325,6 +336,9 @@ describe("repo-sync", () => {
       const plan = (entry: unknown) => ({ entries: [entry], selected: [] });
       expect(planProblem(plan({ status: "compiled" }))).toBe(
         "entries[0] has no path",
+      );
+      expect(planProblem(plan({ path: "a", status: "failed" }))).toBe(
+        "entries[0] has no reason",
       );
       expect(planProblem(plan({ path: "a", status: "shipped" }))).toBe(
         "entries[0] has an unknown status",
