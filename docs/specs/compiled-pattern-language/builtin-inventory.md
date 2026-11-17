@@ -652,7 +652,13 @@ the element is keyed by the identity of that cell.
   writes it elsewhere, and `key(i)` on the array is a handle by
   position that nothing rewrites to a reference to the element. How
   the reference is stored and labeled is assumed
-  (`plan-and-label-templates.md` §8, questions 113 and 114). Over an
+  (`plan-and-label-templates.md` §8, questions 113 and 114). Assumed
+  as well (its questions 132 and 133): a handler that declares a data
+  type for the element in its state holds a copy, as a body that
+  reads through a handle does by ruling; and a re-key moves an
+  instance that a computation of the body made, replaces what is
+  stored under the new key, and moves nothing for another element
+  whose occurrence count it changed. Over an
   array of references none of this applies.
 - *A list of keyed records is an array of references.* The record
   that `elementById` yields a handle of is, by ruling, a cell of its

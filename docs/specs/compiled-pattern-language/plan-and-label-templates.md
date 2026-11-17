@@ -1109,6 +1109,11 @@ export interface Closure {
  *   is a prefix: the key of the position starts with the keys of the
  *   binding's enclosing collections. In the result of a `flatMap`
  *   every member of one source element's segment is such a position.
+ *   `steps` is the number of `element` steps of the binding that the
+ *   one `*` stands for, where that is more than one: at the result of
+ *   a `flatMap` whose callback returns the result of an inner
+ *   per-element construct, the key of a position holds the keys of
+ *   both (assumed; section 8, question 131).
  * - `every`: a collection that no `element` step of the binding names,
  *   whose callback writes the stream. Every position of the collection
  *   holds the one stream.
@@ -1123,7 +1128,8 @@ export interface Closure {
  *   of which one element holds the stream inside its value.
  */
 export type ResultStar =
-  | { readonly kind: "element" | "every" | "inside" }
+  | { readonly kind: "element"; readonly steps?: number }
+  | { readonly kind: "every" | "inside" }
   | { readonly kind: "member"; readonly index: number };
 
 /** One path of `Binding.result`. */
@@ -1764,7 +1770,11 @@ makes, 3 evaluations of `patterns/apps/base/contacts.tsx` fail the
 check: a promoted `computed` with a block body returns a tree that
 holds the stream of a binding, value code places the marker, and the
 prototype's compiler lists no path for the binding. That is a missing
-path of the first kind above, which the check found.
+path of the first kind above, which the check found. With a path
+listed below the position of the `computed` for a stream in the tree
+that it returns, for a statement body, where each `return` is a
+branch, and for an expression body, no evaluation of that run fails
+the check.
 
 **What a `*` of a result path stands for.** A `*` of a path of
 `Binding.result` can stand for four things: the positions of a
@@ -1823,7 +1833,43 @@ that passes one on (`Output.passesCollection`), a `*` is of kind
 whose keys the result has (section 1.3). By ruling that holds for the
 result of a `flatMap` as well, whose keys start with the keys of its
 source: the `*` is of kind `element` for a handler bound in the
-upstream body, and the match is the prefix match above.
+upstream body, and the match is the prefix match above. The
+prototype's compiler lists such a path for a binding of the body of
+the callback of a `flatMap`, and its executor matches by the prefix.
+Its fixture has the case over a source of references and over a
+source of plain values in place, each with segments of plain values
+that the callback writes: every member of a segment holds the stream
+of its source key, and an event for it reads the source element. A
+member of a segment of references is a cell that the callback did not
+write, so no marker of a binding of the body is placed in one.
+
+**A `*` that stands for two `element` steps.** A path has one `*` for
+each collection it passes through, and a binding has one `element`
+step for each collection its handler is bound within. The two counts
+differ in one case: a `flatMap` whose callback returns the result of
+an inner per-element construct, with the handler bound in the inner
+body, as in
+`xs.flatMap((x) => x.items.map((item) => <li onClick={pick({ item })} />))`.
+The binding has two `element` steps, that of the source of the
+`flatMap` and that of the inner `map`. The result of the `flatMap`
+has one level of positions, and the key of each is the key of the
+source element, the separator, and the key that the member has in the
+inner result (section 1.3, as assumed under question 101). The ruling
+on the prefix match covers the position, whose key starts with the
+keys of the handler's enclosing collections, here both. The ruling
+does not say how the path states it. *Assumed* (section 8, question
+131): the path has one `*` at the result of the `flatMap`, of kind
+`element`, and its entry of `stars` holds `steps: 2`, the number of
+`element` steps of the binding that the `*` stands for, outermost
+first. The check accepts the marker at a position whose key starts
+with the keys of those steps joined in that order, and a reader that
+has the plan composes the key in the same way. The alternative lists
+`*/*` with two kinds `element`, which names a level of positions that
+the stored result does not have; the prototype's compiler lists that.
+The case is the result of another per-element construct, the
+`flatMap`, over a source of any of the three cases, with a segment
+that is the result of a `map` or a `filter` over an array of
+references or over an array of plain values in place.
 
 *Assumed* (section 8, question 78), except where an item names a
 ruling, since the ruling on the kinds does not say how a kind is
@@ -2124,7 +2170,13 @@ A reference by key is resolved through the schema that its link
 holds, and a slot is read under `Slot.schema`, so each reader finds
 the keyword in the schema of the array it reads. `Collection` has a
 member of the same name that holds a copy (section 1.1), for a source
-that is an output, of which the plan holds no schema. *Assumed,* with
+that is an output, of which the plan holds no schema. *Assumed*
+(section 8, question 134): the key does not say how it was formed. It
+is the salted hash and the count, whether the hash is of the whole
+value or of the value of the key field, and whoever resolves it takes
+the field from the schema. The prototype's executor writes the name
+of the field into the key and resolves a reference by key with no
+schema. *Assumed,* with
 the form: the field is a required property of `T` at the top level,
 of type `string` or `number` (`language-subset.md` §7.2); the value
 of the field is salted as any value in a key is, so a client cannot
@@ -2284,13 +2336,33 @@ to an element is the link to its cell, which a move does not change.
   given for the element, as a handler whose state declares the
   element as a `Cell` is, is the reference by key: the body can pass
   it on, compare it with `equals`, and write through it. A value that
-  the body reads, through `get()` on such a handle or at a position
-  of its argument that it declares as data, is a copy. A body that
-  stores it, as `selected.set(items.get()[i])` and
-  `center.set(stop.position)` do, stores the value. That is an
-  exception, for a plain value in place, to the rule that a value a
-  body passes on unchanged is stored as a reference
-  (`execution-and-storage.md` §2.4).
+  the body reads through `get()` or `sample()` on a handle is a copy.
+  A body that stores it, as `selected.set(items.get()[i])` does,
+  stores the value. That is an exception, for a plain value in place,
+  to the rule that a value a body passes on unchanged is stored as a
+  reference (`execution-and-storage.md` §2.4). The ruling names a
+  handle that the body is given and a read through a handle. Two
+  ways in which a body gets the element are neither, and what they
+  give is *assumed* (section 8, question 132).
+  - **A state path of data type.** A handler bound in the element
+    body can declare a data type for the element in its state, as
+    `stop: Stop`. The state entry is no handle, and the handler reads
+    through none. *Assumed:* the value that the handler is given at
+    the path is a copy, so `center.set(stop.position)` stores the
+    value. The alternative hands the handler a stand-in that carries
+    the reference by key, and a member read from it carries the
+    reference with the member's path, so the write stores a reference
+    by key. The prototype's executor does the alternative. By the
+    prototype's measurement the runtime of today stores a link to
+    the position there, which reads the element that stands at the
+    position afterwards.
+  - **A read through a handle whose type declares the members as
+    handles,** as `Writable<Writable<Item>[]>`. The read gives a
+    handle for each member. *Assumed:* the handle of a member that
+    is a plain value in place is a reference by key, as a handle that
+    the body is given for the element is. The prototype's executor
+    does so. The alternative gives a handle by position, as
+    `items.key(i)` is.
 - **A move** changes nothing that a reference by key holds. Nothing is
   evaluated for it, and the reference resolves to the new position.
 - **A read** through the reference resolves the key to the position
@@ -2353,11 +2425,14 @@ to an element is the link to its cell, which a move does not change.
   the position, and nothing once no element stands there. In this
   design it reads as nothing in both. That is for a reference by key,
   which a node of the reactive tier stores and a handle to the
-  element is. A handler that reads a member of such an element and
-  stores it in a cell, as `center.set(stop.position)` does where the
-  list holds its records in place, stores a copy of the value by the
-  ruling above, and the cell reads the value after the element is
-  removed, as today. Where function bodies wrote the records into the
+  element is. A handler that reads a member of such an element
+  through a handle and stores it in a cell, as
+  `center.set(stops.get()[i].position)` does where the list holds its
+  records in place, stores a copy of the value by the ruling above,
+  and the cell reads the value after the element is removed, as
+  today. For a handler that is given the element at a state path of
+  data type the copy is assumed ("What a function body holds",
+  above). Where function bodies wrote the records into the
   list with `push`, the list is an array of references: a stored
   handle to the record is a link into the record's document and reads
   the record after the removal, today and in this design.
@@ -2398,8 +2473,33 @@ references.
   reference whose key no position holds is refused, as a write
   through a handle to a value the instance computes is, so in a
   handler it rejects the event's transaction. The prototype's
-  executor does not re-key: there a row loses its state on such a
-  write, and a second write through the same reference is refused.
+  executor re-keys so. In its fixture the row keeps its state, two
+  writes one after the other commit, a handler that throws moves
+  nothing, and a reference stored elsewhere under the old key reads
+  as nothing, in a body over the array and in a body over the result
+  of a `filter` of it; over an array of references the two writes
+  commit and no key changes. Three things that neither the ruling nor
+  the assumptions above name are *assumed* as well (section 8,
+  question 133).
+  - **What a function body made under the old key.** An instance that
+    a `lift` or a `computed` of the element body made is a child
+    under the key (`execution-and-storage.md` §2.5) and is moved with
+    the children. A binding that a function body made is named by
+    what it holds and not by the key (section 3.14), and nothing is
+    moved for it. The prototype's executor names both by the run and
+    its element keys and moves neither.
+  - **Something is stored under the new key already,** from an
+    element that left the collection earlier, since a removal deletes
+    nothing. What is moved replaces it. The prototype's executor does
+    so.
+  - **The occurrence count of other elements.** An edit that makes
+    the value equal to that of another element, or ends such an
+    equality, changes the count of elements that the write did not
+    touch. Each of those has the key that its value and its new
+    count give. Nothing is moved for it, and it reads what is stored
+    under that key, as the element that remains after a removal does
+    ("Occurrences", above). The prototype's executor does so.
+
   An edit of the value that is not made through a reference by key,
   as a write through a handle by position or a `set` of the whole
   array, is a new element (below), and nothing is moved for it.
@@ -2448,17 +2548,18 @@ that names a position resolve to the cell.
   reads two arrays, exchanges members, and sets both, as the shuffle
   of `patterns/showcase/card-piles/main.tsx` does, reads plain values
   and so holds copies. It writes the values into both arrays, as the
-  runtime of today does. The prototype's executor writes references
-  by key there, and 9 of the module's 28 compared values differ from
-  today's in a seeded run.
+  runtime of today does. The prototype's executor does so: a read
+  through a handle gives a copy that carries no address, and the
+  module's 28 compared values equal today's in a seeded run.
 - **A position compared with an element.** A handler of a row that
   finds its element with `items.key(i).equals(item)`, as
   `patterns/dev/gideon-tests/test-handler-capture-key-equals.tsx`
   does, compares a handle by position with a reference by key. The
   two are equal while the element stands at `i`, and the handler
   finds the element, as it does in the runtime of today, where both
-  name the position. The prototype's executor holds them unequal (2
-  values).
+  name the position. The prototype's executor resolves both to the
+  position and finds them equal, and the module's 4 compared values
+  equal today's.
 
 A link to a plain value is keyed by the cell it links to, so two cells that
 hold equal values have two element parts. A position that holds a
@@ -5374,7 +5475,36 @@ is no collection: its members are written out among the children when
 the tree is built, each at a child position of its own, as the JSX
 factory does today (`children.flat()` in `h`). The runtime of today
 stores the same paths for a `map` over a cell (section 3.1, "A binding
-with a `within` step").
+with a `within` step"). For a `map` over an array that is written in
+place in the pattern body, which is a collection over plain values in
+place, this design stores one nested child as well. By the
+prototype's comparison the runtime of today runs such a `map` when
+the pattern is built and holds its elements as children of their own,
+from the position of the expression on.
+
+Two forms among the children are named neither by the ruling nor by
+the rule for an array literal. *Assumed* (section 8, question 130):
+each is one child at the position it is written at.
+
+- **A spread child,** `{...xs}`, holds what `xs` is, as the expression
+  child `{xs}` does: the nested collection where `xs` is a collection,
+  over an array of references, over an array of plain values in place
+  or over the result of another per-element construct, and the
+  reference where `xs` is another expression of array type.
+- **An array literal that itself has a spread or a hole,** as
+  `{[head, ...xs.map(f), tail]}`, is one nested child: an array value
+  with a spread, stored at `children/<n>`, whose positions are named
+  as those of any array value with a spread are (section 1.1, "From a
+  path to a position, in an array value with a spread"). Its members
+  are not written out among the children.
+
+Every child written after either form then has a static position. The
+alternative writes the members out when the tree is built, as the JSX
+factory does today for what is an array at that time, and the
+positions from the spread on are then not static. An expression of
+array type that is no collection, as an input written `{items}`, is
+one child that holds the reference, by the rule for any child. The
+prototype's compiler makes each of these one child.
 A fragment is the same record with the fragment's
 name. The rendered tree under `$UI` is such a construction, and its paths
 are these.
@@ -7683,7 +7813,14 @@ and a call through `inSpace` is such an instance already.
   has `asInstance: true`. Its `name` and `within` are those of the
   site, as for any child of the reactive tier. *Assumed:* the form of
   the member; and that a `Child` with `asInstance` and a `factory`
-  callee is the same record with the mark.
+  callee is the same record with the mark. The prototype's compiler
+  writes the record so for a callee that it can see, with one write
+  edge of target `argument` per path of the argument and a slot of
+  root `child` per read of the result, in the same form in each of
+  the three cases and outside an element body. It writes a
+  placeholder in the place of the hash, no `argumentSchema` and no
+  `resultSchema`, and neither `scope` nor `space` where the call
+  composes the modifiers: limits of the prototype.
 - **In an element body.** The `within` of the record has the `element`
   step of each enclosing collection, so the instance is identified by
   the site, the collection and the element key (section 1.3). It
@@ -7725,7 +7862,12 @@ and a call through `inSpace` is such an instance already.
   with the element, as the rest of what the old key holds is, so the
   row keeps it; and a link stored elsewhere to its result under the
   old key reads what it read before the write and no later value. No
-  record maps a key to an instance. An edit of such a value that is
+  record maps a key to an instance. The prototype's executor differs
+  in both: it keeps a table from the child and the element keys to
+  the instance, and on a re-key it moves the table entry and leaves
+  the documents under the names they were made with, so a link stored
+  elsewhere to the result reads the later values as well (section 8,
+  question 123). An edit of such a value that is
   not made through a reference by key, and a new array in which the
   value differs, is a new element with a new instance, and the
   instance of the old key stays as that of a key that left.
@@ -11647,10 +11789,11 @@ this document made.
     after a spread at the position of an element, and a reader does
     not send an event for such a binding to the stream of an element,
     as the harness of the prototype's comparison did. The prototype's
-    plans hold the kinds: of the 1,420 listed paths of its 382 corpus
-    patterns, 448 have a `*`, and their 476 `*` are 215 `inside`, 207
-    `element`, 51 `member` and 3 `every`, counted with the children of
-    a view node stored flat. Not open either, by ruling: a
+    plans hold the kinds: of the 1,421 listed paths of its 382 corpus
+    patterns, 411 have a `*`, and their 425 `*` are 215 `inside`, 207
+    `element` and 3 `every`. No path of the corpus has kind `member`:
+    a child written after a collection among the children of a view
+    node has a static position. Not open either, by ruling: a
     collection among the children of a view node is stored as one
     nested child, so its elements are at `children/<n>/*`, a child
     written after it has a static position and no `*`, and two
@@ -12260,9 +12403,10 @@ this document made.
      through a handle by position or a `set` of the whole array, is a
      new element and moves nothing; and a write through a reference
      whose key no position holds is refused. The prototype's executor
-     does not re-key: one write commits and the row loses its state,
-     and a second write through the same reference is refused with
-     the event. The case is an array of plain values in place. Over
+     re-keys as ruled, in a body over the array and in a body over
+     the result of a `filter` of it. Question 133 has what neither
+     the ruling nor these assumptions name. The case is an array of
+     plain values in place. Over
      the result of another per-element construct whose upstream
      position holds a value, a write lands only where the upstream
      collection is stored. Nothing arises over an array of
@@ -12323,18 +12467,21 @@ this document made.
      given for the element is a reference by key, and a value that
      the body reads through a handle is a copy. So a handler that
      exchanges members between two arrays and sets both stores the
-     values (`patterns/showcase/card-piles/main.tsx`, where the
-     prototype stores references by key and 9 of 28 compared values
-     differ in a seeded run). Second: `items.key(i)` is equal to a
+     values (`patterns/showcase/card-piles/main.tsx`, whose 28
+     compared values equal today's in the prototype's seeded run).
+     Second: `items.key(i)` is equal to a
      reference by key to the element at position `i`, with both
      resolved to the current position and compared there
      (`patterns/dev/gideon-tests/test-handler-capture-key-equals.tsx`,
-     2 values of the prototype's run). And by ruling `items.key(i)`
+     whose 4 compared values equal today's in the prototype's run).
+     And by ruling `items.key(i)`
      is a handle by position, at the call and when stored; nothing
      rewrites it to a reference to the element, so `items.key(0)`
      addresses the first element, whichever it is (section 1.3).
      Question 121 has what the comparison gives where the parent
-     cannot be read. The rulings on the copy and on the comparison
+     cannot be read, and question 132 has two ways in which a body
+     gets an element that the ruling on the copy does not name. The
+     rulings on the copy and on the comparison
      are about an array of plain values in place; the ruling on
      `key(i)` is the same over an array of references, an array of
      plain values in place, and the result of another per-element
@@ -12429,7 +12576,10 @@ this document made.
      read through the name is, of a path that a cone of the instance
      computes, stays with question 108. The same for a binding in an
      element body in each of the three cases of a per-element source.
-     The entry keeps its number.
+     The prototype's compiler writes the place and its executor hands
+     the handler the reference, in the pattern's body and in an
+     element body over references and over plain values in place. The
+     entry keeps its number.
 121. **A handle by position compared with a reference by key, where
      the parent cannot be read** (for the project owner). By ruling
      `items.key(i)` is a handle by position that nothing rewrites,
@@ -12494,7 +12644,17 @@ this document made.
      stored elsewhere to its result under the old key reads what it
      read before the write and no later value. The owner did not
      object to this and did not rule it. No record maps a key to an
-     instance. Over the result of another per-element construct the
+     instance. The prototype's executor has the smaller mechanism: a
+     table from the child and the element keys to the instance, whose
+     entry it moves to the new key on a re-key, with the documents
+     left under the names they were made with. The row then keeps its
+     instance and its argument is written again, as assumed here, and
+     a link stored elsewhere to the result keeps reading the later
+     values, which the assumption here does not have. The coordinator
+     of this work recommends adopting the executor's behavior. That
+     is a recommendation to the owner and no ruling, and the
+     assumption stands until one. Over the result of another
+     per-element construct the
      case is that of the upstream source. Third, the argument of an
      instance whose key is away. *Assumed:* a path bound to the
      element holds what it last held, the reference over an array of
@@ -12595,3 +12755,115 @@ this document made.
      plain values in place. Nothing of it arises over an array of
      references, and over the result of another per-element construct
      it is the case of the upstream source.
+130. **A spread child, and an array literal with a spread, among the
+     children of a view node** (for the project owner; from the
+     prototype). By ruling a collection among the children of a view
+     node is one nested child, and an array literal that the author
+     writes among the children has its members written out, each at
+     a child position of its own (section 3.4). Neither names a
+     spread child, `{...xs}`, or an array literal among the children
+     that itself has a spread or a hole, as
+     `{[head, ...xs.map(f), tail]}`. The JSX factory of today
+     flattens what is an array when the tree is built. *Assumed:*
+     each is one child at the position it is written at. A spread
+     child holds what `xs` is, as the expression child `{xs}` does.
+     Such an array literal is one nested child, an array value with a
+     spread, whose positions are named as those of an array value
+     with a spread outside the children are. Every child written
+     after either has a static position. The prototype's compiler
+     does so. The alternative writes the members out among the
+     children, so that the positions from the spread on are not
+     static and kind `member` returns among the children. The same
+     whether `xs` is a collection over an array of references, over
+     an array of plain values in place, or the result of another
+     per-element construct; where `xs` is another expression of array
+     type the child holds the reference.
+131. **How a result path states that one `*` stands for the keys of
+     two `element` steps** (for the project owner; from the
+     prototype). By ruling kind `element` matches by prefix: the key
+     of the position starts with the keys of the handler's enclosing
+     collections. Where the callback of a `flatMap` returns the
+     result of an inner `map` whose body binds the handler, the
+     binding has two `element` steps, and the result of the `flatMap`
+     has one level of positions, each with the key of the outer
+     element, the separator, and the key of the inner one. The
+     ruling covers the position and does not say what the path
+     holds: `ResultPath.stars` has one entry for each `*`. *Assumed:*
+     the path has one `*` at the result of the `flatMap`, of kind
+     `element`, and the entry holds `steps`, the number of `element`
+     steps of the binding that the `*` stands for (section 1.1, "A
+     `*` that stands for two `element` steps"). The alternative lists
+     `*/*` with two kinds `element`, as the prototype's compiler
+     does, which no position of the stored result has; a second
+     alternative stores the result of such a `flatMap` nested by
+     segment. The case is the result of another per-element
+     construct, the `flatMap`, over a source of any of the three
+     cases, with a segment that is the result of a `map` or a
+     `filter` over an array of references or over an array of plain
+     values in place.
+132. **What a function body is given for an element where it is given
+     no handle** (for the project owner; from the prototype). By
+     ruling a handle that a body is given for the element is a
+     reference by key, and a value that the body reads through a
+     handle is a copy (question 115). Two cases are neither. First, a
+     handler bound in an element body whose state declares a data
+     type for its element, as `stop: Stop`, and that stores a member
+     of it, as `center.set(stop.position)`. *Assumed:* the value at
+     the state path is a copy, and the write stores the value. The
+     alternative hands the handler a stand-in that carries the
+     reference by key, so the write stores a reference by key with
+     the member's path; the prototype's executor does the
+     alternative. By the prototype's measurement the runtime of
+     today stores a link to the position there. Second, a read
+     through a handle whose type declares the members as handles, as
+     `Writable<Writable<Item>[]>`. *Assumed:* the handle of a member
+     that is a plain value in place is a reference by key, as the
+     prototype's executor has it. The alternative gives a handle by
+     position, as `items.key(i)` is by ruling. Both cases are an
+     array of plain values in place, and the result of another
+     per-element construct where the upstream position holds a
+     value. Over an array of references the state path and the
+     member handle resolve to the element's cell.
+133. **What a re-key does that the ruling does not name** (for the
+     project owner; from the prototype). By ruling a write through a
+     reference by key that changes the value re-keys the element and
+     moves what the old key holds (question 112). Four things are
+     not named. First, an instance or a binding that a function body
+     made in the element body. *Assumed:* an instance that a `lift`
+     or a `computed` of the body made is a child under the key and
+     is moved; a binding that a function body made is named by what
+     it holds, and nothing is moved for it. The prototype's executor
+     names both by the run with its element keys and moves neither.
+     Second, something stored under the new key already, from a key
+     that left earlier. *Assumed:* what is moved replaces it. The
+     alternative keeps what is stored there and drops what the old
+     key held, or refuses the write. Third, an edit that makes the
+     value equal to that of another element, or ends such an
+     equality, changes the occurrence count of other elements.
+     *Assumed:* nothing is moved for those; each reads what is
+     stored under the key that its value and its new count give, as
+     after a removal. The alternative moves the state of every
+     element whose count changed. Fourth, a write that is not made
+     through a reference by key, as a `set` of the whole array.
+     *Assumed,* as under question 112: it re-keys nothing, and the
+     element is another element. The prototype's executor does the
+     second, the third and the fourth as assumed. The case is an
+     array of plain values in place with no declared key field, and
+     a body over the result of another per-element construct applied
+     to it; nothing of it arises over an array of references.
+134. **Whether a key says how it was formed** (from the prototype).
+     Where the element type declares a key field, the element part
+     is formed from the value of that field, and otherwise from the
+     whole value. Section 1.3 resolves a reference by key through
+     the schema that its link holds. The prototype's executor writes
+     the name of the field into the key, so that a reference by key
+     is resolved with no schema. *Assumed:* the key does not say how
+     it was formed, and whoever resolves one takes the key field
+     from the schema of the array. The alternative marks the key
+     with the field, which makes a reference by key resolvable
+     without the schema and reveals the name of the field to a
+     holder of the link. The case is an array of plain values in
+     place, a plain array generated from scratch included, and the
+     result of another per-element construct where the upstream
+     position holds a value; an array of references is keyed by its
+     cells.

@@ -734,9 +734,15 @@ edited, a reference to it that was stored elsewhere, by a node of the
 reactive tier or as a handle a handler was given, reads as
 `undefined`; in the runtime of today such a reference names the
 position and reads the element that stands there. A function body
-that reads the value holds a copy, by ruling: `center.set(stop.position)`
-in a handler that reads `stop` stores the value, as today, and the
-cell keeps it after the element is removed. `items.key(i)` is a
+that reads the value through a handle holds a copy, by ruling: it
+stores the value where it writes it elsewhere, as today, and a cell
+it wrote keeps the value after the element is removed. That a
+handler which declares a data type for the element in its state, as
+`stop: Stop`, holds a copy as well, so that
+`center.set(stop.position)` stores the value, is *assumed*
+(`plan-and-label-templates.md` §8, question 132); by the prototype's
+measurement the runtime of today stores a link to the position
+there. `items.key(i)` is a
 handle by position, at the call and when it is stored: nothing
 rewrites it to a reference to the element, so `items.key(0)` names
 the first element, whichever it is, over an array of references, an
@@ -1120,7 +1126,15 @@ expressions.
   equivalent to an `action`.
 - An arrow function in any other attribute is refused
   (`pattern-context:function-creation`).
-- Spread attributes and spread children are allowed.
+- Spread attributes and spread children are allowed. *Assumed*
+  (`plan-and-label-templates.md` §8, question 130): a spread child,
+  `{...xs}`, is one child at the position it is written at, as the
+  expression child `{xs}` is, and so is an array literal among the
+  children that itself has a spread or a hole. An array literal with
+  neither has its members written out among the children
+  (`plan-and-label-templates.md` §3.4). The same whether `xs` is a
+  collection over an array of references, over an array of plain
+  values in place, or the result of another per-element construct.
 
 ### 4.6 Captures
 

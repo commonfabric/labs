@@ -1041,6 +1041,20 @@ the result of a `map`, a `filter` or a `flatMap`. In a later run over
 makes, 3 evaluations of one module fail the check, at a stream for
 which the prototype's compiler lists no path
 (`plan-and-label-templates.md` §1.1, "The listed paths are complete").
+With that path listed, no evaluation of the run fails. For a marker
+at a position that no listed path covers, the executor leaves the
+top-level property of the result as it was stored, stores every other
+property, and records the property, the binding and the position; the
+next evaluation that stores the property clears the record, as
+assumed above. In its fixture a marker below a conditional fails
+while another subtree of the tree changed in the same write, and the
+stored `$UI` is the earlier tree whole. That is the same for a marker
+of a cone of an element body over references, over plain values in
+place, and over the result of a `filter`: `$UI` holds nothing where
+nothing was stored, and the other properties are stored. The executor
+stores the children of a view node as value code gives them, so a
+collection among them is one nested array, and it reads the origin of
+a position below a child from that array.
 
 An earlier run, without the marker and the check, compared where the
 stored results hold a stream with the listed paths. By kind, the
@@ -1450,7 +1464,11 @@ calls `items.get()`, the body is handed a handle. A state path that a
 handler declares with a data type, as `stop: Stop`, holds a reference
 stand-in or, where the body has entries below the path, the form that
 carries more with the reference's address, by the rule for two entries
-at one path. An entry of `computed` has no slot and so no schema.
+at one path. Where the path is bound to an element that is a plain
+value in place, whether that form carries the reference by key or is
+a copy is *assumed* (`plan-and-label-templates.md` §8, question
+132): it is a copy. An entry of `computed` has no slot and so no
+schema.
 *Assumed* (section 11, question 91): the runtime takes the type of
 such a position from the type the body declares at the entry's `at`.
 No record of the plan holds that type.
@@ -1497,9 +1515,15 @@ the position that holds the key at each read and each write, so it
 stays right when the element moves, and it reads as nothing once no
 position holds the key. By ruling such a reference does not reach a
 function body through a read: a function body that reads a plain
-value in place, through `get()` on a handle or at a position of its
-argument that it declares as data, holds a copy, and writing it
-elsewhere stores the value, as today. The value that such a body is
+value in place through `get()` or `sample()` on a handle holds a
+copy, and writing it elsewhere stores the value, as today. *Assumed*
+(`plan-and-label-templates.md` §8, question 132): a position of its
+argument that a body declares as data, as the state path `stop: Stop`
+of a handler bound in an element body, holds a copy as well. The
+prototype's executor hands the handler a stand-in there that carries
+the reference by key, and by the prototype's measurement the runtime
+of today stores a link to the position where such a handler stores a
+member of the element. The value that such a body is
 given carries no address for the rule of this paragraph. So a body
 that exchanges members between two arrays of plain values in place
 and sets both stores the values in both. A handle by position, as
@@ -1744,7 +1768,25 @@ documents are moved by writing them under the identifiers of the new
 key and retiring those of the old key in the same transaction, so
 that an identifier is still a function of the key (section 5.3); and
 a link held elsewhere to a state cell or a stream of the old key
-reads what it read before the write and no later value.
+reads what it read before the write and no later value. *Assumed* as
+well (its question 133): an instance that a `lift` or a `computed` of
+the body made under the old key is moved as a child is, and nothing
+is moved for a binding that a function body made, which is named by
+what it holds; what is moved replaces what is stored under the new
+key from an element that left earlier; and an element whose
+occurrence count the edit changed has nothing moved and reads what is
+stored under the key of its new count.
+
+The prototype's executor re-keys when the handler returns, or at its
+next settling for a write from outside a handler, as through a member
+bound both ways, and a handler that throws moves nothing. Until the
+transaction ends it finds a key that was changed under the key the
+element has now, so the handler's second write succeeds. It moves
+the state cells of the old key, in the body over the array and in the
+bodies over the results of the constructs applied to it, and drops
+the cone instances of the old key. It does not move an instance or a
+binding that a function body made in the element body, which it names
+by the run and its element keys.
 
 **Which cones are the body's.** The cones of a collection's body are the
 cones of the plan whose `Cone.within` has the `element` step that names
@@ -2029,6 +2071,25 @@ child without the modifier.
   construct the case is that of the upstream source. Section 2.6 has
   a worked case of the first two ("Two worked cases").
 
+  The prototype's executor implements the modifier, and its fixture
+  has the three cases. Over an array of references the argument holds
+  the link to the element's cell, and a change of the element's value
+  writes no argument and changes no key. Over an array of plain
+  values in place the argument holds the value: the instance of a
+  value that left reads the value it was last given, and the same
+  value written again, at any position, has the same instance. Over
+  the result of a `filter` the instance is identified by the upstream
+  key, and it is the same when the `filter` drops the element and
+  keeps it again. An event for a stream of the instance is handled
+  while the key is away, and an event for a binding of an element
+  body with no modifier is refused then. The executor identifies the
+  instance by a table from the child and the element keys, and on a
+  re-key it moves the table entry and leaves the documents under the
+  names they were made with, so a link stored elsewhere to the result
+  reads the later values, which the assumption of question 123 does
+  not have. The runtime of today has no such modifier, so nothing of
+  this is compared with it.
+
 An author who needs a child to stay with a record across an edit of the
 record makes the elements cells: a position that holds a link keeps its
 element part when the value behind the link changes. An author who
@@ -2123,8 +2184,10 @@ over the result of another per-element construct.
   over plain values in place: while a key is away its cone instances
   are gone, no document is made or deleted, and the key that returns
   reads what its cell held (72 of 72 values equal those of the runtime
-  of today). It has no state of an operation that is kept per key and
-  no child of an element body, so neither is exercised. Over plain
+  of today). It has no state of an operation that is kept per key,
+  and the one child of an element body it has is a pattern called
+  through `asInstance()`, which stays, so neither the operation state
+  nor the teardown of a child is exercised. Over plain
   values in place a value that returns at another position is the one
   case where the runtime of today, whose key is the position, would
   read another cell, and the comparison does not have it.
@@ -2192,9 +2255,13 @@ references, where the element is a cell.
   reads the element that moved to the position, and nothing once no
   element stands there (`plan-and-label-templates.md` §1.3, "Which
   stored forms make which case"). By ruling a handler that reads the
-  member and writes the value to a cell, as
-  `center.set(stop.position)` does, stores a copy, as today, and the
-  cell reads the value after the removal.
+  member through a handle and writes the value to a cell stores a
+  copy, as today, and the cell reads the value after the removal.
+  That a handler which is given the element at a state path of data
+  type, as `center.set(stop.position)` with the state `stop: Stop`,
+  stores a copy as well is *assumed* (its §8, question 132). By the
+  prototype's measurement the runtime of today stores a link to the
+  position there.
 
 A list that function bodies fill with records through `set`, `push`
 or `addUnique` is not this case. Each record is a document of its own
@@ -2371,6 +2438,16 @@ const RepoSearch = pattern<{ url: string; minStars: number }>(
   whole value. A response in which `stars` changed is then a new key
   and a new instance, and the instance of the old key stays with the
   old value.
+
+The prototype's executor has the second case in a fixture, with a
+`lift` in the place of `fetchJson`: each element has the key of its
+`id`, a state cell of its row stays when every element has another
+`stars`, and the instance of a row is the same when its element has
+another `stars`, leaves the result of the `filter`, and enters it
+again. Its key holds the value of the field with no salt and no hash,
+and the name of the field
+(`plan-and-label-templates.md` §8, question 134). The runtime of today
+has no such marker, so nothing of this is compared with it.
 
 Three points are open for a declared key: a write to the key field
 itself (`plan-and-label-templates.md` §8, question 129), the document
@@ -3093,7 +3170,15 @@ another per-element construct. An array literal that the author
 writes among the children is not such a collection: its members are
 written out among the children when the tree is built, as the JSX
 factory does today (`children.flat()` in `h`), and each has a child
-position of its own. These are the paths
+position of its own. *Assumed* (`plan-and-label-templates.md` §8,
+question 130): a spread child, `{...xs}`, and an array literal among
+the children that itself has a spread or a hole are each one child at
+the position they are written at, the second as a nested array value,
+so every child written after one has a static position. A `map` over
+an array that is written in place in the pattern body is a collection
+over plain values in place and is one nested child as well; by the
+prototype's comparison the runtime of today holds the elements of
+such a `map` as children of their own. These are the paths
 `plan-and-label-templates.md` §3.4
 gives the entries of `Plan.outputs` for a JSX element, and the paths a
 label entry, a provenance record and a split point of section 4.10 are
@@ -5885,11 +5970,11 @@ Added by the ruling that the scheduler is switched per space (section 9):
     plain values in place, and over the result of another per-element
     construct: the rows of the other keys below the same top-level
     property keep their stored values with it. The prototype's
-    executor puts back the stored value at the kept entry of
-    `Plan.outputs` with the longest path at or above the position, so
-    for a cone of an element body the row alone, and leaves a position
-    that no entry is above as it was, where the ruling has the
-    top-level property. It keeps the memo entry of the cone instance
+    executor does so: it leaves the top-level property as it was
+    stored, stores every other property, and records the property,
+    the binding and the position, which the next evaluation that
+    stores the property clears. It keeps the memo entry of the cone
+    instance
     that computed the value, markers included, so a reader of an
     interim output of it gets the new value while the stored result
     holds the old one. *Assumed* beside the ruling: the form of the
@@ -5957,7 +6042,13 @@ Added by the ruling that the scheduler is switched per space (section 9):
     schema declares a default starts from the default, and the push
     is applied. The write stores the result at the path, and the
     members taken from the default keep the label of a default. The
-    prototype's executor starts from the empty array. The same for a
+    prototype's executor starts a `push` from the default nearest the
+    end of the links that the handle resolves through, or from that
+    of the handle's declared type, and in its fixture 12 of 12 values
+    equal those of the runtime of today. It does so for `push`
+    alone: a `set` of one member below an empty path of the argument
+    starts there from an empty record, a limit of the prototype. The
+    same for a
     handle in an element body in each of the three cases of a
     per-element source. The entry keeps its number.
 93. **The document of a keyed plain value that a function body pushes

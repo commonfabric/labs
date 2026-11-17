@@ -515,7 +515,11 @@ which element keys what they hold is kept
   nested child, with its elements at `children/<n>/*`, over an array
   of references, over an array of plain values in place, and over the
   result of another per-element construct alike
-  ([execution and storage](execution-and-storage.md), §4.2).
+  ([execution and storage](execution-and-storage.md), §4.2). A spread
+  child, and an array literal among the children that itself has a
+  spread, is assumed to be one child as well
+  ([plan format and label templates](plan-and-label-templates.md),
+  §8, question 130).
 - The removal of an element drops the cone instances of its key and
   deletes nothing that is stored under the key. An event for a stream
   of the element's body is refused while the key is away. An element that
@@ -1186,18 +1190,26 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   transaction, so its row keeps its state; a function body that reads
   the value holds a copy; and `items.key(i)` is a handle by position
   that nothing rewrites, equal to the reference of the element that
-  stands at `i` at the moment of the comparison. Three things are
+  stands at `i` at the moment of the comparison. Six things are
   assumed, each
   for an array of plain values in place and for the result of another
   per-element construct where the upstream position holds a value, and
   none for an array of references
   ([plan format and label templates](plan-and-label-templates.md), §8,
-  questions 113, 114 and 121): the reference is stored as a link that
+  questions 113, 114, 121, 132, 133 and 134): the reference is stored
+  as a link that
   holds the key, a client does not resolve it, and it resolves again
   when an equal value is added after a removal; a read through it
-  carries the label of the element and of the collection's array; and
+  carries the label of the element and of the collection's array;
   the comparison of a handle by position with such a reference gives
-  "not equal" where the parent cannot be read.
+  "not equal" where the parent cannot be read; a handler that
+  declares a data type for the element in its state holds a copy,
+  and a member handle read through a handle of handles is a
+  reference by key; a re-key moves an instance that a computation of
+  the body made, replaces what is stored under the new key, and
+  moves nothing for another element whose occurrence count it
+  changed; and a key does not say whether it was formed from the
+  whole value or from a declared key field.
 - **A pattern call that is an instance of its own.** The modifier
   `asInstance()` and what it does in a per-element body are ruled.
   Two things are assumed: that a function body which stores, outside
@@ -1222,9 +1234,10 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   93). And the marker written on an array of references is accepted
   and has no effect
   ([language subset](language-subset.md), §13, question 43).
-- **Element bodies and equal elements.** The rulings leave five things
+- **Element bodies and equal elements.** The rulings leave six things
   open ([plan format and label templates](plan-and-label-templates.md),
-  §8, questions 36, 90, 101, 105, and 111). By ruling each says which case
+  §8, questions 36, 90, 101, 105, 111, and 131). By ruling each says
+  which case
   of a source it is about: an array of references, an array of plain
   values in place, or the result of another per-element construct
   (§1.3 there). Which state an occurrence has depends on which equal
@@ -1247,7 +1260,11 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   derivation, not equal identifiers. And whether an output that is
   the result of another per-element construct on some evaluations
   only keeps that collection's keys: assumed not, so it is keyed by
-  what its positions hold.
+  what its positions hold. And how the result path of a handler
+  states that one `*` stands for the keys of two collections, where
+  the handler is bound in the body of an inner `map` whose result
+  the callback of a `flatMap` returns as its segment: assumed by a
+  count on the kind `element`.
 - **Which default is read.** The default declared nearest the end of
   the chain of places a read resolves through is read, by ruling. Two
   cases are assumed
