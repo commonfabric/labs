@@ -131,10 +131,11 @@ export default pattern<InductorPoolInput, InductorPoolOutput>(
       return question ? `Inductor pool: ${question}` : "Inductor pool";
     });
     const thresholdLine = computed(() =>
-      `A rule appears here once about ${thresholdCenter} people hold it ` +
-      `(give or take ${jitter}, and never fewer than ` +
-      `${MIN_SEALED_THRESHOLD}). Each rule's exact threshold is kept secret, ` +
-      `and the first contribution fixes these numbers for good.`
+      `This pool is set to show a rule once about ${thresholdCenter} people ` +
+      `hold it (give or take ${jitter}, and never fewer than ` +
+      `${MIN_SEALED_THRESHOLD}). Each rule's exact threshold is kept secret. ` +
+      `The setting in force at the first contribution is fixed for good, ` +
+      `so changing it afterwards has no effect.`
     );
     const releasedLines = computed(() =>
       consensus.map((rule: ReleasedRule) => ({
