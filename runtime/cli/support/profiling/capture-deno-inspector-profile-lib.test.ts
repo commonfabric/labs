@@ -71,6 +71,9 @@ class FakeWebSocket {
   }
 }
 
+/** The id the fake inspector gives the program's own context. */
+const PROGRAM_CONTEXT_ID = 1;
+
 class FakeCelestial {
   calls: string[] = [];
   closeError: unknown;
@@ -101,6 +104,9 @@ class FakeCelestial {
       if (this.runtimeEnableError) {
         return Promise.reject(this.runtimeEnableError);
       }
+      // As V8 does, enabling reports the contexts that already exist: here
+      // the program's default context.
+      this.dispatchExecutionContextCreated(PROGRAM_CONTEXT_ID, true);
       return Promise.resolve();
     },
   };
@@ -193,11 +199,22 @@ class FakeCelestial {
     }
   }
 
-  dispatchExecutionContextDestroyed(): void {
+  dispatchExecutionContextCreated(id: number, isDefault: boolean): void {
+    this.dispatch(
+      "Runtime.executionContextCreated",
+      new CustomEvent("Runtime.executionContextCreated", {
+        detail: { context: { id, auxData: { isDefault } } },
+      }),
+    );
+  }
+
+  dispatchExecutionContextDestroyed(
+    executionContextId = PROGRAM_CONTEXT_ID,
+  ): void {
     this.dispatch(
       "Runtime.executionContextDestroyed",
       new CustomEvent("Runtime.executionContextDestroyed", {
-        detail: { executionContextId: 1 },
+        detail: { executionContextId },
       }),
     );
   }
@@ -1428,8 +1445,12 @@ describe("capture-deno-inspector-profile helpers", () => {
 
       await resumed.promise;
       // The inspector delivers the program's console messages, then reports
-      // the end of the program, with the profiler start still in flight.
+      // the end of the program, with the profiler start still in flight. A
+      // worker's context ending first leaves the capture running.
       celestial.dispatchConsole({ value: "Usage: cf" });
+      celestial.dispatchExecutionContextCreated(2, false);
+      celestial.dispatchExecutionContextDestroyed(2);
+      assertEquals(logs.includes(CAPTURE_TARGET_FINISHED_MESSAGE), false);
       celestial.dispatchExecutionContextDestroyed();
       assertEquals(logs.includes(CAPTURE_TARGET_FINISHED_MESSAGE), true);
 
@@ -1599,6 +1620,7 @@ describe("capture-deno-inspector-profile helpers", () => {
       assertEquals(removed, ["SIGINT", "SIGTERM"]);
       assertEquals(celestial.removedListeners, [
         "Runtime.consoleAPICalled",
+        "Runtime.executionContextCreated",
         "Runtime.executionContextDestroyed",
       ]);
       assertEquals(celestial.calls.includes("close"), true);

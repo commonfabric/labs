@@ -563,7 +563,19 @@ export async function captureDenoInspectorProfile(
   };
 
   const handleClose = () => requestStop("websocket-closed");
-  const handleExecutionContextDestroyed = (): void => {
+  // The program's own context is the inspector's default one; a worker's or a
+  // `node:vm` context ending says nothing about the program.
+  let programContextId: number | undefined;
+  const handleExecutionContextCreated = (event: Event): void => {
+    const { context } = (event as CustomEvent<{
+      context: { id: number; auxData?: { isDefault?: boolean } };
+    }>).detail;
+    if (context.auxData?.isDefault) programContextId = context.id;
+  };
+  const handleExecutionContextDestroyed = (event: Event): void => {
+    const { executionContextId } =
+      (event as CustomEvent<{ executionContextId: number }>).detail;
+    if (executionContextId !== programContextId) return;
     output.log(CAPTURE_TARGET_FINISHED_MESSAGE);
     requestProfilerStop("target-finished");
   };
@@ -578,9 +590,14 @@ export async function captureDenoInspectorProfile(
       "Runtime.consoleAPICalled",
       handleConsoleApiCalled,
     );
-    // The inspector sends this after every console message the program wrote,
-    // when the program has finished and the target waits for this session to
-    // disconnect.
+    // `Runtime.enable` reports the contexts that already exist, the program's
+    // among them. The program's context is destroyed after every console
+    // message the program wrote, when it has finished and the target waits
+    // for this session to disconnect.
+    celestial.addEventListener(
+      "Runtime.executionContextCreated",
+      handleExecutionContextCreated,
+    );
     celestial.addEventListener(
       "Runtime.executionContextDestroyed",
       handleExecutionContextDestroyed,
@@ -629,6 +646,10 @@ export async function captureDenoInspectorProfile(
       celestial.removeEventListener(
         "Runtime.consoleAPICalled",
         handleConsoleApiCalled,
+      );
+      celestial.removeEventListener(
+        "Runtime.executionContextCreated",
+        handleExecutionContextCreated,
       );
       celestial.removeEventListener(
         "Runtime.executionContextDestroyed",
