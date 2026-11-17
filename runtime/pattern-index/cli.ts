@@ -33,7 +33,7 @@
 
 import { parseArgs } from "@std/cli/parse-args";
 import { join as joinPath } from "@std/path";
-import { PatternIndexClient } from "./src/client.ts";
+import { isPieceRef, PatternIndexClient } from "./src/client.ts";
 import { openPatternIndexClient } from "./src/access.ts";
 import { PatternIndexStore } from "./src/store.ts";
 import {
@@ -191,7 +191,7 @@ const answerRequest = async (
         const subject = typeof patternId === "string" && patternId !== "" &&
             piece === undefined
           ? { patternId }
-          : typeof piece === "string" && /^piece:[0-9a-f]{64}$/.test(piece) &&
+          : typeof piece === "string" && isPieceRef(piece) &&
               patternId === undefined
           ? { piece }
           : undefined;

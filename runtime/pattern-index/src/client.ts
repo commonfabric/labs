@@ -565,8 +565,11 @@ const PIECE_REF = /^piece:[0-9a-f]{64}$/;
  *
  * @throws Error naming the field for anything else.
  */
+/** Whether `ref` is a piece reference as {@link deployedPieceRef} answers one. */
+export const isPieceRef = (ref: string): boolean => PIECE_REF.test(ref);
+
 const pieceRef = (field: string, ref: string): string => {
-  if (!PIECE_REF.test(ref)) {
+  if (!isPieceRef(ref)) {
     throw new Error(
       `${field} must be a piece reference from deployedPieceRef, not a piece id`,
     );
