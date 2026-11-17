@@ -165,14 +165,6 @@ export const EXEMPTIONS: readonly Exemption[] = [
       "engine's labeling of moved anchors is arranged",
   },
   {
-    file: "runtime/runner/src/cfc/prepare.ts",
-    citation: "§8.12.5.1",
-    reason: "the served-run holder rule cites the section " +
-      "https://github.com/commonfabric/specs/pull/95 adds, which the pinned " +
-      "snapshot (specs#88's head) does not hold; its SPEC-PENDING marker names " +
-      "that pull request",
-  },
-  {
     file: "runtime/runner/src/cfc/schema-merge.ts",
     citation: "§8.15.13",
     reason: "the write-policy merge cites the section " +
