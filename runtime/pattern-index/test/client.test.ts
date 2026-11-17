@@ -728,6 +728,16 @@ describe("PatternIndexClient", () => {
         },
       },
       {
+        fn: "deleteVersion",
+        call: (c) => c.deleteVersion({ versionId: "ver-1" }),
+        body: { versionId: "ver-1" },
+      },
+      {
+        fn: "deleteLineage",
+        call: (c) => c.deleteLineage({ lineageId: "lin-1" }),
+        body: { lineageId: "lin-1" },
+      },
+      {
         fn: "unshareLineage",
         call: (c) => c.unshareLineage({ lineageId: "lin-1" }),
         body: { lineageId: "lin-1" },

@@ -693,6 +693,28 @@ export interface PatternIndexPublishLineageResponse {
   share?: PatternIndexShareState;
 }
 
+export interface PatternIndexDeleteVersionResponse {
+  versionId: string;
+  deleted: true;
+
+  /** Whether it was the lineage's last version, which takes the lineage. */
+  lineageDeleted: boolean;
+
+  /** The lineage's head now, when it was the head and others remain. */
+  head?: string;
+
+  /** Whether a share not yet exposed was dropped with it. */
+  droppedShare: boolean;
+}
+
+export interface PatternIndexDeleteLineageResponse {
+  lineageId: string;
+  deleted: true;
+
+  /** How many shares not yet exposed were dropped with it. */
+  droppedShares: number;
+}
+
 export interface PatternIndexUnshareLineageResponse {
   lineageId: string;
   unshared: true;
@@ -1525,6 +1547,26 @@ export class PatternIndexClient {
     request: { lineageId: string },
   ): Promise<PatternIndexUnshareLineageResponse> {
     return this.#call("unshareLineage", { ...request });
+  }
+
+  /**
+   * Deletes one of the caller's versions. A version already exposed stays
+   * readable by id; one being checked to share is dropped.
+   */
+  deleteVersion(
+    request: { versionId: string },
+  ): Promise<PatternIndexDeleteVersionResponse> {
+    return this.#call("deleteVersion", { ...request });
+  }
+
+  /**
+   * Deletes one of the caller's lineages and its versions. Versions already
+   * exposed stay readable by id, unlisted.
+   */
+  deleteLineage(
+    request: { lineageId: string },
+  ): Promise<PatternIndexDeleteLineageResponse> {
+    return this.#call("deleteLineage", { ...request });
   }
 
   /** Stops naming the caller on a lineage from now on. */
