@@ -62,8 +62,8 @@ import { PATTERN_DISCOVERABILITY_REASONS } from "./publish-render-gate.ts";
  *
  * The index files every publication into a lineage, one pattern's history of
  * versions, and finds it from what the request names: a `slot` before a
- * `priorPatternId`, and a `remixedFrom` always starting a new one
- * (pattern-index `docs/visibility-contract.md`, "Lineages and versions"). An
+ * `priorPatternId`, and a `remixedFrom` always starting a new one (see
+ * those fields on `PatternIndexPublishRequest`). An
  * agent run names the new piece it deployed to as the slot, so without more
  * every run's pattern would start a history of its own. Two things say more:
  *

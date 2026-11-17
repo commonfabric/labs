@@ -437,13 +437,13 @@ describe("pattern index ledger", () => {
 
   describe("version history", () => {
     /**
-     * Which history the index files each publication in, by the order
-     * pattern-index `docs/visibility-contract.md` ("Lineages and versions")
-     * states for a current client: a slot, then a `priorPatternId` naming one
-     * of the caller's own versions, with a remix always starting a new one.
-     * `foreign` are versions someone else wrote. The model binds the tests to
-     * that contract rather than to the request fields that satisfy it, and
-     * mirrors it as of pattern-index 48ccb22: change both together.
+     * Which history the index files each publication in, by the order it
+     * applies for a client that sends an origin: a slot, then a
+     * `priorPatternId` naming one of the caller's own versions, with a remix
+     * always starting a new one, else a new history. `foreign` are versions
+     * someone else wrote. The model binds the tests to that rule rather than
+     * to the request fields that satisfy it, so a change to the rule changes
+     * it here too.
      */
     const historiesOf = (
       sent: RecordedCall[],
