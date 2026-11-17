@@ -59,6 +59,16 @@ export class FabricAwareResolver implements ProgramResolver {
       : this.#inner.resolveSource(name);
   }
 
+  /** Forwards to the wrapped resolver, which may not list directories. */
+  listDataFiles(directory: string): Promise<readonly string[] | undefined> {
+    if (this.#inner.listDataFiles === undefined) {
+      return Promise.reject(
+        new Error(`This program's source cannot list \`${directory}\`.`),
+      );
+    }
+    return this.#inner.listDataFiles(directory);
+  }
+
   async resolveSource(identifier: string): Promise<Source | undefined> {
     if (identifier.startsWith(FABRIC_MOUNT_ROOT)) {
       return this.#mountedFiles.get(identifier);

@@ -13,7 +13,11 @@ import type {
 } from "@commonfabric/ts-transformers";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
-import { dataFileUrl, isStoredAsDataUrl } from "@commonfabric/text/data-file";
+import {
+  dataFileAssets,
+  dataFileUrl,
+  isStoredAsDataUrl,
+} from "@commonfabric/text/data-file";
 import type ts from "typescript";
 
 import type { DataFileStrings } from "../data-file-strings.ts";
@@ -778,6 +782,8 @@ type NamespaceBinder = (
  * The reader returns a text file's contents, and its `url` member any file's
  * contents as a base64 `data:` URL, which is how a binary media file is read:
  * the plain reader refuses one, whose stored contents are that URL already.
+ * Its `urls` member returns the URL of each asset attached in a directory, by
+ * asset name (see `dataFileAssets`).
  * Each string either returns is recorded in `dataFileStrings`, when one is
  * given, so that setup can store it by reference.
  *
@@ -834,7 +840,15 @@ function dataFileBinding(
     };
     const url = (path: string): string =>
       urlOf(resolveDataFilePath(path, moduleName));
-    const reader = freezeSandboxValue(Object.assign(read, { url }));
+    const urls = (path: string): Readonly<Record<string, string>> => {
+      const directory = resolveDataFilePath(path, moduleName);
+      const assets: Record<string, string> = {};
+      for (const [name, file] of dataFileAssets(directory, attached)) {
+        assets[name] = urlOf(file);
+      }
+      return freezeSandboxValue(assets);
+    };
+    const reader = freezeSandboxValue(Object.assign(read, { url, urls }));
     const bound = new WeakMap<
       Record<string, unknown>,
       Record<string, unknown>

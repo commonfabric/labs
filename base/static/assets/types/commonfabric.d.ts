@@ -4122,6 +4122,20 @@ export interface DataFileFunction {
    * `.mp3`, `.ogg`, and `.wav`. Any other extension throws.
    */
   url(path: string): string;
+
+  /**
+   * Reads every asset in an attached directory as a `data:` URL, keyed by its
+   * file name without the extension, so `assets/glaze.png` is `glaze` in
+   * `dataFile.urls("./assets")`. An asset is a file directly inside the
+   * directory whose extension `dataFile.url()` reads; other files and
+   * subdirectories are left out. `path` resolves as for `dataFile()`.
+   *
+   * Building the program attaches the directory's assets by listing it, which
+   * a program read over HTTP cannot do. A file whose name without the
+   * extension holds characters other than letters, digits, `_`, and `-`, or
+   * two files that would share a name, throw.
+   */
+  urls(path: string): Readonly<Record<string, string>>;
 }
 
 //

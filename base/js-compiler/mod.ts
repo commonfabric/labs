@@ -23,6 +23,7 @@ export {
   type TypeScriptCompilerOptions,
 } from "./typescript/mod.ts";
 export {
+  collectDataDirectoryNames,
   collectDataFileNames,
   collectImportSpecifiers,
   type ModuleDeclarations,

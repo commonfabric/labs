@@ -285,6 +285,9 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
         url: (path: string): string => {
           throw noDataFileClosure(path);
         },
+        urls: (path: string): Readonly<Record<string, string>> => {
+          throw noDataFileClosure(path);
+        },
       },
     ),
     sqliteDatabase,

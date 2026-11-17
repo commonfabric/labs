@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
+  dataFileAssets,
   dataFileMediaType,
   dataFileUrl,
   decodeDataFile,
@@ -21,6 +22,47 @@ const PNG_BYTES = new Uint8Array([
 ]);
 
 describe("data-file", () => {
+  describe("dataFileAssets()", () => {
+    it("returns each asset directly in the directory, by its name", () => {
+      const assets = dataFileAssets("/donuts/assets", [
+        "/donuts/assets/glaze.png",
+        "/donuts/assets/menu.woff2",
+        "/donuts/assets/README.md",
+        "/donuts/assets/old/glaze.png",
+        "/donuts/main.tsx",
+      ]);
+
+      expect([...assets]).toEqual([
+        ["glaze", "/donuts/assets/glaze.png"],
+        ["menu", "/donuts/assets/menu.woff2"],
+      ]);
+    });
+
+    it("reads a directory written with a trailing slash, and the root", () => {
+      expect([...dataFileAssets("/donuts/", ["/donuts/glaze.png"])]).toEqual([
+        ["glaze", "/donuts/glaze.png"],
+      ]);
+      expect([...dataFileAssets("/", ["/glaze.png", "/a/b.png"])]).toEqual([
+        ["glaze", "/glaze.png"],
+      ]);
+    });
+
+    it("throws for a file whose name is not an asset name", () => {
+      expect(() => dataFileAssets("/a", ["/a/glaze.small.png"])).toThrow(
+        "Data file `/a/glaze.small.png` has no asset name: `glaze.small` " +
+          "holds characters other than letters, digits, `_`, and `-`.",
+      );
+    });
+
+    it("throws for two files that would share a name", () => {
+      expect(() => dataFileAssets("/a", ["/a/glaze.png", "/a/glaze.webp"]))
+        .toThrow(
+          "Data files `/a/glaze.png` and `/a/glaze.webp` would both be the " +
+            "asset `glaze`.",
+        );
+    });
+  });
+
   describe("dataFileMediaType()", () => {
     it("returns the media type of an extension in the table", () => {
       expect(dataFileMediaType("glaze.png")).toBe("image/png");

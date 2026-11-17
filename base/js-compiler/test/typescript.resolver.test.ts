@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
+  collectDataDirectoryNames,
   collectDataFileNames,
   collectImportSpecifiers,
   resolveProgram,
@@ -461,6 +462,43 @@ describe("typescript/resolver.ts", () => {
 
     it("finds nothing in a module that never imports it", () => {
       expect(names("export const x = 1;\n")).toEqual([]);
+    });
+  });
+
+  describe("collectDataDirectoryNames", () => {
+    const directoriesIn = (name: string, contents: string) =>
+      collectDataDirectoryNames({ name, contents }, TARGET);
+
+    it("reads the directory a call to dataFile's `urls` member names", () => {
+      expect(directoriesIn(
+        "/donuts/main.tsx",
+        'import { dataFile } from "commonfabric";\n' +
+          'export default () => dataFile.urls("./assets");\n',
+      )).toEqual(["/donuts/assets"]);
+    });
+
+    it("follows the binding through a namespace import", () => {
+      expect(directoriesIn(
+        "/main.tsx",
+        'import * as cf from "commonfabric";\n' +
+          'export default () => cf.dataFile.urls("/assets");\n',
+      )).toEqual(["/assets"]);
+    });
+
+    it("reads no directory from a file read", () => {
+      expect(directoriesIn(
+        "/main.tsx",
+        'import { dataFile } from "commonfabric";\n' +
+          'export default () => [dataFile("/a.json"), dataFile.url("/b.png")];\n',
+      )).toEqual([]);
+    });
+
+    it("leaves a directory read out of the file names", () => {
+      expect(collectDataFileNames({
+        name: "/main.tsx",
+        contents: 'import { dataFile } from "commonfabric";\n' +
+          'export default () => dataFile.urls("/assets");\n',
+      }, TARGET)).toEqual([]);
     });
   });
 

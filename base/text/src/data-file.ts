@@ -121,6 +121,50 @@ export function dataFileUrl(contents: string, name: string): string {
   }`;
 }
 
+/** What an asset's name may be: what `cf-iframe`'s `cf-asset:` references match. */
+const ASSET_NAME = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Returns the assets the directory `directory` holds, among the root-relative
+ * file names `names`: each name directly inside `directory` whose extension
+ * the table has, keyed by its file name without the extension, so
+ * `/donuts/glaze.png` is `glaze` in `/donuts`. Names in subdirectories, and
+ * files the table has no media type for, are left out.
+ *
+ * Throws for a file whose name without its extension is not an asset name
+ * (letters, digits, `_`, and `-`), and for two files that would share a name,
+ * such as `glaze.png` and `glaze.webp`.
+ */
+export function dataFileAssets(
+  directory: string,
+  names: Iterable<string>,
+): Map<string, string> {
+  const parent = directory.replace(/\/+$/, "");
+  const assets = new Map<string, string>();
+  for (const name of names) {
+    const slash = name.lastIndexOf("/");
+    if (name.slice(0, slash) !== parent) continue;
+    if (mediaTypeEntry(name) === undefined) continue;
+    const base = name.slice(slash + 1);
+    const asset = base.slice(0, base.lastIndexOf("."));
+    if (!ASSET_NAME.test(asset)) {
+      throw new Error(
+        `Data file \`${name}\` has no asset name: \`${asset}\` holds ` +
+          "characters other than letters, digits, `_`, and `-`.",
+      );
+    }
+    const other = assets.get(asset);
+    if (other !== undefined) {
+      throw new Error(
+        `Data files \`${other}\` and \`${name}\` would both be the asset ` +
+          `\`${asset}\`.`,
+      );
+    }
+    assets.set(asset, name);
+  }
+  return assets;
+}
+
 /** Helper for the functions above, which looks `name` up by its extension. */
 function mediaTypeEntry(name: string): MediaTypeEntry | undefined {
   const base = name.slice(name.lastIndexOf("/") + 1);

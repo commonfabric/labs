@@ -66,6 +66,20 @@ describe("undeclaredDataFiles", () => {
     ).toEqual(["/extra.txt"]);
   });
 
+  it("says nothing about an asset in a directory the source reads", () => {
+    const readsAssets = 'import { dataFile } from "commonfabric";\n' +
+      'export default () => dataFile.urls("/assets");\n';
+    expect(
+      undeclaredDataFiles(
+        program({
+          "/main.tsx": readsAssets,
+          "/assets/glaze.png": "data:image/png;base64,AA==",
+          "/assets/notes.md": "# notes",
+        }, ["/assets/glaze.png", "/assets/notes.md"]),
+      ),
+    ).toEqual(["/assets/notes.md"]);
+  });
+
   it("says nothing about a program carrying no data at all", () => {
     expect(undeclaredDataFiles(program({ "/main.tsx": "export default 1;\n" })))
       .toEqual([]);

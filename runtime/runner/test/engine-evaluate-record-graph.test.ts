@@ -602,6 +602,51 @@ describe("Engine.evaluateRecordGraph()", () => {
     });
   });
 
+  describe("dataFile.urls()", () => {
+    /** A program whose entry exports `expression`, over a directory of files. */
+    const programReading = (expression: string): RuntimeProgram => ({
+      main: "/main.tsx",
+      dataFiles: ["/assets/glaze.png", "/assets/logo.svg", "/assets/notes.md"],
+      files: [
+        {
+          name: "/main.tsx",
+          contents: [
+            'import { __cf_data, dataFile } from "commonfabric";',
+            `export default __cf_data(${expression});`,
+          ].join("\n"),
+        },
+        {
+          name: "/assets/glaze.png",
+          contents: decodeDataFile(
+            new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+            "/assets/glaze.png",
+          ),
+        },
+        { name: "/assets/logo.svg", contents: "<svg/>" },
+        { name: "/assets/notes.md", contents: "# notes" },
+      ],
+    });
+
+    it("returns each asset in the directory as a `data:` URL, by name", async () => {
+      const { main } = await engine.compileAndEvaluateModules(
+        programReading('dataFile.urls("./assets")'),
+      );
+
+      expect(main?.default).toEqual({
+        glaze: "data:image/png;base64,iVBORw==",
+        logo: "data:image/svg+xml;base64,PHN2Zy8+",
+      });
+    });
+
+    it("returns an empty record for a directory holding no asset", async () => {
+      const { main } = await engine.compileAndEvaluateModules(
+        programReading('dataFile.urls("./elsewhere")'),
+      );
+
+      expect(main?.default).toEqual({});
+    });
+  });
+
   it("separates identities for data files differing only in line endings", async () => {
     // A data file's bytes are the payload a pattern reads, so CRLF and LF are
     // different content — unlike source text, where they are formatting.

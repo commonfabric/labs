@@ -4,6 +4,7 @@ import type {
   Source,
 } from "@commonfabric/js-compiler";
 import { resolveDeclaredDataFile } from "@commonfabric/js-compiler/specifier";
+import { dataFileAssets } from "@commonfabric/text/data-file";
 
 import type { SourcePackageIdentity } from "../sandbox/module-record-compiler.ts";
 import { compilerStack } from "./deferred-compiler-stack.ts";
@@ -32,6 +33,11 @@ import type { RuntimeProgram } from "./types.ts";
  * that scan; any other is parsed here, which is the compiler stack's work, so
  * the caller must have awaited `ensureCompilerStack()`.
  *
+ * A `dataFile.urls()` call declares the assets a directory holds, so the
+ * resolver lists the directory and each asset in it is attached as though the
+ * source named it. A resolver that cannot list a directory cannot assemble
+ * such a program, and saying so names the module and the directory.
+ *
  * A declared name the resolver cannot produce is an error. The program cannot
  * be assembled as its source describes it, and saying so here names both the
  * module that asked and the name it asked for, while the pattern that would
@@ -39,7 +45,10 @@ import type { RuntimeProgram } from "./types.ts";
  */
 export async function attachDeclaredDataFiles(
   program: RuntimeProgram,
-  resolver: Pick<ProgramResolver, "resolveSource" | "resolveDataFile">,
+  resolver: Pick<
+    ProgramResolver,
+    "resolveSource" | "resolveDataFile" | "listDataFiles"
+  >,
   declarations: ReadonlyMap<string, ModuleDeclarations> = new Map(),
 ): Promise<RuntimeProgram> {
   // A data file is not code and is never parsed as code. One already attached
@@ -49,8 +58,27 @@ export async function attachDeclaredDataFiles(
   const declaredBy = new Map<string, string>();
   for (const file of program.files) {
     if (alreadyAttached.has(file.name)) continue;
-    for (const name of declaredDataFiles(file, declarations.get(file.name))) {
+    const declared = declarations.get(file.name);
+    for (const name of declaredDataFiles(file, declared)) {
       if (!declaredBy.has(name)) declaredBy.set(name, file.name);
+    }
+    for (const directory of declaredDataDirectories(file, declared)) {
+      if (resolver.listDataFiles === undefined) {
+        throw new Error(
+          `"${file.name}" reads the data directory "${directory}", which ` +
+            "this program's source cannot list.",
+        );
+      }
+      const listed = await resolver.listDataFiles(directory);
+      if (listed === undefined) {
+        throw new Error(
+          `"${file.name}" reads the data directory "${directory}", which ` +
+            "this program does not contain.",
+        );
+      }
+      for (const name of dataFileAssets(directory, listed).values()) {
+        if (!declaredBy.has(name)) declaredBy.set(name, file.name);
+      }
     }
   }
   if (declaredBy.size === 0) return program;
@@ -85,7 +113,9 @@ export async function attachDeclaredDataFiles(
  * Assigns each edge of a program's source package to the module that owns it.
  *
  * A module whose `dataFile()` call names a data file owns the edge to that
- * file, so the module's identity covers the bytes it reads and its stored
+ * file, and one whose `dataFile.urls()` call names a directory owns the edge
+ * to each asset the program carries there, so the module's identity covers
+ * the bytes it reads and its stored
  * documents link to them. A load entered at that module by its own identity,
  * as a sub-pattern referenced by `{ identity, symbol }` is loaded, then
  * reaches the file. The entry owns every attached source root, and every data
@@ -128,7 +158,13 @@ export function sourcePackageOwners(
         contents: module.contents,
       };
       const declared = program.declarations?.get(module.name);
-      for (const name of declaredDataFiles(read, declared)) {
+      const names = [
+        ...declaredDataFiles(read, declared),
+        ...declaredDataDirectories(read, declared).flatMap((directory) => [
+          ...dataFileAssets(directory, dataByStoredName.keys()).values(),
+        ]),
+      ];
+      for (const name of names) {
         const path = dataByStoredName.get(name);
         if (path === undefined) continue;
         claimed.add(path);
@@ -172,6 +208,23 @@ function declaredDataFiles(
     return collectDataFileNames(module, TARGET);
   }
   return declared.dataFiles.map((path) =>
+    resolveDeclaredDataFile(path, module)
+  );
+}
+
+/**
+ * Like `declaredDataFiles()`, except that it returns the data directories
+ * `module` declares with `dataFile.urls()`.
+ */
+function declaredDataDirectories(
+  module: Source,
+  declared: ModuleDeclarations | undefined,
+): string[] {
+  if (declared === undefined) {
+    const { collectDataDirectoryNames, TARGET } = compilerStack();
+    return collectDataDirectoryNames(module, TARGET);
+  }
+  return declared.dataDirectories.map((path) =>
     resolveDeclaredDataFile(path, module)
   );
 }
