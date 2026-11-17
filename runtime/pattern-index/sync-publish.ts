@@ -56,15 +56,17 @@ const main = async (): Promise<number> => {
     const problem = planProblem(plan);
     if (problem !== undefined) throw new Error(`Unreadable plan: ${problem}`);
     const signer = await Identity.generate();
+    const indexUrl = resolvePatternIndexUrl(flags["index-url"]);
     const result = await publishPlan(
       // Checked above, as far as this step trusts it: the publish requests
       // themselves are the index's to judge.
       plan as RepoSyncPlan,
       { repository, commit },
       new PatternIndexClient({
-        baseUrl: resolvePatternIndexUrl(flags["index-url"]),
+        baseUrl: indexUrl,
         signer,
-        githubOidc: () => mintGithubOidcToken(signer.did(), Deno.env.get),
+        githubOidc: () =>
+          mintGithubOidcToken(indexUrl, signer.did(), Deno.env.get),
       }),
     );
     await report(reportMarkdown(result));

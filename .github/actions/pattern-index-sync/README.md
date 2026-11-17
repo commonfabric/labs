@@ -93,10 +93,10 @@ versions.
    hash and publish request, or why it failed.
 2. The publish job checks the plan's shape and that it runs for the default
    branch. It makes a signing key that lives only for the run. For each call to
-   the index it asks GitHub for an OIDC token whose audience names that key. The
-   index checks the token against GitHub's keys, reads the repository and owner
-   from it, and accepts only requests signed by the key it names. So a token
-   copied out of a log is useless without the key.
+   the index it asks GitHub for an OIDC token whose audience names the index
+   host and that key. The index checks the token against GitHub's keys, reads
+   the repository and owner from it, and accepts only requests signed by the key
+   it names. So a token copied out of a log is useless without the key.
 3. It asks the index for the newest version of each lineage this repository
    holds, with the hash each was published from. Entries whose hash matches are
    left alone. Each of the rest is published as the lineage's next version and
