@@ -8,7 +8,6 @@ import { isVerdictReason } from "../src/cfc/verdict-reason.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import { captureLogs } from "./support/captured-logs.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -16,7 +15,7 @@ import {
 } from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase(
-  "runner-cfc-prepare-cov-cross-holder-log",
+  "runner-cfc-prepare-served-writer-fit",
 );
 const space = signer.did();
 
@@ -51,13 +50,10 @@ describe("prepare", () => {
     storageManager = undefined;
   });
 
-  // Seeds a source in `sourceSpace` whose `secret` the owner's clause labels,
-  // then prepares a served event handler that copies it into a target of this
-  // space declaring that clause. Returns the target's id, the prepare
-  // decision, and what the `cfc` logger printed under
-  // `writer-fit-cross-holder` meanwhile.
+  /** Prepares a served copy of the owner's labeled value into `targetSchema`. */
   const preparedServedCopy = async (
     sourceSpace: `did:${string}:${string}`,
+    targetSchema: JSONSchema,
   ) => {
     storageManager = StorageManager.emulate({ as: signer });
     runtime = new Runtime({
@@ -89,7 +85,6 @@ describe("prepare", () => {
     });
     expect((await seed.commit().settled).error).toBeUndefined();
 
-    using logs = captureLogs("cfc");
     const tx = runtime.edit();
     stampWaveRunContext(tx, {
       actionId: "test:copy",
@@ -112,30 +107,38 @@ describe("prepare", () => {
           verdict: isVerdictReason(reason),
         }))
         : [],
-      logged: logs.textsOf("writer-fit-cross-holder"),
     };
   };
 
-  describe("a served run's write of a clause read from another space", () => {
-    it("invalidates the write with a cross-holder misfit verdict, and logs it, at the target's root", async () => {
-      const { targetId, status, reasons, logged } = await preparedServedCopy(
+  describe("a served run's writes", () => {
+    it("prepares a copy from another space where the target declares the owner's clause", async () => {
+      const { status, reasons } = await preparedServedCopy(
         OTHER_SPACE,
+        targetSchema,
+      );
+      expect(status).toBe("prepared");
+      expect(reasons).toEqual([]);
+    });
+
+    it("prepares a copy from the same space where the target declares the owner's clause", async () => {
+      const { status, reasons } = await preparedServedCopy(space, targetSchema);
+      expect(status).toBe("prepared");
+      expect(reasons).toEqual([]);
+    });
+
+    it("invalidates a copy from another space with a writer-fit verdict where the target declares no confidentiality", async () => {
+      const { targetId, status, reasons } = await preparedServedCopy(
+        OTHER_SPACE,
+        { ...targetSchema, ifc: { confidentiality: [] } },
       );
       expect(status).toBe("invalidated");
       expect(reasons).toEqual([{
         reason: expect.stringContaining(
           `writer-fit confidentiality misfit for ${targetId} at / ` +
-            `(cross-holder`,
+            `(canWrite, §8.12.4)`,
         ),
         verdict: true,
       }]);
-      expect(logged).toEqual([`cross-holder misfit for ${targetId} at /`]);
-    });
-
-    it("prepares the write, and logs no misfit, where the clause was read from the target's own space", async () => {
-      const { status, logged } = await preparedServedCopy(space);
-      expect(status).toBe("prepared");
-      expect(logged).toEqual([]);
     });
   });
 });

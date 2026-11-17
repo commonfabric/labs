@@ -1119,3 +1119,4 @@
 {"date": "2026-11-20", "from": {"p": "runtime/cli/test/buildCreateSpaceCommand.test.ts"}, "to": {"p": "runtime/cli/test/buildCreateSpaceCommand.serial.test.ts"}}
 {"date": "2026-11-20", "from": {"p": "runtime/cli/test/mod-exit-status.test.ts"}, "to": {"p": "runtime/cli/test/mod.serial.test.ts"}}
 {"date": "2026-11-20", "from": {"p": "runtime/cli/test/multi-user-test-completion.test.ts"}, "to": {"p": "runtime/cli/test/multi-user-test-completion.serial.test.ts"}}
+{"date":"2026-11-18","from":{"p":"runtime/runner/test/cfc-prepare-cov-cross-holder-log.test.ts"},"to":{"p":"runtime/runner/test/cfc-prepare-served-writer-fit.test.ts"}}
