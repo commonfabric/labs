@@ -23,12 +23,15 @@ agent).
 1. Every item is labelled by the hi-fi model (an LLM, assumed right) and by the
    lo-fi rule set (regular expressions, run as plain pattern code, assumed
    fallible).
-2. When they disagree, the lo-fi set was _surprised_. The item and the hi-fi
-   label join the graded set, which keeps a held-out split.
-3. After surprises accumulate, another LLM call proposes a whole new rule set.
-   It replaces the current one only if every rule compiles, passes the regex
-   safety check, and the set scores better on the held-out examples. No one has
-   to approve rules one by one.
+2. When they disagree, the lo-fi set was _surprised_. Every item the hi-fi model
+   has labelled is a graded example, on the training or held-out side of a split
+   fixed by a hash of its id; surprises are what start a rewrite.
+3. After enough new surprises (`rewriteAfter`, default 3), another LLM call sees
+   the current rules and the training examples and proposes a whole new rule
+   set. It replaces the current one only if every rule is in the grammar and
+   passes the regex safety check, and the set's F1 on the held-out examples is
+   strictly higher; a tie keeps the current set. No one has to approve rules one
+   by one. Every judged proposal goes into the history, accepted or not.
 4. Some goals never settle into rules. That is a valid outcome: they stay on the
    hi-fi model.
 5. Publishing sends the accepted rules to a pool under the goal's pseudonym.
@@ -57,6 +60,38 @@ ever match it.
 Builds on `apps/self-improving-classifier` (`classifier-logic.ts`): regex
 compiling, `isRegexSafe`, and scoring. Design notes: the "hi-fi → lo-fi pump" in
 the enricher-ecosystem PRD (§6.8–6.10).
+
+## Building `lofi-inductor`
+
+- `rule-grammar.ts` holds the grammar and the canonical form. The canonical form
+  keeps what `RegExp.test` answers with the `i` flag and rewrites only what
+  cannot change it: alternation order, laziness, capturing groups, letter case,
+  equivalent spellings of one character or class, and quantifier spelling. When
+  unsure it leaves a pattern as written, so two rules may compare different that
+  mean the same, but never the reverse. The safety check runs on the canonical
+  form, which is what runs, so `(a|b)+` is accepted as `[ab]+`.
+- A rule set says YES when a YES rule matches and no NO rule does.
+- Scoring all labelled held-out items, not only surprises, is what lets the gate
+  see a proposal that fixes the surprises by breaking items the current rules
+  got right.
+- A computed cannot write, so the judgement is derived and recorded by the
+  `settleRewrite` stream, which the view's "Record the judgement" button and
+  agents send. The gate decides; sending only records what it decided. Adding an
+  item does not record as well, because of the second issue below.
+- `publish` records `{goal, rules, publishedAt}` in `published`, which the pool
+  will take.
+- Choose the hi-fi model with `hifiModel`; omitted, the deployment's default
+  `generateObject` model answers.
+
+Known runtime issues this pattern works around:
+
+1. In a block-bodied `map` callback, `const answer = generateObject({...})` with
+   a reactive argument is lowered into a `lift` that calls `generateObject`, and
+   the graph never settles. The hi-fi map is written expression-bodied.
+2. An action that reads state derived from mapped `generateObject` calls while
+   two or more of them are in flight can lose their results for good
+   (`contribution-dropped`, a builtin write superseded). Recording the judgement
+   while hi-fi calls are in flight can still hit it.
 
 ## CFC debt
 
