@@ -78,17 +78,70 @@ export function ruleIdentity(
 // =============================================================================
 
 const K = [
-  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
-  0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-  0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
-  0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
-  0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-  0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
-  0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
-  0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-  0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+  0x428a2f98,
+  0x71374491,
+  0xb5c0fbcf,
+  0xe9b5dba5,
+  0x3956c25b,
+  0x59f111f1,
+  0x923f82a4,
+  0xab1c5ed5,
+  0xd807aa98,
+  0x12835b01,
+  0x243185be,
+  0x550c7dc3,
+  0x72be5d74,
+  0x80deb1fe,
+  0x9bdc06a7,
+  0xc19bf174,
+  0xe49b69c1,
+  0xefbe4786,
+  0x0fc19dc6,
+  0x240ca1cc,
+  0x2de92c6f,
+  0x4a7484aa,
+  0x5cb0a9dc,
+  0x76f988da,
+  0x983e5152,
+  0xa831c66d,
+  0xb00327c8,
+  0xbf597fc7,
+  0xc6e00bf3,
+  0xd5a79147,
+  0x06ca6351,
+  0x14292967,
+  0x27b70a85,
+  0x2e1b2138,
+  0x4d2c6dfc,
+  0x53380d13,
+  0x650a7354,
+  0x766a0abb,
+  0x81c2c92e,
+  0x92722c85,
+  0xa2bfe8a1,
+  0xa81a664b,
+  0xc24b8b70,
+  0xc76c51a3,
+  0xd192e819,
+  0xd6990624,
+  0xf40e3585,
+  0x106aa070,
+  0x19a4c116,
+  0x1e376c08,
+  0x2748774c,
+  0x34b0bcb5,
+  0x391c0cb3,
+  0x4ed8aa4a,
+  0x5b9cca4f,
+  0x682e6ff3,
+  0x748f82ee,
+  0x78a5636f,
+  0x84c87814,
+  0x8cc70208,
+  0x90befffa,
+  0xa4506ceb,
+  0xbef9a3f7,
+  0xc67178f2,
 ];
 
 const rotr = (x: number, n: number): number => (x >>> n) | (x << (32 - n));
@@ -118,15 +171,26 @@ function utf8(text: string): number[] {
 /** SHA-256 of `bytes` (FIPS 180-4). */
 export function sha256(bytes: readonly number[]): number[] {
   const h = [
-    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c,
-    0x1f83d9ab, 0x5be0cd19,
+    0x6a09e667,
+    0xbb67ae85,
+    0x3c6ef372,
+    0xa54ff53a,
+    0x510e527f,
+    0x9b05688c,
+    0x1f83d9ab,
+    0x5be0cd19,
   ];
   const bitLength = bytes.length * 8;
   const padded = [...bytes, 0x80];
   while (padded.length % 64 !== 56) padded.push(0);
   const high = Math.floor(bitLength / 0x100000000);
   for (const word of [high, bitLength >>> 0]) {
-    padded.push(word >>> 24, (word >>> 16) & 255, (word >>> 8) & 255, word & 255);
+    padded.push(
+      word >>> 24,
+      (word >>> 16) & 255,
+      (word >>> 8) & 255,
+      word & 255,
+    );
   }
   const w = new Array<number>(64);
   for (let offset = 0; offset < padded.length; offset += 64) {
@@ -304,6 +368,42 @@ export function releaseFrom(
     b.count - a.count ||
     (ruleIdentity(a) < ruleIdentity(b) ? -1 : 1)
   );
+}
+
+/**
+ * `drafts` as one contribution's rule set: each checked against the grammar
+ * and put in canonical form, a rule given twice kept once. A rule out of
+ * grammar refuses the whole set, so a contributor learns their set was not
+ * taken rather than having part of it silently dropped.
+ */
+export function canonicalSet(drafts: unknown): CanonicalRule[] {
+  if (!Array.isArray(drafts)) {
+    throw new Error("A contribution needs a list of rules.");
+  }
+  const rules = new Map<string, CanonicalRule>();
+  for (const draft of drafts) {
+    const checked = checkRule(draft);
+    if (!checked.ok) throw new Error(`Refused a rule: ${checked.reason}.`);
+    const identity = ruleIdentity(checked.rule);
+    if (!rules.has(identity)) rules.set(identity, checked.rule);
+  }
+  return [...rules.values()];
+}
+
+/**
+ * Every rule any pseudonym holds, with its count, threshold or not. Only for
+ * showing what the release withholds; the pool's policy does not release it.
+ */
+export function tallyAll(
+  contributions: readonly (Contribution | undefined)[] | undefined,
+): ReleasedRule[] {
+  return [...supportOf(contributions).values()].map(({ rule, pseudonyms }) => ({
+    field: rule.field,
+    pattern: rule.pattern,
+    predicts: rule.predicts,
+    key: rule.key,
+    count: pseudonyms.size,
+  }));
 }
 
 /**

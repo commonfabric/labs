@@ -4,6 +4,7 @@ import { expect } from "@std/expect";
 import { checkRule } from "../lofi-inductor/rule-grammar.ts";
 import {
   type CanonicalRule,
+  canonicalSet,
   type Contribution,
   hmacSha256,
   MIN_THRESHOLD,
@@ -12,6 +13,7 @@ import {
   ruleIdentity,
   sha256,
   supportOf,
+  tallyAll,
   thresholdFor,
   thresholdOffset,
 } from "./consensus.ts";
@@ -222,7 +224,10 @@ describe("releaseFrom", () => {
 
   it("releases each rule only at its own jittered threshold", () => {
     const config = { thresholdCenter: 6, jitter: 3 };
-    const rules = Array.from({ length: 40 }, (_, i) => rule("subject", `w${i}`));
+    const rules = Array.from(
+      { length: 40 },
+      (_, i) => rule("subject", `w${i}`),
+    );
     for (let n = 1; n <= 10; n++) {
       const released = releaseFrom(many("p", n, rules), SECRET, config);
       const expected = rules.filter((r) =>
@@ -257,5 +262,30 @@ describe("mintSecret", () => {
     expect(secret).toMatch(/^[0-9a-f]{32}$/);
     expect(mintSecret(Math.random)).not.toBe(secret);
     expect(mintSecret(() => 0)).toBe("0".repeat(32));
+  });
+});
+
+describe("canonicalSet", () => {
+  it("canonicalizes and keeps a rule given twice once", () => {
+    const set = canonicalSet([
+      { field: "subject", pattern: "INVOICE", predicts: true },
+      { field: "subject", pattern: "[iI]nvoice", predicts: true },
+      { field: "subject", pattern: "bill", predicts: true },
+    ]);
+    expect(set).toEqual([INVOICE, BILL]);
+  });
+
+  it("refuses the whole set for one rule out of grammar, or no list", () => {
+    expect(() => canonicalSet([INVOICE, { ...BILL, pattern: "(a)\\1" }]))
+      .toThrow("Refused a rule");
+    expect(() => canonicalSet(undefined)).toThrow();
+  });
+});
+
+describe("tallyAll", () => {
+  it("counts every rule, below threshold too", () => {
+    expect(tallyAll([{ pseudonym: "a", rules: [INVOICE] }])).toEqual([
+      { ...INVOICE, count: 1 },
+    ]);
   });
 });
