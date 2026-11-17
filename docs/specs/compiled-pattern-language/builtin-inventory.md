@@ -648,17 +648,20 @@ the element is keyed by the identity of that cell.
   `push` or `addUnique` is not this case. It is a cell of its own,
   today and in this design, and a reference to it reads the record
   after the list no longer holds it. By ruling a function body that
-  reads such a value holds a copy and stores the value where it
-  writes it elsewhere, and `key(i)` on the array is a handle by
-  position that nothing rewrites to a reference to the element. How
+  reads such a value through a handle holds a copy and stores the
+  value where it writes it elsewhere, and `key(i)` on the array is a
+  handle by position that nothing rewrites to a reference to the
+  element. How
   the reference is stored and labeled is assumed
-  (`plan-and-label-templates.md` §8, questions 113 and 114). Assumed
-  as well (its questions 132 and 133): a handler that declares a data
-  type for the element in its state holds a copy, as a body that
-  reads through a handle does by ruling; and a re-key moves an
-  instance that a computation of the body made, replaces what is
-  stored under the new key, and moves nothing for another element
-  whose occurrence count it changed. Over an
+  (`plan-and-label-templates.md` §8, questions 113 and 114). Ruled as
+  well: a handler that declares a data type for the element in its
+  state, as `stop: Stop`, is given a reference by key, and a member read
+  from it carries the reference with the member's path, so a write of
+  the member elsewhere stores a reference by key; and a re-key moves an
+  instance that a computation of the body made, replaces what is stored
+  under the new key, moves nothing for another element whose occurrence
+  count it changed, and does not happen for a write that is not made
+  through a reference by key. Over an
   array of references none of this applies.
 - *A list of keyed records is an array of references.* The record
   that `elementById` yields a handle of is, by ruling, a cell of its

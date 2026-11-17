@@ -736,13 +736,21 @@ reactive tier or as a handle a handler was given, reads as
 position and reads the element that stands there. A function body
 that reads the value through a handle holds a copy, by ruling: it
 stores the value where it writes it elsewhere, as today, and a cell
-it wrote keeps the value after the element is removed. That a
-handler which declares a data type for the element in its state, as
-`stop: Stop`, holds a copy as well, so that
-`center.set(stop.position)` stores the value, is *assumed*
-(`plan-and-label-templates.md` §8, question 132); by the prototype's
-measurement the runtime of today stores a link to the position
-there. `items.key(i)` is a
+it wrote keeps the value after the element is removed. A handler
+that declares a data type for the element in its state, as
+`stop: Stop`, is ruled the other way: the value it is given for the
+element is a reference by key, a member read from it, as
+`stop.position`, carries the reference with the member's path, and
+`center.set(stop.position)` stores a reference by key, which reads
+as `undefined` after the element is removed. The binding copies
+nothing under either answer, because a binding made in an element
+body binds by reference, so the stream is the same stream when the
+element's data changes. By ruling as well, a member handle read
+through a handle of handles, as `Writable<Writable<Item>[]>`, is a
+reference by key where the member is a plain value in place
+(`plan-and-label-templates.md` §1.3, "What a function body holds").
+By the prototype's measurement the runtime of today stores a link to
+the position where such a handler stores a member. `items.key(i)` is a
 handle by position, at the call and when it is stored: nothing
 rewrites it to a reference to the element, so `items.key(0)` names
 the first element, whichever it is, over an array of references, an
@@ -1126,11 +1134,11 @@ expressions.
   equivalent to an `action`.
 - An arrow function in any other attribute is refused
   (`pattern-context:function-creation`).
-- Spread attributes and spread children are allowed. *Assumed*
-  (`plan-and-label-templates.md` §8, question 130): a spread child,
-  `{...xs}`, is one child at the position it is written at, as the
-  expression child `{xs}` is, and so is an array literal among the
-  children that itself has a spread or a hole. An array literal with
+- Spread attributes and spread children are allowed. By ruling a
+  spread child, `{...xs}`, is one child at the position it is written
+  at, as the expression child `{xs}` is, and so is an array literal
+  among the children that itself has a spread or a hole, which is
+  stored as one nested array value. An array literal with
   neither has its members written out among the children
   (`plan-and-label-templates.md` §3.4). The same whether `xs` is a
   collection over an array of references, over an array of plain

@@ -3806,10 +3806,13 @@ holds, before the server's result arrives.
   enclosing element key is a salted value hash. The client's run of the
   value code places the marker of `host.stream` where the server's run
   does, and the client's runtime puts the link to the stream it derived
-  in the marker's place, with the same check against `Binding.result`
-  (`execution-and-storage.md` §2.2). Where the check fails, the
-  top-level property of the result that holds the position keeps what
-  it held, on a client as on the server.
+  in the marker's place (`execution-and-storage.md` §2.2). By ruling
+  no position is checked, on a client as on the server, and the plan
+  does not say where a stream is stored. The same for a binding of an
+  element body over an array of references, over an array of plain
+  values in place, and over the result of another per-element
+  construct, except that a client cannot derive a stream whose
+  enclosing element key is a salted value hash.
 - A binding made in a function body whose paths are all links, to cells or
   to containers bound by reference, is named by the identities of those
   cells and the addresses of those containers. A client derives it.
