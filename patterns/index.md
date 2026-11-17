@@ -2036,8 +2036,8 @@ shadows it. Disagreements become graded examples; an LLM proposes a new rule
 set, adopted only when it is in grammar, cheap to run, and better on a held-out
 split. Rules publish under a per-goal pseudonym to an `inductor-pool`, and the
 pool's released rules come back as an offer judged the same way. The view is
-four card sub-patterns (`rules-card.tsx`, `pool-card.tsx`, `history-card.tsx`,
-`items-card.tsx`).
+five card sub-patterns, in the order a newcomer uses them (`items-card.tsx`,
+`rules-card.tsx`, `history-card.tsx`, `pool-card.tsx`, `settings-card.tsx`).
 
 **Keywords:** classifier, regex, rule induction, hi-fi lo-fi, held-out, F1,
 pseudonym, threshold release, CFC
