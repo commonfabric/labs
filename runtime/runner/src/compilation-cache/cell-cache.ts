@@ -2819,6 +2819,18 @@ async function planStampRepair(
     metadata: CfcMetadata | undefined;
   }>();
   if (runtimeVersion !== undefined) {
+    // Each member's compiled record is read at its own key, so each is
+    // synchronized here: the source closure's sync loaded none of them.
+    await Promise.all(
+      [...closure.keys()].map((identity) =>
+        runtime.getCell(
+          space,
+          compiledDocKey(runtimeVersion, identity),
+          undefined,
+          tx,
+        ).sync()
+      ),
+    );
     for (const identity of closure.keys()) {
       const link = ownKey(compiledDocKey(runtimeVersion, identity));
       const metadata = readStoredCfcMetadata(tx, link);

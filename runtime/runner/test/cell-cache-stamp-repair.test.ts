@@ -4,6 +4,8 @@ import type { FabricPlainObject, FabricValue } from "@commonfabric/data-model";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
+import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
   computeModuleHashes,
@@ -604,6 +606,87 @@ describe("cell-cache", () => {
       expect(await repair(program.entryIdentity)).toBe("repaired");
       expect(stored(compiled)).toEqual({});
       expect(atomsOn(idOf(sourceDocKey(program.entryIdentity)))).toEqual([]);
+    });
+
+    it("erases a stamped compiled record that the repairing runtime has never loaded", async () => {
+      // A cold runtime repairs straight from the store: nothing it did
+      // before the repair loaded the compiled records.
+
+      const server = newSharedServer();
+      const writerManager = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const writer = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: writerManager,
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+      });
+      const coldManager = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const cold = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: coldManager,
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+      });
+      try {
+        const modules = toModules(PROGRAM);
+        const tx = writer.edit();
+        writeSourceAndCompiledDocs(
+          writer,
+          space,
+          modules.modules,
+          modules.entryIdentity,
+          { runtimeVersion: RUNTIME_VERSION },
+          tx,
+        );
+        writer.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        const compiledId = writer.getCell(
+          space,
+          compiledDocKey(RUNTIME_VERSION, modules.entryIdentity),
+        ).getAsNormalizedFullLink().id as URI;
+        const seed = writer.edit();
+        const current = storedFields(seed, address(compiledId)) as Stored;
+        seedStoredEnvelope(seed, address(compiledId), {
+          ...current,
+          cfc: {
+            ...current.cfc!,
+            labelMap: {
+              ...current.cfc!.labelMap,
+              entries: [
+                ...current.cfc!.labelMap.entries,
+                ...rootPairStamp(space),
+              ],
+            },
+          },
+        } as unknown as FabricValue);
+        expect((await seed.commit().settled).error).toBeUndefined();
+        await writerManager.synced();
+
+        expect(
+          await repairCompileCacheStamps(
+            cold,
+            space,
+            modules.entryIdentity,
+            RUNTIME_VERSION,
+          ),
+        ).toBe("repaired");
+        await coldManager.synced();
+        const check = cold.edit();
+        try {
+          expect(storedFields(check, address(compiledId))).toEqual({});
+        } finally {
+          check.abort();
+        }
+      } finally {
+        await cold.dispose();
+        await writer.dispose();
+        await coldManager.close();
+        await writerManager.close();
+      }
     });
 
     it("refuses, and erases nothing, where a stamped compiled record's list is one the source record does not attest", async () => {
