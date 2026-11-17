@@ -50,7 +50,8 @@ failing tests, which the pull request's checks and `gh run view` show.
 ### Running one test by name
 
 Use `--filter` on a package's `test` task, not on the root one. The root task
-runs `tasks/test.ts`, which takes no arguments and refuses a run given any.
+runs `tasks/workspace-tests.ts`, which takes no arguments and refuses a run
+given any.
 
 ```bash
 cd runtime/runner

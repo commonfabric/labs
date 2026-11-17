@@ -88,6 +88,21 @@ const findingKeys = (
 ): string[] => strandedKeys(before, after).map((finding) => finding.key);
 
 describe("vintage paths", () => {
+  it("returns `undefined` for a fixture-named file outside a test and tier directory", () => {
+    const name = vintageFileName(
+      stampFor(new Date("2026-07-29T16:33:28.000Z")),
+      ID_A,
+    );
+
+    expect(parseVintagePath(`root/${name}`, "root")).toBeUndefined();
+    expect(parseVintagePath(`root/pinned/${name}`, "root")).toBeUndefined();
+    expect(parseVintagePath(`root//pinned/${name}`, "root")).toBeUndefined();
+    expect(parseVintagePath(`root/a.test.tsx//${name}`, "root"))
+      .toBeUndefined();
+    expect(parseVintagePath(`root/a.test.tsx/pinned/${name}`, "root"))
+      .toMatchObject({ testKey: "a.test.tsx", tier: PINNED });
+  });
+
   it("round-trips a path it built itself", () => {
     const stamp = stampFor(new Date("2026-07-29T16:33:28.000Z"));
     const path = `${vintageDir("system/home/home.test.tsx", PINNED)}/${
@@ -311,6 +326,19 @@ describe("coverage", () => {
 });
 
 describe("collectVintages", () => {
+  it("throws when the tree cannot be read, and returns nothing when it is absent", async () => {
+    const root = await Deno.makeTempDir({ prefix: "vintage-collect-" });
+    try {
+      await Deno.writeTextFile(`${root}/file`, "");
+
+      await expect(collectVintages(`${root}/file`)).rejects
+        .toThrow(Deno.errors.NotADirectory);
+      expect(await collectVintages(`${root}/absent`)).toEqual([]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
   it("finds fixtures at any depth and ignores non-fixtures", async () => {
     const root = await Deno.makeTempDir({ prefix: "vintage-collect-" });
     try {

@@ -7,7 +7,8 @@ import {
 import { decodeBase64 } from "@std/encoding/base64";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { FakeTime } from "@std/testing/time";
 
 import type { HarnessRunArtifacts } from "../src/artifacts.ts";
 import {
@@ -16,18 +17,25 @@ import {
 } from "../src/cfc-posture.ts";
 import { InMemoryHarnessCredentialStore } from "../src/auth/credential-store.ts";
 import {
+  OPENAI_CODEX_DEVICE_START_URL,
+  OPENAI_CODEX_DEVICE_TOKEN_URL,
+  OPENAI_CODEX_TOKEN_URL,
+} from "../src/auth/openai-codex.ts";
+import {
   buildCfHarnessBaseSystemPrompt,
   buildCfHarnessBatchSystemPrompt,
   buildCfHarnessOperatorSystemPrompt,
   cfHarnessCliInformationalControl,
   type CfHarnessCliIO,
   type CfHarnessCliSignalHandler,
+  cfHarnessOpenUrlCommand,
   createCfHarnessBatchResult,
   createCfHarnessCliCapabilities,
   formatCfHarnessCliResult,
   formatCfHarnessCliUsage,
   formatCfHarnessTranscriptEvent,
   installCfHarnessSignalHandlers,
+  registerCfHarnessSignalHandler,
   resolveCfHarnessCliSystemPrompt,
   validateCfHarnessStructuredResult,
 } from "../src/cli.ts";
@@ -4598,6 +4606,23 @@ describe("validateCfHarnessStructuredResult()", () => {
     );
   });
 
+  it("says the result file was not valid JSON for text that does not parse", async () => {
+    const validation = await validate(() => Promise.resolve("{answer"));
+
+    expect(validation).toMatchObject({
+      status: "invalid",
+      validation_error: "structured result file was not valid JSON",
+    });
+  });
+
+  it("says the result file was empty for a file holding only whitespace", async () => {
+    const validation = await validate(() => Promise.resolve("  \n"));
+
+    expect(validation.validation_error).toBe(
+      "structured result file was empty",
+    );
+  });
+
   it("names the field and the reason a result does not match the schema", async () => {
     const validation = await validate(() =>
       Promise.resolve(JSON.stringify({ answer: 7 }))
@@ -8806,4 +8831,910 @@ Deno.test("cf-harness cli rejects an invalid network mode for the runsc runtime"
     Error,
     "must be one of none, bridge, or host",
   );
+});
+
+describe("cli", () => {
+  describe("formatCfHarnessTranscriptEvent()", () => {
+    const toolCallLine = (name: string, args: string): string | undefined =>
+      formatCfHarnessTranscriptEvent({
+        message: {
+          role: "assistant",
+          content: "",
+          toolCalls: [{
+            id: `call-${name}`,
+            type: "function",
+            function: { name, arguments: args },
+          }],
+        },
+        transcript: [],
+      });
+
+    it("returns each tool's call with the arguments it shows", () => {
+      const cases: readonly (readonly [string, unknown, string])[] = [
+        ["bash", { command: "ls -l" }, 'bash(command="ls -l")'],
+        ["read_file", { path: "a.ts" }, 'read_file(path="a.ts")'],
+        [
+          "web_fetch",
+          { url: "https://x.test/" },
+          'web_fetch(url="https://x.test/")',
+        ],
+        [
+          "browser",
+          { action: "open", url: "https://x.test/" },
+          'browser(action="open" url="https://x.test/")',
+        ],
+        [
+          "edit_file",
+          { path: "a.ts", edits: [{}, {}] },
+          'edit_file(path="a.ts" edits=2)',
+        ],
+        [
+          "read_skill_resource",
+          { skill: "kit", path: "references/a.md" },
+          'read_skill_resource(skill="kit" path="references/a.md")',
+        ],
+        [
+          "run_skill_script",
+          { skill: "kit", path: "scripts/a.sh", args: ["-v"] },
+          'run_skill_script(skill="kit" path="scripts/a.sh" args=1)',
+        ],
+        [
+          "write_file",
+          { path: "a.ts", mode: "append", content: "secret" },
+          'write_file(path="a.ts" mode="append")',
+        ],
+        [
+          "search_patterns",
+          { tags: ["todo"], text: "list" },
+          'search_patterns(tags=["todo"] text="list")',
+        ],
+        [
+          "search_skills",
+          { query: "pdf", owner: "acme", limit: 3 },
+          'search_skills(query="pdf" owner="acme" limit=3)',
+        ],
+        ["research", { task: "find it" }, 'research(task="find it")'],
+        ["query_docs", { question: "how?" }, 'query_docs(question="how?")'],
+        [
+          "record_feedback",
+          { patternId: "p1", verdict: "worked", note: "private prose" },
+          'record_feedback(patternId="p1" verdict="worked")',
+        ],
+        ["run_pattern", { patternId: "p1" }, 'run_pattern(patternId="p1")'],
+        ["delegate_task", { task: "anything" }, "delegate_task(subagent)"],
+      ];
+      expect(
+        cases.map(([name, args]) => toolCallLine(name, JSON.stringify(args))),
+      ).toEqual(
+        cases.map(([, , shown]) => `assistant -> tools: ${shown}\n`),
+      );
+    });
+
+    it("returns a bare tool name when no shown argument has its type", () => {
+      const bare = [
+        ["bash", { command: 1 }],
+        ["edit_file", { path: 1, edits: "two" }],
+        ["read_skill_resource", {}],
+        ["run_skill_script", { args: "-v" }],
+        ["write_file", { mode: 1 }],
+        ["search_patterns", { tags: "todo" }],
+        ["search_skills", { limit: "3" }],
+        ["research", { task: 1 }],
+        ["query_docs", {}],
+        ["record_feedback", { note: "prose" }],
+        ["run_pattern", {}],
+        ["web_fetch", {}],
+        ["read_file", {}],
+        ["describe_handle", {}],
+      ] as const;
+      expect(
+        bare.map(([name, args]) => toolCallLine(name, JSON.stringify(args))),
+      )
+        .toEqual(bare.map(([name]) => `assistant -> tools: ${name}\n`));
+    });
+
+    it("returns a bare tool name for arguments that are not a JSON object", () => {
+      expect(toolCallLine("bash", "{not json")).toBe(
+        "assistant -> tools: bash\n",
+      );
+      expect(toolCallLine("bash", '["ls"]')).toBe(
+        "assistant -> tools: bash\n",
+      );
+      expect(toolCallLine("delegate_task", "{not json")).toBe(
+        "assistant -> tools: delegate_task\n",
+      );
+    });
+
+    it("returns a bare tool name for a tool it does not summarize", () => {
+      expect(toolCallLine("constructor", '{"path":"a"}')).toBe(
+        "assistant -> tools: constructor\n",
+      );
+    });
+
+    it("returns undefined for a system message", () => {
+      expect(
+        formatCfHarnessTranscriptEvent({
+          message: { role: "system", content: "You are a harness." },
+          transcript: [],
+        }),
+      ).toBeUndefined();
+    });
+
+    it("returns a tool result's text on one line, cut short when long", () => {
+      const toolLine = (content: string) =>
+        formatCfHarnessTranscriptEvent({
+          message: {
+            role: "tool",
+            toolCallId: "call-1",
+            toolName: "bash",
+            content,
+          },
+          transcript: [],
+        });
+      expect(toolLine('{"exitCode":0}')).toBe('tool bash: {"exitCode":0}\n');
+      expect(toolLine("line one\n  line two")).toBe(
+        "tool bash: line one line two\n",
+      );
+      expect(toolLine("x".repeat(200))).toBe(
+        `tool bash: ${"x".repeat(177)}...\n`,
+      );
+    });
+  });
+
+  describe("parseCfHarnessCliArgs()", () => {
+    it("throws naming the flag for a malformed --allow-skill-script", async () => {
+      await expect(
+        parseCfHarnessCliArgs(
+          ["--allow-skill-script", "no-separator", "Ask"],
+          { cwd: "/tmp/project", env: {} },
+        ),
+      ).rejects.toThrow(
+        "invalid --allow-skill-script: allowed skill script must use skill:scripts/path form: no-separator",
+      );
+    });
+
+    describe("--skills-root", () => {
+      let workspace: string;
+      let outside: string;
+
+      beforeEach(async () => {
+        workspace = await Deno.realPath(
+          await Deno.makeTempDir({ prefix: "cf-harness-cli-workspace-" }),
+        );
+        outside = await Deno.realPath(
+          await Deno.makeTempDir({ prefix: "cf-harness-cli-outside-" }),
+        );
+      });
+
+      afterEach(async () => {
+        await Deno.remove(workspace, { recursive: true });
+        await Deno.remove(outside, { recursive: true });
+      });
+
+      const parseWithSkillsRoot = (skillsRoot: string) =>
+        parseCfHarnessCliArgs(["--skills-root", skillsRoot, "Ask"], {
+          cwd: workspace,
+          env: {},
+        });
+
+      it("throws for a skills root that does not exist", async () => {
+        await expect(parseWithSkillsRoot("skills")).rejects.toThrow(
+          `--skills-root must exist: ${join(workspace, "skills")}`,
+        );
+      });
+
+      it("throws for a skills root that links outside the workspace", async () => {
+        await Deno.symlink(outside, join(workspace, "skills"));
+        await expect(parseWithSkillsRoot("skills")).rejects.toThrow(
+          "--skills-root must stay within the workspace or a host mount",
+        );
+      });
+
+      it("returns the skills root that resolves within the workspace", async () => {
+        await Deno.mkdir(join(workspace, "skills"));
+        const parsed = await parseWithSkillsRoot("skills");
+        if ("help" in parsed) throw new Error("expected config result");
+        expect(parsed.skillsRoot).toBe(join(workspace, "skills"));
+      });
+    });
+  });
+
+  describe("system prompts", () => {
+    it("points the operator at the workspace for a focus root outside it", () => {
+      const prompt = buildCfHarnessOperatorSystemPrompt({
+        workspace: "/tmp/project",
+        focusRoot: "/tmp/elsewhere",
+      });
+      expect(prompt).toContain("- Prefer exploration within /workspace.");
+    });
+
+    it("points the operator at the focus root inside the workspace", () => {
+      const prompt = buildCfHarnessOperatorSystemPrompt({
+        workspace: "/tmp/project",
+        focusRoot: "/tmp/project/packages/app",
+      });
+      expect(prompt).toContain(
+        "- Prefer exploration within /workspace/packages/app.",
+      );
+    });
+
+    it("lists host mounts and the Fabric mount in a batch prompt", () => {
+      const prompt = buildCfHarnessBatchSystemPrompt({
+        fabricMountPath: "/fabric",
+        hostMounts: [{
+          name: "notes",
+          hostPath: "/host/notes",
+          sandboxPath: "/notes",
+          mode: "readonly",
+        }],
+      });
+      expect(prompt).toContain(
+        "- A Common Fabric space is mounted at /fabric.",
+      );
+      expect(prompt).toContain("  - /notes: readonly (notes)");
+    });
+
+    it("leaves mounts out of a batch prompt that has none", () => {
+      const prompt = buildCfHarnessBatchSystemPrompt({});
+      expect(prompt).not.toContain("mounted at");
+      expect(prompt).not.toContain("Additional host mounts");
+    });
+  });
+
+  describe("models command", () => {
+    it("exits nonzero when the created client is for another provider", async () => {
+      const { io, stderr } = createIoBuffers();
+      const exitCode = await runCfHarnessCli(["models", "openai-codex"], {
+        io,
+        createModelClient: () => ({
+          providerId: "openai-compatible-gateway",
+          complete: () => Promise.reject(new Error("unused")),
+        }),
+      });
+      expect(exitCode).toBe(1);
+      expect(stderr.join("")).toContain(
+        "created model client provider openai-compatible-gateway does not match selected provider openai-codex",
+      );
+    });
+
+    it("exits nonzero when the client cannot list models", async () => {
+      const { io, stdout, stderr } = createIoBuffers();
+      const exitCode = await runCfHarnessCli(["models", "openai-codex"], {
+        io,
+        env: {},
+        createModelClient: () => ({
+          providerId: "openai-codex",
+          complete: () => Promise.reject(new Error("unused")),
+        }),
+      });
+      expect(exitCode).toBe(1);
+      expect(stdout).toEqual([]);
+      expect(stderr.join("")).toContain(
+        "openai-codex model discovery is unavailable",
+      );
+    });
+
+    it("asks the store under the harness home when no client is injected", async () => {
+      // Nothing is stored for the local owner, so discovery stops at the
+      // credential, before any request.
+
+      const home = await Deno.makeTempDir({
+        prefix: "cf-harness-models-home-",
+      });
+      try {
+        const { io, stdout, stderr } = createIoBuffers();
+        const exitCode = await runCfHarnessCli(["models", "openai-codex"], {
+          io,
+          env: { CF_HARNESS_HOME: home },
+          fetchFn: () => Promise.reject(new Error("unexpected request")),
+        });
+        expect(exitCode).toBe(1);
+        expect(stdout).toEqual([]);
+        expect(stderr).toEqual([
+          "OpenAI Codex is not connected for this credential owner\n",
+        ]);
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+    });
+  });
+
+  describe("auth command", () => {
+    class FailingCredentialStore extends InMemoryHarnessCredentialStore {
+      override getRecord(): never {
+        throw new Error("credential store is locked");
+      }
+
+      override get(): never {
+        throw new Error("credential store is locked");
+      }
+    }
+
+    it("reports no connection from the store under the harness home", async () => {
+      const home = await Deno.makeTempDir({ prefix: "cf-harness-auth-home-" });
+      try {
+        const { io, stdout } = createIoBuffers();
+        const exitCode = await runCfHarnessCli(
+          ["auth", "status", "openai-codex"],
+          { io, env: { CF_HARNESS_HOME: home } },
+        );
+        expect(exitCode).toBe(1);
+        expect(stdout).toEqual(["openai-codex: not connected\n"]);
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+    });
+
+    it("exits nonzero with the store's error for a status it cannot read", async () => {
+      const { io, stdout, stderr } = createIoBuffers();
+      const exitCode = await runCfHarnessCli(
+        ["auth", "status", "openai-codex"],
+        { io, credentialStore: new FailingCredentialStore() },
+      );
+      expect(exitCode).toBe(1);
+      expect(stdout).toEqual([]);
+      expect(stderr.join("")).toContain("credential store is locked");
+    });
+
+    it("prints the authorization URL, opens it, and reports the connection", async () => {
+      const { io, stdout } = createIoBuffers();
+      const opened: string[] = [];
+      const exitCode = await runCfHarnessCli(
+        ["auth", "login", "openai-codex"],
+        {
+          io,
+          credentialStore: new InMemoryHarnessCredentialStore(),
+          controlSignal: new AbortController().signal,
+          openUrl: (url) => {
+            opened.push(url);
+          },
+          loginOpenAICodex: async (options) => {
+            await options.onAuthorizationUrl("https://auth.example.test/go");
+            return {
+              type: "oauth",
+              providerId: "openai-codex",
+              accessToken: "access",
+              refreshToken: "refresh",
+              expiresAt: Date.UTC(2099, 0, 1),
+              accountId: "account",
+            };
+          },
+        },
+      );
+      expect(exitCode).toBe(0);
+      expect(opened).toEqual(["https://auth.example.test/go"]);
+      expect(stdout).toEqual([
+        "Open this URL to connect openai-codex:\nhttps://auth.example.test/go\n",
+        "openai-codex: connected\n",
+      ]);
+    });
+
+    it("exits nonzero with the login's error when not asked for JSON", async () => {
+      const { io, stdout, stderr } = createIoBuffers();
+      const exitCode = await runCfHarnessCli(
+        ["auth", "login", "openai-codex"],
+        {
+          io,
+          credentialStore: new InMemoryHarnessCredentialStore(),
+          controlSignal: new AbortController().signal,
+          loginOpenAICodex: () => Promise.reject(new Error("login refused")),
+        },
+      );
+      expect(exitCode).toBe(1);
+      expect(stdout).toEqual([]);
+      expect(stderr.join("")).toContain("login refused");
+    });
+
+    it("prints the device code and exits nonzero when that login is canceled", async () => {
+      const controller = new AbortController();
+      const { io, stdout, stderr } = createIoBuffers();
+      const exitCode = await runCfHarnessCli(
+        ["auth", "login", "openai-codex", "--device"],
+        {
+          io: {
+            stdout: (text) => {
+              io.stdout(text);
+              controller.abort(new Error("operator canceled the login"));
+            },
+            stderr: io.stderr,
+          },
+          credentialStore: new InMemoryHarnessCredentialStore(),
+          controlSignal: controller.signal,
+          fetchFn: () =>
+            Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  device_auth_id: "device-1",
+                  user_code: "ABCD-EFGH",
+                  interval: 5,
+                }),
+                { status: 200 },
+              ),
+            ),
+        },
+      );
+      expect(exitCode).toBe(1);
+      expect(stdout).toHaveLength(1);
+      expect(stdout[0]).toMatch(/^Open \S+ and enter code ABCD-EFGH\n$/);
+      expect(stderr.join("")).toContain("operator canceled the login");
+    });
+
+    it("saves the credential a device login completes once its interval passes", async () => {
+      // The device endpoint asks for a five-second interval between polls;
+      // fake time stands in for those five seconds.
+
+      using time = new FakeTime();
+      const store = new InMemoryHarnessCredentialStore();
+      const shown = Promise.withResolvers<void>();
+      const { io, stdout, stderr } = createIoBuffers();
+      const encode = (value: unknown) =>
+        btoa(JSON.stringify(value)).replaceAll("+", "-").replaceAll("/", "_")
+          .replace(/=+$/, "");
+      const accessToken = `${encode({ alg: "none" })}.${
+        encode({
+          "https://api.openai.com/auth": { chatgpt_account_id: "account-1" },
+        })
+      }.`;
+      const answers = new Map<string, unknown>([
+        [OPENAI_CODEX_DEVICE_START_URL, {
+          device_auth_id: "device-1",
+          user_code: "ABCD-EFGH",
+          interval: 5,
+        }],
+        [OPENAI_CODEX_DEVICE_TOKEN_URL, {
+          authorization_code: "code-1",
+          code_verifier: "verifier-1",
+        }],
+        [OPENAI_CODEX_TOKEN_URL, {
+          access_token: accessToken,
+          refresh_token: "refresh-1",
+          expires_in: 3600,
+        }],
+      ]);
+      const exitCode = runCfHarnessCli(
+        ["auth", "login", "openai-codex", "--device"],
+        {
+          io: {
+            stdout: (text) => {
+              io.stdout(text);
+              shown.resolve();
+            },
+            stderr: io.stderr,
+          },
+          credentialStore: store,
+          controlSignal: new AbortController().signal,
+          fetchFn: (input) => {
+            const answer = answers.get(String(input));
+            return answer === undefined
+              ? Promise.reject(new Error(`unexpected request: ${input}`))
+              : Promise.resolve(
+                new Response(JSON.stringify(answer), { status: 200 }),
+              );
+          },
+        },
+      );
+      await shown.promise;
+      expect(await store.get("local", "openai-codex")).toBeUndefined();
+      await time.tickAsync(5_000);
+      expect(await exitCode).toBe(0);
+      expect(stderr).toEqual([]);
+      expect(stdout.at(-1)).toBe("openai-codex: connected\n");
+      expect(await store.get("local", "openai-codex")).toMatchObject({
+        accessToken,
+        refreshToken: "refresh-1",
+        accountId: "account-1",
+      });
+    });
+
+    it("reports a device login canceled while it waits for the code", async () => {
+      // The device endpoint answers through the injected fetch; the login is
+      // canceled as soon as the code is shown, which ends the wait for the
+      // operator without any timer.
+
+      const controller = new AbortController();
+      const lines: string[] = [];
+      const requests: string[] = [];
+      const exitCode = await runCfHarnessCli(
+        ["auth", "login", "openai-codex", "--device", "--json"],
+        {
+          io: {
+            stdout: (text) => {
+              lines.push(text);
+              controller.abort();
+            },
+            stderr: (text) => lines.push(text),
+          },
+          credentialStore: new InMemoryHarnessCredentialStore(),
+          controlSignal: controller.signal,
+          fetchFn: (input) => {
+            requests.push(String(input));
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  device_auth_id: "device-1",
+                  user_code: "ABCD-EFGH",
+                  interval: 5,
+                }),
+                { status: 200 },
+              ),
+            );
+          },
+        },
+      );
+      expect(exitCode).toBe(1);
+      expect(requests).toHaveLength(1);
+      expect(lines.map((line) => JSON.parse(line))).toEqual([
+        {
+          type: "cf-harness.control-event",
+          version: 1,
+          command: "auth.login",
+          event: "authorization-required",
+          data: {
+            method: "device",
+            verificationUrl: expect.any(String),
+            userCode: "ABCD-EFGH",
+          },
+        },
+        {
+          type: "cf-harness.control-result",
+          version: 1,
+          ok: false,
+          command: "auth.login",
+          error: {
+            code: "operation-canceled",
+            message: "The cf-harness control operation was canceled",
+          },
+        },
+      ]);
+    });
+  });
+
+  describe("recorded runs", () => {
+    const recordedArtifacts = (
+      overrides: Partial<HarnessRunState> = {},
+    ): HarnessRunArtifacts => ({
+      runRoot: "/tmp/project/.cf-harness-artifacts/run-1",
+      runStatePath: "/tmp/project/.cf-harness-artifacts/run-1/run-state.json",
+      transcriptPath:
+        "/tmp/project/.cf-harness-artifacts/run-1/transcript.json",
+      runState: {
+        runId: "run-1",
+        status: "failed",
+        createdAt: "2026-04-15T22:10:00.000Z",
+        updatedAt: "2026-04-15T22:10:01.000Z",
+        cfcEnforcementMode: "disabled",
+        currentDir: "/workspace",
+        model: "gpt-5.4",
+        artifactRoot: "/tmp/project/.cf-harness-artifacts/run-1",
+        policyEvents: [],
+        toolOutputs: [],
+        ...overrides,
+      },
+      transcript: [{ role: "user", content: "hello" }],
+    });
+
+    const resume = (
+      artifacts: HarnessRunArtifacts,
+      deps: Partial<Parameters<typeof runCfHarnessCli>[1]> = {},
+    ) => {
+      const { io, stdout, stderr } = createIoBuffers();
+      const loops: string[] = [];
+      const exitCode = runCfHarnessCli(
+        ["--resume-run", "/tmp/project/.cf-harness-artifacts/run-1"],
+        {
+          io,
+          cwd: "/tmp/project",
+          env: { CF_HARNESS_API_KEY: "test-key" },
+          readRunArtifacts: () => Promise.resolve(artifacts),
+          createPromptLoop: () => {
+            loops.push("created");
+            return {
+              runPrompt: () => Promise.reject(new Error("unexpected prompt")),
+              runTranscript: () => Promise.resolve(completedCliResult("run-1")),
+            };
+          },
+          ...deps,
+        },
+      );
+      return { exitCode, stdout, stderr, loops };
+    };
+
+    it("exits nonzero for a gateway run resumed without an API key", async () => {
+      const { exitCode, stderr, loops } = resume(recordedArtifacts(), {
+        env: {},
+      });
+      expect(await exitCode).toBe(1);
+      expect(stderr).toEqual([
+        "no API key configured; set CF_HARNESS_API_KEY or OPENAI_API_KEY\n",
+      ]);
+      expect(loops).toEqual([]);
+    });
+
+    it("exits nonzero for a recorded run with no transcript", async () => {
+      const { exitCode, stderr } = resume({
+        ...recordedArtifacts(),
+        transcript: undefined,
+      });
+      expect(await exitCode).toBe(1);
+      expect(stderr.join("")).toContain(
+        "resume run is missing transcript data: /tmp/project/.cf-harness-artifacts/run-1",
+      );
+    });
+
+    it("exits zero for a recorded run with its transcript", async () => {
+      const { exitCode, stderr, loops } = resume(recordedArtifacts());
+      expect(await exitCode).toBe(0);
+      expect(stderr).toEqual([]);
+      expect(loops).toEqual(["created"]);
+    });
+
+    it("exits nonzero for a continuation asking for a result its run had no schema for", async () => {
+      // Continuing a run may leave the schema to the record, so the parse
+      // accepts a result path alone; a record without one leaves nothing.
+
+      const workspace = await Deno.realPath(
+        await Deno.makeTempDir({ prefix: "cf-harness-cli-continue-" }),
+      );
+      try {
+        const prior = join(workspace, ".cf-harness-artifacts", "prior");
+        await Deno.mkdir(prior, { recursive: true });
+        const { io, stderr } = createIoBuffers();
+        const exitCode = await runCfHarnessCli(
+          [
+            "--continue-run",
+            prior,
+            "--prompt",
+            "Next task",
+            "--structured-result-path",
+            "result.json",
+          ],
+          {
+            io,
+            cwd: workspace,
+            env: { CF_HARNESS_API_KEY: "test-key" },
+            readRunArtifacts: () =>
+              Promise.resolve({
+                ...recordedArtifacts({ status: "completed" }),
+                runRoot: prior,
+              }),
+            createPromptLoop: () => {
+              throw new Error("must not start a loop");
+            },
+          },
+        );
+        expect(exitCode).toBe(1);
+        expect(stderr).toEqual([
+          "--structured-result-path requires a recorded or explicit schema\n",
+        ]);
+      } finally {
+        await Deno.remove(workspace, { recursive: true });
+      }
+    });
+
+    it("exits nonzero for a Loom Codex run recorded without its owner", async () => {
+      const { exitCode, stderr, loops } = resume(
+        recordedArtifacts({
+          modelProvider: "openai-codex",
+          runManifest: {
+            type: "cf-harness.loom-run-manifest",
+            version: 1,
+            source: "loom",
+          },
+        }),
+        {
+          createModelClient: () => {
+            throw new Error("must not resolve credentials");
+          },
+        },
+      );
+      expect(await exitCode).toBe(1);
+      expect(stderr).toEqual([
+        "Loom openai-codex runs require an authenticated credential owner reference\n",
+      ]);
+      expect(loops).toEqual([]);
+    });
+  });
+
+  describe("fresh runs", () => {
+    const loomCodexRun = (
+      deps: Partial<Parameters<typeof runCfHarnessCli>[1]>,
+    ) => {
+      const { io, stderr } = createIoBuffers();
+      const exitCode = runCfHarnessCli(
+        ["--run-manifest", "/tmp/loom-owner.json", "--prompt", "hello"],
+        {
+          io,
+          cwd: "/tmp/project",
+          env: {},
+          readTextFile: () =>
+            Promise.resolve(JSON.stringify({
+              type: "cf-harness.loom-run-manifest",
+              version: 1,
+              source: "loom",
+              modelProvider: "openai-codex",
+              credentialOwner: {
+                type: "cf-harness.credential-owner-ref",
+                version: 1,
+                ownerKey: "loom:user-a",
+              },
+            })),
+          createPromptLoop: () => {
+            throw new Error("must not start a loop");
+          },
+          ...deps,
+        },
+      );
+      return { exitCode, stderr };
+    };
+
+    it("exits nonzero for a Loom model client bound to another owner", async () => {
+      const { exitCode, stderr } = loomCodexRun({
+        createModelClient: () => ({
+          providerId: "openai-codex",
+          credentialOwner: {
+            type: "cf-harness.credential-owner-ref",
+            version: 1,
+            ownerKey: "loom:user-b",
+          },
+          complete: () => Promise.reject(new Error("unused")),
+        }),
+      });
+      expect(await exitCode).toBe(1);
+      expect(stderr).toEqual([
+        "Loom model client credential owner does not match the run manifest\n",
+      ]);
+    });
+
+    it("exits nonzero for a Loom credential resolver keyed to another owner", async () => {
+      const { exitCode, stderr } = loomCodexRun({
+        openAICodexCredentialResolver: {
+          ownerKey: "loom:user-b",
+          resolve: () => Promise.reject(new Error("must not resolve")),
+        },
+      });
+      expect(await exitCode).toBe(1);
+      expect(stderr).toEqual([
+        "Loom credential resolver owner does not match the run manifest\n",
+      ]);
+    });
+
+    it("exits nonzero for gateway options given to a run its manifest makes openai-codex", async () => {
+      // The flag naming the provider is refused at parse; a provider the run
+      // manifest names is only known once the run starts.
+
+      const { io, stderr } = createIoBuffers();
+      const exitCode = await runCfHarnessCli(
+        [
+          "--run-manifest",
+          "/tmp/manifest.json",
+          "--gateway-base-url",
+          "https://gateway.example.test/v1",
+          "hello",
+        ],
+        {
+          io,
+          cwd: "/tmp/project",
+          env: {},
+          readTextFile: () =>
+            Promise.resolve(JSON.stringify({
+              type: "cf-harness.loom-run-manifest",
+              version: 1,
+              source: "loom",
+              modelProvider: "openai-codex",
+            })),
+          createModelClient: () => {
+            throw new Error("must not resolve credentials");
+          },
+        },
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr).toEqual([
+        "gateway URL/auth options cannot be used with openai-codex\n",
+      ]);
+    });
+  });
+
+  describe("cfHarnessOpenUrlCommand()", () => {
+    const url = "https://auth.example.test/go?a=1";
+
+    it("returns open for macOS", () => {
+      expect(cfHarnessOpenUrlCommand("darwin", url)).toEqual({
+        command: "open",
+        args: [url],
+      });
+    });
+
+    it("returns cmd's start, with an empty window title, for Windows", () => {
+      expect(cfHarnessOpenUrlCommand("windows", url)).toEqual({
+        command: "cmd",
+        args: ["/c", "start", "", url],
+      });
+    });
+
+    it("returns xdg-open for every other platform", () => {
+      for (const os of ["linux", "freebsd", "android"] as const) {
+        expect(cfHarnessOpenUrlCommand(os, url)).toEqual({
+          command: "xdg-open",
+          args: [url],
+        });
+      }
+    });
+  });
+
+  describe("registerCfHarnessSignalHandler()", () => {
+    /** A process whose signals the test fires itself. */
+    const fakeProcess = () => {
+      const listeners = new Map<Deno.Signal, Set<() => void>>();
+      const removals: Deno.Signal[] = [];
+      return {
+        listeners,
+        removals,
+        process: {
+          addSignalListener: (signal: Deno.Signal, handler: () => void) => {
+            const held = listeners.get(signal) ?? new Set();
+            held.add(handler);
+            listeners.set(signal, held);
+          },
+          removeSignalListener: (signal: Deno.Signal, handler: () => void) => {
+            removals.push(signal);
+            listeners.get(signal)?.delete(handler);
+          },
+        },
+        fire: (signal: Deno.Signal) => {
+          for (const listener of [...(listeners.get(signal) ?? [])]) {
+            listener();
+          }
+        },
+      };
+    };
+
+    it("calls the handler with the signal that fired, and only that one", () => {
+      const fake = fakeProcess();
+      const received: string[] = [];
+      registerCfHarnessSignalHandler(
+        ["SIGINT", "SIGTERM"],
+        (signal) => {
+          received.push(signal);
+        },
+        fake.process,
+      );
+      fake.fire("SIGTERM");
+      expect(received).toEqual(["SIGTERM"]);
+    });
+
+    it("removes each listener once, however often it is disposed", () => {
+      const fake = fakeProcess();
+      const received: string[] = [];
+      const dispose = registerCfHarnessSignalHandler(
+        ["SIGINT", "SIGTERM"],
+        (signal) => {
+          received.push(signal);
+        },
+        fake.process,
+      );
+      dispose();
+      dispose();
+      fake.fire("SIGINT");
+      expect(fake.removals).toEqual(["SIGINT", "SIGTERM"]);
+      expect(received).toEqual([]);
+    });
+
+    it("lets the installed handlers exit 130 on SIGINT and stop listening", async () => {
+      const fake = fakeProcess();
+      const exited = Promise.withResolvers<number>();
+      const dispose = installCfHarnessSignalHandlers(() => undefined, {
+        registerSignalHandler: (signals, handler) =>
+          registerCfHarnessSignalHandler(signals, handler, fake.process),
+        exit: (code) => {
+          exited.resolve(code);
+        },
+      });
+      fake.fire("SIGINT");
+      expect(await exited.promise).toBe(130);
+      expect([...fake.listeners.values()].every((held) => held.size === 0))
+        .toBe(true);
+      dispose();
+      expect(fake.removals).toEqual(["SIGINT", "SIGTERM"]);
+    });
+  });
 });

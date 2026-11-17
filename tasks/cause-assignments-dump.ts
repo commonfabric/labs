@@ -169,6 +169,7 @@ export async function buildAssignment(
   return { pattern, source: sourceDigest(program.files), levels };
 }
 
+/** The arguments `runDump()` takes, read from `args`. Throws on a missing one. */
 function parseArgs(args: readonly string[]): {
   root: string;
   out: string;
@@ -190,8 +191,12 @@ function parseArgs(args: readonly string[]): {
   return { root: root.replace(/\/$/, ""), out, files };
 }
 
-async function main() {
-  const { root, out, files } = parseArgs(Deno.args);
+/**
+ * Compiles the patterns `args` names with the compiler of the checkout its
+ * `--root` names, and writes what it found to the file its `--out` names.
+ */
+export async function runDump(args: readonly string[]): Promise<void> {
+  const { root, out, files } = parseArgs(args);
   // Loaded from under `root`, so that the compiler is that checkout's.
   const { createRuntime } = await import(`${root}/runtime/cli/lib/dev.ts`);
   const { resolveLocalProgram } = await import(
@@ -229,6 +234,4 @@ async function main() {
   await Deno.writeTextFile(out, JSON.stringify(output));
 }
 
-if (import.meta.main) {
-  await main();
-}
+if (import.meta.main) await runDump(Deno.args);

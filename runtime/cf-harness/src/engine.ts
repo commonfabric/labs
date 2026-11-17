@@ -53,7 +53,6 @@ import { mergeLabel } from "@commonfabric/runner/cfc/label-view-core";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { maxOf } from "@commonfabric/collections/math";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
   createFileSystemHarnessArtifactStore,
@@ -299,7 +298,7 @@ import type {
   RecordFeedbackToolInput,
   RecordFeedbackToolOutput,
 } from "./tools/record-feedback.ts";
-import { getBuiltinTool } from "./tools/registry.ts";
+import { getBuiltinTool, getTypedBuiltinTool } from "./tools/registry.ts";
 import type {
   ReadPieceSourceToolInput,
   ReadPieceSourceToolOutput,
@@ -427,10 +426,6 @@ export interface BuiltinToolOutputMap {
   run_command: RunCommandOutput;
   report_progress: ReportProgressOutput;
   submit_result: SubmitResultOutput;
-}
-
-interface ToolOutputWithId {
-  outputId: string;
 }
 
 /** A structured-result schema and the host path its JSON file is kept at. */
@@ -663,11 +658,6 @@ export interface BuiltinToolInvocationResult<
   resultRef: ToolResultRef;
   runState: HarnessRunState;
 }
-
-const isToolOutputWithId = (value: unknown): value is ToolOutputWithId =>
-  isObjectOrArray(value) &&
-  "outputId" in value &&
-  typeof value.outputId === "string";
 
 const resolveInitialCurrentDir = (
   sandbox: SandboxRuntime,
@@ -1020,8 +1010,9 @@ export class CfHarnessEngine {
     // The engine builds the direct runsc runtime unless one is handed in. The
     // mounts below come from the configuration it builds from, so host-backed
     // tools resolve against the sandbox that actually executes.
-    const runscConfig = options.sandboxRuntime === undefined
-      ? resolveRunscSandboxConfig({
+    let runscConfig: RunscSandboxConfig | undefined;
+    if (options.sandboxRuntime === undefined) {
+      runscConfig = resolveRunscSandboxConfig({
         workspaceHostPath: options.workspaceHostPath ??
           (() => {
             throw new Error("runsc sandbox needs a workspaceHostPath");
@@ -1053,18 +1044,18 @@ export class CfHarnessEngine {
         unnamedRuntimeNote: unnamedRuntimeMountNote(
           options.sandboxRuntimeChoice,
         ),
-      })
-      : undefined;
+      });
+      this.sandbox = new RunscSandboxRuntime(
+        runscConfig,
+        options.processRunner,
+      );
+    } else {
+      this.sandbox = options.sandboxRuntime;
+    }
     this.#ownedNativeConfig = runscConfig;
     this.#sandboxRuntimeChoice = options.sandboxRuntimeChoice;
     this.#ownsSandbox = options.sandboxRuntime === undefined ||
       options.ownsSandboxRuntime === true;
-    this.sandbox = runscConfig !== undefined
-      ? new RunscSandboxRuntime(runscConfig, options.processRunner)
-      : options.sandboxRuntime ??
-        (() => {
-          throw new Error("the engine has no sandbox runtime to run in");
-        })();
     this.workspaceHostPath = runscConfig?.workspaceHostPath ??
       options.workspaceHostPath;
     this.workspaceMountPath = normalizeSandboxRoot(
@@ -2633,7 +2624,7 @@ export class CfHarnessEngine {
     input: BuiltinToolInputMap[TToolId],
     options: { signal?: AbortSignal; sideEffectsAuthorized?: boolean } = {},
   ): Promise<BuiltinToolInvocationResult<TToolId>> {
-    const tool = getBuiltinTool(toolId);
+    const tool = getTypedBuiltinTool(toolId);
     if (tool === undefined) {
       throw new Error(`unknown builtin tool: ${toolId}`);
     }
@@ -2646,7 +2637,7 @@ export class CfHarnessEngine {
           options.sideEffectsAuthorized,
         ),
         input,
-      ) as BuiltinToolOutputMap[TToolId];
+      );
       return await this.recordBuiltinToolOutput(toolId, input, output, options);
     } catch (error) {
       if (options.signal?.aborted) {
@@ -2673,9 +2664,6 @@ export class CfHarnessEngine {
     output: BuiltinToolOutputMap[TToolId],
     options: { signal?: AbortSignal } = {},
   ): Promise<BuiltinToolInvocationResult<TToolId>> {
-    if (!isToolOutputWithId(output)) {
-      throw new Error(`builtin tool did not return an outputId: ${toolId}`);
-    }
     const artifactPath = await this.artifactStore?.persistToolOutput(
       toolId,
       output.outputId as ToolOutputId,
@@ -2792,78 +2780,17 @@ export class CfHarnessEngine {
     );
   }
 
-  #hostPathToWorkspacePath(path: string): string | undefined {
-    const hostPath = normalizeHostPath(path);
-    for (const mount of this.#hostMounts) {
-      const hostRoot = normalizeHostPath(mount.hostPath);
-      if (!isHostPathWithinRoot(hostRoot, hostPath)) {
-        continue;
-      }
-      const relativePath = relativeHostPath(hostRoot, hostPath);
-      if (relativePath === "") {
-        return normalizeSandboxRoot(mount.sandboxPath);
-      }
-      return normalizeSandboxPath(
-        `${normalizeSandboxRoot(mount.sandboxPath)}/${
-          relativePath.replaceAll("\\", "/")
-        }`,
-      );
-    }
-    return undefined;
-  }
-
-  async #isHostPathWithinWorkspace(
-    path: string,
-    options: { allowMissing?: boolean } = {},
-  ): Promise<boolean> {
+  async #isHostPathWithinWorkspace(path: string): Promise<boolean> {
     if (this.workspaceHostPath === undefined) {
       return false;
     }
-    const normalizedPath = normalizeHostPath(path);
     try {
       const hostRoot = await Deno.realPath(this.workspaceHostPath);
-      const hostPath = await Deno.realPath(normalizedPath);
+      const hostPath = await Deno.realPath(normalizeHostPath(path));
       return isHostPathWithinRoot(hostRoot, hostPath);
-    } catch (error) {
-      if (!options.allowMissing || !(error instanceof Deno.errors.NotFound)) {
-        return false;
-      }
-      return await this.#missingHostPathCanResolveWithinWorkspace(
-        normalizedPath,
-      );
-    }
-  }
-
-  async #missingHostPathCanResolveWithinWorkspace(path: string): Promise<
-    boolean
-  > {
-    if (this.workspaceHostPath === undefined) {
-      return false;
-    }
-    const lexicalRoot = normalizeHostPath(this.workspaceHostPath);
-    let realRoot: string;
-    try {
-      realRoot = await Deno.realPath(this.workspaceHostPath);
     } catch {
       return false;
     }
-    let candidate = normalizeHostPath(path);
-    while (isHostPathWithinRoot(lexicalRoot, candidate)) {
-      try {
-        const realCandidate = await Deno.realPath(candidate);
-        return isHostPathWithinRoot(realRoot, realCandidate);
-      } catch (error) {
-        if (!(error instanceof Deno.errors.NotFound)) {
-          return false;
-        }
-      }
-      const parent = dirname(candidate);
-      if (parent === candidate) {
-        return false;
-      }
-      candidate = parent;
-    }
-    return false;
   }
 
   async #realHostPath(path: string): Promise<string | undefined> {
@@ -2878,17 +2805,12 @@ export class CfHarnessEngine {
     path: string,
   ): Promise<string | undefined> {
     let candidate = normalizeHostPath(path);
-    while (true) {
-      const realPath = await this.#realHostPath(candidate);
-      if (realPath !== undefined) {
-        return realPath;
-      }
-      const parent = dirname(candidate);
-      if (parent === candidate) {
-        return undefined;
-      }
-      candidate = parent;
+    let realPath = await this.#realHostPath(candidate);
+    while (realPath === undefined && dirname(candidate) !== candidate) {
+      candidate = dirname(candidate);
+      realPath = await this.#realHostPath(candidate);
     }
+    return realPath;
   }
 
   async #isHostPathWithinArtifactRoot(
@@ -2912,34 +2834,6 @@ export class CfHarnessEngine {
       ? await this.#nearestExistingRealHostPath(normalizedPath)
       : await this.#realHostPath(normalizedPath);
     return realPath !== undefined && isHostPathWithinRoot(realRoot, realPath);
-  }
-
-  async #doesHostPathIntersectArtifactRoot(
-    path: string,
-    options: { allowMissing?: boolean } = {},
-  ): Promise<boolean> {
-    const root = this.artifactStore?.artifactRoot;
-    if (root === undefined) {
-      return false;
-    }
-    const normalizedRoot = normalizeHostPath(root);
-    const normalizedPath = normalizeHostPath(path);
-    if (
-      isHostPathWithinRoot(normalizedRoot, normalizedPath) ||
-      isHostPathWithinRoot(normalizedPath, normalizedRoot)
-    ) {
-      return true;
-    }
-    const realRoot = await this.#realHostPath(normalizedRoot);
-    if (realRoot === undefined) {
-      return false;
-    }
-    const realPath = options.allowMissing === true
-      ? await this.#nearestExistingRealHostPath(normalizedPath)
-      : await this.#realHostPath(normalizedPath);
-    return realPath !== undefined &&
-      (isHostPathWithinRoot(realRoot, realPath) ||
-        isHostPathWithinRoot(realPath, realRoot));
   }
 
   async #createCfcInvocationContext(options: {
@@ -3187,22 +3081,14 @@ export class CfHarnessEngine {
         this.sandbox.resolvePath(path, this.#runState.currentDir),
       resolveHostPath: (path: string) => this.#resolveHostPath(path),
       resolveHostRootPath: (path: string) => this.#resolveHostRootPath(path),
-      hostPathToWorkspacePath: (path: string) =>
-        this.#hostPathToWorkspacePath(path),
-      isHostPathWithinWorkspace: (
-        path: string,
-        options?: { allowMissing?: boolean },
-      ) => this.#isHostPathWithinWorkspace(path, options),
+      isHostPathWithinWorkspace: (path: string) =>
+        this.#isHostPathWithinWorkspace(path),
       isHostPathWithinArtifactRoot: (
         path: string,
         options?: { allowMissing?: boolean },
       ) => this.#isHostPathWithinArtifactRoot(path, options),
       imageAttachmentSnapshotDir: this.artifactStore
         ?.imageAttachmentSnapshotDir,
-      doesHostPathIntersectArtifactRoot: (
-        path: string,
-        options?: { allowMissing?: boolean },
-      ) => this.#doesHostPathIntersectArtifactRoot(path, options),
       setCurrentDir: (path: string) => {
         const resolved = this.sandbox.resolvePath(
           path,

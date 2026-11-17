@@ -203,7 +203,8 @@ export const storedLinkPaths = (
 };
 
 /** `value` with `replacement` at `path`, or `value` itself where the path
- * does not reach. Copies only the containers along the path. */
+ * does not reach or the replacement is already there. Copies only the
+ * containers along the path. */
 export const replacedAt = (
   value: unknown,
   path: readonly (string | number)[],
@@ -212,15 +213,15 @@ export const replacedAt = (
   if (path.length === 0) return replacement;
   const [head, ...rest] = path;
   if (Array.isArray(value) && typeof head === "number" && head < value.length) {
+    const child = replacedAt(value[head], rest, replacement);
+    if (child === value[head]) return value;
     const copy = [...value];
-    copy[head] = replacedAt(value[head], rest, replacement);
+    copy[head] = child;
     return copy;
   }
   if (isObjectNotArray(value) && Object.hasOwn(value, String(head))) {
-    return {
-      ...value,
-      [head]: replacedAt(value[String(head)], rest, replacement),
-    };
+    const child = replacedAt(value[String(head)], rest, replacement);
+    return child === value[String(head)] ? value : { ...value, [head]: child };
   }
   return value;
 };

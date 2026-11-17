@@ -16,7 +16,7 @@
 
 import { join } from "@std/path";
 import { toLongQuotedDebugString } from "@commonfabric/data-model";
-import { readEnv } from "@commonfabric/test-support/records";
+import { type Environment, readEnv } from "@commonfabric/test-support/records";
 import {
   isRecipient,
   recipientFingerprint,
@@ -339,13 +339,8 @@ export async function mintKey(
   return JSON.stringify(keyFile, null, 2) + "\n";
 }
 
-function usage(): never {
-  console.error(
-    "usage: test-records-mint.ts --recipient <string> " +
-      "--username <github-login> --out <dir>",
-  );
-  Deno.exit(2);
-}
+const USAGE = "usage: test-records-mint.ts --recipient <string> " +
+  "--username <github-login> --out <dir>";
 
 export interface MintRunOptions {
   recipient: string;
@@ -355,6 +350,9 @@ export interface MintRunOptions {
 
   /** GITHUB_OUTPUT file to append the fingerprint line to, when set. */
   githubOutput?: string;
+
+  /** Where the store's bucket and prefix are read from. */
+  env?: Environment;
 }
 
 /**
@@ -364,6 +362,7 @@ export interface MintRunOptions {
  */
 export async function runMint(options: MintRunOptions): Promise<string> {
   const { recipient, out, client } = options;
+  const env = options.env ?? Deno.env.get;
   if (!isRecipient(recipient)) {
     throw new Error(
       "the recipient input is not a cfr1 delivery recipient; " +
@@ -378,9 +377,10 @@ export async function runMint(options: MintRunOptions): Promise<string> {
   // display name, and the key's cf_username all agree however the person
   // typed it into the dispatch form.
   const username = options.username.toLowerCase();
-  if (!DATASET_PREFIXES.includes(storePrefix())) {
+  const prefix = storePrefix(env);
+  if (!DATASET_PREFIXES.includes(prefix)) {
     throw new Error(
-      `the configured store prefix ${storePrefix()} is not in ` +
+      `the configured store prefix ${prefix} is not in ` +
         "DATASET_PREFIXES; a key minted now could not write where " +
         "uploads go",
     );
@@ -388,10 +388,10 @@ export async function runMint(options: MintRunOptions): Promise<string> {
 
   const email = await ensureServiceAccount(client, username);
   console.log(`service account: ${email}`);
-  const bucket = storeBucket();
-  for (const prefix of DATASET_PREFIXES) {
-    await ensurePersonFolder(client, bucket, prefix, username, email);
-    console.log(`folder ready: ${prefix}/submissions/local/${username}/`);
+  const bucket = storeBucket(env);
+  for (const dataset of DATASET_PREFIXES) {
+    await ensurePersonFolder(client, bucket, dataset, username, email);
+    console.log(`folder ready: ${dataset}/submissions/local/${username}/`);
   }
   const keyFile = await mintKey(client, email, username);
   const sealed = await seal(recipient, new TextEncoder().encode(keyFile));
@@ -442,22 +442,34 @@ export function parseMintArgs(
   return { recipient, username, out };
 }
 
-async function main(): Promise<void> {
-  const parsed = parseMintArgs(Deno.args);
-  if (parsed === undefined) usage();
-  const token = readEnv("TEST_RECORDS_GCP_TOKEN");
+/**
+ * Runs the minting a command line asks for, with the broker's token and
+ * the workflow's output file read from `env`, and returns the exit status:
+ * 2 for a malformed command line, and 0 once the delivery is written.
+ */
+export async function runMintCommand(
+  args: readonly string[],
+  env: Environment = Deno.env.get,
+  fetchImpl: typeof fetch = fetch,
+): Promise<number> {
+  const parsed = parseMintArgs(args);
+  if (parsed === undefined) {
+    console.error(USAGE);
+    return 2;
+  }
+  const token = readEnv("TEST_RECORDS_GCP_TOKEN", env);
   if (token === undefined || token.length === 0) {
     throw new Error("TEST_RECORDS_GCP_TOKEN is not set");
   }
   const runOptions: MintRunOptions = {
     ...parsed,
-    client: { token, fetchImpl: fetch },
+    client: { token, fetchImpl },
+    env,
   };
-  const githubOutput = readEnv("GITHUB_OUTPUT");
+  const githubOutput = readEnv("GITHUB_OUTPUT", env);
   if (githubOutput !== undefined) runOptions.githubOutput = githubOutput;
   await runMint(runOptions);
+  return 0;
 }
 
-if (import.meta.main) {
-  await main();
-}
+if (import.meta.main) Deno.exit(await runMintCommand(Deno.args));

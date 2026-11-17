@@ -470,7 +470,7 @@ shell expansion to forward extra `deno test` flags (e.g. `--filter`).
 | Task | What it does |
 |---|---|
 | `check` | Type-check all packages (`./tasks/check.sh`). |
-| `test` | Run all package tests (`./tasks/test.ts`). |
+| `test` | Run all package tests (`./tasks/workspace-tests.ts`). |
 | `integration` | Run integration tests (`./tasks/integration.ts`). |
 | `build-binaries` | Build all standalone binaries, build only the named targets passed after the task (`toolshed` or `cf`), or use the legacy `deno task build-binaries --cli-only` alias to build only `cf`. |
 | `cf` | Run the CLI via the launcher. |

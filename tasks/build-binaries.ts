@@ -10,6 +10,7 @@ import {
 } from "../runtime/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 import { CONNECTOR_PATTERN_SOURCES } from "../connectors/pattern-sources.ts";
 import { CF_PERMISSION_FLAGS } from "../runtime/cli/lib/cf-permissions.ts";
+import type { TreeSitterGrammar } from "../runtime/cli/lib/view/languages/treesitter/adapter.ts";
 import { treeSitterGrammars } from "../runtime/cli/lib/view/languages/treesitter/grammars.ts";
 import { BASELINES_DIR, isIframeGuestSource } from "./pattern-files.ts";
 import { PACKAGE_ROOTS } from "./package-layout.ts";
@@ -450,9 +451,20 @@ async function ensureDistDir(config: BuildConfig): Promise<void> {
   }
 }
 
-async function buildShell(
+/** Runs a command to its end, and returns whether it succeeded. */
+export type RunCommand = (
+  command: string,
+  options: Deno.CommandOptions,
+) => Promise<{ success: boolean }>;
+
+/** The {@link RunCommand} that runs the command in a process of its own. */
+const runCommand: RunCommand = (command, options) =>
+  new Deno.Command(command, options).output();
+
+export async function buildShell(
   config: BuildConfig,
   compileCacheVersion: string,
+  run: RunCommand = runCommand,
 ): Promise<void> {
   for (const mode of ["development", "production"]) {
     console.log(`Building shell app in ${mode}...`);
@@ -460,7 +472,7 @@ async function buildShell(
     const toolshedShellFrontend = mode === "production"
       ? config.toolshedShellFrontendPath()
       : config.toolshedShellFrontendPathDev();
-    const { success } = await new Deno.Command(Deno.execPath(), {
+    const { success } = await run(Deno.execPath(), {
       args: [
         "task",
         task,
@@ -475,7 +487,7 @@ async function buildShell(
       env: { CF_COMPILE_CACHE_RUNTIME_VERSION: compileCacheVersion },
       stdout: "inherit",
       stderr: "inherit",
-    }).output();
+    });
     if (!success) {
       throw new Error("Failed to build shell app");
     }
@@ -492,9 +504,12 @@ async function buildShell(
   console.log("Shell app built successfully");
 }
 
-async function buildToolshed(config: BuildConfig): Promise<void> {
+export async function buildToolshed(
+  config: BuildConfig,
+  run: RunCommand = runCommand,
+): Promise<void> {
   console.log("Building toolshed binary...");
-  const { success } = await new Deno.Command(Deno.execPath(), {
+  const { success } = await run(Deno.execPath(), {
     env: {
       OTEL_DENO: "true",
     },
@@ -515,43 +530,19 @@ async function buildToolshed(config: BuildConfig): Promise<void> {
     cwd: config.toolshedProjectPath(),
     stdout: "inherit",
     stderr: "inherit",
-  }).output();
+  });
   if (!success) {
     throw new Error("Failed to build toolshed binary");
   }
   console.log("Toolshed binary built successfully");
 }
 
-async function buildCli(config: BuildConfig): Promise<void> {
+export async function buildCli(
+  config: BuildConfig,
+  run: RunCommand = runCommand,
+): Promise<void> {
   console.log("Building CLI binary...");
-  // Figure out the full list requested by typescript and
-  // friends
-  // Globs don't work for compile(?)
-  const _envs = [
-    "API_URL",
-    "TSC_WATCHFILE",
-    "TSC_NONPOLLING_WATCHER",
-    "TSC_WATCHDIRECTORY",
-    "TSC_WATCH_POLLINGINTERVAL_LOW",
-    "TSC_WATCH_POLLINGINTERVAL_MEDIUM",
-    "TSC_WATCH_POLLINGINTERVAL_HIGH",
-    "TSC_WATCH_POLLINGCHUNKSIZE_LOW",
-    "TSC_WATCH_POLLINGCHUNKSIZE_MEDIUM",
-    "TSC_WATCH_POLLINGCHUNKSIZE_HIGH",
-    "TSC_WATCH_UNCHANGEDPOLLTHRESHOLDS_LOW",
-    "TSC_WATCH_UNCHANGEDPOLLTHRESHOLDS_MEDIUM",
-    "TSC_WATCH_UNCHANGEDPOLLTHRESHOLDS_HIGH",
-    "NODE_INSPECTOR_IPC",
-    "VSCODE_INSPECTOR_OPTIONS",
-    "NODE_ENV",
-    // sqlite3 library requires these
-    "DENO_SQLITE_PATH",
-    "DENO_SQLITE_LOCAL",
-    "DENO_DIR",
-    "HOME",
-    "XDG_CACHE_HOME",
-  ];
-  const { success } = await new Deno.Command(Deno.execPath(), {
+  const { success } = await run(Deno.execPath(), {
     args: [
       ...lockedCompileArgs(config),
       "--output",
@@ -568,7 +559,7 @@ async function buildCli(config: BuildConfig): Promise<void> {
     cwd: config.root,
     stdout: "inherit",
     stderr: "inherit",
-  }).output();
+  });
   if (!success) {
     throw new Error("Failed to build CLI binary");
   }
@@ -594,10 +585,13 @@ export function embedArgs(config: BuildConfig, binary: BinaryName): string[] {
  * never reads, which the `cf` binary leaves out: every directory in the
  * package but the one holding its compiled parser, such as generated C source
  * and native builds. The packages are in Deno's npm cache rather than in the
- * repository.
+ * repository. `grammars` are the grammars the pager loads.
  */
-export function unusedGrammarDirectories(): string[] {
-  return treeSitterGrammars.flatMap((grammar) => {
+export function unusedGrammarDirectories(
+  grammars: readonly Pick<TreeSitterGrammar, "id" | "wasmUrl">[] =
+    treeSitterGrammars,
+): string[] {
+  return grammars.flatMap((grammar) => {
     const parser = path.fromFileUrl(grammar.wasmUrl());
     let root = path.dirname(parser);
     while (!existsSync(path.join(root, "package.json"))) {

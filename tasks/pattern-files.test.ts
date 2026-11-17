@@ -1,12 +1,16 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path/from-file-url";
+import { join } from "@std/path/join";
 import {
+  collectAllPatternFiles,
+  collectBaselineKeys,
   collectPatternFiles,
   isIframeGuestBundle,
   isPatternSource,
   matchesPatternFilter,
   normalizePatternPath,
+  PATTERN_TREES,
   patternKey,
   patternPath,
   patternRoot,
@@ -234,5 +238,59 @@ describe("collectPatternFiles", () => {
 
   it("is repo-root-relative by default, which is what the task relies on", () => {
     expect(PATTERNS_DIR).toBe("patterns");
+  });
+
+  it("returns files alone, leaving out an entry that is a link", async () => {
+    const dir = await Deno.makeTempDir({ prefix: "pattern-files-" });
+    try {
+      await Deno.writeTextFile(`${dir}/a.tsx`, "");
+      await Deno.symlink(`${dir}/a.tsx`, `${dir}/b.tsx`);
+
+      expect(await collectPatternFiles(dir)).toEqual([`${dir}/a.tsx`]);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+});
+
+describe("collectAllPatternFiles", () => {
+  it("returns every tree's sources relative to the root it was given, sorted", async () => {
+    const root = await Deno.makeTempDir({ prefix: "pattern-files-all-" });
+    try {
+      for (const tree of PATTERN_TREES) {
+        await Deno.mkdir(join(root, tree.directory, "z"), { recursive: true });
+        await Deno.writeTextFile(join(root, tree.directory, "z/z.tsx"), "");
+        await Deno.writeTextFile(
+          join(root, tree.directory, "z/z.test.tsx"),
+          "",
+        );
+      }
+      await Deno.mkdir(join(root, "patterns/a"));
+      await Deno.writeTextFile(join(root, "patterns/a/a.tsx"), "");
+
+      expect(await collectAllPatternFiles(root)).toEqual(
+        [
+          "patterns/a/a.tsx",
+          ...PATTERN_TREES.map((tree) => `${tree.directory}/z/z.tsx`),
+        ].sort(),
+      );
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+});
+
+describe("collectBaselineKeys", () => {
+  it("returns no keys for an absent tree, and throws for one it cannot read", async () => {
+    const dir = await Deno.makeTempDir({ prefix: "pattern-files-" });
+    try {
+      await Deno.writeTextFile(`${dir}/file`, "");
+
+      expect(await collectBaselineKeys(`${dir}/absent`)).toEqual([]);
+      await expect(collectBaselineKeys(`${dir}/file`)).rejects
+        .toThrow(Deno.errors.NotADirectory);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
   });
 });
