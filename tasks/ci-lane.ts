@@ -143,7 +143,6 @@ import { appendSummary, say, setStepOutput } from "./step-summary.ts";
 import {
   errorExcerpt,
   type FailedCommand,
-  passed,
   printSummary,
   type RunSummary,
   summaryLines,
@@ -526,7 +525,11 @@ export function pathsOf(listing: string): Set<string> {
   return new Set(listing.split("\0").filter((path) => path.length > 0));
 }
 
-/** The files this change touched, as the repository names them. */
+/**
+ * The files this change touched, as the repository names them. A file the
+ * change moved is both of its paths, since what reaches the path it left
+ * is as touched as what reaches the path it came to.
+ */
 export async function changedFiles(
   root: string,
   base: string | undefined,
@@ -539,7 +542,7 @@ export async function changedFiles(
   return pathsOf(
     await gitOutput(
       root,
-      ["diff", "-z", "--name-only", `${base}...HEAD`],
+      ["diff", "-z", "--name-only", "--no-renames", `${base}...HEAD`],
       `cannot diff against ${base}`,
     ),
   );
@@ -3252,23 +3255,19 @@ export async function runLane(
     // whole and nothing writes into the work directory. A capability that
     // failed to close fails the lane without displacing whatever the loop
     // threw.
-    try {
-      await opened.close();
-    } catch (error) {
+    await opened.close().catch((error) => {
       ok = false;
       notes.push(describeFailure(error));
       console.log(`ci-lane: ${describeFailure(error)}`);
-    }
+    });
     // On every path, a lane that stops or throws included, since the job
     // uploads what the lane leaves however it ends. A rewrite that fails
     // fails the lane without displacing whatever the loop threw.
-    try {
-      await relativizePatternCoverage(options);
-    } catch (error) {
+    await relativizePatternCoverage(options).catch((error) => {
       ok = false;
       notes.push(describeFailure(error));
       console.log(`ci-lane: ${describeFailure(error)}`);
-    }
+    });
     // Only for a lane that failed -- a green run has nothing to explain,
     // and the logs are large.
     if (!ok) {
@@ -3295,9 +3294,13 @@ export async function runLane(
     ok = false;
     notes.push("Converting a coverage profile lost a tracked file.");
   }
-  // A signal can arrive while the conversion runs, and a lane told to stop
-  // has failed whenever it was told.
-  if (stop.signal !== undefined) ok = false;
+  // A signal can arrive once every batch has run, while the capabilities
+  // close or the conversion runs, and a lane told to stop has failed
+  // whenever it was told. One that had failed already says why.
+  if (stop.signal !== undefined && ok) {
+    ok = false;
+    notes.push(`Stopped by ${stop.signal} after every batch had run.`);
+  }
   // A failure that did not fail the run is one a later run can only
   // explain from what the servers wrote, so its directory is kept too.
   const kept = !ok || excusedFailures.length > 0;
@@ -3351,9 +3354,6 @@ export async function runLane(
         : ""),
     seconds: (performance.now() - startedAt) / 1000,
   };
-  if (!ok && passed(summary)) {
-    notes.push("The lane failed for a reason the output above gives.");
-  }
   reportLane(summary, Deno.env.get, annotated);
   return ok;
 }
@@ -3645,12 +3645,16 @@ const store: LaneDeps = { manifest: fetchManifest, stop: stopOnSignals };
 
 /**
  * A stop that receives SIGINT and SIGTERM: what a job stops a step with,
- * and what an interrupt at a terminal sends.
+ * and what an interrupt at a terminal sends. `listen` is where it asks to
+ * hear each signal.
  */
-export function stopOnSignals(): LaneStop {
+export function stopOnSignals(
+  listen: (signal: Deno.Signal, handler: () => void) => void =
+    Deno.addSignalListener,
+): LaneStop {
   const stop = new LaneStop();
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    Deno.addSignalListener(signal, () => stop.receive(signal));
+    listen(signal, () => stop.receive(signal));
   }
   return stop;
 }

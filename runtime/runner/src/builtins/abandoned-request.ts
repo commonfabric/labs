@@ -61,6 +61,9 @@ export type AbandonedRequest = {
  *
  * How it commits depends on where it runs:
  *
+ * - On a client with server execution on: the ending is a speculative
+ *   derivation, visible only in that client's overlay. It may read speculative
+ *   state, and the serving runtime owns the durable ending.
  * - Under the serving posture, with server execution on, while the request's
  *   work is running: its release check passed, so the serving loop holds the
  *   identity carriage the staging run's seal recorded, and holds it until that
@@ -79,12 +82,11 @@ export type AbandonedRequest = {
  *   and the ending is written. For a user- or session-scoped cell there is no
  *   instance the run could be said to have written, so the ending is not
  *   written, and the cells keep what the refused run left.
- * - Everywhere else, a serving runtime with server execution off included, it
- *   commits on its own, marked as a completion of the request, as a client's
- *   does.
+ * - With server execution off, it commits on its own, marked as a completion
+ *   of the request.
  *
- * Which of the first two applies is asked inside the transaction, at each
- * attempt, since the answer can change between the call and the commit.
+ * Whether a served ending is a completion is asked inside the transaction, at
+ * each attempt, since the answer can change between the call and the commit.
  */
 export async function settleAbandonedRequest(
   runtime: Runtime,
@@ -92,10 +94,8 @@ export async function settleAbandonedRequest(
   write: (tx: IExtendedStorageTransaction) => void,
 ): Promise<void> {
   const { builtinId, effectKey, identity } = request;
-  // A serving loop runs only with server execution on; a serving runtime
-  // without it commits every transaction to the store, as a client does.
-  const served = runtime.servingPosture &&
-    runtime.experimental.serverExecution === true;
+  const serverExecution = runtime.experimental.serverExecution === true;
+  const served = runtime.servingPosture && serverExecution;
   let unwritable = false;
   const { error } = await runtime.editWithRetry((tx) => {
     // Asked at each attempt, the latest point before the commit: the outbox
@@ -113,10 +113,10 @@ export async function settleAbandonedRequest(
     // Set here as well as by the stamp, which leaves it unset where no serving
     // loop has installed a stamper.
     if (identity !== undefined) tx.tx.scopeKeyIdentity = identity;
-    if (served && !completion) {
+    if (serverExecution && !completion) {
       runtime.stampServerRun(tx, {
         actionId: `${builtinId}/abandoned/${effectKey}`,
-        kind: "bookkeeping",
+        kind: served ? "bookkeeping" : "derivation",
         ...(identity !== undefined ? { scopeKeyIdentity: identity } : {}),
       });
     } else {

@@ -20,13 +20,9 @@ export async function resolveProgram(
   const main = await graph.main();
   const sources = new Map([[main.name, main]]);
   const toProcess = [main.name];
-  const processed: string[] = [];
 
   while (toProcess.length > 0) {
     const currentName = toProcess.shift()!;
-    if (processed.includes(currentName)) {
-      continue;
-    }
     const current = sources.get(currentName)!;
     const specifiers = scanSource(current, target, false).imports;
     for (const specifier of specifiers) {

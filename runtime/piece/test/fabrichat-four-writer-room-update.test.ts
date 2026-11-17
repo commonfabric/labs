@@ -7,17 +7,19 @@
  * it (`fixtures/fabrichat-four-writer-room/`, whose `SOURCE.txt` says where
  * it comes from), and the room is set up from that stored source, as a
  * runtime loading such a room does. It seeds through that program's own
- * handlers, each from its reviewed gesture: two messages, a reaction, and a
- * window. Then the room opens, as a person opening it would, and follows
- * `system:system/fabrichat/room.tsx`, which this tree's patterns route serves.
+ * handlers, each from its reviewed gesture: six messages, one of them a
+ * reply, a reaction, and two windows. Then the room opens, as a person opening
+ * it would, and follows `system:system/fabrichat/room.tsx`, which this tree's
+ * patterns route serves.
  *
  * The release appends the three writers the stored policy lacks after its
  * four (`docs/specs/cfc-conformance-statement.md` §10), and the room's stored
  * result keeps its writer claim for the session's windows, which this tree's
  * room still holds. Each case checks the room after that release: what it
  * stores, that its writers send, edit and react, on messages the earlier
- * program stored as on new ones, and which acts on those earlier messages
- * are still refused.
+ * program stored as on new ones, and that it deletes, obliterates and windows
+ * those earlier messages, whose stored write policies keep writers this
+ * tree's room no longer lists.
  */
 
 import { expect } from "@std/expect";
@@ -203,6 +205,7 @@ describe("fabrichat-four-writer-room-update", () => {
   let releasedIdentity: string;
   let storedBefore: { writer: string; module: unknown }[];
   let windowsBefore: unknown;
+  let argumentClaimsBefore: unknown;
   let failuresBefore: Record<string, number>;
   let failuresAfter: Record<string, number>;
 
@@ -233,6 +236,22 @@ describe("fabrichat-four-writer-room-update", () => {
   const reactionsOn = async (message: Cell<unknown>) =>
     ((await message.key("reactions").pull()) as { emoji?: string }[] ?? [])
       .map((reaction) => reaction?.emoji);
+
+  /**
+   * What the room's argument stores under its two lone writer claims: the
+   * participants `addParticipant` added, and the `about` the room was
+   * created with.
+   */
+  const argumentClaims = () => {
+    const stored = room.getArgumentCell<unknown>()!.getRaw() as {
+      participants?: { items?: unknown[] };
+      about?: unknown;
+    };
+    return {
+      participants: stored.participants?.items?.length,
+      about: stored.about,
+    };
+  };
 
   /** The document the room's result links for the session's windows. */
   const windowsDocument = () => {
@@ -350,6 +369,28 @@ describe("fabrichat-four-writer-room-update", () => {
         "ChatSend",
       ),
     );
+    for (const [requestId, value] of [["m4", "Root"], ["m5", "Twice"]]) {
+      await send(
+        "sendMessage",
+        trusted(
+          { requestId, target: { value } },
+          "ChatSendSurface",
+          "ChatSend",
+        ),
+      );
+    }
+    await send(
+      "sendMessage",
+      trusted(
+        {
+          requestId: "m6",
+          target: { value: "Reply" },
+          replyTo: { message: (await storedMessages())[0], shownIn: "main" },
+        },
+        "ChatSendSurface",
+        "ChatSend",
+      ),
+    );
     const [first] = await storedMessages();
     await send(
       "sendReaction",
@@ -359,12 +400,50 @@ describe("fabrichat-four-writer-room-update", () => {
         "ChatReact",
       ),
     );
-    await room.key("messages").key("openWindow").pull();
+    // A member who joined, through the earlier program's own
+    // `addParticipant`, and an `about`, so that the room holds a value under
+    // each of its two lone writer claims, as rooms people use do. The `about`
+    // is planted where a manager's `commitStart` writes it as it creates the
+    // room, since this test runs no manager.
     {
       const tx = runtime.edit();
+      runtime.getCell(owner.did(), "joined profile", undefined, tx).set({
+        name: "Joined",
+      });
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    await send("addParticipant", {
+      profile: runtime.getCell(owner.did(), "joined profile"),
+    });
+    {
+      const { id } = room.getArgumentCell<unknown>()!.getAsNormalizedFullLink();
+      const address = {
+        space: roomSpace,
+        scope: "space" as const,
+        id,
+        path: [],
+      };
+      const plant = runtime.edit();
+      const stored = storedFields(plant, address);
+      seedStoredEnvelope(plant, address, {
+        ...stored,
+        value: {
+          ...(stored.value as FabricPlainObject),
+          about: { kind: "group", title: "Four writers" },
+        },
+      });
+      expect((await plant.commit().settled).error).toBeUndefined();
+      await runtime.idle();
+    }
+    await room.key("messages").key("openWindow").pull();
+    // Two windows: `main`, which a case opens again, and `old`, which a case
+    // closes.
+    for (const [requestId, windowId] of [["w1", "main"], ["o1", "old"]]) {
+      const tx = runtime.edit();
       room.withTx(tx).key("messages").key("openWindow").send({
-        requestId: "w1",
-        windowId: "main",
+        requestId,
+        windowId,
         from: { before: "end" },
         count: 5,
       });
@@ -372,13 +451,21 @@ describe("fabrichat-four-writer-room-update", () => {
       expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
     }
-    expect(await bodies()).toEqual(["First", "Second", "Third"]);
+    expect(await bodies()).toEqual([
+      "First",
+      "Second",
+      "Third",
+      "Root",
+      "Twice",
+      "Reply",
+    ]);
     storedBefore = storedPolicy(
       runtime,
       room.getArgumentCell<unknown>()!,
       "messages/*",
     );
     windowsBefore = windowsDocument();
+    argumentClaimsBefore = argumentClaims();
 
     // The release: the room opens as a person opening it would, follows its
     // origin to this tree's room, and waits for the running room to swap.
@@ -466,6 +553,14 @@ describe("fabrichat-four-writer-room-update", () => {
     expect(prepared.delegations.size).toBeGreaterThan(0);
   });
 
+  it("keeps the participant and the `about` its argument stores under their writers' claims", () => {
+    expect(argumentClaimsBefore).toEqual({
+      participants: 1,
+      about: { kind: "group", title: "Four writers" },
+    });
+    expect(argumentClaims()).toEqual(argumentClaimsBefore);
+  });
+
   it("keeps the session's windows where the room's result linked them", () => {
     expect(windowsDocument()).toEqual(windowsBefore);
   });
@@ -481,7 +576,7 @@ describe("fabrichat-four-writer-room-update", () => {
     );
     const messages = await storedMessages();
     const [first] = messages;
-    const fourth = messages[3];
+    const fourth = messages.at(-1)!;
     await send(
       "editMessage",
       trusted(
@@ -510,15 +605,57 @@ describe("fabrichat-four-writer-room-update", () => {
   });
 
   describe("acts on a message stored before the release", () => {
-    // TODO(danfuzz): These pin refusals that are wrong for the room (see the
-    // `TODO` in `mergeWritePolicyAnyOf()`). Each message the earlier program
-    // stored holds, beneath `/reactions/*`, the write policy its
-    // `SentReaction` named, with `commitDelete` and `commitObliterate` among
-    // its writers, and this tree's `SentReaction` names neither. A deletion or
-    // an obliteration writes the whole message, and a window names the
-    // messages, and the merge refuses a schema that omits a stored
-    // alternative, in every write. Flip these when a ruling lets a later
-    // schema omit an alternative the merged envelope keeps.
+    // Each message the earlier program stored holds, beneath `/reactions/*`,
+    // the write policy its `SentReaction` named, with `commitDelete` and
+    // `commitObliterate` among its writers, and this tree's `SentReaction`
+    // names neither. A deletion or an obliteration writes the whole message,
+    // and a window names the messages, so each of these writes a document
+    // whose stored policy lists writers this tree's schema omits. The merge
+    // keeps them as stored.
+
+    /** The writers of the room's reactions before the release, as stored. */
+    const STORED_REACTION_WRITERS = [
+      "commitSendReaction",
+      "commitDeleteReaction",
+      "commitDelete",
+      "commitObliterate",
+    ];
+
+    /**
+     * The row of a window this tree's room opens that shows `message`: its
+     * place in the window, as the row names it. The link stored there
+     * resolves to the message under the schema the program that sent it
+     * stored it with.
+     */
+    const windowRowOf = async (message: Cell<unknown>) => {
+      const today = (await roomController.get(
+        room.getAsNormalizedFullLink().id,
+      )).getCell();
+      const tx = runtime.edit();
+      today.withTx(tx).key("messages").key("openWindow").send({
+        requestId: "w-rows",
+        windowId: "rows",
+        from: { after: "start" },
+        count: 20,
+      });
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await runtime.idle();
+      const windows = today.key("messages").key("windows").resolveAsCell();
+      const link = windows.getAsNormalizedFullLink();
+      const docOf = (cell: Cell<unknown>) =>
+        cell.resolveAsCell().getAsNormalizedFullLink().id;
+      const row = (windows.getRaw() as { rows: { messages: unknown[] } }).rows
+        .messages.map((_, index) =>
+          runtime.getCellFromLink({
+            ...link,
+            path: ["rows", "messages", String(index)],
+            schema: undefined,
+          })
+        ).find((cell) => docOf(cell) === docOf(message));
+      expect(row).toBeDefined();
+      return row!;
+    };
 
     /**
      * The refusal messages logged while `act` runs, of those naming a write
@@ -530,11 +667,11 @@ describe("fabrichat-four-writer-room-update", () => {
       return logged.calls.flatMap((call) =>
         call.args.map((arg) =>
           typeof arg === "string" ? arg : Deno.inspect(arg, { depth: 4 })
-        ).filter((text) => text.includes("writePolicyAnyOf must remain stable"))
+        ).filter((text) => text.includes("writePolicyAnyOf"))
       );
     };
 
-    it("refuses deleting it, over the reactions' stored write policy", async () => {
+    it("deletes it, keeping the writers its reactions' policy stores", async () => {
       const [, second] = await storedMessages();
       const refusals = await refusalsDuring(() =>
         send(
@@ -543,14 +680,30 @@ describe("fabrichat-four-writer-room-update", () => {
         )
       );
 
-      expect(refusals.join("\n")).toContain(
-        "writePolicyAnyOf must remain stable at /reactions/*: the candidate " +
-          "drops a stored alternative",
-      );
-      expect(await second.key("body").pull()).toBe("Second");
+      expect(refusals).toEqual([]);
+      expect(await second.key("body").pull()).toEqual({ deleted: true });
+      expect(
+        storedPolicy(runtime, second, "reactions/*").map(({ writer }) =>
+          writer
+        ),
+      ).toEqual(STORED_REACTION_WRITERS);
     });
 
-    it("refuses obliterating it, over the reactions' stored write policy", async () => {
+    it("deletes one holding reactions", async () => {
+      const [first] = await storedMessages();
+      expect(await reactionsOn(first)).not.toEqual([]);
+      const refusals = await refusalsDuring(() =>
+        send(
+          "deleteMessage",
+          trusted({ message: first }, "ChatDeleteSurface", "ChatDelete"),
+        )
+      );
+
+      expect(refusals).toEqual([]);
+      expect(await first.key("body").pull()).toEqual({ deleted: true });
+    });
+
+    it("obliterates it, keeping the writers its reactions' policy stores", async () => {
       const [, , third] = await storedMessages();
       const refusals = await refusalsDuring(() =>
         send(
@@ -563,11 +716,160 @@ describe("fabrichat-four-writer-room-update", () => {
         )
       );
 
-      expect(refusals.join("\n")).toContain(
-        "writePolicyAnyOf must remain stable at /reactions/*: the candidate " +
-          "drops a stored alternative",
+      expect(refusals).toEqual([]);
+      expect(await third.key("body").pull()).toEqual({ deleted: true });
+      expect((third.getRaw() as { authorProfile?: unknown }).authorProfile)
+        .toBeUndefined();
+      expect(
+        storedPolicy(runtime, third, "reactions/*").map(({ writer }) => writer),
+      ).toEqual(STORED_REACTION_WRITERS);
+    });
+
+    it("reads a deleted message the earlier program stored as a tombstone, in `count`, `latest` and a window opened afterward", async () => {
+      // The handle a message's stored link resolves to keeps the earlier
+      // program's schema for it, which requires an `earlierVersions` that
+      // the tombstone this tree's room leaves does not hold. The room reads
+      // each message under its own schema, so the tombstone still counts.
+
+      const [, second] = await storedMessages();
+      await send(
+        "deleteMessage",
+        trusted({ message: second }, "ChatDeleteSurface", "ChatDelete"),
       );
-      expect(await third.key("body").pull()).toBe("Third");
+      const today = (await roomController.get(
+        room.getAsNormalizedFullLink().id,
+      )).getCell();
+      {
+        const tx = runtime.edit();
+        today.withTx(tx).key("messages").key("openWindow").send({
+          requestId: "w-tombstone",
+          windowId: "tombstone",
+          from: { before: "end" },
+          count: 10,
+        });
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+      }
+      const bodiesOf = (messages: unknown) =>
+        ((messages ?? []) as { body?: unknown }[]).map((message) =>
+          message?.body
+        );
+
+      expect(await today.key("messages").key("count").pull()).toBe(
+        (await storedMessages()).length,
+      );
+      expect(
+        bodiesOf(
+          await today.key("messages").key("latest").key("messages")
+            .pull(),
+        ),
+      ).toContainEqual({ deleted: true });
+      expect(
+        bodiesOf(
+          await today.key("messages").key("windows").key("tombstone").key(
+            "messages",
+          ).pull(),
+        ),
+      ).toContainEqual({ deleted: true });
+    });
+
+    it("opens the thread of a message the earlier program stored, once that message is deleted", async () => {
+      const root = (await storedMessages())[3];
+      await send(
+        "sendMessage",
+        trusted(
+          {
+            body: "In the thread",
+            replyTo: { thread: root, shownIn: "thread" },
+          },
+          "ChatSendSurface",
+          "ChatSend",
+        ),
+      );
+      const refusals = await refusalsDuring(() =>
+        send(
+          "deleteMessage",
+          trusted({ message: root }, "ChatDeleteSurface", "ChatDelete"),
+        )
+      );
+      const today = (await roomController.get(
+        room.getAsNormalizedFullLink().id,
+      )).getCell();
+      {
+        const tx = runtime.edit();
+        today.withTx(tx).key("messages").key("openWindow").send({
+          requestId: "w-thread",
+          windowId: "thread",
+          root,
+          from: { after: "start" },
+          count: 10,
+        });
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+      }
+
+      expect(refusals).toEqual([]);
+      expect(
+        ((await today.key("messages").key("windows").key("thread").key(
+          "messages",
+        ).pull()) as { body?: unknown }[] | undefined)?.map((message) =>
+          message?.body
+        ),
+      ).toEqual([{ deleted: true }, "In the thread"]);
+    });
+
+    it("obliterates a message the earlier program stored that its author deleted, named as a row of a window names it, dropping the author", async () => {
+      // A row of a window names its message by its place in the window,
+      // whose stored link resolves to it under the schema the earlier program
+      // stored it with, in a window this tree's room opens as in one the
+      // earlier program did. Its tombstone doesn't fit that schema, so the
+      // act reads the message through the link it was given.
+
+      const twice = (await storedMessages())[4];
+      const shown = await windowRowOf(twice);
+      const refusals = await refusalsDuring(async () => {
+        await send(
+          "deleteMessage",
+          trusted({ message: shown }, "ChatDeleteSurface", "ChatDelete"),
+        );
+        await send(
+          "obliterateMessage",
+          trusted(
+            { message: shown },
+            "ChatObliterateSurface",
+            "ChatObliterate",
+          ),
+        );
+      });
+
+      expect(refusals).toEqual([]);
+      expect(await twice.key("body").pull()).toEqual({ deleted: true });
+      expect((twice.getRaw() as { authorProfile?: unknown }).authorProfile)
+        .toBeUndefined();
+    });
+
+    it("deletes a reply the earlier program stored, named as a row of a window names it, keeping what it replies to", async () => {
+      const reply = (await storedMessages())[5];
+      const shown = await windowRowOf(reply);
+      const refusals = await refusalsDuring(() =>
+        send(
+          "deleteMessage",
+          trusted({ message: shown }, "ChatDeleteSurface", "ChatDelete"),
+        )
+      );
+
+      expect(refusals).toEqual([]);
+      expect(await reply.key("body").pull()).toEqual({ deleted: true });
+      const [first] = await storedMessages();
+      const docOf = (cell: Cell<unknown>) =>
+        cell.resolveAsCell().getAsNormalizedFullLink().id;
+      expect(
+        (reply.getRaw() as { replyTo?: { shownIn?: unknown } }).replyTo
+          ?.shownIn,
+      ).toBe("main");
+      expect(docOf(reply.key("replyTo").key("message"))).toBe(docOf(first));
     });
 
     it("writes nothing for a `closeWindow` naming no open window, under a name an object inherits", async () => {
@@ -588,7 +890,29 @@ describe("fabrichat-four-writer-room-update", () => {
       expect(refusals).toEqual([]);
     });
 
-    it("refuses this tree's `openWindow` setting the window the earlier program wrote, over the messages' reactions' stored write policy", async () => {
+    it("closes a window the earlier program wrote, through this tree's `closeWindow`", async () => {
+      const windows = room.key("messages").key("windows").resolveAsCell();
+      expect(
+        Object.keys((windows.getRaw() ?? {}) as Record<string, unknown>),
+      ).toContain("old");
+      const refusals = await refusalsDuring(async () => {
+        const tx = runtime.edit();
+        room.withTx(tx).key("messages").key("closeWindow").send({
+          requestId: "c-old",
+          windowId: "old",
+        });
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+      });
+
+      expect(refusals).toEqual([]);
+      expect(
+        Object.keys((windows.getRaw() ?? {}) as Record<string, unknown>),
+      ).not.toContain("old");
+    });
+
+    it("sets the window the earlier program wrote through this tree's `openWindow`, keeping the writers the window stores for its messages' reactions", async () => {
       const refusals = await refusalsDuring(async () => {
         const tx = runtime.edit();
         room.withTx(tx).key("messages").key("openWindow").send({
@@ -602,15 +926,19 @@ describe("fabrichat-four-writer-room-update", () => {
         await runtime.idle();
       });
 
-      expect(refusals.join("\n")).toContain(
-        "writePolicyAnyOf must remain stable at " +
-          "/main/messages/*/reactions/*: the candidate adds an alternative " +
-          "outside a release",
-      );
-      const windows = await room.key("messages").key("windows").pull() as
-        | Record<string, { requestId?: string }>
-        | undefined;
-      expect(windows?.main?.requestId).toBe("w1");
+      expect(refusals).toEqual([]);
+      const today = (await roomController.get(
+        room.getAsNormalizedFullLink().id,
+      )).getCell();
+      const windows = today.key("messages").key("windows");
+      expect(await windows.key("main").key("requestId").pull()).toBe("w2");
+      expect(
+        storedPolicy(
+          runtime,
+          windows.resolveAsCell(),
+          "main/messages/*/reactions/*",
+        ).map(({ writer }) => writer),
+      ).toEqual(STORED_REACTION_WRITERS);
     });
   });
   describe("with the room's own space labeling its argument", () => {
@@ -795,16 +1123,13 @@ describe("fabrichat-four-writer-room-update", () => {
 
   describe("with the released program's records storing another member's label", () => {
     // The labels a source update of a room whose own data carries another
-    // member's personal space left on the released program's records, at the
-    // delegation field and at the root, on a runtime that stamped them. A room
-    // set up from that program in the same space reads them, and its writes
-    // misfit; the room's own next update commits. Nothing rewrites what is
-    // stored. Last in the file, so that no other case here runs over the
-    // planted labels.
-    // TODO(danfuzz): The fresh-room cases pin a refusal that is wrong for the
-    // room (see the `TODO` on `stageModuleDelegations()`): flip them to a set
-    // up room once a repair drops the stamps the compile-cache builtin's writes
-    // left.
+    // member's personal space left on the released program's records, on a
+    // runtime that staged the update's delegations in its transition: the
+    // entries such a runtime was measured to leave at the delegation field,
+    // and those a later write-back of the record left at its root. A room set
+    // up from that program in the same space reads them, and the load ahead
+    // of the setup repairs them, warm or cold. Last in the file, so that no
+    // other case here runs over the planted labels.
 
     const personalSpaceOf = async (passphrase: string) => ({
       type: "https://commonfabric.org/cfc/atom/PersonalSpace",
@@ -869,14 +1194,40 @@ describe("fabrichat-four-writer-room-update", () => {
               ...cfc.labelMap,
               entries: [
                 ...cfc.labelMap.entries,
-                ...[["delegatedModuleIdentities"], []].flatMap((path) =>
-                  ["shape", "value"].map((observes) => ({
-                    path,
-                    origin: "derived",
-                    observes,
-                    label: { confidentiality: [otherMember] },
-                  }))
-                ),
+                ...([
+                  [["delegatedModuleIdentities"], "structure", "enumerate"],
+                  [["delegatedModuleIdentities"], "structure", "shape"],
+                  [
+                    ["delegatedModuleIdentities", "*"],
+                    "structure",
+                    "followRef",
+                  ],
+                  [["delegatedModuleIdentities", "*"], "structure", "shape"],
+                  [["delegatedModuleIdentities", "*"], "structure", "value"],
+                  [["delegatedModuleIdentities", "0"], "derived", "shape"],
+                  [["delegatedModuleIdentities", "0"], "derived", "value"],
+                  [[], "derived", "shape"],
+                  [[], "derived", "value"],
+                ] as const).map(([path, origin, observes]) => ({
+                  path: [...path],
+                  origin,
+                  observes,
+                  label: {
+                    confidentiality: [otherMember],
+                    ...(path.length === 0 && observes === "value"
+                      ? {
+                        integrity: [{
+                          type:
+                            "https://commonfabric.org/cfc/atom/TransformedBy",
+                          identity: {
+                            kind: "builtin",
+                            builtinId: "compile-cache",
+                          },
+                        }],
+                      }
+                      : {}),
+                  },
+                })),
               ],
             },
           },
@@ -904,13 +1255,14 @@ describe("fabrichat-four-writer-room-update", () => {
       return fresh;
     };
 
-    it("refuses a fresh room from the released program", async () => {
-      await expect(freshRoom(runtime, roomController)).rejects.toThrow(
-        "writer-fit confidentiality misfit",
-      );
+    it("sets up a fresh room from the released program", async () => {
+      const fresh = await freshRoom(runtime, roomController);
+
+      expect(getPatternIdentityRef(await fresh.withTx().sync())?.identity)
+        .toBe(releasedIdentity);
     });
 
-    it("refuses a fresh room from the released program on a runtime that starts cold", async () => {
+    it("sets up a fresh room from the released program on a runtime that starts cold", async () => {
       const coldStorage = EmulatedStorageManager.connectTo(server, {
         as: owner,
       });
@@ -925,9 +1277,10 @@ describe("fabrichat-four-writer-room-update", () => {
       try {
         await coldPieces.synced();
 
-        await expect(freshRoom(cold, coldPieces)).rejects.toThrow(
-          "writer-fit confidentiality misfit",
-        );
+        const fresh = await freshRoom(cold, coldPieces);
+
+        expect(getPatternIdentityRef(await fresh.withTx().sync())?.identity)
+          .toBe(releasedIdentity);
       } finally {
         await coldPieces.dispose();
         await cold.dispose();
@@ -945,7 +1298,12 @@ describe("fabrichat-four-writer-room-update", () => {
       expect(updated?.identity).not.toBe(releasedIdentity);
     });
 
-    it("leaves the planted label stored on every released record", () => {
+    it("leaves the planted label on no released record once a load verifies the program", async () => {
+      await runtime.patternManager.prepareSourceClosureVerification(
+        roomSpace,
+        [releasedIdentity],
+      );
+
       const tx = runtime.edit();
       try {
         for (const record of records) {
@@ -956,7 +1314,7 @@ describe("fabrichat-four-writer-room-update", () => {
                 entry.label.confidentiality ?? []
               ),
             id,
-          ).toContainEqual(otherMember);
+          ).not.toContainEqual(otherMember);
         }
       } finally {
         tx.abort("planted labels read");

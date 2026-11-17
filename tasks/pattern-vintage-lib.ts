@@ -18,6 +18,7 @@ import {
   acceptedDropKey,
   type AcceptedStateDrop,
 } from "./pattern-vintage-accepted-drops.ts";
+import type { CommandOutput } from "./command-output.ts";
 import { readOnlyArguments } from "./only-arguments.ts";
 
 import {
@@ -588,22 +589,6 @@ async function gitMove(from: string, to: string): Promise<void> {
       }`,
     );
   }
-}
-
-/**
- * Everything a command wants to say, and the code it wants to exit with.
- *
- * Returned rather than printed so the OUTPUT is testable, not just the
- * decision behind it. That is where this file's defects have actually lived:
- * across five review rounds the recurring fault was never a wrong decision, it
- * was the wrong text printed for a correct one — a remedy that did not fit the
- * situation, or a promise about output the function did not control. Text
- * assembled inside the task shell is text no test can read.
- */
-export interface CommandOutput {
-  out?: string;
-  err?: string;
-  code: number;
 }
 
 /** What `--pin` says, given what it decided. */

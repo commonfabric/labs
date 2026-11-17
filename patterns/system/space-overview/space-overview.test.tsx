@@ -10,6 +10,14 @@ import {
 } from "../../tools/test-support/vnode-helpers.ts";
 import SpaceOverview from "./space-overview.tsx";
 
+// The model fails the analysis the autostart asks for.
+export const llmMocks = [
+  {
+    when: { lastMessageContains: "Analyze this space" },
+    error: "The model is unavailable.",
+  },
+];
+
 /** The messages the overview's message beads show. */
 const shownMessages = (root: unknown) =>
   (propValue(findElement(root, "cf-message-beads"), "$messages") ??

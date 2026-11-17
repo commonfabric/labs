@@ -194,6 +194,62 @@ Deno.test("in-process render - piece UI to HTML", async (t) => {
   }
 });
 
+Deno.test("in-process render - delivers events", async (t) => {
+  const runtime = makeRuntime();
+  try {
+    /**
+     * Renders a button whose click sends to a stream counted by a handler,
+     * clicks it, and returns how many clicks reached the handler.
+     */
+    const clicks = async (name: string, dispatchEvents?: boolean) => {
+      const stream = runtime.getCell<unknown>(space, `${name}-clicks`, {
+        asCell: ["stream"],
+      });
+      const count = runtime.getCell<number>(space, `${name}-count`);
+      const vdom = runtime.getCell<unknown>(space, `${name}-button`);
+      const tx = runtime.edit();
+      count.withTx(tx).set(0);
+      vdom.withTx(tx).set({
+        type: "vnode",
+        name: "button",
+        props: { onClick: stream },
+        children: ["Press"],
+      });
+      await tx.commit().settled;
+      const cancelHandler = runtime.scheduler.addEventHandler((tx) => {
+        const current = count.withTx(tx);
+        current.set((current.get() ?? 0) + 1);
+      }, stream.getAsNormalizedFullLink());
+
+      const { container, options } = makeContainer();
+      const render = renderInProcess(container, vdom, {
+        ...options,
+        dispatchEvents,
+      });
+      await runtime.idle();
+      render.flush();
+      const button = container.firstChild!;
+      button.dispatchEvent(new Event("click"));
+      await runtime.idle();
+      await runtime.storageManager.synced();
+      await runtime.idle();
+      render.cancel();
+      cancelHandler();
+      return count.get();
+    };
+
+    await t.step("hands a click to the reconciler's handler", async () => {
+      assertEquals(await clicks("delivered", true), 1);
+    });
+
+    await t.step("drops a click unless asked to deliver events", async () => {
+      assertEquals(await clicks("dropped"), 0);
+    });
+  } finally {
+    await runtime.dispose();
+  }
+});
+
 Deno.test("in-process render - reports a bound prop without a runtime client", async (t) => {
   const runtime = makeRuntime();
   try {

@@ -383,7 +383,9 @@ export const EnvSchema = z.object({
 
   // Whether `/api/health/collected-memory` answers: it runs a full garbage
   // collection on every thread it measures, pausing each, for whoever asks.
-  // Off, the route answers 404. Local development servers and test servers
+  // Off, the route answers 404. Every server exposes V8's collector at
+  // startup either way, for the serving-worker pool to collect a worker
+  // before it ends one for its heap. Local development servers and test servers
   // turn it on. On, ENV must be one of TEST_ENVIRONMENTS, so that a server
   // that declares itself staging or production refuses to start with it.
   EXPOSE_GC: boolFlag(),

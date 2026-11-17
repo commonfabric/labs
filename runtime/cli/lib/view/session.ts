@@ -28,6 +28,7 @@ import {
   type DialogButton,
   dialogControlAt,
   type DialogField,
+  type DialogLink,
   type DialogRadioButton,
   type DialogState,
   DIFF_MARGIN_WIDTH,
@@ -45,6 +46,7 @@ import {
   type OverlayState,
   radioButtonAt,
   type ViewState,
+  webAddresses,
 } from "./render.ts";
 import {
   clamp,
@@ -138,14 +140,22 @@ export interface SessionOptions {
   now?: () => number;
 }
 
-/** A `git blame` the session asks its driver to run, which the driver hands
- * back with the result to {@link Session.finishBlameLoad}. */
+/** A frame that shows a prompt button pushed: the dialog with that button
+ * drawn mid-press. */
+export interface PushedFrame {
+  readonly doc: Document;
+  readonly view: ViewState;
+}
+
+/** The blame of a file or a commit that the session asks its driver to run,
+ * which the driver hands back with the result to
+ * {@link Session.finishBlameLoad}. */
 export interface BlameLoad {
   readonly request: BlameRequest;
 }
 
-/** A file's blame: the load that fetches it, and its lines once it has
- * finished. */
+/** A file's or a commit's blame: the load that fetches it, and its lines
+ * once it has finished. */
 interface BlameEntry {
   readonly load: BlameLoad;
   lines: readonly BlameLine[] | null;
@@ -213,7 +223,6 @@ type Mode =
   | "revertPrompt"
   | "taskPrompt"
   | "settingsPrompt"
-  | "landPrompt"
   | "filePicker"
   | "jumpList";
 
@@ -256,7 +265,13 @@ const MOUSE_WHEEL_STEP = 3;
 const PUSH_ROWS = 16;
 const PUSH_COLUMNS = 80;
 
-/** How the land dialog names each merge method, as GitHub's merge button
+/** A row of the task dialog's body, and the links on it. */
+interface TaskRow {
+  readonly text: string;
+  readonly links: readonly DialogLink[];
+}
+
+/** How the task dialog names each merge method, as GitHub's merge button
  * does. */
 const MERGE_VERBS: Readonly<Record<MergeMethod, string>> = {
   squash: "Squash and merge",
@@ -366,19 +381,21 @@ export class Session {
   /** The clock the blame column's ages are measured by. */
   #now: () => number;
 
-  /** Each file's blame, by {@link blameKey}. */
+  /** Each file's and commit's blame, by {@link blameKey}. */
   #blames = new Map<string, BlameEntry>();
 
   /** Loads the viewport needs that the driver has not yet taken. */
   #blameWanted: BlameLoad[] = [];
 
-  /** The {@link blameKey}s of files git could not blame. */
+  /** The {@link blameKey}s of files and commits git could not blame. */
   #blameFailures = new Set<string>();
 
-  /** The source's blame targets, and the source and text they are for. */
+  /** The source's blame targets, and the source, text, and baseline they are
+   * for. */
   #blameTargetCache?: {
     source: EditableSource;
     text: string;
+    baseline: string;
     targets: readonly (BlameTarget | null)[];
   };
 
@@ -478,7 +495,7 @@ export class Session {
    * the dialog with that button drawn mid-press — so the driver can play the
    * press for a moment before the action's result appears. The next key clears
    * it. */
-  pendingPush: { doc: Document; view: ViewState } | null = null;
+  pendingPush: PushedFrame | null = null;
 
   /** The last key asked for the checked-out branch to be pushed. The driver
    * starts the push, calls {@link beginBranchPush}, and clears this. */
@@ -493,9 +510,13 @@ export class Session {
    * this. */
   landRequested = false;
 
-  /** The merge the land dialog asked for. The driver starts it, calls
-   * {@link beginTask}, and clears this. */
+  /** The merge the task dialog asked for. The driver starts it, calls
+   * {@link continueTask}, and clears this. */
   mergeRequested: MergeRequest | null = null;
+
+  /** The task dialog's Push button was pressed. The driver pushes without
+   * asking, continuing the dialog, and clears this. */
+  pushConfirmed = false;
 
   /** The task dialog's retry button was pressed. The driver starts the task
    * again and clears this. */
@@ -542,25 +563,22 @@ export class Session {
    * failing in a way that trying again can fix, or "" for none. */
   #taskRetry = "";
 
-  /** What the push dialog says, under the push's output, about watching for
-   * the pushed branch's pull request to open, or "" when it says nothing. */
+  /** What the task dialog says, under the task's output, about watching for
+   * the pull request to open or merge and quitting once it has, with
+   * a newline between its lines, or "" when it says nothing. */
   #pullRequestWatch = "";
 
   /** The settings dialog's controls, while it is up. */
   #settingsDraft: SettingsDraft | null = null;
 
-  /** The merge the land dialog asks about, once the pull request has been
-   * found. */
-  #landDraft: MergeRequest | null = null;
+  /** The button that does what the task dialog asks whether to do, such as
+   * merging, and what pressing it does, while it asks. */
+  #confirmation:
+    | { readonly button: DialogButton; readonly confirm: () => void }
+    | null = null;
 
-  /** What the land dialog says while the pull request is being looked for. */
-  #landLooking = "";
-
-  /** Stops looking for the pull request, while it is being looked for. */
-  #cancelLand: (() => void) | null = null;
-
-  /** The address of the pushed branch's pull request, once it has opened
-   * while the push dialog was up, until a quit that it did not ask for. */
+  /** The address of the pull request that has opened or merged while the
+   * task dialog was up, until a quit that it did not ask for. */
   #pullRequestUrl: string | null = null;
 
   //
@@ -962,17 +980,17 @@ export class Session {
     const sel = view.selected;
     const expandRow = view.expandRow;
     const diffAnnotations = view.diffAnnotations;
-    const projectedAnnotations = diffAnnotations?.flatMap(
-      (annotation): DiffAnnotation[] => {
-        if (annotation.line < from || annotation.line >= to) {
-          return [{ ...annotation, line: back(annotation.line) }];
-        }
-        if (annotation.kind === "diffMetadata") return [];
-        return [{
-          ...annotation,
-          line: rev.up ? from : Math.max(0, from - 1),
-        }];
-      },
+    // Diff metadata is never among the lines still to come, which are revealed
+    // context; only a triangle can sit there, and it waits at their edge.
+    const projectedAnnotations = diffAnnotations?.map(
+      (annotation): DiffAnnotation => ({
+        ...annotation,
+        line: annotation.line < from || annotation.line >= to
+          ? back(annotation.line)
+          : rev.up
+          ? from
+          : Math.max(0, from - 1),
+      }),
     );
     const projectedTriangle = projectedAnnotations?.find((annotation) =>
       annotation.kind !== "diffMetadata"
@@ -1362,7 +1380,6 @@ export class Session {
     else if (this.#mode === "revertPrompt") dialog = this.#revertDialog();
     else if (this.#mode === "taskPrompt") dialog = this.#taskDialog();
     else if (this.#mode === "settingsPrompt") dialog = this.#settingsDialog();
-    else if (this.#mode === "landPrompt") dialog = this.#landDialog();
     if (!dialog) return null;
     // The focus runs through the fields and then the buttons. -1 means no
     // control is focused (a prompt with no default, before Tab). While a field
@@ -1435,7 +1452,7 @@ export class Session {
   #prompting(): boolean {
     return this.#mode === "savePrompt" || this.#mode === "amendPrompt" ||
       this.#mode === "revertPrompt" || this.#mode === "taskPrompt" ||
-      this.#mode === "settingsPrompt" || this.#mode === "landPrompt";
+      this.#mode === "settingsPrompt";
   }
 
   /** Whether the task dialog is up. */
@@ -1447,9 +1464,9 @@ export class Session {
    * ended; how many of them it shows; what it says about watching for the
    * pull request under them; and how wide its rows are. */
   #taskLayout(): {
-    output: Array<{ text: string; emphasized: boolean }>;
+    output: Array<TaskRow & { emphasized: boolean }>;
     rows: number;
-    watch: string[];
+    watch: TaskRow[];
     columns: number;
   } {
     const lines = this.#taskLines.at(-1) === ""
@@ -1468,17 +1485,42 @@ export class Session {
     // an address no wider than the box stays on one row, and a word wider than
     // the box is broken. Git pads the lines a server sends with spaces when its
     // output is not a terminal, and those would wrap onto rows of their own.
+    // Each piece of a web address links to the whole address.
     const columns = Math.max(1, Math.min(PUSH_COLUMNS, this.width - 8));
-    const wrap = (line: string) => {
-      let chars = [...line.trimEnd()];
-      const rowsOfLine: string[] = [];
-      while (chars.length > columns) {
-        const space = chars.lastIndexOf(" ", columns);
-        const words = chars.slice(0, space + 1).join("").trimEnd();
-        rowsOfLine.push(words || chars.slice(0, columns).join(""));
-        chars = chars.slice(words ? space + 1 : columns);
+    const wrap = (line: string): TaskRow[] => {
+      const text = line.trimEnd();
+      const chars = [...text];
+      const addresses = Array.from(webAddresses(text), (match) => {
+        const from = cpLen(text.slice(0, match.index));
+        return { from, to: from + cpLen(match[0]), url: match[0] };
+      });
+      const rowsOfLine: TaskRow[] = [];
+      let at = 0;
+      const take = (length: number, next: number) => {
+        const end = at + length;
+        rowsOfLine.push({
+          text: chars.slice(at, end).join(""),
+          links: addresses.flatMap(({ from, to, url }) =>
+            from < end && to > at
+              ? [{
+                from: Math.max(from, at) - at,
+                to: Math.min(to, end) - at,
+                url,
+              }]
+              : []
+          ),
+        });
+        at = next;
+      };
+      while (chars.length - at > columns) {
+        const space = chars.lastIndexOf(" ", at + columns);
+        const words = space < at
+          ? 0
+          : cpLen(chars.slice(at, space + 1).join("").trimEnd());
+        if (words > 0) take(words, space + 1);
+        else take(columns, at + columns);
       }
-      rowsOfLine.push(chars.join(""));
+      take(chars.length - at, chars.length);
       return rowsOfLine;
     };
     // The output keeps at least one row, and what the dialog says about the
@@ -1487,10 +1529,11 @@ export class Session {
     const watch =
       (this.#pullRequestWatch === ""
         ? []
-        : ["", ...wrap(this.#pullRequestWatch)]).slice(0, total - 1);
+        : ["", ...this.#pullRequestWatch.split("\n")].flatMap(wrap))
+        .slice(0, total - 1);
     return {
       output: output.flatMap(({ text, emphasized }) =>
-        wrap(text).map((row) => ({ text: row, emphasized }))
+        wrap(text).map((row) => ({ ...row, emphasized }))
       ),
       rows: total - watch.length,
       watch,
@@ -1531,16 +1574,23 @@ export class Session {
       Math.max(0, output.length - rows),
     );
     const shown = output.slice(top, top + rows);
-    const body = shown.map((row) => row.text);
-    while (body.length < rows) body.push("");
+    const body: TaskRow[] = [...shown];
+    while (body.length < rows) body.push({ text: "", links: [] });
+    for (const row of watch) body.push(row);
     return {
       title: this.#taskTitle,
-      body: [...body, ...watch],
+      body: body.map((row) => row.text),
+      links: body.map((row) => row.links),
       emphasized: shown.flatMap((row, i) => row.emphasized ? [i] : []),
       output: true,
       width: columns,
       buttons: this.#abortTask
         ? [{ label: "Abort", hotkey: "a", kind: "cancel" }]
+        : this.#confirmation
+        ? [
+          this.#confirmation.button,
+          { label: "Cancel", hotkey: "c", kind: "cancel" },
+        ]
         : [
           { label: "Close", hotkey: "c", kind: "cancel" },
           ...(this.#taskRetry === ""
@@ -1554,8 +1604,8 @@ export class Session {
   /**
    * The settings dialog: radio buttons that choose how the viewer handles
    * the pushed branch's pull request, the name of the token touch-gate uses,
-   * a check box that turns on quitting when the pushed branch's pull request
-   * opens, the address of the webhook relay that says when it does, and OK
+   * a check box that turns on quitting when the pull request opens or
+   * merges, the address of the webhook relay that says when it does, and OK
    * and Cancel.
    */
   #settingsDialog(): DialogState {
@@ -1577,36 +1627,6 @@ export class Session {
         { label: "OK", hotkey: "o", kind: "default" },
         { label: "Cancel", hotkey: "c", kind: "cancel" },
       ],
-    };
-  }
-
-  /**
-   * The land dialog: while the pull request is being looked for, what is
-   * looked for and Cancel; then which pull request merges, how, and at which
-   * commit, with Merge and Cancel. A merge cannot be undone, so no button is
-   * the default, and Enter does nothing until a button has the focus.
-   */
-  #landDialog(): DialogState {
-    const draft = this.#landDraft;
-    const cancel: DialogButton = {
-      label: "Cancel",
-      hotkey: "c",
-      kind: "cancel",
-    };
-    if (!draft) {
-      return { title: "Land", body: [this.#landLooking], buttons: [cancel] };
-    }
-    return {
-      title: "Land",
-      body: [
-        `${
-          MERGE_VERBS[draft.method]
-        } pull request ${draft.number} of ${draft.repository},`,
-        `if its head is still ${draft.sha.slice(0, 12)}?`,
-      ],
-      // The button's letter is not the `L` that opened the dialog, so that
-      // pressing `L` again does not merge.
-      buttons: [{ label: "Merge", hotkey: "m" }, cancel],
     };
   }
 
@@ -1690,7 +1710,10 @@ export class Session {
     return { title: "Revert", body: ["Revert which changes?"], buttons };
   }
 
-  handleKey(key: Key, beforeButtonAction?: () => void): void {
+  handleKey(
+    key: Key,
+    beforeButtonAction?: (pushed: PushedFrame) => void,
+  ): void {
     // A reveal is animated by the driver over the frames after the key that
     // caused it, so the next key ends it whatever it was. A message that takes
     // itself away goes now rather than waiting out its moment, before this key
@@ -3580,8 +3603,7 @@ export class Session {
 
   /** Keep source-owned transport outside the text cursor. */
   #clampToLogicalLine(): void {
-    const b = this.#buffer;
-    if (!b) return;
+    const b = this.#buffer!;
     const end = this.#logicalLineEnd();
     if (b.col > end) b.place(b.row, end);
   }
@@ -3723,10 +3745,9 @@ export class Session {
     markerLen: number,
     parsed: { model: DiffModel; hunk: DiffHunk } | null,
   ): void {
-    if (!this.#buffer || markerLen <= 1 || parsed === null) return;
-    const b = this.#buffer;
+    const b = this.#buffer!;
     const prefix = [...b.lines[b.row]].slice(1, markerLen).join("");
-    if (prefix.length === 0) return;
+    if (prefix === "" || parsed === null) return;
     const { model, hunk } = parsed;
     for (let row = b.row + 1; row <= hunk.endLine; row++) {
       const kind = model.lines[row]?.kind;
@@ -3853,12 +3874,27 @@ export class Session {
     this.#overlayStack = [];
     this.#mode = "taskPrompt";
     this.#taskTitle = title;
-    this.#taskTop = null;
     this.#taskLines = [""];
-    this.#taskReturned = false;
     this.#taskEmphasized = new Set();
+    this.#taskSummary = "";
+    this.continueTask(abort);
+  }
+
+  /** Start another task, which `abort` stops, in the task dialog, such as
+   * trying again what the last one failed to do. The dialog keeps its output,
+   * which goes on from how the last task ended. */
+  continueTask(abort: () => void): void {
+    const lines = this.#taskLines.at(-1) === ""
+      ? this.#taskLines.slice(0, -1)
+      : this.#taskLines;
+    this.#taskLines = this.#taskSummary === ""
+      ? [...lines, ""]
+      : [...lines, "", this.#taskSummary, ""];
+    this.#taskTop = null;
+    this.#taskReturned = false;
     this.#taskRetry = "";
     this.#taskSummary = "";
+    this.#confirmation = null;
     this.#pullRequestWatch = "";
     this.#pullRequestUrl = null;
     this.#abortTask = abort;
@@ -3893,24 +3929,38 @@ export class Session {
     this.#taskSummary = summary;
     this.#taskRetry = retry;
     if (this.#mode === "taskPrompt") this.#dialogFocus = 0;
-    if (this.#pullRequestUrl !== null) this.#quitForPullRequest();
+    if (this.#pullRequestUrl !== null) this.#announcePullRequestQuit();
   }
 
-  /** Have the push dialog say `text` about watching for the pushed branch's
-   * pull request, under the push's output. */
+  /** Have the task dialog say `text` about watching for the pull request,
+   * under the task's output. */
   setPullRequestWatch(text: string): void {
     this.#pullRequestWatch = text;
   }
 
   /**
-   * The pushed branch's pull request has opened, at `url`. While the push
-   * dialog is up, close it and quit, as its Quit button does, once the push
-   * has ended; otherwise do nothing.
+   * The pull request at `url` has opened or merged. While the task dialog
+   * is up, have it give the address and say it is quitting, once the task
+   * has ended; otherwise do nothing. {@link completePullRequestQuit} then
+   * quits.
    */
   quitForPullRequest(url: string): void {
     if (this.#mode !== "taskPrompt") return;
     this.#pullRequestUrl = url;
-    if (!this.#abortTask) this.#quitForPullRequest();
+    if (!this.#abortTask) this.#announcePullRequestQuit();
+  }
+
+  /** Whether the task dialog says it is quitting for the pull request, until
+   * {@link completePullRequestQuit} quits or a button takes the dialog down. */
+  get pullRequestQuitPending(): boolean {
+    return this.#mode === "taskPrompt" && !this.#abortTask &&
+      this.#pullRequestUrl !== null;
+  }
+
+  /** Close the task dialog and quit, as its Quit button does, when it says
+   * it is quitting for the pull request; otherwise do nothing. */
+  completePullRequestQuit(): void {
+    if (this.pullRequestQuitPending) this.#quitForPullRequest();
   }
 
   /** What the driver prints once the viewer has closed: the address of the
@@ -3942,7 +3992,7 @@ export class Session {
       },
       quitOnPullRequest: {
         kind: "checkBox",
-        label: "Quit when the pushed branch's pull request opens",
+        label: "Quit when the pull request opens or merges",
         hotkey: "q",
         checked: settings.quitOnPullRequest,
       },
@@ -3956,38 +4006,53 @@ export class Session {
     this.#dialogFocus = 0;
   }
 
-  /** Open the land dialog, saying `looking` while the pull request is looked
-   * for. Its Cancel button calls `cancel`. */
-  beginLand(looking: string, cancel: () => void): void {
-    this.#overlay = null;
-    this.#overlayStack = [];
-    this.#mode = "landPrompt";
-    this.#message = "";
-    this.#landDraft = null;
-    this.#landLooking = looking;
-    this.#cancelLand = cancel;
-    this.#focusDefaultButton();
+  /**
+   * End the task the task dialog shows, which has found the pull request to
+   * land, by asking whether to merge as `request` describes, saying how and
+   * at which commit as GitHub's merge button does. Merge asks the driver to
+   * merge. Does nothing unless the task is running.
+   */
+  confirmLand(request: MergeRequest): void {
+    // The button's letter is not the `L` that opened the dialog, so that
+    // pressing `L` again does not merge.
+    this.#ask(
+      `${MERGE_VERBS[request.method]} pull request ${request.number} of ` +
+        `${request.repository},\nif its head is still ` +
+        `${request.sha.slice(0, 12)}?`,
+      { label: "Merge", hotkey: "m" },
+      () => {
+        this.mergeRequested = request;
+      },
+    );
   }
 
-  /** Have the land dialog, while it is still looking for the pull request,
-   * ask whether to merge as `request` describes. Returns whether it did. */
-  confirmLand(request: MergeRequest): boolean {
-    if (this.#mode !== "landPrompt" || this.#landDraft) return false;
-    this.#landDraft = request;
-    this.#cancelLand = null;
-    this.#focusDefaultButton();
-    return true;
+  /**
+   * End the task the task dialog shows, which has found that the branch to
+   * push is already pushed, by asking whether to push it again, saying
+   * `question` about it. Push asks the driver to push. Does nothing unless
+   * the task is running.
+   */
+  confirmPush(question: string): void {
+    // The button's letter is not the `P` that opened the dialog, so that
+    // pressing `P` again does not push.
+    this.#ask(
+      question,
+      { label: "Push", hotkey: "u" },
+      () => {
+        this.pushConfirmed = true;
+      },
+    );
   }
 
-  /** Take the land dialog down while it is still looking for the pull
-   * request, and then, unless another dialog is up, show `message` in the
-   * status line. */
-  endLand(message: string): void {
-    if (this.#mode === "landPrompt" && !this.#landDraft) {
-      this.#mode = "normal";
-      this.#cancelLand = null;
-    }
-    if (this.#mode === "normal") this.#message = message;
+  /** End the running task by asking `question`, offering `button`, which
+   * calls `confirm`, and Cancel. No button is the default, so Enter does
+   * nothing until a button has the focus. */
+  #ask(question: string, button: DialogButton, confirm: () => void): void {
+    if (this.#mode !== "taskPrompt" || !this.#abortTask) return;
+    this.#abortTask = null;
+    this.#confirmation = { button, confirm };
+    this.appendTaskOutput(`${question}\n`, true);
+    this.#dialogFocus = -1;
   }
 
   /** Have the task dialog show the end of its output, as it does until it is
@@ -4136,11 +4201,9 @@ export class Session {
     );
     if (this.#cornerTotalsWidth() > 0) constrained.add(0);
     for (const lineIdx of constrained) {
-      const line = lines[lineIdx];
-      if (!line) continue;
       width = Math.max(
         width,
-        displayWidth(line, this.#displayMode) -
+        displayWidth(lines[lineIdx], this.#displayMode) -
           this.#lineContentWidth(lineIdx, annotations, contentWidth),
       );
     }
@@ -4256,23 +4319,26 @@ export class Session {
   }
 
   /** Turn the blame column on or off, keeping the viewport's top line. It
-   * stays off when no line comes from a file git can blame. */
+   * stays off when no line can be blamed. */
   #toggleBlame(): void {
     const source = this.#source;
     if (
       !this.#blameOn &&
       !(source && this.#blameTargets(source).some((target) => target !== null))
     ) {
-      this.#message = "No line here comes from a file git can blame";
+      this.#message = "No line here can be blamed";
       return;
     }
     const anchor = this.#wrapLines ? this.#viewportAnchor() : null;
     this.#blameOn = !this.#blameOn;
     if (anchor) this.#restoreWrappedAnchor(anchor);
+    const shown = this.#blameSource();
     this.#message = !this.#blameOn
       ? "Blame off"
-      : this.#blameShown()
-      ? "Blame on"
+      : shown
+      ? this.#blameTargetsInView(shown).some((target) => target !== null)
+        ? "Blame on"
+        : "Blame on; no line in view can be blamed"
       : blameColumnWidth(this.width, true) === 0
       ? "Blame on; the screen is too narrow to show it"
       : "Blame on; it shows in the source view";
@@ -4296,13 +4362,23 @@ export class Session {
       : null;
   }
 
-  /** The source's blame targets for the current text, cached against both. */
+  /** The source's blame targets for the current text and the text as last
+   * loaded or saved, cached against all three. */
   #blameTargets(source: EditableSource): readonly (BlameTarget | null)[] {
     if (!source.blameTargets) return [];
     const text = this.#sourceDoc.text;
+    const baseline = this.#buffer?.baseline() ?? text;
     let cache = this.#blameTargetCache;
-    if (cache?.source !== source || cache.text !== text) {
-      cache = { source, text, targets: source.blameTargets(text) };
+    if (
+      cache?.source !== source || cache.text !== text ||
+      cache.baseline !== baseline
+    ) {
+      cache = {
+        source,
+        text,
+        baseline,
+        targets: source.blameTargets(text, baseline),
+      };
       this.#blameTargetCache = cache;
     }
     return cache.targets;
@@ -4310,28 +4386,38 @@ export class Session {
 
   /** The blame column: the attribution it shows on each display line in view,
    * or null where it shows none, and the current time; null when the column
-   * is hidden. Asks for the blame of any file in view that it does not have
-   * yet. */
+   * is hidden. Asks for the blame of any file or commit in view that it does
+   * not have yet. */
   #blameColumn(): ViewState["blame"] {
     const source = this.#blameSource();
     if (!source) return null;
+    return {
+      lines: this.#blameTargetsInView(source).map((target) =>
+        target && this.#blameFor(target)
+      ),
+      now: this.#now(),
+    };
+  }
+
+  /** The source's blame target for each display line, null outside the
+   * view. */
+  #blameTargetsInView(source: EditableSource): (BlameTarget | null)[] {
     const targets = this.#blameTargets(source);
     const plan = this.#foldPlan();
-    const column = new Array<BlameLine | null>(plan.displayLines.length)
-      .fill(null);
     const first = this.#toFolded(this.#toDoc(this.top));
     const last = this.#toFolded(
       this.#toDoc(this.top + this.#contentRows() - 1),
     );
-    for (let row = first; row <= last; row++) {
-      const target = targets[plan.displayToDoc(row)];
-      if (target) column[row] = this.#blameFor(target);
-    }
-    return { lines: column, now: this.#now() };
+    return plan.displayLines.map((_, row) =>
+      row >= first && row <= last
+        ? targets[plan.displayToDoc(row)] ?? null
+        : null
+    );
   }
 
   /** The attribution of `target`'s line, or null while it is unknown. Loads
-   * the blame of a file that has none, or has one taken of other text. */
+   * the blame of a file or commit that has none, or of a file that has one
+   * taken of other text. */
   #blameFor(target: BlameTarget): BlameLine | null {
     const key = blameKey(target.request);
     if (this.#blameFailures.has(key)) return null;
@@ -4367,8 +4453,8 @@ export class Session {
     if (entry?.load === load) entry.lines = lines;
   }
 
-  /** Record that git could not blame a load's file, which is not tried
-   * again, and say why. */
+  /** Record that git could not blame a load's file or commit, which is not
+   * tried again, and say why. */
   failBlameLoad(load: BlameLoad, reason: string): void {
     const key = blameKey(load.request);
     if (this.#blames.get(key)?.load !== load) return;
@@ -4507,16 +4593,22 @@ export class Session {
 
   /**
    * An interrupt (SIGINT) arrived. During a push, abort the push and return
-   * true so the driver keeps running and shows how it ended. With unsaved edits
-   * and no prompt already up, raise the save prompt and return true so the
-   * driver keeps running and lets the user answer it. Otherwise return false:
-   * nothing to save, or a second interrupt during the prompt, so the driver
-   * should terminate.
+   * true so the driver keeps running and shows how it ended. While the task
+   * dialog says it is quitting for a pull request, quit for it as Quit does,
+   * keeping its address to print, and return whether the save prompt rose
+   * instead. With unsaved edits and no prompt already up, raise the save
+   * prompt and return true so the driver keeps running and lets the user
+   * answer it. Otherwise return false: nothing to save, or a second interrupt
+   * during the prompt, so the driver should terminate.
    */
   requestQuitFromSignal(): boolean {
     if (this.#mode === "taskPrompt" && this.#abortTask) {
       this.#abortTask();
       return true;
+    }
+    if (this.pullRequestQuitPending) {
+      this.#quitForPullRequest();
+      return !this.quit;
     }
     if (this.#mode === "savePrompt") return false;
     const willPrompt = this.#buffer?.dirty() ?? false;
@@ -4532,7 +4624,7 @@ export class Session {
    * it, and a button's activates it. Any other key leaves the prompt up. */
   #handleDialogKey(
     key: Key,
-    beforeButtonAction?: () => void,
+    beforeButtonAction?: (pushed: PushedFrame) => void,
   ): void {
     // Reached only from the prompt modes, each of which builds a dialog with at
     // least one button, so the dialog is present and its row is non-empty.
@@ -4640,7 +4732,7 @@ export class Session {
   #handleClick(
     mouse: MouseButton,
     held: HeldButton | null,
-    beforeButtonAction?: () => void,
+    beforeButtonAction?: (pushed: PushedFrame) => void,
   ): void {
     const dialog = this.#promptDialog();
     if (!dialog) return;
@@ -4690,37 +4782,50 @@ export class Session {
   #activateButton(
     dialog: DialogState,
     index: number,
-    beforeButtonAction?: () => void,
+    beforeButtonAction?: (pushed: PushedFrame) => void,
   ): void {
     this.#dialogFocus = (dialog.fields?.length ?? 0) + index;
-    this.pendingPush = {
+    const pushed = {
       doc: this.displayDoc(),
       view: {
         ...this.view(),
         dialog: { ...dialog, focus: index, fieldFocus: -1, pushed: index },
       },
     };
-    beforeButtonAction?.();
+    this.pendingPush = pushed;
+    beforeButtonAction?.(pushed);
     const button = dialog.buttons[index];
     if (this.#mode === "savePrompt") this.#applySaveButton(button);
     else if (this.#mode === "amendPrompt") this.#applyAmendButton(button);
     else if (this.#mode === "revertPrompt") this.#applyRevertButton(button);
     else if (this.#mode === "settingsPrompt") this.#applySettingsButton(button);
-    else if (this.#mode === "landPrompt") this.#applyLandButton(button);
     else this.#applyTaskButton(button);
   }
 
-  /** Abort stops the task, which then ends; Close takes the dialog down and
-   * leaves how the task ended in the status line; the retry button asks the
-   * driver to try the task again; Quit takes the dialog down and quits, by way
-   * of the save prompt when there are unsaved edits. */
+  /** Abort stops the task, which then ends; the button that does what the
+   * dialog asked whether to do does it, and Cancel takes the dialog down;
+   * Close takes the dialog down and leaves how the task ended in the status
+   * line; the retry button asks the driver to try the task again; Quit takes
+   * the dialog down and quits, by way of the save prompt when there are
+   * unsaved edits, keeping the address of the pull request the dialog says it
+   * is quitting for. */
   #applyTaskButton(button: DialogButton): void {
+    const confirmation = this.#confirmation;
+    this.#confirmation = null;
     if (this.#abortTask) this.#abortTask();
+    else if (confirmation && button.kind !== "cancel") confirmation.confirm();
+    else if (confirmation) this.#closeTaskDialog(false);
     else if (button.hotkey === "p") this.retryRequested = true;
-    else this.#closeTaskDialog(button.hotkey === "Q");
+    else if (button.hotkey === "Q") this.#quitTaskDialog();
+    else this.#closeTaskDialog(false);
   }
 
-  /** Take the push dialog down, leaving how the push ended in the status
+  #quitTaskDialog(): void {
+    if (this.pullRequestQuitPending) this.#quitForPullRequest();
+    else this.#closeTaskDialog(true);
+  }
+
+  /** Take the task dialog down, leaving how the task ended in the status
    * line, and quit when `quit` says to, by way of the save prompt when there
    * are unsaved edits. */
   #closeTaskDialog(quit: boolean): void {
@@ -4729,24 +4834,19 @@ export class Session {
     if (quit) this.#requestQuit();
   }
 
-  /** Close the push dialog and quit for the pull request that has opened,
-   * keeping its address for the driver to print once the viewer closes. */
+  /** Have the task dialog give the address of the pull request that has
+   * opened or merged, and say it is quitting. */
+  #announcePullRequestQuit(): void {
+    this.#pullRequestWatch = `Pull request: ${this.#pullRequestUrl}\nQuitting…`;
+  }
+
+  /** Close the task dialog and quit for the pull request that has opened or
+   * merged, keeping its address for the driver to print once the viewer
+   * closes. */
   #quitForPullRequest(): void {
     const url = this.#pullRequestUrl;
     this.#closeTaskDialog(true);
     this.#pullRequestUrl = url;
-  }
-
-  /** Merge takes the land dialog down and asks the driver to merge; Cancel
-   * takes it down, and stops looking for the pull request when it is still
-   * being looked for. */
-  #applyLandButton(button: DialogButton): void {
-    const draft = this.#landDraft;
-    this.#mode = "normal";
-    this.#landDraft = null;
-    this.#cancelLand?.();
-    this.#cancelLand = null;
-    if (draft && button.kind !== "cancel") this.mergeRequested = draft;
   }
 
   /** OK takes the settings dialog down and asks the driver to save what it

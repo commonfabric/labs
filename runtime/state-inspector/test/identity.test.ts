@@ -2,6 +2,7 @@
 // with the per-user/session scopes it owns within them.
 
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
 import type { DiscoveredSpace } from "../discover.ts";
@@ -98,6 +99,56 @@ Deno.test("identity world: spaces + owned scopes", async (t) => {
       // the profile has no per-user state for this identity
       assertEquals(byDid[PROFILE].scopedEntities, 0);
     });
+
+    await t.step(
+      "finds owned scopes in spaces outside the identity's group",
+      async () => {
+        const mainDid =
+          "did:key:zMainCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
+        const otherDid =
+          "did:key:zOtherDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD";
+        const mainPath = `${dir}/${mainDid}.sqlite`;
+        const otherPath = `${dir}/${otherDid}.sqlite`;
+        const junkPath = `${dir}/junk.sqlite`;
+        // Both spaces are written by another principal, so neither is in
+        // HOME's group; HOME owns a per-user scope in only one of them.
+        for (const path of [mainPath, otherPath]) {
+          const d = db(path);
+          d.prepare(
+            `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution)
+             VALUES (1, ?, 1, '{}', '{}')`,
+          ).run(`session:${otherDid}:sid`);
+          rev(d, "of:plain", "space", 1, { value: 1 });
+          if (path === mainPath) {
+            rev(d, "of:shared", USER, 1, { value: { seen: true } });
+          }
+          d.close();
+        }
+        await Deno.writeTextFile(junkPath, "not a database");
+
+        const wider = describeIdentity(
+          [
+            disc(homePath),
+            disc(profilePath),
+            disc(mainPath),
+            disc(otherPath),
+            disc(junkPath),
+          ],
+          HOME,
+        );
+        const main = wider.spaces.find((s) => s.did === mainDid);
+        expect(main).toMatchObject({
+          role: "main",
+          present: true,
+          scopedEntities: 1,
+          evidence: ["owns scopes for zHomeA…AAAA here"],
+        });
+        expect(wider.spaces.map((s) => s.did)).not.toContain(otherDid);
+        expect(wider.spaces.map((s) => s.did)).not.toContain("junk");
+        expect(wider.totals.spacesWithScopedState).toBe(2);
+        expect(wider.totals.scopedEntities).toBe(2);
+      },
+    );
 
     await t.step("totals roll up", () => {
       assertEquals(world.totals.presentSpaces, 2);

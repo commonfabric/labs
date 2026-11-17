@@ -74,6 +74,7 @@ export const StatsResponseSchema = z.object({
         bytes: z.number().int().nonnegative(),
         budgetBytes: z.number().int().positive(),
         maxEntries: z.number().int().positive(),
+        held: z.number().int().nonnegative(),
       }),
     ),
   }).optional(),

@@ -3861,7 +3861,8 @@ type OnlyTestStep<Own extends TestStepKey, Fields> =
  *   trimmed, is `control`, and dispatches a click on it, so the handler bound
  *   there receives the event with the provenance its rendered markers give.
  *   `within` names text an element around the control shows, for a view that
- *   shows `control` more than once, such as a row of a list.
+ *   shows `control` more than once, such as a row of a list. `modifiers` names
+ *   the keys held during the click, such as `["meta"]` for a Cmd-click.
  * - `{ render }` materializes a VDOM subtree.
  * - `{ settle: true }` waits for full settlement (scheduler, storage, and
  *   in-flight async builtin I/O) before the next step.
@@ -3881,7 +3882,12 @@ export type TestStep =
     event?: unknown;
     trustedUi?: { surface: string; action: string };
   }>
-  | OnlyTestStep<"press", { press: unknown; control: string; within?: string }>
+  | OnlyTestStep<"press", {
+    press: unknown;
+    control: string;
+    within?: string;
+    modifiers?: ("alt" | "ctrl" | "meta" | "shift")[];
+  }>
   | OnlyTestStep<"render", { render: unknown }>
   | OnlyTestStep<"settle", { settle: true }>
   | OnlyTestStep<"label", { label: string }>
@@ -4546,23 +4552,28 @@ export declare function principalsOf(
  * principal that the label of the cell a write to `target` lands in names as
  * the one the value represents, in the form the runtime writes, at that
  * label's root, and only when no claim anywhere in the label names anyone
- * else. The value's own cell is that cell when the value is the whole of it
- * and the cell holds no link to a value elsewhere: a value at a path within a
- * document reads with that document's label, and a link stored in the cell
- * leads to a value it does not hold. `undefined` in every other case, for a
- * value stored without a label, and for a `target` of `undefined`.
+ * else. The value's own cell is that cell when the value is the whole of it,
+ * the cell is in the space of the document holding `target`'s field, and the
+ * cell holds no link to a value elsewhere: a value at a path within a document
+ * reads with that document's label, and a link stored in the cell leads to a
+ * value it does not hold. `undefined` in every other case, for a value stored
+ * without a label, and for a `target` of `undefined`.
  *
- * The label says whom the cell's value represents, not who pointed `target`
- * at that cell: the links on the way, write redirects among them, are
- * followed. A write declared `RepresentsCurrentUser`, as a profile's
- * `setPicture` is, labels the value with the principal it acts for, and a
- * profile's owner-protected fields keep their write redirects from being
- * repointed. So comparing this with `profileOwnerOf()` says whether a
- * profile's `picture` is one its owner set. It can be called where
- * `principalOf()` can: in a reactive computation the result updates when the
- * label or the links change, and in a handler a document still loading has
- * the handler run again once it arrives. Calling it in a pattern body throws,
- * and so does a label stored in a form the runtime cannot interpret.
+ * The label says whom the cell's value represents, not who pointed `target` at
+ * that cell: the links on the way, write redirects among them, are followed. A
+ * cell in another space is refused, since its label says who wrote the value
+ * there, not that anyone put it at this field. Name the field through the
+ * document holding it, as `profile.key("picture")` does: a write redirect of
+ * your own to the field, stored in another space, is refused like any other. A
+ * write declared `RepresentsCurrentUser`, as a profile's `setPicture` is,
+ * labels the value with the principal it acts for, so comparing this with
+ * `profileOwnerOf()` says whether a profile's `picture` is one its owner set.
+ * Within the profile's space, a visitor can still point a face field at another
+ * cell the owner wrote there. It can be called where `principalOf()` can: in a
+ * reactive computation the result updates when the label or the links change,
+ * and in a handler a document still loading has the handler run again once it
+ * arrives. Calling it in a pattern body throws, and so does a label stored in a
+ * form the runtime cannot interpret.
  */
 export declare function writtenPrincipalOf<T>(
   target: AnyCell<T> | undefined,
@@ -5068,6 +5079,24 @@ export type EqualsFunction = (
 ) => boolean;
 
 /**
+ * Returns a string that two values share exactly when `equals` returns `true`
+ * for them in the same run, so that a `Set` or a `Map` keyed by it finds the
+ * distinct references in a list, or joins one list to another, in one pass
+ * where `equals` compares them in pairs. Inside a handler or a reactive
+ * computation it follows links first, as `equals` does, so an alias and the
+ * document it names share a key; elsewhere it compares links as given.
+ *
+ * Returns `undefined` for a value with no place in the graph — a fresh object
+ * literal, a primitive, `undefined` — which `equals` matches to nothing but
+ * itself. A key holds for the run that made it, as `equals` does: compare it
+ * with keys from the same run, and do not store it. Its form is not part of
+ * the contract.
+ */
+export type EqualsKeyFunction = (
+  value: AnyCell<any> | object | undefined,
+) => string | undefined;
+
+/**
  * Deep structural equality for two values, intended for `FabricValue`-shaped
  * data. Compares primitives with `Object.is` (so `NaN` equals `NaN` and `-0`
  * is distinct from `0`). Unlike `equals`, it compares values directly and does
@@ -5162,6 +5191,7 @@ export declare const multiUserTest: <T extends MultiUserTestDescriptor>(
 export declare const cell: CellTypeConstructor<AsCell>["of"];
 
 export declare const equals: EqualsFunction;
+export declare const equalsKey: EqualsKeyFunction;
 export declare const valueEqual: ValueEqualFunction;
 export declare const byRef: ByRefFunction;
 export function getPatternEnvironment(): PatternEnvironment {

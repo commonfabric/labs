@@ -14,9 +14,14 @@ import {
   type FirstPartyHttpSigner,
   signFirstPartyHttpRequest,
 } from "@commonfabric/runner/toolshed-http-auth";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
 import type { PatternIndexFetch } from "./http-fetch.ts";
+import { encodeHex } from "@std/encoding/hex";
+import { sha256 } from "@commonfabric/content-hash";
 
 /** Own and publication-bounded inherited evidence computed by the index. */
 export interface PatternIndexSignals {
@@ -181,8 +186,16 @@ export interface PatternIndexSearchResult {
   /** Which ranked bucket this hit came from, absent on older deployments. */
   bucket?: PatternIndexBucket;
 
-  /** The author's stable pseudonym on this index. */
+  /**
+   * @deprecated Read `author.pseudonym`. Deployments with private versions
+   * answer the same per-lineage pseudonym here, for older readers; older
+   * deployments answer one pseudonym per author, shared across their
+   * patterns.
+   */
   handle?: string;
+
+  /** How the author is shown: a per-lineage pseudonym, a tier, a name if published. */
+  author?: PatternIndexAuthor;
 
   /** Whether the caller is its author. */
   mine?: boolean;
@@ -244,8 +257,16 @@ export interface PatternIndexPattern {
   /** The publisher's DID, from deployments that predate `handle`. */
   ownerDid?: string;
 
-  /** The author's stable pseudonym on this index. */
+  /**
+   * @deprecated Read `author.pseudonym`. Deployments with private versions
+   * answer the same per-lineage pseudonym here, for older readers; older
+   * deployments answer one pseudonym per author, shared across their
+   * patterns.
+   */
   handle?: string;
+
+  /** How the author is shown: a per-lineage pseudonym, a tier, a name if published. */
+  author?: PatternIndexAuthor;
 
   /** Whether the caller is its author. */
   mine?: boolean;
@@ -259,6 +280,11 @@ export interface PatternIndexPattern {
   priorPatternId?: string;
   remixedFrom?: string;
   lineageId?: string;
+
+  /** The caller's own version with this source; owner only. */
+  versionId?: string;
+
+  visibility?: PatternIndexVisibility;
   program?: PatternIndexProgram;
 
   /**
@@ -312,8 +338,16 @@ export interface PatternIndexListedPattern {
   /** The publisher's DID, from deployments that predate `handle`. */
   ownerDid?: string;
 
-  /** The author's stable pseudonym on this index. */
+  /**
+   * @deprecated Read `author.pseudonym`. Deployments with private versions
+   * answer the same per-lineage pseudonym here, for older readers; older
+   * deployments answer one pseudonym per author, shared across their
+   * patterns.
+   */
   handle?: string;
+
+  /** How the author is shown: a per-lineage pseudonym, a tier, a name if published. */
+  author?: PatternIndexAuthor;
 
   /** Whether the caller is its author. */
   mine?: boolean;
@@ -439,10 +473,23 @@ export type PatternIndexUsageEventType =
   | "viewed_in_loom"
   | "removed";
 
-export interface PatternIndexRecordUsageEventRequest {
-  patternId: string;
+/**
+ * A usage event and what it is about. The owner's `viewed_in_loom` about the
+ * piece a version was deployed to settles that version: the index shares it
+ * then, while the sharing setting covers it.
+ */
+export type PatternIndexRecordUsageEventRequest = PatternIndexEventSubject & {
   eventType: PatternIndexUsageEventType;
-}
+};
+
+/**
+ * What an event is about: a pattern by id, or, for its owner's own use of a
+ * version in a loom, the piece the version was deployed to
+ * ({@link deployedPieceRef}), which is what a loom knows.
+ */
+export type PatternIndexEventSubject =
+  | { patternId: string; piece?: never }
+  | { piece: string; patternId?: never };
 
 /** Signed event payload; the client supplies the author from its identity. */
 export interface PatternIndexRecordEventRequest {
@@ -462,6 +509,19 @@ export interface PatternIndexRecordEventRequest {
 
 export interface PatternIndexRecordEventResponse {
   ok: boolean;
+
+  /**
+   * `false` for an event the index keeps no record of, such as one about a
+   * piece the caller has no version for.
+   */
+  recorded?: boolean;
+
+  /** What the owner's use of a version did about sharing it. */
+  settled?: {
+    autoShare: PatternIndexAutoShare;
+    shared?: boolean;
+    reason?: string;
+  };
 }
 
 /** An owner's request to retire a generation in favor of its direct successor. */
@@ -482,6 +542,310 @@ export interface PatternIndexRetractResponse {
   discoverable: false;
   changed: boolean;
 }
+
+/**
+ * How a client names a piece a version was deployed to, for `deployedTo`
+ * and for an event about it: a hash of the space and the piece's id, so the
+ * index learns neither. `pieceId` is the bare `fid1:…` form; an `of:` prefix
+ * is taken off.
+ */
+export function deployedPieceRef(spaceDid: string, pieceId: string): string {
+  const bare = pieceId.startsWith("of:") ? pieceId.slice(3) : pieceId;
+  return `piece:${
+    encodeHex(sha256(new TextEncoder().encode(`${spaceDid}/${bare}`)))
+  }`;
+}
+
+/** What {@link deployedPieceRef} answers, and nothing else is sent as one. */
+const PIECE_REF = /^piece:[0-9a-f]{64}$/;
+
+/** Whether `ref` is a piece reference as {@link deployedPieceRef} answers one. */
+export const isPieceRef = (ref: string): boolean => PIECE_REF.test(ref);
+
+/**
+ * `ref`, checked to be a hashed piece reference, so a raw piece id never
+ * reaches the index.
+ *
+ * @throws Error naming the field for anything else.
+ */
+const pieceRef = (field: string, ref: string): string => {
+  if (!isPieceRef(ref)) {
+    throw new Error(
+      `${field} must be a piece reference from deployedPieceRef, not a piece id`,
+    );
+  }
+  return ref;
+};
+
+/**
+ * Who may read a version: its owner alone, any member who shares (under the
+ * lineage's pseudonym), or any member (under its owner's public profile).
+ */
+export type PatternIndexVisibility = "private" | "shared" | "published";
+
+/**
+ * Where a version's share stands:
+ *
+ * - `none`: never asked to share.
+ * - `pending`: the privacy gardener is checking it.
+ * - `held`: the gardener found something identifying; its owner reads
+ *   `gates`, and a changed source can be shared again.
+ * - `error`: the check failed to run; `shareVersion` asks again.
+ * - `exposed`: shared, and readable by others.
+ * - `public_elsewhere`: the same source is already shared under someone
+ *   else, so this one cannot be; a changed source can.
+ */
+export type PatternIndexShareState =
+  | "none"
+  | "pending"
+  | "held"
+  | "error"
+  | "exposed"
+  | "public_elsewhere";
+
+/**
+ * Who made a version, which decides the sharing sub-setting that applies:
+ * the person (`cf`, Claude Code) or an agent working for them.
+ */
+export type PatternIndexOrigin = "self" | "agent";
+
+/** A Common Fabric public profile, by its space. */
+export interface PatternIndexProfileRef {
+  space: string;
+
+  /** The profile piece, when the client knows it. */
+  piece?: string;
+}
+
+/**
+ * The person a named lineage is published under. Others read the name from
+ * the profile itself.
+ */
+export interface PatternIndexPublishedAuthor {
+  profile: PatternIndexProfileRef;
+
+  /** The name the owner gave when naming it; only the owner sees it. */
+  displayName?: string;
+
+  /** The UTC day it was named. */
+  since: string;
+}
+
+/**
+ * How a pattern's author is shown to others: a pseudonym of its own lineage,
+ * unrelated to the author's other lineages, and a coarse tier saying how much
+ * their other shared work is used; a name only where they published it.
+ */
+export interface PatternIndexAuthor {
+  /** Stable for the lineage, and for no other. */
+  pseudonym: string;
+
+  /** 0 to 9, logarithmic in uses of the author's other lineages. */
+  tier: number;
+
+  published?: PatternIndexPublishedAuthor;
+  brand?: {
+    githubOrg: string;
+    displayName: string;
+    profile?: PatternIndexProfileRef;
+  };
+}
+
+/** One version of a lineage, as its owner (and only its owner) sees it. */
+export interface PatternIndexVersionSummary {
+  versionId: string;
+  lineageId: string;
+
+  /** 1, 2, 3 within the lineage. */
+  seq: number;
+
+  patternId: string;
+  createdAt: string;
+  name?: string;
+  description: string;
+  hashtags: readonly string[];
+  origin: PatternIndexOrigin;
+  visibility: PatternIndexVisibility;
+  share: PatternIndexShareState;
+
+  /** Whether it is the lineage's current version. */
+  head: boolean;
+
+  /** The version whose source a rollback restored. */
+  rolledBackFrom?: string;
+
+  remixedFrom?: string;
+}
+
+/** One version with its full metadata and, when asked for, its source. */
+export interface PatternIndexVersion extends PatternIndexVersionSummary {
+  keywords: readonly string[];
+  argumentSchema?: JSONSchema;
+  resultSchema?: JSONSchema;
+  dependencies: readonly string[];
+  program?: PatternIndexProgram;
+  gates?: Readonly<Record<string, PatternIndexGardenerVerdict>>;
+}
+
+/** One of the caller's lineages: a pattern they have worked on over time. */
+export interface PatternIndexLineage {
+  lineageId: string;
+
+  /** The client key it was made under, such as a file path. */
+  slot?: string;
+
+  origin: PatternIndexOrigin;
+
+  /** How others see its author while it is unnamed. */
+  pseudonym: string;
+
+  name?: string;
+  description: string;
+  head: PatternIndexVersionSummary;
+
+  /** How many versions it has, and how many of them others can read. */
+  versions: number;
+  sharedVersions: number;
+
+  published?: PatternIndexPublishedAuthor;
+  tier: number;
+}
+
+export interface PatternIndexListLineagesResponse {
+  /** Newest head first. */
+  lineages: readonly PatternIndexLineage[];
+}
+
+export interface PatternIndexListVersionsResponse {
+  lineageId: string;
+
+  /** Newest first. */
+  versions: readonly PatternIndexVersionSummary[];
+}
+
+export interface PatternIndexGetVersionRequest {
+  versionId: string;
+  includeSource?: boolean;
+}
+
+export interface PatternIndexRollbackRequest {
+  lineageId: string;
+
+  /** The version whose source becomes the new head. */
+  toVersionId: string;
+
+  /** Keep the new head private whatever the sharing setting says. */
+  keepPrivate?: boolean;
+}
+
+export interface PatternIndexShareVersionResponse {
+  versionId: string;
+  patternId: string;
+  visibility: PatternIndexVisibility;
+  share: PatternIndexShareState;
+  listing?: PatternIndexListing;
+
+  /** `false` when it was already shared or being checked. */
+  changed: boolean;
+}
+
+/**
+ * Names the caller as the author of one lineage. `profileProof` is the
+ * profile's root delegation to the person's core identity, then one link
+ * from that identity to the request's signing key under
+ * `/memory/attest/pattern-index`, in the encoding `proofs` uses.
+ */
+export interface PatternIndexPublishLineageRequest {
+  lineageId: string;
+  profile: PatternIndexProfileRef;
+
+  /** A name for the owner's own view; others read it from the profile. */
+  displayName?: string;
+
+  profileProof: readonly string[];
+
+  /**
+   * Shares this version first; a share the index refuses is answered as
+   * that refusal, and nothing is named.
+   */
+  versionId?: string;
+}
+
+export interface PatternIndexPublishLineageResponse {
+  lineageId: string;
+  published: PatternIndexPublishedAuthor;
+  share?: PatternIndexShareState;
+}
+
+export interface PatternIndexDeleteVersionResponse {
+  versionId: string;
+  deleted: true;
+
+  /** Whether it was the lineage's last version, which takes the lineage. */
+  lineageDeleted: boolean;
+
+  /** The lineage's head now, when it was the head and others remain. */
+  head?: string;
+
+  /** Whether a share not yet exposed was dropped with it. */
+  droppedShare: boolean;
+}
+
+export interface PatternIndexDeleteLineageResponse {
+  lineageId: string;
+  deleted: true;
+
+  /** How many shares not yet exposed were dropped with it. */
+  droppedShares: number;
+}
+
+export interface PatternIndexUnshareLineageResponse {
+  lineageId: string;
+  unshared: true;
+  changed: boolean;
+}
+
+export interface PatternIndexUnpublishLineageResponse {
+  lineageId: string;
+  published: null;
+  changed: boolean;
+}
+
+/**
+ * The member's give-to-get setting. `enabled` is the main switch: while it
+ * is on, the index shares versions agents make for the member, and the
+ * member sees what others share; `selfBuilt` also shares the versions the
+ * member builds themselves (`cf`, Claude Code). Turned off, the member's
+ * searches and listings hold only named patterns; fetching a shared one by
+ * id still works.
+ */
+export interface PatternIndexSharingSettings {
+  enabled: boolean;
+  selfBuilt: boolean;
+
+  /** Whether the member sees anonymous shared patterns; follows `enabled`. */
+  receivesAnonymous: boolean;
+
+  /** `null` until the member first sets it. */
+  updatedAt: string | null;
+}
+
+export interface PatternIndexSetSharingSettingsRequest {
+  enabled?: boolean;
+  selfBuilt?: boolean;
+}
+
+/**
+ * What a publish did about sharing the version it recorded. A publish never
+ * shares by itself: `when_used` means the index shares the version once its
+ * owner opens it in a loom, while the sharing setting allows.
+ */
+export type PatternIndexAutoShare =
+  | "when_used"
+  | "sharing_off"
+  | "kept_private"
+  | "already_shared"
+  | "not_eligible";
 
 export interface PatternIndexPublishRequest {
   /**
@@ -514,8 +878,36 @@ export interface PatternIndexPublishRequest {
    */
   priorPatternId?: string;
 
-  /** Someone else's pattern this one was built from; credits it, inherits nothing. */
+  /**
+   * Someone else's pattern this one was built from; credits it, inherits
+   * nothing, and starts a new lineage.
+   */
   remixedFrom?: string;
+
+  /** Continue this lineage of the caller's; refused when it is not theirs. */
+  lineageId?: string;
+
+  /**
+   * A key the caller chooses for the lineage, unique per owner, such as an
+   * entry file's path; finds the lineage when no id or predecessor does.
+   */
+  slot?: string;
+
+  /**
+   * Who made it, which decides whether the sharing setting shares it; a
+   * version sent without one is never shared on its own.
+   */
+  origin?: PatternIndexOrigin;
+
+  /** Keep this version private whatever the sharing setting says. */
+  keepPrivate?: boolean;
+
+  /**
+   * The piece this version was deployed to ({@link deployedPieceRef}), so
+   * the owner's later use of that piece in a loom finds the version. Owner
+   * only; the index keeps a keyed hash of it.
+   */
+  deployedTo?: string;
 
   /**
    * Explicitly offers this entry to search on publication. Deployments with
@@ -534,6 +926,71 @@ export interface PatternIndexPublishRequest {
    * for is an entry nobody can decide about later.
    */
   nonDiscoverable?: { readonly reason: string };
+
+  /**
+   * The repository file this pattern is the newest version of, sent by a
+   * repository sync. The index keeps one lineage per repository and path,
+   * so it sets the predecessor itself, and `publishPattern` refuses one sent
+   * with `priorPatternId`, `lineageId` or `slot`.
+   */
+  source?: PatternIndexRepoSource;
+}
+
+/** Where in a repository a synced pattern comes from. */
+export interface PatternIndexRepoSource {
+  /** `owner/name`, as GitHub names it. */
+  repository: string;
+
+  /** The entry file's path from the repository root. */
+  path: string;
+
+  /** The commit the program was read at. */
+  commit: string;
+
+  /**
+   * A hash of the program's files as read, before compiling. A later sync
+   * compares it to decide whether the source changed, without compiling.
+   */
+  sourceHash: string;
+}
+
+/** Asks for the newest version of every lineage a repository holds. */
+export interface PatternIndexListRepoHeadsRequest {
+  /** `owner/name`. */
+  repository: string;
+}
+
+/** The newest version the index holds for one repository path. */
+export interface PatternIndexRepoHead {
+  path: string;
+  patternId: string;
+  sourceHash: string;
+  commit: string;
+  listing?: PatternIndexListing;
+
+  /** Gate gardener verdicts by gardener name. */
+  gates?: Readonly<Record<string, PatternIndexGardenerVerdict>>;
+}
+
+export interface PatternIndexListRepoHeadsResponse {
+  heads: readonly PatternIndexRepoHead[];
+}
+
+/**
+ * Withdraws the lineages of repository paths that are no longer patterns
+ * there: each is unlisted and stays readable by id, and a path that comes
+ * back resumes its lineage.
+ */
+export interface PatternIndexWithdrawRepoPathsRequest {
+  /** `owner/name`. */
+  repository: string;
+
+  paths: readonly string[];
+}
+
+export interface PatternIndexWithdrawRepoPathsResponse {
+  /** Each path asked about, and whether a lineage was withdrawn for it. */
+  withdrawn: readonly { path: string; withdrawn: boolean }[];
 }
 
 export interface PatternIndexPublishResponse {
@@ -542,8 +999,34 @@ export interface PatternIndexPublishResponse {
   /** `false` when the index already held this identity, which is not an error. */
   created: boolean;
 
+  /**
+   * For a repository sync: `true` when the lineage's newest version already
+   * has this identity, so nothing was written.
+   */
+  unchanged?: boolean;
+
   /** Request fields this deployment no longer stores and dropped. */
   ignored?: readonly string[];
+
+  /**
+   * The version recorded, or the head that already had this source. Absent
+   * from deployments that predate private versions.
+   */
+  versionId?: string;
+  lineageId?: string;
+  seq?: number;
+
+  /**
+   * Who may read the new version. A repository sync's version is
+   * `published`, unless the same source is already public under someone
+   * else, when it is `private`.
+   */
+  visibility?: PatternIndexVisibility;
+  share?: PatternIndexShareState;
+
+  /** What the index did about sharing it, and why where it did not. */
+  autoShare?: PatternIndexAutoShare;
+  reason?: string;
 }
 
 /** An owner's request that a pattern be considered for discovery. */
@@ -734,6 +1217,21 @@ export class PatternIndexError extends Error {
       this.retryAt = retryAt;
     }
   }
+
+  /**
+   * A 2xx answer this client cannot read. `problem` is the client's own
+   * account of what is wrong, naming fields and never quoting the answer, so
+   * unlike a service's `detail` it is part of `message`.
+   */
+  static malformed(
+    fn: string,
+    status: number,
+    problem: string,
+  ): PatternIndexError {
+    const error = new PatternIndexError(fn, status);
+    error.message = `pattern index ${fn} answer is malformed: ${problem}`;
+    return error;
+  }
 }
 
 export interface PatternIndexClientOptions {
@@ -749,6 +1247,17 @@ export interface PatternIndexClientOptions {
    * signer is its own root.
    */
   proofs?: readonly string[];
+
+  /**
+   * Mints a GitHub Actions OIDC token whose audience is
+   * `pattern-index:<index host>:<signer DID>`, sent inside every signed call.
+   * The host keeps a token minted for one index deployment from being
+   * accepted by another, and the DID binds it to this client's signer. It makes the signer act for the brand that
+   * owns the token's repository; `github-oidc.ts` says how the token is
+   * minted. Called once per call, since a token lives only minutes and a
+   * sync can run longer.
+   */
+  githubOidc?: () => Promise<string>;
 }
 
 /** A JSON object's own property, or `undefined` for anything else. */
@@ -756,6 +1265,44 @@ const ownField = (value: unknown, key: string): unknown =>
   isObjectOrArray(value) && !Array.isArray(value)
     ? Object.getOwnPropertyDescriptor(value, key)?.value
     : undefined;
+
+/**
+ * What keeps `program` from being a {@link PatternIndexProgram}, or
+ * `undefined` when nothing does, as when there is no program at all. Names
+ * fields, never their values, so the answer is safe to show whoever asked.
+ */
+const programProblem = (program: unknown): string | undefined => {
+  if (program === undefined) return undefined;
+  if (!isObjectNotArray(program)) {
+    return "program is not an object";
+  }
+  if (typeof ownField(program, "main") !== "string") {
+    return "program.main is not a string";
+  }
+  const mainExport = ownField(program, "mainExport");
+  if (mainExport !== undefined && typeof mainExport !== "string") {
+    return "program.mainExport is not a string";
+  }
+  const files = ownField(program, "files");
+  if (!Array.isArray(files)) return "program.files is not an array";
+  for (const [index, file] of files.entries()) {
+    for (const key of ["name", "contents"]) {
+      if (typeof ownField(file, key) !== "string") {
+        return `program.files[${index}].${key} is not a string`;
+      }
+    }
+  }
+  for (const key of ["sourceRoots", "dataFiles"]) {
+    const list = ownField(program, key);
+    if (
+      list !== undefined &&
+      !(Array.isArray(list) && list.every((entry) => typeof entry === "string"))
+    ) {
+      return `program.${key} is not an array of strings`;
+    }
+  }
+  return undefined;
+};
 
 /**
  * Joins an index function onto the configured base, keeping every segment the
@@ -771,6 +1318,7 @@ export class PatternIndexClient {
   readonly #fetchFn: PatternIndexFetch;
   readonly #signer: FirstPartyHttpSigner;
   readonly #proofs?: readonly string[];
+  readonly #githubOidc?: () => Promise<string>;
 
   constructor(options: PatternIndexClientOptions) {
     // The function name is appended to the base's path, so a base carrying a
@@ -800,6 +1348,7 @@ export class PatternIndexClient {
       // A copy, so the caller's later edits never change what is sent.
       this.#proofs = [...options.proofs];
     }
+    this.#githubOidc = options.githubOidc;
   }
 
   /**
@@ -814,18 +1363,24 @@ export class PatternIndexClient {
    * Posts `payload` to one index function and returns its parsed answer.
    *
    * @throws PatternIndexError when the index answers non-2xx, or when a 2xx
-   * answer does not parse as JSON — a body the caller cannot read is a
-   * failure of the call rather than a result.
+   * answer does not parse as JSON or `problem` finds fault with it — a body
+   * the caller cannot read is a failure of the call rather than a result.
    */
-  async #call<T>(fn: string, payload: Record<string, unknown>): Promise<T> {
+  async #call<T>(
+    fn: string,
+    payload: Record<string, unknown>,
+    problem?: (answer: unknown) => string | undefined,
+  ): Promise<T> {
     const url = functionUrl(this.#baseUrl, fn);
     // The proof commits to the body hash, so the bytes signed and the bytes
     // sent must be identical — serialize once.
-    const body = JSON.stringify(
-      this.#proofs === undefined
-        ? payload
-        : { ...payload, proofs: [...this.#proofs] },
-    );
+    const body = JSON.stringify({
+      ...payload,
+      ...(this.#proofs === undefined ? {} : { proofs: [...this.#proofs] }),
+      ...(this.#githubOidc === undefined
+        ? {}
+        : { githubOidc: await this.#githubOidc() }),
+    });
     const headers = await signFirstPartyHttpRequest({
       url,
       method: "POST",
@@ -838,11 +1393,15 @@ export class PatternIndexClient {
       headers,
       body,
     });
-    return await this.#readResponse<T>(fn, response);
+    return await this.#readResponse<T>(fn, response, problem);
   }
 
   /** Parses a service response while keeping its failure detail artifact-only. */
-  async #readResponse<T>(fn: string, response: Response): Promise<T> {
+  async #readResponse<T>(
+    fn: string,
+    response: Response,
+    problem?: (answer: unknown) => string | undefined,
+  ): Promise<T> {
     const text = await response.text();
     let parsed: unknown;
     try {
@@ -863,12 +1422,9 @@ export class PatternIndexClient {
         typeof resetsAt === "string" ? resetsAt : undefined,
       );
     }
-    if (parsed === undefined) {
-      throw new PatternIndexError(
-        fn,
-        response.status,
-        "answer was not JSON",
-      );
+    const fault = parsed === undefined ? "it is not JSON" : problem?.(parsed);
+    if (fault !== undefined) {
+      throw PatternIndexError.malformed(fn, response.status, fault);
     }
     return parsed as T;
   }
@@ -905,13 +1461,23 @@ export class PatternIndexClient {
     });
   }
 
+  /**
+   * Reads one pattern, with its program when `includeSource` asks for it.
+   *
+   * @throws PatternIndexError when the answer carries a program without the
+   * shape of a {@link PatternIndexProgram}, naming what is missing.
+   */
   getPattern(request: PatternIndexGetRequest): Promise<PatternIndexPattern> {
-    return this.#call<PatternIndexPattern>("getPattern", {
-      patternId: request.patternId,
-      ...(request.includeSource !== undefined
-        ? { includeSource: request.includeSource }
-        : {}),
-    });
+    return this.#call<PatternIndexPattern>(
+      "getPattern",
+      {
+        patternId: request.patternId,
+        ...(request.includeSource !== undefined
+          ? { includeSource: request.includeSource }
+          : {}),
+      },
+      (answer) => programProblem(ownField(answer, "program")),
+    );
   }
 
   /**
@@ -970,9 +1536,19 @@ export class PatternIndexClient {
     });
   }
 
-  publishPattern(
+  async publishPattern(
     request: PatternIndexPublishRequest,
   ): Promise<PatternIndexPublishResponse> {
+    // The index places a synced version in its path's lineage itself.
+    if (
+      request.source !== undefined &&
+      (request.priorPatternId !== undefined ||
+        request.lineageId !== undefined || request.slot !== undefined)
+    ) {
+      throw new Error(
+        "a publish with a repository source names no predecessor, lineage or slot",
+      );
+    }
     const schemas = {
       ...(request.argumentSchema !== undefined
         ? { argumentSchema: request.argumentSchema }
@@ -981,7 +1557,7 @@ export class PatternIndexClient {
         ? { resultSchema: request.resultSchema }
         : {}),
     };
-    return this.#call<PatternIndexPublishResponse>("publishPattern", {
+    return await this.#call<PatternIndexPublishResponse>("publishPattern", {
       patternId: request.patternId,
       program: request.program,
       meta: {
@@ -1012,17 +1588,63 @@ export class PatternIndexClient {
       ...(request.remixedFrom !== undefined
         ? { remixedFrom: request.remixedFrom }
         : {}),
+      ...(request.source !== undefined ? { source: request.source } : {}),
+      ...(request.lineageId !== undefined
+        ? { lineageId: request.lineageId }
+        : {}),
+      ...(request.slot !== undefined ? { slot: request.slot } : {}),
+      ...(request.origin !== undefined ? { origin: request.origin } : {}),
+      ...(request.keepPrivate === true ? { keepPrivate: true } : {}),
+      ...(request.deployedTo !== undefined
+        ? { deployedTo: pieceRef("deployedTo", request.deployedTo) }
+        : {}),
     });
+  }
+
+  /** Withdraws the lineages of repository paths that are gone. */
+  withdrawRepoPaths(
+    request: PatternIndexWithdrawRepoPathsRequest,
+  ): Promise<PatternIndexWithdrawRepoPathsResponse> {
+    return this.#call(
+      "withdrawRepoPaths",
+      { ...request, paths: [...request.paths] },
+      (answer) =>
+        Array.isArray(ownField(answer, "withdrawn"))
+          ? undefined
+          : "withdrawn is not an array",
+    );
+  }
+
+  /** Reads the newest version of every lineage a repository holds. */
+  listRepoHeads(
+    request: PatternIndexListRepoHeadsRequest,
+  ): Promise<PatternIndexListRepoHeadsResponse> {
+    return this.#call(
+      "listRepoHeads",
+      { ...request },
+      (answer) =>
+        Array.isArray(ownField(answer, "heads"))
+          ? undefined
+          : "heads is not an array",
+    );
   }
 
   /**
    * Reports what a person did with a pattern in their loom. Only Loom calls
-   * this; a harness or agent run never does.
+   * this; a harness or agent run never does. The index takes it through the
+   * same function as a run's outcome, which is why the two are kept apart
+   * here by type.
    */
-  recordUsageEvent(
+  async recordUsageEvent(
     request: PatternIndexRecordUsageEventRequest,
   ): Promise<PatternIndexRecordEventResponse> {
-    return this.#call("recordUsageEvent", { ...request });
+    return await this.#call("recordEvent", {
+      ...(request.patternId !== undefined
+        ? { patternId: request.patternId }
+        : { piece: pieceRef("piece", request.piece) }),
+      eventType: request.eventType,
+      did: this.did,
+    });
   }
 
   /** Asks that an owned pattern be checked and, if it passes, listed. */
@@ -1101,5 +1723,101 @@ export class PatternIndexClient {
     request: PatternIndexSetFeaturedRequest,
   ): Promise<PatternIndexSetFeaturedResponse> {
     return this.#call("setPatternFeatured", { ...request });
+  }
+
+  /** The caller's lineages, newest head first. */
+  listLineages(): Promise<PatternIndexListLineagesResponse> {
+    return this.#call("listLineages", {});
+  }
+
+  /** Every version of one of the caller's lineages, newest first. */
+  listVersions(
+    request: { lineageId: string },
+  ): Promise<PatternIndexListVersionsResponse> {
+    return this.#call("listVersions", { ...request });
+  }
+
+  /** One of the caller's versions, with its source when asked. */
+  getVersion(
+    request: PatternIndexGetVersionRequest,
+  ): Promise<PatternIndexVersion> {
+    return this.#call("getVersion", { ...request });
+  }
+
+  /**
+   * Makes an earlier version's source the lineage's head again, as a new
+   * version; shared by the same rule as any update.
+   */
+  rollback(
+    request: PatternIndexRollbackRequest,
+  ): Promise<PatternIndexPublishResponse> {
+    return this.#call("rollback", { ...request });
+  }
+
+  /** Asks that one of the caller's versions be checked and shared anonymously. */
+  shareVersion(
+    request: { versionId: string },
+  ): Promise<PatternIndexShareVersionResponse> {
+    return this.#call("shareVersion", { ...request });
+  }
+
+  /** Names the caller as the author of one lineage, under their profile. */
+  publishLineage(
+    request: PatternIndexPublishLineageRequest,
+  ): Promise<PatternIndexPublishLineageResponse> {
+    return this.#call("publishLineage", {
+      ...request,
+      profileProof: [...request.profileProof],
+    });
+  }
+
+  /**
+   * Takes one of the caller's lineages out of listing and stops sharing it
+   * on its own; what was exposed stays readable by id. A later
+   * `shareVersion` shares it again.
+   */
+  unshareLineage(
+    request: { lineageId: string },
+  ): Promise<PatternIndexUnshareLineageResponse> {
+    return this.#call("unshareLineage", { ...request });
+  }
+
+  /**
+   * Deletes one of the caller's versions. A version already exposed stays
+   * readable by id; one being checked to share is dropped.
+   */
+  deleteVersion(
+    request: { versionId: string },
+  ): Promise<PatternIndexDeleteVersionResponse> {
+    return this.#call("deleteVersion", { ...request });
+  }
+
+  /**
+   * Deletes one of the caller's lineages and its versions. Versions already
+   * exposed stay readable by id, unlisted.
+   */
+  deleteLineage(
+    request: { lineageId: string },
+  ): Promise<PatternIndexDeleteLineageResponse> {
+    return this.#call("deleteLineage", { ...request });
+  }
+
+  /** Stops naming the caller on a lineage from now on. */
+  unpublishLineage(
+    request: { lineageId: string },
+  ): Promise<PatternIndexUnpublishLineageResponse> {
+    return this.#call("unpublishLineage", { ...request });
+  }
+
+  /** The caller's give-to-get setting. */
+  getSharingSettings(): Promise<PatternIndexSharingSettings> {
+    return this.#call("getSharingSettings", {});
+  }
+
+  /** Changes the caller's give-to-get setting. */
+  setSharingSettings(
+    request: PatternIndexSetSharingSettingsRequest,
+  ): Promise<PatternIndexSharingSettings> {
+    return this.#call("setSharingSettings", { ...request });
   }
 }

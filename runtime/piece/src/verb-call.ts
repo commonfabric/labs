@@ -23,6 +23,7 @@ import {
   type NormalizedFullLink,
   type Runtime,
   sendEvent,
+  startWithInputSources,
   transactionFailureMessage,
 } from "@commonfabric/runner";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
@@ -362,8 +363,9 @@ const isValueLessReceipt = (raw: unknown): boolean =>
  * converts to the link the verb stores. A name that is not a verb, and an
  * event the gate refuses, are refused before anything is sent.
  *
- * The piece is started in `runtime` if it is not running, and the handling
- * runs there. With an `invocation`, a retry naming the same pair settles on
+ * The piece is started in `runtime` if it is not running, after the pieces
+ * that enclose it (`startWithInputSources()`), and the handling runs
+ * there. With an `invocation`, a retry naming the same pair settles on
  * the original outcome rather than committing twice.
  */
 export async function callVerb(
@@ -407,7 +409,7 @@ export async function callVerb(
     };
   }
 
-  if (!await runtime.start(cell)) {
+  if (!await startWithInputSources(runtime, cell, () => runtime.start(cell))) {
     return {
       status: "refused",
       message:

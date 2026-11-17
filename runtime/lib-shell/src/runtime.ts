@@ -28,6 +28,7 @@ import {
 } from "@commonfabric/runtime-client";
 import { WebWorkerRuntimeTransport } from "@commonfabric/runtime-client/transports/web-worker";
 import { getLogger } from "@commonfabric/logger";
+import { readBuildHash } from "./build-hash.ts";
 
 const logger = getLogger("lib-shell.runtime", {
   enabled: false,
@@ -249,24 +250,7 @@ let buildHashPromise: Promise<string | undefined> | undefined;
  * fetched at most once.
  */
 export function fetchBuildHash(): Promise<string | undefined> {
-  if (!buildHashPromise) {
-    buildHashPromise = (async () => {
-      try {
-        const resp = await fetch(
-          new URL("/build-manifest.json", globalThis.location.origin),
-          { cache: "no-store" },
-        );
-        if (resp.ok) {
-          const manifest = await resp.json();
-          // Key must match the worker entry's `out` path in felt.config.ts.
-          return manifest["scripts/worker-runtime.js"] as string | undefined;
-        }
-      } catch {
-        // Manifest not available — compilation cache disabled
-      }
-      return undefined;
-    })();
-  }
+  buildHashPromise ??= readBuildHash();
   return buildHashPromise;
 }
 
@@ -598,11 +582,7 @@ export class RuntimeInternals extends EventTarget {
     options?: { argument?: FabricPlainObject; run?: boolean; cause?: string },
   ): Promise<PieceHandle<T>> {
     this.#check();
-    const piece = await this.#client.createPiece<T>(source, space, options);
-    if (!piece) {
-      throw new Error("Could not create piece");
-    }
-    return piece;
+    return await this.#client.createPiece<T>(source, space, options);
   }
 
   /**
@@ -787,9 +767,7 @@ export class RuntimeInternals extends EventTarget {
   #dropPattern(space: DID, scope: CellScope, id: string): void {
     const byScope = this.#patternCache.get(space);
     const byId = byScope?.get(scope);
-    if (!byScope || !byId) return;
-    byId.delete(id);
-    if (byId.size > 0) return;
+    if (!byScope || !byId?.delete(id) || byId.size > 0) return;
     byScope.delete(scope);
     if (byScope.size === 0) this.#patternCache.delete(space);
   }

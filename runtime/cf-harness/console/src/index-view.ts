@@ -80,9 +80,6 @@ export class ConsoleIndexView extends LitElement {
 
   #refreshes = 0;
 
-  /** Which search is current, for the same reason. */
-  #searches = 0;
-
   constructor() {
     super();
     this.patterns = [];
@@ -147,7 +144,9 @@ export class ConsoleIndexView extends LitElement {
   }
 
   async #runSearch(): Promise<void> {
-    // The disabled binding lands on the next render, not on the click.
+    // One search at a time, so an older answer cannot land over a newer one.
+    // The disabled binding lands on the next render, not on the click, so the
+    // click is refused here as well.
     if (this.searching) return;
     const field = (id: string): string =>
       (this.querySelector(`#${id}`) as HTMLInputElement | null)?.value ?? "";
@@ -156,26 +155,16 @@ export class ConsoleIndexView extends LitElement {
       field("index-text"),
       field("index-limit"),
     );
-    const run = ++this.#searches;
     this.searchRequest = prettyJson(request);
     this.searching = true;
     try {
-      const response = await searchIndexPatterns(request);
-      if (run !== this.#searches) {
-        return;
-      }
-      this.searchResults = response.results;
+      this.searchResults = (await searchIndexPatterns(request)).results;
       this.searchError = undefined;
     } catch (error) {
-      if (run !== this.#searches) {
-        return;
-      }
       this.searchError = describeFailure(error);
       this.searchResults = undefined;
     } finally {
-      if (run === this.#searches) {
-        this.searching = false;
-      }
+      this.searching = false;
     }
   }
 

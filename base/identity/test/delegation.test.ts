@@ -120,6 +120,96 @@ Deno.test("issueDelegation() throws for a command that is not a path", async () 
   ).rejects.toThrow(DelegationError);
 });
 
+Deno.test("issueDelegation() throws a `DelegationError` naming a field that is not an ed25519 did:key", async () => {
+  const issueWith = (extra: object) =>
+    issueDelegation(profile, {
+      aud: core.did(),
+      sub: profile.did(),
+      cmd: "/memory",
+      pol: [],
+      ...extra,
+    });
+  const notEd25519 =
+    "did:key:z6DtMrg4Kv51UMAM8vJcCLcRywJfEB4dpHVxPCR6qm6hSV3N" as const;
+
+  await expect(issueWith({ aud: notEd25519 })).rejects.toThrow(
+    "aud is not an ed25519 did:key",
+  );
+  await expect(issueWith({ sub: notEd25519 })).rejects.toThrow(
+    "sub is not an ed25519 did:key or null",
+  );
+});
+
+Deno.test("issueDelegation() throws a `DelegationError` for an empty nonce or a non-empty policy", async () => {
+  const issueWith = (extra: object) =>
+    issueDelegation(profile, {
+      aud: core.did(),
+      sub: profile.did(),
+      cmd: "/memory",
+      pol: [],
+      ...extra,
+    });
+
+  await expect(issueWith({ nonce: new Uint8Array() })).rejects.toThrow(
+    "nonce is empty",
+  );
+  await expect(issueWith({ pol: [["==", ".x", 1]] })).rejects.toThrow(
+    "pol is not empty",
+  );
+});
+
+Deno.test("issueDelegation() throws the error its signer fails with", async () => {
+  const failure = new Error("the signer is gone");
+  const failing = {
+    did: () => profile.did(),
+    verifier: profile.verifier,
+    keyPair: profile.keyPair,
+    sign: () => Promise.resolve({ error: failure }),
+  };
+
+  await expect(
+    issueDelegation(failing, {
+      aud: core.did(),
+      sub: profile.did(),
+      cmd: "/memory",
+      pol: [],
+    }),
+  ).rejects.toBe(failure);
+});
+
+Deno.test("decodeDelegation() throws for an envelope that is not a signature and a payload", async () => {
+  const signed = { h: ED25519_DAG_CBOR_VARSIG, [DELEGATION_TAG]: fields() };
+  for (
+    const value of [
+      {},
+      [VECTOR.bytes.slice(3, 67)],
+      [VECTOR.bytes.slice(3, 67), signed, null],
+    ]
+  ) {
+    await expect(decodeDelegation(encodeDagCbor(value))).rejects.toThrow(
+      "envelope is not a two-element array",
+    );
+  }
+  await expect(decodeDelegation(encodeDagCbor(["signature", signed])))
+    .rejects.toThrow("envelope signature is not bytes");
+});
+
+Deno.test("decodeDelegation() throws for a field of the wrong kind", async () => {
+  const wrongKinds: { [key: string]: DagCborValue }[] = [
+    { iss: 7 },
+    { sub: 7 },
+    { pol: {} },
+    { nonce: "nonce" },
+    { exp: "never" },
+    { nbf: "now" },
+  ];
+  for (const extra of wrongKinds) {
+    await expect(decodeDelegation(envelope(fields(extra)))).rejects.toThrow(
+      "delegation payload has a field of the wrong kind",
+    );
+  }
+});
+
 Deno.test("decodeDelegation() returns the signed fields of the pinned bytes", async () => {
   const delegation = await decodeDelegation(VECTOR.bytes);
   expect(delegation.payload).toEqual({

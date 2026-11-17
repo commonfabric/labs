@@ -408,52 +408,59 @@ Deno.test("Claude rejects a second prompt while resolving session metadata", asy
 });
 
 Deno.test("Claude cancels a prompt while resolving session metadata", async () => {
-  let releaseLookup!: () => void;
-  const lookupBlocked = new Promise<void>((resolve) => releaseLookup = resolve);
-  let markLookupStarted!: () => void;
-  const lookupStarted = new Promise<void>((resolve) =>
-    markLookupStarted = resolve
-  );
-  let queryCalled = false;
-  const sdk = {
-    getSessionInfo: async () => {
-      markLookupStarted();
-      await lookupBlocked;
-      return {
-        sessionId: "session-1",
-        summary: "First task",
-        cwd: "/session/worktree",
-        createdAt: 1_000,
-        lastModified: 2_000,
-      };
-    },
-    query: () => {
-      queryCalled = true;
-      return fakeQuery([]);
-    },
-  } as unknown as ClaudeSdkAdapter;
-  const driver = new ClaudeAgentSdkDriver(
-    { id: "claude-code:default", driver: "claude-agent-sdk", enabled: true },
-    sdk,
-  );
-  let cancellationReadyCalls = 0;
-
-  try {
-    const prompt = driver.prompt("session-1", { text: "continue" }, {
-      onCancellationReady: () => {
-        cancellationReadyCalls++;
+  // The cancellation wins over the lookup's answer, whether it resolves or
+  // rejects.
+  for (const lookupRejects of [false, true]) {
+    let releaseLookup!: () => void;
+    const lookupBlocked = new Promise<void>((resolve) =>
+      releaseLookup = resolve
+    );
+    let markLookupStarted!: () => void;
+    const lookupStarted = new Promise<void>((resolve) =>
+      markLookupStarted = resolve
+    );
+    let queryCalled = false;
+    const sdk = {
+      getSessionInfo: async () => {
+        markLookupStarted();
+        await lookupBlocked;
+        if (lookupRejects) throw new Error("metadata unavailable");
+        return {
+          sessionId: "session-1",
+          summary: "First task",
+          cwd: "/session/worktree",
+          createdAt: 1_000,
+          lastModified: 2_000,
+        };
       },
-    });
-    await lookupStarted;
-    assertEquals(cancellationReadyCalls, 1);
-    assertEquals((await driver.cancel("session-1")).status, "succeeded");
-    releaseLookup();
-    const result = await prompt;
-    assertEquals(result.status, "failed");
-    assertEquals(result.error?.code, "cancelled");
-    assertEquals(queryCalled, false);
-  } finally {
-    releaseLookup();
+      query: () => {
+        queryCalled = true;
+        return fakeQuery([]);
+      },
+    } as unknown as ClaudeSdkAdapter;
+    const driver = new ClaudeAgentSdkDriver(
+      { id: "claude-code:default", driver: "claude-agent-sdk", enabled: true },
+      sdk,
+    );
+    let cancellationReadyCalls = 0;
+
+    try {
+      const prompt = driver.prompt("session-1", { text: "continue" }, {
+        onCancellationReady: () => {
+          cancellationReadyCalls++;
+        },
+      });
+      await lookupStarted;
+      assertEquals(cancellationReadyCalls, 1);
+      assertEquals((await driver.cancel("session-1")).status, "succeeded");
+      releaseLookup();
+      const result = await prompt;
+      assertEquals(result.status, "failed", String(lookupRejects));
+      assertEquals(result.error?.code, "cancelled", String(lookupRejects));
+      assertEquals(queryCalled, false);
+    } finally {
+      releaseLookup();
+    }
   }
 });
 
@@ -825,7 +832,7 @@ Deno.test("Claude driver handles message, cursor, and live control edges", async
       Promise.resolve([{
         type: "future",
         uuid: "nested",
-        message: { content: ["one", { text: "two" }, null] },
+        message: { content: ["one", { text: "two" }, { type: "image" }, null] },
       }]),
     renameSession: () => Promise.resolve(),
     query: () => query,

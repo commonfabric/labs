@@ -161,6 +161,13 @@ describe("BaseFabricPrimitive", () => {
         expect(BaseFabricPrimitive.isInstance([])).toBe(false);
       });
 
+      it("returns `false` for a function on a primitive's prototype chain", () => {
+        const fn = Object.setPrototypeOf(() => {}, FabricEpochDay.prototype);
+
+        expect(fn instanceof FabricPrimitive).toBe(true);
+        expect(BaseFabricPrimitive.isInstance(fn)).toBe(false);
+      });
+
       it("throws for a `FabricPrimitive` that is not a `BaseFabricPrimitive`", () => {
         expect(() => BaseFabricPrimitive.isInstance(new RoguePrimitive()))
           .toThrow("counterfeit");

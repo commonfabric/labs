@@ -120,6 +120,7 @@ type TransportPlane = Extract<
 type MirroredSession = {
   principal: string | undefined;
   servingOwn?: true;
+  notDemand?: true;
   readCeiling: SessionReadCeiling | undefined;
   expiresAt: number | null;
 };
@@ -152,6 +153,7 @@ class SessionMirror {
         sessions.set(event.sessionId, {
           principal: event.principal,
           ...(event.servingOwn === true ? { servingOwn: true } : {}),
+          ...(event.notDemand === true ? { notDemand: true } : {}),
           readCeiling: event.readCeiling,
           expiresAt: null,
         });
@@ -644,7 +646,7 @@ export class ServingPlane {
     });
     endpoint.onNotice(
       "observer.demandChanged",
-      ({ space, reason, principal, sessionId, servingOwn }) => {
+      ({ space, reason, principal, sessionId, servingOwn, notDemand }) => {
         this.#demandShares.noteChanged(space, sessionId);
         this.#observer?.demandChanged?.(
           space,
@@ -652,6 +654,7 @@ export class ServingPlane {
           principal,
           sessionId,
           servingOwn,
+          notDemand,
         );
       },
     );

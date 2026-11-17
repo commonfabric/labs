@@ -1,4 +1,6 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
 import { OpenAICompatibleGatewayClient } from "../src/gateway/openai-client.ts";
 import {
   compactThresholdForBudget,
@@ -222,7 +224,6 @@ Deno.test("pruning drops superseded turns but keeps tool pairs intact", async ()
     compactedTranscript(),
     MODEL,
     PROVIDER,
-    "gateway Responses",
     undefined,
     "drop",
   );
@@ -258,7 +259,6 @@ Deno.test("the boundary's compaction item is emitted exactly once", async () => 
     compactedTranscript(),
     MODEL,
     PROVIDER,
-    "gateway Responses",
     undefined,
     "drop",
   );
@@ -277,7 +277,6 @@ Deno.test("a transcript with no compaction is unchanged", async () => {
     plain,
     MODEL,
     PROVIDER,
-    "gateway Responses",
     undefined,
     "drop",
   );
@@ -296,7 +295,6 @@ Deno.test("a compaction from another model is not replayed", async () => {
     foreign,
     MODEL,
     PROVIDER,
-    "gateway Responses",
     undefined,
     "drop",
   );
@@ -560,4 +558,100 @@ Deno.test("continuationOutput replays nothing from a continuation of an unknown 
       [],
     );
   }
+});
+
+describe("openai-compatible-gateway", () => {
+  describe("OpenAICompatibleGatewayModelClient", () => {
+    describe("complete() budget discovery floor", () => {
+      // The floor is 200,000 UTF-8 bytes of rendered input, counted without
+      // encoding it. Each case sits just above or just below it.
+
+      const discoveredUrls = async (
+        overrides: Partial<HarnessModelTurnRequest>,
+      ): Promise<string[]> => {
+        const urls: string[] = [];
+        const client = new OpenAICompatibleGatewayModelClient(
+          new OpenAICompatibleGatewayClient({
+            baseUrl: GATEWAY,
+            authMode: "none",
+            fetchFn: (input) => {
+              const path = new URL(String(input)).pathname;
+              urls.push(path);
+              return Promise.resolve(Response.json(
+                path === "/v1/models"
+                  ? registry([{
+                    id: MODEL,
+                    capabilities: {
+                      contextWindow: 1_050_000,
+                      maxOutputTokens: 128_000,
+                    },
+                  }])
+                  : completed([]),
+              ));
+            },
+          }),
+        );
+        await client.complete(turn(overrides));
+        return urls;
+      };
+
+      const userText = (content: string): HarnessTranscriptMessage[] => [
+        { role: "user", content },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [{
+            id: "call-empty",
+            type: "function",
+            function: { name: "read_file", arguments: "{}" },
+          }],
+        },
+        {
+          role: "tool",
+          toolCallId: "call-empty",
+          toolName: "read_file",
+          content: "",
+        },
+      ];
+
+      it("counts two bytes for each two-byte character", async () => {
+        expect(
+          await discoveredUrls({ transcript: userText("é".repeat(100_000)) }),
+        ).toEqual(["/v1/models", "/v1/responses"]);
+        expect(
+          await discoveredUrls({ transcript: userText("é".repeat(99_000)) }),
+        ).toEqual(["/v1/responses"]);
+      });
+
+      it("counts four bytes for each character outside the BMP", async () => {
+        // Each emoji is two UTF-16 code units but one four-byte character.
+        expect(
+          await discoveredUrls({ transcript: userText("😀".repeat(50_000)) }),
+        ).toEqual(["/v1/models", "/v1/responses"]);
+        expect(
+          await discoveredUrls({ transcript: userText("😀".repeat(49_000)) }),
+        ).toEqual(["/v1/responses"]);
+      });
+
+      it("counts the property names of tool schemas", async () => {
+        const schemaTool = (propertyName: string) => ({
+          toolId: "write_file",
+          title: "Write file",
+          description: "Write a file",
+          effectClass: "write" as const,
+          inputSchema: {
+            type: "object" as const,
+            properties: { [propertyName]: { type: "string" as const } },
+          },
+        });
+
+        expect(
+          await discoveredUrls({ tools: [schemaTool("k".repeat(200_000))] }),
+        ).toEqual(["/v1/models", "/v1/responses"]);
+        expect(
+          await discoveredUrls({ tools: [schemaTool("k".repeat(190_000))] }),
+        ).toEqual(["/v1/responses"]);
+      });
+    });
+  });
 });

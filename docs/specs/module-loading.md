@@ -22,7 +22,7 @@ and replication use the empty runtime fingerprint until that provider is enabled
 
 ## Last Updated
 
-2026-07-30
+2026-11-13
 
 ## Summary
 
@@ -321,7 +321,8 @@ hash with the tag `cf/executable-runtime-fingerprint/v1`. The hash includes:
 
 - the compiler-input fingerprint (`computeCompilerFingerprint()` in
   `compiler-fingerprint.deno.ts`);
-- [`schedulerRuntimeFingerprint()`][c12];
+- a scheduler-semantics version, defined alongside the provider and changed
+  with every change to how the scheduler runs a pattern's actions;
 - an automatically generated catalog hash of the implementations and export
   surfaces of every pattern-facing runtime module; and
 - an automatically generated catalog hash of the sandbox and execution-policy
@@ -916,6 +917,11 @@ cell's contents. The cache is designed around this:
   piece's source transition among them. Each cache write therefore records a
   `runtime.undeclarable-store` marker naming its document
   (`recordUndeclarablePolicyStore`), and the check skips the ceiling there.
+  The marker covers only what a builtin wrote: a write of the record under
+  any other identity in the same transaction, or an unmarked one on the
+  storage transaction beneath, is measured as any writer's is, whatever the
+  cache writes after it. Code holding the transaction object can still write
+  around that record (`cfc-enforcement-matrix.md` §4).
   The skip is scoped to a join the target's own space produced: where a clause
   reached the join from another space, the cache write is measured like any
   other, so a compile cannot carry a foreign space's labeled value into a
@@ -925,6 +931,80 @@ cell's contents. The cache is designed around this:
   which CFC leaves out of the flow join on both sides, so what a stamp can
   reach is the compiler's bookkeeping beside them. `cfc-enforcement-matrix.md`
   §4 carries the reasoning, including where this stops short of spec §18.6.2.
+- **Repairing a stamped record.** A runtime that staged a source update's
+  delegations in the update's own transaction left the piece data's label on
+  the successor's records, and every later setup that reads one consumes the
+  label and is refused as a writer-fit misfit. The load ahead of a setup
+  repairs them: `PatternManager.prepareSourceClosureVerification()` runs
+  `repairCompileCacheStamps()` for each closure it prepares, and the setup
+  then reads the records unlabeled.
+  - It verifies the closure in a transaction of its own and aborts it. The
+    repair's transaction reads each record it writes whole, and refuses to
+    write if any changed since. The source record of each module whose
+    compiled record it erases guards the erase: it is read as the verifier
+    reads, so its label flows nowhere, and the read still refuses the commit
+    if the record changed. The transaction reads and writes nothing else but
+    content-addressed documents, is refused if it is CFC-relevant, and
+    commits with no explicit preparation, refused if its commit would prepare
+    it.
+  - A stamped compiled record is erased, value and label together, and the
+    next load compiles it again. It is left, and the closure refused, where
+    its attested delegation list names an identity the source record's
+    attested list does not, or is stored as anything but an inline list of
+    identities.
+  - A stamped source record is rewritten to the value the compile-cache
+    writer stores for its identity, computed from the verified closure: its
+    code, filename, the authored edges a scan of its code yields in scan
+    order, its source-root and data-file edges ordered by specifier and
+    identity, on the closure's entry only a cache-root edge per other module
+    of the closure it linked, and its delegation list where its own label
+    attests it in an entry the repair keeps. Its new label is
+    that attestation alone; every `derived` and `structure` entry goes,
+    existence entries included.
+  - Each member is read at the document its own identity keys, an edge that
+    lands anywhere else refuses the closure, the list is taken only from the
+    record's own document, and no attestation is added. A record holding
+    annotations, a field the cache writer does not write, code its identity
+    does not hash unchanged, a clause outside a stamp entry, or a
+    label-metadata template its entries do not derive is refused. So is a
+    source record whose stamp entry holds the compiler's attestation at its
+    list, or that holds any entry outside a stamp entry other than that
+    attestation over a non-empty list of identities, and a closure a
+    member's dropped cache-root edges were the only way to reach.
+  - The write takes the `compile-cache-repair` builtin identity and a
+    compile-cache record's key (`writeRepairedCompileCacheRecord()`). A
+    session that may not write the space is refused at the commit, and its
+    setup is refused as before. A clean closure costs a read of its labels,
+    and a sync of each member's compiled record, in the transaction that
+    already loaded it.
+  - A refused closure is not tried again in the session. One whose commit lost a
+    race, was refused for want of write access, or failed for another reason is
+    tried again at the next load: a session that may only read the space
+    verifies the closure again at each load of it, about 40 to 50 ms for a
+    28-module closure. A module that is a non-entry member of one closure and
+    the entry of another is repaired with its own cache-root edges only through
+    the closure it enters: a test program's closure verified before its page's
+    is refused when the page's dropped edges were the only way to reach a
+    member, and is clean once the page's closure is repaired.
+  - Not repaired: a stamped compiled record of a module the source closure
+    does not reach, such as a `fabric:` dependency the compiled closure
+    links, is neither checked nor erased. A setup of its importer still
+    commits, since a setup reads source records only, but a write-back of the
+    importer that reads it re-stamps the importer's compiled record, which
+    the next load erases again. On a serving runtime, a closure in a space
+    other than the one it serves is not repaired, since a direct commit
+    there may write only the served space; that setup is refused as before,
+    and the closure is tried again at its next load.
+  - The loads that run it are each creation's and each source transition's
+    preparation, ahead of the transaction that verifies the closure: a served
+    instantiation, a controller's creation, the children a handler returns,
+    and a supplied source compiled into a space for a wish's sidecar, which
+    the sidecar's creation in the wish's own transaction then reads. A
+    supplied source is compiled once per space in a session, so a record an
+    older runtime stamps again later in that session is not repaired before
+    the next sidecar created from it. Not repaired first: a child a
+    pattern's own graph places in another space, whose closure no load
+    prepares there. Its creation reads a stamped record as before.
 - **Fail-closed, not fail-hard.** A compiled document with a missing or invalid
   integrity label is treated as a **cache miss** and recompiled from the
   (self-verifying) source set, which re-runs the SES verifier. So the verifier
@@ -943,7 +1023,9 @@ cell's contents. The cache is designed around this:
   shared space reads one cache (a per-user stamp made every other member a
   permanent miss and made their write-backs collide on the label merge). Minting
   is gated — prepare strips `cf-compiled-by:` atoms from any write not authored
-  by a trusted builtin — so pattern code cannot stamp a forged doc. While
+  by a trusted builtin, and at any path a write by another identity in the same
+  transaction reached — so pattern code cannot stamp a forged doc, nor keep
+  the stamp over a value it chose, before or after the cache writer's write. While
   compilation is still client-side, the label remains client-asserted at the
   raw-storage level, so within a space it amounts to self-poisoning (acceptable,
   and contained by the per-space scope). The end state moves **compilation to the
@@ -1144,8 +1226,8 @@ index's restart-stable `action` column,
   implementations install their accessors through
   [`annotateFunctionDebugMetadata`][c11]; pattern factories call
   `defineAuthoredDebugAccessors` directly.
-- Scheduler fingerprints: [`schedulerImplementationFingerprint`][c12] and
-  [`schedulerRuntimeFingerprint`][c12].
+- Scheduler implementation fingerprint:
+  [`schedulerImplementationFingerprint`][c12].
 - Hash primitive: [`hashStringOf`][c13] (and [`hashOf`][c13]).
 - Content-addressed cache: [`sourceDocKey`][c14], [`compiledDocKey`][c14],
   [`buildSourceDocs`][c14], [`verifySourceDocs`][c14],

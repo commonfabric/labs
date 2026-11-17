@@ -709,9 +709,11 @@ The current package provides:
   complete usage. Optional host input-byte and output-token ceilings can only
   narrow through callers and follow the shared model client into children.
   Bounded Codex calls check final request bytes, send the output ceiling
-  including reasoning, and make one provider attempt; unverified gateway limits
-  refuse before dispatch. Native search context and image token expansion need
-  separate accounting. See [Local jobs](../../cli/README.md#local-jobs);
+  including reasoning, and make one provider attempt, or a second when the
+  provider refused the first one's access token (a 401) and the request is
+  issued again with a refreshed token; unverified gateway limits refuse before
+  dispatch. Native search context and image token expansion need separate
+  accounting. See [Local jobs](../../cli/README.md#local-jobs);
 - batch CLI execution with bounded model turns and optional streamed events;
 - machine-readable capability discovery with `--describe-capabilities`;
 - refusal of any flag an entrypoint does not declare — the batch CLI and its

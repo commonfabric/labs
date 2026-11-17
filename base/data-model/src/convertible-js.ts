@@ -572,7 +572,9 @@ function isValidFabricConvertibleJsValueInternal(
       return false;
     }
 
-    case "object": {
+    default: {
+      // `typeof value` is `"object"`, the one result not handled above.
+
       // `FabricSpecialObject` -- already a valid `FabricValue`.
       if (isFabricSpecialObject(value)) return true;
 
@@ -631,10 +633,6 @@ function isValidFabricConvertibleJsValueInternal(
       }
       seen.delete(value);
       return true;
-    }
-
-    default: {
-      return false;
     }
   }
 }

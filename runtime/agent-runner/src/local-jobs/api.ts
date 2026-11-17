@@ -63,6 +63,7 @@ import {
 } from "@commonfabric/cf-harness/task-classification";
 import type { HarnessInlineImageAttachment } from "@commonfabric/cf-harness/contracts/image";
 import { decodeHarnessInlineImage } from "@commonfabric/cf-harness/image-attachments";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { LocalJobBrowserHost } from "./browser-host.ts";
@@ -198,11 +199,7 @@ const attachmentsOf = (
   try {
     images = imagesOf(imageAttachments);
   } catch (error) {
-    return {
-      error: error instanceof Error
-        ? error.message
-        : "Invalid image attachments.",
-    };
+    return { error: describeFailure(error) };
   }
   if (
     inputs !== undefined &&
@@ -530,16 +527,10 @@ const eventStream = (
     start(controller) {
       let closed = false;
       const close = () => {
-        if (closed) return;
         cleanup();
-        try {
-          controller.close();
-        } catch {
-          // The reader already went away.
-        }
+        controller.close();
       };
       cleanup = () => {
-        if (closed) return;
         closed = true;
         unsubscribe();
         clearInterval(heartbeat);

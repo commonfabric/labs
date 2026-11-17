@@ -33,7 +33,7 @@
 
 import { parseArgs } from "@std/cli/parse-args";
 import { join as joinPath } from "@std/path";
-import { PatternIndexClient } from "./src/client.ts";
+import { isPieceRef, PatternIndexClient } from "./src/client.ts";
 import { openPatternIndexClient } from "./src/access.ts";
 import { PatternIndexStore } from "./src/store.ts";
 import {
@@ -183,11 +183,68 @@ const answerRequest = async (
       }
       case "join":
         return await join(context, body);
+      case "view": {
+        // A person used something in a loom: a piece (sharing settles the
+        // version of theirs deployed to it) or a pattern they placed from
+        // the index (it ranks). Exactly one.
+        const { patternId, piece } = body;
+        const subject = typeof patternId === "string" && patternId !== "" &&
+            piece === undefined
+          ? { patternId }
+          : typeof piece === "string" && isPieceRef(piece) &&
+              patternId === undefined
+          ? { piece }
+          : undefined;
+        if (subject === undefined) {
+          return {
+            ok: false,
+            status: 400,
+            error: "view needs a patternId or a piece, exactly one",
+          };
+        }
+        const viewed = await client.recordUsageEvent({
+          ...subject,
+          eventType: "viewed_in_loom",
+        });
+        return viewed.ok ? { ok: true, value: viewed } : {
+          ok: false,
+          status: 502,
+          error: "the index did not take the view",
+        };
+      }
+      case "getSharing":
+        return { ok: true, value: await client.getSharingSettings() };
+      case "setSharing": {
+        // Only the switches the caller set, so changing one never writes
+        // the other from a value the caller guessed.
+        const change: { enabled?: boolean; selfBuilt?: boolean } = {};
+        for (const name of ["enabled", "selfBuilt"] as const) {
+          const value = body[name];
+          if (value === undefined) continue;
+          if (typeof value !== "boolean") {
+            return {
+              ok: false,
+              status: 400,
+              error: `${name} must be true or false`,
+            };
+          }
+          change[name] = value;
+        }
+        if (Object.keys(change).length === 0) {
+          return {
+            ok: false,
+            status: 400,
+            error: "setSharing needs enabled or selfBuilt",
+          };
+        }
+        return { ok: true, value: await client.setSharingSettings(change) };
+      }
       default:
         return {
           ok: false,
           status: 400,
-          error: "op must be search, feedback, whoami, admit or join",
+          error:
+            "op must be search, feedback, whoami, admit, join, view, getSharing or setSharing",
         };
     }
   } catch (error) {

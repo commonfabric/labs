@@ -511,7 +511,6 @@ export class WorkerReconciler {
         this.#handlers.set(id, handler);
         return id;
       },
-      getHandler: (id) => this.#handlers.get(id),
     };
   }
 
@@ -2378,25 +2377,6 @@ export class WorkerReconciler {
     return textIntegrity.requiredIntegrity.every((required) =>
       integrity.some((atom) => deepEqual(atom, required))
     );
-  }
-
-  #readCellValue(cell: Cell<unknown>): unknown {
-    const readableCell = cell as Cell<unknown> & {
-      get?: (options?: { traverseCells?: boolean }) => unknown;
-      getRawUntyped?: (options?: { frozen?: false }) => unknown;
-    };
-    try {
-      if (typeof readableCell.get === "function") {
-        return readableCell.get({ traverseCells: true });
-      }
-    } catch {
-      // Fall back to the raw read below.
-    }
-    try {
-      return readableCell.getRawUntyped?.({ frozen: false });
-    } catch {
-      return undefined;
-    }
   }
 
   #readCellPolicyValue(cell: Cell<unknown>): unknown {
@@ -5240,13 +5220,4 @@ export class WorkerReconciler {
     }
     return String(value);
   }
-}
-
-/**
- * Create a new reconciler instance.
- */
-export function createReconciler(
-  options: WorkerReconcilerOptions,
-): WorkerReconciler {
-  return new WorkerReconciler(options);
 }

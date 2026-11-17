@@ -2,7 +2,6 @@ import type { Source } from "@commonfabric/js-compiler";
 import { getLogger } from "@commonfabric/logger";
 import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
 import { utf8Compare } from "@commonfabric/text/utf8";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
   brandTrustedPattern,
@@ -32,6 +31,7 @@ import {
 import {
   buildSourceDocs,
   type ClosureLoadTally,
+  compileCacheClosureHoldsStamp,
   COMPILED_INTEGRITY_ATOM,
   compiledDocKey,
   deriveModulePredecessors,
@@ -42,13 +42,14 @@ import {
   type ModuleDelegationMap,
   moduleDelegationsFromDocs,
   planCompileCacheWriteChunks,
-  recordUndeclarablePolicyStore,
+  repairCompileCacheStamps,
   ROOT_LINK_SPECIFIER,
   sourceClosureNeedsParser,
   type SourceDoc,
   sourceDocKey,
   stageModuleDelegations,
   writeSourceAndCompiledDocs,
+  writeSourceAnnotation,
   writeSourceDocs,
 } from "./compilation-cache/cell-cache.ts";
 import {
@@ -83,7 +84,7 @@ import type { MemorySpace, Runtime, ServerRunInfo } from "./runtime.ts";
 import type { PatternManagerSizes } from "./runtime-sizes.ts";
 
 import {
-  isFabricImportSpecifier,
+  type FabricRef,
   parseFabricRef,
   pinnedIdentity,
 } from "./sandbox/fabric-import-specifier.ts";
@@ -346,7 +347,12 @@ export function sourceCfcMetadataProhibitsCrossSpaceCopy(
   }) ?? false;
 }
 
-function throwableStorageError(error: CommitError): Error {
+/**
+ * Returns `error` as a throwable `Error`: the error itself when it is one, and
+ * otherwise a new `Error` carrying its `message` and `name`, with `error` as
+ * its `cause`. Exported for testing.
+ */
+export function throwableStorageError(error: CommitError): Error {
   if (error instanceof Error) return error;
   return Object.assign(new Error(error.message), {
     name: error.name,
@@ -459,9 +465,9 @@ function cacheEntriesIncludePatternCoverage(
  * data that predates that guard.
  *
  * Parsing needs the compiler stack, which the caller loads when some module
- * carries no attested list.
+ * carries no attested list. Exported for testing.
  */
-function fabricImportRefsFromSource(
+export function fabricImportRefsFromSource(
   doc: SourceDoc,
   attestedImports: readonly string[] | undefined,
 ): CacheableModule["imports"] {
@@ -473,8 +479,12 @@ function fabricImportRefsFromSource(
   const refs: CacheableModule["imports"] = [];
   const seen = new Set<string>();
   for (const specifier of specifiers) {
-    if (!isFabricImportSpecifier(specifier)) continue;
-    const ref = parseFabricRef(specifier);
+    let ref: FabricRef | undefined;
+    try {
+      ref = parseFabricRef(specifier);
+    } catch {
+      continue;
+    }
     if (ref === undefined) continue;
     const targetIdentity = pinnedIdentity(ref);
     if (targetIdentity === undefined) continue;
@@ -486,7 +496,11 @@ function fabricImportRefsFromSource(
   return refs;
 }
 
-function uniqueCacheableImports(
+/**
+ * Returns `imports` without repeats: the first of each specifier and target
+ * pair, in order. Exported for testing.
+ */
+export function uniqueCacheableImports(
   imports: CacheableModule["imports"],
 ): CacheableModule["imports"] {
   const seen = new Set<string>();
@@ -976,6 +990,13 @@ export class PatternManager {
    * persisted × the variants it wrote there.
    */
   #persistedClosureSpaces = new Map<string, Map<MemorySpace, Set<string>>>();
+
+  /**
+   * The closures, by `stringTupleKey([space, identity])`, whose stamp repair
+   * this session refused: a refusal stands until the records change, so it is
+   * not tried again here.
+   */
+  #unrepairedStampedClosures = new Set<string>();
 
   /**
    * Failed replications _parked_ for event-driven re-supply (the one supplier
@@ -2304,9 +2325,6 @@ export class PatternManager {
     const fabricDependencies = new Set<string>();
     for (const [identity, doc] of sourceDocs) {
       const compiled = compiledDocs?.get(identity);
-      if (runtimeVersion !== undefined && !compiled) {
-        throw new Error(`compiled doc missing for ${identity}`);
-      }
       const fabricImports = compiled?.kind === "data"
         ? []
         : fabricImportRefsFromSource(doc, compiled?.sourceImports);
@@ -2731,17 +2749,119 @@ export class PatternManager {
     identities: Iterable<string>,
   ): Promise<void> {
     const tx = this.#runtime.edit();
+    const stamped: string[] = [];
     try {
       let parserNeeded = false;
       for (const identity of new Set(identities)) {
         if (PatternManager.isKeylessPatternIdentity(identity)) continue;
-        if (!await this.#closureVerifiesWithoutParser(space, identity, tx)) {
-          parserNeeded = true;
+        const { verifies, closure } = await this.#closureVerifiesWithoutParser(
+          space,
+          identity,
+          tx,
+        );
+        if (!verifies) parserNeeded = true;
+        // The source closure is already loaded here, so asking whether a
+        // record of it is stamped syncs only its compiled records.
+        if (
+          closure !== undefined &&
+          await this.#closureHoldsStamp(space, identity, tx, closure)
+        ) {
+          stamped.push(identity);
         }
       }
       if (parserNeeded) await ensureCompilerStack();
     } finally {
       tx.abort("source closure verification prepared");
+    }
+    for (const identity of stamped) {
+      await this.#repairCompileCacheStamps(space, identity);
+    }
+  }
+
+  /**
+   * Helper for `prepareSourceClosureVerification()`, which returns whether a
+   * record of `identity`'s closure in `space` holds a flow stamp, read in
+   * `tx` (`compileCacheClosureHoldsStamp()`), and is not one this session's
+   * repair already gave up on.
+   */
+  async #closureHoldsStamp(
+    space: MemorySpace,
+    identity: string,
+    tx: IExtendedStorageTransaction,
+    closure: ReadonlyMap<string, SourceDoc>,
+  ): Promise<boolean> {
+    if (
+      this.#unrepairedStampedClosures.has(stringTupleKey([space, identity]))
+    ) {
+      return false;
+    }
+    try {
+      return await compileCacheClosureHoldsStamp(
+        this.#runtime,
+        space,
+        identity,
+        await this.compileCacheRuntimeVersion({
+          patternCoverage: this.#patternCoverageFor() !== undefined,
+        }),
+        tx,
+        closure,
+      );
+    } catch (error) {
+      logger.warn("compile-cache-stamp-check-failed", () => [
+        `entry=${identity}`,
+        `space=${space}`,
+        error,
+      ]);
+      return false;
+    }
+  }
+
+  /**
+   * Helper for `prepareSourceClosureVerification()`, which repairs the
+   * compile-cache records of `identity`'s closure in `space` that a flow stamp
+   * labeled (`repairCompileCacheStamps()`), so that the verification and setup
+   * that follow read them unlabeled. A repair this session may not commit, as
+   * in a read-only session, is logged and leaves the records as they were.
+   */
+  async #repairCompileCacheStamps(
+    space: MemorySpace,
+    identity: string,
+  ): Promise<void> {
+    const key = stringTupleKey([space, identity]);
+    if (this.#unrepairedStampedClosures.has(key)) return;
+    try {
+      const runtimeVersion = await this.compileCacheRuntimeVersion({
+        patternCoverage: this.#patternCoverageFor() !== undefined,
+      });
+      const outcome = await repairCompileCacheStamps(
+        this.#runtime,
+        space,
+        identity,
+        runtimeVersion,
+        (tx) =>
+          this.#runtime.stampServerRun(tx, {
+            actionId: `compile-cache/stamp-repair/${identity}`,
+            kind: "bookkeeping",
+            directCommit: true,
+          }),
+      );
+      // A refusal stands until the records change. A conflict is a race the
+      // next load may win, and a session refused write access may be granted
+      // it, so each of those is tried again.
+      if (outcome === "refused") this.#unrepairedStampedClosures.add(key);
+      if (outcome !== "clean" && outcome !== "unverified") {
+        logger.debug("compile-cache-stamp-repair", () => [
+          `entry=${identity}`,
+          `space=${space}`,
+          outcome,
+        ]);
+      }
+    } catch (error) {
+      logger.warn("compile-cache-stamp-repair-failed", () => [
+        `entry=${identity}`,
+        `space=${space}`,
+        error,
+      ]);
     }
   }
 
@@ -2756,20 +2876,18 @@ export class PatternManager {
     space: MemorySpace,
     identity: string,
     tx: IExtendedStorageTransaction,
-  ): Promise<boolean> {
+  ): Promise<{ verifies: boolean; closure?: Map<string, SourceDoc> }> {
+    let closure: Map<string, SourceDoc> | undefined;
     try {
-      const closure = await loadSourceClosure(
-        this.#runtime,
-        space,
-        identity,
-        tx,
-      );
-      if (closure === undefined) return true;
-      if (!sourceClosureNeedsParser(this.#runtime, space, closure)) return true;
+      closure = await loadSourceClosure(this.#runtime, space, identity, tx);
+      if (closure === undefined) return { verifies: true };
+      if (!sourceClosureNeedsParser(this.#runtime, space, closure)) {
+        return { verifies: true, closure };
+      }
       const runtimeVersion = await this.compileCacheRuntimeVersion({
         patternCoverage: this.#patternCoverageFor() !== undefined,
       });
-      if (runtimeVersion === undefined) return false;
+      if (runtimeVersion === undefined) return { verifies: false, closure };
       await loadCompiledClosure(
         this.#runtime,
         space,
@@ -2777,14 +2895,17 @@ export class PatternManager {
         { runtimeVersion },
         tx,
       );
-      return !sourceClosureNeedsParser(this.#runtime, space, closure);
+      return {
+        verifies: !sourceClosureNeedsParser(this.#runtime, space, closure),
+        closure,
+      };
     } catch (error) {
       logger.warn("source-closure-preparation-read-failed", () => [
         `entry=${identity}`,
         `space=${space}`,
         error,
       ]);
-      return false;
+      return { verifies: false, closure };
     }
   }
 
@@ -4214,9 +4335,6 @@ export class PatternManager {
   ): Pattern {
     this.registerEvaluatedModules(result);
     const { main } = result;
-    if (!main) {
-      throw new Error("Pattern compilation produced no exports.");
-    }
     // Usually an authored export, but a map/filter/flatMap `op` reloads by a
     // transformer HOIST symbol (`__cfReg`, e.g. `__cfPattern_1`) that is not an
     // export — `registerEvaluatedModules` above indexed it, so resolve it there.
@@ -4640,14 +4758,10 @@ export class PatternManager {
     this.#compileCacheWrites.delete(write);
     this.#pendingCacheWriteBacks.delete(write);
     for (const identity of identities) {
-      const spaces = this.#closurePersistsInFlight.get(identity);
-      const count = spaces?.get(space);
-      if (spaces === undefined || count === undefined) continue;
-      if (count > 1) {
-        spaces.set(space, count - 1);
-        continue;
-      }
-      spaces.delete(space);
+      const spaces = this.#closurePersistsInFlight.get(identity) ?? new Map();
+      const count = (spaces.get(space) ?? 1) - 1;
+      if (count > 0) spaces.set(space, count);
+      else spaces.delete(space);
       if (spaces.size === 0) this.#closurePersistsInFlight.delete(identity);
     }
     this.#runtime.telemetry.submit({
@@ -5001,9 +5115,6 @@ export class PatternManager {
   ): Pattern {
     this.registerEvaluatedModules(result);
     const { main } = result;
-    if (!main) {
-      throw new Error("Pattern compilation produced no exports.");
-    }
     const exportName = program.mainExport ?? "default";
     if (!(exportName in main)) {
       throw new Error(
@@ -5232,9 +5343,8 @@ export class PatternManager {
     } finally {
       readTx.abort?.("get-pattern-source-files read complete");
     }
-    if (sourceDocs === undefined) return undefined;
-    const entry = sourceDocs.get(entryIdentity);
-    if (entry === undefined) return undefined;
+    const entry = sourceDocs?.get(entryIdentity);
+    if (sourceDocs === undefined || entry === undefined) return undefined;
     const sourceRoots = sourcePackagePaths(
       entry,
       sourceDocs,
@@ -5290,21 +5400,7 @@ export class PatternManager {
         actionId: `pattern-annotate/${entryIdentity}`,
         kind: "bookkeeping",
       });
-      const cell = this.#runtime.getCell<
-        { annotations?: Record<string, unknown> }
-      >(
-        space,
-        sourceDocKey(entryIdentity),
-        undefined,
-        tx,
-      );
-      recordUndeclarablePolicyStore(tx, cell);
-      const current = cell.get();
-      const annotations = {
-        ...(isObjectOrArray(current?.annotations) ? current!.annotations : {}),
-        [key]: link,
-      };
-      cell.key("annotations").set(annotations);
+      writeSourceAnnotation(this.#runtime, space, entryIdentity, key, link, tx);
     });
   }
 

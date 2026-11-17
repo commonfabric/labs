@@ -108,7 +108,29 @@ execution observer and decides which worker serves which space:
   not bound buffers outside the heap, so the pool also takes out a worker
   whose heartbeat reports as many megabytes of those as the limit. Both
   checks run at the heartbeat, so a worker can pass the limit for up to one
-  heartbeat interval before it is ended. Either way
+  heartbeat interval before it is ended.
+
+  A process-wide `--max-old-space-size`, which the toolshed's binary, tasks
+  and `start-local-dev.sh` set to 16384 for the main thread, replaces the
+  limit V8 gives each worker. The pool sees that from the `heap_size_limit` a
+  worker's init reports (`heap-limit-overridden`) and holds such a worker to
+  `heapLimitMb` itself. A heartbeat's heap includes garbage V8 has not
+  collected yet, so at a heartbeat that reports a heap of `heapLimitMb` or
+  more the pool asks the worker to collect its garbage (`host.collectedMemory`,
+  one request at a time), and takes it out as one that reached its limit only
+  if its heap is still that large once collected. A worker whose collected
+  heap is under the limit goes on serving. One that refuses the request, or
+  does not answer it while its heartbeats go on, is taken out at six
+  heartbeats in a row past the limit. The toolshed exposes V8's collector at
+  startup for this (`EXPOSE_GC` decides only whether
+  `/api/health/collected-memory` answers); a pool without it
+  (`collectBeforeEnding` unset) takes the worker out at two heartbeats in a
+  row past the limit. Pattern code cannot reach the collector: V8 gives
+  `gc()` only to contexts created by `vm`, not to a worker's own realm or to
+  a SES compartment. This check needs the worker's heartbeats, which its timers send between tasks,
+  so a worker that allocates without yielding is bounded only by the process
+  flag and by the watchdog, which ends it after `watchdogLimitMs` of silence.
+  Either way
   the process goes on. The worker's spaces are not placed again as a failed
   worker's are, since a program that grew one heap to the limit grows the
   next, and the limit is the worker's, so the pool learns which space grew
@@ -184,13 +206,17 @@ A space stays placed on its worker for as long as the worker runs. Counted:
 A space is ACTIVE when it has ≥1 live client session or undelivered
 events; otherwise it MAY be parked (lease released, loop stopped, and
 the runtime disposed or kept for the space's next tenure — Parking
-below). A client session is any session except a serving loop's own,
-which is a session of the deployment's service identity that
-reached the memory server from the process holding it, declared the
-serving binding (`actingAs: "space-owner"`, a serving runtime of another
-process), or declared that it is not demand (`demand: false`, which the
-toolshed's own webhook runtime declares, since it keeps a session on
-every space it touched for as long as it runs and no one waits on it).
+below). A client session is any session except a serving loop's own
+and one that declared that it is not demand. A serving loop's own is a
+session of the deployment's service identity that reached the memory
+server from the process holding it, or declared the serving binding
+(`actingAs: "space-owner"`, a serving runtime of another process). A
+session of any identity declares that it is not demand with
+`demand: false`: the toolshed's own webhook runtime does, since it keeps
+a session on every space it touched for as long as it runs and no one
+waits on it, and so does a client that only copies documents, such as
+the Topics command-line tool's mirror, whose watches would otherwise
+make the server start every piece whose documents it holds.
 The connection and the session's declaration decide, not the key: a local
 toolshed that runs under the identity its operator's client also signs
 with still counts that client's sessions as client sessions, for
@@ -1562,11 +1588,21 @@ or dropped meanwhile; that refusal is retried like a stale read.
   landing, runs it again.
 - A derivation run that read, through a link, an absent user- or
   session-scoped instance of a document another derivation registered in
-  this runtime declares as a write (a builtin's stores included) aborts its
-  tx the same way: the serving loop has not produced that instance yet, so
-  the absence is not its state (speculation.md §2's serving-runtime
-  corollary to the scoped first-write carve-out). Its read of the instance
-  stays subscribed, so it runs again once the instance is produced.
+  this runtime declares as a write (a builtin's stores included), and that
+  writer has not yet run for that instance, aborts its tx the same way: the
+  serving loop has not produced that instance yet, so the absence is not
+  its state (speculation.md §2's serving-runtime corollary to the scoped
+  first-write carve-out). A JavaScript derivation whose run for the
+  instance finished without being withdrawn and left it absent, as a run
+  whose result is `undefined` does, has produced it, and the read commits.
+  "For the instance" is per instance key on a fanned-out writer and any
+  run on one that is not; a withdrawn run produced nothing, and a builtin
+  writer is owed until it writes. Its read of the instance
+  stays subscribed, so it runs again once the instance is produced. A run
+  that threw after such a read is withdrawn the same way and its error is
+  not reported: the throw came from the same absence its writes did. A
+  throw from the run once the instance is produced is reported as any
+  other.
 - On a client (OFF arm, and speculation in the ON arm) seal == commit /
   overlay-apply as today — one abstraction, two destinations. Anchor:
   `runtime/runner/src/storage/extended-storage-transaction.ts`.

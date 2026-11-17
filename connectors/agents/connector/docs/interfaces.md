@@ -993,6 +993,13 @@ The ledger creates its directory with mode `0700` and its files with mode
 either ledger slot when it is a symbolic link, belongs to another user, or
 permits group or other-user access.
 
+The ledger takes the operating system, which selects the Unix or Windows layout,
+and the user that must own the directory and files from the running process
+(`Deno.build.os` and `Deno.uid()`). A test states them through
+`CommandLedger.accessForTestingOnly.open(path, system)`, so it can exercise
+either layout and the ownership check on any machine; nothing else can open a
+ledger as if on another system.
+
 `pendingPublicationCount()` reports the current outbox size. It does not expose
 receipt contents. A host uses this value when deciding whether health can return
 to ready.

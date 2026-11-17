@@ -1,4 +1,9 @@
-import type { CellScope, ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import {
+  type CellScope,
+  resolveScopeKey,
+  type ScopeKey,
+  type ScopeKeyIdentity,
+} from "@commonfabric/memory/v2";
 import { type ArmedTurn, armTurn } from "@commonfabric/async/turn";
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
 import { ensureNotRenderThread } from "@commonfabric/platform/env";
@@ -145,6 +150,7 @@ import { NodeRegistry, type SchedulerNode } from "./node-record.ts";
 import {
   resolveRegistrationSurface,
   resubscribePullSchedulerAction,
+  type SchedulerResubscribeOptions,
   type SchedulerSubscribeActionState,
   type SchedulerSubscriptionState,
   type SchedulerUnsubscribeActionState,
@@ -984,16 +990,22 @@ export class Scheduler {
   resubscribe(
     action: Action,
     log: ReactivityLog,
-    options: {
-      isEffect?: boolean;
-      changeGroup?: ChangeGroup;
-    } = {},
+    options: SchedulerResubscribeOptions = {},
   ): void {
+    this.#resubscribe(action, log, options);
+  }
+
+  /** Like {@link resubscribe}, except that it returns the action's node. */
+  #resubscribe(
+    action: Action,
+    log: ReactivityLog,
+    options: SchedulerResubscribeOptions = {},
+  ): SchedulerNode {
     const record = this.#nodes.get(action);
     const wasLiveBeforeRootRegistration = record !== undefined &&
       isLive(this.#dependencyGraphState, record);
     this.#updateMaterializerRegistration(action);
-    resubscribePullSchedulerAction(
+    return resubscribePullSchedulerAction(
       this.#subscribeActionState,
       action,
       log,
@@ -1022,6 +1034,10 @@ export class Scheduler {
         ? { demandRootIds: identity.demandRootIds }
         : {}),
     };
+    // The registry files a node under its demand roots when it joins the
+    // active set, so an identity set on a node that is already active has to
+    // be told to it. This is the only place an identity is set.
+    this.#nodes.noteObservationIdentity(action);
   }
 
   unsubscribe(
@@ -1367,17 +1383,11 @@ export class Scheduler {
    * whenever it comes. Returns the number of nodes re-armed.
    */
   invalidateActionsForDemandRoots(rootIds: readonly string[]): number {
-    const roots = new Set(rootIds);
     let rearmed = 0;
-    for (const record of this.#nodes.nodes()) {
-      const identity = (record.action as Partial<TelemetryAnnotations>)
-        .schedulerObservationIdentity;
-      const demandRootIds = identity?.demandRootIds ??
-        (identity?.pieceRootId !== undefined
-          ? [identity.pieceRootId]
-          : undefined);
-      if (demandRootIds === undefined) continue;
-      if (!demandRootIds.some((id) => roots.has(id))) continue;
+    // Read from the registry's index by demand root rather than by walking
+    // every node: the space server calls this once for each demand key it
+    // maps to a piece, and a session on a large space brings thousands.
+    for (const record of this.#nodes.nodesUnderDemandRoots(rootIds)) {
       if (record.fanOut === undefined) {
         if (record.status === "never-ran") continue;
       } else if (!record.fanOut.narrowed) continue;
@@ -1588,7 +1598,6 @@ export class Scheduler {
       this.#nodes.demandedWriters.delete(action);
       this.#demandRootCounters.leaves += 1;
     }
-    if (record === undefined) return;
     notifyNodeLivenessChange(this.#dependencyGraphState, action, wasLive);
     if (
       shouldBeRoot && this.#isLiveAction(action) &&
@@ -1675,12 +1684,11 @@ export class Scheduler {
     if (writers === undefined || writers.size === 0) return 0;
     let rearmed = 0;
     for (const writer of writers) {
-      const record = this.#nodes.get(writer);
-      if (record === undefined) continue;
-      if (record.fanOut === undefined) continue;
-      const pairKey = keyAtRatchet(record.fanOut, demander);
+      const fanOut = this.#nodes.get(writer)?.fanOut;
+      if (fanOut === undefined) continue;
+      const pairKey = keyAtRatchet(fanOut, demander);
       if (pairKey === undefined) continue;
-      if (record.fanOut.clean.has(pairKey)) continue;
+      if (fanOut.clean.has(pairKey)) continue;
       this.#markActionInvalid(writer, undefined, { fanOutInstances: "keep" });
       this.#pending.add(writer);
       rearmed += 1;
@@ -2083,27 +2091,76 @@ export class Scheduler {
   }
 
   /**
-   * Whether an action registered here other than `except` declares a write to
-   * some instance of `address`'s document, at any scope.
+   * Whether an action registered here, other than the one `tx` runs, declares
+   * a write to some instance of `address`'s document, at any scope, and has
+   * not yet produced the instance `tx` reads: it is not a JavaScript
+   * derivation, or no run of it for that instance
+   * (`address`'s scope resolved against the run identity of `tx` on a
+   * fanned-out writer, any on a writer that is not fanned out) has finished
+   * without being withdrawn. A
+   * writer whose run finished and left the instance absent has produced it,
+   * and its value is `undefined`; one whose run was withdrawn has not.
    *
    * The lookup spans every scope because the write index keys a derivation by
    * its declared scope, while a JavaScript derivation writes its output at the
    * scope its reads narrowed to: a user instance of an output declared at
    * space scope has a writer indexed only at space scope.
    */
-  hasOtherWriterOf(
-    address: Pick<IMemorySpaceAddress, "space" | "id">,
-    except: object,
+  owesScopedInstance(
+    address: Pick<IMemorySpaceAddress, "space" | "id" | "scope">,
+    tx: IExtendedStorageTransaction,
   ): boolean {
+    const reader = tx.tx.sourceAction;
+    const identity = waveRunContextOf(tx)?.scopeKeyIdentity ??
+      this.runtime.scopeKeyIdentity;
+    let instance: ScopeKey | undefined;
+    try {
+      instance = resolveScopeKey(address.scope, identity);
+    } catch {
+      // An identity that cannot name the instance (a sessionless one read
+      // at session scope) names none any writer has produced.
+    }
     for (const scope of ["space", "user", "session"] as const) {
       const writers = this.#writeIndex.writersByEntity.get(
         entityNameKey({ ...address, scope }),
       );
       for (const writer of writers ?? []) {
-        if (writer !== except) return true;
+        if (
+          writer !== reader && !this.#hasProducedInstance(writer, instance)
+        ) {
+          return true;
+        }
       }
     }
     return false;
+  }
+
+  /**
+   * Whether `action` has produced the instance keyed `instance`: it is a
+   * JavaScript derivation, and a run of it finished without being withdrawn,
+   * for that instance on a fanned-out node and at all on any other. A
+   * JavaScript derivation writes its whole result in its run, so a run that
+   * left the instance absent produced that absence. A builtin can write its
+   * output after its run returns, as a list coordinator does once its element
+   * setups complete, so a finished run of one shows nothing about whether it
+   * has produced the instance. And a fanned-out node's run for another
+   * instance, such as its space-keyed probe before it learned to narrow,
+   * produced that instance and not this one.
+   */
+  #hasProducedInstance(
+    action: Action,
+    instance: ScopeKey | undefined,
+  ): boolean {
+    if (
+      (action as Partial<TelemetryAnnotations>).module?.type !== "javascript"
+    ) {
+      return false;
+    }
+    const node = this.#nodes.get(action);
+    if (node === undefined) return false;
+    if (node.fanOut === undefined) return node.produced === true;
+    return instance !== undefined &&
+      node.fanOut.instances.get(instance)?.produced === true;
   }
 
   /**
@@ -2918,9 +2975,6 @@ export class Scheduler {
         this.#eventQueue[0] === head
       ) break;
       if (--remaining <= 0 || this.#eventQueue.length === 0) break;
-      // The handler's run has to have landed before the next preflight
-      // reads what it wrote.
-      if (this.runningPromise) await this.runningPromise;
     }
     return {
       eventBlockingDeps,
@@ -3627,9 +3681,7 @@ export class Scheduler {
       ],
       writes: previous?.writes ?? [],
     };
-    this.resubscribe(action, log);
-    const record = this.#nodes.get(action);
-    if (record === undefined) return;
+    const record = this.#resubscribe(action, log);
     const cancels: (() => void)[] = [];
     for (const space of new Set(log.reads.map((read) => read.space))) {
       const replica = this.runtime.storageManager.open(space).replica;
@@ -3969,14 +4021,18 @@ export class Scheduler {
     const history = this.#headEventLoadParkHistory;
     if (!history || history.eventId !== event.id) return [...keys];
     return keys.filter((key) => {
-      const currentGeneration =
-        this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0;
+      const currentGeneration = this.#pendingLoadGeneration(key);
       const settledGeneration = history.generations.get(key);
       if (settledGeneration === undefined) return true;
       if (settledGeneration === currentGeneration) return false;
       return this.#preflightPendingLoadGenerations.get(key) ===
         currentGeneration;
     });
+  }
+
+  /** The generation of `key`'s pending load, or 0 when none is pending. */
+  #pendingLoadGeneration(key: string): number {
+    return this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0;
   }
 
   #capturePendingLoadGenerations(): void {
@@ -3988,22 +4044,23 @@ export class Scheduler {
       const key = entityKey(address, this.runtime.scopeKeyIdentity);
       this.#preflightPendingLoadGenerations.set(
         key,
-        this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0,
+        this.#pendingLoadGeneration(key),
       );
     }
   }
 
+  /**
+   * Parks `event`, the head, on the loads of `keys`. The event is not parked
+   * already: a parked event neither passes its preflight nor runs, and those
+   * are the only places that park one.
+   */
   #parkHeadEventForLoads(
     event: QueuedEvent,
     keys: readonly string[],
     withdrawal?: LoadingReadWithdrawal,
   ): void {
-    if (this.#headEventLoadPark?.eventId === event.id) return;
     const generations = new Map(
-      keys.map((key) => [
-        key,
-        this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0,
-      ]),
+      keys.map((key) => [key, this.#pendingLoadGeneration(key)]),
     );
     logger.debug("event-load-park", () => [
       `event ${event.id} parks on ${keys.length} loading document(s)`,
@@ -4363,10 +4420,6 @@ export class Scheduler {
   #markNodeHasRun(action: Action): void {
     const record = this.#nodes.get(action);
     if (!record) return;
-
-    if (record.status === "never-ran") {
-      this.#nodes.setStatus(action, "clean");
-    }
 
     if (
       record.provisionalDemand &&

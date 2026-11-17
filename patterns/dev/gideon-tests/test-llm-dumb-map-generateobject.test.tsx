@@ -2,10 +2,11 @@
  * Test: `generateObject` called inside `.map()` sends one request per item,
  * and adding or removing an item sends no request for the others.
  *
- * Each mock answers one request and is then used up, so an item whose request
- * were sent again would find no mock left and show an error instead of its
- * sentiment. The item with no mock at all shows that error, and the item with
- * no content sends no request, so it shows neither.
+ * Each entry of `llmMocks` answers one request and is then used up, so an item
+ * whose request were sent again would find no answer left, which fails the
+ * test. The model fails the request of the item the test says nobody answers,
+ * which shows that error, and the item with no content sends no request, so it
+ * shows neither.
  *
  * Run: deno task cf test patterns/dev/gideon-tests/test-llm-dumb-map-generateobject.test.tsx --root patterns --verbose
  */
@@ -22,16 +23,20 @@ import DumbMap from "./test-llm-dumb-map-generateobject.tsx";
 
 export const llmMocks = [
   {
-    promptIncludes: "I love this!",
+    when: { lastMessageContains: "I love this!" },
     object: { sentiment: "positive", confidence: 0.9, keywords: ["love"] },
   },
   {
-    promptIncludes: "This is terrible",
+    when: { lastMessageContains: "This is terrible" },
     object: { sentiment: "negative", confidence: 0.8, keywords: ["terrible"] },
   },
   {
-    promptIncludes: "It's okay",
+    when: { lastMessageContains: "It's okay" },
     object: { sentiment: "neutral", confidence: 0.6, keywords: ["okay"] },
+  },
+  {
+    when: { lastMessageContains: "Nobody answers this" },
+    error: "The model is unavailable.",
   },
 ];
 
@@ -147,7 +152,7 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          hasText(subject[UI], "Error: Mock mode enabled")
+          hasText(subject[UI], "Error: The model is unavailable.")
         ),
       },
 

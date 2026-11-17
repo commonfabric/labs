@@ -123,7 +123,7 @@ describe("newPiece() naming", () => {
           {
             newPiece: (_config, _entry, given) => {
               seen = given;
-              return Promise.resolve("fid1:created");
+              return Promise.resolve({ pieceId: "fid1:created" });
             },
           },
         );
@@ -134,13 +134,23 @@ describe("newPiece() naming", () => {
     it("carries the slug and the flag that takes it into the creation", async () => {
       const { seen } = await runAction({ slug: "notes", force: true });
 
-      expect(seen).toEqual({ start: undefined, slug: "notes", force: true });
+      expect(seen).toEqual({
+        onDeployed: expect.any(Function),
+        start: undefined,
+        slug: "notes",
+        force: true,
+      });
     });
 
     it("leaves the flag off when it was not given", async () => {
       const { seen } = await runAction({ slug: "notes" });
 
-      expect(seen).toEqual({ start: undefined, slug: "notes", force: false });
+      expect(seen).toEqual({
+        onDeployed: expect.any(Function),
+        start: undefined,
+        slug: "notes",
+        force: false,
+      });
     });
 
     it("sends the reader to the name when there is one, and to the id when there is not", async () => {

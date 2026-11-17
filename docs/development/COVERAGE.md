@@ -215,7 +215,10 @@ counts, for each file, how many lines no test covered. The top-level `scripts`
 directory is left out, and so is an iframe pattern's `guest.js`: that file is
 the bundle `deno bundle` writes from the `guest.ts` or `guest.tsx` beside it,
 and the metric counts the source instead. [Testing an iframe
-guest](#testing-an-iframe-guest) says how a test loads that source. The same
+guest](#testing-an-iframe-guest) says how a test loads that source. A
+`deno-web-test.config.ts` is left out as well, because it is the
+configuration the browser test runner reads for a package's browser tests,
+not source those tests exercise. The same
 counting serves both readers:
 
 - **The repository-wide figure** merges every report the full run's lanes wrote
@@ -230,11 +233,15 @@ counting serves both readers:
 Authored pattern files under `patterns` are tracked source files, so
 their uncovered lines count toward `coverage-debt: patterns`. Every
 authored-pattern coverage stream feeds this one metric: the `pattern-unit`
-suite's coverage (`TN:pattern-runtime`) and the integration suites' coverage
-(`TN:pattern-runtime-integration`) both join the merged report, and a line
-covered by either counts covered. Nothing in the accounting reads the test name
-— the two are kept distinct only so a reader of the merged report can tell what
-covered a line.
+suite's coverage (`TN:pattern-runtime`), the integration suites' coverage
+(`TN:pattern-runtime-integration`), and the multi-runtime harness's coverage
+(`TN:pattern-runtime-multi-runtime`) all join the merged report, and a line
+covered by any of them counts covered. The accounting reads the test name only
+to tell the instrumentation's records from those of Deno's coverage, which
+carry none; [A file both producers
+recorded](#a-file-both-producers-recorded) says why. It treats the
+instrumentation's streams alike. They carry different names so that a reader
+of a lane's reports can tell which path covered a line.
 
 One detail of the accounting is worth knowing when reasoning about pattern
 coverage. A file with no LCOV record has every tracked line counted as
@@ -246,16 +253,57 @@ nothing](#a-file-that-opts-out-of-coverage-is-charged-nothing). A record that
 names none of a file's lines says nothing about which of them ran, so it counts
 as no record. A file with a record is scored against the lines that record
 names. For a file measured by Deno's V8 coverage that is every executable line;
-pattern instrumentation names only the statements it could instrument, so a
-pattern file's first record both covers real lines and drops the never-named
-lines out of the count.
+pattern instrumentation names only the statements it could instrument, so the
+first record of a file only the instrumentation records both covers real lines
+and drops the never-named lines out of the count. A file Deno's coverage also
+records is scored against Deno's lines instead, as [A file both producers
+recorded](#a-file-both-producers-recorded) describes.
 
-Gaining a record can therefore only *lower* a file's count, since the record
-names a subset of the file's lines and the rest stop being counted. A figure
-whose file gains one moves down, and a measured set's baseline settles at a
-lower — and therefore stricter — bar rather than failing anything. The
-instrumented statements are also the only lines this mechanism can speak to: a
-line the instrumentation cannot reach is not a line a pattern test could cover.
+Gaining a first record can therefore only *lower* a file's count, since the
+record names a subset of the file's lines and the rest stop being counted. A
+figure whose file gains one moves down, and a measured set's baseline settles at
+a lower — and therefore stricter — bar rather than failing anything. A second
+producer's record can raise the count, since Deno's coverage names executable
+lines the instrumentation could not reach. The instrumented statements are also
+the only lines this mechanism can speak to: a line the instrumentation cannot
+reach is not a line a pattern test could cover.
+
+### A file both producers recorded
+
+A module that a Deno unit test imports and that a pattern also loads gets a
+record from each producer, and the two name different lines of the same
+statement. Deno's coverage names every line it counts as executable, run or
+not, but leaves out a line holding only the end of a statement begun on an
+earlier line, such as the closing `);` of a call written over three lines. The
+pattern instrumentation names every line a statement spans, each with a count
+taken from the statements that cover it.
+
+So for a file that a record from Deno's coverage names, the lines scored are
+the lines Deno's records name. Each of them is covered when a record from
+either producer shows a hit on it. A line that only the instrumentation names
+belongs to a statement whose first line Deno's coverage names, so that
+statement is charged, or not, on Deno's lines rather than a second time on its
+last line. `tasks/lcov.ts` holds the rule, which makes the repository-wide
+figure, the measured-set gate, and the combined report all apply it. It tells
+the producers' records apart by their `TN:` line: every record the
+instrumentation writes carries `pattern-runtime`, alone or followed by a hyphen
+and the name of the path that collected it, and Deno's records carry no test
+name. The type of the runner's `patternCoverageReportToLcov()` parameter
+admits no other name, and the reader refuses a record carrying one, since it
+cannot tell which lines that record's producer counts.
+
+Take a `throw new RangeError(...)` on lines 278 to 280 of a module, closing
+with `);` on line 280, which a Deno test runs and no pattern test reaches.
+Deno's record names lines 278 and 279 as hit. The instrumentation's names lines
+278, 279 and 280 with no hits. Lines 278 and 279 are covered, and line 280 is
+not scored. Had no test run the throw, lines 278 and 279 would both be charged.
+Had only a pattern test run it, the instrumentation's hits on lines 278 and 279
+would cover them.
+
+Deno's coverage also leaves out the lines that a `deno-coverage-ignore` comment,
+or a `deno-coverage-ignore-start` and `deno-coverage-ignore-stop` pair, opts
+out, so those lines are not scored for such a file either. A file that only the
+instrumentation recorded is scored against the lines the instrumentation names.
 
 ### A file that compiles to nothing is charged nothing
 
@@ -1071,7 +1119,11 @@ it has finished converting. The fragments therefore map onto any checkout: the
 `Status` job, which reads them from a different directory than the one the lane
 ran from, and an IDE with a local checkout. The merge combines the records for
 the same source file into one, with the per-line hit counts added together, so a
-file exercised by several lanes is reported once with its combined coverage.
+file exercised by several lanes is reported once with its combined coverage. It
+keeps the lines the metric scores, by the rule in [A file both producers
+recorded](#a-file-both-producers-recorded), so the combined report scores the
+same as the lanes' reports it came from. A merged record that took in one of
+Deno's carries no test name, since the lines it names are Deno's.
 
 The merged file carries line coverage only. LCOV identifies a function by its
 name, and `deno coverage --lcov` can emit several functions with the same name

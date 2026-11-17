@@ -177,6 +177,19 @@ describe("prompt-loop run_pattern model boundary", () => {
       const text = `see ${schemed} then ${computed} and ${token}`;
       expect(scrubBareFabricIdentifiers(text)).toBe(text);
     });
+
+    it("replaces a bare tagged hash whose tag holds `_`, the whole tag included", () => {
+      const hash = "C".repeat(43);
+      expect(scrubBareFabricIdentifiers(`at my_hash:${hash} now`))
+        .toBe("at [fabric-id] now");
+      expect(scrubBareFabricIdentifiers(`at _:${hash} now`))
+        .toBe("at [fabric-id] now");
+    });
+
+    it("leaves a schemed link whose hash tag holds `_` untouched", () => {
+      const text = `see /of:my_hash:${"D".repeat(43)}/items/0`;
+      expect(scrubBareFabricIdentifiers(text)).toBe(text);
+    });
   });
 
   it("records the compiled pattern's result schema on the handle minted for its result reference", async () => {

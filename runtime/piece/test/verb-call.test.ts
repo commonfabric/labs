@@ -10,9 +10,20 @@ import {
 import { withheldStatusTxViewForTestingOnly } from "@commonfabric/runner/for-testing-only";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
-import { callVerb, sendVerbEvent } from "../src/verb-call.ts";
+import {
+  callVerb,
+  pieceVerbs,
+  sendVerbEvent,
+  type VerbCall,
+} from "../src/verb-call.ts";
 
 const signer = await Identity.fromPassphrase("piece verb-call");
+
+/** The message of a refused or failed call, and `undefined` for a settled
+ * one. */
+function messageOf(call: VerbCall): string | undefined {
+  return call.status === "settled" ? undefined : call.message;
+}
 
 /** A counter whose `add` takes an amount and returns the new total, and
  * throws on an amount that is not positive. */
@@ -104,7 +115,7 @@ describe("verb-call", () => {
       const call = await callVerb(runtime, piece, "total", 5);
 
       expect(call.status).toBe("refused");
-      expect((call as { message: string }).message).toContain(
+      expect(messageOf(call)).toContain(
         '"total" is not a verb of this piece. Its verbs are "add"',
       );
       expect(await total()).toBe(0);
@@ -118,7 +129,42 @@ describe("verb-call", () => {
       });
 
       expect(call.status).toBe("refused");
-      expect((call as { message: string }).message).toContain('"note"');
+      expect(messageOf(call)).toContain('"note"');
+      expect(await total()).toBe(0);
+    });
+
+    it("refuses a piece whose pattern cannot be read, sending nothing", async () => {
+      const call = await callVerb(
+        runtime,
+        {
+          ...piece,
+          id: "of:baedreinopatternherexxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        },
+        "add",
+        { amount: 3 },
+      );
+
+      expect(call.status).toBe("refused");
+      expect(messageOf(call)).toContain(
+        "could not read the piece's pattern:",
+      );
+      expect(await total()).toBe(0);
+    });
+
+    it("returns the reason an event could not be sent, running no handler", async () => {
+      const call = await callVerb(runtime, piece, "add", { amount: 3 }, {
+        sendEvent: () => {
+          throw new Error("transport closed");
+        },
+      });
+
+      expect(call.status).toBe("failed");
+      expect(messageOf(call)).toContain(
+        'the event for "add" could not be sent: ',
+      );
+      expect(messageOf(call)).toContain(
+        "transport closed",
+      );
       expect(await total()).toBe(0);
     });
 
@@ -126,7 +172,7 @@ describe("verb-call", () => {
       const call = await callVerb(runtime, piece, "add", { amount: 0 });
 
       expect(call.status).toBe("failed");
-      expect((call as { message: string }).message).toContain(
+      expect(messageOf(call)).toContain(
         "add: amount must be positive",
       );
       expect(await total()).toBe(0);
@@ -147,6 +193,16 @@ describe("verb-call", () => {
       expect(call).not.toHaveProperty("receipt");
       expect(call).not.toHaveProperty("result");
       expect(await total()).toBe(3);
+    });
+  });
+
+  describe("pieceVerbs()", () => {
+    it("returns the handlers the piece's result declares, and not its data", async () => {
+      const verbs = await pieceVerbs(runtime, cell);
+
+      expect(verbs.map(({ name, kind, on }) => ({ name, kind, on }))).toEqual([
+        { name: "add", kind: "handler", on: "result" },
+      ]);
     });
   });
 
@@ -217,6 +273,49 @@ describe("verb-call", () => {
       expect(call.status).toBe("withheld");
       expect(call).not.toHaveProperty("result");
       expect(call).not.toHaveProperty("receipt");
+    });
+
+    it("throws when the append is refused on an otherwise clean transaction", async () => {
+      const refusing: typeof sendEvent = (_stream, _event, _onCommit, opts) =>
+        opts?.onAppended?.(
+          { delivered: false, refused: "quota" },
+          runtime.edit(),
+        );
+
+      await expect(
+        sendVerbEvent(cell.key("add" as never), { amount: 1 }, {
+          sendEvent: refusing,
+        }),
+      ).rejects.toThrow("event append refused: quota");
+    });
+
+    it("returns the handling's failure when a refused append's transaction failed", async () => {
+      const refusing: typeof sendEvent = (_stream, _event, _onCommit, opts) => {
+        const tx = runtime.edit();
+        tx.abort(new Error("the handler threw"));
+        opts?.onAppended?.({ delivered: false, refused: "quota" }, tx);
+      };
+
+      const sent = await sendVerbEvent(cell.key("add" as never), {
+        amount: 1,
+      }, { sendEvent: refusing });
+
+      expect(sent.status).toBe("failed");
+    });
+
+    it("throws what the send itself throws, and reports no commit", async () => {
+      const phases: string[] = [];
+      const throwing: typeof sendEvent = () => {
+        throw new Error("no stream here");
+      };
+
+      await expect(
+        sendVerbEvent(cell.key("add" as never), { amount: 1 }, {
+          sendEvent: throwing,
+          onPhase: (phase) => phases.push(phase),
+        }),
+      ).rejects.toThrow("no stream here");
+      expect(phases).toEqual(["dispatched"]);
     });
 
     it("reports a failed echo as the handling's outcome when the commit callback settles with it", async () => {

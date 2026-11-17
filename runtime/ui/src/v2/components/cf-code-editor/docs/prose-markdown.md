@@ -60,6 +60,13 @@ activation: the cursor position is compared to the element's `from`/`to` span.
 | `` ```lang `` | `FencedCode`, `CodeMark`                                          | Fences hidden, body lines styled                                | `cm-prose-codeblock`     |
 | `code`        | `CodeBlock`                                                       | Lines always styled (no cursor sensitivity)                     | `cm-prose-codeblock`     |
 | GFM tables    | `Table`, `TableHeader`, `TableRow`, `TableDelimiter`, `TableCell` | Pipes hidden, cells and rows styled via line + mark decorations | `cm-prose-table-*`       |
+| `<br>`        | `HTMLTag`                                                         | Replaced with a line break widget                               | `cm-prose-br`            |
+
+Prose mode draws no inline HTML except `<br>` (also spelled `<br/>` or `<br />`,
+in any case), which is how Markdown breaks a line inside a GFM table cell, since
+a cell cannot hold a newline. Every other tag is shown as written. A `<br>` in a
+paragraph uses range-based activation; one in a table follows the table, showing
+its source while the cursor is anywhere in the table.
 
 ## Math
 
@@ -95,6 +102,14 @@ draws it is `features/prose-math.ts`, and KaTeX itself is reached only through
   correction when they differ. CodeMirror's `focusChangeEffect` would drop its
   transaction whenever another lands first, which the editor's own updates do.
 
+The editor adds `proseMath` ahead of `createProseMarkdownPlugin()`, so the
+formulas' decorations take precedence. CodeMirror wraps a widget only in marks
+of equal or lower precedence, so this is what puts a formula inside the Markdown
+around it: a table cell, bold text, a link. A table row hides anything it holds
+outside a cell, so a formula left unwrapped there would not be drawn. A table
+cell's mark is inclusive for the same reason, so it opens before and closes
+after a formula at the cell's edges.
+
 KaTeX runs with `trust` off, so `\href`, `\url`, `\includegraphics` and the
 `\html…` commands draw nothing of the author's choosing. A size a formula asks
 for is capped at 10em (`maxSize`), and its macro expansions at 1000
@@ -125,8 +140,8 @@ says how to roll it.
 
 ## Widgets
 
-Six `WidgetType` subclasses handle elements that cannot be expressed as simple
-mark/replace decorations:
+Six `WidgetType` subclasses in `prose-markdown.ts` handle elements that cannot
+be expressed as simple mark/replace decorations:
 
 - **`BulletWidget`** — renders a `•` character.
 - **`OrderedListWidget`** — renders the original number text (e.g. `1.`) with
@@ -135,10 +150,11 @@ mark/replace decorations:
 - **`HorizontalRuleWidget`** — renders an `<hr>` element.
 - **`TaskCheckboxWidget`** — renders an `<input type="checkbox">` that toggles
   `[x]`/`[ ]` in the document on click.
+- **`LineBreakWidget`** — renders a `<br>` element inside a `<span>`.
 
-Singletons (`bulletWidget`, `hrWidget`) are used where possible: CodeMirror
-keeps a widget's element when the widget replacing it is the same object, so one
-instance serves every bullet and every rule.
+Singletons (`bulletWidget`, `hrWidget`, `lineBreakWidget`) are used where
+possible: CodeMirror keeps a widget's element when the widget replacing it is
+the same object, so one instance serves every bullet and every rule.
 
 ## Integration with cf-code-editor
 

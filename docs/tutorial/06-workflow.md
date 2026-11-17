@@ -266,7 +266,11 @@ Chapter 3 insisted on them. Keep assertions deterministic — no
 (`fetchJson` and friends) can still be tested deterministically: export a
 module-scope `fetchMocks` array from the test file and the harness injects
 it as the runtime's fetch (worked examples in
-`patterns/examples/fetch-json/fetch-mock.test.tsx`). The guidance from the
+`patterns/examples/fetch-json/fetch-mock.test.tsx`). Patterns that ask a
+language model are tested the same way: a module-scope `llmMocks` array
+states each answer the model gives, and a request the test states no answer
+for fails the test (see `docs/common/workflows/pattern-testing.md`). The
+guidance from the
 canonical guide: primary verification is still runtime behavior; write
 tests for logic that's awkward or expensive to verify by clicking.
 

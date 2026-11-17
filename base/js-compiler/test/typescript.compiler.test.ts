@@ -5,11 +5,14 @@ import { stub } from "@std/testing/mock";
 import { StaticCache } from "@commonfabric/static";
 import { transformCfDirective } from "@commonfabric/ts-transformers";
 
+import ts from "typescript";
+
 import {
   type AuthoredSourceLookup,
   CompilerError,
   getTypeScriptEnvironmentTypes,
   InMemoryProgram,
+  type Program,
   type SourceMap,
   type TransformerDiagnosticInfo,
   TransformerError,
@@ -509,6 +512,134 @@ export function render() {
     );
   });
 
+  it("throws a program-wide diagnostic, such as a missing type library", () => {
+    const compiler = new TypeScriptCompiler({});
+
+    expect(() =>
+      compiler.compileToModules({
+        main: "/main.ts",
+        files: [{ name: "/main.ts", contents: "export default 1;" }],
+      })
+    ).toThrow("File '$types/es2023.d.ts' not found.");
+  });
+
+  it("compileToModulesCollecting reports a program-wide diagnostic under no file", () => {
+    // A compiler given no type libraries misses the ones the options name,
+    // which is a diagnostic about the program rather than about a file.
+    const compiler = new TypeScriptCompiler({});
+
+    const collected = compiler.compileToModulesCollecting({
+      main: "/main.ts",
+      files: [{ name: "/main.ts", contents: "export default 1;" }],
+    });
+
+    expect(collected.diagnostics).toContainEqual({
+      file: "",
+      message: expect.stringContaining("File '$types/es2023.d.ts' not found."),
+    });
+    expect(collected.diagnostics.some((d) => d.file === "/main.ts")).toBe(
+      false,
+    );
+  });
+
+  it("compileToModulesCollecting reports a syntax error at its line", () => {
+    const compiler = new TypeScriptCompiler(types);
+
+    const collected = compiler.compileToModulesCollecting({
+      main: "/main.ts",
+      files: [{ name: "/main.ts", contents: "export const a = 1;\n}x" }],
+    });
+
+    expect(collected.diagnostics).toContainEqual({
+      file: "/main.ts",
+      message: "2: Declaration or statement expected.",
+    });
+  });
+
+  it("compileToModulesCollecting reports transformer errors and no warnings", () => {
+    const compiler = new TypeScriptCompiler(types);
+    const diagnostic = (
+      severity: TransformerDiagnosticInfo["severity"],
+    ): TransformerDiagnosticInfo => ({
+      severity,
+      type: "test",
+      message: `a transformer ${severity}`,
+      fileName: "/main.ts",
+      line: 1,
+      column: 1,
+      start: 0,
+      length: 1,
+    });
+
+    const collected = compiler.compileToModulesCollecting(
+      {
+        main: "/main.ts",
+        files: [{ name: "/main.ts", contents: "export default 1;" }],
+      },
+      {
+        beforeTransformers: () => ({
+          factories: [],
+          getDiagnostics: () => [diagnostic("warning"), diagnostic("error")],
+        }),
+      },
+    );
+
+    expect(collected.diagnostics).toEqual([
+      { file: "/main.ts", message: "1: a transformer error" },
+    ]);
+  });
+
+  it("compileToModulesCollecting checks against a runtime module's declarations and emits no module for them", () => {
+    const compiler = new TypeScriptCompiler(types);
+    const program = (argument: string) => ({
+      main: "/main.ts",
+      files: [
+        {
+          name: "/main.ts",
+          contents:
+            `import { add } from '@std/math';\nexport default add(${argument}, 2);`,
+        },
+        {
+          name: "@std/math.d.ts",
+          contents:
+            "export declare function add(x: number, y: number): number;",
+        },
+      ],
+    });
+
+    const clean = compiler.compileToModulesCollecting(program("1"), {
+      runtimeModules: ["@std/math"],
+    });
+    expect(clean.diagnostics).toEqual([]);
+    expect([...clean.modules.keys()]).toEqual(["/main.ts"]);
+
+    const wrong = compiler.compileToModulesCollecting(program("'1'"), {
+      runtimeModules: ["@std/math"],
+    });
+    expect(wrong.diagnostics).toContainEqual({
+      file: "/main.ts",
+      message:
+        "2: Argument of type 'string' is not assignable to parameter of type 'number'.",
+    });
+  });
+
+  it("compileToModulesCollecting throws when two sources collide on one emit target", () => {
+    const compiler = new TypeScriptCompiler(types);
+
+    expect(() =>
+      compiler.compileToModulesCollecting({
+        main: "/main.ts",
+        files: [
+          { name: "/main.ts", contents: "import './a.tsx'; export {};" },
+          { name: "/a.ts", contents: "export const a = 1;" },
+          { name: "/a.tsx", contents: "export const b = 2;" },
+        ],
+      })
+    ).toThrow(
+      "Ambiguous emit target: '/a.ts' and '/a.tsx' both compile to '/a.js'",
+    );
+  });
+
   it("compileToModulesCollecting times each authored file separately", async () => {
     // What a batch caller charges each of the programs it unioned. Only
     // authored files carry a figure: the declaration libs emit nothing and
@@ -699,6 +830,80 @@ export function render() {
     );
   });
 
+  it("throws for a program whose main module it does not hold", () => {
+    const compiler = new TypeScriptCompiler(types);
+    const artifact = {
+      main: "/main.ts",
+      files: [{ name: "/other.ts", contents: "export default 1;" }],
+    };
+
+    expect(() => compiler.compileToModules(artifact)).toThrow(
+      'No main module "/main.ts" in source.',
+    );
+    expect(() => compiler.compileToModulesCollecting(artifact)).toThrow(
+      'No main module "/main.ts" in source.',
+    );
+  });
+
+  it("hands the transformed program to getTransformedProgram", () => {
+    const compiler = new TypeScriptCompiler(types);
+    const renameOne: ts.TransformerFactory<ts.SourceFile> =
+      (context) => (sourceFile) =>
+        ts.visitEachChild(
+          sourceFile,
+          function visit(node): ts.Node {
+            return ts.isNumericLiteral(node) && node.text === "1"
+              ? ts.factory.createNumericLiteral(2)
+              : ts.visitEachChild(node, visit, context);
+          },
+          context,
+        );
+    const transformed: Program[] = [];
+
+    compiler.compileToModules(
+      {
+        main: "/main.ts",
+        files: [
+          {
+            name: "/main.ts",
+            contents: "import { one } from './dep.ts';\nexport default one;",
+          },
+          { name: "/dep.ts", contents: "export const one = 1;" },
+        ],
+      },
+      {
+        beforeTransformers: () => [renameOne],
+        getTransformedProgram: (program) => transformed.push(program),
+      },
+    );
+
+    expect(transformed).toEqual([{
+      main: "/main.ts",
+      files: [
+        {
+          name: "/main.ts",
+          contents: "import { one } from './dep.ts';\nexport default one;\n",
+        },
+        { name: "/dep.ts", contents: "export const one = 2;\n" },
+      ],
+    }]);
+  });
+
+  it("hands no transformed program over when nothing transforms it", () => {
+    const compiler = new TypeScriptCompiler(types);
+    const transformed: Program[] = [];
+
+    compiler.compileToModules(
+      {
+        main: "/main.ts",
+        files: [{ name: "/main.ts", contents: "export default 1;" }],
+      },
+      { getTransformedProgram: (program) => transformed.push(program) },
+    );
+
+    expect(transformed).toEqual([]);
+  });
+
   it("Typechecks a runtime dependency, providing typedefs", async () => {
     const compiler = new TypeScriptCompiler(types);
     const program = new InMemoryProgram("/main.tsx", {
@@ -748,6 +953,30 @@ export function render() {
     };
     expect(() => compiler.compileToModules(badProgram, { specifierAliases }))
       .toThrow(`has no exported member 'missing'.`);
+  });
+
+  it("resolves a specifier alias naming a `.ts` file", () => {
+    const compiler = new TypeScriptCompiler(types);
+    const specifierAliases = new Map([["x-scheme:thing", "/dep.ts"]]);
+    const program = (imported: string) => ({
+      main: "/main.ts",
+      files: [
+        {
+          name: "/main.ts",
+          contents:
+            `import { ${imported} } from "x-scheme:thing";\nexport const run = ${imported};`,
+        },
+        { name: "/dep.ts", contents: `export const value: string = "ok";` },
+      ],
+    });
+
+    expect(
+      compiler.compileToModules(program("value"), { specifierAliases })
+        .get("/main.ts")!.js,
+    ).toContain('require("x-scheme:thing")');
+    expect(() =>
+      compiler.compileToModules(program("missing"), { specifierAliases })
+    ).toThrow(`has no exported member 'missing'.`);
   });
 
   it("Resolves nested relative type imports from runtime module typedefs", async () => {

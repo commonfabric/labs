@@ -1,6 +1,7 @@
 /** Durable link epochs and revocations: a router cannot revive client authority. */
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
@@ -356,4 +357,59 @@ Deno.test("an earlier toolshed's ledger near its bound compacts as it loads and 
     store.close();
     Deno.removeSync(directory, { recursive: true });
   }
+});
+
+describe("RoutedEpochStore", () => {
+  describe("loading a ledger", () => {
+    it("treats an epoch line repeated after its retirement as an epoch consumed again, which the restart retires", async () => {
+      const directory = Deno.makeTempDirSync(), path = `${directory}/ledger`;
+      const router = (await Identity.fromRaw(new Uint8Array(32).fill(97)))
+        .did();
+      const longAgo = Math.floor(Date.now() / 1000) - 2 * RETENTION;
+      Deno.writeTextFileSync(
+        path,
+        [
+          ["epoch", router, epoch(1)],
+          ["retire", router, epoch(1), longAgo],
+          ["epoch", router, epoch(1)],
+        ].map((record) => `${JSON.stringify(record)}\n`).join(""),
+      );
+      const store = new RoutedEpochStore(path);
+      try {
+        const loaded = Math.floor(Date.now() / 1000);
+        // The old retirement no longer holds, so the epoch's retention
+        // period runs from the load.
+        expect(() => store.consume(router, epoch(1), loaded)).toThrow(
+          "Routed memory request denied",
+        );
+        expect(
+          Deno.readTextFileSync(path).split("\n").filter((line) =>
+            line.startsWith('["epoch"')
+          ),
+        ).toEqual([JSON.stringify(["epoch", router, epoch(1)])]);
+        store.consume(router, epoch(1), loaded + RETENTION + 1);
+      } finally {
+        store.close();
+        Deno.removeSync(directory, { recursive: true });
+      }
+    });
+    it("throws for a record of a kind it does not know", async () => {
+      const directory = Deno.makeTempDirSync(), path = `${directory}/ledger`;
+      const router = (await Identity.fromRaw(new Uint8Array(32).fill(98)))
+        .did();
+      try {
+        Deno.writeTextFileSync(
+          path,
+          `${JSON.stringify(["epoch", router, epoch(1)])}\n${
+            JSON.stringify(["forget", router, epoch(1)])
+          }\n`,
+        );
+        expect(() => new RoutedEpochStore(path)).toThrow(
+          "Routed memory request denied",
+        );
+      } finally {
+        Deno.removeSync(directory, { recursive: true });
+      }
+    });
+  });
 });

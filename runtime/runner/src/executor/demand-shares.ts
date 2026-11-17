@@ -16,6 +16,7 @@ import {
 export type SessionOfShare = {
   readonly principal: string | undefined;
   readonly servingOwn?: true;
+  readonly notDemand?: true;
 };
 
 /**

@@ -485,7 +485,7 @@ start_server "$TOOLSHED_LOG" \
     EXPOSE_GC=true \
     API_URL="$TOOLSHED_API_URL" \
     MEMORY_URL="$TOOLSHED_MEMORY_URL" \
-    deno run --unstable-otel -A \
+    deno run --unstable-otel -A --v8-flags=--max-old-space-size=16384 \
         $INSPECT_FLAG $WATCH_FLAG \
         --env-file=.env index.ts --port="$TOOLSHED_PORT"
 TOOLSHED_PID=$!

@@ -1,0 +1,1 @@
+{"date": "2026-12-01", "from": {"k": "unit", "s": "tasks", "n": "test-records-gather > the command line continuous integration runs > refuses a command line that names no output directory"}, "to": {"k": "unit", "s": "tasks", "n": "test-records-gather > runGatherCommand() > returns 2 and prints the usage for a command line that names no output directory"}}

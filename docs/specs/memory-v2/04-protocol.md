@@ -705,12 +705,15 @@ Rules:
   the field would open, or refuse, the session without redeeming anything
 - a session that no one waits on declares `demand: false`: a server-side
   component that reads and writes a space as an ordinary client and keeps its
-  sessions open for as long as it runs, such as a toolshed's webhook runtime.
-  A value other than `false` refuses the message. A client declares it on
-  every open, a resume included. A server running the serving loop counts
-  such a session of its service identity as the loop's own: it neither
-  activates the space, nor keeps it from parking, nor adds to its demand
-  (`server-side-execution/serving-loop.md` §1). A server that does not know the
+  sessions open for as long as it runs, such as a toolshed's webhook runtime,
+  or a client that only copies a space's documents, such as a command-line
+  tool's local mirror. A value other than `false` refuses the message. A
+  client declares it on every open, a resume included. A server running the
+  serving loop leaves such a session out of client demand, whichever identity
+  signed it: it neither activates the space, nor keeps it from parking, nor
+  adds to its demand (`server-side-execution/serving-loop.md` §1). The
+  session still reads and writes as any other; what it gives up is the
+  server deriving anything on its account. A server that does not know the
   field ignores it, and the session counts as it did before;
 - a session whose runtime names instances declares `instanceNames: true`, and
   one that declares nothing is positional; a value other than `true` refuses

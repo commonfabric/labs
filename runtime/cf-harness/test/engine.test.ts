@@ -1,11 +1,15 @@
 import { checkoutDocsCorpusRoots } from "../src/docs-corpus/corpus.ts";
 import { resolveHarnessSkillsRoot } from "../src/skills/root.ts";
+import { discoverHarnessSkills } from "../src/skills/registry.ts";
 import {
   assertEquals,
   assertExists,
   assertRejects,
   assertThrows,
 } from "@std/assert";
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
 import type { HarnessArtifactStore } from "../src/artifacts.ts";
 import { harnessFabricSessionPosture } from "../src/cfc-posture.ts";
@@ -14,6 +18,8 @@ import { createHarnessCfcPolicySnapshot } from "../src/contracts/cfc-policy-snap
 import { createHarnessPolicyEvent } from "../src/contracts/policy.ts";
 import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts";
 import type { HarnessSkillResourceReads } from "../src/contracts/skill.ts";
+import { createHarnessPolicyTrace } from "../src/contracts/policy-trace.ts";
+import type { BuiltinToolId } from "../src/contracts/tool-descriptor.ts";
 import { createToolOutputId } from "../src/contracts/tool-result.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
 import { CAPABILITY_PROBE_SENTINEL } from "../src/diagnostics.ts";
@@ -2441,4 +2447,361 @@ Deno.test("CfHarnessEngine records the same read ceiling in a delegated child as
     recorded.readMaxConfidentiality,
   );
   assertEquals(child.getRunState().fabricSessionCfc?.readOnExceed, "skip");
+});
+
+describe("engine", () => {
+  describe("CfHarnessEngine", () => {
+    /** An artifact store whose writes succeed unless `overrides` replaces them. */
+    const fakeArtifactStore = (
+      artifactRoot: string,
+      overrides: Partial<HarnessArtifactStore> = {},
+    ): HarnessArtifactStore => {
+      const runRoot = join(artifactRoot, "run");
+      return {
+        artifactRoot,
+        runRoot,
+        persistRunState: () => Promise.resolve(join(runRoot, "run-state.json")),
+        persistTranscript: () =>
+          Promise.resolve(join(runRoot, "transcript.json")),
+        persistCapabilitySnapshot: () =>
+          Promise.resolve(join(runRoot, "capabilities.json")),
+        persistCfcPolicySnapshot: () =>
+          Promise.resolve(join(runRoot, "cfc-policy.json")),
+        persistPolicyTrace: () =>
+          Promise.resolve(join(runRoot, "policy-trace.json")),
+        persistRunReport: () =>
+          Promise.resolve(join(runRoot, "run-report.json")),
+        persistToolOutput: () =>
+          Promise.resolve(join(runRoot, "tool-output.json")),
+        ...overrides,
+      };
+    };
+
+    const failureSources = (engine: CfHarnessEngine) =>
+      (engine.getRunState().failureRecords ?? []).map((record) =>
+        record.source
+      );
+
+    describe("constructor()", () => {
+      const codexRun = (credentialOwnerKey?: string): HarnessRunState => ({
+        runId: "run-codex-owner-key",
+        status: "failed",
+        createdAt: "2026-07-23T20:00:00.000Z",
+        updatedAt: "2026-07-23T20:00:01.000Z",
+        cfcEnforcementMode: "disabled",
+        currentDir: "/workspace",
+        modelProvider: "openai-codex",
+        ...(credentialOwnerKey !== undefined ? { credentialOwnerKey } : {}),
+        policyEvents: [],
+        toolOutputs: [],
+        failureRecords: [],
+      });
+
+      it("resumes an openai-codex run under its recorded credential owner key", () => {
+        const engine = new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          runState: codexRun("loom:recorded"),
+        });
+        expect(engine.config.credentialOwnerKey).toBe("loom:recorded");
+      });
+
+      it("resumes an openai-codex run that recorded no key under the requested key", () => {
+        const engine = new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          runState: codexRun(),
+          credentialOwnerKey: "loom:requested",
+        });
+        expect(engine.config.credentialOwnerKey).toBe("loom:requested");
+      });
+    });
+
+    describe("persistPolicyTrace()", () => {
+      const trace = createHarnessPolicyTrace({
+        generatedAt: "2026-04-17T20:00:00.000Z",
+        runId: "run-trace",
+        cfcEnforcementMode: "observe",
+      });
+
+      it("keeps the trace and records a failure when its artifact cannot be written", async () => {
+        const engine = new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          runId: "run-trace",
+          artifactStore: fakeArtifactStore("/tmp/cf-harness-trace", {
+            persistPolicyTrace: () =>
+              Promise.reject(new Error("trace persist boom")),
+          }),
+        });
+
+        expect(await engine.persistPolicyTrace(trace)).toBeUndefined();
+        expect(engine.getRunState().policyTrace).toEqual(trace);
+        expect(engine.getRunState().policyTracePath).toBeUndefined();
+        expect(failureSources(engine)).toEqual(["policy_trace"]);
+      });
+
+      it("returns the artifact path and records no failure when the write succeeds", async () => {
+        const engine = new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          runId: "run-trace",
+          artifactStore: fakeArtifactStore("/tmp/cf-harness-trace"),
+        });
+
+        expect(await engine.persistPolicyTrace(trace)).toBe(
+          "/tmp/cf-harness-trace/run/policy-trace.json",
+        );
+        expect(failureSources(engine)).toEqual([]);
+      });
+    });
+
+    describe("ensureDiagnosticsInitialized()", () => {
+      it("keeps the capability snapshot and records a failure when its artifact cannot be written", async () => {
+        const engine = new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          runId: "run-capabilities",
+          artifactStore: fakeArtifactStore("/tmp/cf-harness-capabilities", {
+            persistCapabilitySnapshot: () =>
+              Promise.reject(new Error("capabilities persist boom")),
+          }),
+        });
+
+        const state = await engine.ensureDiagnosticsInitialized();
+
+        expect(state.capabilitySnapshot).toBeDefined();
+        expect(state.capabilitiesPath).toBeUndefined();
+        expect(failureSources(engine)).toEqual(["capability_snapshot"]);
+      });
+    });
+
+    describe("materializeAcquiredSkill()", () => {
+      it("refuses a run with no artifact store to write scripts into", async () => {
+        const engine = new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          runId: "run-no-artifacts",
+        });
+
+        await expect(engine.materializeAcquiredSkill({
+          registryId: "owner/repo/skill",
+          commitSha: "abc123",
+          scripts: [],
+        })).rejects.toThrow(
+          "acquiring a skill's scripts requires a run that can write artifacts",
+        );
+      });
+    });
+
+    describe("builtinToolEffectClass()", () => {
+      it("rejects a name no builtin tool answers to", async () => {
+        const engine = new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+        });
+
+        await expect(
+          engine.builtinToolEffectClass("retired_tool" as BuiltinToolId, {}),
+        ).rejects.toThrow("unknown builtin tool: retired_tool");
+        expect(await engine.builtinToolEffectClass("read_file", {})).toBe(
+          "read",
+        );
+      });
+    });
+
+    describe("invokeBuiltinTool()", () => {
+      it("rejects a name no builtin tool answers to before probing the sandbox", async () => {
+        const sandbox = new FakeSandboxRuntime();
+        const engine = new CfHarnessEngine({ sandboxRuntime: sandbox });
+
+        await expect(
+          engine.invokeBuiltinTool("retired_tool" as BuiltinToolId, {}),
+        ).rejects.toThrow("unknown builtin tool: retired_tool");
+        expect(sandbox.shellRequests).toEqual([]);
+      });
+
+      it("records a failure when a submitted result's path runs through a file", async () => {
+        const root = await Deno.makeTempDir();
+        try {
+          const file = join(root, "file");
+          await Deno.writeTextFile(file, "");
+          const engine = new CfHarnessEngine({
+            sandboxRuntime: new FakeSandboxRuntime(),
+            runId: "run-result-through-file",
+            structuredResult: {
+              schema: { type: "object" },
+              path: join(file, "result.json"),
+            },
+          });
+
+          await expect(
+            engine.invokeBuiltinTool("submit_result", { result: {} }),
+          ).rejects.toThrow();
+          expect(failureSources(engine)).toEqual(["run_error"]);
+        } finally {
+          await Deno.remove(root, { recursive: true });
+        }
+      });
+
+      it("refuses a path named directly inside the artifact root", async () => {
+        const workspaceHostPath = await Deno.makeTempDir();
+        try {
+          const sandbox = new FakeSandboxRuntime();
+          const engine = new CfHarnessEngine({
+            sandboxRuntime: sandbox,
+            runId: "run-artifact-lexical",
+            workspaceHostPath,
+            artifactStore: fakeArtifactStore(
+              join(workspaceHostPath, ".cf-harness-artifacts"),
+            ),
+          });
+
+          const result = await engine.invokeBuiltinTool("read_file", {
+            path: ".cf-harness-artifacts/run/run-state.json",
+          });
+
+          expect(result.output).toMatchObject({
+            ok: false,
+            error: {
+              code: "permission_denied",
+              detail: RESERVED_ARTIFACT_PATH_DETAIL,
+            },
+          });
+          expect(
+            sandbox.shellRequests.filter((request) =>
+              !request.command.includes(CAPABILITY_PROBE_SENTINEL)
+            ),
+          ).toEqual([]);
+        } finally {
+          await Deno.remove(workspaceHostPath, { recursive: true });
+        }
+      });
+
+      it("reads a workspace file while the artifact root does not exist yet", async () => {
+        const workspaceHostPath = await Deno.makeTempDir();
+        try {
+          const engine = new CfHarnessEngine({
+            sandboxRuntime: new FakeSandboxRuntime([
+              { stdout: "notes\n", stderr: "", exitCode: 0 },
+            ]),
+            runId: "run-artifact-missing",
+            workspaceHostPath,
+            artifactStore: fakeArtifactStore(
+              join(workspaceHostPath, "..", "missing-artifacts"),
+            ),
+          });
+
+          const result = await engine.invokeBuiltinTool("read_file", {
+            path: "notes.txt",
+          });
+
+          expect(result.output).toMatchObject({
+            path: "/workspace/notes.txt",
+            content: "notes\n",
+          });
+        } finally {
+          await Deno.remove(workspaceHostPath, { recursive: true });
+        }
+      });
+
+      it("runs a host skill script only from a working directory that exists in the workspace", async () => {
+        const workspaceHostPath = await Deno.realPath(await Deno.makeTempDir());
+        try {
+          const skillsRoot = join(workspaceHostPath, "skills");
+          const skillDir = join(skillsRoot, "demo");
+          await Deno.mkdir(join(skillDir, "scripts"), { recursive: true });
+          await Deno.writeTextFile(
+            join(skillDir, "SKILL.md"),
+            "---\nname: demo\ndescription: Demo skill\n---\n\nRun hello.\n",
+          );
+          await Deno.writeTextFile(
+            join(skillDir, "scripts", "hello.sh"),
+            "#!/bin/bash\necho hello\n",
+            { mode: 0o755 },
+          );
+          const hostRunner = new FakeProcessRunner([
+            { stdout: "hello\n", stderr: "", exitCode: 0 },
+          ]);
+          const engine = new CfHarnessEngine({
+            sandboxRuntime: new FakeSandboxRuntime(),
+            processRunner: hostRunner,
+            workspaceHostPath,
+            skillsRoot,
+            skillScriptExecutionTarget: "host",
+            allowedSkillScripts: [{ skill: "demo", path: "scripts/hello.sh" }],
+            runId: "run-host-script-cwd",
+          });
+          const registry = await discoverHarnessSkills({
+            skillsRoot,
+            sandboxSkillsRoot: "/workspace/skills",
+          });
+          const [skill] = registry.skills;
+          await engine.persistSkillRegistry(registry);
+          await engine.persistSkillActivations({
+            type: "cf-harness.skill-activations",
+            version: 1,
+            generatedAt: "2026-05-01T00:00:00.000Z",
+            activations: [{
+              name: skill.name,
+              source: "cli-preload",
+              runId: "run-host-script-cwd",
+              skillPath: skill.skillPath,
+              skillDir: skill.skillDir,
+              sandboxSkillPath: skill.sandboxSkillPath,
+              sandboxSkillDir: skill.sandboxSkillDir,
+              digest: skill.digest,
+              activatedAt: "2026-05-01T00:00:00.000Z",
+              cfcPromptRole: "context",
+            }],
+          });
+
+          const missing = await engine.invokeBuiltinTool("run_skill_script", {
+            skill: "demo",
+            path: "scripts/hello.sh",
+            cwd: "/workspace/missing",
+          });
+          expect(missing.output).toMatchObject({
+            status: "error",
+            error: {
+              code: "permission_denied",
+              message:
+                "host skill scripts must execute from a workspace path outside cf-harness artifacts",
+            },
+          });
+          expect(hostRunner.calls).toEqual([]);
+
+          const present = await engine.invokeBuiltinTool("run_skill_script", {
+            skill: "demo",
+            path: "scripts/hello.sh",
+            cwd: "/workspace",
+          });
+          expect(present.output).toMatchObject({ status: "executed" });
+          expect(hostRunner.calls.map((call) => call.cwd)).toEqual([
+            workspaceHostPath,
+          ]);
+        } finally {
+          await Deno.remove(workspaceHostPath, { recursive: true });
+        }
+      });
+
+      it("reports an image path outside every host mount", async () => {
+        const workspaceHostPath = await Deno.makeTempDir();
+        try {
+          const engine = new CfHarnessEngine({
+            sandboxRuntime: new FakeSandboxRuntime(),
+            runId: "run-image-outside",
+            workspaceHostPath,
+          });
+
+          const result = await engine.invokeBuiltinTool("view_image", {
+            path: "/elsewhere/picture.png",
+          });
+
+          expect(result.output).toMatchObject({
+            ok: false,
+            error: {
+              detail:
+                "path escapes host-backed sandbox roots: /elsewhere/picture.png",
+            },
+          });
+        } finally {
+          await Deno.remove(workspaceHostPath, { recursive: true });
+        }
+      });
+    });
+  });
 });

@@ -553,6 +553,11 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
     make: () => new FabricHash(new Uint8Array(32).fill(0xab), "sha256"),
   },
   {
+    name: "hash under the algorithm tag my_hash",
+    section: SECTION_HASH,
+    make: () => new FabricHash(new Uint8Array([1]), "my_hash"),
+  },
+  {
     name: "hash under an algorithm tag of 65 UTF-8 bytes",
     section: SECTION_HASH,
     make: () => new FabricHash(new Uint8Array([1]), "t".repeat(65)),
@@ -843,6 +848,11 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
     name: "unknown value under a tag with prefixes",
     section: SECTION_INSTANCE,
     make: () => new UnknownValue("sys.beep.Boop@1", null),
+  },
+  {
+    name: "unknown value under a tag holding underscores",
+    section: SECTION_INSTANCE,
+    make: () => new UnknownValue("_sys.beep_x.Boop_@1", null),
   },
 
   // Cycles, and sharing.

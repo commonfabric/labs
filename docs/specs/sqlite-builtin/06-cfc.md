@@ -870,7 +870,8 @@ key and the result cell's coordinates. The salt is a runtime secret
 (`runtime/runner/src/runtime-secret.ts`): one document per space at a
 reserved id, minted with a random value by the first settle that needs it.
 The transaction write chokepoint refuses every unprivileged write to that id,
-and the one writer, `ensureRuntimeSecret()`, returns nothing; the read
+and the one writer, `ensureRuntimeSecret()`, refuses a caller without the
+runtime's authorization and returns the salt only to the runtime; the read
 chokepoint refuses every read of its value but the runtime's own, so no
 executed code reads the salt. A stored salt is trusted only when its stored
 schema carries the writer claim `writeAuthorizedBy: ["runtime-secret"]`, which

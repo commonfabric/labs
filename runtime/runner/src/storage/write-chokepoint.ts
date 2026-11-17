@@ -5,13 +5,20 @@
  * The chokepoint is where a write reaching a document's runtime-owned
  * members is judged: the meta fields of `meta-seam.ts`, which it refuses
  * unless the runtime authorizes the write, and the reserved siblings of
- * `reserved-sibling-seam.ts`, which it records for the commit boundary. The
- * storage transaction is reachable as the extended transaction's `.tx`, so a
- * write made there would skip both. It refuses a write that changes either
+ * `reserved-sibling-seam.ts`, which it records for the commit boundary. It is
+ * also where a write's identity is noted for CFC preparation. The storage
+ * transaction is reachable as the extended transaction's `.tx`, so a write
+ * made there would skip all three. It refuses a write that changes either
  * kind of member unless the write carries this mark, which says only that
- * the chokepoint saw it. A symbol cannot be named by a module that did not
- * import it, and the sandbox hands pattern code the builder namespace rather
- * than the runner's modules.
+ * the chokepoint saw it, and reports every other write without it to the
+ * extended transaction, which counts it as made under no identity
+ * (`reportUnmarkedWrites()`).
+ *
+ * The mark keeps an unjudged write from passing as a judged one only for code
+ * that cannot see a marked write's options. The sandbox hands pattern code the
+ * builder namespace rather than the runner's modules, and no transaction. Code
+ * holding the transaction object can read the symbol off a marked write's
+ * options (`Object.getOwnPropertySymbols()`), or import this module by path.
  */
 
 import { isObjectNotArray } from "@commonfabric/js-values/types";

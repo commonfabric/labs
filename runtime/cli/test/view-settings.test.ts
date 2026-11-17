@@ -298,7 +298,7 @@ describe("settings", () => {
         },
         {
           kind: "checkBox",
-          label: "Quit when the pushed branch's pull request opens",
+          label: "Quit when the pull request opens or merges",
           hotkey: "q",
           checked: true,
         },
@@ -702,7 +702,7 @@ describe("settings", () => {
 
       s.handleKey({ name: "home" });
       const start = drawnRows(s);
-      expect(start[shown.y]).toMatch(/ x{50}►/);
+      expect(start[shown.y]).toMatch(/ x{44}►/);
     });
 
     it("lists `O` in the help", () => {

@@ -36,6 +36,12 @@ export {
   SPACE_INVITE_CAPABILITY,
   SpaceInviteError,
 } from "@commonfabric/memory/space-invites";
+export {
+  buildSpaceLink,
+  parseSpaceLink,
+  SpaceLinkError,
+} from "@commonfabric/memory/space-links";
+export type { SpaceLink } from "@commonfabric/memory/space-links";
 export type {
   CreateInvite,
   InviteAccess,

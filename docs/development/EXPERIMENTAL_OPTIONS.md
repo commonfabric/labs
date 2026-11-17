@@ -3136,8 +3136,7 @@ sweep does not mistake them for missing experimental flags:
 - **Runner diagnostics** (environment): `CF_TRAVERSE_CAPTURE`,
   `CF_TRAVERSE_CAPTURE_MAX`, `CF_TRAVERSE_DIAGNOSTICS`. What each one does is in
   [the configuration reference](./CONFIGURATION.md#runner-diagnostics).
-- **CLI controls** (environment): `CF_EXEC_SHEBANG`, `CF_CLI_TRACE_TIMINGS`,
-  `CF_PROFILE_DONE_MARKER`.
+- **CLI controls** (environment): `CF_EXEC_SHEBANG`, `CF_CLI_TRACE_TIMINGS`.
 - **`CF_ADOPT_SERVER_FLAGS`** — set to `false` to stop a client that is not
   built alongside its server from adopting that deployment's posture, leaving
   it on its own environment. An escape hatch over the mechanism, not a flag

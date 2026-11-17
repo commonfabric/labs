@@ -5,7 +5,7 @@
  * dropped on it or pinned from elsewhere as the chat's attachments, and shows
  * a peek at the latest reply while the history is folded away.
  *
- * The test environment has no language model, so a message the test sends is
+ * The test states that the model fails, so a message the test sends is
  * answered by the dialog's error reply. That reply is still an assistant
  * message, which is what the peek is about.
  */
@@ -27,6 +27,14 @@ import {
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
 import OmniboxFAB, { latestAssistantText, wishTool } from "./omnibox-fab.tsx";
+
+// The model fails the reply to the message the test sends.
+export const llmMocks = [
+  {
+    when: { lastMessageContains: "hello" },
+    error: "The model is unavailable.",
+  },
+];
 
 type Pinned = { path: string; name: string };
 type Message = { role: string; content: unknown };
@@ -269,7 +277,7 @@ export default pattern(() => {
       { assertion: assert_wish_navigates },
     ],
     fab,
-    // The dialog warns when it cannot reach the language model.
+    // The dialog warns when the model fails.
     allowConsoleWarnings: true,
   };
 });

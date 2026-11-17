@@ -140,6 +140,17 @@ describe("check-verb-session-sync", () => {
         .toEqual([["cf", "cell", "get", "--piece", "a", "x"]]);
     });
 
+    it("reads a `pending` line's first argument as the command it promises, without its space flag", () => {
+      expect(
+        demoCommands(`pending 'cf cell get -s home --piece a x' 'not yet'`),
+      )
+        .toEqual([["cf", "cell", "get", "--piece", "a", "x"]]);
+    });
+
+    it("finds no command in a `pending` line that names none", () => {
+      expect(demoCommands("pending")).toEqual([]);
+    });
+
     it("ignores a helper it does not know", () => {
       // The head list is the whole of what makes a line a command the demo
       // ran; a new helper that executes one has to be added to it.

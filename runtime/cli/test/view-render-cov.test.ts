@@ -19,7 +19,7 @@ import {
   renderFrame,
   type ViewState,
 } from "../lib/view/render.ts";
-import { stripAnsi } from "../lib/view/ansi.ts";
+import { stripAnsi, term } from "../lib/view/ansi.ts";
 import type { StructureKind, StructureNode } from "../lib/view/model.ts";
 
 function baseView(over: Partial<ViewState> = {}): ViewState {
@@ -930,6 +930,20 @@ Deno.test("cellsToAnsi: encodes rich text attributes", () => {
   assert(out.includes("\x1b[3m"), "italic → SGR 3");
   assert(out.includes("\x1b[4m"), "underline → SGR 4");
   assert(out.includes("\x1b[9m"), "strikethrough → SGR 9");
+});
+
+Deno.test("cellsToAnsi: wraps each run of linked cells in a terminal link, ending one that reaches the last cell", () => {
+  const url = "https://example.test/";
+  const cells = [
+    { ch: "a", style: {} },
+    { ch: "b", style: {}, link: url },
+    { ch: "c", style: {}, link: url },
+  ];
+  assertEquals(
+    _internal.cellsToAnsi(cells, true),
+    `a${term.linkStart(url)}bc${term.linkEnd}`,
+  );
+  assertEquals(_internal.cellsToAnsi(cells, false), "abc");
 });
 
 Deno.test("mergeBg: overlays a background, or leaves the style when there is none", () => {

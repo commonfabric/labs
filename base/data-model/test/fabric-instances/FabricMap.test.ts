@@ -40,6 +40,21 @@ describe("FabricMap", () => {
   });
 
   describe("instance members", () => {
+    describe("map", () => {
+      it("returns the wrapped `Map` itself rather than a copy", () => {
+        const wrapped = new Map<FabricValue, FabricValue>([["k", 1]]);
+        const other = new Map<FabricValue, FabricValue>([["k", 1]]);
+        const instance = new FabricMap(wrapped);
+        expect(instance.map).toBe(wrapped);
+        expect(instance.map).not.toBe(other);
+      });
+
+      it("returns a wrapped `FrozenMap` as is", () => {
+        const wrapped = new FrozenMap<FabricValue, FabricValue>([["k", 1]]);
+        expect(new FabricMap(wrapped).map).toBe(wrapped);
+      });
+    });
+
     describe("toNativeValue()", () => {
       it("returns a `FrozenMap` when `frozen` is `true`", () => {
         const map = new Map<FabricValue, FabricValue>([["a", 1]]);

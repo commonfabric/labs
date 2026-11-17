@@ -371,8 +371,8 @@ Landed:
   arrivals at one cell are one position as [`grammar.md`](grammar.md)
   promises. The name is decision 13's checked name: the prompt shows it
   because a read confirmed it, and `pwd` prints the piece — a resolution
-  answers with a piece's own id, which is the form `namesResolvedParts` takes
-  for a durable link. `enter` is the one door
+  answers with a piece's own id, the self-identifying piece form a durable link
+  requires. `enter` is the one door
   that lands a piece without a read, the fabric having resolved the target
   already, and it refuses an address naming its piece by slug so that the
   place holds a piece whichever door reached it.

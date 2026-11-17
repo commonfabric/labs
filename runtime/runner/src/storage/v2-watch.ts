@@ -28,6 +28,7 @@ import {
   decomposeSchema,
   recomposeSchema,
   SchemaNotDecomposableError,
+  SchemaNotRecomposableError,
 } from "../schema-decompose.ts";
 import { getContentAddressedSchemasConfig } from "../schema-doc-config.ts";
 import {
@@ -156,12 +157,13 @@ const inlineFormOf = (decomposed: DecomposedSchema): JSONSchema =>
  * A decomposition refusal keeps the selector exactly as given when the
  * schema carries no references — inline is inline, and the server accepts
  * it. Refusal is structural as often as it is a missing document, so a
- * ref-bearing refusal splits on what the SERVER can answer: a schema
- * whose every reference the target space is confirmed to persist passes
- * through as given, and any other throws
+ * ref-bearing refusal, or a stored document that does not fit the reference
+ * to it and so cannot be recomposed, splits on what the SERVER can answer:
+ * a schema whose every reference the target space is confirmed to persist
+ * passes through as given, and any other throws
  * {@link SelectorClosureUnavailableError} — a document held only in the
- * local registry backs nothing on the wire, the structural refusal rules
- * out recomposing inline, and emitting would violate the client's
+ * local registry backs nothing on the wire, the refusal rules out
+ * recomposing inline, and emitting would violate the client's
  * send-only-what-you-can-back obligation while spending a round trip on
  * the server's refusal. The retainer invariant is one instance: a
  * reference dies with the registry epoch that minted it, and every
@@ -201,7 +203,10 @@ export const externalizeSyncSelector = (
       schema: inlineFormOf(decomposed),
     });
   } catch (error) {
-    if (error instanceof SchemaNotDecomposableError) {
+    if (
+      error instanceof SchemaNotDecomposableError ||
+      error instanceof SchemaNotRecomposableError
+    ) {
       if (!carriesRefs) return selector;
       // Decomposition refuses for structural reasons too — a nested
       // `$defs`, a `$id`, an unsupported `$ref` form — and those say
@@ -213,9 +218,9 @@ export const externalizeSyncSelector = (
       // exactly when every reference is confirmed persisted there — a
       // persisted document's closure persisted with it, the same
       // write-side guarantee the decomposing arm leans on — and otherwise
-      // this throws: rebuilding the inline form needs the decomposition
-      // that just refused, and emitting would only move the failure to
-      // the server's refusal.
+      // this throws: rebuilding the inline form needs the decomposition or
+      // recomposition that just refused, and emitting would only move the
+      // failure to the server's refusal.
       const unemittable = [
         ...collectExternalSchemaRefHashes(schema as JSONSchemaObj),
       ].filter((hash) => !isContentAddressedDocPersisted(hash));

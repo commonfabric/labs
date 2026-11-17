@@ -2935,6 +2935,7 @@
         "dependencies": [
           "npm:@types/react-dom@19.2.5",
           "npm:@types/react@19.2.18",
+          "npm:happy-dom@^20.14.6",
           "npm:react-dom@19.2.8",
           "npm:react@19.2.8"
         ]
@@ -2973,7 +2974,8 @@
       },
       "dashboard": {
         "dependencies": [
-          "npm:@resvg/resvg-js@2.6.2"
+          "npm:@resvg/resvg-js@2.6.2",
+          "npm:happy-dom@^20.14.6"
         ]
       },
       "patterns": {

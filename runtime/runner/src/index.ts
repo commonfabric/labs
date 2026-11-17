@@ -2,6 +2,7 @@ export {
   decomposeSchema,
   recomposeSchema,
   SchemaNotDecomposableError,
+  SchemaNotRecomposableError,
 } from "./schema-decompose.ts";
 export { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 export { lookupSchemaDocument } from "./schema-registry.ts";
@@ -185,6 +186,7 @@ export {
 } from "./harness/index.ts";
 export {
   PATTERN_COVERAGE_INTEGRATION_TEST_NAME,
+  PATTERN_COVERAGE_MULTI_RUNTIME_TEST_NAME,
   PATTERN_COVERAGE_TEST_NAME,
   PatternCoverageCollector,
   type PatternCoverageData,
@@ -465,6 +467,7 @@ export {
 } from "./sandbox/fabric-import-specifier.ts";
 export { type PinRewrite, rewriteFabricPins } from "./fabric-pin-rewrite.ts";
 export { DEFAULT_CELL_SCOPE } from "./scope.ts";
+export { startWithInputSources } from "./ensure-piece-running.ts";
 export {
   isPieceDocument,
   isPieceRoot,

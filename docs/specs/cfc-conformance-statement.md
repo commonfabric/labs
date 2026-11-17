@@ -425,32 +425,23 @@ dials.
   runtime write of label-derived data arriving unlabeled, is `SC-55`'s
   accepted residual, and for the others a declaration that reaches such a
   document stays a read floor and stops being a write ceiling, as the same
-  section states. A served run's cross-holder misfit, below, is measured on
-  those documents all the same.
-- Under strict, a served run, any wave run context
-  (`isServedRunUnderHolderRule` in `cfc/prepare.ts`), admits a
-  clause it read from a store whose holders don't include every holder of the
-  target only by the target's residency. This implements §8.12.5.1 as proposed
-  in [specs#95](https://github.com/commonfabric/specs/pull/95), which the pin
-  does not hold, ahead of its ruling and under a `SPEC-PENDING` marker naming
-  it; `check-cfc-correspondence` exempts the citation. It refuses writes the
-  pinned §8.12.5 admits, by an authored, upgraded or minted declaration or by
-  the runtime-owned routes above, and persists nothing new: an over-taint
-  against the pin. Against the proposal it differs two ways. Residency's
-  owner case admits a cross-holder `PersonalSpace(P)` clause
-  into a store bound to `P`, which the proposal leaves out pending specs#68
-  and specs#71: an under-taint against the proposal's text, whose holders,
-  `P` alone, are inside that clause's audience. And it inherits the
-  reference-write gap below: a served run that carries a cross-holder clause
-  into a store by reference, rather than by value, is not refused, although
-  the clause is in the slot stamp it persists. A read declared onward, whose
-  membership lands as a stamp the measurement does not reach, is the same,
-  and so is a `data:` link of a media type other than the Fabric codec's,
-  which is written as a reference whose content rides in its URI (the codec's
-  own `data:` links and native snapshots are expanded and written as values,
-  `data-updating.ts`). A SQLite write commits beside a value write of its
-  database document's revision, which writer-fit measures, so a served run's
-  cross-holder clause in it is refused there, as any other write's is.
+  section states.
+- A served run is measured as any run is: its whole join fits a target by
+  §8.12.4 and the options of §8.12.5, whichever store a clause was read from.
+  A serving host reads what its acting principal's own runtime could not
+  (`docs/specs/server-side-execution/protocol.md` §2b, "read a foreign doc"),
+  so a served run can carry a clause its acting principal does not satisfy
+  into a store that principal reads, where it lands labeled. Two boundaries
+  then let it out, and both are open: an under-taint each. The memory server
+  delivers a document to every reader of its space whatever its label admits
+  (Topics top/3173), and a served effect's request is checked against its
+  sink only where the host declares a sink ceiling (Topics top/3174;
+  `served-effect-cross-holder.test.ts` pins a served fetch over another
+  space's private URL going out). An event's payload is delivered unlabeled,
+  so a send drops its sender's clauses (Topics top/3175). The holder rule of
+  [specs#95](https://github.com/commonfabric/specs/pull/95)'s first proposal,
+  which refused such writes by where a clause was read, ran here ahead of its
+  ruling and was removed when the proposal was withdrawn.
 - Writer-fit does not measure a reference or structure write. §8.2.6
   requires "writer-fit for the reference and structure actually persisted,
   including replica audiences", and §8.12.8 that writer-fit and upgrade
@@ -462,9 +453,7 @@ dials.
   such a write persists is the reference's own label, §3 above: the link
   schema's declarations, the handle's carried restriction, and the creating
   attempt's flow join as a pointer-class stamp at the slot. None of it is
-  measured against the target's ceiling: an under-taint. A served run's
-  cross-holder clause (§8.12.5.1, above) is in that stamp, so a measurement
-  of reference writes would bring those writes under the holder rule.
+  measured against the target's ceiling: an under-taint.
 
 ## 6. Idempotent persistence (§4.6.4)
 
@@ -891,67 +880,123 @@ request's `SPEC-PENDING` marker.
 The specification at the pin has no write policy: nothing in it names
 `writePolicyAnyOf`, a list of alternatives at one position, each pairing a
 writer with an optional UI contract. Its rules for a schema that changes a
-stored claim are general: §4.2.2.1 rule 4 has schema evolution preserve the
-IFC contract attached to a path, and §8.15.3 has write authority stable.
+stored claim are general: §4.2.2.1 rule 4 has schema evolution preserve the IFC
+contract attached to a path, and §8.15.3 has write authority stable.
 [specs#96](https://github.com/commonfabric/specs/pull/96), stacked on
 [specs#52](https://github.com/commonfabric/specs/pull/52), proposes the
-construct (§8.15.6.1) and a release that may append an alternative to a stored
-policy (carve-out (c) of §8.15.13, `mergeWritePolicy` and `admissible`).
+construct (§8.15.6.1, "Write-Policy Alternatives"), that a later schema may omit
+a stored alternative, which the merge keeps exactly as stored, in every write, a
+release included, and a release that may append an alternative to a stored
+policy (carve-out (c) of §8.15.13, "Release", `mergeWritePolicy` and
+`admissible`).
 
 **What the runtime does.** `mergeWritePolicyAnyOf` in `cfc/schema-merge.ts`
-matches each stored alternative to a candidate's by content: the same keys,
-the same contract, and writer claims that reconcile as two lone
-`writeAuthorizedBy` claims do (`reconcileWriterClaimStamp`). It keeps the
-stored alternatives as stored, in stored order, whatever order the candidate
-lists them in, and refuses a candidate that lacks one. It appends a
-candidate's alternative that matches none only in a release, and only where
+matches each stored alternative to a candidate's by content: the same keys, the
+same contract, and writer claims that reconcile as two lone `writeAuthorizedBy`
+claims do (`reconcileWriterClaimStamp`). It keeps the stored alternatives as
+stored, in stored order, whatever order the candidate lists them in, and keeps
+one the candidate does not list as stored too, in every write, a release
+included. Its caller says which side is stored (`storedSide`): the persist
+loop's merge of the stored envelope with the writer's schema
+(`mergeStoredCfcEnvelope`), the dry run of that merge
+(`storedCfcEnvelopeMergeIssue`), and the merge of a linked document's stored
+envelope with the schema the transaction writes it under
+(`linkedSourceEvidence`) name the stored envelope; the verification overlay,
+which merges the writer's schema with the claims the merged envelope holds where
+the write puts links, names those claims. A merge of two schemas neither of
+which is stored, such as two inputs of one transaction to the same document,
+refuses a candidate that lacks an alternative. Every write, a link write too, is
+verified against its writer's own schema as well as the stored envelope, so a
+writer the candidate omits writes only under a schema that lists it, and only
+with the stamp that schema gives it. It appends a candidate's alternative that
+matches none only in a release, and only where
 `writePolicyAlternativeAdmissible` admits it: its writer carries a module stamp
 the release installs, and one stored alternative names the same keys and the
 same contract with a writer stamped with that module or with one the space
-attests the installed module succeeds, whose claim the appended one's is but
-for the symbol it binds, a nonempty path of names, and its stamp and file
-spelling. The commit site in
-`prepareBoundaryCommit` (`cfc/prepare.ts`) knows a release by the runtime's
-`release-program` input (`transactionReleasesStore`), names the installed
-modules from it (`releaseProgramModules`), and reads succession from the
-delegations the transaction is pinned to (`moduleSucceeds`), which for a
+attests the installed module succeeds, whose claim the appended one's is but for
+the symbol it binds, a nonempty path of names, and its stamp and file spelling.
+The commit site in `prepareBoundaryCommit` (`cfc/prepare.ts`) knows a release by
+the runtime's `release-program` input (`transactionReleasesStore`), names the
+installed modules from it (`releaseProgramModules`), and reads succession from
+the delegations the transaction is pinned to (`moduleSucceeds`), which for a
 source update's setup include the ones the update proposes. `droppedStoredClaim`
 in `cfc/claim-preservation.ts` checks the merged envelope again, reading it
-independently of how the merge built it: every stored alternative kept,
-wherever it sits. It shares the merge's admission predicate,
-`writePolicyAlternativeAdmissible`, for every other alternative, so a defect
-in that predicate passes both. `piece setsrc --check` and the
-origin-following review merge in dry run through a transaction pinned to the
-delegations the update would propose
-(`PatternManager.proposedSourceUpdateDelegations`,
+independently of how the merge built it: every stored alternative kept, wherever
+it sits. It shares the merge's admission predicate,
+`writePolicyAlternativeAdmissible`, for every other alternative, so a defect in
+that predicate passes both. `piece setsrc --check` and the origin-following
+review merge in dry run through a transaction pinned to the delegations the
+update would propose (`PatternManager.proposedSourceUpdateDelegations`,
 `Runtime.readTxProposingDelegations`), derived from the same verified source
-closures as the update's own where the space holds the candidate's, so the
-check and the commit give one verdict. A candidate the space does not hold
-yet, as `--check` compiles one, is derived from the modules this session
-evaluated it with, which leave out a module the program imports only for its
-types; there the check can refuse an appended writer the commit admits.
+closures as the update's own where the space holds the candidate's, so the check
+and the commit give one verdict. A candidate the space does not hold yet, as
+`--check` compiles one, is derived from the modules this session evaluated it
+with, which leave out a module the program imports only for its types; there the
+check can refuse an appended writer the commit admits.
 
 This implements specs#96 ahead of its ruling, at strict and with no dial:
 @danfuzz ruled that it lands at the strict default with no default-off dial,
 recorded in the correspondence procedure as a nonconforming semantic gap,
-pending specs#96. Against the pin it admits more: an appended writer, and a
-candidate listing the stored alternatives in another order, which the pin's
-general stability rules refuse. So it does not satisfy the correspondence
-procedure's step 4, which asks for a default-off dial for a change admitting
-more. Its four deciding sites, the merge's matching and its append, and the
-keep rule's matching and its admission, carry its `SPEC-PENDING` marker, and the
-kernel manifest carries no row for
-`mergeWritePolicy` until a regenerated snapshot defines it.
+pending specs#96. Against the pin it admits more: an appended writer, a
+candidate listing the stored alternatives in another order, and a candidate
+omitting a stored alternative, which the pin's general stability rules refuse.
+The last follows specs#96 as amended, and @danfuzz ruled on 2026-11-15 that it
+lands the same way, at the strict default with no dial. So it does not satisfy
+the correspondence procedure's step 4, which asks for a default-off dial for a
+change admitting more. Its four deciding sites, the merge's matching and its
+append, and the keep rule's matching and its admission, carry its `SPEC-PENDING`
+marker, and the kernel manifest carries no row for `mergeWritePolicy` until a
+regenerated snapshot defines it.
+
+**The restatement waiver across a release.** A setup that carries a protected
+argument slot over unchanged has its writer refusal deferred and then waived
+where the envelope it would store declares the same policy throughout the
+document ([specs#67](https://github.com/commonfabric/specs/pull/67), §8.15.4,
+which the pin does not have). A release that appends an alternative changes the
+policy at that position, so the waiver's comparison would refuse every release
+of a piece whose argument holds a value under a lone writer claim beside the
+extended policy. In a release, the comparison that stores the derived envelope
+counts such a position as unchanged where the stored alternatives begin the
+derived list, element for element and in order, stamps and files included, each
+further alternative is one `writePolicyAlternativeAdmissible` admits, and every
+other claim there is the same (`ifcDiffersOnlyByReleaseAppend` in
+`cfc/schema-merge.ts`). A position whose logical path the comparison cannot
+tell, or that is at, above or beneath a deferred field, is compared exactly.
+That is specs#67 as amended (§8.15.4, the replayed-setup restatement), which
+decides the deferred paths against the stored envelope's requirements alone;
+the runtime decides them against every schema the write answers to, the
+stored envelope among them, so it compares at least the positions the
+amendment compares exactly. Against the pin the runtime admits more; @danfuzz
+ruled on 2026-11-17 that this lands at the strict default with no dial, ahead
+of specs#67's ruling, under its `SPEC-PENDING` marker.
 
 **Residuals.**
 
 - The merge also requires an appended alternative to hold the same keys as the
   stored one it pairs with, which the proposal does not ask: an over-taint.
-- A drop is refused in every write. A program that retires a writer at a
-  position whose stored envelopes list it can therefore write those documents
-  only through a candidate that still lists the writer's alternative, and an
-  ordinary write of a document that stores fewer alternatives than the program
-  lists is refused as an addition outside a release.
+- An unstamped stored writer claim, lone or a write policy's alternative, is
+  adopted wherever the merge runs: a write whose schema restates it stamped,
+  with a file spelling that corresponds, stamps it in that write, whichever
+  writer makes the write, in a release or outside one. The proposal lets only
+  the writer the stamp names bring the stamp over outside a release (§8.15.13,
+  "Release"), and asks of the spelling a directory as well as a file name
+  (§8.15.1, "Handler-Declared Write Capability"), so the runtime admits more
+  there. A write whose schema differs from the stored envelope only in its
+  stamps takes the persist loop's unchanged-envelope shortcut and adopts
+  nothing. A compiled pattern's claims are stamped when the compiler mints
+  them: a module compile carries each module's identity
+  (`ModuleCompileRequest.moduleIdentities` in `harness/module-compile.ts`),
+  and the schema transformer refuses to mint a claim for a module it has none
+  for (`schema-generator.ts` in `base/ts-transformers`). So an unstamped claim
+  is stored only from a schema the compiler did not mint, or from data stored
+  before claims were minted stamped.
+- A schema declaring an empty list where the document stores a policy is
+  refused by the merge ("the candidate lists no alternative"), whatever the
+  write touches, and one declaring nothing there keeps the stored policy as
+  stored, as the proposal has them. Where the document stores no policy at the
+  position, an empty list is refused as malformed only by a write that touches
+  the position; a write that leaves it untouched stores the empty list, which
+  then admits no writer there.
 
 ## 11. Writer delegations across a source update (§8.11.3)
 
@@ -1049,6 +1094,44 @@ procedure's step 4. Its two deciding sites, the recording in
   link, into a field the granting module protects after the failed staging is
   refused the grant, since that runtime registers it only from the records, and
   is granted nothing more.
-- Records an earlier transition stamped keep their clause, and the setups
-  that read them keep refusing, until a separate repair. A write-back still
-  re-stamps the root of a record that already carries a clause.
+- Records an earlier transition stamped keep their clause until the load
+  ahead of a setup repairs them (`module-loading.md`, "Repairing a stamped
+  record"). The repair erases a stamped compiled record and rewrites a stamped
+  source record to the value the compile-cache writer stores for its identity,
+  which lowers a stored label at strict ahead of the specification's ruling
+  (commonfabric/specs#103, §18.6.2.1). What §18.6.4 asks a repairing runtime
+  to record:
+  - When it runs: in `PatternManager.prepareSourceClosureVerification()`,
+    ahead of a setup that verifies the closure, once a check of the closure's
+    labels finds a stamp. A child a pattern's own graph places in another
+    space is created without that preparation, and is not repaired first
+    (`module-loading.md`).
+  - The identity it writes under: the `compile-cache-repair` builtin, through
+    `writeRepairedCompileCacheRecord()`, which refuses any other identity and
+    any key but a compile-cache record's.
+  - How the attestation at a delegation list is kept to lists the
+    compile-cache writer wrote: the writer mints it only on a list it writes
+    in an attempt of its own, and a write by another identity strips it at
+    the path it reaches, before or after the writer's write
+    (`module-loading.md`, "Per-space containment"). That cannot be
+    established for records a runtime before #9868 wrote, which staged the
+    lists in the update's own transaction. Nor does it hold for a write at
+    the `disabled` rung, which leaves the attestation over a list another
+    writer chose; no shipped host runs `disabled`.
+  - The four residuals it releases: the attested delegation list, carried
+    unlabeled; the cache-root edge set of the entry's record, kept as a set
+    of verified members; existence, since a reader not cleared for the
+    removed clauses learns that the record was once written under a label;
+    and program text a writer chose under a label below strict, released as
+    the canonical value of the record's key.
+
+  A record the repair refuses keeps its clause, and a setup that reads it
+  keeps refusing. A write-back still re-stamps the root of a record that
+  already carries a clause, which a later load repairs again. A closure whose
+  repair lost a race, or whose commit was refused for want of write access, is
+  tried again at its next load; one the repair refused is not tried again in
+  that session. A stamped compiled record of a
+  `fabric:` dependency is not repaired, and a write-back of its importer that
+  reads it re-stamps the importer's compiled record, which the next load
+  erases again; a setup of the importer still commits, since it reads source
+  records only.

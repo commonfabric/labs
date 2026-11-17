@@ -105,6 +105,13 @@ export const durableEntryIdentity = (
     ? identity
     : undefined;
 
+/**
+ * Hashtags as the index stores them: without a leading `#`, lower case. A
+ * doc comment's `@hashtags #Math` and a flag's `math` are the same tag.
+ */
+export const normalizeHashtags = (tags: readonly string[]): string[] =>
+  tags.map((tag) => tag.replace(/^#/, "").toLowerCase());
+
 /** One compiled pattern, in the terms the index stores it under. */
 export interface CompiledPattern {
   /** Absent when the compile produced no durable identity. */

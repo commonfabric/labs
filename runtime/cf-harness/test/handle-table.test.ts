@@ -13,6 +13,7 @@ import {
   assertValidHarnessHandleTable,
   createHarnessHandleTable,
   type HandleTokenHasher,
+  markHandleDescribed,
   mergeHarnessHandleTables,
   mintAddressHandle,
   mintReferentHandle,
@@ -608,6 +609,15 @@ describe("handle-table", () => {
       expect(table.entries[0].ref).toBe(`/of:fid9:${HASH_A}`);
     });
 
+    it("replaces a schemed URI carrying a tagged hash whose tag holds `_`", async () => {
+      const { table, value } = await swapLinksForTokens(
+        createHarnessHandleTable("run-1"),
+        `stored at of:_my_hash_:${HASH_A} today`,
+      );
+      expect(value).toBe(`stored at ${table.entries[0].token} today`);
+      expect(table.entries[0].ref).toBe(`/of:_my_hash_:${HASH_A}`);
+    });
+
     it("consumes an `@space` scope suffix, minting the canonical unsuffixed ref", async () => {
       const { table, value } = await swapLinksForTokens(
         createHarnessHandleTable("run-1"),
@@ -965,6 +975,23 @@ describe("handle-table", () => {
 
       expect(() => assertValidHarnessHandleTable(broken)).toThrow(
         "unknown capability",
+      );
+    });
+
+    it("throws for a described mark other than `true`", async () => {
+      const { table } = await mintAddressHandle(
+        createHarnessHandleTable("run-1"),
+        LINK_A,
+      );
+      const marked = markHandleDescribed(table, table.entries[0].token);
+      expect(() => assertValidHarnessHandleTable(marked)).not.toThrow();
+
+      const broken = {
+        ...table,
+        entries: [{ ...table.entries[0], described: false }],
+      } as unknown as HarnessHandleTable;
+      expect(() => assertValidHarnessHandleTable(broken)).toThrow(
+        "has a described mark that is not `true`",
       );
     });
 

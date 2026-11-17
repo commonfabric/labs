@@ -35,6 +35,7 @@ import {
   type ServingWorkerPoolOptions,
   type WorkerHeapProfile,
 } from "@commonfabric/runner/executor/serving-worker-host";
+import { garbageCollectorExposed } from "@commonfabric/runner/collected-memory";
 import { ModuleCompilerPool } from "@commonfabric/runner/module-compiler-pool";
 import { openSharedCompileCache } from "@commonfabric/runner/compilation-cache/shared-compile-cache.deno";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
@@ -306,8 +307,7 @@ export const DEFAULT_SPARE_SERVING_WORKERS = 1;
 /**
  * The largest a toolshed's serving worker's heap may grow unless told, in
  * megabytes: well above what a worker serving one space holds, about 80 MB,
- * and below the limit V8 gives the toolshed's main thread, a quarter of the
- * machine's memory up to about 4 GB, on a host with 16 GB or more, so a
+ * and well below the 16 GiB the toolshed's main thread is limited to, so a
  * runaway space ends its own worker rather than the process.
  */
 export const DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB = 2048;
@@ -689,6 +689,8 @@ export function startServerExecutionHost(options: {
       ensureSpaceRoots,
       experimental,
       ...pool,
+      // The toolshed exposes the collector at startup (`startServer()`).
+      collectBeforeEnding: garbageCollectorExposed(),
       ...(memoryUrl === undefined ? {} : { route: memoryUrl }),
       moduleCompiler,
       ...(compile.compileCacheDir === undefined

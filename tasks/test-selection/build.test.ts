@@ -3129,6 +3129,13 @@ describe("history held under a name an alias has since replaced", () => {
     expect(kept.prCatches).toBe(1);
   });
 
+  it("leaves where it is history held under a key that names no identity", () => {
+    const states = new Map([["not an identity", either()]]);
+    expect(resolveHistory(states, {}, RENAMED)).toBe(0);
+    expect([...states.keys()]).toEqual(["not an identity"]);
+    expect(states.get("not an identity")).toEqual(either());
+  });
+
   it("adds to the history the new name already holds", () => {
     const states = new Map([
       [testIdentityKey(OLD), { ...either(), newRealTestFailureDays: {} }],

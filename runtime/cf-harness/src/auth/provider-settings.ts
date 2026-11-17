@@ -274,7 +274,6 @@ export class FileHarnessProviderSettingsStore {
       dirname(this.path),
       `.config-${crypto.randomUUID()}.tmp`,
     );
-    let failure: unknown;
     try {
       await Deno.writeTextFile(
         temporaryPath,
@@ -285,16 +284,11 @@ export class FileHarnessProviderSettingsStore {
       signal?.throwIfAborted();
       await Deno.rename(temporaryPath, this.path);
     } catch (error) {
-      failure = error;
+      // The write failure is what the caller needs; a temporary file that
+      // was never created, or cannot be removed, does not change it.
+      await Deno.remove(temporaryPath).catch(() => {});
+      throw error;
     }
-    try {
-      await Deno.remove(temporaryPath);
-    } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound) && failure === undefined) {
-        throw error;
-      }
-    }
-    if (failure !== undefined) throw failure;
   }
 
   initialize(

@@ -181,6 +181,14 @@ export interface CreateHarnessInteractiveChatServiceOptions {
   clientActionIdleTimeoutMs?: number;
 }
 
+/**
+ * Names one run of a turn's task. A task settling compares its token by
+ * identity with the session's, so it clears only its own ownership.
+ */
+interface HarnessActiveTurnToken {
+  readonly turnId: string;
+}
+
 interface HarnessInteractiveChatSessionRecord {
   status: HarnessChatSessionStatus;
 
@@ -217,9 +225,16 @@ interface HarnessInteractiveChatSessionRecord {
 
   startingTurnId?: string;
   startingTurn?: HarnessChatTurnStatus;
-  activeTurnToken?: object;
+  /** Identifies the turn `activeTask` runs; replaced for each new turn. */
+  activeTurnToken?: HarnessActiveTurnToken;
   activeTask?: Promise<void>;
   activeAbortController?: AbortController;
+
+  /**
+   * Settles once the active turn's cancel is recorded, however that went; a
+   * turn that stops first waits for it before it settles.
+   */
+  pendingCancel?: Promise<void>;
   fabricRuntimes: Set<Runtime>;
   canceledTurnIds: Set<string>;
   turns: Map<string, HarnessChatTurnRecord>;
@@ -593,16 +608,6 @@ const malformedTranscriptChatError = (
     transcriptIndex: error.transcriptIndex,
   },
 });
-
-/** Returns a local protocol response for malformed durable history. */
-const malformedTranscriptError = (
-  requestId: string,
-  error: MalformedHarnessChatTranscriptError,
-): HarnessChatErrorResponse =>
-  createHarnessChatErrorResponse(
-    requestId,
-    malformedTranscriptChatError(error),
-  );
 
 /** Returns an explicit tool result whose execution outcome remains unknown. */
 const unknownToolOutcome = (
@@ -1122,18 +1127,20 @@ export class HarnessInteractiveChatService {
     };
   }
 
+  /**
+   * Waits for the session's turn `turnId` to settle, returning at once when it
+   * already has. Throws for a session or turn this service does not know.
+   */
   async waitForTurn(sessionId: string, turnId: string): Promise<void> {
     const record = this.#sessions.get(sessionId);
-    if (record?.activeTask === undefined) {
-      return;
+    if (record === undefined) {
+      throw new Error(`no session ${sessionId}`);
     }
-    await record.activeTask;
-    const latest = this.#sessions.get(sessionId);
-    if (
-      latest?.status.activeTurnId === turnId &&
-      latest.activeTask !== undefined
-    ) {
-      await latest.activeTask;
+    if (!record.turns.has(turnId)) {
+      throw new Error(`session ${sessionId} has no turn ${turnId}`);
+    }
+    if (record.activeTurnToken?.turnId === turnId) {
+      await record.activeTask;
     }
   }
 
@@ -1147,6 +1154,18 @@ export class HarnessInteractiveChatService {
       }
       await Promise.allSettled(tasks);
     }
+  }
+
+  /**
+   * Settles every turn, as {@link waitForIdle} does, then releases the Fabric
+   * runtimes every session holds, for a host that is stopping. The sessions
+   * stay as they are stored, open, so that a later host resumes them on
+   * runtimes of its own. A runtime that fails to release does not stop the
+   * others; the failures are thrown once every release has settled.
+   */
+  async releaseFabricRuntimes(): Promise<void> {
+    await this.waitForIdle();
+    await this.#disposeFabricRuntimes([...this.#sessions.values()]);
   }
 
   /**
@@ -1337,8 +1356,6 @@ export class HarnessInteractiveChatService {
   async handleRequest(
     request: HarnessChatRequestEnvelope,
   ): Promise<HarnessChatResponse> {
-    const requestId = request.requestId;
-    const method = String(request.method);
     switch (request.method) {
       case "start_session":
         return withProtocolEcho(
@@ -1381,11 +1398,6 @@ export class HarnessInteractiveChatService {
           request.requestId,
           await this.listTurnsForReplay(request.params),
         );
-      default:
-        return createHarnessChatErrorResponse(requestId, {
-          code: "invalid_request",
-          message: `unsupported chat request method: ${method}`,
-        });
     }
   }
 
@@ -1555,30 +1567,16 @@ export class HarnessInteractiveChatService {
     if (record.recoveryError !== undefined) {
       return createHarnessChatErrorResponse(requestId, record.recoveryError);
     }
-    let normalizedTranscript: NormalizedHarnessChatTranscript;
-    try {
-      normalizedTranscript = normalizeIncompleteToolExchanges(
-        record.transcript,
-      );
-    } catch (error) {
-      if (error instanceof MalformedHarnessChatTranscriptError) {
-        return malformedTranscriptError(requestId, error);
-      }
-      throw error;
-    }
-    // Under the durable checkpoint invariant this holds by construction. It is
-    // kept after legacy normalization so a regression surfaces here, named,
-    // instead of as an opaque provider rejection several layers away.
-    if (!isResumableHarnessTranscript(normalizedTranscript.transcript)) {
-      return createHarnessChatErrorResponse(requestId, {
-        code: "incomplete_transcript",
-        message: `chat session history is not resumable: ${params.sessionId}`,
-      });
-    }
-    if (record.activeTask !== undefined) {
-      return activeTurnError(requestId, record.status);
-    }
-    if (record.status.activeTurnId !== undefined) {
+    // Only provider-safe history reaches a record without a recovery error:
+    // the store's malformed history set one above, and every transcript a
+    // turn hands back is checked before it is adopted.
+    const normalizedTranscript = normalizeIncompleteToolExchanges(
+      record.transcript,
+    );
+    if (
+      record.activeTask !== undefined ||
+      record.status.activeTurnId !== undefined
+    ) {
       return activeTurnError(requestId, record.status);
     }
     if (record.startingTurnId !== undefined) {
@@ -1635,6 +1633,38 @@ export class HarnessInteractiveChatService {
       ...(browserAccess !== undefined ? { browserAccess } : {}),
       ...(params.metadata !== undefined ? { metadata: params.metadata } : {}),
     };
+    // The turn's task starts in the step that commits the turn, so nothing
+    // finds the turn without the task that settles it: not a caller waiting
+    // for it while `turn_started` is still being delivered, and not a turn
+    // whose delivery then fails.
+    const abortController = new AbortController();
+    const activeTurnToken = { turnId };
+    let started = false;
+    const startTask = () => {
+      const current = this.#sessions.get(params.sessionId);
+      if (current === undefined) {
+        return;
+      }
+      started = true;
+      const finalizeTask = (interrupted?: HarnessChatTurnCheckpoint) =>
+        this.#finalizeTurnTask(
+          params.sessionId,
+          turnId,
+          activeTurnToken,
+          interrupted,
+        );
+      current.activeTurnToken = activeTurnToken;
+      current.activeTask = this.#runTurn(
+        current,
+        turnId,
+        params,
+        abortController.signal,
+        policy,
+        browserAccess,
+        attached.browserHost,
+      ).then(finalizeTask, () => finalizeTask()).catch(() => {});
+      current.activeAbortController = abortController;
+    };
     record.startingTurnId = turn.turnId;
     record.startingTurn = turn;
     try {
@@ -1659,6 +1689,7 @@ export class HarnessInteractiveChatService {
       }, {
         turnRecord,
         createTurn: true,
+        onCommitted: startTask,
         ...(normalizedTranscript.synthesizedToolCallIds.length > 0
           ? { transcript: normalizedTranscript.transcript }
           : {}),
@@ -1675,34 +1706,9 @@ export class HarnessInteractiveChatService {
       }
     }
 
-    const updatedRecord = this.#sessions.get(params.sessionId);
-    if (updatedRecord === undefined) {
+    if (!started) {
       return sessionNotFoundError(requestId, params.sessionId);
     }
-    const abortController = new AbortController();
-    const turnTask = this.#runTurn(
-      updatedRecord,
-      turn.turnId,
-      params,
-      abortController.signal,
-      policy,
-      browserAccess,
-      attached.browserHost,
-    );
-    const activeTurnToken = {};
-    const finalizeTask = (interrupted?: HarnessChatTurnCheckpoint) =>
-      this.#finalizeTurnTask(
-        params.sessionId,
-        turn.turnId,
-        activeTurnToken,
-        interrupted,
-      );
-    const task = turnTask.then(finalizeTask, () => finalizeTask()).catch(
-      () => {},
-    );
-    updatedRecord.activeTurnToken = activeTurnToken;
-    updatedRecord.activeTask = task;
-    updatedRecord.activeAbortController = abortController;
     return createHarnessChatOkResponse(requestId, turn);
   }
 
@@ -1727,11 +1733,13 @@ export class HarnessInteractiveChatService {
     record.activeAbortController?.abort(
       createTurnAbortError(activeTurnId, reason),
     );
-    await this.#emit(sessionId, activeTurnId, {
+    const recorded = this.#emit(sessionId, activeTurnId, {
       kind: "turn_canceled",
       turnId: activeTurnId,
       reason,
     });
+    record.pendingCancel = recorded.catch(() => {});
+    await recorded;
     return createHarnessChatOkResponse(
       requestId,
       this.#sessions.get(sessionId)!.status,
@@ -1747,7 +1755,7 @@ export class HarnessInteractiveChatService {
   async #finalizeTurnTask(
     sessionId: string,
     turnId: string,
-    activeTurnToken: object,
+    activeTurnToken: HarnessActiveTurnToken,
     interrupted?: HarnessChatTurnCheckpoint,
   ): Promise<void> {
     const latest = this.#sessions.get(sessionId);
@@ -1760,9 +1768,15 @@ export class HarnessInteractiveChatService {
       latest.activeTurnToken = undefined;
       latest.activeTask = undefined;
       latest.activeAbortController = undefined;
+      latest.pendingCancel = undefined;
       latest.canceledTurnIds.delete(turnId);
     };
     try {
+      // A turn can stop the moment it is canceled, before the cancel is
+      // recorded; once it is, the session reads as canceling.
+      if (latest.pendingCancel !== undefined) {
+        await latest.pendingCancel;
+      }
       if (
         latest.status.status === "canceling" &&
         latest.status.activeTurnId === turnId
@@ -1846,7 +1860,7 @@ export class HarnessInteractiveChatService {
       if (
         record.status.status === "closed" && record.activeTask === undefined
       ) {
-        await this.#disposeFabricRuntimes(record);
+        await this.#disposeFabricRuntimes([record]);
       }
     }
     return createHarnessChatOkResponse(
@@ -1901,12 +1915,32 @@ export class HarnessInteractiveChatService {
     }
   }
 
+  /**
+   * Disposes of every Fabric runtime `records` hold, then throws the failure,
+   * or an `AggregateError` of the failures, once every disposal has settled.
+   */
   async #disposeFabricRuntimes(
-    record: HarnessInteractiveChatSessionRecord,
+    records: readonly HarnessInteractiveChatSessionRecord[],
   ): Promise<void> {
-    const runtimes = [...record.fabricRuntimes];
-    record.fabricRuntimes.clear();
-    await Promise.all(runtimes.map((runtime) => runtime.dispose()));
+    const runtimes = records.flatMap((record) => {
+      const held = [...record.fabricRuntimes];
+      record.fabricRuntimes.clear();
+      return held;
+    });
+    const failures = (await Promise.allSettled(
+      runtimes.map(async (runtime) => await runtime.dispose()),
+    )).flatMap((outcome) =>
+      outcome.status === "rejected" ? [outcome.reason] : []
+    );
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        `${failures.length} Fabric runtimes failed to dispose`,
+      );
+    }
+    if (failures.length === 1) {
+      throw failures[0];
+    }
   }
 
   async #runTurn(
@@ -2205,7 +2239,7 @@ export class HarnessInteractiveChatService {
       );
     } finally {
       if (record.status.status === "closed") {
-        await this.#disposeFabricRuntimes(record);
+        await this.#disposeFabricRuntimes([record]);
       }
     }
   }
@@ -2248,6 +2282,7 @@ export class HarnessInteractiveChatService {
     if (
       options.engine === undefined && skillsRoot === undefined &&
       fabricSession === undefined &&
+      options.fabricSessionFactory === undefined &&
       (options.inputCells?.length ?? 0) === 0 &&
       (options.patternRefs?.length ?? 0) === 0
     ) {
@@ -2269,9 +2304,16 @@ export class HarnessInteractiveChatService {
         ...(skillsRoot !== undefined ? { skillsRoot } : {}),
         skillNames: [],
         allowedToolIds: options.allowedToolIds,
+        allowedSubagentProfiles: options.allowedSubagentProfiles,
       },
+      // The failure is logged as its description, as the CLI logs it. The
+      // console keeps what it is handed, and an error's call sites keep their
+      // receivers, this engine among them, and with it the fabric session and
+      // its runtime, past the session's close.
       onGrantsUnavailable: (error) =>
-        console.error("fabric grants unavailable for this turn:", error),
+        console.error(
+          `fabric grants unavailable for this turn: ${describeFailure(error)}`,
+        ),
     });
     return {
       loop: this.#createPromptLoop({ ...options, engine }),
@@ -2379,9 +2421,6 @@ export class HarnessInteractiveChatService {
           event.message,
         );
         await this.#emitToolMessage(sessionId, turnId, event.message);
-        break;
-      case "system":
-      case "user":
         break;
     }
   }
@@ -2598,11 +2637,6 @@ export class HarnessInteractiveChatService {
     envelope: HarnessChatEventEnvelope,
   ): HarnessChatTurnRecord | undefined {
     switch (envelope.event.kind) {
-      case "turn_started":
-        return this.#updatedTurnRecord(record, envelope.event.turn.turnId, {
-          status: envelope.event.turn.status,
-          updatedAt: envelope.event.turn.updatedAt,
-        });
       case "turn_canceled":
         return this.#updatedTurnRecord(record, envelope.event.turnId, {
           status: "canceling",

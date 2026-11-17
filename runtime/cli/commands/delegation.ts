@@ -2,6 +2,7 @@ import { Command, ValidationError } from "@cliffy/command";
 import { Table } from "@cliffy/table";
 import { type DIDKey, encodeDelegationChains } from "@commonfabric/identity";
 import { isDIDKey } from "@commonfabric/identity/did";
+import type { MemorySpace } from "@commonfabric/runner";
 
 import { cliText } from "../lib/cli-name.ts";
 import {
@@ -15,7 +16,7 @@ import {
   issueIndexDelegation,
 } from "../lib/index-delegation.ts";
 import { resolvePatternIndexUrl } from "@commonfabric/pattern-index/access";
-import { loadPieces } from "../lib/piece.ts";
+import { loadPieces, type SpaceConfig } from "../lib/piece.ts";
 import { render } from "../lib/render.ts";
 import {
   parseSpaceOptions,
@@ -46,11 +47,27 @@ interface IssueOptions extends PieceCLIOptions {
 /** The time a `--expires-in` counts from, read once per command. */
 const nowSeconds = (): number => Math.floor(Date.now() / 1000);
 
+/** What `cf delegation issue` reads of the connection to the space. */
+export interface IssueConnection {
+  getSpace(): MemorySpace;
+  runtime: {
+    storageManager: {
+      delegationChainFor?(
+        space: MemorySpace,
+      ): readonly Uint8Array[] | undefined;
+    };
+  };
+  dispose(): Promise<void>;
+}
+
 /**
  * `cf delegation issue`: the chain the key `--to` names presents to open the
- * space, written to `--out` or stdout.
+ * space, written to `--out` or stdout, over the connection `load` opens.
  */
-async function issue(options: IssueOptions): Promise<void> {
+export async function delegationIssueAction(
+  options: IssueOptions,
+  load: (config: SpaceConfig) => Promise<IssueConnection> = loadPieces,
+): Promise<void> {
   if (options.index || options.indexRoot) {
     if (options.index && options.indexRoot) {
       throw new ValidationError("Pass --index or --index-root, not both.");
@@ -62,7 +79,7 @@ async function issue(options: IssueOptions): Promise<void> {
   const expiresAt = options.expiresIn === undefined
     ? undefined
     : nowSeconds() + options.expiresIn;
-  const pieces = await loadPieces(config);
+  const pieces = await load(config);
   try {
     // The connection's signer is typed without the key pair a delegation's
     // issuer is, so the identity is loaded for signing on its own.
@@ -270,7 +287,7 @@ export const delegation = new Command()
           ),
           "Write the chain a Loom instance key presents to publish as you.",
         )
-        .action(issue),
+        .action((options) => delegationIssueAction(options)),
       { global: false },
     ),
   )

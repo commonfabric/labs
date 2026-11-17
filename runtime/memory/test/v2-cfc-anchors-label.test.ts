@@ -519,6 +519,44 @@ describe("cfc-anchors-label", () => {
       )).toBeUndefined();
     });
 
+    it("returns `undefined` for a writer's label no stored document backs where the field holds no confidentiality", () => {
+      expect(anchorsEnvelopeWith(
+        anchorsEnvelope([{
+          path: ["end"],
+          origin: "derived",
+          observes: "value",
+          label: { $ref: "cid:missing" },
+        }], 2),
+        [],
+        [],
+        ["end"],
+        "of:anchors",
+        () => undefined,
+      )).toBeUndefined();
+    });
+
+    it("throws what reading a writer's label throws, other than `AnchorsLabelError`, where the field holds no confidentiality", () => {
+      const failure = new TypeError("label store closed");
+
+      expect(() =>
+        anchorsEnvelopeWith(
+          anchorsEnvelope([{
+            path: ["end"],
+            origin: "derived",
+            observes: "value",
+            label: { $ref: "cid:anything" },
+          }], 2),
+          [],
+          [],
+          ["end"],
+          "of:anchors",
+          () => {
+            throw failure;
+          },
+        )
+      ).toThrow(failure);
+    });
+
     it("returns an envelope keeping members it does not define", () => {
       const result = withAnchor({
         version: 1,

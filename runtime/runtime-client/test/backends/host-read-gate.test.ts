@@ -23,7 +23,9 @@ import {
   vnodeSchema,
 } from "@commonfabric/runner/schemas";
 import {
+  addCfcDenialListener,
   CFC_LABEL_READ_FAILED_ATOM,
+  type CfcDenial,
   type SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -821,6 +823,28 @@ describe("HostReadGate", () => {
       );
     }
 
+    it("reports a refusal as a denial of the render ceiling, saying it was a host's read", async () => {
+      await using docs = await shelf();
+      const denials: CfcDenial[] = [];
+      const stop = addCfcDenialListener((denial) => denials.push(denial));
+      try {
+        gateFor(docs.runtime, visitor).readMetadata(
+          docs.sealedPiece,
+          "internal",
+        );
+        gateFor(docs.runtime, owner).readMetadata(
+          docs.sealedPiece,
+          "internal",
+        );
+      } finally {
+        stop();
+      }
+
+      expect(denials).toHaveLength(1);
+      expect(denials[0].code).toBe("render-confidentiality-ceiling");
+      expect(denials[0].inputs).toMatchObject({ hostRead: true });
+    });
+
     it("returns the owner their own piece's metadata", async () => {
       await using docs = await shelf();
       const answer = gateFor(docs.runtime, owner).readMetadata(
@@ -1151,6 +1175,15 @@ describe("HostReadGate", () => {
           refused: { refusedBy: "display-ceiling", labelSource: "consumed" },
         }),
       ]);
+    });
+  });
+
+  describe("nothing()", () => {
+    it("returns an answer holding no value, for any reader", async () => {
+      await using docs = await shelf();
+      expect(gateFor(docs.runtime, visitor).nothing()).toEqual({
+        value: undefined,
+      });
     });
   });
 

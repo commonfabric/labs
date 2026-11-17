@@ -10,7 +10,7 @@ import {
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
-  type PatternIndexClient,
+  PatternIndexClient,
   PatternIndexError,
   type PatternIndexPattern,
 } from "@commonfabric/pattern-index/client";
@@ -124,6 +124,29 @@ describe("deploy", () => {
       });
     });
 
+    it("answers the index's display name with the program, when it has one", async () => {
+      const named = await compileIndexedPattern(
+        deployOptions(
+          clientAnswering((id) =>
+            Promise.resolve({
+              ...recordFor(id, DOUBLING_SOURCE),
+              name: "Doubler",
+            })
+          ),
+        ),
+      );
+      const unnamed = await compileIndexedPattern(
+        deployOptions(
+          clientAnswering((id) =>
+            Promise.resolve(recordFor(id, DOUBLING_SOURCE))
+          ),
+        ),
+      );
+
+      expect(named.name).toBe("Doubler");
+      expect(unnamed).not.toHaveProperty("name");
+    });
+
     it("compiles the published patterns the program imports into the space first", async () => {
       await ensureCompilerStack();
       const doublerId = await computeEntryIdentity("/main.tsx", [
@@ -211,6 +234,32 @@ describe("deploy", () => {
       expect(error.message).toBe(
         'the pattern index returned no program for "doubler"',
       );
+    });
+
+    it("throws a lookup-stage error naming what the index's program lacks, and quoting none of it", async () => {
+      // Through the real client, which refuses the answer before deploy
+      // reads it.
+      const client = new PatternIndexClient({
+        baseUrl: "https://index.test",
+        signer,
+        fetchFn: () =>
+          Promise.resolve(
+            new Response(JSON.stringify({
+              ...recordFor("doubler", DOUBLING_SOURCE),
+              program: { main: "/SECRET_MARKER.tsx" },
+            })),
+          ),
+      });
+      const error = await prepareIndexedProgram(
+        deployOptions(() => Promise.resolve(client)),
+      ).then(() => undefined, (e) => e);
+
+      expect(error).toBeInstanceOf(IndexedPatternError);
+      expect(error.stage).toBe("lookup");
+      expect(error.message).toBe(
+        'pattern index lookup failed for "doubler": pattern index getPattern answer is malformed: program.files is not an array',
+      );
+      expect(error.rawCauseMessage).toBeUndefined();
     });
 
     it("throws a compose-stage error for a recorded dependency that cannot be read", async () => {

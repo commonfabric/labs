@@ -1751,6 +1751,48 @@ ${testCase.row}
     }
   });
 
+  it("gives a line resurrected into an emptied range its neighbor's CRLF", () => {
+    const root = Deno.makeTempDirSync();
+    try {
+      Deno.mkdirSync(join(root, ".git"));
+      const path = join(root, "value.ts");
+      Deno.writeTextFileSync(path, "new\nrest\r\n");
+      const diff = `diff --git a/value.ts b/value.ts
+--- a/value.ts
++++ b/value.ts
+@@ -1 +1 @@
+-old
++new
+`;
+      const ws = realWorkspace(root);
+      const built = buildDiffDocument(diff, parseDiff(diff)!, ws);
+      const session = new Session(
+        built.doc,
+        { color: false, showLineNumbers: false },
+        { width: 80, height: 10 },
+        undefined,
+        diffSource(ws, built.edit),
+      );
+      session.top = 5;
+      session.handleKey({ name: "e" });
+      session.handleKey({ name: "end" });
+      for (let i = 0; i < "new".length + 1; i++) {
+        session.handleKey({ name: "backspace" });
+      }
+      session.handleKey({ name: "f3" });
+      expect(Deno.readTextFileSync(path)).toBe("rest\r\n");
+
+      // The saved range is now empty, before the file's first line.
+      session.handleKey({ name: "R", char: "R" });
+      session.handleKey({ name: "f3" });
+
+      expect(session.view().message).toBe("Saved 1 file");
+      expect(Deno.readTextFileSync(path)).toBe("old\r\nrest\r\n");
+    } finally {
+      Deno.removeSync(root, { recursive: true });
+    }
+  });
+
   it("preserves an unterminated EOF when its diff omits metadata", () => {
     const root = Deno.makeTempDirSync();
     try {

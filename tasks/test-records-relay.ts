@@ -314,12 +314,8 @@ export async function relayArtifacts(options: RelayOptions): Promise<string[]> {
   return failed;
 }
 
-function usage(): never {
-  console.error(
-    "usage: test-records-relay.ts --artifacts <dir> [--run-json <file>]",
-  );
-  Deno.exit(2);
-}
+const USAGE =
+  "usage: test-records-relay.ts --artifacts <dir> [--run-json <file>]";
 
 /** Parses the command line; undefined means a malformed one. */
 export function parseRelayArgs(
@@ -410,13 +406,20 @@ export async function runRelay(options: RelayRunOptions): Promise<number> {
   return 0;
 }
 
-async function main(): Promise<void> {
-  const parsed = parseRelayArgs(Deno.args);
-  if (parsed === undefined) usage();
-  const code = await runRelay(parsed);
-  if (code !== 0) Deno.exit(code);
+/**
+ * Runs the relay a command line asks for and returns the process's exit
+ * code, 2 for a malformed command line.
+ */
+export async function runRelayCommand(
+  args: readonly string[],
+  options: Pick<RelayRunOptions, "env" | "fetchImpl"> = {},
+): Promise<number> {
+  const parsed = parseRelayArgs(args);
+  if (parsed === undefined) {
+    console.error(USAGE);
+    return 2;
+  }
+  return await runRelay({ ...options, ...parsed });
 }
 
-if (import.meta.main) {
-  await main();
-}
+if (import.meta.main) Deno.exit(await runRelayCommand(Deno.args));
