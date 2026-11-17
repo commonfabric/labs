@@ -954,12 +954,6 @@ export const IFRAME_PATTERN = {
   }
 
   describe("assets", () => {
-    // These cases read the wrapper's text rather than compiling it: `cf check`
-    // refuses a wrapper that passes `assets` for as long as `cf-iframe`'s JSX
-    // type declares no such attribute.
-    // TODO(seefeld): Compile the wrappers here once `CFIframeAttributes`
-    // declares `assets`.
-
     it("passes no `assets` for a contract that declares none", async () => {
       await inTemporaryDirectory(
         "pattern-iframe-no-assets-",
@@ -998,6 +992,9 @@ export const IFRAME_PATTERN = {
             'const GUEST_ASSETS = dataFile.urls("../assets");',
           );
           expect(generated).toContain("          assets={GUEST_ASSETS}\n");
+          // Evaluating the wrapper lists the directory and reads each asset.
+          const check = await cfCheck(out, directory);
+          expect(check.code, decoder.decode(check.stderr)).toBe(0);
         },
       );
     });
@@ -1037,6 +1034,8 @@ export const IFRAME_PATTERN = {
 };
 `);
           expect(generated).toContain("          assets={GUEST_ASSETS}\n");
+          const check = await cfCheck(out, directory);
+          expect(check.code, decoder.decode(check.stderr)).toBe(0);
         },
       );
     });
