@@ -1,6 +1,6 @@
 /** Harness configuration and identity loading for the shared index client. */
 
-import { PatternIndexClient } from "@commonfabric/pattern-index/client";
+import type { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import { openPatternIndexClient } from "@commonfabric/pattern-index/access";
 import type { PatternIndexStore } from "@commonfabric/pattern-index/store";
 import type { HarnessPatternIndexConfig } from "../config.ts";
@@ -27,7 +27,8 @@ export type HarnessPatternIndexClientFactory = () => Promise<
  * this machine's membership store keeps for it (renewing it there when the
  * root is kept here), so the index applies that member's settings, such as
  * whether they share, to the run's searches and publishes. A machine that
- * never joined presents nothing, and the key signs as its own root.
+ * never joined presents nothing, and the key signs as its own root; a
+ * machine whose chain cannot be built fails the call (see below).
  * `store` defaults to the store for the index's host in the user's state
  * directory, which is where `cf index join` put it.
  */
@@ -47,23 +48,17 @@ async () => {
       ...(fetchFn !== undefined ? { fetchFn } : {}),
     });
   } catch (error) {
-    // A chain this run cannot build (a store it cannot read, no state
-    // directory, a root key that will not issue) costs the member's
-    // settings, not the index: the run signs as its key alone, as it did
-    // before it presented chains, and says why. Failing every index call
-    // over it would buy no privacy, since sharing settings are not a
-    // security boundary. A failure that is not about the chain, such as a
-    // malformed base URL, throws again from the client built below.
-    console.error(
-      `pattern index: signing without the membership chain, which could not be built: ${
+    // Never sign without the chain instead: the index would take the key as
+    // a root of its own, so the run's publishes would belong to nobody the
+    // person is, their sharing setting would not apply, and their use of a
+    // piece would never find what the agent made for them. A run that cannot
+    // act for its member makes no index call and says why.
+    throw new Error(
+      `pattern index: the run cannot act for its member, since the membership chain for its key could not be built: ${
         error instanceof Error ? error.message : String(error)
       }`,
+      { cause: error },
     );
-    return new PatternIndexClient({
-      baseUrl: config.baseUrl,
-      signer: identity,
-      ...(fetchFn !== undefined ? { fetchFn } : {}),
-    });
   }
 };
 

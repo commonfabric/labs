@@ -142,7 +142,7 @@ describe("createHarnessPatternIndexClientFactory()", () => {
     }
   });
 
-  it("signs without a chain when the store cannot be read, rather than failing", async () => {
+  it("refuses, sending nothing, when the chain cannot be built, rather than signing as a stranger", async () => {
     const root = await Deno.makeTempDir();
     try {
       const key = await Identity.generatePkcs8();
@@ -155,14 +155,17 @@ describe("createHarnessPatternIndexClientFactory()", () => {
       const { fetchFn, requests } = recordingFetch([
         jsonResponse({ results: [] }),
       ]);
-      const client = await createHarnessPatternIndexClientFactory(
-        { baseUrl: "https://index.test/api" },
-        keyPath,
-        fetchFn,
-        store,
-      )();
-      await client.searchPatterns({ text: "reusable components" });
-      expect(JSON.parse(requests[0].body).proofs).toBeUndefined();
+      await expect(
+        createHarnessPatternIndexClientFactory(
+          { baseUrl: "https://index.test/api" },
+          keyPath,
+          fetchFn,
+          store,
+        )(),
+      ).rejects.toThrow(
+        "pattern index: the run cannot act for its member, since the membership chain for its key could not be built",
+      );
+      expect(requests).toHaveLength(0);
     } finally {
       await Deno.remove(root, { recursive: true });
     }
