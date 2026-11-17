@@ -1199,7 +1199,11 @@ describe("blame", () => {
         await git(root, ["commit", "-q", "-am", "side"], carol());
         await git(root, ["switch", "-q", main]);
         // The merge keeps neither side's line, so its combined diff shows it.
-        await git(root, ["merge", "-q", "-s", "ours", "--no-commit", "side"]);
+        await git(
+          root,
+          ["merge", "-q", "-s", "ours", "--no-commit", "side"],
+          carol(),
+        );
         await Deno.writeTextFile(
           path,
           "const a = 1;\nconst b = 42;\nconst c = 3;\n",
@@ -1263,7 +1267,7 @@ describe("blame", () => {
         const removed = join(root, "a.ts");
         await Deno.writeTextFile(removed, "removed\n".repeat(20));
         await git(root, ["add", "a.ts"]);
-        await git(root, ["commit", "-q", "-m", "a"]);
+        await git(root, ["commit", "-q", "-m", "a"], carol());
         await Deno.remove(removed);
         await Deno.writeTextFile(path, "const a = 1;\nconst b = 21;\n");
         const diff = await git(root, ["diff"]);
