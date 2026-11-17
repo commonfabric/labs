@@ -514,7 +514,8 @@ export class Handle {
     depth: number,
   ): unknown {
     const { store } = this.instance;
-    if (!declaresHandle(schema, depth)) return store.read(ref, reads);
+    // A plain value in place that the body reads is a copy (ruling Z25).
+    if (!declaresHandle(schema, depth)) return store.read(ref, reads, true);
     const located = store.locate(ref, true, reads);
     const member = (segment: string, at: Ref) => {
       const below = schemaBelow(schema, segment);
@@ -543,7 +544,7 @@ export class Handle {
         ) => [name, member(name, located.named.key(name))]),
       );
     }
-    return store.read(ref, reads);
+    return store.read(ref, reads, true);
   }
 
   key(segment: string | number): Handle {
@@ -630,12 +631,29 @@ export class Handle {
     this.instance.store.write(this.target, [...held, ...pushed]);
   }
 
-  remove(member: unknown): void {
-    if (this.target instanceof StreamRef) return;
+  /**
+   * The positions of this list that hold `member`: the positions a
+   * reference names, for a handle, a reference stand-in or a value read
+   * from a cell, and the positions that hold an equal value, for a copy
+   * of a plain value (ruling Z25).
+   */
+  #positionsOf(member: unknown): number[] {
+    if (this.target instanceof StreamRef) return [];
     const held = this.get();
-    if (!Array.isArray(held)) return;
-    const at = held.findIndex((other) => this.instance.same(other, member));
-    if (at >= 0) this.set(held.filter((_, index) => index !== at));
+    if (!Array.isArray(held)) return [];
+    const list = this.target;
+    return held.flatMap((other, index) =>
+      this.instance.same(list.key(`${index}`), member) ||
+        this.instance.same(other, member)
+        ? [index]
+        : []
+    );
+  }
+
+  remove(member: unknown): void {
+    const [at] = this.#positionsOf(member);
+    if (at === undefined) return;
+    this.set((this.get() as unknown[]).filter((_, index) => index !== at));
   }
 
   send(event: unknown): void {
@@ -663,9 +681,11 @@ export class Handle {
   }
 
   removeAll(member: unknown): void {
-    const held = this.get();
-    if (!Array.isArray(held)) return;
-    this.set(held.filter((other) => !this.instance.same(other, member)));
+    const found = this.#positionsOf(member);
+    if (found.length === 0) return;
+    this.set(
+      (this.get() as unknown[]).filter((_, index) => !found.includes(index)),
+    );
   }
 
   /** Removes each member that is `member` (`removeByValue` of a cell). */
@@ -675,13 +695,7 @@ export class Handle {
 
   /** Appends `member` unless the list holds it (`addUnique` of a cell). */
   addUnique(member: unknown): void {
-    const held = this.get();
-    if (
-      Array.isArray(held) &&
-      held.some((other) => this.instance.same(other, member))
-    ) {
-      return;
-    }
+    if (this.#positionsOf(member).length > 0) return;
     this.push(member);
   }
 
@@ -892,10 +906,13 @@ export class Host {
   }
 
   /**
-   * Whether two operands name one thing (PL §3.16): the links each
-   * reference holds are resolved, which the evaluation then depends on,
-   * and a reference by key is compared as the collection, the key and the
-   * path it holds, with no key resolved to a position.
+   * Whether two operands name one thing (PL §3.16): each reference is
+   * resolved to the position it names now, and the two are compared
+   * there (ruling Z26). The evaluation depends on the links each
+   * reference crossed and on the outcome of the comparison, and on no
+   * position: an element that moves with its key is the same element,
+   * so a move evaluates nothing for a comparison of two references by
+   * key.
    */
   equals(a: unknown, b: unknown): boolean {
     for (const operand of [a, b]) {
@@ -903,7 +920,12 @@ export class Host {
         this.instance.store.locate(operand, true, this.reads, true);
       }
     }
-    return this.instance.same(a, b);
+    const seen = this.instance.same(a, b);
+    this.dependencies.push({
+      stamp: () => this.instance.same(a, b),
+      seen,
+    });
+    return seen;
   }
 
   /** A value with every reference in it replaced by what it refers to. */
@@ -1649,6 +1671,7 @@ export class Instance {
         const kept = this.stored(member);
         if (kept !== undefined) members[name] = kept;
       }
+      if (this.store.copies.has(value)) this.#copied.add(members);
       return members;
     }
     if (typeof value === "object" && value !== null) {
@@ -1656,6 +1679,13 @@ export class Instance {
     }
     return value;
   }
+
+  /**
+   * The records in stored form that are a copy of a plain value in
+   * place (ruling Z25): written into an array, such a record is stored
+   * in place, as the value it is, and gets no document of its own.
+   */
+  readonly #copied = new WeakSet<object>();
 
   /**
    * A value in stored form that a body writes through a handle, with each
@@ -1667,7 +1697,9 @@ export class Instance {
    * wrote is a cell, and the list is an array of references. A member the
    * body read from the list and writes back is a link already and is not
    * touched, and neither is a plain value that is no record. What the
-   * creator of the instance wrote into the argument stays in place.
+   * creator of the instance wrote into the argument stays in place, and
+   * so does the copy of a plain value in place that the body read and
+   * writes back or writes into another array (ruling Z25).
    */
   anchored(value: unknown, inArray = false): unknown {
     if (isLink(value) || isStream(value)) return value;
@@ -1680,7 +1712,7 @@ export class Instance {
         [name, member],
       ) => [name, this.anchored(member)]),
     );
-    if (!inArray) return members;
+    if (!inArray || this.#copied.has(value)) return members;
     this.#created += 1;
     const id = this.doc(`record:${this.#created}`);
     this.store.create(id, "element record", members);
@@ -1703,11 +1735,13 @@ export class Instance {
       return value.map((member) => this.returned(member));
     }
     if (isRecord(value)) {
-      return Object.fromEntries(
+      const members = Object.fromEntries(
         Object.entries(value).map((
           [name, member],
         ) => [name, this.returned(member)]),
       );
+      if (this.store.copies.has(value)) this.store.copies.add(members);
+      return members;
     }
     return value;
   }
@@ -1762,29 +1796,32 @@ export class Instance {
 
   /**
    * Whether two values a body holds are one: two handles or two values
-   * read from one stored address, and otherwise two equal values.
+   * read from one stored address, and otherwise two equal values. Each
+   * reference is resolved to the position it names now and the two are
+   * compared there (ruling Z26): a handle by position, as `items.key(i)`
+   * is at the call and when stored (ruling Z33), is equal to a reference
+   * by key to the element that is at the position at that time, and to
+   * the cell of the element where the position holds a link.
    */
   same(a: unknown, b: unknown): boolean {
     const address = (value: unknown): string | undefined => {
-      if (value instanceof Handle) {
-        return value.target instanceof Ref
-          ? addressOf(
-            this.store.locate(value.target, true, undefined, true).named,
-          )
-          : `stream:${value.target.instance}:${value.target.binding}:${
-            canonical(value.target.keys)
-          }`;
+      if (value instanceof Handle && value.target instanceof StreamRef) {
+        return `stream:${value.target.instance}:${value.target.binding}:${
+          canonical(value.target.keys)
+        }`;
       }
-      if (value instanceof Ref) {
-        return addressOf(
-          this.store.locate(value, true, undefined, true).named,
-        );
-      }
-      if (typeof value === "object" && value !== null) {
-        const read = this.store.addresses.get(value);
-        return read === undefined ? undefined : addressOf(read);
-      }
-      return undefined;
+      const ref = value instanceof Handle
+        ? value.target as Ref
+        : value instanceof Ref
+        ? value
+        : typeof value === "object" && value !== null
+        ? this.store.addresses.get(value)
+        : undefined;
+      // A key that no position holds resolves to no position: the
+      // reference is compared as the key it holds.
+      return ref === undefined
+        ? undefined
+        : addressOf(this.store.locate(ref, true).ref);
     };
     const [left, right] = [address(a), address(b)];
     if (left !== undefined && right !== undefined) return left === right;

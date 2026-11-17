@@ -1997,16 +1997,49 @@ describe("an element that is a plain value in place", () => {
     expect(result(instance).chosen).toBe("x");
   });
 
-  it("is not equal to a handle that names its position", async () => {
+  // Rulings Z26 and Z33: `items.key(i)` is a handle by position, and it
+  // is equal to a reference by key to the element that is at the
+  // position at the time of the comparison.
+  it("is equal to a handle that names the position it is at, and to no other", async () => {
     const instance = await start();
     const element = new Ref("argument", ["stops", keySegment(keyOf("a", 1))]);
-    const position = new Ref("argument", ["stops", "0"]);
+    const stops = new Handle(
+      instance,
+      new Ref("argument", ["stops"]),
+      undefined,
+      undefined,
+      [],
+    );
 
-    expect(instance.store.read(element)).toEqual(instance.store.read(position));
-    expect(instance.same(element, position)).toBe(false);
+    expect(instance.same(element, stops.key(0))).toBe(true);
+    expect(stops.key(0).equals(element)).toBe(true);
+    expect(instance.same(element, stops.key(1))).toBe(false);
     expect(instance.same(element, new Ref(element.doc, element.path))).toBe(
       true,
     );
+
+    // The element moves: the handle by position names what is at the
+    // position now, and the reference by key its element.
+    instance.send(bindingOf(instance, "reverse"), {});
+
+    expect(instance.same(element, stops.key(0))).toBe(false);
+    expect(instance.same(element, stops.key(2))).toBe(true);
+    expect(stops.key(0).get()).toEqual(stop("c", 3));
+  });
+
+  it("is equal to a handle that names its position, over references", async () => {
+    const instance = await start(references());
+    const element = new Ref("argument", ["pool", "a"]);
+    const stops = new Handle(
+      instance,
+      new Ref("argument", ["stops"]),
+      undefined,
+      undefined,
+      [],
+    );
+
+    expect(instance.same(element, stops.key(0))).toBe(true);
+    expect(instance.same(element, stops.key(1))).toBe(false);
   });
 
   it("reads as nothing through a stored reference to a member after it is removed, over plain values in place", async () => {
@@ -2150,6 +2183,110 @@ describe("an element that is a plain value in place", () => {
       open: true,
       stop: { title: "renamed", done: true },
     });
+  });
+});
+
+// Rulings Z25, Z26 and Z33 on `fixtures/value-copy.tsx`: a function body
+// that reads a plain value in place through a handle holds a copy.
+describe("a plain value that a function body reads through a handle", () => {
+  const card = (suit: string, rank: number) => ({ suit, rank });
+  const inPlace = () => ({
+    left: [card("a", 1), card("a", 2)],
+    right: [card("b", 3), card("b", 4)],
+  });
+  const link = (name: string) => ({
+    $link: { doc: "argument", path: ["pool", name] },
+  });
+  const references = () => ({
+    pool: {
+      p: card("a", 1),
+      q: card("a", 2),
+      r: card("b", 3),
+      s: card("b", 4),
+    },
+    left: [link("p"), link("q")],
+    right: [link("r"), link("s")],
+  });
+  type Result = { left: unknown[]; right: unknown[]; kept: unknown };
+  const [DISCARD, SWAP, KEEP] = [0, 1, 2];
+  const argumentOf = (instance: Instance) =>
+    instance.store.docs.get("argument")?.value as {
+      left: unknown[];
+      right: unknown[];
+    };
+  const keptOf = (instance: Instance) =>
+    instance.store.docs.get(
+      `state:${
+        instance.plan.stateCells.findIndex((cell) => cell.name === "kept")
+      }:[]`,
+    )?.value;
+
+  it("is stored as the value where the body writes it to a cell, over plain values in place", async () => {
+    const instance = new Instance(await artifactOf("value-copy"), inPlace());
+
+    instance.send(KEEP, {});
+
+    // The cell holds the value, and no reference by key and no link to
+    // the position.
+    expect(keptOf(instance)).toEqual(card("a", 1));
+    instance.writeArgument(["left"], [card("z", 9)]);
+    expect((instance.result() as Result).kept).toEqual(card("a", 1));
+  });
+
+  it("is stored as the link to its cell, over references", async () => {
+    const instance = new Instance(await artifactOf("value-copy"), references());
+
+    instance.send(KEEP, {});
+
+    expect(keptOf(instance)).toMatchObject(link("p"));
+    instance.writeArgument(["pool", "p", "rank"], 7);
+    expect((instance.result() as Result).kept).toEqual(card("a", 7));
+  });
+
+  it("is stored in place where the body writes it into another array, over plain values in place", async () => {
+    const instance = new Instance(await artifactOf("value-copy"), inPlace());
+
+    const outcome = instance.send(SWAP, {});
+
+    // Each array holds the values, in place: no reference by key into
+    // the other array, no link, and no document for a record.
+    expect(outcome.committed).toBe(true);
+    expect(argumentOf(instance)).toEqual({
+      left: [card("a", 1), card("b", 4)],
+      right: [card("b", 3), card("a", 2)],
+    });
+    expect(instance.documents()["element record"]).toBe(undefined);
+    expect(instance.result()).toMatchObject({
+      left: [card("a", 1), card("b", 4)],
+      right: [card("b", 3), card("a", 2)],
+    });
+  });
+
+  it("keeps the links where the body moves references between two arrays, over references", async () => {
+    const instance = new Instance(await artifactOf("value-copy"), references());
+
+    instance.send(SWAP, {});
+
+    expect(argumentOf(instance).left).toMatchObject([link("p"), link("s")]);
+    expect(argumentOf(instance).right).toMatchObject([link("r"), link("q")]);
+  });
+
+  it("finds the element of a row with a handle by position, over plain values in place", async () => {
+    const instance = new Instance(await artifactOf("value-copy"), inPlace());
+
+    // The row of the second card.
+    const outcome = instance.send(DISCARD, {}, [1]);
+
+    expect(outcome.committed).toBe(true);
+    expect((instance.result() as Result).left).toEqual([card("a", 1)]);
+  });
+
+  it("finds the element of a row with a handle by position, over references", async () => {
+    const instance = new Instance(await artifactOf("value-copy"), references());
+
+    instance.send(DISCARD, {}, [0]);
+
+    expect((instance.result() as Result).left).toEqual([card("a", 2)]);
   });
 });
 

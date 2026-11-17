@@ -167,6 +167,21 @@ const WRITTEN: Record<string, Written[]> = {
       { binding: 5, event: {} },
     ],
   }],
+  // Rulings Z25 and Z26 over arrays of plain values in place: a card is
+  // kept, the piles swap their last cards, and the row of the last card
+  // of the first pile discards it.
+  "value-copy": [{
+    argument: {
+      left: [{ suit: "a", rank: 1 }, { suit: "a", rank: 2 }],
+      right: [{ suit: "b", rank: 3 }, { suit: "b", rank: 4 }],
+    },
+    events: [
+      { binding: 2, event: {} },
+      { binding: 1, event: {} },
+      { binding: 0, event: {} },
+      { binding: 1, event: {} },
+    ],
+  }],
   "passes-collection": [{
     argument: {
       items: [

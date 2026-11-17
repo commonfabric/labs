@@ -224,6 +224,11 @@ export type Located = {
   /** A key of the path is held by no position. */
   missing: boolean;
   /**
+   * The position is an element of an array of its document, or below
+   * one: a plain value in place.
+   */
+  inPlace: boolean;
+  /**
    * The default declared nearest the end of the chain of links the read
    * resolved through: that of the last link whose schema declares one,
    * and that of the reference's own schema where no link does.
@@ -295,6 +300,12 @@ export class Store {
    * is handed to (`execution-and-storage.md` §2.4).
    */
   readonly addresses = new WeakMap<object, Ref>();
+  /**
+   * The containers that are a copy of a plain value in place, which a
+   * function body read through a handle (ruling Z25). A copy carries no
+   * address: what writes it elsewhere stores the value.
+   */
+  readonly copies = new WeakSet<object>();
 
   create(id: string, kind: string, value: unknown): void {
     this.docs.set(id, { kind, value });
@@ -399,6 +410,7 @@ export class Store {
     let rest = [...ref.path];
     let links = 0;
     let missing = false;
+    let inPlace = false;
     for (;;) {
       while (isLink(value) && (rest.length > 0 || through)) {
         links += 1;
@@ -408,6 +420,7 @@ export class Store {
             value: undefined,
             named: new Ref(doc, named_),
             missing,
+            inPlace,
             fallback: undefined,
           };
         }
@@ -424,6 +437,7 @@ export class Store {
         rest = [...value.$link.path, ...rest];
         at = [];
         named_ = [];
+        inPlace = false;
         value = this.#held(doc);
       }
       const segment = rest.shift();
@@ -431,7 +445,14 @@ export class Store {
       if (isKeySegment(segment)) {
         if (names) {
           const named = new Ref(doc, [...named_, segment, ...rest], schema);
-          return { ref: named, value: undefined, named, missing, fallback };
+          return {
+            ref: named,
+            value: undefined,
+            named,
+            missing,
+            inPlace: true,
+            fallback,
+          };
         }
         if (reads !== undefined) {
           const keyed = new Ref(doc, [...named_, segment, ...rest]);
@@ -448,6 +469,7 @@ export class Store {
           )
           : -1;
         named_ = [...named_, segment];
+        inPlace = true;
         if (index < 0) {
           missing = true;
           value = undefined;
@@ -458,6 +480,7 @@ export class Store {
         }
         continue;
       }
+      if (Array.isArray(value) && /^\d+$/.test(segment)) inPlace = true;
       value = child(value, segment);
       at = [...at, segment];
       named_ = [...named_, segment];
@@ -468,6 +491,7 @@ export class Store {
       value,
       named: new Ref(doc, named_, schema),
       missing,
+      inPlace,
       fallback,
     };
   }
@@ -478,12 +502,23 @@ export class Store {
    * `undefined`. The stream of a binding reads as `{ $stream: true }`,
    * and so does a position that holds nothing and that the schema of the
    * reference declares as a stream: a stream the instance was given.
+   *
+   * With `copies`, the read is that of a function body through a handle
+   * (ruling Z25): a plain value in place, an element of an array or a
+   * value below one, is a copy. It carries no address, so what writes
+   * it elsewhere stores the value. A member that is a link is the value
+   * of its cell and carries that cell's address, as without `copies`.
    */
-  read(ref: Ref, reads?: Position[]): unknown {
-    return this.#deep(ref, reads, new Set());
+  read(ref: Ref, reads?: Position[], copies = false): unknown {
+    return this.#deep(ref, reads, new Set(), copies);
   }
 
-  #deep(ref: Ref, reads: Position[] | undefined, open: Set<string>): unknown {
+  #deep(
+    ref: Ref,
+    reads: Position[] | undefined,
+    open: Set<string>,
+    copies: boolean,
+  ): unknown {
     const located = this.locate(ref, true, reads);
     const id = `${located.ref.doc}\u0000${located.ref.path.join("\u0000")}`;
     if (open.has(id)) return undefined;
@@ -491,46 +526,57 @@ export class Store {
       return { $stream: true };
     }
     open.add(id);
+    const copied = copies && located.inPlace;
     // A container that is copied to fill in a default keeps the address
     // it was read from.
     const value = withDefaults(
       located.value === undefined && located.fallback !== undefined
         ? structuredClone(located.fallback)
-        : this.#copy(located.value, reads, open, located.named),
+        : this.#copy(located.value, reads, open, located.named, copies, copied),
       located.ref.schema,
       (from, to) => {
         const address = this.addresses.get(from);
         if (address !== undefined) this.addresses.set(to, address);
+        if (this.copies.has(from)) this.copies.add(to);
       },
     );
     open.delete(id);
     if (typeof value === "object" && value !== null) {
-      this.addresses.set(value, located.named);
+      if (copied) this.copies.add(value);
+      else this.addresses.set(value, located.named);
     }
     return value;
   }
 
+  /**
+   * `copied`: the value is a plain value in place that a function body
+   * reads, or below one, and carries no address.
+   */
   #copy(
     value: unknown,
     reads: Position[] | undefined,
     open: Set<string>,
     at: Ref,
+    copies: boolean,
+    copied: boolean,
   ): unknown {
     if (isLink(value)) {
       const { doc, path, schema } = value.$link;
-      return this.#deep(new Ref(doc, path, schema), reads, open);
+      return this.#deep(new Ref(doc, path, schema), reads, open, copies);
     }
     if (isStream(value)) return { $stream: true };
     const here = new Ref(at.doc, at.path);
     if (Array.isArray(value)) {
       // A member that is a container in place carries a reference by
-      // key, so what passes it on unchanged stores that reference.
-      const containers = value.some((member) =>
-        typeof member === "object" && member !== null && !isLink(member) &&
-        !isStream(member)
-      );
+      // key, so what passes it on unchanged stores that reference. A
+      // function body reads it as a copy.
+      const containers = !copies &&
+        value.some((member) =>
+          typeof member === "object" && member !== null && !isLink(member) &&
+          !isStream(member)
+        );
       const copy = value.map((member, index) =>
-        this.#copy(member, reads, open, here.key(`${index}`))
+        this.#copy(member, reads, open, here.key(`${index}`), copies, copies)
       );
       if (containers) {
         const keys = this.keysOf(value, here, copy);
@@ -543,16 +589,21 @@ export class Store {
           );
         });
       }
-      this.addresses.set(copy, here);
+      if (copied) this.copies.add(copy);
+      else this.addresses.set(copy, here);
       return copy;
     }
     if (isRecord(value)) {
       const copy = Object.fromEntries(
         Object.entries(value).map((
           [name, member],
-        ) => [name, this.#copy(member, reads, open, here.key(name))]),
+        ) => [
+          name,
+          this.#copy(member, reads, open, here.key(name), copies, copied),
+        ]),
       );
-      this.addresses.set(copy, here);
+      if (copied) this.copies.add(copy);
+      else this.addresses.set(copy, here);
       return copy;
     }
     return value;
