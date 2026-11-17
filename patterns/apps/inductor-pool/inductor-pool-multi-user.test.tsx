@@ -26,14 +26,8 @@ export const setup = pattern<Record<string, never>, Setup>(() => ({
 }));
 
 /**
- * Whether the release is exactly these patterns and counts.
- *
- * This reads `consensus`, the released function's output, not the public
- * `released` store. Copying an array of objects into that store is refused on
- * today's runtime once a confidential contribution sits beside it in the
- * pool's argument document (README.md, "CFC snags": the anchoring read in
- * `data-updating.ts` takes on the whole document's label). When that is
- * fixed, read `pool.released` here as well.
+ * Whether the pool's public result, `consensus`, is exactly these patterns
+ * and counts, and `releasedCount` agrees.
  */
 function releasedIs(
   pool: InductorPoolOutput,
@@ -41,6 +35,7 @@ function releasedIs(
 ): boolean {
   const released = pool.consensus ?? [];
   return released.length === expected.length &&
+    pool.releasedCount === expected.length &&
     expected.every(([pattern, count], i) =>
       released[i]?.pattern === pattern && released[i]?.count === count
     );
@@ -65,9 +60,6 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => ({
     // Bob withdrew `invoice` and added `lunch`.
     { assertion: assert(() => releasedIs(setup.pool, [["lunch", 2]])) },
   ],
-  // A release copy into `released` is refused and logged until the runtime
-  // anchoring bug is fixed (see `releasedIs`).
-  allowConsoleWarnings: true,
 }));
 
 export const bob = pattern<{ setup: Setup }>(({ setup }) => ({
@@ -87,9 +79,6 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => ({
     { assertion: assert(() => releasedIs(setup.pool, [["lunch", 2]])) },
     { label: "bob-resubmitted" },
   ],
-  // A release copy into `released` is refused and logged until the runtime
-  // anchoring bug is fixed (see `releasedIs`).
-  allowConsoleWarnings: true,
 }));
 
 export const carol = pattern<{ setup: Setup }>(({ setup }) => ({
@@ -105,9 +94,6 @@ export const carol = pattern<{ setup: Setup }>(({ setup }) => ({
     { label: "carol-submitted" },
   ],
   expectRuntimeErrors: ["belongs to another contributor"],
-  // A release copy into `released` is refused and logged until the runtime
-  // anchoring bug is fixed (see `releasedIs`).
-  allowConsoleWarnings: true,
 }));
 
 export default multiUserTest({ setup, participants: { alice, bob, carol } });

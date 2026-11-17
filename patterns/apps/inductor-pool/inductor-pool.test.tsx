@@ -1,7 +1,7 @@
 /**
  * One contributor's view of the pool: a rule set below threshold is stored
  * but nothing is released, a resubmission replaces the set, a second
- * pseudonym and an out-of-grammar rule are refused, and the public store
+ * pseudonym and an out-of-grammar rule are refused, and a public store
  * refuses both a computation the policy does not name and a raw contribution.
  *
  * Pattern under test: ./inductor-pool.tsx. Release itself takes two
@@ -27,11 +27,30 @@ import {
   type Untouched,
 } from "./inductor-pool-test-fixture.ts";
 import InductorPool, {
-  publishRelease,
   type ReleasedRule,
   type StoredContribution,
   tallyEveryRule,
 } from "./inductor-pool.tsx";
+
+/**
+ * Copies rules into `to`, as a release into a public store would. The pool
+ * stores no release of its own (README.md, "Workaround: the release is not
+ * stored"), so the probe brings its public stores.
+ */
+const publishRules = handler<
+  void,
+  { from: ReleasedRule[]; to: Writable<ReleasedRule[]> }
+>((_, { from, to }) => {
+  to.set(
+    (from ?? []).map((rule) => ({
+      field: rule.field,
+      pattern: rule.pattern,
+      predicts: rule.predicts,
+      key: rule.key,
+      count: rule.count,
+    })),
+  );
+});
 
 /** Copies the first contribution's rules, as if released, into `to`. */
 const publishRawContribution = handler<
@@ -73,7 +92,7 @@ const LeakProbe = pattern<ProbeInput, ProbeOutput>(
       tally,
       leakedTally,
       leakedRaw,
-      publishTally: publishRelease({ from: tally, to: leakedTally }),
+      publishTally: publishRules({ from: tally, to: leakedTally }),
       publishRaw: publishRawContribution({ contributions, to: leakedRaw }),
     };
   },
@@ -92,12 +111,6 @@ export default pattern(() => {
       contributions: pool.contributions,
     } as Parameters<typeof LeakProbe>[0],
   );
-  // The pool's own release, pointed at the unthresholded tally.
-  const publishTallyToPool = publishRelease({
-    from: probe.tally,
-    to: pool.released,
-  });
-
   return {
     [TESTS]: [
       { assertion: assert(() => pool.releasedCount === 0) },
@@ -112,11 +125,13 @@ export default pattern(() => {
           pool.contributions[0]?.rules.length === 2
         ),
       },
-      // One contributor is below every threshold: the released function
-      // emits nothing, and nothing reaches the public store.
-      { assertion: assert(() => pool.consensus.length === 0) },
-      { assertion: assert(() => pool.releasedCount === 0) },
-      { assertion: assert(() => pool.released.length === 0) },
+      // One contributor is below every threshold: the pool's public result
+      // is empty.
+      {
+        assertion: assert(() =>
+          pool.consensus.length === 0 && pool.releasedCount === 0
+        ),
+      },
 
       // A resubmission replaces the set rather than adding to it.
       {
@@ -166,11 +181,6 @@ export default pattern(() => {
           probe.leakedTally[0]?.key === "untouched"
         ),
       },
-      // and so does the pool's own public store (on today's runtime this
-      // store refuses any array of objects once a contribution exists, so
-      // the probe store above is the sharper check; README.md, "CFC snags"),
-      { action: publishTallyToPool },
-      { assertion: assert(() => pool.released.length === 0) },
       // and a public store refuses a contribution copied out raw.
       { action: probe.publishRaw },
       {
@@ -179,7 +189,11 @@ export default pattern(() => {
           probe.leakedRaw[0]?.key === "untouched"
         ),
       },
-      { assertion: assert(() => pool.releasedCount === 0) },
+      {
+        assertion: assert(() =>
+          pool.consensus.length === 0 && pool.releasedCount === 0
+        ),
+      },
     ],
     // Each refused publish logs the CFC refusal; the refusals are the point.
     allowConsoleWarnings: true,

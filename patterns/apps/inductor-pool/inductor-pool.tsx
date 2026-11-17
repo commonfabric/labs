@@ -6,11 +6,14 @@
  * The pool's policy releases what one function of this module computed,
  * `releaseConsensus`, as `examples/cfc-exchange-rules/blessed-computation.tsx`
  * releases a tally. Contributions and the pool secret carry
- * `PolicyOf<typeof poolRules>`; the store everyone reads admits only public
- * values; and the one exchange rule drops the policy's clause on a value the
- * runtime stamped `TransformedBy` this module's `releaseConsensus`. So the
- * released rules and their counts reach the public store, and nothing else of
- * a contribution or the secret can.
+ * `PolicyOf<typeof poolRules>`, and the one exchange rule drops the policy's
+ * clause on a value the runtime stamped `TransformedBy` this module's
+ * `releaseConsensus`. So the released rules and their counts are public, and
+ * nothing else of a contribution or the secret is.
+ *
+ * The pool's public result is that function's output, `consensus`, read where
+ * it is computed. It is not copied into a public store: the runtime refuses
+ * that write today (README.md, "Workaround: the release is not stored").
  */
 
 import {
@@ -23,7 +26,6 @@ import {
   handler,
   lift,
   linksOf,
-  type MaxConfidentiality,
   NAME,
   pattern,
   principalOf,
@@ -119,16 +121,6 @@ export type PoolSecret = WriteAuthorizedBy<
   typeof submitContribution
 >;
 
-/**
- * What everyone may read: it admits only public values, and only
- * `publishRelease` writes it, so no other code can post a rule as released
- * and no writer can declare it without its ceiling.
- */
-export type PublicRelease = WriteAuthorizedBy<
-  MaxConfidentiality<ReleasedRule[], readonly []>,
-  typeof publishRelease
->;
-
 // =============================================================================
 // THE RELEASED COMPUTATION
 // =============================================================================
@@ -162,7 +154,7 @@ export const releaseConsensus = lift((input: ReleaseInput): ReleasedRule[] =>
 /**
  * Every rule with its count, threshold or not. Defined beside
  * `releaseConsensus` but named by no rule, so what it computes stays
- * confidential: the pool's tests show the public store refuses it.
+ * confidential: the pool's tests show a public store refuses it.
  */
 export const tallyEveryRule = lift(
   (contributions: Contribution[] | undefined): ReleasedRule[] =>
@@ -210,13 +202,6 @@ function slotOf(
 export interface SubmitState {
   contributions: Writable<StoredContribution[]>;
   secret: Writable<PoolSecret | undefined>;
-  release: Stream<void>;
-}
-
-/** What `publishRelease` is bound to. */
-export interface PublishState {
-  from: ReleasedRule[];
-  to: Writable<PublicRelease>;
 }
 
 /** A contribution as `submit` takes it. */
@@ -245,7 +230,7 @@ export interface ContributionEvent {
  * pseudonyms.
  */
 export const submitContribution = handler<ContributionEvent, SubmitState>(
-  (event, { contributions, secret, release }) => {
+  (event, { contributions, secret }) => {
     const actor = currentPrincipal();
     if (actor === undefined) {
       throw new Error("A contribution needs an authenticated contributor.");
@@ -273,22 +258,8 @@ export const submitContribution = handler<ContributionEvent, SubmitState>(
       const kept = (linksOf(contributions) ?? []).filter((_, i) => i !== mine);
       contributions.set([...kept, contribution] as StoredContribution[]);
     } else contributions.push(contribution);
-    release.send();
   },
 );
-
-/** Copies the released rules into the public store. */
-export const publishRelease = handler<void, PublishState>((_, { from, to }) => {
-  to.set(
-    (from ?? []).map((rule) => ({
-      field: rule.field,
-      pattern: rule.pattern,
-      predicts: rule.predicts,
-      key: rule.key,
-      count: rule.count,
-    })),
-  );
-});
 
 // =============================================================================
 // PATTERN
@@ -305,12 +276,10 @@ interface InductorPoolInput {
   contributions: Writable<Default<StoredContribution[], []>>;
   /**
    * The threshold offsets' key, minted by the first contribution. It has no
-   * default: a confidential default written beside the public `released`
-   * makes the piece's start commit refuse (README.md, "CFC snags").
+   * default: a confidential default written beside a public field makes the
+   * piece's start commit refuse (top/3102; README.md, "CFC snags").
    */
   secret: Writable<PoolSecret | undefined>;
-  /** The released rules, which anyone may read. */
-  released: Writable<Default<PublicRelease, []>>;
 }
 
 /**
@@ -332,33 +301,30 @@ export interface InductorPoolOutput {
   jitter: number;
   /** The stored contributions, confidential to the pool's policy. */
   contributions: StoredContribution[];
-  /** The released rules and their counts. */
-  released: PublicRelease;
   /**
-   * What `releaseConsensus` computes now: the rules at threshold and their
-   * counts. The policy releases it, and `release` copies it into `released`.
+   * The pool's public result: what `releaseConsensus` computes now, the rules
+   * at threshold and their counts. The policy releases it, so anyone may read
+   * it. It is derived, not stored (README.md, "Workaround: the release is not
+   * stored").
    */
   consensus: ReleasedRule[];
   /** How many rules are released. */
   releasedCount: number;
   /** Contribute (or replace) one pseudonym's rule set. */
   submit: Stream<ContributionEvent>;
-  /** Copy what is released into `released`; `submit` does this too. */
-  release: Stream<void>;
 }
 
 export default pattern<InductorPoolInput, InductorPoolOutput>(
-  ({ goal, thresholdCenter, jitter, contributions, secret, released }) => {
+  ({ goal, thresholdCenter, jitter, contributions, secret }) => {
     const consensus = releaseConsensus({
       contributions,
       secret,
       thresholdCenter,
       jitter,
     });
-    const release = publishRelease({ from: consensus, to: released });
-    const submit = submitContribution({ contributions, secret, release });
+    const submit = submitContribution({ contributions, secret });
 
-    const releasedCount = computed(() => released.get().length);
+    const releasedCount = computed(() => consensus.length);
     const title = computed(() => {
       const question = goal.trim();
       return question ? `Inductor pool: ${question}` : "Inductor pool";
@@ -369,11 +335,11 @@ export default pattern<InductorPoolInput, InductorPoolOutput>(
       `rule's exact threshold is hidden.`
     );
     const countLine = computed(() => {
-      const n = released.get().length;
+      const n = consensus.length;
       return n === 1 ? "1 rule released." : `${n} rules released.`;
     });
     const releasedLines = computed(() =>
-      released.get().map((rule: ReleasedRule) => ({
+      consensus.map((rule: ReleasedRule) => ({
         rule: describeRule(rule),
         count: `${rule.count} contributors`,
       }))
@@ -384,7 +350,7 @@ export default pattern<InductorPoolInput, InductorPoolOutput>(
         "",
         configLine,
         "",
-        ...released.get().map((rule: ReleasedRule) =>
+        ...consensus.map((rule: ReleasedRule) =>
           `- \`${describeRule(rule)}\` (${rule.count} contributors)`
         ),
       ].join("\n")
@@ -436,11 +402,9 @@ export default pattern<InductorPoolInput, InductorPoolOutput>(
       thresholdCenter,
       jitter,
       contributions,
-      released,
       consensus,
       releasedCount,
       submit,
-      release,
     };
   },
 );

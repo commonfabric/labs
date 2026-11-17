@@ -26,7 +26,9 @@ this pattern is its implementation.
   counted twice. Resubmitting under the same pseudonym replaces the earlier set.
 - **The secret.** The first contribution mints a 128-bit pool secret
   (`Math.random`, the sandbox's, which a handler may call). Only
-  `submitContribution` may write it.
+  `submitContribution` may write it. It has no default, because a confidential
+  default beside a public field makes the piece's start commit refuse (top/3102;
+  snag 2 below).
 - **Release.** `releaseConsensus`, a `lift` exported from `inductor-pool.tsx`,
   counts the distinct pseudonyms holding each rule. A rule is counted by its
   field, label and canonical pattern, not by its 64-bit `key`, whose FNV hash
@@ -36,10 +38,10 @@ this pattern is its implementation.
   the secret. The threshold is never under 2, because a threshold of 1 would
   publish one person's rule. The function emits only the rules at or above their
   threshold, with their counts. Of the rest it emits nothing: not the rule, not
-  its count, not that it exists, not how many there are. `submit` ends by
-  sending `release`, and `release` copies that output into `released`.
-  `released` is `MaxConfidentiality<…, []>`, so it admits only public values,
-  and only `publishRelease` may write it.
+  its count, not that it exists, not how many there are. That output,
+  `consensus`, is the pool's public result, with `releasedCount` and the view
+  derived from it. It is not stored (see "Workaround: the release is not
+  stored").
 
 The pure logic is in `consensus.ts`. The policy module's identity covers it
 because a module's identity covers the modules it imports.
@@ -52,18 +54,11 @@ aggregator. A pool serves one goal. Until the wish can match on the goal, an
 inductor should take a `pool` input directly, or check that `pool.goal` equals
 its own goal before it submits.
 
-The inductor's side is a stable per-goal pseudonym plus a `submit`:
-
-```ts
-pseudonym?: PerSpace<Writable<string | Default<"">>>;
-pool?: { goal: string; submit: Stream<{ pseudonym: string; rules: CanonicalRule[] }> };
-// in publish:
-if (!pseudonym.get()) pseudonym.set(`p-${Math.random().toString(36).slice(2)}…`);
-const target = pool ?? poolWish.result;
-if (target && target.goal.trim() === goal.get().trim()) {
-  target.submit.send({ pseudonym: pseudonym.get(), rules: rules.get() });
-}
-```
+The lo-fi inductor does this: it takes an optional
+`pool?: Pick<InductorPoolOutput, "goal" | "submit">`, falls back to
+`wish({ query: "#inductorPool", scope: ["~", "."] })`, and its `publish` action
+mints a stable per-goal pseudonym once and sends `submit` only when the pool's
+goal, trimmed, equals its own.
 
 Under the approved cut 2, a random string kept by the inductor piece is the
 idiomatic pseudonym today. It is stable for that piece, so for the person's
@@ -93,6 +88,25 @@ document of its own), and the secret, are
 that `tallyEveryRule`, a function of the same module that no rule names, is
 refused by a public store. So is a contribution copied out raw.
 
+## Workaround: the release is not stored
+
+This is a runtime workaround, not a CFC debt cut: the policy is unchanged, and
+only the storing of the release is avoided.
+
+The pool was built to copy `consensus` into a public store, `released`
+(`MaxConfidentiality<ReleasedRule[], []>`, written only by a `publishRelease`
+handler). The runtime refuses that write: once a confidential contribution sits
+in the pool's argument document, writing an array of objects into a
+`MaxConfidentiality` store beside it is refused ("maxConfidentiality failed at
+/released"), even a literal array (top/3205; related, top/2502). So the pool
+stores no release. Its public result is `consensus`, the blessed function's own
+output, read where it is computed, and `releasedCount` and the view count and
+render from it. The refusal tests bring their own small public stores, which is
+enough for what they assert: that the store refuses.
+
+When top/3205 is fixed, a stored release can come back if something needs one (a
+release that outlives a change to the inputs, say). Until then nothing does.
+
 **Cuts** (both approved by Alex, 2026-11-16, and the only ones taken):
 
 1. _Distinct people._ `releaseConsensus` counts distinct pseudonyms. The pool
@@ -118,19 +132,15 @@ refused by a public store. So is a contribution copied out raw.
 
 ## CFC snags (runtime, found while building this)
 
-1. **A public array of objects cannot be written beside a labelled sibling.**
-   This blocks releases reaching `released`. Once a confidential contribution
-   sits in the pool's argument document, every `to.set([...objects])` into the
-   `MaxConfidentiality` `released` is refused ("maxConfidentiality failed at
-   /released"), even a literal. The cause: `anchorValueAsEntity()` in
+1. **A public array of objects cannot be written beside a labelled sibling**
+   (top/3205; related, top/2502). The cause: `anchorValueAsEntity()` in
    `runtime/runner/src/data-updating.ts` reads the parent's whole value just to
    ask whether it is an array, and that read takes on the whole document's
    label. Reading the parent `nonRecursive` fixes it (verified in a scratch
-   copy). Until it lands, the multi-user test asserts the release through
-   `consensus` (the blessed function's output) and not through `released`.
+   copy). The pool works around it by not storing the release (above).
 2. **A confidential default beside a public field fails the piece's start
-   commit** ("maxConfidentiality failed at /<public field>"). The cause: the
-   start reads the confidential slot as content (`runner.ts`
+   commit** (top/3102; "maxConfidentiality failed at /<public field>"). The
+   cause: the start reads the confidential slot as content (`runner.ts`
    `#readStoredArgument`, `#materializeDerivedInternalCells`, and a
    link-resolution probe). This is why `secret` has no default. The same path
    may refuse a restart or a pattern update once `/secret` holds a value; that
@@ -139,3 +149,12 @@ refused by a public store. So is a contribution copied out raw.
    `list.key(i).set(obj)` reads `undefined`.** With `{ label: "written" }` it
    reads whoever pushed to the list last. So a replacement drops the old entry
    and appends the new one.
+4. **Question for Berni: which schema's `maxConfidentiality` binds a write?**
+   The ceiling looks to be judged against the schema the writer's binding
+   declares for the store. In the tests, the probe's handlers declare their
+   target as a plain `Writable<ReleasedRule[]>`, and the refusal names the probe
+   pattern's `/leakedRaw`, whose input schema carries the ceiling. If a pattern
+   that declared the same store without the ceiling could write confidential
+   data into it, a public store's ceiling holds only together with
+   `WriteAuthorizedBy` (which is why the old `released` had both). Is that the
+   intended reading, or should the ceiling travel with the store?
