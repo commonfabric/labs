@@ -94,12 +94,12 @@ export default pattern(() => {
     ITEMS.forEach((item) => outOfGrammar.addItem.send(item));
     ITEMS.forEach((item) => flaky.addItem.send(item));
   });
-  const action_settle = action(() => {
-    better.settleRewrite.send();
-    worse.settleRewrite.send();
-    unsafe.settleRewrite.send();
-    outOfGrammar.settleRewrite.send();
-  });
+  const action_settle_better = action(() => better.settleRewrite.send());
+  const action_settle_worse = action(() => worse.settleRewrite.send());
+  const action_settle_unsafe = action(() => unsafe.settleRewrite.send());
+  const action_settle_out_of_grammar = action(() =>
+    outOfGrammar.settleRewrite.send()
+  );
 
   // "Your bill is ready", "Bill for March", and "Electricity bill" are bills
   // the invoice-only rules miss: three new surprises, past the two a rewrite
@@ -217,7 +217,10 @@ export default pattern(() => {
       { assertion: assert_flaky_retried },
       { action: action_settle_flaky },
       { assertion: assert_flaky_accepted },
-      { action: action_settle },
+      { action: action_settle_better },
+      { action: action_settle_worse },
+      { action: action_settle_unsafe },
+      { action: action_settle_out_of_grammar },
       { assertion: assert_better_accepted },
       { assertion: assert_better_settled },
       { assertion: assert_worse_rejected },
