@@ -3409,6 +3409,70 @@ describe("the stream of a binding of a `flatMap` body", () => {
   });
 });
 
+// Ruling Z39 on `fixtures/spread-child.tsx`: a JSX spread child, and an
+// array literal with a spread or a hole among the children of a view
+// node, is each one child at its written position.
+describe("a spread among the children of a view node", () => {
+  const link = (name: string) => ({
+    $link: { doc: "argument", path: ["pool", name] },
+  });
+  // The elements of `items` are references to cells, and those of
+  // `words` plain values stored in place.
+  const start = async () =>
+    new Instance(await artifactOf("spread-child"), {
+      pool: { a: { title: "a" }, b: { title: "b" } },
+      items: [link("a"), link("b")],
+      words: ["x", "y"],
+    });
+  const children = (instance: Instance) =>
+    (instance.result() as { $UI: ViewNode }).$UI.children;
+  const texts = (rows: unknown) =>
+    (rows as ViewNode[]).map((row) => row.children);
+
+  it("stores each spread child as one child, a nested array", async () => {
+    const instance = await start();
+
+    const held = children(instance);
+
+    expect(held.length).toBe(7);
+    expect((held[0] as ViewNode).children).toEqual(["first"]);
+    // Over plain values in place.
+    expect(held[1]).toEqual(["x", "y"]);
+    // Over the result of a `map`, whose source holds references.
+    expect(texts(held[2])).toEqual([["a"], ["b"]]);
+    // Over an array of references.
+    expect(held[3]).toEqual([{ title: "a" }, { title: "b" }]);
+    expect((held[6] as ViewNode).children).toEqual(["last"]);
+  });
+
+  it("stores an array literal with a spread, and one with a hole, as one child", async () => {
+    const instance = await start();
+
+    const held = children(instance);
+
+    // The members and what the spread holds are the positions of the
+    // one nested array.
+    expect(held[4]).toEqual(["before", "x", "y", "after"]);
+    // The hole is a position that holds nothing.
+    expect((held[5] as unknown[]).length).toBe(3);
+    expect((held[5] as unknown[])[0]).toBe("left");
+    expect((held[5] as unknown[])[1] ?? null).toBe(null);
+    expect((held[5] as unknown[])[2]).toBe("right");
+  });
+
+  it("keeps the position of each child when a spread array changes its length", async () => {
+    const instance = await start();
+
+    instance.writeArgument(["words"], ["x", "y", "z"]);
+
+    const held = children(instance);
+    expect(held.length).toBe(7);
+    expect(held[1]).toEqual(["x", "y", "z"]);
+    expect(held[4]).toEqual(["before", "x", "y", "z", "after"]);
+    expect((held[6] as ViewNode).children).toEqual(["last"]);
+  });
+});
+
 // Ruling Z43 on `fixtures/flat-inner.tsx`: the callback of a `flatMap`
 // returns an inner `map` whose body binds a handler. The result of the
 // `flatMap` has one level of positions, and each holds the link that

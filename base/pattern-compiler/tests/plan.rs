@@ -3939,3 +3939,68 @@ export const P = pattern<{ picked: Writable<string> }>(({ picked }) => {
         ]
     );
 }
+
+/// Ruling Z39 (PL §1.1, "The children of a view node"): a JSX spread
+/// child, and an array literal with a spread or a hole among the
+/// children, is each one child at its written position. The spread is
+/// over plain values in `words`, over the result of a `map` in the
+/// second child, and over records in `items`, which the plan has alike
+/// for references and for plain values in place.
+#[test]
+fn a_spread_among_the_children_is_one_child_at_its_written_position() {
+    let plan = plan_of(
+        &program(
+            r#"import { pattern, UI } from "commonfabric";
+interface Item { title: string }
+export const P = pattern<{ items: Item[]; words: string[] }>(({ items, words }) => {
+  return {
+    [UI]: (
+      <ul>
+        <li>first</li>
+        {...words}
+        {...items.map((item) => <li>{item.title}</li>)}
+        {...items}
+        {["before", ...words, "after"]}
+        {["left", , "right"]}
+        <li>{words.length}</li>
+      </ul>
+    ),
+  };
+});
+"#,
+        ),
+        "P",
+    );
+    let mut paths: Vec<String> = plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .filter(|output| output["kept"] == json!(true))
+        .map(|output| {
+            output["path"]
+                .as_array()
+                .expect("a path")
+                .iter()
+                .map(|segment| segment.as_str().expect("a segment"))
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .collect();
+    paths.sort();
+    assert_eq!(
+        paths,
+        [
+            "$UI",
+            // The three spread children.
+            "$UI/children/1",
+            "$UI/children/2",
+            "$UI/children/3",
+            // The literal with a spread: one value, with the positions
+            // from the spread on below it.
+            "$UI/children/4",
+            "$UI/children/4/*",
+            // The child written last is the seventh.
+            "$UI/children/6/children/0",
+        ]
+    );
+}
