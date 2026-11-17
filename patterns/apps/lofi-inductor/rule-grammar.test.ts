@@ -19,7 +19,9 @@ function canon(pattern: string): string {
 /** Why `pattern` is refused, failing the test when it is accepted. */
 function refusal(pattern: string): string {
   const result = canonicalizePattern(pattern);
-  if (result.ok) throw new Error(`${pattern} was accepted as ${result.pattern}`);
+  if (result.ok) {
+    throw new Error(`${pattern} was accepted as ${result.pattern}`);
+  }
   return result.reason;
 }
 
@@ -194,14 +196,31 @@ describe("canonicalizePattern", () => {
       seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
       return (seed >>> 8) % n;
     };
-    const atoms = ["a", "B", "c", ".", "\\d", "\\w", "\\s", "[a-c]", "[^b]",
-      "\\.", "-", " ", "\\W", "[A-B1]"];
+    const atoms = [
+      "a",
+      "B",
+      "c",
+      ".",
+      "\\d",
+      "\\w",
+      "\\s",
+      "[a-c]",
+      "[^b]",
+      "\\.",
+      "-",
+      " ",
+      "\\W",
+      "[A-B1]",
+    ];
     const quantifiers = ["", "", "", "*", "+", "?", "{2}", "{1,2}", "*?"];
     const anchors = ["", "", "", "^", "\\b"];
     const gen = (depth: number): string => {
       const parts = Array.from({ length: 1 + next(3) }, () => {
         if (depth > 0 && next(4) === 0) {
-          const inner = Array.from({ length: 1 + next(3) }, () => gen(depth - 1))
+          const inner = Array.from(
+            { length: 1 + next(3) },
+            () => gen(depth - 1),
+          )
             .join("|");
           return `(${inner})${quantifiers[next(quantifiers.length)]}`;
         }
@@ -211,9 +230,11 @@ describe("canonicalizePattern", () => {
       return anchors[next(anchors.length)] + parts.join("");
     };
     const alphabet = ["a", "A", "b", "B", "c", "1", " ", ".", "-", "\n", "_"];
-    const probes = Array.from({ length: 60 }, () =>
-      Array.from({ length: next(7) }, () => alphabet[next(alphabet.length)])
-        .join("")
+    const probes = Array.from(
+      { length: 60 },
+      () =>
+        Array.from({ length: next(7) }, () => alphabet[next(alphabet.length)])
+          .join(""),
     );
     let checked = 0;
     for (let i = 0; i < 400; i++) {
@@ -226,7 +247,9 @@ describe("canonicalizePattern", () => {
       for (const probe of probes) {
         if (original.test(probe) !== canonical.test(probe)) {
           throw new Error(
-            `${pattern} → ${result.pattern} disagrees on ${JSON.stringify(probe)}`,
+            `${pattern} → ${result.pattern} disagrees on ${
+              JSON.stringify(probe)
+            }`,
           );
         }
       }

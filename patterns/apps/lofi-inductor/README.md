@@ -23,7 +23,7 @@ agent).
 1. Every item is labelled by the hi-fi model (an LLM, assumed right) and by the
    lo-fi rule set (regular expressions, run as plain pattern code, assumed
    fallible).
-2. When they disagree, the lo-fi set was *surprised*. The item and the hi-fi
+2. When they disagree, the lo-fi set was _surprised_. The item and the hi-fi
    label join the graded set, which keeps a held-out split.
 3. After surprises accumulate, another LLM call proposes a whole new rule set.
    It replaces the current one only if every rule compiles, passes the regex
@@ -55,8 +55,8 @@ ever match it.
   the contributors were real people.
 
 Builds on `apps/self-improving-classifier` (`classifier-logic.ts`): regex
-compiling, `isRegexSafe`, and scoring. Design notes: the "hi-fi → lo-fi pump"
-in the enricher-ecosystem PRD (§6.8–6.10).
+compiling, `isRegexSafe`, and scoring. Design notes: the "hi-fi → lo-fi pump" in
+the enricher-ecosystem PRD (§6.8–6.10).
 
 ## CFC debt
 
@@ -70,8 +70,8 @@ contributed, and a pseudonym is not linkable to its owner or to their other
 pseudonyms.
 
 **What is real CFC.** Items and induced rules are private by default; LLM output
-carries `LlmDerived` and the confidentiality of what it read. Contributions,
-and the secret keying the threshold offsets, are
+carries `LlmDerived` and the confidentiality of what it read. Contributions, and
+the secret keying the threshold offsets, are
 `Confidential<…, [PolicyOf<rules>]>`. The only release is through one trusted
 function of the policy module, `releaseConsensus`: the runtime stamps what it
 writes `TransformedBy{THIS_POLICY.moduleIdentity, "releaseConsensus"}`, and the
@@ -79,19 +79,19 @@ policy's one exchange rule drops the clause on that stamp, as
 `examples/cfc-exchange-rules/blessed-computation.tsx` releases a tally. The
 threshold, its hidden offset, and the rule that nothing below threshold is
 emitted (not the rule, not its count, not that it exists) are that function's
-own logic, so they need no new CFC machinery. The secret and the per-rule
-counts never leave the function; only released rules and their counts do, into
-a public store.
+own logic, so they need no new CFC machinery. The secret and the per-rule counts
+never leave the function; only released rules and their counts do, into a public
+store.
 
 **Proposed cuts** (each pending approval; this section is updated as each is
 decided):
 
-1. *Distinct people.* The trusted function counts distinct pseudonyms. Nothing
+1. _Distinct people._ The trusted function counts distinct pseudonyms. Nothing
    attests that two pseudonyms are two people, so one person with many
    pseudonyms counts as many. The hidden offset raises the cost of probing but
    does not stop it. Missing semantics: an attested distinct-principal
    (personhood) atom.
-2. *Pseudonym linkability.* Commits and owner-integrity labels in the pool space
+2. _Pseudonym linkability._ Commits and owner-integrity labels in the pool space
    name the contributor's core identity (`docs/specs/profile-delegation.md`,
    "Attribution and unlinkability"; the intermediate key is deferred). Missing
    semantics: unlinkable pseudonymous authorship.

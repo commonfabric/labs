@@ -274,20 +274,21 @@ function parse(source: string): Node {
       empty = false;
       const lo = classAtom();
       if (typeof lo !== "number") {
-        if (lo.kind !== "set" || lo.negated) {
-          // \D, \W, \S inside a class: their complements are explicit sets
-          if (lo.kind === "set") ranges.push(...complement(lo.ranges));
-          else fail("an assertion cannot appear inside a character class");
-        } else {
-          ranges.push(...lo.ranges);
+        if (lo.kind !== "set") {
+          fail("an assertion cannot appear inside a character class");
         }
+        // \D, \W, and \S inside a class stand for their complements
+        const members = lo.negated ? complement(lo.ranges) : lo.ranges;
+        for (const range of members) ranges.push(range);
         if (peek() === "-" && source[pos + 1] !== "]" && more()) {
           fail("a class escape cannot start a range");
         }
         continue;
       }
-      if (peek() === "-" && source[pos + 1] !== undefined &&
-        source[pos + 1] !== "]") {
+      if (
+        peek() === "-" && source[pos + 1] !== undefined &&
+        source[pos + 1] !== "]"
+      ) {
         pos++;
         const hi = classAtom();
         if (typeof hi !== "number") fail("a class escape cannot end a range");
@@ -463,7 +464,9 @@ function simplify(node: Node): Node {
       const byText = new Map<string, Node>();
       for (const branch of merged) byText.set(print(branch), branch);
       const unique = [...byText.keys()].sort().map((key) => byText.get(key)!);
-      return unique.length === 1 ? unique[0] : { kind: "alt", branches: unique };
+      return unique.length === 1
+        ? unique[0]
+        : { kind: "alt", branches: unique };
     }
     case "repeat": {
       const body = simplify(node.body);
@@ -648,7 +651,9 @@ export function checkRule(draft: unknown): RuleCheck {
       pattern: canonical.pattern,
       predicts,
       key: stableHash(
-        `${trimmedField}\u0000${predicts ? "1" : "0"}\u0000${canonical.pattern}`,
+        `${trimmedField}\u0000${
+          predicts ? "1" : "0"
+        }\u0000${canonical.pattern}`,
       ),
     },
   };
