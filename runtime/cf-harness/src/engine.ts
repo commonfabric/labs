@@ -1391,6 +1391,11 @@ export class CfHarnessEngine {
    * said otherwise, so an injected factory with no connection config — a test
    * harness, a delegating parent — publishes like a configured one.
    */
+  /** Who this run's published patterns are made for (`config.patternIndex.origin`). */
+  get patternIndexOrigin(): "agent" | undefined {
+    return this.config.patternIndex?.origin;
+  }
+
   get patternIndexPublishEnabled(): boolean {
     return this.patternIndexAvailable &&
       this.config.patternIndex?.publish !== false;
@@ -2995,6 +3000,9 @@ export class CfHarnessEngine {
           getPatternIndexClient: this.#patternIndexClientFactory,
           patternIndexPublishEnabled: this.patternIndexPublishEnabled,
           patternIndexPublishDiscoverable: this.patternIndexPublishDiscoverable,
+          ...(this.patternIndexOrigin !== undefined
+            ? { patternIndexOrigin: this.patternIndexOrigin }
+            : {}),
           patternIndexLedger: this.patternIndexLedger,
         }
         : {}),

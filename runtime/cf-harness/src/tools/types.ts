@@ -226,6 +226,12 @@ export interface HarnessToolContext {
   patternIndexPublishDiscoverable?: boolean;
 
   /**
+   * `"agent"` when the run is a person's own agent making patterns for them
+   * (`HarnessPatternIndexConfig.origin`); absent for any other run.
+   */
+  patternIndexOrigin?: "agent";
+
+  /**
    * Where this run's writes to the pattern index go: a pattern it authored is
    * held there until the session ends, so search is offered one candidate per
    * capability while the index still records every iteration, and a report

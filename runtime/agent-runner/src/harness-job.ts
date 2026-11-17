@@ -197,6 +197,9 @@ export interface HarnessJobSpec extends HarnessModelLimits {
    * harness publishes unless this is `false`.
    */
   patternIndexPublish?: boolean;
+
+  /** `"agent"`: the job is a person's own agent making patterns for them (`--pattern-index-origin`). */
+  patternIndexOrigin?: "agent";
 }
 
 /**
@@ -397,6 +400,9 @@ const argvOf = (
     ? ["--pattern-index-url", spec.patternIndexUrl]
     : []),
   ...(spec.patternIndexPublish === false ? ["--no-pattern-index-publish"] : []),
+  ...(spec.patternIndexOrigin === "agent"
+    ? ["--pattern-index-origin", "agent"]
+    : []),
   ...(spec.loomRetrievalConfigPath !== undefined
     ? ["--loom-retrieval-config", spec.loomRetrievalConfigPath]
     : []),
