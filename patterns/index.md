@@ -1498,6 +1498,112 @@ type Output = {
 };
 ```
 
+## `showcase/inductor/lofi/lofi-inductor.tsx`
+
+A hi-fi model labels each item for a yes-or-no goal while a lo-fi regex rule set
+shadows it. Disagreements become graded examples; an LLM proposes a new rule
+set, adopted only when it is in grammar, cheap to run, and better on a held-out
+split. Rules publish under a per-goal pseudonym to an `inductor-pool`, and the
+pool's released rules come back as an offer judged the same way. The view is
+five card sub-patterns, in the order a newcomer uses them (`items-card.tsx`,
+`rules-card.tsx`, `history-card.tsx`, `pool-card.tsx`, `settings-card.tsx`).
+
+**Keywords:** classifier, regex, rule induction, hi-fi lo-fi, held-out, F1,
+pseudonym, threshold release, CFC
+
+### Input Schema
+
+```ts
+interface LofiInductorInput {
+  goal?: PerSpace<Writable<string | Default<"">>>;
+  items?: PerSpace<Writable<Item[] | Default<[]>>>;
+  rules?: PerSpace<Writable<CanonicalRule[] | Default<[]>>>;
+  history?: PerSpace<Writable<HistoryEntry[] | Default<[]>>>;
+  published?: PerSpace<Writable<Published | null | Default<null>>>;
+  pseudonym?: PerSpace<Writable<string | Default<"">>>;
+  pool?: PoolTarget;
+  hifiModel?: PerSpace<Writable<string | Default<"">>>;
+  rewriteAfter?: PerSpace<Writable<number | Default<3>>>;
+  heldOutPercent?: PerSpace<Writable<number | Default<30>>>;
+  rewriteAttempt?: PerSpace<Writable<number | Default<0>>>;
+  adopted?: PerSpace<Writable<string[] | Default<[]>>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface LofiInductorOutput {
+  goal: string;
+  items: Item[];
+  rules: CanonicalRule[];
+  history: HistoryEntry[];
+  published: Published | null;
+  pseudonym: string;
+  adopted: string[];
+  hifiModel: string;
+  rewriteAfter: number;
+  heldOutPercent: number;
+  rows: ItemRow[];
+  summary: Summary;
+  heldOutF1: number;
+  rewrite: RewriteStatus;
+  poolOffer: PoolOffer | null;
+  setGoal: Stream<GoalEvent>;
+  addItem: Stream<SubmittedItem>;
+  addItems: Stream<SubmittedItems>;
+  removeItem: Stream<ItemRef>;
+  removeRule: Stream<RuleRef>;
+  resetRules: Stream<void>;
+  settleRewrite: Stream<void>;
+  retryRewrite: Stream<void>;
+  setRewriteAfter: Stream<RewriteAfterEvent>;
+  setHeldOutPercent: Stream<HeldOutPercentEvent>;
+  setHifiModel: Stream<HifiModelEvent>;
+  settlePoolOffer: Stream<void>;
+  publish: Stream<void>;
+  unpublish: Stream<void>;
+}
+```
+
+## `showcase/inductor/pool/inductor-pool.tsx`
+
+Lo-fi rule sets for one goal, contributed under per-goal pseudonyms and
+confidential to the pool's own CFC policy (`pool-policy.tsx`). A rule and its
+count become public only once enough distinct contributors hold the same
+canonical rule; each rule's threshold is a sealed, configurable centre (at
+least 5) plus a secret per-rule offset. The one release path is the trusted
+`releaseConsensus` lift, witnessed by the pool's own writer.
+
+**Keywords:** threshold release, k-anonymity, consensus, pseudonym, declassify,
+exchange rule, TransformedBy, CFC
+
+### Input Schema
+
+```ts
+interface InductorPoolInput {
+  goal: Default<string, "">;
+  thresholdCenter: Default<number, typeof DEFAULT_THRESHOLD_CENTER>;
+  jitter: Default<number, typeof DEFAULT_JITTER>;
+  contributions: Writable<Default<StoredContribution[], []>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface InductorPoolOutput {
+  goal: string;
+  thresholdCenter: number;
+  jitter: number;
+  contributions: StoredContribution[];
+  consensus: ReleasedRule[];
+  releasedCount: number;
+  submit: Stream<ContributionEvent>;
+  withdraw: Stream<void>;
+}
+```
+
 ---
 
 # Detail Views
@@ -2026,111 +2132,5 @@ interface RecordsOutput {
   [NAME]: string;
   [UI]: VNode;
   seed: Stream<void>;
-}
-```
-
-## `showcase/inductor/lofi/lofi-inductor.tsx`
-
-A hi-fi model labels each item for a yes-or-no goal while a lo-fi regex rule set
-shadows it. Disagreements become graded examples; an LLM proposes a new rule
-set, adopted only when it is in grammar, cheap to run, and better on a held-out
-split. Rules publish under a per-goal pseudonym to an `inductor-pool`, and the
-pool's released rules come back as an offer judged the same way. The view is
-five card sub-patterns, in the order a newcomer uses them (`items-card.tsx`,
-`rules-card.tsx`, `history-card.tsx`, `pool-card.tsx`, `settings-card.tsx`).
-
-**Keywords:** classifier, regex, rule induction, hi-fi lo-fi, held-out, F1,
-pseudonym, threshold release, CFC
-
-### Input Schema
-
-```ts
-interface LofiInductorInput {
-  goal?: PerSpace<Writable<string | Default<"">>>;
-  items?: PerSpace<Writable<Item[] | Default<[]>>>;
-  rules?: PerSpace<Writable<CanonicalRule[] | Default<[]>>>;
-  history?: PerSpace<Writable<HistoryEntry[] | Default<[]>>>;
-  published?: PerSpace<Writable<Published | null | Default<null>>>;
-  pseudonym?: PerSpace<Writable<string | Default<"">>>;
-  pool?: PoolTarget;
-  hifiModel?: PerSpace<Writable<string | Default<"">>>;
-  rewriteAfter?: PerSpace<Writable<number | Default<3>>>;
-  heldOutPercent?: PerSpace<Writable<number | Default<30>>>;
-  rewriteAttempt?: PerSpace<Writable<number | Default<0>>>;
-  adopted?: PerSpace<Writable<string[] | Default<[]>>>;
-}
-```
-
-### Output Schema
-
-```ts
-interface LofiInductorOutput {
-  goal: string;
-  items: Item[];
-  rules: CanonicalRule[];
-  history: HistoryEntry[];
-  published: Published | null;
-  pseudonym: string;
-  adopted: string[];
-  hifiModel: string;
-  rewriteAfter: number;
-  heldOutPercent: number;
-  rows: ItemRow[];
-  summary: Summary;
-  heldOutF1: number;
-  rewrite: RewriteStatus;
-  poolOffer: PoolOffer | null;
-  setGoal: Stream<GoalEvent>;
-  addItem: Stream<SubmittedItem>;
-  addItems: Stream<SubmittedItems>;
-  removeItem: Stream<ItemRef>;
-  removeRule: Stream<RuleRef>;
-  resetRules: Stream<void>;
-  settleRewrite: Stream<void>;
-  retryRewrite: Stream<void>;
-  setRewriteAfter: Stream<RewriteAfterEvent>;
-  setHeldOutPercent: Stream<HeldOutPercentEvent>;
-  setHifiModel: Stream<HifiModelEvent>;
-  settlePoolOffer: Stream<void>;
-  publish: Stream<void>;
-  unpublish: Stream<void>;
-}
-```
-
-## `showcase/inductor/pool/inductor-pool.tsx`
-
-Lo-fi rule sets for one goal, contributed under per-goal pseudonyms and
-confidential to the pool's own CFC policy (`pool-policy.tsx`). A rule and its
-count become public only once enough distinct contributors hold the same
-canonical rule; each rule's threshold is a sealed, configurable centre (at
-least 5) plus a secret per-rule offset. The one release path is the trusted
-`releaseConsensus` lift, witnessed by the pool's own writer.
-
-**Keywords:** threshold release, k-anonymity, consensus, pseudonym, declassify,
-exchange rule, TransformedBy, CFC
-
-### Input Schema
-
-```ts
-interface InductorPoolInput {
-  goal: Default<string, "">;
-  thresholdCenter: Default<number, typeof DEFAULT_THRESHOLD_CENTER>;
-  jitter: Default<number, typeof DEFAULT_JITTER>;
-  contributions: Writable<Default<StoredContribution[], []>>;
-}
-```
-
-### Output Schema
-
-```ts
-interface InductorPoolOutput {
-  goal: string;
-  thresholdCenter: number;
-  jitter: number;
-  contributions: StoredContribution[];
-  consensus: ReleasedRule[];
-  releasedCount: number;
-  submit: Stream<ContributionEvent>;
-  withdraw: Stream<void>;
 }
 ```
