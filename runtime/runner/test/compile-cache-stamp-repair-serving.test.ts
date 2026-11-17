@@ -619,6 +619,38 @@ describe("compile-cache-stamp-repair-serving", () => {
         .toBeUndefined();
     });
 
+    it("erases nothing where a racing commit relabels the source record that guards an erase", async () => {
+      // The guard is read as the verifier reads, and that read still
+      // conditions the commit on the record being unchanged, label included.
+
+      const pattern = await compileIntoHome();
+      const keys = await recordKeys();
+      const source = idOf(homeSpace, keys.source);
+      const compiled = await plant(
+        homeSpace,
+        keys.compiled,
+        rootPairStamp(UNDECLARED_ATOM),
+      );
+      await servingSees(homeSpace, keys.compiled, UNDECLARED_ATOM);
+      let racedHead: number | undefined;
+      beforeStoreWrites = {
+        id: compiled,
+        run: async () => {
+          await plant(homeSpace, keys.source, rootPairStamp(RACING_ATOM));
+          racedHead = await storedHead(homeSpace, source);
+        },
+      };
+
+      await instantiate(homeSpace, pattern, "guard-raced");
+
+      expect(racedHead).toBeDefined();
+      expect(repairOutcomes()).toEqual(["conflicted"]);
+      expect(await storedHead(homeSpace, source)).toBe(racedHead);
+      expect(await storedAtoms(homeSpace, compiled)).toEqual(
+        expect.arrayContaining([UNDECLARED_ATOM]),
+      );
+    });
+
     it("repairs the record at the next load, which the race did not stop", async () => {
       // A conflict is a race the next load can win, so the session tries
       // again where a refusal it would not.

@@ -941,8 +941,8 @@ cell's contents. The cache is designed around this:
     repair's transaction reads each record it writes whole, and refuses to
     write if any changed since. The source record of each module whose
     compiled record it erases guards the erase: it is read as the verifier
-    reads, so its label flows nowhere, and the commit is conditioned on its
-    value being the one verified. The transaction reads and writes nothing
+    reads, so its label flows nowhere, and the read still refuses the commit
+    if the record changed. The transaction reads and writes nothing
     else, is refused if it is CFC-relevant, and commits with no explicit
     preparation, refused if its commit would prepare it.
   - A stamped compiled record is erased, value and label together, and the

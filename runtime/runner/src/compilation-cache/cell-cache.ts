@@ -11,7 +11,6 @@ import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { utf8Compare } from "@commonfabric/text/utf8";
-import { commitPreconditionValueHash } from "@commonfabric/memory/v2";
 import { pathsOverlap } from "@commonfabric/memory/v2/path";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
@@ -2689,31 +2688,15 @@ export async function repairCompileCacheStamps(
         type: "application/json" as const,
         path: [],
       };
-      // A record the repair writes is read whole, which makes the read a
-      // precondition of the commit. One it only guards is read as the
-      // verifier reads, so that its labels flow nowhere, and pinned by value
-      // at the commit instead.
+      // Each record is read whole, which conditions the commit on the
+      // record being unchanged. One the repair only guards is read as the
+      // verifier reads, so that its label flows nowhere.
       const current = target.write
         ? tx.readOrThrow(address)
         : tx.readOrThrow(address, { meta: internalVerifierRead });
       if (taggedHashStringOf(current as FabricValue) !== target.expectedHash) {
         tx.abort("compile-cache stamp repair: a record changed");
         return "conflicted";
-      }
-      if (!target.write) {
-        if (tx.addCommitPrecondition === undefined) {
-          tx.abort("compile-cache stamp repair: no commit precondition");
-          return "refused";
-        }
-        const value = (current as { value?: FabricValue } | undefined)?.value;
-        tx.addCommitPrecondition(target.space, {
-          kind: "entity-value-hash",
-          id: target.id,
-          scope: target.scope,
-          valueHash: value === undefined
-            ? null
-            : commitPreconditionValueHash(value),
-        });
       }
     }
     for (const target of plan) {
