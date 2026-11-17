@@ -1915,6 +1915,82 @@ describe("an element that is a plain value in place", () => {
     expect(instance.same(element, stops.key(1))).toBe(false);
   });
 
+  // Ruling Z40: the state of `pick` declares `stop: Stop`, a plain type.
+  // What the handler is given there carries the reference by key, and
+  // `stop.position` the reference with the member's path.
+  it("is given to a handler through a state path of plain type as a reference by key, over plain values in place", async () => {
+    const instance = await start();
+
+    instance.send(bindingOf(instance, "pick"), {}, [1]);
+
+    // `selected.set(stop)` and `center.set(stop.position)`.
+    const element = ["stops", keySegment(keyOf("b", 2))];
+    expect(cellOf(instance, "selected")).toMatchObject({
+      $link: { doc: "argument", path: element },
+    });
+    expect(cellOf(instance, "center")).toMatchObject({
+      $link: { doc: "argument", path: [...element, "position"] },
+    });
+  });
+
+  it("is given to a handler through a state path of plain type as the link to its cell, over references", async () => {
+    const instance = await start(references());
+
+    instance.send(bindingOf(instance, "pick"), {}, [1]);
+
+    expect(cellOf(instance, "selected")).toMatchObject({
+      $link: { doc: "argument", path: ["pool", "b"] },
+    });
+    expect(cellOf(instance, "center")).toMatchObject({
+      $link: { doc: "argument", path: ["pool", "b", "position"] },
+    });
+  });
+
+  // Ruling Z40, second half: a handle whose type declares its members
+  // as handles, as `Writable<Writable<Stop>[]>`.
+  it("is a handle by key where it is read through a handle of handles, over plain values in place", async () => {
+    const instance = await start();
+    const stops = new Handle(
+      instance,
+      new Ref("argument", ["stops"]),
+      undefined,
+      undefined,
+      [],
+      { type: "array", items: { type: "object", asCell: ["cell"] } },
+    );
+
+    const members = stops.get() as Handle[];
+
+    expect(members.map((member) => (member.target as Ref).path)).toEqual([
+      ["stops", keySegment(keyOf("a", 1))],
+      ["stops", keySegment(keyOf("b", 2))],
+      ["stops", keySegment(keyOf("c", 3))],
+    ]);
+    // The handle stays with its element when the element moves.
+    instance.send(bindingOf(instance, "reverse"), {});
+    expect(members[0].get()).toEqual(stop("a", 1));
+  });
+
+  it("is a handle to the position that holds the link where it is read through a handle of handles, over references", async () => {
+    const instance = await start(references());
+    const stops = new Handle(
+      instance,
+      new Ref("argument", ["stops"]),
+      undefined,
+      undefined,
+      [],
+      { type: "array", items: { type: "object", asCell: ["cell"] } },
+    );
+
+    const members = stops.get() as Handle[];
+
+    expect(members.map((member) => (member.target as Ref).path)).toEqual([
+      ["stops", "0"],
+      ["stops", "1"],
+      ["stops", "2"],
+    ]);
+  });
+
   it("reads as nothing through a stored reference to a member after it is removed, over plain values in place", async () => {
     const instance = await start();
     instance.send(bindingOf(instance, "pick"), {}, [0]);
