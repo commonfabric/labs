@@ -2,8 +2,7 @@
 
 ## Status
 
-Parts 1 to 3 are built. Parts 4 to 6 are being built, and part 7 is
-proposed. The document covers files that ship with a pattern: images, fonts,
+Parts 1 to 5 are built. Part 6 is being built, and part 7 is proposed. The document covers files that ship with a pattern: images, fonts,
 and audio. Files people add while using a pattern are out of scope.
 
 ## The problem
@@ -261,8 +260,12 @@ A record mixes with single files by spreading:
 ## 4. `cf-iframe`'s `assets` prop
 
 `assets` is a record from a name to a base64 `data:` URL. A name matches
-`[A-Za-z0-9_-]+`. A value that is not a base64 `data:` URL is refused when the
-view is built, as `$context` refuses a field that is not a cell.
+`[A-Za-z0-9_-]+`, and a URL is `data:<type>/<subtype>`, any `;name=value`
+parameters, then `;base64,` and padded base64, each part drawn from characters
+that need no escaping in an attribute, a CSS `url()`, or JSON
+(`toAssetRecord()` in `base/iframe-sandbox/src/assets.ts`). `cf-iframe` refuses
+any other value: its error display says why, and it holds the guest closed
+until `assets` changes.
 
 It is a prop of its own rather than a `$context` field. A `$context` field is a
 live cell the guest is granted, with a kind in `resourceKinds` and a
@@ -283,10 +286,11 @@ at the quote of an attribute or the parenthesis of a CSS `url()`. That covers
 it too, where a string `"cf-asset:glaze"` becomes the URL. The guest's bundle,
 passed as `script`, is not searched.
 
-A reference to a name the record lacks is left in place, and the host reports
-an error that names it and lists the record's names. `cf-asset:` is therefore
-reserved in a guest's document; prose that needs those characters writes the
-colon as `&#58;`.
+A reference to a name the record lacks is left in place, and the sandbox
+reports it as a guest error (`common-iframe-error`, which `cf-iframe` shows),
+naming each such reference and the record's names. The guest loads all the
+same. `cf-asset:` is therefore reserved in a guest's document; prose that needs
+those characters writes the colon as `&#58;`.
 
 The substitution is plain text, made before anything parses the document. Two
 other places were considered and do not work. The outer frame parses the
@@ -296,9 +300,9 @@ with scripting disabled and serializing changes `<noscript>` content
 script in the guest that rewrote references would run after the parser had
 already tried to load them, and each attempt would be a policy violation.
 
-**It hands the guest the record.** The host writes it into the document ahead
-of the guest's script, as an element that is not executed, so `script-src`
-does not govern it:
+**It hands the guest the record.** The host writes it into the document right
+after its doctype, ahead of every script, as an element that is not executed,
+so `script-src` does not govern it:
 
 ```html
 <script type="application/json" data-cf-assets>{"glaze": "data:image/png;base64,…"}</script>
@@ -420,9 +424,6 @@ uses when it writes a source set itself. The details are open.
 - How `runtime/fuse` presents a binary data file in a piece's source: as its
   decoded bytes, or read-only in its stored form. It presents and accepts text
   today.
-- How `cf-iframe` shows a reference to a missing asset: in its error state,
-  which hides the guest, or as a reported error beside a guest that still
-  loads.
 - Part 7's threshold, and how a lifecycle request names a file it does not
   carry.
 

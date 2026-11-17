@@ -1,6 +1,6 @@
 ---
 name: pattern-iframe
-description: Build a Common Fabric pattern whose primary UI is a self-contained `cf-iframe` guest. Use when an agent should turn an input-data shape and a small state/output contract into a working iframe-first pattern without learning the broader pattern framework, including plain DOM, React, D3, Phaser 2D games, Babylon.js 3D scenes, PerSpace/PerUser/PerSession data, path-scoped Cell access, stable array-item handles, mergeable pushes, bridged SQLite, ephemeral presence such as live cursors, or pattern verbs the guest sends events to through streams, such as a user-triggered `agent()` or LLM request.
+description: Build a Common Fabric pattern whose primary UI is a self-contained `cf-iframe` guest. Use when an agent should turn an input-data shape and a small state/output contract into a working iframe-first pattern without learning the broader pattern framework, including plain DOM, React, D3, Phaser 2D games, Babylon.js 3D scenes, PerSpace/PerUser/PerSession data, path-scoped Cell access, stable array-item handles, mergeable pushes, bridged SQLite, ephemeral presence such as live cursors, images, fonts, or sounds the pattern ships as assets, or pattern verbs the guest sends events to through streams, such as a user-triggered `agent()` or LLM request.
 ---
 
 # Iframe-first patterns
@@ -66,12 +66,19 @@ What the guides cannot leave to judgment:
 - One joint initial `pull()` barrier owns readiness for every resource an action
   uses. Keep action controls disabled until it resolves; an individual
   synchronous `sink()` callback must never declare the guest ready.
+- An image, a font, or a sound the pattern ships is a file in its directory,
+  handed to `cf-iframe` as `assets={dataFile.urls("./assets")}`. `guest.html`
+  refers to one as `cf-asset:<name>`, and the guest's script reads one with
+  `fabric.asset(name)`. The guest's policy refuses a CDN or host URL, a `blob:`
+  URL, and `fetch()`; "Images and other assets" in
+  `docs/common/ai/iframe-pattern-guide.md` has the rest.
 
 `patterns/examples/iframe-verb-list/` is the smallest complete example, with a
 verb; `patterns/showcase/iframe-signal-atlas/` adds a per-user SQLite database
-and per-session output, and `patterns/examples/iframe-cursor-canvas/` a presence
-room. `patterns/showcase/iframe-ring-loops/` is the exception, not a template:
-its `main.tsx` composes a `frame.tsx` that `scripts/write-iframe-wrapper.ts`
+and per-session output, `patterns/examples/iframe-cursor-canvas/` a presence
+room, and `patterns/examples/iframe-donut-menu/` pictures shipped as assets.
+`patterns/showcase/iframe-ring-loops/` is the exception, not a template: its
+`main.tsx` composes a `frame.tsx` that `scripts/write-iframe-wrapper.ts`
 generates, and it has no `guest.js`. Do not copy its shape into a new pattern.
 
 Run the pattern or add a focused test when behavior, rather than only its data

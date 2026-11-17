@@ -349,9 +349,12 @@ pattern passes in as a stream where it can; the guest sends it an event with
 pattern guide is the contract.
 
 Generate textures and simple audio locally when practical. The iframe CSP does
-not allow arbitrary network fetches, so do not load assets from a CDN. For
-larger assets, include data files through the supported pattern program rather
-than inventing a side channel.
+not allow arbitrary network fetches, so do not load assets from a CDN or with
+Phaser's loader. A sprite sheet, an image, or a sound the pattern ships goes to
+the guest through `cf-iframe`'s `assets`: add an image as a texture with
+`this.textures.addImage(key, await fabric.asset(name).image())`, and decode a
+sound from `fabric.asset(name).bytes()` with Web Audio. See
+[Images and other assets](./iframe-pattern-guide.md#images-and-other-assets).
 
 ## Use operations that match player intent
 
