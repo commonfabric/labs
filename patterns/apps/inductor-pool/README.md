@@ -214,7 +214,24 @@ release that outlives a change to the inputs, say). Until then nothing does.
    `list.key(i).set(obj)` reads `undefined`.** With `{ label: "written" }` it
    reads whoever pushed to the list last. So a replacement drops the old entry
    and appends the new one.
-4. **Question for Berni: which schema's `maxConfidentiality` binds a write?**
+4. **A `MaxConfidentiality` ceiling that names a `PolicyOf` atom refuses every
+   write.** The pool should put `MaxConfidentiality<…, [PolicyOf<poolRules>]>`
+   on each stored contribution and rule, so that a contribution carrying any
+   clause beyond the policy's is refused in its contributor's submit rather than
+   stored, where it would make every release that reads it confidential and so
+   silently stop `consensus` being public. With the ceiling in place, honest
+   submissions are refused too ("maxConfidentiality failed at /"). The cause, as
+   far as we can tell: `runtime/runner/src/cfc/prepare.ts` reads the ceiling
+   from the schema as written (`ifc?.maxConfidentiality`), with the `PolicyOf`
+   atom's `{ __ctOwningSpace: true }` placeholder, while the stored label's atom
+   names the owning space, resolved by `resolvePolicyOfConfidentiality` on the
+   way in; so the two never compare equal. Resolving the ceiling the same way
+   (verified in a scratch copy) lets honest submissions through. Until then the
+   pool has no ceiling. Today the gap is narrow: an event's payload is delivered
+   unlabelled (top/3175), so a submission cannot bring its sender's clauses in;
+   a labelled `thresholdCenter` or `jitter`, copied into the seal, is the path
+   left.
+5. **Question for Berni: which schema's `maxConfidentiality` binds a write?**
    The ceiling looks to be judged against the schema the writer's binding
    declares for the store. In the tests, the probe's handlers declare their
    target as a plain `Writable<ReleasedRule[]>`, and the refusal names the probe
