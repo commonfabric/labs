@@ -3,7 +3,8 @@
  * surprise, an item they label differently is one, a rewrite waits for enough
  * new surprises, `submitItem` ignores a repeated id and an item without
  * fields, publishing records the current rules for the goal, with no pool to
- * send them to, and setting a new goal clears what belonged to the old one.
+ * send them to, setting a new goal clears what belonged to the old one, and
+ * removing an item takes it out by id.
  *
  * Pattern under test: ./lofi-inductor.tsx
  */
@@ -132,6 +133,17 @@ export default pattern(() => {
     subject.goal === LUNCH_GOAL && subject.items.length === 3
   );
 
+  // Removing an item takes it out by id; an unknown id changes nothing.
+  const action_remove_items = action(() => {
+    subject.removeItem.send({ id: "mail-12" });
+    subject.removeItem.send({ id: "mail-404" });
+  });
+  const assert_item_removed = assert(() =>
+    subject.items.length === 2 &&
+    subject.items.every((item) => item.id !== "mail-12") &&
+    subject.rows.length === 2
+  );
+
   const assert_text_projection = assert(() =>
     subject[FS].type === "text/markdown" &&
     subject[FS].frontmatter.title === `Lo-fi inductor: ${GOAL}` &&
@@ -162,6 +174,8 @@ export default pattern(() => {
       { assertion: assert_goal_reset },
       { action: action_set_same_goal },
       { assertion: assert_goal_kept },
+      { action: action_remove_items },
+      { assertion: assert_item_removed },
     ],
     subject,
   };

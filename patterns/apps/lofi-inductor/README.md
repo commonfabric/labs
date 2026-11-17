@@ -125,6 +125,9 @@ Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
   history, what was published, and the pseudonym, so the pool cannot link this
   piece's contributions for two questions; the items stay, and the hi-fi model
   labels them for the new goal.
+- Agents drive it through its streams: `setGoal`, `submitItem`, `removeItem`,
+  `settleRewrite`, `retryRewrite`, and `publish`. The pool's are `submit` and
+  `withdraw`.
 - Choose the hi-fi model with `hifiModel`; omitted, the deployment's default
   `generateObject` model answers.
 

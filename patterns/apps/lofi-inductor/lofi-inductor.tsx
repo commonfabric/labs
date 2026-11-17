@@ -85,6 +85,11 @@ export interface PoolSubmission {
   withdraw?: boolean;
 }
 
+/** The item `removeItem` takes out, by id. */
+export interface ItemRef {
+  id: string;
+}
+
 /** A new goal, as `setGoal` takes it. */
 export interface GoalEvent {
   goal: string;
@@ -165,6 +170,8 @@ export interface LofiInductorOutput {
   setGoal: Stream<GoalEvent>;
   /** Add one item. An id the list holds already adds nothing. */
   submitItem: Stream<SubmittedItem>;
+  /** Take one item out, by id. An id the list does not hold does nothing. */
+  removeItem: Stream<ItemRef>;
   /**
    * Record the rewrite's judgement once it is ready: adopt the proposed set if
    * it was accepted, and add the round to the history either way.
@@ -313,6 +320,12 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         : `item-${Math.random().toString(36).slice(2, 10)}`;
       if (items.get().some((existing) => existing.id === id)) return;
       items.push({ id, fields });
+    });
+
+    const removeItem = action((event: ItemRef) => {
+      const id = typeof event?.id === "string" ? event.id.trim() : "";
+      const kept = items.get().filter((item) => item.id !== id);
+      if (kept.length < items.get().length) items.set(kept);
     });
 
     const addDraft = action(() => {
@@ -553,6 +566,7 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       rewrite,
       setGoal,
       submitItem,
+      removeItem,
       settleRewrite,
       retryRewrite,
       publish,
