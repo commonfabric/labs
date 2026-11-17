@@ -229,6 +229,12 @@ export type Located = {
    */
   inPlace: boolean;
   /**
+   * Each key the path crossed in the last document, outermost first: the
+   * path of the array in the form that names it, the key the position
+   * holds, and the path of the position.
+   */
+  crossed: { array: string[]; key: string; position: string[] }[];
+  /**
    * The default declared nearest the end of the chain of links the read
    * resolved through: that of the last link whose schema declares one,
    * and that of the reference's own schema where no link does.
@@ -411,6 +417,7 @@ export class Store {
     let links = 0;
     let missing = false;
     let inPlace = false;
+    let crossed: Located["crossed"] = [];
     for (;;) {
       while (isLink(value) && (rest.length > 0 || through)) {
         links += 1;
@@ -421,6 +428,7 @@ export class Store {
             named: new Ref(doc, named_),
             missing,
             inPlace,
+            crossed,
             fallback: undefined,
           };
         }
@@ -438,6 +446,7 @@ export class Store {
         at = [];
         named_ = [];
         inPlace = false;
+        crossed = [];
         value = this.#held(doc);
       }
       const segment = rest.shift();
@@ -451,6 +460,7 @@ export class Store {
             named,
             missing,
             inPlace: true,
+            crossed,
             fallback,
           };
         }
@@ -463,13 +473,19 @@ export class Store {
           });
           reads = undefined;
         }
-        const index = Array.isArray(value)
-          ? this.keysOf(value, new Ref(doc, at)).indexOf(
-            segment.slice(KEY.length),
-          )
-          : -1;
-        named_ = [...named_, segment];
-        inPlace = true;
+        const keys = Array.isArray(value)
+          ? this.keysOf(value, new Ref(doc, at))
+          : [];
+        // A key that a write of the transaction in progress changed is
+        // found under the key the element has now (ruling Z24).
+        let key = segment.slice(KEY.length);
+        let index = keys.indexOf(key);
+        for (let hops = 0; index < 0 && hops < MAX_LINKS; hops++) {
+          const next = this.#rekeyed(doc, named_, key);
+          if (next === undefined) break;
+          key = next;
+          index = keys.indexOf(key);
+        }
         if (index < 0) {
           missing = true;
           value = undefined;
@@ -477,7 +493,10 @@ export class Store {
         } else {
           value = (value as unknown[])[index];
           at = [...at, `${index}`];
+          crossed = [...crossed, { array: named_, key, position: at }];
         }
+        named_ = [...named_, segment];
+        inPlace = true;
         continue;
       }
       if (Array.isArray(value) && /^\d+$/.test(segment)) inPlace = true;
@@ -492,8 +511,83 @@ export class Store {
       named: new Ref(doc, named_, schema),
       missing,
       inPlace,
+      crossed,
       fallback,
     };
+  }
+
+  /**
+   * The elements that a write of the transaction in progress re-keyed
+   * (`plan-and-label-templates.md` §1.3; ruling Z24): the document, the
+   * path of the array in the form that names it, and the key before and
+   * after. A write through a reference by key that changes the value
+   * leaves the position with another key. Until the transaction ends, a
+   * reference that holds the old key resolves to the position, so the
+   * writer's later writes succeed, and the runtime moves what the old
+   * key holds to the new key. Whoever runs the transaction empties the
+   * list when it ends: a reference stored elsewhere under the old key
+   * then names no position.
+   */
+  readonly rekeys: {
+    doc: string;
+    array: readonly string[];
+    from: string;
+    to: string;
+  }[] = [];
+
+  #rekeyed(
+    doc: string,
+    array: readonly string[],
+    key: string,
+  ): string | undefined {
+    const id = canonical(array);
+    return this.rekeys.findLast((rekey) =>
+      rekey.doc === doc && rekey.from === key && canonical(rekey.array) === id
+    )?.to;
+  }
+
+  /**
+   * A reference with each key that the transaction in progress changed
+   * replaced by the key the element has now: the reference the writer
+   * holds, as it is stored (ruling Z24).
+   */
+  current(ref: Ref): Ref {
+    if (this.rekeys.length === 0 || !ref.path.some(isKeySegment)) return ref;
+    const held: string[] = [];
+    const path = ref.path.map((segment) => {
+      let now = segment;
+      if (isKeySegment(segment)) {
+        let key = segment.slice(KEY.length);
+        for (let hops = 0; hops < MAX_LINKS; hops++) {
+          const next = this.#rekeyed(ref.doc, held, key);
+          if (next === undefined) break;
+          key = next;
+        }
+        now = keySegment(key);
+      }
+      held.push(segment);
+      return now;
+    });
+    return new Ref(ref.doc, path, ref.schema);
+  }
+
+  /** Gives a document another identifier, with what it was declared as. */
+  move(from: string, to: string): void {
+    const document = this.docs.get(from);
+    const declared = this.declared.get(from);
+    this.docs.delete(to);
+    this.declared.delete(to);
+    if (document !== undefined) {
+      this.docs.delete(from);
+      this.docs.set(to, document);
+    }
+    if (declared !== undefined) {
+      this.declared.delete(from);
+      this.declared.set(to, declared);
+    }
+    this.clock += 1;
+    this.log.push({ doc: from, path: [], at: this.clock });
+    this.log.push({ doc: to, path: [], at: this.clock });
   }
 
   /**
@@ -684,6 +778,17 @@ export class Store {
     }
     this.clock += 1;
     this.log.push({ doc, path, at: this.clock });
+    // A position the write went through by key that holds another key
+    // now is re-keyed (ruling Z24).
+    for (const { array, key, position } of located.crossed) {
+      const index = Number(position[position.length - 1]);
+      const holder = this.locate(new Ref(doc, position.slice(0, -1)), false);
+      if (!Array.isArray(holder.value)) continue;
+      const now = this.keysOf(holder.value, holder.ref)[index];
+      if (now !== undefined && now !== key) {
+        this.rekeys.push({ doc, array, from: key, to: now });
+      }
+    }
   }
 
   /** Whether a write after `since` is at, above, or below a position. */

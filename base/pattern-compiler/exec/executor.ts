@@ -1639,11 +1639,14 @@ export class Instance {
   /** A value in stored form: each reference in it as a link. */
   stored(value: unknown): unknown {
     if (value instanceof Ref) {
+      // A reference by key that the writer holds is stored with the key
+      // the element has now (ruling Z24).
+      const now = this.store.current(value);
       return {
         $link: {
-          doc: value.doc,
-          path: [...value.path],
-          ...(value.schema === undefined ? {} : { schema: value.schema }),
+          doc: now.doc,
+          path: [...now.path],
+          ...(now.schema === undefined ? {} : { schema: now.schema }),
         },
       };
     }
@@ -2575,6 +2578,9 @@ export class Instance {
     const none: Context = new Map();
     const result = this.#result;
     if (result === undefined) return;
+    // A write from outside a handler, as through a member bound both
+    // ways, is a transaction of its own.
+    this.root.#rekey();
     for (let pass = 0; pass < MAX_PASSES; pass++) {
       const before = this.store.clock;
       this.plan.outputs.forEach((output, index) => {
@@ -3133,6 +3139,7 @@ export class Instance {
       root.#bound.clear();
       for (const [key, held] of bound) root.#bound.set(key, held);
       this.#children.length = children;
+      this.store.rekeys.length = 0;
       return {
         binding,
         committed: false,
@@ -3141,7 +3148,101 @@ export class Instance {
     } finally {
       this.#handling = undefined;
     }
+    root.#rekey();
     return { binding, committed: true };
+  }
+
+  /**
+   * Ends a transaction that re-keyed elements (ruling Z24): for each
+   * element that a write through a reference by key left with another
+   * key, moves what the old key holds to the new key, in this instance
+   * and in every instance a function body made. What is moved is the
+   * state cells declared under the key, in the body over the array and
+   * in the bodies over the results of the constructs applied to it,
+   * which have the upstream key. The cone instances of the old key are
+   * dropped, and those of the new key are evaluated when they are next
+   * demanded. A reference that was stored elsewhere under the old key is
+   * not found and keeps the old key.
+   */
+  #rekey(): void {
+    const rekeys = this.store.rekeys.splice(0);
+    for (const rekey of rekeys) {
+      for (const instance of [this, ...this.#instances.values()]) {
+        instance.#moveKey(rekey);
+      }
+    }
+  }
+
+  #moveKey(
+    rekey: { doc: string; array: readonly string[]; from: string; to: string },
+  ): void {
+    const element = canonical([...rekey.array, keySegment(rekey.from)]);
+    // The collections over the array: those whose element table holds
+    // the reference by key, and the constructs applied to them.
+    const over = new Set<number>();
+    for (const [name, table] of this.#tables) {
+      const held = table.some(({ source }) =>
+        source instanceof Ref && source.doc === rekey.doc &&
+        canonical(source.path) === element
+      );
+      if (held) over.add(Number(name.slice(1, name.indexOf("|"))));
+    }
+    if (over.size === 0) return;
+    for (let grown = true; grown;) {
+      grown = false;
+      this.plan.collections.forEach(({ source }, index) => {
+        const upstream = source.collection ??
+          (source.output === undefined
+            ? undefined
+            : this.plan.outputs[source.output].passesCollection);
+        if (upstream !== undefined && over.has(upstream) && !over.has(index)) {
+          over.add(index);
+          grown = true;
+        }
+      });
+    }
+    // The key itself, and the key of a member of the segment that a
+    // `flatMap` gave the element (ruling Z22).
+    const renamed = (key: string) =>
+      key === rekey.from
+        ? rekey.to
+        : key.startsWith(`${rekey.from}/`)
+        ? `${rekey.to}${key.slice(rekey.from.length)}`
+        : key;
+    for (const [name, table] of this.#tables) {
+      const bar = name.indexOf("|");
+      const collection = Number(name.slice(1, bar));
+      if (!over.has(collection)) continue;
+      this.#tables.set(
+        name,
+        table.map((member) => {
+          const key = renamed(member.key);
+          if (key === member.key) return member;
+          this.#drop(collection, name.slice(bar + 1), member.key);
+          return {
+            ...member,
+            key,
+            source: member.source instanceof Ref &&
+                canonical(member.source.path) === element
+              ? new Ref(rekey.doc, [...rekey.array, keySegment(rekey.to)])
+              : member.source,
+          };
+        }),
+      );
+    }
+    for (const [id, { cell, keys }] of [...this.#cells]) {
+      const steps = this.plan.stateCells[cell].within.flatMap((step) =>
+        step.element === undefined ? [] : [step.element]
+      );
+      const moved = keys.map((key, index) =>
+        over.has(steps[index]) ? renamed(key) : key
+      );
+      if (canonical(moved) === canonical(keys)) continue;
+      const to = this.doc(`state:${cell}:${canonical(moved)}`);
+      this.#cells.delete(id);
+      this.#cells.set(to, { cell, keys: moved });
+      this.store.move(id, to);
+    }
   }
 }
 

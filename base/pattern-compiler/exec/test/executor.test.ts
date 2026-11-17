@@ -2111,16 +2111,16 @@ describe("an element that is a plain value in place", () => {
       .toMatchObject({
         $link: { doc: "argument", path: ["stops", keySegment(key)] },
       });
-    // The state cell of the body is that of the new key, and reads its
-    // first value. The cell of the old key keeps its document.
-    expect(result(instance).rows[1].open).toBe(false);
-    expect(
-      instance.stateCells().filter(({ name }) => name === "open").map((
-        { keys, value },
-      ) => [keys[0], value]),
-    ).toContainEqual([keyOf("b", 2), true]);
-    // The reference `selected` holds keeps the key it was made with, and
-    // reads as nothing (PL §8, question 112, assumed).
+    // What the old key held moved to the new key in the same
+    // transaction (ruling Z24): the state cell of the row is that of
+    // the new key and holds what the row had set.
+    expect(result(instance).rows[1].open).toBe(true);
+    const open = instance.stateCells().filter(({ name }) => name === "open")
+      .map(({ keys, value }) => [keys[0], value]);
+    expect(open).toContainEqual([key, true]);
+    expect(open.map(([held]) => held)).not.toContain(keyOf("b", 2));
+    // The reference `selected` holds was stored under the old key before
+    // the write, keeps that key, and reads as nothing.
     expect(result(instance).selected).toBe(undefined);
     expect(result(instance).rows.map((row) => row.isSelected)).toEqual([
       false,
@@ -2129,9 +2129,9 @@ describe("an element that is a plain value in place", () => {
     ]);
   });
 
-  it("refuses a second write through the same reference after a write that changed the value, over plain values in place", async () => {
+  it("takes a second write through the same reference after a write that changed the value, over plain values in place", async () => {
     const instance = await start();
-    const before = structuredClone(instance.store.docs.get("argument")?.value);
+    instance.send(bindingOf(instance, "toggle"), {}, [1]);
 
     // `stop.key("done").set(true)` and then `stop.key("title").set(...)`.
     const outcome = instance.send(
@@ -2140,16 +2140,17 @@ describe("an element that is a plain value in place", () => {
       [1],
     );
 
-    // The second write finds no position that holds the key, and the
-    // event commits nothing, the first write included.
-    expect(outcome.committed).toBe(false);
-    expect(outcome.error).toBe(
-      "a write through a reference by key that no position holds",
-    );
-    expect(instance.store.docs.get("argument")?.value).toEqual(before);
+    // The reference the handler holds follows the element to its new
+    // key, and the row keeps its state (ruling Z24).
+    expect(outcome.committed).toBe(true);
+    expect(result(instance).rows[1]).toMatchObject({
+      title: "renamed",
+      open: true,
+      stop: { title: "renamed", done: true },
+    });
     expect(result(instance).rows.map((row) => row.title)).toEqual([
       "a",
-      "b",
+      "renamed",
       "c",
     ]);
   });
@@ -2287,6 +2288,170 @@ describe("a plain value that a function body reads through a handle", () => {
     instance.send(DISCARD, {}, [0]);
 
     expect((instance.result() as Result).left).toEqual([card("a", 2)]);
+  });
+});
+
+// Ruling Z24 on `fixtures/rekey.tsx`: a write through a reference by key
+// that changes a plain value in place re-keys the element in the same
+// transaction, and what the old key holds moves to the new key.
+describe("a write through a reference by key that changes the value", () => {
+  const task = (title: string, done = false) => ({ title, done });
+  const inPlace = () => ({ tasks: [task("a"), task("b"), task("hidden")] });
+  const link = (name: string) => ({
+    $link: { doc: "argument", path: ["pool", name] },
+  });
+  const references = () => ({
+    pool: { a: task("a"), b: task("b"), c: task("hidden") },
+    tasks: [link("a"), link("b"), link("c")],
+  });
+  const keyOf = (title: string, done = false) =>
+    `value:${JSON.stringify({ done, title })}#0`;
+  type Result = {
+    picked: unknown;
+    rows: { title: string; done: boolean; noted: string }[];
+    open: { title: string; seen: string }[];
+  };
+  const result = (instance: Instance) => instance.result() as Result;
+  const [NOTE, FINISH_AND_RENAME, FINISH_AND_PICK, PICK, SEE] = [0, 1, 2, 3, 4];
+  // The cells of the rows that hold something.
+  const cells = (instance: Instance, name: string) =>
+    instance.stateCells().filter((cell) =>
+      cell.name === name && cell.value !== ""
+    ).map(({ keys, value }) => [keys[0], value]);
+  const keysOf = (instance: Instance, name: string) =>
+    instance.stateCells().filter((cell) => cell.name === name).map((
+      { keys },
+    ) => keys[0]);
+  const start = async (argument: unknown = inPlace()) =>
+    new Instance(await artifactOf("rekey"), argument);
+
+  it("moves the state cell of the row to the new key, over plain values in place", async () => {
+    const instance = await start();
+    instance.send(NOTE, { text: "mine" }, [1]);
+    const documents = instance.documents()["state cell"];
+
+    const outcome = instance.send(FINISH_AND_RENAME, {}, [1]);
+
+    // Both writes commit, and the row keeps its note.
+    expect(outcome.committed).toBe(true);
+    expect(result(instance).rows).toMatchObject([
+      { title: "a", done: false, noted: "" },
+      { title: "renamed", done: true, noted: "mine" },
+      { title: "hidden", done: false, noted: "" },
+    ]);
+    // The cell is that of the new key, and no cell of the old key or of
+    // the key between the two writes is left. No document was made.
+    expect(cells(instance, "noted")).toEqual([[
+      keyOf("renamed", true),
+      "mine",
+    ]]);
+    expect(keysOf(instance, "noted")).not.toContain(keyOf("b"));
+    expect(keysOf(instance, "noted")).not.toContain(keyOf("b", true));
+    expect(instance.documents()["state cell"]).toBe(documents);
+  });
+
+  it("moves the state cell of a row over the result of a `filter` with the upstream key", async () => {
+    const instance = await start();
+    instance.send(SEE, { text: "seen" }, [1]);
+    expect(result(instance).open[1]).toMatchObject({
+      title: "b",
+      seen: "seen",
+    });
+
+    instance.send(FINISH_AND_RENAME, {}, [1]);
+
+    expect(result(instance).open).toMatchObject([
+      { title: "a", seen: "" },
+      { title: "renamed", seen: "seen" },
+    ]);
+    expect(cells(instance, "seen")).toEqual([[keyOf("renamed", true), "seen"]]);
+  });
+
+  it("stores the reference the writer holds with the new key", async () => {
+    const instance = await start();
+
+    instance.send(FINISH_AND_PICK, {}, [0]);
+
+    // The handle was stored after the write: it names the element.
+    expect(result(instance).picked).toEqual(task("a", true));
+    const stored = instance.store.docs.get("state:0:[]")?.value;
+    expect(stored).toMatchObject({
+      $link: {
+        doc: "argument",
+        path: ["tasks", keySegment(keyOf("a", true))],
+      },
+    });
+  });
+
+  it("leaves a reference stored elsewhere under the old key reading as nothing", async () => {
+    const instance = await start();
+    instance.send(PICK, {}, [1]);
+    expect(result(instance).picked).toEqual(task("b"));
+
+    instance.send(FINISH_AND_RENAME, {}, [1]);
+
+    expect(result(instance).picked).toBe(undefined);
+  });
+
+  it("moves the state cell on a write through a member bound both ways", async () => {
+    const instance = await start();
+    instance.send(NOTE, { text: "mine" }, [0]);
+
+    // As the rendered checkbox of the row writes its attribute.
+    instance.writeThrough(["rows", "0", "check", "props", "$checked"], true);
+
+    expect(result(instance).rows[0]).toMatchObject({
+      title: "a",
+      done: true,
+      noted: "mine",
+    });
+    expect(cells(instance, "noted")).toEqual([[keyOf("a", true), "mine"]]);
+  });
+
+  it("moves nothing where a handler that wrote throws", async () => {
+    const artifact = structuredClone(await artifactOf("rekey"));
+    const instance = new Instance(artifact, inPlace());
+    instance.send(NOTE, { text: "mine" }, [1]);
+    // The second write of the handler is refused: the row's element is
+    // gone by then.
+    const run = instance.bodies.get(
+      artifact.plan.bindings[FINISH_AND_RENAME].handler.body!,
+    )!;
+    instance.bodies.set(
+      artifact.plan.bindings[FINISH_AND_RENAME].handler.body!,
+      (...given: unknown[]) => {
+        run(...given);
+        throw new Error("after the writes");
+      },
+    );
+
+    const outcome = instance.send(FINISH_AND_RENAME, {}, [1]);
+
+    expect(outcome.committed).toBe(false);
+    expect(result(instance).rows[1]).toMatchObject({
+      title: "b",
+      done: false,
+      noted: "mine",
+    });
+    expect(cells(instance, "noted")).toEqual([[keyOf("b"), "mine"]]);
+  });
+
+  it("changes no key over references, where the element is a cell", async () => {
+    const instance = await start(references());
+    instance.send(NOTE, { text: "mine" }, [1]);
+    instance.send(PICK, {}, [1]);
+    const before = cells(instance, "noted");
+
+    const outcome = instance.send(FINISH_AND_RENAME, {}, [1]);
+
+    expect(outcome.committed).toBe(true);
+    expect(result(instance).rows[1]).toMatchObject({
+      title: "renamed",
+      done: true,
+      noted: "mine",
+    });
+    expect(cells(instance, "noted")).toEqual(before);
+    expect(result(instance).picked).toEqual(task("renamed", true));
   });
 });
 
