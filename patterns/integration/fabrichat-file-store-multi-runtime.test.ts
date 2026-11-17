@@ -10,7 +10,9 @@
  *
  * The store takes adds from every member of the room's space, not only the
  * one whose runtime created it, and records each member as the adder of their
- * own files, with server execution on or off.
+ * own files, with server execution on or off, whether or not the member's
+ * client has opened the store. It refuses an add from a member whose home
+ * lists no profile.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -129,13 +131,15 @@ describe("fabrichat file store across runtimes", () => {
 
       /**
        * A harness whose creator and member each have a profile of their own,
-       * and a store the creator's runtime alone created, as one member's
-       * client does in a room, with a file the creator added unless
-       * `creatorAdds` is `false`. Returns the harness's sessions, the
+       * unless `memberProfile` is `false`, and a store the creator's runtime
+       * alone created, as one member's client does in a room, with a file the
+       * creator added unless `creatorAdds` is `false`. Returns the harness's sessions, the
        * member's identity, the store, the link the room's record holds to it,
        * and the means to add a file to it.
        */
-      const storeTheCreatorMade = async ({ creatorAdds = true } = {}) => {
+      const storeTheCreatorMade = async (
+        { creatorAdds = true, memberProfile = true } = {},
+      ) => {
         const creatorIdentity = await Identity.fromPassphrase(
           "fabrichat-file-store-creator",
           { implementation: "noble" },
@@ -163,7 +167,7 @@ describe("fabrichat file store across runtimes", () => {
         });
         const [creator, member] = harness.sessions;
         await listOwnProfile(harness, creator, "Creator");
-        await listOwnProfile(harness, member, "Member");
+        if (memberProfile) await listOwnProfile(harness, member, "Member");
 
         await creator.send("ensureFileStore", {});
         await harness.settleUntil(async () =>
@@ -269,54 +273,35 @@ describe("fabrichat file store across runtimes", () => {
         ).toBe(adder);
       };
 
-      /**
-       * Checks that the first add to a store no client has opened, sent by
-       * `session`, is refused as having no profile, which is what the serving
-       * loop does with it: the served `commitAdd` reads a per-user instance of
-       * the store's `#profile` wish that no run has computed for `session`.
-       */
-      const expectServedFirstAddRefused = async (
-        session: MultiRuntimeSession,
-        add: Awaited<ReturnType<typeof storeTheCreatorMade>>["add"],
-      ) => {
-        // TODO(danfuzz): Expect the add to be taken, as it is with server
-        // execution off, once a served handler's per-user inputs are computed
-        // for the event's principal before it runs.
-        expect(await add(session, undefined, "add-0", "file-0.png"))
+      it("takes the first add of the creator, whose client has never opened the store", async () => {
+        const { creator, add } = await storeTheCreatorMade({
+          creatorAdds: false,
+        });
+
+        await expectUnopenedAdd(creator, add, 0, "Creator");
+      });
+
+      it("takes the first add of a member to a store no client has opened", async () => {
+        const { member, add } = await storeTheCreatorMade({
+          creatorAdds: false,
+        });
+
+        await expectUnopenedAdd(member, add, 0, "Member");
+      });
+
+      it("refuses the first add of a member whose home lists no profile, as having no profile", async () => {
+        const { member, add } = await storeTheCreatorMade({
+          creatorAdds: false,
+          memberProfile: false,
+        });
+
+        expect(await add(member, undefined, "add-0", "file-0.png"))
           .toMatchObject({
             status: "refused",
             code: "not-permitted",
             reason: "You have no profile yet.",
           });
-      };
-
-      it(
-        `${
-          serverExecution ? "refuses" : "takes"
-        } the first add of the creator, whose client has never opened the store`,
-        async () => {
-          const { creator, add } = await storeTheCreatorMade({
-            creatorAdds: false,
-          });
-
-          if (serverExecution) await expectServedFirstAddRefused(creator, add);
-          else await expectUnopenedAdd(creator, add, 0, "Creator");
-        },
-      );
-
-      it(
-        `${
-          serverExecution ? "refuses" : "takes"
-        } the first add of a member to a store no client has opened`,
-        async () => {
-          const { member, add } = await storeTheCreatorMade({
-            creatorAdds: false,
-          });
-
-          if (serverExecution) await expectServedFirstAddRefused(member, add);
-          else await expectUnopenedAdd(member, add, 0, "Member");
-        },
-      );
+      });
 
       it("takes the first add of a member, whose client has never opened the store", async () => {
         const { member, add } = await storeTheCreatorMade();

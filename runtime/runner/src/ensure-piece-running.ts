@@ -24,8 +24,9 @@ const logger = getLogger("ensure-piece-running", {
 
 /**
  * Warns where an open starts a piece without a piece its inputs come from
- * (`startWithInputSources()`), whose handlers then read what that source
- * derived last.
+ * (`startWithInputSources()`), or a start that asks for
+ * `EnsurePieceOptions.sourcesBestEffort` does, whose handlers then read what
+ * that source derived last.
  */
 const openLogger = getLogger("ensure-piece-running.open", {
   enabled: true,
@@ -33,6 +34,48 @@ const openLogger = getLogger("ensure-piece-running.open", {
 });
 
 const MAX_RESULT_LINK_DEPTH = 10;
+
+/** A piece the walk of `startInputSources()` could not start. */
+interface UnstartedSource {
+  /** The piece's root. */
+  source: NormalizedFullLink;
+
+  /** Why it did not start. */
+  verdict: EnsurePieceVerdict;
+}
+
+/**
+ * Warns that `verb` ("Opened" or "Started") put the piece `ownerId` in motion
+ * without `source`, a piece that encloses it, which could not start.
+ */
+function warnUnstartedSource(
+  verb: string,
+  ownerId: string,
+  { source, verdict }: UnstartedSource,
+): void {
+  openLogger.warn("input-sources", () => [
+    `${verb} ${ownerId} without ${source.id}, a piece that encloses it, ` +
+    `which could not start (${verdict.reason ?? "failed"}); its ` +
+    `handlers read what ${source.id} derived last.`,
+  ]);
+}
+
+/**
+ * Warns that `verb` ("Opened" or "Started") put the piece `ownerId` in motion
+ * without the pieces that enclose it, because the links that name them could
+ * not be read.
+ */
+function warnUnreadSources(
+  verb: string,
+  ownerId: string,
+  error: unknown,
+): void {
+  openLogger.warn("input-sources", () => [
+    `${verb} ${ownerId} without the pieces that enclose it, whose links ` +
+    `could not be read; its handlers read what those derived last:`,
+    error,
+  ]);
+}
 
 /**
  * Follows `result` backlinks from `rootCell` to the result document that
@@ -111,7 +154,7 @@ async function startInputSources(
   owner: OwningRootAddress,
   options: EnsurePieceOptions | undefined,
   visited: Set<string>,
-  unstarted?: { source: NormalizedFullLink; verdict: EnsurePieceVerdict }[],
+  unstarted?: UnstartedSource[],
 ): Promise<EnsurePieceVerdict | undefined> {
   const signal = options?.signal;
   const sources = options?.enclosingSourcesOnly === true
@@ -146,6 +189,34 @@ async function startInputSources(
     }
   }
   return undefined;
+}
+
+/**
+ * Helper for `ensureVerdict()`, which runs `startInputSources()` for `owner`
+ * under `EnsurePieceOptions.sourcesBestEffort`: each source the walk could not
+ * start is warned of, and so are links it could not read, which leave `owner`
+ * to start without its sources rather than fail. A source still owed its
+ * follow is returned as `startInputSources()` returns it, and an abort is
+ * rethrown.
+ */
+async function startSourcesBestEffort(
+  runtime: Runtime,
+  owner: OwningRootAddress,
+  options: EnsurePieceOptions,
+  visited: Set<string>,
+): Promise<EnsurePieceVerdict | undefined> {
+  const unstarted: UnstartedSource[] = [];
+  try {
+    return await startInputSources(runtime, owner, options, visited, unstarted);
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    warnUnreadSources("Started", owner.id, error);
+    return undefined;
+  } finally {
+    for (const entry of unstarted) {
+      warnUnstartedSource("Started", owner.id, entry);
+    }
+  }
 }
 
 /**
@@ -527,6 +598,16 @@ export type EnsurePieceOptions = {
   enclosingSourcesOnly?: boolean;
 
   /**
+   * With `startInputSources`, start the owning piece whatever the walk could
+   * not do, as an open does (`startWithInputSources()`): a source that could
+   * not start, and links the walk could not read, are each warned of, and the
+   * owning piece starts without them. Without it, a walk whose links cannot
+   * be read fails the owning piece's start. A source still owed its origin's
+   * follow holds the owning piece back either way.
+   */
+  sourcesBestEffort?: boolean;
+
+  /**
    * The walk delivers an event, so each piece it starts, the pieces its
    * inputs come from included, is started as one
    * (`RunnerStartOptions.forEvent`).
@@ -561,7 +642,7 @@ async function ensureVerdict(
   cellLink: NormalizedFullLink,
   options: EnsurePieceOptions | undefined,
   visited: Set<string>,
-  unstarted?: { source: NormalizedFullLink; verdict: EnsurePieceVerdict }[],
+  unstarted?: UnstartedSource[],
 ): Promise<EnsurePieceVerdict> {
   const observedDocIds: string[] = [];
   const observedDocs: OwningRootAddress[] = [];
@@ -690,13 +771,15 @@ async function ensureVerdict(
         !runtime.runner.isRunning(resultCell)
       ) {
         visited.add(rootKey(root));
-        const pending = await startInputSources(
-          runtime,
-          root,
-          options,
-          visited,
-          unstarted,
-        );
+        const pending = options.sourcesBestEffort === true
+          ? await startSourcesBestEffort(runtime, root, options, visited)
+          : await startInputSources(
+            runtime,
+            root,
+            options,
+            visited,
+            unstarted,
+          );
         signal?.throwIfAborted();
         // A source still owed its follow holds this piece back with it; the
         // caller asks again once the follow has run, and the re-arm watches
@@ -827,11 +910,7 @@ export async function startWithInputSources(
     try {
       await startEnclosingFollowingOrigins(runtime, root, options);
     } catch (error) {
-      openLogger.warn("input-sources", () => [
-        `Opened ${id} without the pieces that enclose it, whose links ` +
-        `could not be read; its handlers read what those derived last:`,
-        error,
-      ]);
+      warnUnreadSources("Opened", id, error);
     }
   }
   return await start();
@@ -860,10 +939,7 @@ async function startEnclosingFollowingOrigins(
     : undefined;
   while (true) {
     owed = [];
-    const unstarted: {
-      source: NormalizedFullLink;
-      verdict: EnsurePieceVerdict;
-    }[] = [];
+    const unstarted: UnstartedSource[] = [];
     const pending = await startInputSources(
       runtime,
       root,
@@ -875,12 +951,8 @@ async function startEnclosingFollowingOrigins(
       new Set([rootKey(root)]),
       unstarted,
     );
-    for (const { source, verdict } of unstarted) {
-      openLogger.warn("input-sources", () => [
-        `Opened ${root.id} without ${source.id}, a piece that encloses it, ` +
-        `which could not start (${verdict.reason ?? "failed"}); its ` +
-        `handlers read what ${source.id} derived last.`,
-      ]);
+    for (const entry of unstarted) {
+      warnUnstartedSource("Opened", root.id, entry);
     }
     if (pending === undefined) return;
     const toFollow = owed.filter((source) => !followed.has(rootKey(source)));

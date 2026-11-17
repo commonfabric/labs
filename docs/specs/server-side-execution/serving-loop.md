@@ -382,6 +382,11 @@ A session demands one of its values when it is sent a document the piece's
 setup wrote, other than its argument, which holds inputs current without it. A
 read that stops at a link to the piece is sent only its result document, and
 starts nothing (`carriesPieceMeta` in `runtime/memory/v2/server-sync.ts`). A
+demand that reaches a nested instance's values starts the instances that
+enclose it first, whether or not it reaches any of theirs (runtime-mapping.md,
+N22): the documents an enclosing instance's setup wrote may all be ones the
+demand pass starts nothing from, such as its nested node's output, a
+`computed:` document, and its argument. A
 piece whose document a client session tracks at that commit keeps running,
 because that session's demand has already made its attempt to load it. The result
 pattern's index entry goes with the release, and so do the watches of the
@@ -2053,7 +2058,9 @@ started, its demand key stays pending and its served event defers, and the
 loop runs the follow BESIDE its cycles rather than inside one. The pieces
 an event's piece takes its inputs from, which its auto-start starts first
 (runtime-mapping.md), are answered the same way, and a follow still owed
-for one of them defers the event as the piece's own would. The
+for one of them defers the event as the piece's own would. So are the
+pieces enclosing a piece the demand pass starts, which it starts first, and
+a follow still owed for one of them leaves the demanded root pending. The
 reconciler's compile seals the candidate's closure into whatever wave is
 open when it finishes, and its adopting write is a direct commit (below)
 that would read that closure, so the reconciler waits for every wave open

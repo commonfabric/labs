@@ -295,10 +295,17 @@ starts does. That start is best effort: an enclosing
 piece that cannot start, one whose origin's follow cannot be settled, and an
 argument whose links cannot be read leave the opened piece to start alone,
 with a warning naming it, so an open fails only where the piece's own start
-does. A serving runtime's demand start passes no
-`startInputSources`: the demand a session hands it reaches the documents
-upstream of what the session watches, the enclosing instance's among them,
-so the demand pass starts that instance itself.
+does. A serving runtime's demand start walks the same restricted chain before
+it starts a piece a demand reaches (`#attemptStructureLoad()` in
+`space-server.ts`): a session's demand can reach a nested instance's documents
+without reaching any of the enclosing instance's that the demand pass starts a
+piece from, as when the session reads through a link that names the nested
+instance's result and never opens the enclosing instance, and the nested
+instance would then run alone. The walk there is best effort as an open's is
+(`EnsurePieceOptions.sourcesBestEffort`), except that an enclosing piece
+owed its origin's follow holds the demanded root pending until the follow has
+run (serving-loop.md §3e). Each enclosing piece it starts runs for the rest of
+the tenure.
 The derivation path needs no analog: a commit dirtying docs read by
 unmaterialized nodes leaves them dirty-unmaterialized until a
 value-granular client pull (a subscription) demands them and their

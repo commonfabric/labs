@@ -6588,7 +6588,20 @@ export class SpaceServer implements TransactionSealDestination {
    * piece's origin is followed before its first start in this tenure
    * (§3e): the serving runtime is the opener of every piece it serves. A
    * start the follow is still owed is declined (`origin-pending`), left
-   * pending for the cycle after the follow runs. */
+   * pending for the cycle after the follow runs.
+   *
+   * The pieces that enclose the owning piece start first, as they do for a
+   * client's open (`startWithInputSources()`): the instance whose graph sets
+   * it up as a nested node, that instance's own enclosing instance, and so on
+   * (`EnsurePieceOptions.enclosingSourcesOnly`). A demand can reach a nested
+   * instance's documents without reaching any of its enclosing instance's
+   * that would start it, and a nested instance running alone runs its
+   * handlers against inputs nothing in the runtime derives. An enclosing piece
+   * owed its origin's follow holds the owning piece back with it, as above;
+   * one that cannot start, and links the walk cannot read, are warned of, and
+   * the owning piece starts without them
+   * (`EnsurePieceOptions.sourcesBestEffort`). An enclosing piece runs for the
+   * rest of the tenure, as the owning piece does. */
   async #attemptStructureLoad(
     runtime: Runtime,
     root: { id: string; scope?: string },
@@ -6598,6 +6611,11 @@ export class SpaceServer implements TransactionSealDestination {
     const termini: OwningRootAddress[] = [];
     const admitStart = (owning: OwningRootAddress) =>
       !this.#failedStartRoots.has(owning.id);
+    const enclosingFirst = {
+      startInputSources: true,
+      enclosingSourcesOnly: true,
+      sourcesBestEffort: true,
+    };
     const verdict = await ensurePieceRunningVerdict(runtime, {
       space: this.#options.space,
       id: root.id as never,
@@ -6609,6 +6627,7 @@ export class SpaceServer implements TransactionSealDestination {
       onOwningRoot,
       admitStart,
       originFollowed: this.#originFollowed,
+      ...enclosingFirst,
     });
     if (verdict.root !== undefined) termini.push(verdict.root);
     if (
@@ -6628,6 +6647,7 @@ export class SpaceServer implements TransactionSealDestination {
       onOwningRoot,
       admitStart,
       originFollowed: this.#originFollowed,
+      ...enclosingFirst,
     });
     if (spaceVerdict.root !== undefined) termini.push(spaceVerdict.root);
     // Merge observed docs: the re-arm must watch both instances' reads.

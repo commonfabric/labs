@@ -1319,7 +1319,10 @@ An open of a nested instance starts the instances that enclose it first, and
 an open that follows the opened piece's origin follows each of their recorded
 origins the same way before starting it (`startWithInputSources()` in
 `runtime/runner/src/ensure-piece-running.ts`), so the opened piece never
-derives from source an enclosing piece's origin has already replaced.
+derives from source an enclosing piece's origin has already replaced. A
+serving runtime's start of a piece a demand reaches does the same, its follows
+running beside the serving loop's cycles
+([serving-loop.md §3e](server-side-execution/serving-loop.md#3e-pattern-updates)).
 
 A piece that is already running when it is opened keeps its reactive nodes
 through step 7. The runner's pattern watcher re-instantiates it on the accepted
