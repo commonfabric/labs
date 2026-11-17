@@ -196,13 +196,17 @@ A space stays placed on its worker for as long as the worker runs. Counted:
 A space is ACTIVE when it has ≥1 live client session or undelivered
 events; otherwise it MAY be parked (lease released, loop stopped, and
 the runtime disposed or kept for the space's next tenure — Parking
-below). A client session is any session except a serving loop's own,
-which is a session of the deployment's service identity that
-reached the memory server from the process holding it, declared the
-serving binding (`actingAs: "space-owner"`, a serving runtime of another
-process), or declared that it is not demand (`demand: false`, which the
-toolshed's own webhook runtime declares, since it keeps a session on
-every space it touched for as long as it runs and no one waits on it).
+below). A client session is any session except a serving loop's own
+and one that declared that it is not demand. A serving loop's own is a
+session of the deployment's service identity that reached the memory
+server from the process holding it, or declared the serving binding
+(`actingAs: "space-owner"`, a serving runtime of another process). A
+session of any identity declares that it is not demand with
+`demand: false`: the toolshed's own webhook runtime does, since it keeps
+a session on every space it touched for as long as it runs and no one
+waits on it, and so does a client that only copies documents, such as
+the Topics command-line tool's mirror, whose watches would otherwise
+make the server start every piece whose documents it holds.
 The connection and the session's declaration decide, not the key: a local
 toolshed that runs under the identity its operator's client also signs
 with still counts that client's sessions as client sessions, for
