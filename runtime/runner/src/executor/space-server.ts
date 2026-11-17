@@ -206,7 +206,6 @@ import type {
 } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
 import {
-  getDirectTransactionReactivityLog,
   getTransactionReadActivities,
   getTransactionWriteAttempts,
 } from "../storage/transaction-inspection.ts";
@@ -3490,7 +3489,7 @@ export class SpaceServer implements TransactionSealDestination {
         )
       ),
       ...getTransactionWriteAttempts(inner) ?? [],
-      ...getDirectTransactionReactivityLog(inner)?.attemptedWrites ?? [],
+      ...(inner.getReactivityLog().attemptedWrites ?? []),
     ];
     for (const target of targets) {
       const scope: CellScope = target.scope ?? "space";

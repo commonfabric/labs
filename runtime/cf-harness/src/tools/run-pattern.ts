@@ -89,6 +89,7 @@ import {
   patternIndexDependencies,
 } from "@commonfabric/pattern-index/deploy";
 import type { HarnessToolDefinition } from "./types.ts";
+import { resolvePiece } from "./piece-source.ts";
 import {
   RUN_PATTERN_INPUT_SCHEMA,
   type RunPatternToolInput,
@@ -994,6 +995,11 @@ export const runPatternTool: HarnessToolDefinition<
         );
       }
       named = { sourceText };
+    } else if (input.revises !== undefined) {
+      return errorOutput(
+        "error",
+        "run_pattern revises goes with sourceText: it names the piece your source revises, and an indexed pattern's run has no source of yours",
+      );
     } else if (patternId === undefined) {
       return errorOutput("error", RUN_PATTERN_NO_PROGRAM_MESSAGE);
     } else if (
@@ -1036,6 +1042,20 @@ export const runPatternTool: HarnessToolDefinition<
     }
     const { pieces } = session;
     const space = pieces.getSpace();
+    // The pattern the revised piece runs, read before anything is created:
+    // a token naming no piece is the caller's mistake, said now rather than
+    // after a piece exists. It matters only to what the index is told, and is
+    // settled there (`PatternIndexStageOptions.revisedFrom`).
+    let revisedFrom: string | undefined;
+    if (input.revises !== undefined) {
+      const revised = await resolvePiece(
+        "run_pattern revises",
+        pieces,
+        input.revises.trim(),
+      );
+      if (!revised.ok) return errorOutput("error", revised.message);
+      revisedFrom = getPatternIdentityRef(revised.cell)?.identity;
+    }
     const signal = context.signal;
     if (signal?.aborted) {
       return cancelledOutput();
@@ -2053,7 +2073,10 @@ export const runPatternTool: HarnessToolDefinition<
               }
               : { discoverable: true }),
           };
-          patternIndexLedger.stage(request);
+          patternIndexLedger.stage(
+            request,
+            revisedFrom !== undefined ? { revisedFrom } : {},
+          );
         }
       }
     }

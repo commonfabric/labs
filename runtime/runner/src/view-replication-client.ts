@@ -625,8 +625,9 @@ export class ViewReplicationClient {
         state.fallback = true;
         const fallback = async () => {
           await state.replica.whenSessionRestored?.();
+          // Disposal clears `state.roots`, and the iteration reads each
+          // entry as it now stands, so only the awaits below can outdate one.
           for (const [id, root] of state.roots) {
-            if (this.#disposed || state.roots.get(id) !== root) continue;
             try {
               await root.sync();
               if (this.#disposed || state.roots.get(id) !== root) continue;

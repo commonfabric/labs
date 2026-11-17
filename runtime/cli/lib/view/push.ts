@@ -51,20 +51,41 @@ export interface RealPushIoOptions {
   readonly signal?: AbortSignal;
 }
 
+/** How the same-named branch on `origin`, as git last fetched or pushed it,
+ * stands against the checked-out commit. */
+export interface PushedBranch {
+  /** The commit `origin`'s branch is at. */
+  readonly commit: string;
+
+  /** How many commits each side has that the other does not, or null when
+   * the checkout's history is shallow, so that git cannot count them. */
+  readonly counts: {
+    /** How many commits the checkout has that `origin`'s branch does not. */
+    readonly added: number;
+
+    /** How many commits `origin`'s branch has that the checkout does not,
+     * which a push removes from it. */
+    readonly removed: number;
+  } | null;
+}
+
 /**
  * Force-pushes the checked-out branch to the same-named branch on `origin`,
  * unless that branch has commits the checked-out branch has never included.
  * The branch `origin` names as its default is never pushed, so the push
- * refuses when `origin` names none. Once the push succeeds, calls
- * `onPushed` with the branch's name and the address of the page the server
- * offers for creating a pull request, or null when it offers none; by
- * default, it opens the page. When git fails, calls `onFailed` with what git
- * printed. Says which branch it pushes, with `io`, before git starts.
- * Returns one line saying how it ended, which ends with what `onPushed`
- * returns, and says the push was aborted when it failed after
- * `signal` aborted; git's own output has been shown by then.
+ * refuses when `origin` names none. When `origin` already has the branch and
+ * there is an `ask`, pushes nothing, and returns what `ask` returns, given
+ * the branch's name and how `origin`'s branch stands; otherwise it pushes,
+ * and returns one line saying how that ended. Says which branch it pushes,
+ * with `io`, before git starts. Once the push succeeds, calls `onPushed` with
+ * the branch's name and the address of the page the server offers for
+ * creating a pull request, or null when it offers none; by default, it opens
+ * the page, and the line it returns ends with what `onPushed` returns. When
+ * git fails, calls `onFailed` with what git printed, and the line it returns
+ * says the push was aborted when it failed after `signal` aborted; git's own
+ * output has been shown by then.
  */
-export async function pushBranch(
+export async function pushBranch<Asked = never>(
   io: PushIo,
   signal?: AbortSignal,
   onPushed: (
@@ -73,7 +94,8 @@ export async function pushBranch(
   ) => Promise<string> | string = (_, url) =>
     url === null ? "" : openPage(io, url),
   onFailed: (output: string) => void = () => {},
-): Promise<string> {
+  ask?: (branch: string, remote: PushedBranch) => Promise<Asked>,
+): Promise<string | Asked> {
   const gitDir = io.query(["rev-parse", "--absolute-git-dir"])?.trim();
   if (!gitDir) return "This is not a git repository.";
   const paged = io.pagedGitDir();
@@ -101,6 +123,10 @@ export async function pushBranch(
     return `Rename the branch first. You were about to push your ${main} ` +
       "branch.";
   }
+  if (ask) {
+    const remote = pushedBranch(io.query, branch);
+    if (remote !== null) return await ask(branch, remote);
+  }
   const pushed = `Pushed ${branch} to origin`;
   io.write(`Pushing ${branch} to origin.\n`);
   const push = await io.run([
@@ -119,6 +145,57 @@ export async function pushBranch(
   }
   const then = await onPushed(branch, offeredPullRequestUrl(push.output));
   return then === "" ? `${pushed}.` : `${pushed}. ${then}`;
+}
+
+/**
+ * Returns how `branch` on `origin`, as git last fetched or pushed it, stands
+ * against the checked-out commit, or null when git has never seen `origin`
+ * have it. Throws when git cannot compare the two.
+ */
+export function pushedBranch(
+  git: GitQuery,
+  branch: string,
+): PushedBranch | null {
+  const tracking = `refs/remotes/origin/${branch}`;
+  const commit = git(["rev-parse", "--verify", "--quiet", tracking])?.trim();
+  if (!commit) return null;
+  // A shallow history's commits end at the depth it was cloned or fetched
+  // to, so counting them leaves out those beyond it.
+  if (git(["rev-parse", "--is-shallow-repository"])?.trim() === "true") {
+    return { commit, counts: null };
+  }
+  const counts = /^(\d+)\s+(\d+)$/.exec(
+    git(["rev-list", "--left-right", "--count", `${tracking}...HEAD`])
+      ?.trim() ?? "",
+  );
+  if (counts === null) {
+    throw new Error(`git could not compare ${branch} with origin's`);
+  }
+  return {
+    commit,
+    counts: { removed: Number(counts[1]), added: Number(counts[2]) },
+  };
+}
+
+/** Returns what pushing `branch`, which `origin` has as `pushed` says,
+ * would do, a sentence per line. */
+export function describePush(branch: string, pushed: PushedBranch): string {
+  const commits = (count: number) =>
+    count === 1 ? "1 commit" : `${count} commits`;
+  const { counts } = pushed;
+  const effect = counts === null
+    ? "This checkout's history is shallow, so the commits pushing would add " +
+      "or remove cannot be counted."
+    : counts.removed > 0
+    ? `Pushing would replace it, removing ${commits(counts.removed)} that ` +
+      `this checkout does not have${
+        counts.added > 0 ? ` and adding ${commits(counts.added)}` : ""
+      }.`
+    : counts.added > 0
+    ? `Pushing would add ${commits(counts.added)} to it.`
+    : "Pushing would leave it as it is.";
+  return `origin already has ${branch}, at ${pushed.commit.slice(0, 12)} ` +
+    `when last fetched or pushed.\n${effect}`;
 }
 
 /** Opens the page at `url` for creating a pull request, and returns a
@@ -155,6 +232,25 @@ export function offeredPullRequestUrl(output: string): string | null {
     if (url) return url[0];
   }
   return null;
+}
+
+/**
+ * Decodes `stream` as UTF-8 and passes each piece of text to `write` as it
+ * arrives. An abort of `signal` stops the relay as well as the process writing
+ * the stream, in case a process it started still holds the pipe; the relay
+ * then resolves. Rejects with any other failure to read the stream.
+ */
+export async function relayText(
+  stream: ReadableStream<BufferSource>,
+  write: (text: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  try {
+    const texts = stream.pipeThrough(new TextDecoderStream(), { signal });
+    for await (const text of texts) write(text);
+  } catch (error) {
+    if (!signal?.aborted) throw error;
+  }
 }
 
 /** The real operations, against the repository at `cwd`. */
@@ -205,23 +301,14 @@ export function realPushIo({
     run: async (args) => {
       const child = git(args, repoEnv).spawn();
       let output = "";
-      // An abort stops the relays as well as git, in case a process git
-      // started still holds the pipes.
-      const relay = async (stream: ReadableStream<BufferSource>) => {
-        try {
-          const texts = stream.pipeThrough(new TextDecoderStream(), { signal });
-          for await (const text of texts) {
-            write(text);
-            output += text;
-          }
-        } catch (error) {
-          if (!signal?.aborted) throw error;
-        }
+      const shown = (text: string) => {
+        write(text);
+        output += text;
       };
       const [status] = await Promise.all([
         child.status,
-        relay(child.stdout),
-        relay(child.stderr),
+        relayText(child.stdout, shown, signal),
+        relayText(child.stderr, shown, signal),
       ]);
       return { success: status.success, output };
     },

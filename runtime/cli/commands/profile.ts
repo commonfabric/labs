@@ -219,6 +219,7 @@ export async function profileGetPictureAction(
   profileSpace: string,
   file: string,
   deps: ProfileCommandDeps = defaultDeps,
+  stdout: WritableStream<Uint8Array> = Deno.stdout.writable,
 ): Promise<void> {
   setQuietMode(!!options.quiet);
   const listed = (await deps.listProfiles(await connection(options))).find((
@@ -246,7 +247,7 @@ export async function profileGetPictureAction(
   if (file === "-") {
     // The stream's writer writes the whole buffer, where a single `write()`
     // may write part of it.
-    const writer = Deno.stdout.writable.getWriter();
+    const writer = stdout.getWriter();
     try {
       await writer.write(listed.picture);
     } finally {

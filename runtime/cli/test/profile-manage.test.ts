@@ -54,6 +54,7 @@ import {
 
 const signer = await Identity.fromPassphrase("cf-profile-manage");
 const stranger = await Identity.fromPassphrase("cf-profile-manage stranger");
+const nobody = await Identity.fromPassphrase("cf-profile-manage nobody");
 
 // A PNG's signature and header chunk start, which is what a picture is checked
 // by; a profile stores the bytes as they are.
@@ -223,6 +224,32 @@ describe("profile management", () => {
   }
 
   /**
+   * Has the home connection answer that the identity has no home, and refuse
+   * to create one. Returns the stub on `ensureDefaultPattern()`, whose calls
+   * say whether a home was asked for; both are restored on disposal.
+   */
+  async function homeless() {
+    const pieces = await loadPieces(CONFIG);
+    const absent = stub(
+      pieces,
+      "getDefaultPattern",
+      () => Promise.resolve(undefined),
+    );
+    const created = stub(
+      pieces,
+      "ensureDefaultPattern",
+      () => Promise.reject(new Error("Home was created.")),
+    );
+    return {
+      created,
+      [Symbol.dispose]() {
+        absent.restore();
+        created.restore();
+      },
+    };
+  }
+
+  /**
    * Makes a profile as the stranger, in `profileSpace`, the stranger's own
    * space by default, names it `name` through its `setName`, and links it
    * from the owner's Home `profiles` list (`listInHome()`). Returns the
@@ -384,6 +411,15 @@ describe("profile management", () => {
       expect(await listProfiles(CONFIG, { loadPieces })).toEqual([]);
     });
 
+    it("returns no profiles, creating no home, when the identity's home is not there", async () => {
+      await createProfile({ ...CONFIG, name: "Ada" }, { loadPieces });
+      expect(await listedNames()).toEqual(["Ada"]);
+      using home = await homeless();
+
+      expect(await listProfiles(CONFIG, { loadPieces })).toEqual([]);
+      expect(home.created.calls).toHaveLength(0);
+    });
+
     it("returns each profile's name, space and address, the first marked current", async () => {
       const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
         loadPieces,
@@ -500,6 +536,30 @@ describe("profile management", () => {
         expect(listed.map((each) => each.name)).toEqual(["Ada"]);
       });
 
+      it("leaves out a retired-list entry the profiles list does not hold, and one whose document is absent", async () => {
+        await createProfile({ ...CONFIG, name: "Ada" }, { loadPieces });
+        const absent = runtime.getCell(nobody.did(), "no profile written")
+          .getAsNormalizedFullLink();
+        await listInHome(absent);
+        await listInHome(absent, "retiredProfiles");
+        const retiredOnly = runtime.getCell(stranger.did(), "retired only")
+          .getAsNormalizedFullLink();
+        await listInHome(retiredOnly, "retiredProfiles");
+        const listedSpaces = (
+          host.key("profiles").asSchema(linkListSchema).get() ?? []
+        ).map((each) => each.getAsNormalizedFullLink().space);
+        expect(listedSpaces).toContain(nobody.did());
+        expect(listedSpaces).not.toContain(stranger.did());
+
+        const listed = await listProfiles(CONFIG, { loadPieces }, {
+          includeRetired: true,
+        });
+
+        expect(listed.map((each) => [each.name, each.retired])).toEqual([
+          ["Ada", undefined],
+        ]);
+      });
+
       it("throws, naming the space, when a retired profile cannot be read", async () => {
         await createProfile({ ...CONFIG, name: "Ada" }, { loadPieces });
         const alan = await createProfile({ ...CONFIG, name: "Alan" }, {
@@ -547,22 +607,12 @@ describe("profile management", () => {
 
   describe("retireProfile()", () => {
     it("throws, creating no home, for a person who has none", async () => {
-      const pieces = await loadPieces(CONFIG);
-      using _homeless = stub(
-        pieces,
-        "getDefaultPattern",
-        () => Promise.resolve(undefined),
-      );
-      using created = stub(
-        pieces,
-        "ensureDefaultPattern",
-        () => Promise.reject(new Error("Home was created.")),
-      );
+      using home = await homeless();
 
       await expect(
         retireProfile({ ...CONFIG, profileSpace: space }, { loadPieces }),
       ).rejects.toThrow(/has no home/);
-      expect(created.calls).toHaveLength(0);
+      expect(home.created.calls).toHaveLength(0);
     });
 
     it("leaves the retired profile out of the list, and the rest in it", async () => {
@@ -751,6 +801,20 @@ describe("profile management", () => {
       expect(await listedNames()).toEqual(["Ada"]);
     });
 
+    it("throws, creating no home, for a person who has none", async () => {
+      const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
+        loadPieces,
+      });
+      using home = await homeless();
+
+      await expect(
+        attestProfileName({ ...CONFIG, profileSpace: ada.space }, {
+          loadPieces,
+        }),
+      ).rejects.toThrow(`${space} has no home, so it has no profiles.`);
+      expect(home.created.calls).toHaveLength(0);
+    });
+
     it("refuses a space no listed profile lives in", async () => {
       await createProfile({ ...CONFIG, name: "Ada" }, { loadPieces });
 
@@ -785,6 +849,24 @@ describe("profile management", () => {
       );
 
       expect(await listedNames()).toEqual(["Countess"]);
+    });
+
+    it("throws, creating no home and storing no name, for a person who has none", async () => {
+      const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
+        loadPieces,
+      });
+      {
+        using home = await homeless();
+
+        await expect(
+          renameProfile(
+            { ...CONFIG, profileSpace: ada.space, name: "Countess" },
+            { loadPieces },
+          ),
+        ).rejects.toThrow(`${space} has no home, so it has no profiles.`);
+        expect(home.created.calls).toHaveLength(0);
+      }
+      expect(await listedNames()).toEqual(["Ada"]);
     });
 
     it("refuses a blank name and leaves the stored one", async () => {
@@ -975,6 +1057,19 @@ describe("profile management", () => {
       const [kept] = await listProfiles(CONFIG, { loadPieces });
       expect(kept.picture).toEqual(picture);
       expect(kept.pictureByOwner).toBe(true);
+    });
+
+    it("refuses `keepCurrent` for a space no listed profile lives in", async () => {
+      await createProfile({ ...CONFIG, name: "Ada" }, { loadPieces });
+
+      await expect(
+        setProfilePicture(
+          { ...CONFIG, profileSpace: stranger.did(), keepCurrent: true },
+          { loadPieces },
+        ),
+      ).rejects.toThrow(
+        `No listed profile of ${space} lives in ${stranger.did()}.`,
+      );
     });
 
     it("refuses `keepCurrent` for a profile with no picture, and stores none", async () => {

@@ -106,7 +106,7 @@ describe("firstResolvedOutputRedirect vs partialCause aliases", () => {
       new Set([twin.id]),
     );
     expect(found?.id).toBe(twin.id);
-    const reads = tx.getReactivityLog?.().reads ?? [];
+    const reads = tx.getReactivityLog().reads;
     expect(reads.filter((read) => read.id === twin.id)).toEqual([]);
     tx.abort("test: read-only");
   });
@@ -141,7 +141,7 @@ describe("firstResolvedOutputRedirect vs partialCause aliases", () => {
     );
     expect(found?.id).toBe(twin.id);
     expect(found?.scope).toBe("user");
-    const reads = tx.getReactivityLog?.().reads ?? [];
+    const reads = tx.getReactivityLog().reads;
     expect(reads.filter((read) => read.id === twin.id)).toEqual([]);
     tx.abort("test: read-only");
   });

@@ -61,10 +61,8 @@ const ENUMERATED_OPTION_VALUES: Readonly<Record<string, readonly string[]>> = {
 };
 
 /** First sentence of a description, for the shell's annotation column. */
-function summarize(description: unknown): string | undefined {
-  if (typeof description !== "string") return undefined;
+function summarize(description: string): string | undefined {
   const text = description.trim().split("\n")[0];
-  if (!text) return undefined;
   const sentence = text.match(/^(.{1,72}?)(?:\.\s|\.$|$)/);
   return (sentence?.[1] ?? text).trim() || undefined;
 }

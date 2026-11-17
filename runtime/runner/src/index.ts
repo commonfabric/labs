@@ -2,6 +2,7 @@ export {
   decomposeSchema,
   recomposeSchema,
   SchemaNotDecomposableError,
+  SchemaNotRecomposableError,
 } from "./schema-decompose.ts";
 export { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 export { lookupSchemaDocument } from "./schema-registry.ts";

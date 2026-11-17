@@ -98,6 +98,20 @@ async function fixture(name: string, serving: boolean) {
       ),
 
     /**
+     * Starts a consumer that reads `state` through `holder`'s link and throws
+     * while it reads nothing there, as a computation that dereferences the
+     * value does, and waits for it to settle.
+     */
+    runThrowingConsumer: () =>
+      subscribeConsumer(
+        consumerOf((tx) => {
+          const value = holder.withTx(tx).key("state").get();
+          if (value === undefined) throw new TypeError("read nothing");
+          return value;
+        }),
+      ),
+
+    /**
      * Starts a consumer that reads `state` directly, following no link, and
      * waits for it to settle.
      */
@@ -130,6 +144,48 @@ describe("scheduler-derivation-unproduced-instance", () => {
 
       expect(f.consumerRuns()).toBe(2);
       expect(f.output.get()).toBe("derived from the instance");
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("reports no error from a served derivation that threw after reading a scoped instance not yet produced, and commits once it is produced", async () => {
+    // The throw is the absence's consequence, as the value it would have
+    // committed is, so the run is withdrawn rather than reported.
+
+    const f = await fixture("thrown", true);
+    const errors: Error[] = [];
+    f.runtime.scheduler.onError((error) => errors.push(error));
+    try {
+      f.registerWriter();
+      await f.runThrowingConsumer();
+
+      expect(f.consumerRuns()).toBe(1);
+      expect(errors).toEqual([]);
+      expect(f.output.get()).toBe("as it was");
+
+      const produce = f.runtime.edit();
+      f.state.withTx(produce).set("the instance");
+      expect((await produce.commit().settled).error).toBeUndefined();
+      await f.runtime.idle();
+      await f.storage.synced();
+
+      expect(f.consumerRuns()).toBe(2);
+      expect(f.output.get()).toBe("derived from the instance");
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("reports the error of a served derivation that threw after reading a missing scoped instance no registered derivation writes", async () => {
+    const f = await fixture("thrown-authored", true);
+    const errors: Error[] = [];
+    f.runtime.scheduler.onError((error) => errors.push(error));
+    try {
+      await f.runThrowingConsumer();
+
+      expect(f.consumerRuns()).toBe(1);
+      expect(errors.map((error) => error.message)).toEqual(["read nothing"]);
     } finally {
       await f.close();
     }

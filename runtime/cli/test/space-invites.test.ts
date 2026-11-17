@@ -1047,5 +1047,40 @@ describe("space invite", () => {
         expect(declared).toEqual([namesInstances]);
       });
     }
+
+    it("returns a session and a redeemer over a storage manager it opens itself when given no `open`, and neither over one that offers no memory sessions", async () => {
+      const signer = await Identity.fromPassphrase("invite storage opener", {
+        implementation: "noble",
+      });
+      const settings = () =>
+        Promise.resolve({
+          experimental: {},
+          memoryHost: new URL("https://memory.example"),
+        });
+      const target = {
+        as: signer,
+        apiUrl: new URL("https://fabric.example"),
+        space: signer.did(),
+      };
+
+      const own = await inviteStorageOpener({ settings })(target);
+      try {
+        expect(typeof own.session).toBe("function");
+        expect(typeof own.redeemer).toBe("function");
+      } finally {
+        await own.close();
+      }
+
+      const bare = await inviteStorageOpener({
+        settings,
+        open: () => ({
+          setInstanceNames: () => {},
+          close: () => Promise.resolve(),
+        }),
+      })(target);
+      await bare.close();
+      expect(bare.session).toBeUndefined();
+      expect(bare.redeemer).toBeUndefined();
+    });
   });
 });

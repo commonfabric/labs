@@ -863,7 +863,7 @@ describe("extended-storage-transaction", () => {
       });
 
       describe("over a transaction without optional members", () => {
-        it("throws for a gate or a write the transaction cannot carry", () => {
+        it("throws for a gate the transaction cannot carry", () => {
           const tx = edit();
           expect(() =>
             new TransactionWrapper(lacking(tx, "addCommitPrecondition"))
@@ -874,19 +874,6 @@ describe("extended-storage-transaction", () => {
           ).toThrow(
             "storage transaction does not support addCommitPrecondition()",
           );
-          expect(() =>
-            new TransactionWrapper(lacking(tx, "recordTextChanges"))
-              .recordTextChanges(link("text", ["body"]), [{ from: 0 }])
-          ).toThrow("storage transaction does not support recordTextChanges()");
-          expect(() =>
-            new TransactionWrapper(lacking(tx, "recordSqliteWrite"))
-              .recordSqliteWrite(space, {
-                op: "sqlite",
-                db: { id: "of:db", tables: {} },
-                sql: "CREATE TABLE notes (body TEXT)",
-                params: [],
-              })
-          ).toThrow("storage transaction does not support recordSqliteWrite()");
           expect(tx.getCommitPreconditions(space)).toBeUndefined();
           tx.abort();
         });

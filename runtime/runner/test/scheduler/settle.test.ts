@@ -6,7 +6,7 @@ import { NodeRegistry } from "../../src/scheduler/node-record.ts";
 import { runPullSchedulerSettleLoop } from "../../src/scheduler/settle.ts";
 import type { Action } from "../../src/scheduler/types.ts";
 import type { IMemorySpaceAddress } from "../../src/storage/interface.ts";
-import { captureLogs, type LogCapture } from "../support/log-capture.ts";
+import { type CapturedLogs, captureLogs } from "../support/captured-logs.ts";
 
 const identity = { principal: "did:test:settle", sessionId: "session-1" };
 
@@ -74,7 +74,7 @@ describe("settle", () => {
     // The skip and backoff paths report at debug level, so each case reads
     // the scheduler's debug output as well as what the loop did.
 
-    let debug: LogCapture;
+    let debug: CapturedLogs;
 
     beforeEach(() => {
       debug = captureLogs("scheduler");
@@ -103,7 +103,7 @@ describe("settle", () => {
         expect(state.filterStats).toEqual({ filtered: 1, executed: 1 });
         expect(runs).toBe(1);
         expect(result.settledEarly).toBe(true);
-        expect(debug.lines("schedule-debounce")).toContainEqual(
+        expect(debug.textsOf("schedule-debounce")).toContainEqual(
           expect.stringContaining(
             "[DEBOUNCE] Skipping debounced computation: debounced",
           ),
@@ -128,7 +128,7 @@ describe("settle", () => {
         expect(state.filterStats).toEqual({ filtered: 1, executed: 1 });
         expect(runs).toBe(1);
         expect(result.settledEarly).toBe(true);
-        expect(debug.lines("schedule-throttle")).toContainEqual(
+        expect(debug.textsOf("schedule-throttle")).toContainEqual(
           expect.stringContaining(
             "[THROTTLE] Skipping throttled action: throttled",
           ),
@@ -153,7 +153,7 @@ describe("settle", () => {
 
         expect(state.filterStats).toEqual({ filtered: 1, executed: 1 });
         expect(runs).toBe(1);
-        expect(debug.lines("schedule-backoff")).toContainEqual(
+        expect(debug.textsOf("schedule-backoff")).toContainEqual(
           expect.stringContaining(
             "[GATE] Skipping time-gated action: timeGated",
           ),
@@ -177,7 +177,7 @@ describe("settle", () => {
       expect(result.backoffApplied).toBe(true);
       expect(result.backoffActions).toEqual([action]);
       expect(result.backoffUntil).toBe(nodes.get(action)?.gate.backoffUntil);
-      expect(debug.lines("schedule-backoff")).toContainEqual(
+      expect(debug.textsOf("schedule-backoff")).toContainEqual(
         expect.stringMatching(
           /\[BACKOFF\] pass-budget: deferred 1 action\(s\) wake in \d+ms/,
         ),
