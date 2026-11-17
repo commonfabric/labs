@@ -198,17 +198,21 @@ currency. The existing overlay and retirement rules below still apply.
      routes link chains through user-scoped docs (the #6179 review's
      population audit).
      A serving runtime's commit reads one such row differently (a
-     corollary that narrows the ruling above and awaits the owner's
-     ruling): an absent user- or session-scoped instance of a document
-     that another derivation registered in the same serving runtime
-     declares as a write — its output, or a store a builtin keeps
-     (scheduler-v2 README §4.3) — is one the serving loop owes and has
-     not produced yet, so it is transit for that runtime, not knowledge.
-     The read still reads `undefined`, but the served run that read it
-     commits nothing (serving-loop.md §3d) and runs again once the
-     instance is produced. A writer that never produces a principal's
-     instance therefore holds back its served readers' commits for that
-     instance indefinitely; the client's own echo of it persists (§4's
+     corollary that narrows the ruling above): an absent user- or
+     session-scoped instance of a document that another derivation
+     registered in the same serving runtime declares as a write — its
+     output, or a store a builtin keeps (scheduler-v2 README §4.3) — and
+     that has not yet run for that instance is one the serving loop owes
+     and has not produced yet, so it is transit for that runtime, not
+     knowledge. The read still reads `undefined`, but the served run that
+     read it commits nothing (serving-loop.md §3d) and runs again once
+     the instance is produced. A writer that has run for the instance
+     has produced it, whether or not anything is there: a run whose
+     result is `undefined` writes nothing, and the absence is then the
+     instance's state (RULED 2026-11-17, owner: "a served run that yields
+     `undefined` counts as having produced its instance"). Only a writer
+     that has not run for a principal's instance holds back its served
+     readers' commits for it; the client's own echo of it persists (§4's
      arrival gate).
   2. **A lift that THROWS the error takes the same disposition.** The
      refusal propagates out of the lift body (the body did not catch

@@ -3,7 +3,10 @@ import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 
-import { toMemorySpaceAddress } from "../src/link-utils.ts";
+import {
+  createSigilLinkFromParsedLink,
+  toMemorySpaceAddress,
+} from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
@@ -86,6 +89,34 @@ async function fixture(name: string, serving: boolean) {
         shallowReads: [],
         writes: [toMemorySpaceAddress(scope ? { ...link, scope } : link)],
       });
+    },
+
+    /**
+     * Registers a derivation that runs as one narrowed to user scope whose
+     * result for this principal is `undefined` does: it points the space slot
+     * of `state`'s document at the user instance and leaves that instance
+     * absent. Waits for it to settle.
+     */
+    async runEmptyWriter() {
+      const user = state.getAsNormalizedFullLink();
+      const slot = { ...user, scope: "space" as const };
+      const writer = (tx: IExtendedStorageTransaction) => {
+        tx.writeValueOrThrow(
+          slot,
+          createSigilLinkFromParsedLink(user, {
+            base: slot,
+            overwrite: "redirect",
+          }),
+        );
+      };
+      runtime.scheduler.subscribe(writer, {
+        reads: [],
+        shallowReads: [],
+        writes: [toMemorySpaceAddress(slot)],
+      });
+      await runtime.scheduler.run(writer);
+      await runtime.idle();
+      await storage.synced();
     },
 
     /**
@@ -186,6 +217,22 @@ describe("scheduler-derivation-unproduced-instance", () => {
 
       expect(f.consumerRuns()).toBe(1);
       expect(errors.map((error) => error.message)).toEqual(["read nothing"]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("commits the output of a served derivation that read a scoped instance its registered derivation ran and left absent", async () => {
+    // A writer that has run for the instance has produced it, and its value
+    // is `undefined`: the absence is the instance's state.
+
+    const f = await fixture("ran-empty", true);
+    try {
+      await f.runEmptyWriter();
+      await f.runConsumer();
+
+      expect(f.consumerRuns()).toBe(1);
+      expect(f.output.get()).toBe("derived from nothing");
     } finally {
       await f.close();
     }

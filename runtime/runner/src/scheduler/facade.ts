@@ -2086,27 +2086,50 @@ export class Scheduler {
   }
 
   /**
-   * Whether an action registered here other than `except` declares a write to
-   * some instance of `address`'s document, at any scope.
+   * Whether an action registered here, other than the one `tx` runs, declares
+   * a write to some instance of `address`'s document, at any scope, and has
+   * not yet run for the instance `tx` reads: the instance its run identity
+   * resolves to on a fanned-out writer, and any instance on a writer that is
+   * not fanned out. A writer that has run for that instance and left it absent
+   * has produced it, and its value is `undefined`.
    *
    * The lookup spans every scope because the write index keys a derivation by
    * its declared scope, while a JavaScript derivation writes its output at the
    * scope its reads narrowed to: a user instance of an output declared at
    * space scope has a writer indexed only at space scope.
    */
-  hasOtherWriterOf(
+  owesScopedInstance(
     address: Pick<IMemorySpaceAddress, "space" | "id">,
-    except: object,
+    tx: IExtendedStorageTransaction,
   ): boolean {
+    const reader = tx.tx.sourceAction;
+    const identity = waveRunContextOf(tx)?.scopeKeyIdentity ??
+      this.runtime.scopeKeyIdentity;
     for (const scope of ["space", "user", "session"] as const) {
       const writers = this.#writeIndex.writersByEntity.get(
         entityNameKey({ ...address, scope }),
       );
       for (const writer of writers ?? []) {
-        if (writer !== except) return true;
+        if (writer !== reader && !this.#hasRunForInstance(writer, identity)) {
+          return true;
+        }
       }
     }
     return false;
+  }
+
+  /**
+   * Whether `action` has finished a run for the instance `identity` resolves
+   * to: on a fanned-out node, a run of that instance at the current ratchet;
+   * on any other, a run at all.
+   */
+  #hasRunForInstance(action: Action, identity: ScopeKeyIdentity): boolean {
+    const node = this.#nodes.get(action);
+    if (node === undefined) return false;
+    if (node.fanOut === undefined) return node.status !== "never-ran";
+    const key = keyAtRatchet(node.fanOut, identity);
+    return key !== undefined &&
+      node.fanOut.instances.get(key)?.log !== undefined;
   }
 
   /**
