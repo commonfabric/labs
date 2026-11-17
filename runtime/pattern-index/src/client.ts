@@ -187,6 +187,9 @@ export interface PatternIndexSearchResult {
   /** The author's stable pseudonym on this index. */
   handle?: string;
 
+  /** How the author is shown: a per-lineage pseudonym, a tier, a name if published. */
+  author?: PatternIndexAuthor;
+
   /** Whether the caller is its author. */
   mine?: boolean;
 
@@ -250,6 +253,9 @@ export interface PatternIndexPattern {
   /** The author's stable pseudonym on this index. */
   handle?: string;
 
+  /** How the author is shown: a per-lineage pseudonym, a tier, a name if published. */
+  author?: PatternIndexAuthor;
+
   /** Whether the caller is its author. */
   mine?: boolean;
 
@@ -262,6 +268,11 @@ export interface PatternIndexPattern {
   priorPatternId?: string;
   remixedFrom?: string;
   lineageId?: string;
+
+  /** The caller's own version with this source; owner only. */
+  versionId?: string;
+
+  visibility?: PatternIndexVisibility;
   program?: PatternIndexProgram;
 
   /**
@@ -317,6 +328,9 @@ export interface PatternIndexListedPattern {
 
   /** The author's stable pseudonym on this index. */
   handle?: string;
+
+  /** How the author is shown: a per-lineage pseudonym, a tier, a name if published. */
+  author?: PatternIndexAuthor;
 
   /** Whether the caller is its author. */
   mine?: boolean;
@@ -486,6 +500,221 @@ export interface PatternIndexRetractResponse {
   changed: boolean;
 }
 
+/**
+ * Who may read a version: its owner alone, any member who shares (under the
+ * lineage's pseudonym), or any member (under its owner's public profile).
+ */
+export type PatternIndexVisibility = "private" | "shared" | "published";
+
+/**
+ * Where a version's share stands: never asked, being checked by the privacy
+ * gardener, held by it (the owner reads `gates`), failed, or readable by
+ * others.
+ */
+export type PatternIndexShareState =
+  | "none"
+  | "pending"
+  | "held"
+  | "error"
+  | "exposed";
+
+/**
+ * Who made a version, which decides the sharing sub-setting that applies:
+ * the person (`cf`, Claude Code) or an agent working for them.
+ */
+export type PatternIndexOrigin = "self" | "agent";
+
+/** A Common Fabric public profile, by its space. */
+export interface PatternIndexProfileRef {
+  space: string;
+
+  /** The profile piece, when the client knows it. */
+  piece?: string;
+}
+
+/** The person a named lineage is published under. */
+export interface PatternIndexPublishedAuthor {
+  profile: PatternIndexProfileRef;
+
+  /** The name read from the profile when it was named; a display hint. */
+  displayName: string;
+
+  /** The UTC day it was named. */
+  since: string;
+}
+
+/**
+ * How a pattern's author is shown to others: a pseudonym of its own lineage,
+ * unrelated to the author's other lineages, and a coarse tier saying how much
+ * their other shared work is used; a name only where they published it.
+ */
+export interface PatternIndexAuthor {
+  /** Stable for the lineage, and for no other. */
+  pseudonym: string;
+
+  /** 0 to 9, logarithmic in uses of the author's other lineages. */
+  tier: number;
+
+  published?: PatternIndexPublishedAuthor;
+  brand?: {
+    githubOrg: string;
+    displayName: string;
+    profile?: PatternIndexProfileRef;
+  };
+}
+
+/** One version of a lineage, as its owner (and only its owner) sees it. */
+export interface PatternIndexVersionSummary {
+  versionId: string;
+  lineageId: string;
+
+  /** 1, 2, 3 within the lineage. */
+  seq: number;
+
+  patternId: string;
+  createdAt: string;
+  name?: string;
+  description: string;
+  hashtags: readonly string[];
+  origin: PatternIndexOrigin;
+  visibility: PatternIndexVisibility;
+  share: PatternIndexShareState;
+
+  /** Whether it is the lineage's current version. */
+  head: boolean;
+
+  /** The version whose source a rollback restored. */
+  rolledBackFrom?: string;
+
+  remixedFrom?: string;
+}
+
+/** One version with its full metadata and, when asked for, its source. */
+export interface PatternIndexVersion extends PatternIndexVersionSummary {
+  keywords: readonly string[];
+  argumentSchema?: JSONSchema;
+  resultSchema?: JSONSchema;
+  dependencies: readonly string[];
+  program?: PatternIndexProgram;
+  gates?: Readonly<Record<string, PatternIndexGardenerVerdict>>;
+}
+
+/** One of the caller's lineages: a pattern they have worked on over time. */
+export interface PatternIndexLineage {
+  lineageId: string;
+
+  /** The client key it was made under, such as a file path. */
+  slot?: string;
+
+  origin: PatternIndexOrigin;
+
+  /** How others see its author while it is unnamed. */
+  pseudonym: string;
+
+  name?: string;
+  description: string;
+  head: PatternIndexVersionSummary;
+
+  /** How many versions it has, and how many of them others can read. */
+  versions: number;
+  sharedVersions: number;
+
+  published?: PatternIndexPublishedAuthor;
+  tier: number;
+}
+
+export interface PatternIndexListLineagesResponse {
+  /** Newest head first. */
+  lineages: readonly PatternIndexLineage[];
+}
+
+export interface PatternIndexListVersionsResponse {
+  lineageId: string;
+
+  /** Newest first. */
+  versions: readonly PatternIndexVersionSummary[];
+}
+
+export interface PatternIndexGetVersionRequest {
+  versionId: string;
+  includeSource?: boolean;
+}
+
+export interface PatternIndexRollbackRequest {
+  lineageId: string;
+
+  /** The version whose source becomes the new head. */
+  toVersionId: string;
+}
+
+export interface PatternIndexShareVersionResponse {
+  versionId: string;
+  patternId: string;
+  visibility: PatternIndexVisibility;
+  share: PatternIndexShareState;
+  listing?: PatternIndexListing;
+
+  /** `false` when it was already shared or being checked. */
+  changed: boolean;
+}
+
+/**
+ * Names the caller as the author of one lineage. `profileProof` is the
+ * profile's root delegation to the person's core identity, then one link
+ * from that identity to the request's signing key under
+ * `/memory/attest/pattern-index`, in the encoding `proofs` uses.
+ */
+export interface PatternIndexPublishLineageRequest {
+  lineageId: string;
+  profile: PatternIndexProfileRef;
+  displayName: string;
+  profileProof: readonly string[];
+
+  /** Also shares this version. */
+  versionId?: string;
+}
+
+export interface PatternIndexPublishLineageResponse {
+  lineageId: string;
+  published: PatternIndexPublishedAuthor;
+  share?: PatternIndexShareState;
+}
+
+export interface PatternIndexUnpublishLineageResponse {
+  lineageId: string;
+  published: null;
+  changed: boolean;
+}
+
+/**
+ * The member's give-to-get setting. While sharing is on for a version's
+ * origin, the index shares the version as it records it; while
+ * `receivesAnonymous` is false, the member sees only named patterns.
+ */
+export interface PatternIndexSharingSettings {
+  enabled: boolean;
+  selfBuilt: boolean;
+  agentBuilt: boolean;
+  receivesAnonymous: boolean;
+
+  /** `null` until the member first sets it. */
+  updatedAt: string | null;
+}
+
+export interface PatternIndexSetSharingSettingsRequest {
+  enabled?: boolean;
+  selfBuilt?: boolean;
+  agentBuilt?: boolean;
+}
+
+/** What a publish did about sharing the version it recorded. */
+export type PatternIndexAutoShare =
+  | "requested"
+  | "sharing_off"
+  | "kept_private"
+  | "already_shared"
+  | "not_eligible";
+
 export interface PatternIndexPublishRequest {
   /**
    * The program's content-addressed entry identity — what
@@ -520,6 +749,21 @@ export interface PatternIndexPublishRequest {
   /** Someone else's pattern this one was built from; credits it, inherits nothing. */
   remixedFrom?: string;
 
+  /** Continue this lineage of the caller's; refused when it is not theirs. */
+  lineageId?: string;
+
+  /**
+   * A key the caller chooses for the lineage, unique per owner, such as an
+   * entry file's path; finds the lineage when no id or predecessor does.
+   */
+  slot?: string;
+
+  /** Who made it; the index assumes an agent when absent. */
+  origin?: PatternIndexOrigin;
+
+  /** Keep this version private whatever the sharing setting says. */
+  keepPrivate?: boolean;
+
   /**
    * Explicitly offers this entry to search on publication. Deployments with
    * listing ignore it: discovery follows `requestListing` and the gardeners.
@@ -547,6 +791,20 @@ export interface PatternIndexPublishResponse {
 
   /** Request fields this deployment no longer stores and dropped. */
   ignored?: readonly string[];
+
+  /**
+   * The version recorded, or the head that already had this source. Absent
+   * from deployments that predate private versions.
+   */
+  versionId?: string;
+  lineageId?: string;
+  seq?: number;
+  visibility?: PatternIndexVisibility;
+  share?: PatternIndexShareState;
+
+  /** What the index did about sharing it, and why where it did not. */
+  autoShare?: PatternIndexAutoShare;
+  reason?: string;
 }
 
 /** An owner's request that a pattern be considered for discovery. */
@@ -1083,6 +1341,12 @@ export class PatternIndexClient {
       ...(request.remixedFrom !== undefined
         ? { remixedFrom: request.remixedFrom }
         : {}),
+      ...(request.lineageId !== undefined
+        ? { lineageId: request.lineageId }
+        : {}),
+      ...(request.slot !== undefined ? { slot: request.slot } : {}),
+      ...(request.origin !== undefined ? { origin: request.origin } : {}),
+      ...(request.keepPrivate === true ? { keepPrivate: true } : {}),
     });
   }
 
@@ -1172,5 +1436,70 @@ export class PatternIndexClient {
     request: PatternIndexSetFeaturedRequest,
   ): Promise<PatternIndexSetFeaturedResponse> {
     return this.#call("setPatternFeatured", { ...request });
+  }
+
+  /** The caller's lineages, newest head first. */
+  listLineages(): Promise<PatternIndexListLineagesResponse> {
+    return this.#call("listLineages", {});
+  }
+
+  /** Every version of one of the caller's lineages, newest first. */
+  listVersions(
+    request: { lineageId: string },
+  ): Promise<PatternIndexListVersionsResponse> {
+    return this.#call("listVersions", { ...request });
+  }
+
+  /** One of the caller's versions, with its source when asked. */
+  getVersion(
+    request: PatternIndexGetVersionRequest,
+  ): Promise<PatternIndexVersion> {
+    return this.#call("getVersion", { ...request });
+  }
+
+  /**
+   * Makes an earlier version's source the lineage's head again, as a new
+   * version; shared by the same rule as any update.
+   */
+  rollback(
+    request: PatternIndexRollbackRequest,
+  ): Promise<PatternIndexPublishResponse> {
+    return this.#call("rollback", { ...request });
+  }
+
+  /** Asks that one of the caller's versions be checked and shared anonymously. */
+  shareVersion(
+    request: { versionId: string },
+  ): Promise<PatternIndexShareVersionResponse> {
+    return this.#call("shareVersion", { ...request });
+  }
+
+  /** Names the caller as the author of one lineage, under their profile. */
+  publishLineage(
+    request: PatternIndexPublishLineageRequest,
+  ): Promise<PatternIndexPublishLineageResponse> {
+    return this.#call("publishLineage", {
+      ...request,
+      profileProof: [...request.profileProof],
+    });
+  }
+
+  /** Stops naming the caller on a lineage from now on. */
+  unpublishLineage(
+    request: { lineageId: string },
+  ): Promise<PatternIndexUnpublishLineageResponse> {
+    return this.#call("unpublishLineage", { ...request });
+  }
+
+  /** The caller's give-to-get setting. */
+  getSharingSettings(): Promise<PatternIndexSharingSettings> {
+    return this.#call("getSharingSettings", {});
+  }
+
+  /** Changes the caller's give-to-get setting. */
+  setSharingSettings(
+    request: PatternIndexSetSharingSettingsRequest,
+  ): Promise<PatternIndexSharingSettings> {
+    return this.#call("setSharingSettings", { ...request });
   }
 }

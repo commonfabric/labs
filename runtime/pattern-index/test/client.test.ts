@@ -637,6 +637,121 @@ describe("PatternIndexClient", () => {
     expect(body.remixedFrom).toBe("pat-other");
   });
 
+  it("sends a version's lineage, slot, origin and privacy, and omits each when unset", async () => {
+    const { client, requests } = createClient([
+      jsonResponse({
+        patternId: "pat-4",
+        created: true,
+        versionId: "ver-4",
+        lineageId: "lin-1",
+        seq: 4,
+        visibility: "private",
+        share: "none",
+        autoShare: "kept_private",
+      }),
+      jsonResponse({ patternId: "pat-5", created: true }),
+    ]);
+    const program = {
+      main: "/main.tsx",
+      files: [{ name: "/main.tsx", contents: "export default 2;" }],
+    };
+    const response = await client.publishPattern({
+      patternId: "pat-4",
+      description: "Doubles a number",
+      hashtags: [],
+      program,
+      lineageId: "lin-1",
+      slot: "file:/work/main.tsx",
+      origin: "self",
+      keepPrivate: true,
+    });
+    expect(response.versionId).toBe("ver-4");
+    expect(response.autoShare).toBe("kept_private");
+    const body = JSON.parse(requests[0].body);
+    expect([body.lineageId, body.slot, body.origin, body.keepPrivate])
+      .toEqual(["lin-1", "file:/work/main.tsx", "self", true]);
+
+    await client.publishPattern({
+      patternId: "pat-5",
+      description: "Doubles a number",
+      hashtags: [],
+      program,
+      keepPrivate: false,
+    });
+    const bare = JSON.parse(requests[1].body);
+    for (const field of ["lineageId", "slot", "origin", "keepPrivate"]) {
+      expect(Object.hasOwn(bare, field)).toBe(false);
+    }
+  });
+
+  it("posts each version, visibility and sharing-setting call to its function with only its fields", async () => {
+    const calls: Array<{
+      fn: string;
+      call: (client: PatternIndexClient) => Promise<unknown>;
+      body: Record<string, unknown>;
+    }> = [
+      { fn: "listLineages", call: (c) => c.listLineages(), body: {} },
+      {
+        fn: "listVersions",
+        call: (c) => c.listVersions({ lineageId: "lin-1" }),
+        body: { lineageId: "lin-1" },
+      },
+      {
+        fn: "getVersion",
+        call: (c) => c.getVersion({ versionId: "ver-1", includeSource: true }),
+        body: { versionId: "ver-1", includeSource: true },
+      },
+      {
+        fn: "rollback",
+        call: (c) => c.rollback({ lineageId: "lin-1", toVersionId: "ver-1" }),
+        body: { lineageId: "lin-1", toVersionId: "ver-1" },
+      },
+      {
+        fn: "shareVersion",
+        call: (c) => c.shareVersion({ versionId: "ver-1" }),
+        body: { versionId: "ver-1" },
+      },
+      {
+        fn: "publishLineage",
+        call: (c) =>
+          c.publishLineage({
+            lineageId: "lin-1",
+            profile: { space: "did:key:z6Mkprofile" },
+            displayName: "Sam",
+            profileProof: ["root", "link"],
+          }),
+        body: {
+          lineageId: "lin-1",
+          profile: { space: "did:key:z6Mkprofile" },
+          displayName: "Sam",
+          profileProof: ["root", "link"],
+        },
+      },
+      {
+        fn: "unpublishLineage",
+        call: (c) => c.unpublishLineage({ lineageId: "lin-1" }),
+        body: { lineageId: "lin-1" },
+      },
+      {
+        fn: "getSharingSettings",
+        call: (c) => c.getSharingSettings(),
+        body: {},
+      },
+      {
+        fn: "setSharingSettings",
+        call: (c) => c.setSharingSettings({ selfBuilt: false }),
+        body: { selfBuilt: false },
+      },
+    ];
+    for (const { fn, call, body } of calls) {
+      const { client, requests } = createClient([jsonResponse({})]);
+      await call(client);
+      expect(requests[0].url).toBe(`https://index.test/api/${fn}`);
+      expect(requests[0].method).toBe("POST");
+      expect(JSON.parse(requests[0].body)).toEqual(body);
+    }
+  });
+
   it("posts each listing, identity and curation call to its function with only its fields", async () => {
     const calls: Array<{
       fn: string;
