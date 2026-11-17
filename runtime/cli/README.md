@@ -3402,23 +3402,24 @@ admits a key without an invite with `cf index admit <did>`.
 On an index that keeps versions, each `cf piece new <file>` and
 `cf piece setsrc` of a pattern the person owns is kept as a version only they
 can read, once the deploy commits, and the deploy prints one line saying which
-version it is (`piece new --json` carries it as `version`). A deploy whose
-source the newest version already has keeps no new one and says so. An index
-from before private versions is sent nothing, and the deploy says nothing about
-versions. A version holds the source as deployed, personal details included, so
-it is kept where only its owner can read it, and admins cannot see it. The
-versions of one entry file form its lineage, which the index finds by a slot
-`cf` computes. In a git checkout with an `origin` remote the slot is a hash of
-the remote and the file's path in the repository, so every worktree and clone
-continues one lineage. Elsewhere it is the absolute path keyed with a secret
-kept in this machine's index store, so the index cannot confirm a guessed path;
-moving such a file starts a new lineage. A deploy from the index
-(`--from-index`), a `setsrc --origin` deploy (a system or repository pattern),
-and a file fetched from someone else's pattern and deployed unchanged keep no
-version; an edited one is kept as the person's remix of it. When this machine
-never joined an index, a deploy makes no index call and says so once. The index
-write never changes a deploy's outcome: a failure is reported in one line and
-the deploy's exit status stands.
+version it is (`piece new --json` carries it as `version`, whose `status` is
+`recorded`, `unchanged`, `not-joined`, `skipped` or `failed`). A deploy whose
+source the newest version already has keeps no new one and says so
+(`unchanged`). An index from before private versions is sent nothing, and the
+deploy says nothing about versions. A version holds the source as deployed,
+personal details included, so it is kept where only its owner can read it, and
+admins cannot see it. The versions of one entry file form its lineage, which the
+index finds by a slot `cf` computes. In a git checkout with an `origin` remote
+the slot is a hash of the remote and the file's path in the repository, so every
+worktree and clone continues one lineage. Elsewhere it is the absolute path
+keyed with a secret kept in this machine's index store, so the index cannot
+confirm a guessed path; moving such a file starts a new lineage. A deploy from
+the index (`--from-index`), a `setsrc --origin` deploy (a system or repository
+pattern), and a file fetched from someone else's pattern and deployed unchanged
+keep no version; an edited one is kept as the person's remix of it. When this
+machine never joined an index, a deploy makes no index call and says so once.
+The index write never changes a deploy's outcome: a failure is reported in one
+line and the deploy's exit status stands.
 
 A deploy never shares a version by itself: drafts land many times an hour. The
 index shares a version once it settles, when its owner opens it in a loom, and
