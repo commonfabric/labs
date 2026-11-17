@@ -249,11 +249,11 @@ release that outlives a change to the inputs, say). Until then nothing does.
    atom's `{ __ctOwningSpace: true }` placeholder, while the stored label's atom
    names the owning space, resolved by `resolvePolicyOfConfidentiality` on the
    way in; so the two never compare equal. Resolving the ceiling the same way
-   (verified in a scratch copy) lets honest submissions through. Until then the
-   pool has no ceiling. Today the gap is narrow: an event's payload is delivered
-   unlabelled (top/3175), so a submission cannot bring its sender's clauses in;
-   a labelled `thresholdCenter` or `jitter`, copied into the seal, is the path
-   left.
+   (verified in a scratch copy) lets honest submissions through. Filed as
+   top/3207. Until then the pool has no ceiling. Today the gap is narrow: an
+   event's payload is delivered unlabelled (top/3175), so a submission cannot
+   bring its sender's clauses in; a labelled `thresholdCenter` or `jitter`,
+   copied into the seal, is the path left.
 5. **Question for Berni: which schema's `maxConfidentiality` binds a write?**
    The ceiling looks to be judged against the schema the writer's binding
    declares for the store. In the tests, the probe's handlers declare their
