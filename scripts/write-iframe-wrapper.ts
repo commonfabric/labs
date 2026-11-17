@@ -1,9 +1,31 @@
-import { build } from "@commonfabric/felt";
-import { dirname, isAbsolute, relative, resolve, toFileUrl } from "@std/path";
+/**
+ * Writes the pattern that wraps an iframe-first guest, from the contract that
+ * declares its data, and the guest's files beside it: the bundle of the
+ * guest's source as `guest.js`, and, unless `--html` names the guest's own
+ * document, a default one as `guest.html`. The wrapper reads both with
+ * `dataFile()`, whose strings a piece's result document links to rather than
+ * holds a copy of (`docs/specs/iframe-static-assets.md`, parts 1 and 6).
+ */
 
-const SCRIPT_MARKER = "<!-- PATTERN_IFRAME_SCRIPT -->";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  relative,
+  resolve,
+  toFileUrl,
+} from "@std/path";
+
+import { build } from "@commonfabric/felt";
+
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const RESERVED_RESOURCES = new Set(["input", "state", "output"]);
+
+/** The file the guest's bundle is written to, beside the wrapper. */
+const GUEST_SCRIPT_FILE = "guest.js";
+
+/** The file the default guest document is written to, beside the wrapper. */
+const GUEST_HTML_FILE = "guest.html";
 
 type Scope = "space" | "user" | "session";
 
@@ -37,7 +59,8 @@ type Options = {
 };
 
 function usage(): string {
-  return `Write the generated Common Fabric wrapper for an iframe-first pattern.
+  return `Write the generated Common Fabric wrapper for an iframe-first pattern,
+and the guest's bundle as ${GUEST_SCRIPT_FILE} beside it.
 
 Usage:
   deno run -A scripts/write-iframe-wrapper.ts \\
@@ -45,12 +68,18 @@ Usage:
 
 Options:
   --contract <path>  Module exporting IFRAME_PATTERN and DEFAULT_INPUT/STATE/OUTPUT
-  --guest <path>     Browser entry bundled into the iframe document
+  --guest <path>     Browser entry bundled into ${GUEST_SCRIPT_FILE} beside --out
   --out <path>       Generated pattern wrapper
-  --html <path>      Optional document shell containing ${SCRIPT_MARKER}
-  --react           Compile TSX with the React instance imported by the guest
-  --force            Replace an existing output file
+  --html <path>      The guest's document, which the wrapper reads in place;
+                     without it, a default document is written to
+                     ${GUEST_HTML_FILE} beside --out
+  --react            Compile TSX with the React instance imported by the guest
+  --force            Replace existing output files
   --help             Show this help
+
+The wrapper reads the document and ${GUEST_SCRIPT_FILE} with dataFile(). cf-iframe
+runs ${GUEST_SCRIPT_FILE} as the document's last module script, so the document
+holds no <script> for it.
 `;
 }
 
@@ -99,6 +128,10 @@ function scope(value: unknown, label: string): Scope {
   throw new TypeError(`${label} must be "space", "user", or "session".`);
 }
 
+/**
+ * Validates the contract's `IFRAME_PATTERN`, and returns it with every
+ * optional field filled in. Throws, naming the field, for one it cannot take.
+ */
 function validateConfig(value: unknown):
   & Required<
     Pick<
@@ -242,9 +275,14 @@ function validateConfig(value: unknown):
   };
 }
 
-function relativeImport(fromFile: string, targetFile: string): string {
-  const path = relative(dirname(fromFile), targetFile).replaceAll("\\", "/");
-  return path.startsWith(".") ? path : `./${path}`;
+/**
+ * Returns the path of `target` relative to the directory holding `fromFile`,
+ * with the leading `./` or `../` that an import specifier needs and that keeps
+ * a `dataFile()` path from reading as one grounded at the package root.
+ */
+function relativePath(fromFile: string, target: string): string {
+  const path = relative(dirname(fromFile), target).replaceAll("\\", "/");
+  return path === ".." || path.startsWith("../") ? path : `./${path}`;
 }
 
 function htmlText(value: string): string {
@@ -255,19 +293,25 @@ function htmlText(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
-function inlineScript(code: string): string {
-  return code.replaceAll(/<\/script/gi, "<\\/script");
-}
-
-function moduleString(value: string): string {
-  // SES conservatively rejects import-expression and HTML-comment tokens even
-  // when they occur inside a string. Unicode escapes reconstruct the exact
-  // iframe document at runtime without exposing those tokens to the host
-  // module's source scanner.
-  return JSON.stringify(value)
-    .replaceAll("import", "\\u0069mport")
-    .replaceAll("<!--", "\\u003c!--")
-    .replaceAll("-->", "--\\u003e");
+/**
+ * Returns the default guest document: a full-size `#root` for the guest to
+ * draw into, titled with the pattern's display name, and no script, since
+ * `cf-iframe` runs the guest's bundle after the document.
+ */
+function defaultGuestHtml(displayName: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${htmlText(displayName)}</title>
+  <style>html,body,#root{box-sizing:border-box;width:100%;height:100%;margin:0}</style>
+</head>
+<body>
+  <div id="root"></div>
+</body>
+</html>
+`;
 }
 
 function scopedCellType(
@@ -321,10 +365,25 @@ function streamType(name: string): string {
   return `Stream<IframeStreamEvents[${JSON.stringify(name)}], unknown>`;
 }
 
+/** Where the files the wrapper names are, each relative to the wrapper. */
+interface WrapperPaths {
+  /** The contract module. */
+  contract: string;
+
+  /** The guest's source, which the bundle is built from. */
+  guest: string;
+
+  /** The guest's document. */
+  document: string;
+
+  /** The guest's bundle. */
+  script: string;
+}
+
+/** Returns the source of the wrapper pattern `config` describes. */
 function wrapperSource(
   config: ReturnType<typeof validateConfig>,
-  contractImport: string,
-  guestHtml: string,
+  paths: WrapperPaths,
 ): string {
   const databases = Object.entries(config.databases);
   const streams = config.streams;
@@ -337,6 +396,7 @@ function wrapperSource(
     config.outputScope === "space";
   const imports = [
     ...(databases.length > 0 ? ["cfSqlite"] : []),
+    "dataFile",
     "type Default",
     "NAME",
     "pattern",
@@ -398,8 +458,8 @@ function wrapperSource(
     `  ${name}: ${streamVariable(index)},\n`
   ).join("");
 
-  return `// Generated by scripts/write-iframe-wrapper.ts.
-// Edit the contract or guest source and regenerate this wrapper.
+  return `// Generated by scripts/write-iframe-wrapper.ts, as is the guest's bundle.
+// Edit the contract or guest source and regenerate both.
 import {
 ${imports.map((name) => `  ${name},`).join("\n")}
 } from "commonfabric";
@@ -410,7 +470,7 @@ import {
   type IframeInputData,
   type IframeOutputData,
   type IframeStateData,
-${streamEventsImport}} from ${JSON.stringify(contractImport)};
+${streamEventsImport}} from ${JSON.stringify(paths.contract)};
 
 export interface ${config.name}Input {
   input?: Default<IframeInputData, typeof DEFAULT_INPUT>;
@@ -452,7 +512,11 @@ const IframeContext = pattern<IframeContextInput, IframeContextOutput>(
   (context) => context,
 );
 
-const GUEST_HTML = ${moduleString(guestHtml)};
+/** The guest's document. */
+const GUEST_HTML = dataFile(${JSON.stringify(paths.document)});
+
+/** The guest's bundle, built from \`${paths.guest}\`. */
+const GUEST_SCRIPT = dataFile(${JSON.stringify(paths.script)});
 
 export default pattern<${config.name}Input, ${config.name}Output>(({
   input,
@@ -485,6 +549,7 @@ ${contextResourceValues}
   } }}>
         <cf-iframe
           src={GUEST_HTML}
+          script={GUEST_SCRIPT}
           $context={context}
           resourceKinds={{
 ${resourceKinds}
@@ -538,6 +603,23 @@ async function replaceFile(path: string, contents: string): Promise<void> {
   }
 }
 
+/**
+ * Helper for `main()`, which returns whether an entry of `kind` is at `path`,
+ * following a symlink, and `false` when nothing is there.
+ */
+async function isEntry(
+  path: string,
+  kind: "file" | "directory",
+): Promise<boolean> {
+  try {
+    const info = await Deno.stat(path);
+    return kind === "file" ? info.isFile : info.isDirectory;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return false;
+    throw error;
+  }
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(Deno.args);
   if (options.help) {
@@ -554,15 +636,40 @@ async function main(): Promise<void> {
   const guestPath = resolve(options.guest);
   const outPath = resolve(options.out);
   const htmlPath = options.html ? resolve(options.html) : undefined;
-  if (
-    outPath === contractPath || outPath === guestPath || outPath === htmlPath
-  ) {
-    throw new TypeError("--out must not replace a source file.");
+  const scriptPath = resolve(dirname(outPath), GUEST_SCRIPT_FILE);
+  const documentPath = htmlPath ?? resolve(dirname(outPath), GUEST_HTML_FILE);
+
+  // Every file the generator writes, in the order it writes them, each named
+  // as a message about it names it.
+  const outputs = [
+    { path: scriptPath, label: `${GUEST_SCRIPT_FILE} beside --out` },
+    ...(htmlPath === undefined
+      ? [{ path: documentPath, label: `${GUEST_HTML_FILE} beside --out` }]
+      : []),
+    { path: outPath, label: "--out" },
+  ];
+  const sources = [contractPath, guestPath, ...(htmlPath ? [htmlPath] : [])];
+  for (const { path, label } of outputs) {
+    if (sources.includes(path)) {
+      throw new TypeError(`${label} must not replace a source file.`);
+    }
   }
-  if (!options.force && await exists(outPath)) {
+  if (outputs.filter(({ path }) => path === outPath).length > 1) {
     throw new TypeError(
-      `${outPath} already exists; pass --force to regenerate it.`,
+      `--out must not be ${
+        basename(outPath)
+      }, which the generator writes beside it.`,
     );
+  }
+  if (!options.force) {
+    for (const { path } of outputs) {
+      if (!await exists(path)) continue;
+      throw new TypeError(
+        path === documentPath && htmlPath === undefined
+          ? `${path} already exists; pass --force to regenerate it, or --html to read it as the guest's document.`
+          : `${path} already exists; pass --force to regenerate it.`,
+      );
+    }
   }
 
   const contractModule = await import(
@@ -574,6 +681,9 @@ async function main(): Promise<void> {
     }
   }
   const config = validateConfig(contractModule.IFRAME_PATTERN);
+  if (htmlPath !== undefined && !await isEntry(htmlPath, "file")) {
+    throw new TypeError(`--html names ${htmlPath}, which is not a file.`);
+  }
 
   const result = await build({
     entryPoints: [guestPath],
@@ -594,44 +704,25 @@ async function main(): Promise<void> {
       "The guest build did not produce one self-contained script.",
     );
   }
-  const script = `<script type="module">\n${
-    inlineScript(result.outputFiles[0].text)
-  }\n</script>`;
-  let guestHtml: string;
-  if (htmlPath) {
-    const html = await Deno.readTextFile(htmlPath);
-    const markerCount = html.split(SCRIPT_MARKER).length - 1;
-    if (markerCount !== 1) {
-      throw new TypeError(
-        `${htmlPath} must contain ${SCRIPT_MARKER} exactly once; found ${markerCount}.`,
-      );
-    }
-    guestHtml = html.replace(SCRIPT_MARKER, () => script);
-  } else {
-    guestHtml = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${htmlText(config.displayName)}</title>
-  <style>html,body,#root{box-sizing:border-box;width:100%;height:100%;margin:0}</style>
-</head>
-<body>
-  <div id="root"></div>
-  ${script}
-</body>
-</html>`;
-  }
 
+  await replaceFile(scriptPath, result.outputFiles[0].text);
+  if (htmlPath === undefined) {
+    await replaceFile(documentPath, defaultGuestHtml(config.displayName));
+  }
   await replaceFile(
     outPath,
-    wrapperSource(
-      config,
-      relativeImport(outPath, contractPath),
-      guestHtml,
-    ),
+    wrapperSource(config, {
+      contract: relativePath(outPath, contractPath),
+      guest: relativePath(outPath, guestPath),
+      document: relativePath(outPath, documentPath),
+      script: relativePath(outPath, scriptPath),
+    }),
   );
-  console.log(`Wrote ${isAbsolute(options.out) ? outPath : options.out}`);
+  for (const { path } of outputs) {
+    console.log(
+      `Wrote ${isAbsolute(options.out) ? path : relative(Deno.cwd(), path)}`,
+    );
+  }
 }
 
 if (import.meta.main) {
