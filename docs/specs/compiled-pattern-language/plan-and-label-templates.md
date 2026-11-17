@@ -1082,7 +1082,10 @@ export interface Closure {
  *
  * - `element`: a collection for whose keys the binding has an `element`
  *   step. The path stands for one position per key, and the position
- *   that holds a key holds the stream of that key.
+ *   that holds a key holds the stream of that key. By ruling the match
+ *   is a prefix: the key of the position starts with the keys of the
+ *   binding's enclosing collections. In the result of a `flatMap`
+ *   every member of one source element's segment is such a position.
  * - `every`: a collection that no `element` step of the binding names,
  *   whose callback writes the stream. Every position of the collection
  *   holds the one stream.
@@ -1738,7 +1741,18 @@ ruling.
 - **The check accepts a marker only at a position of the stated kind.**
   At a `*` of kind `element` the marker of a cone instance is accepted
   at the position that holds the key of that instance, and at no
-  other. At a `*` of kind `every` or `inside` it is accepted at the
+  other. By ruling the match is a prefix: the key of the position has
+  to start with the keys that the cone instance has for the binding's
+  enclosing collections. For the result of a `map` or a `filter` the
+  key of a position is the upstream key, and the prefix is the whole
+  key. For the result of a `flatMap` the key of a position is the
+  source element's key followed by a member part (section 1.3), so a
+  handler bound in the upstream body has its marker accepted at every
+  member of the segment of its source element, and each of those
+  positions holds the one stream of that source key. No further kind
+  exists for the case. That is the same for a segment of references
+  and for a segment of plain values. At a `*` of kind `every` or
+  `inside` it is accepted at the
   position of an element of the collection, and not at a member
   written beside the collection in the same array. At a `*` of kind
   `member` it is accepted at the position of that member, and not at a
@@ -1748,7 +1762,10 @@ ruling.
   each collection is the child at its own position, so the path names
   the collection.
 - **A reader that has the plan resolves the path.** For kind `element`
-  it chooses the position that holds the key whose stream it wants.
+  it chooses a position whose key starts with the key whose stream it
+  wants: the one position for the result of a `map` or a `filter`, and
+  any member of the source element's segment for the result of a
+  `flatMap`.
   For kind `every` it chooses any position of the collection. For kind
   `member` it takes the one position of the member. For kind `inside`
   it tries the positions of the collection's elements, and the one
@@ -1762,7 +1779,10 @@ alone ("The stream is reached through a member of the element", above).
 For the result of another per-element construct, and for an output
 that passes one on (`Output.passesCollection`), a `*` is of kind
 `element` where the binding has the `element` step of the collection
-whose keys the result has (section 1.3).
+whose keys the result has (section 1.3). By ruling that holds for the
+result of a `flatMap` as well, whose keys start with the keys of its
+source: the `*` is of kind `element` for a handler bound in the
+upstream body, and the match is the prefix match above.
 
 *Assumed* (section 8, question 78), except where an item names a
 ruling, since the ruling on the kinds does not say how a kind is
@@ -1821,7 +1841,9 @@ counted to a stored position:
   of the binding for the element key at that position: the stream named
   by the binding's `name` and `within`, with that key at the `element`
   step (section 1.3). A key stands at one position, so no two positions
-  hold a link to one stream.
+  hold a link to one stream, except in the result of a `flatMap`,
+  where every member of a segment holds the link to the stream of its
+  source element's key (by the prefix match above).
 - **An event for that stream** is handled with each slot of root `element`
   of the handler's state bound to that key, and resolved at the position
   that holds the key (section 2.6).
@@ -11335,7 +11357,12 @@ this document made.
     nested child, so its elements are at `children/<n>/*`, a child
     written after it has a static position and no `*`, and two
     collections among the children of one node are two child
-    positions, each named by the path (section 3.4). *Assumed,* as
+    positions, each named by the path (section 3.4). And by ruling
+    kind `element` matches by prefix: the key of the position starts
+    with the keys of the binding's enclosing collections, so at the
+    result of a `flatMap` every member of a source element's segment
+    is a position of a handler bound in the upstream body, and no
+    fifth kind exists. *Assumed,* as
     section 1.1 has it: the path has `*` at the position
     of each enclosing collection, as the path of a per-element output
     has; the link there is to the stream of the element key at

@@ -945,7 +945,14 @@ where.
   `plan-and-label-templates.md` §1.1, "What a `*` of a result path
   stands for"). At a `*` for the positions of a collection whose keys
   the binding has, the marker of a cone instance is accepted at the
-  position that holds the key of that instance. At a `*` for every
+  position that holds the key of that instance. By ruling that match
+  is a prefix: the key of the position has to start with the keys the
+  cone instance has for the binding's enclosing collections. So in
+  the result of a `flatMap`, where the key of a position is the source
+  element's key followed by a member part, the marker of a handler
+  bound in the upstream body is accepted at every member of the
+  segment of its source element, over a segment of references and
+  over a segment of plain values alike. At a `*` for every
   position of a collection, or for the one element that holds the
   stream inside a value, it is accepted at the position of an element
   of that collection. At a `*` for a member written after a spread it

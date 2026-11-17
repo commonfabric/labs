@@ -1467,6 +1467,13 @@ is relitigated.
   (`ResultPath.stars`). The same over an array of references, over an
   array of plain values in place, and over the result of another
   per-element construct.
+- A `*` at the result of a `flatMap`, for a handler bound in the
+  upstream body, is of kind `element`, and the match of that kind is
+  a prefix: the key of the position has to start with the keys of the
+  handler's enclosing collections. Every member of a source element's
+  segment then holds the stream of that source key. There is no fifth
+  kind. The same for a segment of references and for a segment of
+  plain values.
 - A collection among the children of a view node is stored as one
   nested child, as the runtime of today stores the result of a `map`.
   The collection is the child at the position `n` it is written at,
@@ -2378,7 +2385,11 @@ as an assumption.
     nested child, with its elements at `children/<n>/*`, so two
     collections among the children of one node are told apart by
     their child positions, and a child written after a collection has
-    a static position ([Decided](#decided)). *Assumed* beside the
+    a static position ([Decided](#decided)). And settled by ruling:
+    kind `element` matches by prefix, so that at the result of a
+    `flatMap` every member of a source element's segment is a
+    position of a handler bound in the upstream body, for a segment
+    of references and for a segment of plain values alike. *Assumed* beside the
     rulings: a `*` at the position of each enclosing collection; and
     kind `member`, which remains only for an array value that the
     author spreads into outside the children of a view node, holds
