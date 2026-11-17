@@ -160,7 +160,8 @@ export function startServer(deps: ServerStartDeps): Promise<void> {
   );
   // Before any worker starts, so that the flag never changes while another
   // thread runs. The serving-worker pool collects a worker's garbage before
-  // it ends one for its heap; whoever calls the route needs EXPOSE_GC too.
+  // it ends one for its heap; the route answers only on a server started
+  // with EXPOSE_GC=true.
   deps.exposeGarbageCollector();
   if (env.EXPOSE_GC) {
     log(

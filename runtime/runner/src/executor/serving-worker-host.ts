@@ -215,7 +215,10 @@ export type ServingWorkerPoolOptions = {
    * Whether the pool has a worker collect its garbage before ending it for a
    * heap past `heapLimitMb` that V8 does not enforce, because a process-wide
    * `--max-old-space-size` replaced the worker's limit. The pool then ends
-   * the worker only if its heap is still past the limit once collected.
+   * the worker at once if its heap is still past the limit once collected,
+   * and keeps it serving if the collection brings it under. A worker that
+   * refuses the collection, or does not answer it, is still ended, at
+   * {@link BEATS_PAST_LIMIT_UNCOLLECTED} heartbeats in a row past its limit.
    * Needs `exposeGarbageCollector()` to have run in this process before the
    * worker started. Default: false, and such a worker is ended at
    * {@link BEATS_PAST_REPLACED_LIMIT} heartbeats in a row past its limit.
