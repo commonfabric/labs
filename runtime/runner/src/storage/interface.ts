@@ -3178,17 +3178,19 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
 
   /**
    * The repair of a compile-cache record a flow stamp labeled: writes
-   * `replacement`'s value and label envelope over the document `target` names,
-   * or deletes the document when `replacement` is absent, inside the
-   * privileged system-write scope. Requires the transaction's current
-   * implementation identity to be the `compile-cache-repair` builtin. The
+   * `replacement`'s value and label envelope over the document a compile-cache
+   * record's key `target.key` names, or deletes the document when
+   * `replacement` is absent, inside the privileged system-write scope.
+   * Requires the transaction's current implementation identity to be the
+   * `compile-cache-repair` builtin, and the key to be a compile-cache record's.
+   * The
    * caller, `repairCompileCacheStamps()`, computes the replacement from the
    * verified closure; this method trusts it.
    *
-   * @throws When the identity is not the repair's.
+   * @throws When the identity is not the repair's, or the key not a record's.
    */
   writeRepairedCompileCacheRecord(
-    target: { space: MemorySpace; id: URI; scope?: CellScope },
+    target: { space: MemorySpace; key: string },
     replacement: { value: FabricValue; cfc: CfcMetadata } | undefined,
   ): void;
 

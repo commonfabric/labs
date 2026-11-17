@@ -9,6 +9,7 @@ import type {
 import { isBuilderSourceSitesV1 } from "@commonfabric/ts-transformers/runtime-contract";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { utf8Compare } from "@commonfabric/text/utf8";
 import { pathsOverlap } from "@commonfabric/memory/v2/path";
 
@@ -61,7 +62,9 @@ import {
   SOURCE_COMPILE_CACHE_RUNTIME_VERSION,
 } from "./compile-cache-version.ts";
 import {
+  COMPILE_CACHE_COMPILED_KEY_PREFIX,
   COMPILE_CACHE_REPAIR_WRITER,
+  COMPILE_CACHE_SOURCE_KEY_PREFIX,
   COMPILE_CACHE_WRITER,
 } from "./writer-identity.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
@@ -582,7 +585,7 @@ function isDenoError(error: unknown, name: string): boolean {
 
 /** Cell key (id) for a source-set document. */
 export function sourceDocKey(identity: string): string {
-  return `pattern:${identity}`;
+  return `${COMPILE_CACHE_SOURCE_KEY_PREFIX}${identity}`;
 }
 
 /** Cell key (id) for a compiled-set document. */
@@ -590,7 +593,7 @@ export function compiledDocKey(
   runtimeVersion: string,
   identity: string,
 ): string {
-  return `compileCache:${runtimeVersion}/${identity}`;
+  return `${COMPILE_CACHE_COMPILED_KEY_PREFIX}${runtimeVersion}/${identity}`;
 }
 
 /**
@@ -2582,8 +2585,18 @@ interface StampRepairTarget {
   readonly id: URI;
   readonly scope: CellScope;
 
+  /** The compile-cache record key naming the document. */
+  readonly key: string;
+
   /** The whole stored document the verification read. */
   readonly expectedHash: string;
+
+  /**
+   * Whether the repair writes the document, or only reads it to stand
+   * guard: the source record of a module whose compiled record it erases,
+   * whose list decided that the erase loses no grant.
+   */
+  readonly write: boolean;
 
   /** The canonical source record, or nothing for an erase. */
   readonly source?: {
@@ -2650,6 +2663,7 @@ export async function repairCompileCacheStamps(
       }
     }
     for (const target of plan) {
+      if (!target.write) continue;
       tx.writeRepairedCompileCacheRecord(
         target,
         target.source === undefined ? undefined : {
@@ -2691,8 +2705,9 @@ export async function repairCompileCacheStamps(
 
 /**
  * Helper for {@link repairCompileCacheStamps}, which returns whether the
- * documents `tx` read, and the documents it wrote, are each exactly
- * `targets`, its verifier reads and content-addressed documents aside.
+ * documents `tx` read are exactly `targets`, and the documents it wrote
+ * exactly those `targets` it writes, its verifier reads and
+ * content-addressed documents aside.
  */
 function readsOnlyWhatItWrites(
   tx: IExtendedStorageTransaction,
@@ -2700,9 +2715,10 @@ function readsOnlyWhatItWrites(
 ): boolean {
   const keyOf = (space: string, id: string, scope: unknown) =>
     `${space}\0${normalizeCellScope(scope as CellScope)}\0${id}`;
-  const expected = new Set(
-    targets.map((target) => keyOf(target.space, target.id, target.scope)),
-  );
+  const keysOf = (of: readonly StampRepairTarget[]) =>
+    new Set(of.map((target) => keyOf(target.space, target.id, target.scope)));
+  const expectedReads = keysOf(targets);
+  const expectedWrites = keysOf(targets.filter((target) => target.write));
   const read = new Set<string>();
   for (const activity of getTransactionReadActivities(tx)) {
     if (isInternalVerifierRead(activity.meta)) continue;
@@ -2716,9 +2732,9 @@ function readsOnlyWhatItWrites(
       keyOf(attempt.space, attempt.id, attempt.scope),
     );
   }
-  const same = (set: ReadonlySet<string>) =>
+  const same = (set: ReadonlySet<string>, expected: ReadonlySet<string>) =>
     set.size === expected.size && [...set].every((key) => expected.has(key));
-  return same(read) && same(written);
+  return same(read, expectedReads) && same(written, expectedWrites);
 }
 
 /**
@@ -2858,10 +2874,24 @@ async function planStampRepair(
       }
       return "refused";
     }
+    // A stored label-metadata template is one its record's entries derive,
+    // and goes with the entry it describes; one they would not derive is
+    // nothing the repair examined, so the record is refused. The record
+    // keeps the templates its kept entries derive.
+    const derivable = labelMetadataTemplatesFor(metadata.labelMap.entries);
+    if (
+      (metadata.labelMap.documentEntries ?? []).some((stored) =>
+        !derivable.some((template) => deepEqual(template, stored))
+      )
+    ) {
+      return "refused";
+    }
+    const templates = labelMetadataTemplatesFor(kept);
     const imports = canonicalSourceImports(
       closure,
       identity,
       dataIdentities,
+      entryIdentity,
     );
     if (imports === undefined) return "refused";
     repairedClosure.set(identity, { ...doc, imports });
@@ -2870,7 +2900,9 @@ async function planStampRepair(
       space,
       id: record.link.id,
       scope: normalizeCellScope(record.link.scope),
+      key: sourceDocKey(identity),
       expectedHash: taggedHashStringOf(record.whole as FabricValue),
+      write: true,
       source: {
         value: {
           kind: "source",
@@ -2897,10 +2929,7 @@ async function planStampRepair(
           labelMap: {
             version: metadata.labelMap.version,
             entries: kept,
-            ...(() => {
-              const templates = labelMetadataTemplatesFor(kept);
-              return templates.length > 0 ? { documentEntries: templates } : {};
-            })(),
+            ...(templates.length > 0 ? { documentEntries: templates } : {}),
           },
         },
       },
@@ -2908,13 +2937,17 @@ async function planStampRepair(
   }
   if (
     stampedSources.length > 0 &&
-    !verifySourceDocs(
+    (!verifySourceDocs(
       entryIdentity,
       repairedClosure,
       "",
       (identity) => runtime.attestedSourceImports(space, identity),
-    ).ok
+    ).ok ||
+      !reachesEvery(repairedClosure, entryIdentity, closure.keys()))
   ) {
+    // A rewritten member keeps cache-root edges only as the closure's entry,
+    // as the cache writer writes them; one whose dropped edges carried the
+    // closure to a record nothing else reaches is refused.
     return "refused";
   }
 
@@ -2951,10 +2984,45 @@ async function planStampRepair(
       space,
       id: record.link.id,
       scope: normalizeCellScope(record.link.scope),
+      key: compiledDocKey(runtimeVersion!, identity),
       expectedHash: taggedHashStringOf(record.whole as FabricValue),
+      write: true,
     });
+    // The source record's list is what judged the erase safe, so the repair
+    // reads it again, and refuses to erase if it changed.
+    const source = sources.get(identity);
+    if (source !== undefined && !stampedSourceIdentities.has(identity)) {
+      plan.push({
+        space,
+        id: source.link.id,
+        scope: normalizeCellScope(source.link.scope),
+        key: sourceDocKey(identity),
+        expectedHash: taggedHashStringOf(source.whole as FabricValue),
+        write: false,
+      });
+    }
   }
   return plan;
+}
+
+/**
+ * Helper for {@link planStampRepair}, which returns whether every identity of
+ * `identities` is reached from `entryIdentity` over the edges of `closure`.
+ */
+function reachesEvery(
+  closure: ReadonlyMap<string, SourceDoc>,
+  entryIdentity: string,
+  identities: Iterable<string>,
+): boolean {
+  const reached = new Set<string>();
+  const queue = [entryIdentity];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (reached.has(id)) continue;
+    reached.add(id);
+    for (const imp of closure.get(id)?.imports ?? []) queue.push(imp.identity);
+  }
+  return [...identities].every((id) => reached.has(id));
 }
 
 /**
@@ -2962,14 +3030,15 @@ async function planStampRepair(
  * compile-cache writer stores on the source record of `identity`, computed
  * from the verified `closure`: the authored edges a scan of its code yields,
  * in scan order, then its source-root and data-file edges ordered by
- * specifier and identity, then one cache-root edge per other module of the
- * closure it links, ordered by identity. Returns `undefined` when its own
- * view does not resolve.
+ * specifier and identity, then, on the closure's entry `entryIdentity` only,
+ * one cache-root edge per other module of the closure it links, ordered by
+ * identity. Returns `undefined` when its own view does not resolve.
  */
 function canonicalSourceImports(
   closure: ReadonlyMap<string, SourceDoc>,
   identity: string,
   dataIdentities: ReadonlySet<string>,
+  entryIdentity: string,
 ): ModuleImportRef[] | undefined {
   const doc = closure.get(identity)!;
   const isPackageEdge = (imp: ModuleImportRef) =>
@@ -3032,7 +3101,7 @@ function canonicalSourceImports(
     utf8Compare(a.specifier, b.specifier) ||
     utf8Compare(a.identity, b.identity);
   const packages = doc.imports.filter(isPackageEdge).sort(byKey);
-  const roots = [
+  const roots = identity !== entryIdentity ? [] : [
     ...new Set(
       doc.imports.filter(isRootEdge).map((imp) => imp.identity).filter((id) =>
         id !== identity && closure.has(id)

@@ -7,3 +7,9 @@ export const COMPILE_CACHE_WRITER = "compile-cache";
  * (`ExtendedStorageTransaction.writeRepairedCompileCacheRecord()`).
  */
 export const COMPILE_CACHE_REPAIR_WRITER = "compile-cache-repair";
+
+/** The prefix of a source record's key (`sourceDocKey()`). */
+export const COMPILE_CACHE_SOURCE_KEY_PREFIX = "pattern:";
+
+/** The prefix of a compiled record's key (`compiledDocKey()`). */
+export const COMPILE_CACHE_COMPILED_KEY_PREFIX = "compileCache:";

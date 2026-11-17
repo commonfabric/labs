@@ -15,6 +15,7 @@ import {
   compiledDocKey,
   repairCompileCacheStamps,
   sourceDocKey,
+  stageModuleDelegations,
   writeSourceAndCompiledDocs,
 } from "../src/compilation-cache/cell-cache.ts";
 import { COMPILE_CACHE_REPAIR_WRITER } from "../src/compilation-cache/writer-identity.ts";
@@ -109,6 +110,50 @@ const rootPairStamp = (atom: string): FabricValue[] =>
       },
     },
   ] as unknown as FabricValue[];
+
+/** {@link rootPairStamp} as patched heads hold it: no integrity on either. */
+const bareRootPairStamp = (atom: string): FabricValue[] =>
+  [
+    {
+      path: [],
+      origin: "derived",
+      observes: "shape",
+      label: { confidentiality: [atom] },
+    },
+    {
+      path: [],
+      origin: "derived",
+      observes: "value",
+      label: { confidentiality: [atom] },
+    },
+  ] as unknown as FabricValue[];
+
+/** A module two programs share: an entry in one, a dependency in the other. */
+const SHARED_MODULE = {
+  name: "/u.ts",
+  contents: `export const u = 1;`,
+};
+
+/** A program whose entry imports {@link SHARED_MODULE}. */
+const PROGRAM_IMPORTING_SHARED: RuntimeProgram = {
+  main: "/main.ts",
+  files: [
+    {
+      name: "/main.ts",
+      contents: `import { u } from "./u.ts";\nexport const m = u;`,
+    },
+    SHARED_MODULE,
+  ],
+};
+
+/**
+ * A program whose entry is {@link SHARED_MODULE}, with a module it does not
+ * import, so its entry record carries a cache-root edge to that module.
+ */
+const PROGRAM_ROOTED_AT_SHARED: RuntimeProgram = {
+  main: "/u.ts",
+  files: [SHARED_MODULE, { name: "/q.ts", contents: `export const q = 2;` }],
+};
 
 type Stored = FabricPlainObject & {
   value?: FabricPlainObject;
@@ -375,6 +420,154 @@ describe("cell-cache", () => {
       expect(atomsOn(id)).toEqual([space, space]);
     });
 
+    it("rewrites a record stamped by a root pair with no integrity, as patched heads hold it", async () => {
+      const program = await writeDelegatingProgram();
+      const id = idOf(sourceDocKey(program.entryIdentity));
+      const before = stored(id).value;
+      await plant(id, bareRootPairStamp(space));
+
+      expect(await repair(program.entryIdentity)).toBe("repaired");
+      expect(stored(id).value).toEqual(before);
+      expect(atomsOn(id)).toEqual([]);
+    });
+
+    it("rewrites a record whose head is a later write to one of its fields", async () => {
+      // The list is staged by a write of that field alone, after the record
+      // was written whole.
+
+      const program = await writeProgram(PROGRAM);
+      const stage = runtime.edit();
+      stageModuleDelegations(
+        runtime,
+        space,
+        new Map([[program.entryIdentity, new Set(["staged"])]]),
+        RUNTIME_VERSION,
+        stage,
+      );
+      runtime.prepareTxForCommit(stage);
+      expect((await stage.commit().settled).error).toBeUndefined();
+      const id = idOf(sourceDocKey(program.entryIdentity));
+      const before = stored(id).value;
+      expect(before?.delegatedModuleIdentities).toEqual(["staged"]);
+      await plant(id, rootPairStamp(space));
+
+      expect(await repair(program.entryIdentity)).toBe("repaired");
+      expect(stored(id).value).toEqual(before);
+      expect(atomsOn(id)).toEqual([]);
+    });
+
+    it("refuses, and erases nothing, where the source record that granted an erase changes after verification", async () => {
+      const program = await writeDelegatingProgram();
+      const compiled = idOf(
+        compiledDocKey(RUNTIME_VERSION, program.entryIdentity),
+      );
+      await plant(compiled, rootPairStamp(space));
+
+      const outcome = await repairCompileCacheStamps(
+        runtime,
+        space,
+        program.entryIdentity,
+        RUNTIME_VERSION,
+        () => {
+          // Between the verification and the repair's own reads, the
+          // source record whose list covered the erase loses it.
+          const tx = runtime.edit();
+          tx.writeValueOrThrow(
+            runtime.getCell(space, sourceDocKey(program.entryIdentity))
+              .key("delegatedModuleIdentities").getAsNormalizedFullLink(),
+            ["chosen"],
+          );
+          tx.commit();
+        },
+      );
+
+      expect(outcome).toBe("conflicted");
+      expect(stored(compiled).value).toBeDefined();
+    });
+
+    it("refuses, and leaves the stamp, where a stamped record stores a label-metadata template its entries do not derive", async () => {
+      const program = await writeProgram(PROGRAM);
+      const id = idOf(sourceDocKey(program.entryIdentity));
+      await plant(id, [
+        ...rootPairStamp(space),
+        {
+          path: ["cfc", "labels", "value", "filename", "~label"],
+          origin: "label-metadata",
+          observes: "labelMetadata",
+          label: { confidentiality: [space] },
+        } as unknown as FabricValue,
+      ]);
+
+      expect(await repair(program.entryIdentity)).toBe("refused");
+      expect(atomsOn(id)).toContain(space);
+    });
+
+    for (
+      const [what, alsoReached, outcome] of [
+        ["reached through nothing else", false, "refused"],
+        ["also reached from the entry", true, "repaired"],
+      ] as const
+    ) {
+      it(`returns \`${outcome}\` for a stamped dependency whose cache-root edge leads to a module ${what}`, async () => {
+        // The cache writer writes cache-root edges on a program's entry
+        // only, so a dependency rewritten for this closure loses them, and
+        // the closure the records it reached through them.
+
+        const importing = await writeProgram(PROGRAM_IMPORTING_SHARED);
+        const rooted = await writeProgram(PROGRAM_ROOTED_AT_SHARED);
+        const shared = rooted.entryIdentity;
+        const q = rooted.modules.find((m) => m.filename === "/q.ts")!;
+        const entryId = idOf(sourceDocKey(importing.entryIdentity));
+        if (alsoReached) {
+          const qLink = runtime.getCell(space, sourceDocKey(q.identity))
+            .getAsLink() as unknown as FabricValue;
+          await replaceStored(entryId, (current) => ({
+            value: {
+              ...current.value!,
+              imports: [
+                ...(current.value!.imports as FabricValue[]),
+                { specifier: `cf:cache-root/${q.identity}`, link: qLink },
+              ],
+            },
+            entries: current.cfc?.labelMap.entries ?? [],
+          }));
+        }
+        const sharedId = idOf(sourceDocKey(shared));
+        expect(
+          (stored(sharedId).value!.imports as FabricPlainObject[]).map((imp) =>
+            imp.specifier
+          ),
+        ).toEqual([`cf:cache-root/${q.identity}`]);
+        await plant(sharedId, rootPairStamp(space));
+
+        expect(await repair(importing.entryIdentity)).toBe(outcome);
+        if (outcome === "repaired") {
+          expect(stored(sharedId).value!.imports).toEqual([]);
+          expect(atomsOn(sharedId)).toEqual([]);
+        } else {
+          expect(atomsOn(sharedId)).toEqual([space, space]);
+        }
+      });
+    }
+
+    it("throws on a repair write to a document no compile-cache record's key names", () => {
+      const tx = runtime.edit();
+      try {
+        setCfcImplementationIdentity(tx, {
+          kind: "builtin",
+          builtinId: COMPILE_CACHE_REPAIR_WRITER,
+        });
+        expect(() =>
+          tx.writeRepairedCompileCacheRecord(
+            { space, key: "of:not-a-record" },
+            undefined,
+          )
+        ).toThrow("not a compile-cache record key");
+      } finally {
+        tx.abort();
+      }
+    });
+
     it("writes no stamp placement on the record it rewrites", async () => {
       const program = await writeDelegatingProgram();
       const id = idOf(sourceDocKey(program.entryIdentity));
@@ -582,7 +775,7 @@ describe("cell-cache", () => {
         });
         expect(() =>
           tx.writeRepairedCompileCacheRecord(
-            { space, id: idOf(sourceDocKey("x")) },
+            { space, key: sourceDocKey("x") },
             undefined,
           )
         ).toThrow(COMPILE_CACHE_REPAIR_WRITER);

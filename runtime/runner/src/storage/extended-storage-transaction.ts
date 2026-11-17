@@ -37,7 +37,13 @@ import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray, isPlainObject } from "@commonfabric/js-values/types";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
-import { COMPILE_CACHE_REPAIR_WRITER } from "../compilation-cache/writer-identity.ts";
+import {
+  COMPILE_CACHE_COMPILED_KEY_PREFIX,
+  COMPILE_CACHE_REPAIR_WRITER,
+  COMPILE_CACHE_SOURCE_KEY_PREFIX,
+} from "../compilation-cache/writer-identity.ts";
+import { createRef } from "../create-ref.ts";
+import { toURI } from "../uri-utils.ts";
 import {
   type CfcConfidentialityRelease,
   type CfcConfidentialityReleaseByIntent,
@@ -2875,7 +2881,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   writeRepairedCompileCacheRecord(
-    target: { space: MemorySpace; id: URI; scope?: CellScope },
+    target: { space: MemorySpace; key: string },
     replacement: { value: FabricValue; cfc: CfcMetadata } | undefined,
   ): void {
     this.#assertWritable("writeRepairedCompileCacheRecord()");
@@ -2894,10 +2900,20 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
           "identity",
       );
     }
+    // The document is the one a compile-cache record's key names, and no
+    // other: the repair writes value and label over whatever it names.
+    if (
+      !target.key.startsWith(COMPILE_CACHE_SOURCE_KEY_PREFIX) &&
+      !target.key.startsWith(COMPILE_CACHE_COMPILED_KEY_PREFIX)
+    ) {
+      throw new Error(
+        `compile-cache repair: ${target.key} is not a compile-cache record key`,
+      );
+    }
     const record = {
       space: target.space,
-      id: target.id,
-      scope: normalizeCellScope(target.scope),
+      id: toURI(createRef({}, target.key)),
+      scope: normalizeCellScope(undefined),
     };
     const address = { ...record, type: "application/json" as const };
     // Deliberately NOT marked CFC-relevant, like a release: the caller's
@@ -5465,7 +5481,7 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
   }
 
   writeRepairedCompileCacheRecord(
-    target: { space: MemorySpace; id: URI; scope?: CellScope },
+    target: { space: MemorySpace; key: string },
     replacement: { value: FabricValue; cfc: CfcMetadata } | undefined,
   ): void {
     this.#wrapped.writeRepairedCompileCacheRecord(target, replacement);
