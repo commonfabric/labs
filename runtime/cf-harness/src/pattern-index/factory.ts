@@ -47,13 +47,15 @@ async () => {
       ...(fetchFn !== undefined ? { fetchFn } : {}),
     });
   } catch (error) {
-    // A store this run cannot read (its permissions, a broken file, no
-    // state directory) costs the member's settings, not the index: the run
-    // signs as its key alone, as it did before it presented chains, and
-    // says why. Failing every index call over a local file would buy no
-    // privacy, since sharing settings are not a security boundary.
+    // A chain this run cannot build (a store it cannot read, no state
+    // directory, a root key that will not issue) costs the member's
+    // settings, not the index: the run signs as its key alone, as it did
+    // before it presented chains, and says why. Failing every index call
+    // over it would buy no privacy, since sharing settings are not a
+    // security boundary. A failure that is not about the chain, such as a
+    // malformed base URL, throws again from the client built below.
     console.error(
-      `pattern index: signing without the membership chain, whose store could not be read: ${
+      `pattern index: signing without the membership chain, which could not be built: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
