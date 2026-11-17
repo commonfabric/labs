@@ -33,11 +33,11 @@ const stubClient = (
     created?: boolean;
     failFirstEvent?: boolean;
     /**
-     * What `getPattern` answers per id: whether the caller wrote it, or an
-     * HTTP status for an id it cannot answer for. An id not listed is one
-     * the index does not hold.
+     * What `getPattern` answers per id: the caller's, someone else's, one
+     * from a deployment that does not say whose, or an HTTP status for an id
+     * it cannot answer for. An id not listed is one the index does not hold.
      */
-    patterns?: Record<string, { mine?: boolean } | number>;
+    patterns?: Record<string, "mine" | "theirs" | "unsaid" | number>;
   } = {},
 ) => {
   const calls: RecordedCall[] = [];
@@ -87,7 +87,12 @@ const stubClient = (
               description: "Sortable table",
               hashtags: ["table"],
               dependencies: [],
-              ...known,
+              // As the index answers: an author for every reader of a
+              // deployment that keeps lineages, and `mine` for its owner only.
+              ...(known === "unsaid"
+                ? {}
+                : { author: { pseudonym: "quiet-otter", tier: 0 } }),
+              ...(known === "mine" ? { mine: true } : {}),
             }),
             { status: 200 },
           ),
@@ -437,7 +442,8 @@ describe("pattern index ledger", () => {
      * states for a current client: a slot, then a `priorPatternId` naming one
      * of the caller's own versions, with a remix always starting a new one.
      * `foreign` are versions someone else wrote. The model binds the tests to
-     * that contract rather than to the request fields that satisfy it.
+     * that contract rather than to the request fields that satisfy it, and
+     * mirrors it as of pattern-index 48ccb22: change both together.
      */
     const historiesOf = (
       sent: RecordedCall[],
@@ -476,7 +482,7 @@ describe("pattern index ledger", () => {
       request(patternId, { origin: "agent", slot: deployedTo, deployedTo });
 
     it("files a later run's revision of the caller's own pattern in that pattern's history", async () => {
-      const index = stubClient({ patterns: { "v1": { mine: true } } });
+      const index = stubClient({ patterns: { "v1": "mine" } });
       const firstRun = createPatternIndexLedger(index.getClient);
       firstRun.stage(agentRequest("v1", piece("one")));
       await firstRun.flush();
@@ -497,7 +503,7 @@ describe("pattern index ledger", () => {
     });
 
     it("credits a revision of someone else's pattern as a remix with a history of its own", async () => {
-      const index = stubClient({ patterns: { "theirs": { mine: false } } });
+      const index = stubClient({ patterns: { "theirs": "theirs" } });
       const ledger = createPatternIndexLedger(index.getClient);
       ledger.stage(agentRequest("mine", piece("one")), {
         revisedFrom: "theirs",
@@ -512,7 +518,7 @@ describe("pattern index ledger", () => {
     });
 
     it("starts a new history for a new pattern, beside an existing one", async () => {
-      const index = stubClient({ patterns: { "v1": { mine: true } } });
+      const index = stubClient({ patterns: { "v1": "mine" } });
       const firstRun = createPatternIndexLedger(index.getClient);
       firstRun.stage(agentRequest("v1", piece("one")));
       await firstRun.flush();
@@ -546,6 +552,61 @@ describe("pattern index ledger", () => {
       expect(sent.body.slot).toBe(piece("two"));
     });
 
+    it("names no predecessor when the index does not say whose it is", async () => {
+      const index = stubClient({ patterns: { "v1": "unsaid" } });
+      const ledger = createPatternIndexLedger(index.getClient);
+      ledger.stage(agentRequest("v2", piece("two")), { revisedFrom: "v1" });
+      await ledger.flush();
+
+      const [sent] = publishes(index.calls);
+      expect(sent.body.priorPatternId).toBeUndefined();
+      expect(sent.body.remixedFrom).toBeUndefined();
+      expect(sent.body.slot).toBe(piece("two"));
+    });
+
+    it("files a revision in the history of what it revised, not of a capability described the same way", async () => {
+      const index = stubClient({ patterns: { "older": "mine" } });
+      const ledger = createPatternIndexLedger(index.getClient);
+      ledger.stage(agentRequest("fresh", piece("one")));
+      ledger.stage(agentRequest("revision", piece("two")), {
+        revisedFrom: "older",
+      });
+      await ledger.flush();
+
+      const sent = publishes(index.calls);
+      const revision = sent.find((call) => call.body.patternId === "revision");
+      expect(revision?.body.priorPatternId).toBe("older");
+    });
+
+    it("continues a pattern this session made without asking whose it is, sending it first", async () => {
+      const index = stubClient();
+      const ledger = createPatternIndexLedger(index.getClient);
+      ledger.stage(agentRequest("made-here", piece("one")));
+      // Described differently, so only `revisedFrom` links the two.
+      ledger.stage(
+        request("revision", {
+          description: "Sortable table, revised",
+          origin: "agent",
+          slot: piece("two"),
+          deployedTo: piece("two"),
+        }),
+        { revisedFrom: "made-here" },
+      );
+      await ledger.flush();
+
+      const sent = publishes(index.calls);
+      expect(sent.map((call) => call.body.patternId)).toEqual([
+        "made-here",
+        "revision",
+      ]);
+      expect(historiesOf(sent).get("revision")).toBe(
+        historiesOf(sent).get("made-here"),
+      );
+      expect(index.calls.some((call) => call.fn === "getPattern")).toBe(
+        false,
+      );
+    });
+
     it("names no predecessor whose owner it could not learn, and says so", async () => {
       const index = stubClient({ patterns: { "v1": 500 } });
       const errors: string[] = [];
@@ -563,7 +624,7 @@ describe("pattern index ledger", () => {
     });
 
     it("files every iteration of one session's capability in one history, each deployed to its own piece", async () => {
-      const index = stubClient({ patterns: { "theirs": { mine: false } } });
+      const index = stubClient({ patterns: { "theirs": "theirs" } });
       const ledger = createPatternIndexLedger(index.getClient);
       ledger.stage(agentRequest("first", piece("one")), {
         revisedFrom: "theirs",

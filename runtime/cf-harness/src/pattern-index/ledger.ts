@@ -70,18 +70,29 @@ import { PATTERN_DISCOVERABILITY_REASONS } from "./publish-render-gate.ts";
  * - A later iteration of a capability this session already sent continues
  *   that entry's history: it names the entry as `priorPatternId` and drops
  *   its own slot and remix credit, which would otherwise outrank the
- *   predecessor and start another history.
+ *   predecessor and start another history. A request revised from something
+ *   else than that entry was is not an iteration of it, whatever its words.
  * - A request staged with `revisedFrom` — the pattern a run's source was
  *   revised from, which the run knows only when the model named the piece it
- *   revised — asks the index whose that pattern is before it is sent. The
- *   caller's own continues its history the same way; someone else's is
- *   credited as `remixedFrom` and starts a new one, which is what a revision
- *   of a pattern the caller did not write is. A pattern the index does not
- *   hold, or whose owner it does not say, leaves the request as it was: the
- *   index is told nothing about a predecessor nobody could confirm.
+ *   revised — continues the caller's own pattern the same way, and is
+ *   credited as `remixedFrom` someone else's, starting a new history, which
+ *   is what a revision of a pattern the caller did not write is. A pattern
+ *   this session sent is known to be the caller's (one still held is sent
+ *   first, so the index holds it). For any other the index is asked when the
+ *   request is sent. A pattern it does not hold, or a deployment that does
+ *   not say whose a pattern is, leaves the request as it was: the index is
+ *   told nothing about a predecessor nobody could confirm.
  *
  * An entry staged with neither names nothing earlier, so a new pattern never
  * joins a history it is unrelated to.
+ *
+ * Dropping the slot has a cost, stated rather than discovered: the new piece's
+ * key is then bound to no history, so a later publication naming that piece
+ * as its slot would start another one. Nothing sends one today — every
+ * `run_pattern` deploys a new piece, and an in-place `revise_piece` publishes
+ * nothing. The index binding an unbound slot to the history a
+ * `priorPatternId` finds, as it already does for a remix, would let this keep
+ * the slot.
  *
  * ## What this costs, stated rather than discovered
  *
@@ -138,7 +149,11 @@ export interface PatternIndexStageOptions {
   revisedFrom?: string;
 }
 
-/** A request as held: what was staged, and what it was revised from. */
+/**
+ * A request as held: what was staged, and what it was revised from. Whose
+ * that is still has to be asked unless the request already names it as its
+ * `priorPatternId`.
+ */
 interface StagedPublication {
   request: PatternIndexPublishRequest;
   revisedFrom?: string;
@@ -162,6 +177,8 @@ const continuing = (
  * `request` with what the index says about `revisedFrom` applied: continuing
  * it when the caller wrote it, crediting it when someone else did, and
  * unchanged when the index does not hold it or does not say whose it is.
+ * A deployment that says answers with `author`, and with `mine: true` only to
+ * the author: it leaves `mine` out rather than send `false`.
  * A read that fails is reported and leaves the request unchanged too, since
  * a guess at a predecessor's owner is the one thing this must not send.
  */
@@ -171,12 +188,12 @@ const withPredecessor = async (
   revisedFrom: string,
   onError: (message: string) => void,
 ): Promise<PatternIndexPublishRequest> => {
-  let mine: boolean | undefined;
+  let answer;
   try {
-    ({ mine } = await client.getPattern({
+    answer = await client.getPattern({
       patternId: revisedFrom,
       includeSource: false,
-    }));
+    });
   } catch (error) {
     if (!(error instanceof PatternIndexError && error.status === 404)) {
       onError(
@@ -187,8 +204,10 @@ const withPredecessor = async (
     }
     return request;
   }
-  if (mine === true) return continuing(request, revisedFrom);
-  if (mine === false) return { ...request, remixedFrom: revisedFrom };
+  if (answer.mine === true) return continuing(request, revisedFrom);
+  if (answer.author !== undefined) {
+    return { ...request, remixedFrom: revisedFrom };
+  }
   return request;
 };
 
@@ -213,7 +232,13 @@ export const createPatternIndexLedger = (
   const onError = options.onError ??
     ((message: string) => console.error(message));
   const held = new Map<string, StagedPublication>();
-  const publishedByKey = new Map<string, string>();
+  // Per capability, the entry last sent and what it was revised from; and
+  // every entry this session sent, each of them the caller's own.
+  const publishedByKey = new Map<
+    string,
+    { patternId: string; revisedFrom?: string }
+  >();
+  const sentIds = new Set<string>();
   // Every write is serialized behind one chain, so a write is sent once the
   // write before it has been answered, without any caller awaiting either.
   let chain: Promise<void> = Promise.resolve();
@@ -223,7 +248,11 @@ export const createPatternIndexLedger = (
     { request, revisedFrom }: StagedPublication,
     supersede: boolean,
   ): void => {
-    publishedByKey.set(key, request.patternId);
+    publishedByKey.set(key, {
+      patternId: request.patternId,
+      ...(revisedFrom !== undefined ? { revisedFrom } : {}),
+    });
+    sentIds.add(request.patternId);
     // A render-gate reason is more informative than displacement and stays on
     // a superseded entry. The generic automatic-recording reason is replaced:
     // supersession specifically explains why an earlier iteration is not the
@@ -243,7 +272,7 @@ export const createPatternIndexLedger = (
       try {
         const client = await getClient();
         const response = await client.publishPattern(
-          revisedFrom === undefined
+          revisedFrom === undefined || body.priorPatternId !== undefined
             ? body
             : await withPredecessor(client, body, revisedFrom, onError),
         );
@@ -279,13 +308,15 @@ export const createPatternIndexLedger = (
       });
     },
     stage(request, options = {}) {
+      const { revisedFrom } = options;
       const dependencies = new Set(request.dependencies ?? []);
+      if (revisedFrom !== undefined) dependencies.add(revisedFrom);
       if (dependencies.size > 0) {
         for (const [key, pending] of [...held]) {
           if (dependencies.has(pending.request.patternId)) {
             held.delete(key);
-            // Not superseded: something depends on it, so it is a part of
-            // this session's output in its own right.
+            // Not superseded: something depends on it or revises it, so it
+            // is a part of this session's output in its own right.
             send(key, pending, false);
           }
         }
@@ -297,19 +328,22 @@ export const createPatternIndexLedger = (
         send(key, displaced, true);
       }
       // An earlier iteration this session sent is already in the history
-      // this one belongs to, whatever that iteration was revised from.
+      // this one belongs to — unless this one says it was revised from
+      // something else.
       const prior = publishedByKey.get(key);
-      held.set(
-        key,
-        prior === undefined || prior === request.patternId
-          ? {
-            request,
-            ...(options.revisedFrom !== undefined
-              ? { revisedFrom: options.revisedFrom }
-              : {}),
-          }
-          : { request: continuing(request, prior) },
-      );
+      const predecessor = prior !== undefined &&
+          prior.patternId !== request.patternId &&
+          (revisedFrom === undefined || revisedFrom === prior.revisedFrom)
+        ? prior.patternId
+        : revisedFrom !== undefined && sentIds.has(revisedFrom)
+        ? revisedFrom
+        : undefined;
+      held.set(key, {
+        request: predecessor === undefined
+          ? request
+          : continuing(request, predecessor),
+        ...(revisedFrom !== undefined ? { revisedFrom } : {}),
+      });
     },
     async flush() {
       // Dependency order, not staging order. Staging order happens to be

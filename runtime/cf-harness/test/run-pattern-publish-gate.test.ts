@@ -573,7 +573,9 @@ describe("run_pattern publish render gate", () => {
         description: "Sortable table",
         hashtags: ["table"],
         dependencies: [],
-        mine,
+        author: { pseudonym: "quiet-otter", tier: 0 },
+        // The index says `mine` to the owner and leaves it out for anyone else.
+        ...(mine ? { mine: true } : {}),
       },
     });
 
