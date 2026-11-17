@@ -83,8 +83,7 @@ own logic, so they need no new CFC machinery. The secret and the per-rule counts
 never leave the function; only released rules and their counts do, into a public
 store.
 
-**Proposed cuts** (each pending approval; this section is updated as each is
-decided):
+**Cuts** (both approved by Alex, 2026-11-16):
 
 1. _Distinct people._ The trusted function counts distinct pseudonyms. Nothing
    attests that two pseudonyms are two people, so one person with many
