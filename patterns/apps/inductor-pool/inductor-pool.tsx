@@ -49,13 +49,19 @@ import {
   DEFAULT_JITTER,
   DEFAULT_THRESHOLD_CENTER,
   MIN_THRESHOLD,
-  mintSecret,
+  mintSeal,
+  type PoolSeal,
   type ReleasedRule,
-  releaseFrom,
+  releaseSealed,
   tallyAll,
 } from "./consensus.ts";
 
-export type { CanonicalRule, Contribution, ReleasedRule } from "./consensus.ts";
+export type {
+  CanonicalRule,
+  Contribution,
+  PoolSeal,
+  ReleasedRule,
+} from "./consensus.ts";
 
 // =============================================================================
 // POLICY
@@ -67,6 +73,17 @@ export type { CanonicalRule, Contribution, ReleasedRule } from "./consensus.ts";
 // `THIS_POLICY.moduleIdentity` is this module's identity, which covers what it
 // imports (`consensus.ts`, the rule grammar), so the rule names this module's
 // `releaseConsensus` however the module is edited.
+//
+// The identity alone would release whatever `releaseConsensus` computed over
+// any input a caller chose: a copy of the contributions with each one doubled
+// under a made-up pseudonym, say. The `inputWitness` requires that every
+// confidential input it read was written by this module's
+// `submitContribution`, so a contribution list any other code wrote, or added
+// to, is refused (docs/specs/cfc-transformed-by-input-witnesses.md). The
+// secret and threshold travel inside the contributions (`PoolSeal`), so they
+// are witnessed too: a public input does not constrain the witness, so a
+// threshold or secret passed beside the contributions would be the caller's
+// to choose.
 export const releaseThresholdConsensus = exchangeRule({
   appliesTo: THIS_POLICY,
   pre: {
@@ -76,6 +93,14 @@ export const releaseThresholdConsensus = exchangeRule({
         kind: "verified",
         moduleIdentity: THIS_POLICY.moduleIdentity,
         symbol: "releaseConsensus",
+      },
+      inputWitness: {
+        type: "https://commonfabric.org/cfc/atom/TransformedBy",
+        identity: {
+          kind: "verified",
+          moduleIdentity: THIS_POLICY.moduleIdentity,
+          symbol: "submitContribution",
+        },
       },
     }],
   },
@@ -96,7 +121,7 @@ export type PrivateRule = Confidential<
 
 /** A contribution, readable only through the pool's policy. */
 export type PrivateContribution = Confidential<
-  { pseudonym: string; rules: PrivateRule[] },
+  { pseudonym: string; rules: PrivateRule[]; seal: PoolSeal },
   readonly [PolicyOf<typeof poolRules>]
 >;
 
@@ -111,31 +136,16 @@ export type StoredContribution = AuthoredByCurrentUser<
   WriteAuthorizedBy<PrivateContribution, typeof submitContribution>
 >;
 
-/**
- * The key of each rule's threshold offset: readable only through the policy,
- * and written only by `submitContribution`, which mints it once. Code that
- * could set it could choose every offset.
- */
-export type PoolSecret = WriteAuthorizedBy<
-  Confidential<string, readonly [PolicyOf<typeof poolRules>]>,
-  typeof submitContribution
->;
-
 // =============================================================================
 // THE RELEASED COMPUTATION
 // =============================================================================
 
-interface ReleaseInput {
-  contributions: Contribution[] | undefined;
-  secret: string | undefined;
-  thresholdCenter: number;
-  jitter: number;
-}
-
 /**
  * The pool's one released function: the rules at least their threshold of
- * distinct pseudonyms hold, with their counts, and nothing else. The secret,
- * the offsets, and every count below threshold stay inside it.
+ * distinct pseudonyms hold, with their counts, and nothing else. It takes the
+ * contributions alone; the secret and threshold are the seal they carry, so
+ * the secret, the offsets, and every count below threshold stay inside it,
+ * and a caller chooses none of them.
  *
  * CFC DEBT, cut 1 (distinct people): this counts distinct pseudonyms. The
  * pool binds each pseudonym to one authenticated principal and each principal
@@ -144,11 +154,9 @@ interface ReleaseInput {
  * attested distinct-principal (personhood) atom on each contribution, so the
  * release rule itself could require N distinct attested people.
  */
-export const releaseConsensus = lift((input: ReleaseInput): ReleasedRule[] =>
-  releaseFrom(input.contributions, input.secret, {
-    thresholdCenter: input.thresholdCenter,
-    jitter: input.jitter,
-  })
+export const releaseConsensus = lift(
+  (contributions: Contribution[] | undefined): ReleasedRule[] =>
+    releaseSealed(contributions),
 );
 
 /**
@@ -201,7 +209,9 @@ function slotOf(
  */
 export interface SubmitState {
   contributions: Writable<StoredContribution[]>;
-  secret: Writable<PoolSecret | undefined>;
+  /** The threshold the first contribution seals; ignored after that. */
+  thresholdCenter: number;
+  jitter: number;
 }
 
 /** A contribution as `submit` takes it. */
@@ -230,7 +240,7 @@ export interface ContributionEvent {
  * pseudonyms.
  */
 export const submitContribution = handler<ContributionEvent, SubmitState>(
-  (event, { contributions, secret }) => {
+  (event, { contributions, thresholdCenter, jitter }) => {
     const actor = currentPrincipal();
     if (actor === undefined) {
       throw new Error("A contribution needs an authenticated contributor.");
@@ -243,13 +253,20 @@ export const submitContribution = handler<ContributionEvent, SubmitState>(
     const mine = slotOf(contributions, actor, pseudonym);
 
     // Randomness is allowed only in a handler, so the first contribution mints
-    // the secret. A concurrent first contribution conflicts on it and, retried,
-    // reads the one that landed.
-    if (!secret.get()) secret.set(mintSecret(Math.random) as PoolSecret);
+    // the secret, and seals the threshold beside it; every later one copies
+    // that seal. A concurrent first contribution conflicts on the list, which
+    // this handler read, and, retried, copies the seal that landed.
+    const seal = contributions.get()[0]?.seal ??
+      mintSeal(Math.random, { thresholdCenter, jitter });
 
     const contribution = {
       pseudonym,
       rules: rules.map((rule) => rule as PrivateRule),
+      seal: {
+        secret: seal.secret,
+        thresholdCenter: seal.thresholdCenter,
+        jitter: seal.jitter,
+      },
     } as StoredContribution;
     // A replacement drops the old entry and appends the new one rather than
     // setting the slot in place: after an in-place set, the slot's
@@ -274,12 +291,6 @@ interface InductorPoolInput {
   jitter: Default<number, typeof DEFAULT_JITTER>;
   /** One entry per contributor, written only by `submit`. */
   contributions: Writable<Default<StoredContribution[], []>>;
-  /**
-   * The threshold offsets' key, minted by the first contribution. It has no
-   * default: a confidential default written beside a public field makes the
-   * piece's start commit refuse (top/3102; README.md, "CFC snags").
-   */
-  secret: Writable<PoolSecret | undefined>;
 }
 
 /**
@@ -315,14 +326,13 @@ export interface InductorPoolOutput {
 }
 
 export default pattern<InductorPoolInput, InductorPoolOutput>(
-  ({ goal, thresholdCenter, jitter, contributions, secret }) => {
-    const consensus = releaseConsensus({
+  ({ goal, thresholdCenter, jitter, contributions }) => {
+    const consensus = releaseConsensus(contributions);
+    const submit = submitContribution({
       contributions,
-      secret,
       thresholdCenter,
       jitter,
     });
-    const submit = submitContribution({ contributions, secret });
 
     const releasedCount = computed(() => consensus.length);
     const title = computed(() => {

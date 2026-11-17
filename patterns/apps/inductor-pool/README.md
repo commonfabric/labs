@@ -24,24 +24,26 @@ this pattern is its implementation.
   holds, and refuses a second pseudonym from a principal who already holds one.
   So no one contributes under someone else's pseudonym, and no principal is
   counted twice. Resubmitting under the same pseudonym replaces the earlier set.
-- **The secret.** The first contribution mints a 128-bit pool secret
-  (`Math.random`, the sandbox's, which a handler may call). Only
-  `submitContribution` may write it. It has no default, because a confidential
-  default beside a public field makes the piece's start commit refuse (top/3102;
-  snag 2 below).
+- **The seal.** The first contribution mints a 128-bit pool secret
+  (`Math.random`, the sandbox's, which a handler may call) and copies the
+  configured `thresholdCenter` and `jitter` beside it. That seal is stored in
+  the contribution, and every later contribution copies the first one's. So the
+  secret and threshold are written only by `submitContribution`, like the rules,
+  and the release reads them from the contributions alone.
 - **Release.** `releaseConsensus`, a `lift` exported from `inductor-pool.tsx`,
-  counts the distinct pseudonyms holding each rule. A rule is counted by its
-  field, label and canonical pattern, not by its 64-bit `key`, whose FNV hash
-  anyone can collide. Each rule's threshold is `thresholdCenter + offset`, where
-  `offset` is in `[-k, +k]`: the first 32 bits of HMAC-SHA-256(secret, rule),
-  reduced to the range. It is deterministic, and it cannot be predicted without
-  the secret. The threshold is never under 2, because a threshold of 1 would
-  publish one person's rule. The function emits only the rules at or above their
-  threshold, with their counts. Of the rest it emits nothing: not the rule, not
-  its count, not that it exists, not how many there are. That output,
-  `consensus`, is the pool's public result, with `releasedCount` and the view
-  derived from it. It is not stored (see "Workaround: the release is not
-  stored").
+  takes the contributions and nothing else. It counts the distinct pseudonyms
+  holding each rule. A rule is counted by its field, label and canonical
+  pattern, not by its 64-bit `key`, whose FNV hash anyone can collide. Each
+  rule's threshold is `thresholdCenter + offset`, from the seal, where `offset`
+  is in `[-k, +k]`: the first 32 bits of HMAC-SHA-256(secret, rule), reduced to
+  the range. It is deterministic, and it cannot be predicted without the secret.
+  The threshold is never under 2, because a threshold of 1 would publish one
+  person's rule. The function emits only the rules at or above their threshold,
+  with their counts. Of the rest it emits nothing: not the rule, not its count,
+  not that it exists, not how many there are. When the contributions' seals
+  disagree, or one has none, it emits nothing at all. That output, `consensus`,
+  is the pool's public result, with `releasedCount` and the view derived from
+  it. It is not stored (see "Workaround: the release is not stored").
 
 The pure logic is in `consensus.ts`. The policy module's identity covers it
 because a module's identity covers the modules it imports.
@@ -81,12 +83,33 @@ pseudonyms contributed, and a pseudonym is not linkable to its owner or to their
 other pseudonyms.
 
 **What is real CFC.** Contributions (each rule too, since each rule object is a
-document of its own), and the secret, are
+document of its own), with the seal inside them, are
 `Confidential<…, [PolicyOf<poolRules>]>`. The only release is
 `releaseThresholdConsensus`: it drops the clause on what the runtime stamped
-`TransformedBy{THIS_POLICY.moduleIdentity, "releaseConsensus"}`. The tests show
-that `tallyEveryRule`, a function of the same module that no rule names, is
-refused by a public store. So is a contribution copied out raw.
+`TransformedBy{THIS_POLICY.moduleIdentity, "releaseConsensus"}` with the input
+witness `TransformedBy{THIS_POLICY.moduleIdentity, "submitContribution"}`: every
+confidential input the release read must have been written by the pool's own
+submit handler (`docs/specs/cfc-transformed-by-input-witnesses.md`, as
+`examples/cfc-exchange-rules/witnessed-chain.tsx` uses it). Without the witness,
+any code could run `releaseConsensus` over contributions of its own making, such
+as the pool's doubled under made-up pseudonyms, and the rule would bless the
+output. `inductor-pool-replay.test.tsx` shows a public store refusing exactly
+that; `inductor-pool-multi-user.test.tsx` shows it taking the honest release. A
+public input does not constrain a witness, so the secret and threshold are not
+inputs of the release: they travel inside the witnessed contributions. The tests
+also show that `tallyEveryRule`, a function of the same module that no rule
+names, is refused by a public store, and so is a contribution copied out raw.
+
+**What the witness does not cover.** It pins one level: whoever wrote the
+contributions was `submitContribution`. It says nothing about who called it.
+`submitContribution` is exported, so code can bind it to a contribution list of
+its own and feed it any event, rules read from someone else's contribution
+included, and the release over that list is witnessed like an honest one. The
+handler still binds one pseudonym to each principal, and the seal it mints still
+floors the threshold at 2, so this takes as many principals as the threshold
+(cut 1). Closing it needs evidence minted where a contribution enters, a
+person's gesture on a trusted surface, which is the proof-of-gesture work the
+witness spec names.
 
 ## Workaround: the release is not stored
 
@@ -142,9 +165,10 @@ release that outlives a change to the inputs, say). Until then nothing does.
    commit** (top/3102; "maxConfidentiality failed at /<public field>"). The
    cause: the start reads the confidential slot as content (`runner.ts`
    `#readStoredArgument`, `#materializeDerivedInternalCells`, and a
-   link-resolution probe). This is why `secret` has no default. The same path
-   may refuse a restart or a pattern update once `/secret` holds a value; that
-   has not been tested.
+   link-resolution probe). The pool's secret once had a field of its own, with
+   no default for this reason; it now lives in the contributions' seal. The same
+   path may refuse a restart or a pattern update once `/contributions` holds a
+   value; that has not been tested.
 3. **`principalOf(list.key(i), "authored-by")` after an in-place
    `list.key(i).set(obj)` reads `undefined`.** With `{ label: "written" }` it
    reads whoever pushed to the list last. So a replacement drops the old entry

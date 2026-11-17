@@ -3,13 +3,16 @@ import { expect } from "@std/expect";
 
 import { checkRule } from "../lofi-inductor/rule-grammar.ts";
 import {
+  agreedSeal,
   type CanonicalRule,
   canonicalSet,
   type Contribution,
   hmacSha256,
   MIN_THRESHOLD,
+  mintSeal,
   mintSecret,
   releaseFrom,
+  releaseSealed,
   ruleIdentity,
   sha256,
   supportOf,
@@ -287,5 +290,45 @@ describe("tallyAll", () => {
     expect(tallyAll([{ pseudonym: "a", rules: [INVOICE] }])).toEqual([
       { ...INVOICE, count: 1 },
     ]);
+  });
+});
+
+describe("sealed release", () => {
+  const SEAL = { secret: SECRET, thresholdCenter: 2, jitter: 0 };
+  const sealed = (prefix: string, n: number, rules: CanonicalRule[]) =>
+    many(prefix, n, rules).map((c) => ({ ...c, seal: { ...SEAL } }));
+
+  it("releases with the threshold the contributions carry", () => {
+    expect(releaseSealed(sealed("p", 2, [INVOICE])).map((r) => r.count))
+      .toEqual([2]);
+    expect(releaseSealed(sealed("p", 1, [INVOICE]))).toEqual([]);
+  });
+
+  it("releases nothing when a contribution has no seal or the seals differ", () => {
+    const honest = sealed("p", 3, [INVOICE]);
+    expect(releaseSealed([...honest, ...many("q", 1, [INVOICE])])).toEqual(
+      [],
+    );
+    const lowered = {
+      ...honest[0],
+      seal: { ...SEAL, thresholdCenter: 1 },
+    };
+    expect(agreedSeal([lowered, ...honest.slice(1)])).toBeUndefined();
+    expect(releaseSealed([lowered, ...honest.slice(1)])).toEqual([]);
+    expect(releaseSealed(many("p", 3, [INVOICE]))).toEqual([]);
+    expect(releaseSealed([])).toEqual([]);
+  });
+
+  it("mints a seal from a valid config and refuses an invalid one", () => {
+    const seal = mintSeal(() => 0, { thresholdCenter: 15, jitter: 5 });
+    expect(seal).toEqual({
+      secret: "0".repeat(32),
+      thresholdCenter: 15,
+      jitter: 5,
+    });
+    expect(() => mintSeal(() => 0, { thresholdCenter: 0, jitter: 5 }))
+      .toThrow();
+    expect(() => mintSeal(() => 0, { thresholdCenter: 15, jitter: -1 }))
+      .toThrow();
   });
 });

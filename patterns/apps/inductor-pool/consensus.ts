@@ -26,6 +26,19 @@ export interface Contribution {
   /** The contributor's one stable pseudonym for this pool's goal. */
   pseudonym: string;
   rules: CanonicalRule[];
+  /**
+   * The pool's secret and threshold, as the first contribution fixed them.
+   * Every contribution carries the same seal, so the release reads its secret
+   * and threshold from the witnessed contributions alone (README.md, "The
+   * seal"). Absent on a bare rule set given to `supportOf` or `releaseFrom`.
+   */
+  seal?: PoolSeal;
+}
+
+/** The secret and threshold the release uses, fixed by the first contribution. */
+export interface PoolSeal extends PoolConfig {
+  /** The key of each rule's threshold offset. */
+  secret: string;
 }
 
 /** A rule enough distinct pseudonyms hold, and how many hold it. */
@@ -368,6 +381,77 @@ export function releaseFrom(
     b.count - a.count ||
     (ruleIdentity(a) < ruleIdentity(b) ? -1 : 1)
   );
+}
+
+/**
+ * The one seal every contribution carries, or undefined when there is none or
+ * two disagree. The submit handler copies the first contribution's seal into
+ * every later one, so honest contributions always agree; a disagreement means
+ * a list the handler did not write, and it releases nothing.
+ */
+export function agreedSeal(
+  contributions: readonly (Contribution | undefined)[] | undefined,
+): PoolSeal | undefined {
+  let agreed: PoolSeal | undefined;
+  for (const contribution of contributions ?? []) {
+    const seal = contribution?.seal;
+    if (
+      typeof seal?.secret !== "string" || seal.secret === "" ||
+      typeof seal.thresholdCenter !== "number" ||
+      typeof seal.jitter !== "number"
+    ) {
+      return undefined;
+    }
+    if (agreed === undefined) {
+      agreed = {
+        secret: seal.secret,
+        thresholdCenter: seal.thresholdCenter,
+        jitter: seal.jitter,
+      };
+    } else if (
+      agreed.secret !== seal.secret ||
+      agreed.thresholdCenter !== seal.thresholdCenter ||
+      agreed.jitter !== seal.jitter
+    ) {
+      return undefined;
+    }
+  }
+  return agreed;
+}
+
+/**
+ * The release over sealed contributions: `releaseFrom` with the secret and
+ * threshold the contributions themselves carry. Nothing else chooses them, so
+ * a caller cannot pick a lower threshold or a secret of its own. With no
+ * agreed seal, nothing is released.
+ */
+export function releaseSealed(
+  contributions: readonly (Contribution | undefined)[] | undefined,
+): ReleasedRule[] {
+  const seal = agreedSeal(contributions);
+  if (seal === undefined) return [];
+  return releaseFrom(contributions, seal.secret, seal);
+}
+
+/**
+ * The seal a pool's first contribution fixes: a fresh secret from `random`,
+ * and the configured threshold, checked. Throws on a configuration the
+ * release could never use, so a bad one refuses the first contribution
+ * rather than sealing a pool that can release nothing.
+ */
+export function mintSeal(
+  random: () => number,
+  config: PoolConfig,
+): PoolSeal {
+  return {
+    secret: mintSecret(random),
+    thresholdCenter: wholeAtLeast(
+      "thresholdCenter",
+      config.thresholdCenter,
+      1,
+    ),
+    jitter: wholeAtLeast("jitter", config.jitter, 0),
+  };
 }
 
 /**
