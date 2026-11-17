@@ -146,6 +146,7 @@ Deno.test("health routes", async (t) => {
             "bytes",
             "entries",
             "evictions",
+            "held",
             "hits",
             "maxEntries",
             "misses",

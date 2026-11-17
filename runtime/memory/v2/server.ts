@@ -1238,13 +1238,16 @@ export type ServerExecutionObserver = {
    * `pushGrowthWakes` (W1 review MINOR-4) — and keep a client's session
    * signed with the service's key. `sessionId` names the changed session
    * where the change is one session's, so a mirror of the demand set can
-   * re-read that session's share alone. */
+   * re-read that session's share alone. `notDemand` says whether the
+   * session declared that it is not demand (`SessionState.notDemand`),
+   * which the host drops as it drops the loop's own. */
   demandChanged?: (
     space: string,
     reason?: DemandChangeReason,
     principal?: string,
     sessionId?: string,
     servingOwn?: true,
+    notDemand?: true,
   ) => void;
 
   /**
@@ -8517,6 +8520,7 @@ export class Server {
         },
         principal: session.principal,
         ...(session.servingOwn === true ? { servingOwn: true as const } : {}),
+        ...(session.notDemand === true ? { notDemand: true as const } : {}),
         attached: session.ownerConnectionId !== null,
         view,
         selectionGeneration: session.viewSelections.get(view.id)?.generation,
@@ -11797,6 +11801,7 @@ export class Server {
         session.principal,
         sessionId,
         session.servingOwn,
+        session.notDemand,
       );
     } catch (error) {
       console.warn(

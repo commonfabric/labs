@@ -237,6 +237,27 @@ describe("ExecutorHost", () => {
       }
     });
 
+    it("leaves a space unactivated when a session signed by another identity declares it is not demand", async () => {
+      // A client that only copies a space's documents declares that no one
+      // waits on what the server would derive for it.
+
+      const { host, server, close } = newHost();
+      try {
+        const client = await openSession(server, owner, {
+          inProcess: false,
+          demand: false,
+        });
+        try {
+          expect(host.occupancy).toBe("vacant");
+          expect(host.spaceServer(space)).toBeUndefined();
+        } finally {
+          await client.close();
+        }
+      } finally {
+        await close();
+      }
+    });
+
     it("keeps reporting the occupancy after its observer throws", async () => {
       const reports: HostOccupancy[] = [];
       const parkedReported = defer<void>();

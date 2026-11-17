@@ -299,6 +299,26 @@ export interface SetPiecePatternOptions {
    * absent, the update detaches the piece.
    */
   origin?: string;
+
+  /**
+   * Told what was deployed once storage accepted it; a caller that records
+   * each deploy (`cf`'s private versions) reads it here.
+   */
+  onDeployed?: (deployed: DeployedProgram) => void;
+}
+
+/** A program a deploy committed, and the pattern id it committed under. */
+export interface DeployedProgram {
+  program: RuntimeProgram;
+
+  /**
+   * Reads the pattern id the deploy committed; `undefined` when it cannot be
+   * read back. Lazy, so a caller that records nothing never pays the read.
+   */
+  patternId: () => Promise<string | undefined>;
+
+  /** The space the deploy wrote to, as a DID, and the piece it wrote. */
+  piece: { space: string; id: string };
 }
 
 export interface GetCellValueOptions {
@@ -2057,6 +2077,12 @@ export async function newPieceWithReceipt(
     slug?: string;
     force?: boolean;
     requestKey?: string;
+
+    /**
+     * Told what was deployed once the piece exists, for a piece made from
+     * local files; never for one from the index or a replay.
+     */
+    onDeployed?: (deployed: DeployedProgram) => void;
   },
   deps: PieceOperationDependencies = {},
 ): Promise<NewPieceReceipt> {
@@ -2143,6 +2169,23 @@ export async function newPieceWithReceipt(
           ),
       ),
     };
+  // Told only once the piece exists. The pattern id is what its pointer
+  // reads back, read only when the caller asks; a read that fails answers no
+  // id rather than failing a creation that succeeded.
+  const deployedFrom = (pieceId: string): void => {
+    if (
+      options?.onDeployed === undefined || indexed === undefined ||
+      "patternId" in entry
+    ) return;
+    options.onDeployed({
+      piece: { space: pieces.getSpace(), id: pieceId },
+      program: indexed.program,
+      patternId: () =>
+        pieces.get(pieceId, false).then(
+          (piece) => piece.getPatternRef(),
+        ).then((ref) => ref?.identity, () => undefined),
+    });
+  };
   const source: ServedPatternSource = indexed === undefined
     ? { pattern: replayed!.pattern }
     : { program: indexed.program };
@@ -2217,6 +2260,7 @@ export async function newPieceWithReceipt(
       throw error;
     });
     noteWroteTo(config.space);
+    deployedFrom(id);
     return { pieceId: id, ...named };
   }
   // Only a request key replays a receipt, and a request key always takes the
@@ -2238,8 +2282,10 @@ export async function newPieceWithReceipt(
   );
   // Here rather than after the registry add below: the piece now exists in
   // the space, and a slug or registry step that throws afterwards leaves a
-  // partial write that the operator is owed the location of.
+  // partial write that the operator is owed the location of. The source it
+  // runs is deployed either way, so it is a version either way.
   noteWroteTo(config.space);
+  deployedFrom(piece.id);
 
   if (options?.slug) {
     try {
@@ -2689,7 +2735,7 @@ export async function setPiecePattern(
   const program = await (deps.getPinnedProgramFromFile ??
     getPinnedProgramFromFile)(pieces, entry);
   if (servesLifecycleVerbs(pieces)) {
-    return await updateOnServer(
+    const served = await updateOnServer(
       config,
       pieces,
       resolvedConfig.piece,
@@ -2699,6 +2745,13 @@ export async function setPiecePattern(
       options,
       deps,
     );
+    const patternId = served.ref.identity;
+    options.onDeployed?.({
+      piece: { space: served.space, id: resolvedConfig.piece },
+      program,
+      patternId: () => Promise.resolve(patternId),
+    });
+    return served;
   }
   const piece = await pieces.get(
     resolvedConfig.piece,
@@ -2714,6 +2767,12 @@ export async function setPiecePattern(
     ...(options.origin === undefined ? {} : { origin: options.origin }),
   });
   noteWroteTo(config.space);
+  const patternId = receipt.ref.identity;
+  options.onDeployed?.({
+    piece: { space: receipt.space, id: resolvedConfig.piece },
+    program,
+    patternId: () => Promise.resolve(patternId),
+  });
   return receipt;
 }
 

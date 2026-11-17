@@ -44,6 +44,8 @@ const ENUMERATED_OPTION_VALUES: Readonly<Record<string, readonly string[]>> = {
   "cfc-flow-labels": ["off", "derive", "observe", "persist"],
   // `cf piece map --format`.
   "format": ["ascii", "dot"],
+  // `cf index sharing --self-built`.
+  "self-built": ["on", "off"],
   // `cf piece survey --side`: which document holds the collection.
   "side": ["input", "result"],
   // `cf inspect entities --kind`, the seven its help enumerates.

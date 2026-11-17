@@ -84,7 +84,11 @@ export interface HarnessModelAttemptDiagnostic {
   retry?: HarnessModelAttemptRetry;
 }
 
-/** Optional host ceilings; bounded turns make exactly one provider attempt. */
+/**
+ * Optional host ceilings. A bounded turn makes one provider attempt, with no
+ * transport retries; a client may issue it once more when the provider refused
+ * the first attempt's access token, which it does before doing any work.
+ */
 export interface HarnessModelLimits {
   /** Final serialized request bytes; this is a byte bound, not a token estimate. */
   maxInputBytes?: number;

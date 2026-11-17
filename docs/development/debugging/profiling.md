@@ -684,8 +684,13 @@ process:
   the server's `totalBudgetBytes` (beside it the total `bytes`, and
   `totalBudgetEvictions`: entries given up to hold that total rather than a
   space's own bounds): per space, `entries` and `bytes` against `budgetBytes`
-  and `maxEntries`, and the lifetime `hits`, `misses`, `evictions`,
-  `patchReplays` and `resumes`. The occupancy figures (`entries`, `bytes`, and
+  and `maxEntries`, `held`, and the lifetime `hits`, `misses`, `evictions`,
+  `patchReplays` and `resumes`. `held` counts the decoded revisions the engine
+  knows a reader may still hold, cached or not (`Engine.heldDocuments`): a
+  revision decoded again while one is held is answered with the held copy, so
+  sessions watching the same documents hold one copy of each between them.
+  A collected copy leaves `held` shortly after the collection. The occupancy
+  figures (`entries`, `bytes`, `held`, and
   which spaces appear at all) are a snapshot of the moment — an exception to
   the paragraph below, as `commitRates` is; the five counters accumulate. `hits` and `misses`
   count reads of a document and nothing else, and each read that resolved to a

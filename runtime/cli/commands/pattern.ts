@@ -19,7 +19,31 @@ import {
 } from "@commonfabric/pattern-index/store";
 import { mineLines, mineRows } from "../lib/pattern-mine.ts";
 import {
+  entryHistory,
+  historyLines,
+  lineageLines,
+  PatternHistoryError,
+  rollbackEntry,
+  rollbackLines,
+} from "../lib/pattern-history.ts";
+import {
+  entrySlot,
+  lineageForEntry,
+  type SlotSources,
+} from "../lib/pattern-versions.ts";
+import {
+  chooseProfile,
+  NamingError,
+  namingWarning,
+  profileProof,
+} from "../lib/pattern-named.ts";
+import { type ListedProfile, listProfiles } from "../lib/profile.ts";
+import type { DIDKey } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import type { PatternIndexClient } from "@commonfabric/pattern-index/client";
+import {
   publishPatternFromDisk,
+  type PublishReport,
   publishReportLines,
 } from "../lib/pattern-publish.ts";
 import { loadPieces } from "../lib/piece.ts";
@@ -36,7 +60,7 @@ import {
   targetOptions,
 } from "./piece.ts";
 
-/** What `cf pattern publish` takes beyond the target options. */
+/** What `cf pattern share` takes beyond the target options. */
 interface PublishCLIOptions extends PieceCLIOptions {
   root?: string;
   test?: string[];
@@ -115,14 +139,32 @@ const toolshedGenerator = (apiUrl: string): ObjectGenerator => {
     )).object;
 };
 
-async function publish(
+/** What `cf pattern publish` takes beyond what `share` does. */
+interface NamedPublishCLIOptions extends PublishCLIOptions {
+  profile?: string;
+
+  /** The profile name the person agreed to show, which must match. */
+  as?: string;
+}
+
+/**
+ * Checks and shares `entry`, printing the report; with `naming`, then names
+ * the lineage the share was kept in, once the report is out, so a naming
+ * that fails never hides what the share did.
+ */
+async function share(
   options: PublishCLIOptions,
   entry: string,
+  naming?: (
+    client: PatternIndexClient,
+    report: Extract<PublishReport, { outcome: "shared" }>,
+  ) => Promise<string>,
 ): Promise<void> {
   const config = parseSpaceOptions(options);
   const baseUrl = resolvePatternIndexUrl(options.patternIndexUrl);
   const signer = await loadIdentity(config.identity);
-  const client = await openPatternIndexClient({ baseUrl, signer });
+  const store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
+  const client = await openPatternIndexClient({ baseUrl, signer, store });
   const pieces = await loadPieces(config);
   try {
     const runtime = pieces.runtime;
@@ -150,6 +192,7 @@ async function publish(
           ? {}
           : { keywords: listFlag(options.keywords) }),
         allowDirty: !!options.allowDirty,
+        slot: await entrySlot(absPath(entry), slotSources(store)),
         skipLocalCheck: !!options.skipLocalCheck,
         ...(options.remixedFrom === undefined
           ? {}
@@ -168,17 +211,246 @@ async function publish(
         uncommitted: gitUncommitted,
         readTextFile: (path) => Deno.readTextFile(path),
         writeTextFile: (path, contents) => Deno.writeTextFile(path, contents),
-        store: new PatternIndexStore(patternIndexStoreDir(baseUrl)),
+        store,
       },
     );
-    render(
-      options.json ? report : publishReportLines(report).join("\n"),
-      { json: options.json },
-    );
-    if (report.outcome === "blocked") Deno.exitCode = 1;
+    if (naming === undefined || report.outcome !== "shared") {
+      render(
+        options.json ? report : publishReportLines(report).join("\n"),
+        { json: options.json },
+      );
+      if (report.outcome === "blocked") Deno.exitCode = 1;
+      return;
+    }
+    if (!options.json) render(publishReportLines(report).join("\n"));
+    let named: string;
+    try {
+      named = await naming(client, report);
+    } catch (error) {
+      named = `Shared, but not published under your name: ${
+        describeFailure(error)
+      }`;
+      Deno.exitCode = 1;
+    }
+    render(options.json ? { ...report, named } : named, {
+      json: options.json,
+    });
   } finally {
     await pieces.dispose();
   }
+}
+
+/**
+ * `cf pattern publish`: shares `entry` as `share` does, then names the
+ * person as its author under one of their profiles. It names nothing unless
+ * `--as` repeats the profile's name, so whoever runs it has had to read the
+ * name it shows, and an agent has to have asked the person. Everything that
+ * can refuse the naming is checked before anything is shared.
+ */
+async function publishNamed(
+  options: NamedPublishCLIOptions,
+  entry: string,
+): Promise<void> {
+  const config = parseSpaceOptions(options);
+  const identity = await loadIdentity(config.identity);
+  const refuse = (message: string) => {
+    console.error(message);
+    Deno.exitCode = 1;
+  };
+  let proof: string[];
+  let chosen: ListedProfile;
+  try {
+    const profiles = await listProfiles({ ...config, space: identity.did() });
+    chosen = chooseProfile(profiles, options.profile);
+    if (options.as !== chosen.name) {
+      refuse(
+        `${
+          namingWarning(chosen.name)
+        } Nothing was published. Ask the person whether to show it; if they agree, run this again with --as ${
+          JSON.stringify(chosen.name)
+        }.`,
+      );
+      return;
+    }
+    proof = await profileProof(
+      {
+        space: chosen.space,
+        piece: chosen.id,
+        displayName: chosen.name,
+        delegations: await recordedDelegations(config, chosen.space),
+      },
+      identity.did(),
+    );
+  } catch (error) {
+    if (!(error instanceof NamingError)) throw error;
+    refuse(`${error.message} Nothing was published.`);
+    return;
+  }
+  const sources = slotSources(
+    new PatternIndexStore(
+      patternIndexStoreDir(resolvePatternIndexUrl(options.patternIndexUrl)),
+    ),
+  );
+  await share(options, entry, async (client, report) => {
+    // The lineage the share landed in, which the index may have found by
+    // an earlier publication rather than by this file's slot.
+    const lineageId = report.lineageId ??
+      (await lineageForEntry(client, absPath(entry), sources))?.lineageId;
+    if (lineageId === undefined) {
+      throw new Error(`the index keeps no versions of ${entry}`);
+    }
+    await client.publishLineage({
+      lineageId,
+      profile: { space: chosen.space, piece: chosen.id },
+      displayName: chosen.name,
+      profileProof: proof,
+    });
+    return `Published under "${chosen.name}"; cf pattern unpublish ${entry} stops showing it.`;
+  });
+}
+
+/** Where a lineage slot's inputs come from: `store`'s key, and git. */
+const slotSources = (store: PatternIndexStore): SlotSources => ({
+  pathKey: () => store.slotKey(),
+});
+
+/** The delegations Home records over the profile space `space`. */
+async function recordedDelegations(
+  config: ReturnType<typeof parseSpaceOptions>,
+  space: string,
+): Promise<Uint8Array[]> {
+  const pieces = await loadPieces(config);
+  try {
+    return await pieces.runtime.recordedDelegations(space as DIDKey);
+  } finally {
+    await pieces.dispose();
+  }
+}
+
+/** Options every owner-only `cf pattern` command takes. */
+interface IndexCLIOptions {
+  identity?: string;
+  patternIndexUrl?: string;
+  json?: boolean;
+}
+
+/**
+ * The client for the index `options` names, signing as its identity, and
+ * where that index's lineage slots get their inputs.
+ */
+async function indexFor(options: IndexCLIOptions) {
+  const signer = await loadIdentity(requireIdentityPath(options));
+  const baseUrl = resolvePatternIndexUrl(options.patternIndexUrl);
+  const store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
+  return {
+    client: await openPatternIndexClient({ baseUrl, signer, store }),
+    sources: slotSources(store),
+  };
+}
+
+/**
+ * Runs an owner-only command, turning a refusal of the identity into what
+ * to do about it and a history refusal into a message with exit status 1.
+ */
+async function ownerOnly(run: () => Promise<void>): Promise<void> {
+  try {
+    await run().catch(rethrowAsNotMember);
+  } catch (error) {
+    if (!(error instanceof PatternHistoryError)) throw error;
+    console.error(error.message);
+    Deno.exitCode = 1;
+  }
+}
+
+async function history(
+  options: IndexCLIOptions,
+  entry: string | undefined,
+): Promise<void> {
+  await ownerOnly(async () => {
+    const { client, sources } = await indexFor(options);
+    if (entry === undefined) {
+      const { lineages } = await client.listLineages();
+      render(options.json ? lineages : lineageLines(lineages).join("\n"), {
+        json: options.json,
+      });
+      return;
+    }
+    const { rows } = await entryHistory(client, absPath(entry), sources);
+    render(options.json ? rows : historyLines(entry, rows).join("\n"), {
+      json: options.json,
+    });
+  });
+}
+
+async function rollback(
+  options: IndexCLIOptions & { force?: boolean },
+  entry: string,
+  version: string,
+): Promise<void> {
+  await ownerOnly(async () => {
+    const { client, sources } = await indexFor(options);
+    const report = await rollbackEntry(
+      absPath(entry),
+      version,
+      { force: !!options.force },
+      {
+        client,
+        sources,
+        readTextFile: (path) => Deno.readTextFile(path),
+        writeTextFile: (path, contents) => Deno.writeTextFile(path, contents),
+      },
+    );
+    render(
+      options.json ? report : rollbackLines(entry, report).join("\n"),
+      { json: options.json },
+    );
+  });
+}
+
+async function unshare(
+  options: IndexCLIOptions,
+  entry: string,
+): Promise<void> {
+  await ownerOnly(async () => {
+    const { client, sources } = await indexFor(options);
+    const lineage = await lineageForEntry(client, absPath(entry), sources);
+    if (lineage === undefined) {
+      throw new PatternHistoryError(`No versions of ${entry} are kept.`);
+    }
+    const result = await client.unshareLineage({
+      lineageId: lineage.lineageId,
+    });
+    render(
+      options.json
+        ? result
+        : `${entry} is no longer listed or shared on its own. Anyone holding the id of a version already shared can still open it; cf pattern share shares it again.`,
+      { json: options.json },
+    );
+  });
+}
+
+async function unpublish(
+  options: IndexCLIOptions,
+  entry: string,
+): Promise<void> {
+  await ownerOnly(async () => {
+    const { client, sources } = await indexFor(options);
+    const lineage = await lineageForEntry(client, absPath(entry), sources);
+    if (lineage === undefined) {
+      throw new PatternHistoryError(`No versions of ${entry} are kept.`);
+    }
+    const result = await client.unpublishLineage({
+      lineageId: lineage.lineageId,
+    });
+    render(
+      options.json
+        ? result
+        : result.changed
+        ? `${entry} is no longer shown under your name; it stays shared as ${lineage.pseudonym}. Anyone who already saw both knows they are the same.`
+        : `${entry} was not published under your name.`,
+      { json: options.json },
+    );
+  });
 }
 
 async function mine(
@@ -197,93 +469,197 @@ async function mine(
   });
 }
 
+/** The options `share` and `publish` both take: what to share, and how. */
+// deno-lint-ignore no-explicit-any
+const shareOptions = (cmd: Command<any>) =>
+  cmd
+    .arguments("<entry:string>")
+    .option(
+      "--root <path:string>",
+      "The program root its files are named against; as for cf piece new.",
+    )
+    .option(
+      "--test <path:string>",
+      "A test entry packaged with it, as for cf piece new. Repeatable; " +
+        "pass the same ones the piece was deployed with, so the id matches.",
+      { collect: true },
+    )
+    .option(
+      "--datafile <path:string>",
+      "A data file attached to it, as for cf piece new. Repeatable.",
+      { collect: true },
+    )
+    .option(
+      "--main-export <name:string>",
+      "The export it runs, as for cf piece new.",
+    )
+    .option(
+      "--description <text:string>",
+      "What the pattern does, in place of its doc comment's first paragraph.",
+    )
+    .option(
+      "--hashtags <tags:string>",
+      "Comma-separated hashtags, in place of its doc comment's @hashtags.",
+    )
+    .option(
+      "--keywords <words:string>",
+      "Comma-separated keywords, in place of its doc comment's @keywords.",
+    )
+    .option(
+      "--allow-dirty",
+      "Apply a privacy rewrite over files with uncommitted edits; your source as it was is still kept as a version that cf pattern rollback restores.",
+    )
+    .option(
+      "--skip-local-check",
+      "Skip the local privacy check; the index still checks before listing.",
+    )
+    .option(
+      "--remixed-from <patternId:string>",
+      "The published pattern this one was built from, when cf has no record of it.",
+    )
+    .env(
+      "CF_PATTERN_INDEX_URL=<url:string>",
+      "Base URL of the pattern index.",
+      { prefix: "CF_" },
+    )
+    .option(
+      "--pattern-index-url <url:string>",
+      "Base URL of the pattern index; the deployment's by default.",
+    )
+    .option("--json", "Print the report as JSON, for an agent to read.");
+
 export const pattern = new Command()
   .name("pattern")
   .description(
-    "Publish patterns to the pattern index, and see where yours stand.",
+    "Keep, share and publish patterns in the pattern index: each deploy " +
+      "of your own pattern is kept as a private version, with history and " +
+      "rollback.",
   )
   .default("help")
+  /* pattern share */
+  .command(
+    "share",
+    targetOptions(
+      shareOptions(new Command())
+        .description(
+          "Share a pattern anonymously: others who share see it under a " +
+            "pseudonym of this pattern alone, never linked to your other " +
+            "patterns or your name. Join first with cf index join. It " +
+            "checks the pattern for personal details with the index's own " +
+            "privacy question, and when it finds some, rewrites it into a " +
+            "general version (specific values lifted into arguments). The " +
+            "rewrite goes over your files when git can take it back, or " +
+            "after your source is kept as a private version that " +
+            "cf pattern rollback restores. The index checks it again " +
+            "before others can see it.",
+        )
+        .example(
+          cliText("cf pattern share ./bins.tsx"),
+          "Check ./bins.tsx and share it anonymously.",
+        ),
+      { global: false },
+    ).action((options, entry) => share(options, entry)),
+  )
   /* pattern publish */
   .command(
     "publish",
     targetOptions(
-      new Command()
+      shareOptions(new Command())
         .description(
-          "Publish a pattern to the pattern index and ask for it to be " +
-            "listed; join first with cf index join. It checks the pattern " +
-            "for personal details with the index's own privacy question, " +
-            "and when it finds some, rewrites it into a general version " +
-            "(specific values lifted into arguments), writing the rewrite " +
-            "over your files only when they are committed, so git diff " +
-            "shows it. Exits 1, publishing nothing, when it cannot.",
-        )
-        .arguments("<entry:string>")
-        .option(
-          "--root <path:string>",
-          "The program root its files are named against; as for cf piece new.",
+          "Publish a pattern under your name: shares it as cf pattern share " +
+            "does, then shows one of your profiles as its author to every " +
+            "member. Only this pattern is named; your other patterns stay " +
+            "anonymous and unlinked. Says what it reveals, and names nothing " +
+            "unless --as repeats the name it shows.",
         )
         .option(
-          "--test <path:string>",
-          "A test entry packaged with it, as for cf piece new. Repeatable; " +
-            "pass the same ones the piece was deployed with, so the id matches.",
-          { collect: true },
+          "--profile <space:string>",
+          "The profile to publish under, by its space; the one #profile answers with by default.",
         )
         .option(
-          "--datafile <path:string>",
-          "A data file attached to it, as for cf piece new. Repeatable.",
-          { collect: true },
+          "--as <name:string>",
+          "The profile's name, repeated to confirm the person agreed to show it; nothing is named without it.",
         )
-        .option(
-          "--main-export <name:string>",
-          "The export it runs, as for cf piece new.",
-        )
-        .option(
-          "--description <text:string>",
-          "What the pattern does, in place of its doc comment's first paragraph.",
-        )
-        .option(
-          "--hashtags <tags:string>",
-          "Comma-separated hashtags, in place of its doc comment's @hashtags.",
-        )
-        .option(
-          "--keywords <words:string>",
-          "Comma-separated keywords, in place of its doc comment's @keywords.",
-        )
-        .option(
-          "--allow-dirty",
-          "Apply a privacy rewrite even over files with uncommitted edits.",
-        )
-        .option(
-          "--skip-local-check",
-          "Skip the local privacy check; the index still checks before listing.",
-        )
-        .option(
-          "--remixed-from <patternId:string>",
-          "The published pattern this one was built from, when cf has no record of it.",
-        )
-        .env(
-          "CF_PATTERN_INDEX_URL=<url:string>",
-          "Base URL of the pattern index.",
-          { prefix: "CF_" },
-        )
-        .option(
-          "--pattern-index-url <url:string>",
-          "Base URL of the pattern index; the deployment's by default.",
-        )
-        .option("--json", "Print the report as JSON, for an agent to read.")
         .example(
-          cliText("cf pattern publish ./bins.tsx"),
-          "Check, publish and request a listing for ./bins.tsx.",
+          cliText('cf pattern publish ./bins.tsx --as "Sam Lee"'),
+          "Share ./bins.tsx and name you as its author.",
         ),
       { global: false },
-    ).action(publish),
+    ).action(publishNamed),
+  )
+  /* pattern history */
+  .command(
+    "history",
+    indexAccessOptions(
+      new Command()
+        .description(
+          "The versions the index keeps of a pattern you deploy: one for " +
+            "each cf piece new or cf piece setsrc of it, private unless " +
+            "shared. Without an entry file, lists every pattern of yours " +
+            "the index keeps. Only you can read them.",
+        )
+        .arguments("[entry:string]")
+        .example(
+          cliText("cf pattern history ./bins.tsx"),
+          "List the kept versions of ./bins.tsx, newest first.",
+        ),
+    ).action(history),
+  )
+  /* pattern rollback */
+  .command(
+    "rollback",
+    indexAccessOptions(
+      new Command()
+        .description(
+          "Restore an earlier version of a pattern: the index keeps it as " +
+            "the newest version, and its files are written back over the " +
+            "entry's. Refuses when the files have edits no version keeps, " +
+            "unless --force. Deploy it afterwards to update running pieces.",
+        )
+        .arguments("<entry:string> <version:string>")
+        .option(
+          "--force",
+          "Write over edits that no version keeps; they are lost.",
+        )
+        .example(
+          cliText("cf pattern rollback ./bins.tsx 3"),
+          "Restore version 3 of ./bins.tsx.",
+        ),
+    ).action(rollback),
+  )
+  /* pattern unshare */
+  .command(
+    "unshare",
+    indexAccessOptions(
+      new Command()
+        .description(
+          "Stop sharing a pattern: it leaves others' searches and listings, " +
+            "and no later version is shared until cf pattern share. A version " +
+            "already shared stays readable by its id, so imports of it keep " +
+            "working.",
+        )
+        .arguments("<entry:string>"),
+    ).action(unshare),
+  )
+  /* pattern unpublish */
+  .command(
+    "unpublish",
+    indexAccessOptions(
+      new Command()
+        .description(
+          "Stop showing your name on a pattern you published. It stays " +
+            "shared under its pseudonym; anyone who saw both already knows " +
+            "they are the same.",
+        )
+        .arguments("<entry:string>"),
+    ).action(unpublish),
   )
   /* pattern mine */
   .command(
     "mine",
     indexAccessOptions(
       new Command().description(
-        "Your published patterns, one per lineage: whether each is listed, " +
+        "Your shared patterns, one per lineage: whether each is listed, " +
           "held (with the findings to fix) or still being checked, its " +
           "bucket and use counts, and what moves it on.",
       ),

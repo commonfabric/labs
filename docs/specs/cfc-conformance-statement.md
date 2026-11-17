@@ -425,32 +425,23 @@ dials.
   runtime write of label-derived data arriving unlabeled, is `SC-55`'s
   accepted residual, and for the others a declaration that reaches such a
   document stays a read floor and stops being a write ceiling, as the same
-  section states. A served run's cross-holder misfit, below, is measured on
-  those documents all the same.
-- Under strict, a served run, any wave run context
-  (`isServedRunUnderHolderRule` in `cfc/prepare.ts`), admits a
-  clause it read from a store whose holders don't include every holder of the
-  target only by the target's residency. This implements §8.12.5.1 as proposed
-  in [specs#95](https://github.com/commonfabric/specs/pull/95), which the pin
-  does not hold, ahead of its ruling and under a `SPEC-PENDING` marker naming
-  it; `check-cfc-correspondence` exempts the citation. It refuses writes the
-  pinned §8.12.5 admits, by an authored, upgraded or minted declaration or by
-  the runtime-owned routes above, and persists nothing new: an over-taint
-  against the pin. Against the proposal it differs two ways. Residency's
-  owner case admits a cross-holder `PersonalSpace(P)` clause
-  into a store bound to `P`, which the proposal leaves out pending specs#68
-  and specs#71: an under-taint against the proposal's text, whose holders,
-  `P` alone, are inside that clause's audience. And it inherits the
-  reference-write gap below: a served run that carries a cross-holder clause
-  into a store by reference, rather than by value, is not refused, although
-  the clause is in the slot stamp it persists. A read declared onward, whose
-  membership lands as a stamp the measurement does not reach, is the same,
-  and so is a `data:` link of a media type other than the Fabric codec's,
-  which is written as a reference whose content rides in its URI (the codec's
-  own `data:` links and native snapshots are expanded and written as values,
-  `data-updating.ts`). A SQLite write commits beside a value write of its
-  database document's revision, which writer-fit measures, so a served run's
-  cross-holder clause in it is refused there, as any other write's is.
+  section states.
+- A served run is measured as any run is: its whole join fits a target by
+  §8.12.4 and the options of §8.12.5, whichever store a clause was read from.
+  A serving host reads what its acting principal's own runtime could not
+  (`docs/specs/server-side-execution/protocol.md` §2b, "read a foreign doc"),
+  so a served run can carry a clause its acting principal does not satisfy
+  into a store that principal reads, where it lands labeled. Two boundaries
+  then let it out, and both are open: an under-taint each. The memory server
+  delivers a document to every reader of its space whatever its label admits
+  (Topics top/3173), and a served effect's request is checked against its
+  sink only where the host declares a sink ceiling (Topics top/3174;
+  `served-effect-cross-holder.test.ts` pins a served fetch over another
+  space's private URL going out). An event's payload is delivered unlabeled,
+  so a send drops its sender's clauses (Topics top/3175). The holder rule of
+  [specs#95](https://github.com/commonfabric/specs/pull/95)'s first proposal,
+  which refused such writes by where a clause was read, ran here ahead of its
+  ruling and was removed when the proposal was withdrawn.
 - Writer-fit does not measure a reference or structure write. §8.2.6
   requires "writer-fit for the reference and structure actually persisted,
   including replica audiences", and §8.12.8 that writer-fit and upgrade
@@ -462,9 +453,7 @@ dials.
   such a write persists is the reference's own label, §3 above: the link
   schema's declarations, the handle's carried restriction, and the creating
   attempt's flow join as a pointer-class stamp at the slot. None of it is
-  measured against the target's ceiling: an under-taint. A served run's
-  cross-holder clause (§8.12.5.1, above) is in that stamp, so a measurement
-  of reference writes would bring those writes under the holder rule.
+  measured against the target's ceiling: an under-taint.
 
 ## 6. Idempotent persistence (§4.6.4)
 

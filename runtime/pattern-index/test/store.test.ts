@@ -79,6 +79,72 @@ describe("store", () => {
       );
     });
 
+    it("answers one 32-byte slot key however often or concurrently it is asked", async () => {
+      const store = new PatternIndexStore(join(dir, "slots"));
+
+      const [a, b] = await Promise.all([store.slotKey(), store.slotKey()]);
+      const again = await store.slotKey();
+
+      expect(a.length).toBe(32);
+      expect(b).toEqual(a);
+      expect(again).toEqual(a);
+      expect([...Deno.readDirSync(join(dir, "slots"))].map((e) => e.name))
+        .toEqual(["slot.key"]);
+    });
+
+    it("throws for a slot key file that is not 32 bytes", async () => {
+      const store = new PatternIndexStore(join(dir, "short"));
+      await store.slotKey();
+      await Deno.writeFile(join(dir, "short", "slot.key"), new Uint8Array(3));
+
+      await expect(store.slotKey()).rejects.toThrow("is not a slot key");
+    });
+
+    it("remembers that it told the person this machine has not joined, and that the index keeps versions", async () => {
+      const store = new PatternIndexStore(join(dir, "markers"));
+
+      expect(await store.notedNotJoined()).toBe(false);
+      expect(await store.keepsVersions()).toBe(false);
+      await store.recordNotedNotJoined();
+      await store.recordKeepsVersions();
+
+      expect(await store.notedNotJoined()).toBe(true);
+      expect(await store.keepsVersions()).toBe(true);
+    });
+
+    it("throws, making no key, when the slot key's place holds a link to nothing", async () => {
+      const store = new PatternIndexStore(join(dir, "dangling"));
+      await store.slotKey();
+      await Deno.remove(join(dir, "dangling", "slot.key"));
+      await Deno.symlink(
+        join(dir, "nowhere"),
+        join(dir, "dangling", "slot.key"),
+      );
+
+      await expect(store.slotKey()).rejects.toThrow(Deno.errors.AlreadyExists);
+      expect([...Deno.readDirSync(join(dir, "dangling"))].map((e) => e.name))
+        .toEqual(["slot.key"]);
+    });
+
+    it("throws, rather than answering no, when its markers or slot key cannot be read", async () => {
+      const store = new PatternIndexStore(join(dir, "locked"));
+      await store.slotKey();
+      await Deno.chmod(join(dir, "locked"), 0o000);
+      try {
+        await expect(store.notedNotJoined()).rejects.toThrow(
+          Deno.errors.PermissionDenied,
+        );
+        await expect(store.keepsVersions()).rejects.toThrow(
+          Deno.errors.PermissionDenied,
+        );
+        await expect(store.slotKey()).rejects.toThrow(
+          Deno.errors.PermissionDenied,
+        );
+      } finally {
+        await Deno.chmod(join(dir, "locked"), 0o700);
+      }
+    });
+
     it("returns the root key it created, and none before", async () => {
       const store = new PatternIndexStore(join(dir, "store"));
       expect(await store.rootKey()).toBeUndefined();
