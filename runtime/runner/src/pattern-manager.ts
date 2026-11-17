@@ -980,9 +980,8 @@ export class PatternManager {
 
   /**
    * The closures, by `stringTupleKey([space, identity])`, whose stamp repair
-   * this session made and that did not end clean or repaired: a refusal
-   * stands until the records change, and a commit this session may not make
-   * stays refused, so neither is tried again here.
+   * this session refused: a refusal stands until the records change, so it is
+   * not tried again here.
    */
   #unrepairedStampedClosures = new Set<string>();
 
@@ -2826,12 +2825,11 @@ export class PatternManager {
             actionId: `compile-cache/stamp-repair/${identity}`,
             kind: "bookkeeping",
             directCommit: true,
-            ...this.#runtime.delegationForWriteTo(space, undefined),
           }),
       );
-      if (outcome === "refused" || outcome === "conflicted") {
-        this.#unrepairedStampedClosures.add(key);
-      }
+      // A refusal stands until the records change; a conflict is a race
+      // the next load may win, so it is tried again.
+      if (outcome === "refused") this.#unrepairedStampedClosures.add(key);
       if (outcome !== "clean" && outcome !== "unverified") {
         logger.debug("compile-cache-stamp-repair", () => [
           `entry=${identity}`,

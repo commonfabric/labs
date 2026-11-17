@@ -3183,9 +3183,8 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * `replacement` is absent, inside the privileged system-write scope.
    * Requires the transaction's current implementation identity to be the
    * `compile-cache-repair` builtin, and the key to be a compile-cache record's.
-   * The
-   * caller, `repairCompileCacheStamps()`, computes the replacement from the
-   * verified closure; this method trusts it.
+   * The caller, `repairCompileCacheStamps()`, computes the replacement from
+   * the verified closure; this method trusts it.
    *
    * @throws When the identity is not the repair's, or the key not a record's.
    */

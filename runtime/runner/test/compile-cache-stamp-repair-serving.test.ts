@@ -35,11 +35,7 @@ import {
   systemPatternSource,
 } from "../src/index.ts";
 import {
-  compileCacheClosureHoldsStamp,
   compiledDocKey,
-  loadCompiledClosure,
-  loadSourceClosure,
-  sourceClosureNeedsParser,
   sourceDocKey,
 } from "../src/compilation-cache/cell-cache.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
@@ -62,14 +58,6 @@ const serviceSigner = await Identity.fromPassphrase(
   "stamp repair serving service",
 );
 const aliceSigner = await Identity.fromPassphrase("stamp repair serving alice");
-
-/** Spaces whose records the serving runtime has not read, for cold timings. */
-const COLD_SPACES = await Promise.all(
-  [0, 1, 2, 3, 4, 5].map(async (n) =>
-    (await Identity.fromPassphrase(`stamp repair serving cold ${n}`))
-      .did() as MemorySpace
-  ),
-);
 
 /** A label the programs below do not declare. */
 const UNDECLARED_ATOM = aliceSigner.did();
@@ -194,65 +182,6 @@ type Stored = FabricPlainObject & {
 
 /** One log line of the stamp repair's, its lazy messages evaluated. */
 type RepairLog = { level: string; key: string; messages: unknown[] };
-
-/** Whether `CF_STAMP_REPAIR_TIMING` asks for the trigger's cost to be shown. */
-const showTiming = Deno.env.get("CF_STAMP_REPAIR_TIMING") !== undefined;
-
-/**
- * Milliseconds on the real clock. The test preload fakes `performance.now()`,
- * `Date.now()` and what reads them, and a mark reads the clock beneath.
- */
-const realNow = (): number => new PerformanceMark("now").startTime;
-
-/** The median of `samples`, in milliseconds. */
-const median = (samples: readonly number[]): number => {
-  const sorted = [...samples].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)];
-};
-
-/** What {@link timeTriggerParts} measured. */
-type TriggerParts = {
-  load: number;
-  check: number;
-  needsParser: boolean;
-  stamped: boolean;
-};
-
-/**
- * Times the two parts of the trigger on the program's closure in `space`, in
- * one transaction as `prepareSourceClosureVerification()` runs them: the
- * load it makes ahead of the stamp check, and the check.
- */
-const timeTriggerParts = async (
-  runtime: Runtime,
-  space: MemorySpace,
-): Promise<TriggerParts> => {
-  const runtimeVersion = await runtime.patternManager
-    .compileCacheRuntimeVersion({ patternCoverage: false });
-  const tx = runtime.edit();
-  try {
-    let start = realNow();
-    const closure = await loadSourceClosure(runtime, space, ENTRY_IDENTITY, tx);
-    const needsParser = sourceClosureNeedsParser(runtime, space, closure!);
-    if (needsParser) {
-      await loadCompiledClosure(runtime, space, ENTRY_IDENTITY, {
-        runtimeVersion: runtimeVersion!,
-      }, tx);
-    }
-    const load = realNow() - start;
-    start = realNow();
-    const stamped = await compileCacheClosureHoldsStamp(
-      runtime,
-      space,
-      ENTRY_IDENTITY,
-      runtimeVersion,
-      tx,
-    );
-    return { load, check: realNow() - start, needsParser, stamped };
-  } finally {
-    tx.abort();
-  }
-};
 
 describe("compile-cache-stamp-repair-serving", () => {
   let server: MemoryV2Server.Server;
@@ -567,61 +496,13 @@ describe("compile-cache-stamp-repair-serving", () => {
       expect(heads[0]).toBeGreaterThan(0);
       const batchesBefore = batches.entries.length;
 
-      // The cost is measured, not asserted: the trigger warm on the home
-      // closure, and cold on closures in spaces the serving runtime has not
-      // read, each beside its two parts.
-      const coldTriggerSpaces = COLD_SPACES.slice(0, COLD_SPACES.length / 2);
-      const coldPartSpaces = COLD_SPACES.slice(COLD_SPACES.length / 2);
-      for (const space of COLD_SPACES) await compileOnClient(space);
-      const timing = await host.runLifecycleVerb(homeSpace, {
-        name: "measure",
-        run: async (runtime) => {
-          const trigger = async (space: MemorySpace) => {
-            const start = realNow();
-            await runtime.patternManager.prepareSourceClosureVerification(
-              space,
-              [ENTRY_IDENTITY],
-            );
-            return realNow() - start;
-          };
-          const samples = {
-            warmTrigger: [] as number[],
-            warmParts: [] as TriggerParts[],
-            coldTrigger: [] as number[],
-            coldParts: [] as TriggerParts[],
-          };
-          for (let i = 0; i < 25; i++) {
-            samples.warmTrigger.push(await trigger(homeSpace));
-            samples.warmParts.push(await timeTriggerParts(runtime, homeSpace));
-          }
-          for (const space of coldTriggerSpaces) {
-            samples.coldTrigger.push(await trigger(space));
-          }
-          for (const space of coldPartSpaces) {
-            samples.coldParts.push(await timeTriggerParts(runtime, space));
-          }
-          return samples;
-        },
+      await host.runLifecycleVerb(homeSpace, {
+        name: "trigger",
+        run: (runtime) =>
+          runtime.patternManager.prepareSourceClosureVerification(homeSpace, [
+            ENTRY_IDENTITY,
+          ]),
       });
-      expect(
-        [...timing.warmParts, ...timing.coldParts].map((parts) =>
-          parts.stamped
-        ),
-      ).not.toContain(true);
-      if (showTiming) {
-        console.log(
-          "trigger on a clean closure (ms):",
-          JSON.stringify({
-            warmTriggerMedian: median(timing.warmTrigger),
-            warmLoadMedian: median(timing.warmParts.map((p) => p.load)),
-            warmCheckMedian: median(timing.warmParts.map((p) => p.check)),
-            coldTrigger: timing.coldTrigger,
-            coldLoad: timing.coldParts.map((p) => p.load),
-            coldCheck: timing.coldParts.map((p) => p.check),
-            needsParser: timing.coldParts.map((p) => p.needsParser),
-          }),
-        );
-      }
 
       expect(
         batches.entries.slice(batchesBefore).filter((batch) =>
@@ -736,6 +617,38 @@ describe("compile-cache-stamp-repair-serving", () => {
       expect(String(error?.message)).toContain("misfit");
       expect(await storedPatternIdentity(homeSpace, "raced-piece"))
         .toBeUndefined();
+    });
+
+    it("repairs the record at the next load, which the race did not stop", async () => {
+      // A conflict is a race the next load can win, so the session tries
+      // again where a refusal it would not.
+
+      const pattern = await compileIntoHome();
+      const keys = await recordKeys();
+      const source = await plant(
+        homeSpace,
+        keys.source,
+        rootPairStamp(UNDECLARED_ATOM),
+      );
+      await servingSees(homeSpace, keys.source, UNDECLARED_ATOM);
+      beforeStoreWrites = {
+        id: source,
+        run: async () => {
+          await plant(homeSpace, keys.source, rootPairStamp(RACING_ATOM));
+        },
+      };
+      expect((await instantiate(homeSpace, pattern, "raced-once")).error)
+        .toBeDefined();
+      await servingSees(homeSpace, keys.source, RACING_ATOM);
+
+      const { error } = await instantiate(homeSpace, pattern, "after-race");
+
+      expect(repairOutcomes()).toEqual(["conflicted", "repaired"]);
+      expect(await storedAtoms(homeSpace, source)).toEqual([]);
+      expect(error).toBeUndefined();
+      expect(await storedPatternIdentity(homeSpace, "after-race")).toBe(
+        ENTRY_IDENTITY,
+      );
     });
   });
 

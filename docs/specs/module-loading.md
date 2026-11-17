@@ -938,10 +938,13 @@ cell's contents. The cache is designed around this:
   `repairCompileCacheStamps()` for each closure it prepares, and the setup
   then reads the records unlabeled.
   - It verifies the closure in a transaction of its own and aborts it. The
-    repair's transaction reads each record it writes whole, and the source
-    record of each module whose compiled record it erases, refuses to write
-    if any changed since, reads and writes nothing else, is refused if it is
-    CFC-relevant, and commits with no explicit preparation.
+    repair's transaction reads each record it writes whole, and refuses to
+    write if any changed since. The source record of each module whose
+    compiled record it erases guards the erase: it is read as the verifier
+    reads, so its label flows nowhere, and the commit is conditioned on its
+    value being the one verified. The transaction reads and writes nothing
+    else, is refused if it is CFC-relevant, and commits with no explicit
+    preparation, refused if its commit would prepare it.
   - A stamped compiled record is erased, value and label together, and the
     next load compiles it again. It is left, and the closure refused, where
     its delegation list names an identity the source record's attested list
@@ -959,15 +962,28 @@ cell's contents. The cache is designed around this:
     lands anywhere else refuses the closure, the list is taken only from the
     record's own document, and no attestation is added. A record holding
     annotations, a field the cache writer does not write, code its identity
-    does not hash unchanged, a clause outside a stamp entry, the compiler's
-    attestation at its list only in a stamp entry, or a label-metadata
-    template its entries do not derive is refused, as is a closure a
+    does not hash unchanged, a clause outside a stamp entry, or a
+    label-metadata template its entries do not derive is refused. So is a
+    source record whose stamp entry holds the compiler's attestation at its
+    list, or that holds any entry outside a stamp entry other than that
+    attestation over a non-empty list of identities, and a closure a
     member's dropped cache-root edges were the only way to reach.
   - The write takes the `compile-cache-repair` builtin identity and a
     compile-cache record's key (`writeRepairedCompileCacheRecord()`). A
     session that may not write the space is refused at the commit, and its
-    setup is refused as before. A clean closure costs a read of its labels
-    in the transaction that already loaded it.
+    setup is refused as before. A clean closure costs a read of its labels,
+    and a sync of each member's compiled record, in the transaction that
+    already loaded it.
+  - A refused closure is not tried again in the session; one whose commit
+    lost a race, or failed for another reason, is tried again at the next
+    load.
+  - Not repaired: a stamped compiled record of a module the source closure
+    does not reach, such as a `fabric:` dependency the compiled closure
+    links, is neither checked nor erased, and a setup that reads it is
+    refused as before. On a serving runtime, a closure in a space other than
+    the one it serves is not repaired, since a direct commit there may write
+    only the served space; that setup is refused as before, and the closure
+    is tried again at its next load.
 - **Fail-closed, not fail-hard.** A compiled document with a missing or invalid
   integrity label is treated as a **cache miss** and recompiled from the
   (self-verifying) source set, which re-runs the SES verifier. So the verifier

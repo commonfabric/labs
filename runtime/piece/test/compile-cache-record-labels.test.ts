@@ -24,6 +24,7 @@ import {
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
+import { servedInstantiatePiece } from "../src/ops/served-lifecycle.ts";
 
 const signer = await Identity.fromPassphrase("compile-cache record labels");
 
@@ -56,6 +57,21 @@ export default pattern<Args, { label: string }>(({ seed }) => ({
     }],
   };
 }
+
+/** A program that declares no policy on anything it writes. */
+const PLAIN_PROGRAM: RuntimeProgram = {
+  main: "/plain.tsx",
+  files: [{
+    name: "/plain.tsx",
+    contents: `/// <cts-enable />
+import { NAME, pattern } from "commonfabric";
+export default pattern<{ seed: string }, { label: string }>(({ seed }) => ({
+  [NAME]: "Plain",
+  label: "plain:" + seed,
+}));
+`,
+  }],
+};
 
 describe("compile-cache-record-labels", () => {
   let storage: ReturnType<typeof StorageManager.emulate>;
@@ -363,5 +379,39 @@ describe("compile-cache-record-labels", () => {
         }
       });
     }
+
+    it("commits a served instantiation, its receipt included, of a program whose source record a write-back stamped at its root", async () => {
+      // The instantiation writes its receipt in the setup's transaction,
+      // under a schema that declares no policy, so a clause the setup
+      // consumed from a stamped record misfits the receipt even where the
+      // program itself declares nothing.
+
+      const first = strictRuntime();
+      const firstPieces = await controllerOn(first);
+      const created = await firstPieces.create(PLAIN_PROGRAM, {
+        input: { seed: "a" },
+      });
+      await first.idle();
+      const identity = getPatternIdentityRef(created.getCell())!.identity;
+      await first.patternManager.flushCompileCacheWrites();
+      await firstPieces.synced();
+      await plantEntries(
+        first,
+        recordConfidentiality(first, sourceDocKey(identity)).id,
+        rootPairStamp(UNDECLARED_ATOM),
+      );
+
+      const second = strictRuntime();
+      const receipt = await servedInstantiatePiece(await controllerOn(second), {
+        requestKey: "compile-cache-record-labels-receipt",
+        argument: { seed: "c" },
+        source: { pattern: { identity, symbol: "default" } },
+        actingUser: signer.did(),
+      });
+
+      expect(receipt.requestKey).toBe("compile-cache-record-labels-receipt");
+      expect(recordConfidentiality(second, sourceDocKey(identity)).atoms)
+        .toEqual([]);
+    });
   });
 });

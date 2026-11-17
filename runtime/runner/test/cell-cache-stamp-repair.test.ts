@@ -13,6 +13,7 @@ import {
 } from "../src/harness/module-identity.ts";
 import type { CacheableModule, RuntimeProgram } from "../src/harness/types.ts";
 import {
+  compileCacheClosureHoldsStamp,
   COMPILED_INTEGRITY_ATOM,
   compiledDocKey,
   repairCompileCacheStamps,
@@ -687,6 +688,161 @@ describe("cell-cache", () => {
         await coldManager.close();
         await writerManager.close();
       }
+    });
+
+    it("finds the stamp on a dependency's compiled record a cold runtime has not loaded, the entry's compiled record absent", async () => {
+      const server = newSharedServer();
+      const writerManager = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const writer = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: writerManager,
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+      });
+      const coldManager = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const cold = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: coldManager,
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+      });
+      try {
+        const modules = toModules(PROGRAM);
+        const util = modules.modules.find((m) => m.filename === "/util.ts")!;
+        const tx = writer.edit();
+        writeSourceAndCompiledDocs(
+          writer,
+          space,
+          modules.modules,
+          modules.entryIdentity,
+          { runtimeVersion: RUNTIME_VERSION },
+          tx,
+        );
+        writer.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        const idIn = (key: string) =>
+          writer.getCell(space, key).getAsNormalizedFullLink().id as URI;
+        const seed = writer.edit();
+        const utilId = idIn(compiledDocKey(RUNTIME_VERSION, util.identity));
+        const current = storedFields(seed, address(utilId)) as Stored;
+        seedStoredEnvelope(seed, address(utilId), {
+          ...current,
+          cfc: {
+            ...current.cfc!,
+            labelMap: {
+              ...current.cfc!.labelMap,
+              entries: [
+                ...current.cfc!.labelMap.entries,
+                ...rootPairStamp(space),
+              ],
+            },
+          },
+        } as unknown as FabricValue);
+        seedStoredEnvelope(
+          seed,
+          address(idIn(compiledDocKey(RUNTIME_VERSION, modules.entryIdentity))),
+          undefined as unknown as FabricValue,
+          { delete: true },
+        );
+        expect((await seed.commit().settled).error).toBeUndefined();
+        await writerManager.synced();
+
+        const check = cold.edit();
+        try {
+          expect(
+            await compileCacheClosureHoldsStamp(
+              cold,
+              space,
+              modules.entryIdentity,
+              RUNTIME_VERSION,
+              check,
+            ),
+          ).toBe(true);
+        } finally {
+          check.abort();
+        }
+      } finally {
+        await cold.dispose();
+        await writer.dispose();
+        await coldManager.close();
+        await writerManager.close();
+      }
+    });
+
+    it("repairs a closure holding two modules of one filename, each in a view of its own", async () => {
+      // An entry's cache-root edges can reach two generations of one
+      // ambient file, as two seals leave them; each is verified in its own
+      // view, where its name is unique.
+
+      const first: RuntimeProgram = {
+        main: "/one.ts",
+        files: [{ name: "/one.ts", contents: `export const one = 1;` }, {
+          name: "/ambient.ts",
+          contents: `export const generation = 1;`,
+        }],
+      };
+      const second: RuntimeProgram = {
+        main: "/two.ts",
+        files: [{ name: "/two.ts", contents: `export const two = 2;` }, {
+          name: "/ambient.ts",
+          contents: `export const generation = 2;`,
+        }],
+      };
+      const one = await writeProgram(first);
+      const two = await writeProgram(second);
+      const ambient2 = two.modules.find((m) => m.filename === "/ambient.ts")!;
+      const entryId = idOf(sourceDocKey(one.entryIdentity));
+      await replaceStored(entryId, (current) => ({
+        value: {
+          ...current.value!,
+          imports: [
+            ...(current.value!.imports as FabricValue[]),
+            {
+              specifier: `cf:cache-root/${ambient2.identity}`,
+              link: runtime.getCell(space, sourceDocKey(ambient2.identity))
+                .getAsLink() as unknown as FabricValue,
+            },
+          ],
+        },
+        entries: [
+          ...(current.cfc?.labelMap.entries ?? []),
+          ...rootPairStamp(space),
+        ],
+      }));
+
+      expect(await repair(one.entryIdentity)).toBe("repaired");
+      expect(atomsOn(entryId)).toEqual([]);
+      expect(
+        (stored(entryId).value!.imports as FabricPlainObject[]).map((imp) =>
+          imp.specifier
+        ).filter((specifier) =>
+          (specifier as string).startsWith("cf:cache-root/")
+        ),
+      ).toHaveLength(2);
+    });
+
+    it("rewrites one record and erases another's compiled record in one commit, keeping the rewritten record's attestation", async () => {
+      // The erase is guarded by the unstamped source record beside it,
+      // which the commit pins without consuming its label.
+
+      const program = await writeDelegatingProgram();
+      const util = program.modules.find((m) => m.filename === "/util.ts")!;
+      const entrySource = idOf(sourceDocKey(program.entryIdentity));
+      const utilCompiled = idOf(compiledDocKey(RUNTIME_VERSION, util.identity));
+      await plant(entrySource, rootPairStamp(space));
+      await plant(utilCompiled, rootPairStamp(space));
+
+      expect(await repair(program.entryIdentity)).toBe("repaired");
+      expect(stored(utilCompiled)).toEqual({});
+      expect(stored(entrySource).cfc?.labelMap.entries).toEqual([{
+        path: ["delegatedModuleIdentities"],
+        label: { integrity: [COMPILED_INTEGRITY_ATOM] },
+        origin: "minted",
+      }]);
     });
 
     it("refuses, and erases nothing, where a stamped compiled record's list is one the source record does not attest", async () => {

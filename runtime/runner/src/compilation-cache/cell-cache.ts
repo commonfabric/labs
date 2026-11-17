@@ -11,6 +11,7 @@ import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { utf8Compare } from "@commonfabric/text/utf8";
+import { commitPreconditionValueHash } from "@commonfabric/memory/v2";
 import { pathsOverlap } from "@commonfabric/memory/v2/path";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
@@ -52,7 +53,10 @@ import {
 } from "../sandbox/module-record-compiler.ts";
 import type { SigilLink, URI } from "../sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
-import { isInternalVerifierRead } from "../storage/reactivity-log.ts";
+import {
+  internalVerifierRead,
+  isInternalVerifierRead,
+} from "../storage/reactivity-log.ts";
 import {
   getTransactionReadActivities,
   getTransactionWriteAttempts,
@@ -2482,9 +2486,12 @@ export type CompileCacheStampRepair =
   | "repaired"
   /** The closure is absent, or did not verify. */
   | "unverified"
-  /** A record holds something the repair does not make canonical. */
+  /**
+   * A record holds something the repair does not make canonical, or the
+   * session may not write the space.
+   */
   | "refused"
-  /** A record changed after verification, or the commit failed. */
+  /** A record changed after verification, or the commit failed otherwise. */
   | "conflicted";
 
 /** The label-entry origins a flow stamp is left in. */
@@ -2558,13 +2565,13 @@ export async function compileCacheClosureHoldsStamp(
   const closure = await loadSourceClosure(runtime, space, entryIdentity, tx);
   if (closure === undefined) return false;
   if (runtimeVersion !== undefined) {
-    // One sync pulls the compiled closure, as `loadCompiledClosure()` does.
-    await runtime.getCell(
+    await syncCompiledRecords(
+      runtime,
       space,
-      compiledDocKey(runtimeVersion, entryIdentity),
-      COMPILED_DOC_SCHEMA,
+      closure.keys(),
+      runtimeVersion,
       tx,
-    ).sync();
+    );
   }
   for (const identity of closure.keys()) {
     const keys = runtimeVersion === undefined
@@ -2577,6 +2584,31 @@ export async function compileCacheClosureHoldsStamp(
     }
   }
   return false;
+}
+
+/**
+ * Synchronizes into `tx` the compiled record of `runtimeVersion` of each of
+ * `identities` in `space`, each at its own key: a source closure's sync loads
+ * none of them, and a compiled closure's sync reaches only those its entry
+ * links, which is none when the entry's record is absent.
+ */
+async function syncCompiledRecords(
+  runtime: Runtime,
+  space: MemorySpace,
+  identities: Iterable<string>,
+  runtimeVersion: string,
+  tx: IExtendedStorageTransaction,
+): Promise<void> {
+  await Promise.all(
+    [...identities].map((identity) =>
+      runtime.getCell(
+        space,
+        compiledDocKey(runtimeVersion, identity),
+        undefined,
+        tx,
+      ).sync()
+    ),
+  );
 }
 
 /** One record the repair writes, and what it read there when it verified. */
@@ -2650,16 +2682,38 @@ export async function repairCompileCacheStamps(
       builtinId: COMPILE_CACHE_REPAIR_WRITER,
     });
     for (const target of plan) {
-      const current = tx.readOrThrow({
+      const address = {
         space: target.space,
         id: target.id,
         scope: target.scope,
-        type: "application/json",
+        type: "application/json" as const,
         path: [],
-      });
+      };
+      // A record the repair writes is read whole, which makes the read a
+      // precondition of the commit. One it only guards is read as the
+      // verifier reads, so that its labels flow nowhere, and pinned by value
+      // at the commit instead.
+      const current = target.write
+        ? tx.readOrThrow(address)
+        : tx.readOrThrow(address, { meta: internalVerifierRead });
       if (taggedHashStringOf(current as FabricValue) !== target.expectedHash) {
         tx.abort("compile-cache stamp repair: a record changed");
         return "conflicted";
+      }
+      if (!target.write) {
+        if (tx.addCommitPrecondition === undefined) {
+          tx.abort("compile-cache stamp repair: no commit precondition");
+          return "refused";
+        }
+        const value = (current as { value?: FabricValue } | undefined)?.value;
+        tx.addCommitPrecondition(target.space, {
+          kind: "entity-value-hash",
+          id: target.id,
+          scope: target.scope,
+          valueHash: value === undefined
+            ? null
+            : commitPreconditionValueHash(value),
+        });
       }
     }
     for (const target of plan) {
@@ -2686,13 +2740,19 @@ export async function repairCompileCacheStamps(
       return "refused";
     }
     runtime.prepareTxForCommit(tx);
+    if (tx.getCfcState().prepare.status !== "unprepared") {
+      tx.abort("compile-cache stamp repair: the transaction was prepared");
+      return "refused";
+    }
     const { error } = await tx.commit().settled;
     if (error !== undefined) {
       logger.debug("compile-cache-stamp-repair-refused", () => [
         `entry=${entryIdentity}`,
         error,
       ]);
-      return "conflicted";
+      // A session that may not write the space is refused again at every
+      // commit; anything else is a race a later attempt may win.
+      return error.name === "AuthorizationError" ? "refused" : "conflicted";
     }
     return "repaired";
   } catch (error) {
@@ -2705,9 +2765,9 @@ export async function repairCompileCacheStamps(
 
 /**
  * Helper for {@link repairCompileCacheStamps}, which returns whether the
- * documents `tx` read are exactly `targets`, and the documents it wrote
- * exactly those `targets` it writes, its verifier reads and
- * content-addressed documents aside.
+ * documents `tx` read, and the documents it wrote, are each exactly those
+ * `targets` it writes, its verifier reads and content-addressed documents
+ * aside.
  */
 function readsOnlyWhatItWrites(
   tx: IExtendedStorageTransaction,
@@ -2717,8 +2777,10 @@ function readsOnlyWhatItWrites(
     `${space}\0${normalizeCellScope(scope as CellScope)}\0${id}`;
   const keysOf = (of: readonly StampRepairTarget[]) =>
     new Set(of.map((target) => keyOf(target.space, target.id, target.scope)));
-  const expectedReads = keysOf(targets);
+  // A guarded record is read as the verifier reads, so only the written
+  // ones show among the reads.
   const expectedWrites = keysOf(targets.filter((target) => target.write));
+  const expectedReads = expectedWrites;
   const read = new Set<string>();
   for (const activity of getTransactionReadActivities(tx)) {
     if (isInternalVerifierRead(activity.meta)) continue;
@@ -2819,17 +2881,12 @@ async function planStampRepair(
     metadata: CfcMetadata | undefined;
   }>();
   if (runtimeVersion !== undefined) {
-    // Each member's compiled record is read at its own key, so each is
-    // synchronized here: the source closure's sync loaded none of them.
-    await Promise.all(
-      [...closure.keys()].map((identity) =>
-        runtime.getCell(
-          space,
-          compiledDocKey(runtimeVersion, identity),
-          undefined,
-          tx,
-        ).sync()
-      ),
+    await syncCompiledRecords(
+      runtime,
+      space,
+      closure.keys(),
+      runtimeVersion,
+      tx,
     );
     for (const identity of closure.keys()) {
       const link = ownKey(compiledDocKey(runtimeVersion, identity));
