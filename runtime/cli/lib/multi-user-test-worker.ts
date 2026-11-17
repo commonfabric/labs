@@ -332,6 +332,7 @@ const stepPeekSchema = {
     press: { type: "unknown" },
     control: { type: "string" },
     within: { type: "string" },
+    modifiers: { type: "array", items: { type: "string" } },
     settle: { type: "boolean" },
     label: { type: "string" },
     await: { type: "string" },
@@ -689,6 +690,7 @@ const handlers: Record<
     const peek = stepCell.asSchema(stepPeekSchema).get() as {
       control?: unknown;
       within?: unknown;
+      modifiers?: unknown;
     };
     if (Object.hasOwn(peek ?? {}, "press")) {
       await pressRenderedControl(

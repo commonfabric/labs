@@ -245,11 +245,13 @@ type HarnessTestStepMeta = {
   assertion?: unknown;
   trustedUi?: unknown;
   render?: unknown;
-  // `{ press, control, within? }` clicks a rendered control: `press` is the
-  // view, the other two name the control in it (`test-press.ts`).
+  // `{ press, control, within?, modifiers? }` clicks a rendered control:
+  // `press` is the view, `control` and `within` name the control in it, and
+  // `modifiers` are the keys held during the click (`test-press.ts`).
   press?: unknown;
   control?: string;
   within?: string;
+  modifiers?: unknown;
   skip?: boolean;
   // `{ settle: true }` step: wait for full settlement (scheduler + storage +
   // in-flight async builtin I/O) via `runtime.settled()` before the next step.
@@ -281,6 +283,7 @@ const testStepPeekSchema = internSchema(
       press: { type: "unknown" },
       control: { type: "string" },
       within: { type: "string" },
+      modifiers: { type: "array", items: { type: "string" } },
       skip: { type: "boolean" },
       readBudget: true,
       settle: { type: "boolean" },
