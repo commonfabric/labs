@@ -41,12 +41,14 @@ import {
 } from "./inductor-pool-test-fixture.ts";
 import InductorPool, {
   type Contribution,
+  type ReleasedRule,
+} from "./inductor-pool.tsx";
+import {
   type ContributionEvent,
   releaseConsensus,
-  type ReleasedRule,
   type StoredContribution,
   submitContribution,
-} from "./inductor-pool.tsx";
+} from "./pool-policy.tsx";
 
 /** Copies rules into `to`, as a release into a public store would. */
 const publishRules = handler<

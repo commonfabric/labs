@@ -27,11 +27,8 @@ import {
   type OpenPublic,
   type Untouched,
 } from "./inductor-pool-test-fixture.ts";
-import InductorPool, {
-  type ReleasedRule,
-  type StoredContribution,
-  tallyEveryRule,
-} from "./inductor-pool.tsx";
+import InductorPool, { type ReleasedRule } from "./inductor-pool.tsx";
+import { type StoredContribution, tallyEveryRule } from "./pool-policy.tsx";
 
 /**
  * Copies rules into `to`, as a release into a public store would. The pool

@@ -6,8 +6,9 @@
  * never appears; no one can submit under another's pseudonym; a contributor
  * who resubmits, under a new pseudonym too, replaces their own entry and is
  * still counted once, even after another contributor's replacement rewrote
- * the list; and a contributor who withdraws takes their count off every
- * rule. Carol, Dave, and Erin each hold all three rules, so Alice's and
+ * the list; and a contributor who withdraws takes their own entry out, and
+ * their count off every rule, leaving everyone else's, and withdrawing again
+ * with no entry takes nothing. Carol, Dave, and Erin each hold all three rules, so Alice's and
  * Bob's choices decide which reach five.
  *
  * Pattern under test: ./inductor-pool.tsx
@@ -112,6 +113,12 @@ function releasedIs(
     );
 }
 
+/** Whether the pool holds exactly the four entries other than Alice's. */
+function othersRemain(pool: InductorPoolOutput): boolean {
+  const pseudonyms = pool.contributions.map((c) => c?.pseudonym).sort();
+  return pseudonyms.join() === "bob-new,carol-bills,dave-bills,erin-bills";
+}
+
 export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const reader = Reader(
     { consensus: setup.pool.consensus } as Parameters<typeof Reader>[0],
@@ -160,15 +167,17 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
           reader.later.length === 1 && reader.later[0]?.pattern === "lunch"
         ),
       },
-      // Withdrawing takes Alice's count off every rule.
+      // Withdrawing takes Alice's entry out, and her count off every rule,
+      // and leaves everyone else's entry where it was.
       { action: setup.pool.withdraw },
       {
         assertion: assert(() =>
-          releasedIs(setup.pool, []) &&
-          setup.pool.contributions.length === 4 &&
-          setup.pool.contributions.every((c) => c?.pseudonym !== "alice-bills")
+          releasedIs(setup.pool, []) && othersRemain(setup.pool)
         ),
       },
+      // Alice holds no entry now, so withdrawing again takes nothing out.
+      { action: setup.pool.withdraw },
+      { assertion: assert(() => othersRemain(setup.pool)) },
     ],
     reader,
   };
