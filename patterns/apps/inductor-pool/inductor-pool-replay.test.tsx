@@ -6,6 +6,12 @@
  * but the policy's input witness sees contributions `submitContribution` did
  * not write, so a public store refuses the result.
  *
+ * Links do no better. A list of links to the pool's own entries, one entry
+ * linked five times, releases nothing: a pseudonym counts once. A list
+ * holding a link to the victim's real entry beside forged copies of it,
+ * enough to pass any threshold the pool's seal allows, is refused by a public
+ * store, as the forgery alone is.
+ *
  * And `submitContribution`, bound by other code to a list of its own with a
  * threshold of one, refuses to seal it: the floor is the module's
  * (`MIN_SEALED_THRESHOLD`), not the binding's.
@@ -18,6 +24,7 @@ import {
   computed,
   type Default,
   handler,
+  linksOf,
   NAME,
   pattern,
   type Stream,
@@ -102,6 +109,94 @@ const ReplayProbe = pattern<ProbeInput, ProbeOutput>(
   },
 );
 
+/** The first contribution, linked `MIN_SEALED_THRESHOLD` times. */
+const linkRepeated = handler<
+  void,
+  {
+    contributions: Writable<StoredContribution[]>;
+    to: Writable<Contribution[]>;
+  }
+>((_, { contributions, to }) => {
+  const [first] = linksOf(contributions) ?? [];
+  if (first === undefined) return;
+  to.set(
+    Array.from(
+      { length: MIN_SEALED_THRESHOLD },
+      (): Contribution | typeof first => first,
+    ) as Contribution[],
+  );
+});
+
+/**
+ * A link to the first contribution, beside forged copies of it under new
+ * pseudonyms, carrying its seal: together, as many as its seal's highest
+ * threshold, so the function releases its rules whatever their offsets.
+ */
+const linkBesideForgeries = handler<
+  void,
+  {
+    contributions: Writable<StoredContribution[]>;
+    to: Writable<Contribution[]>;
+  }
+>((_, { contributions, to }) => {
+  const [first] = linksOf(contributions) ?? [];
+  const victim = contributions.get()[0];
+  if (first === undefined || victim === undefined) return;
+  const forgeries = Array.from(
+    { length: victim.seal.thresholdCenter + victim.seal.jitter - 1 },
+    (_, i) => ({
+      pseudonym: `${victim.pseudonym}-${i}`,
+      rules: (victim.rules ?? []).map((rule) => ({ ...rule })),
+      seal: { ...victim.seal },
+    }),
+  );
+  to.set([first, ...forgeries] as Contribution[]);
+});
+
+interface LinkProbeInput {
+  contributions: Writable<StoredContribution[]>;
+  repeated: Writable<Default<Contribution[], []>>;
+  mixed: Writable<Default<Contribution[], []>>;
+  leakedRepeated: Writable<Default<OpenPublic, Untouched>>;
+  leakedMixed: Writable<Default<OpenPublic, Untouched>>;
+}
+
+interface LinkProbeOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  releasedRepeated: ReleasedRule[];
+  releasedMixed: ReleasedRule[];
+  leakedRepeated: OpenPublic;
+  leakedMixed: OpenPublic;
+  buildRepeated: Stream<void>;
+  buildMixed: Stream<void>;
+  publishRepeated: Stream<void>;
+  publishMixed: Stream<void>;
+}
+
+/** Hands `releaseConsensus` lists of links to the pool's real entries. */
+const LinkProbe = pattern<LinkProbeInput, LinkProbeOutput>(
+  ({ contributions, repeated, mixed, leakedRepeated, leakedMixed }) => {
+    const releasedRepeated = releaseConsensus(repeated);
+    const releasedMixed = releaseConsensus(mixed);
+    return {
+      [NAME]: "Link probe",
+      [UI]: <div />,
+      releasedRepeated,
+      releasedMixed,
+      leakedRepeated,
+      leakedMixed,
+      buildRepeated: linkRepeated({ contributions, to: repeated }),
+      buildMixed: linkBesideForgeries({ contributions, to: mixed }),
+      publishRepeated: publishRules({
+        from: releasedRepeated,
+        to: leakedRepeated,
+      }),
+      publishMixed: publishRules({ from: releasedMixed, to: leakedMixed }),
+    };
+  },
+);
+
 interface OwnListInput {
   contributions: Writable<Default<StoredContribution[], []>>;
 }
@@ -138,6 +233,9 @@ export default pattern(() => {
     { contributions: pool.contributions } as Parameters<typeof ReplayProbe>[0],
   );
   const own = OwnList({} as Parameters<typeof OwnList>[0]);
+  const links = LinkProbe(
+    { contributions: pool.contributions } as Parameters<typeof LinkProbe>[0],
+  );
   return {
     [TESTS]: [
       {
@@ -162,6 +260,33 @@ export default pattern(() => {
           probe.leaked.length === 1 && probe.leaked[0]?.key === "untouched"
         ),
       },
+      // One real entry linked five times is one pseudonym: nothing to release,
+      // and a public store holds nothing.
+      { action: links.buildRepeated },
+      { action: links.publishRepeated },
+      {
+        assertion: assert(() =>
+          links.releasedRepeated.length === 0 &&
+          !links.leakedRepeated.some((rule) => rule?.pattern === "invoice")
+        ),
+      },
+      // A real entry beside forged copies of it: the function counts twenty,
+      // the pool's highest threshold, but the forgeries are not the pool's
+      // own, so a public store refuses.
+      { action: links.buildMixed },
+      {
+        assertion: assert(() =>
+          links.releasedMixed.length === 1 &&
+          links.releasedMixed[0]?.count === 20
+        ),
+      },
+      { action: links.publishMixed },
+      {
+        assertion: assert(() =>
+          links.leakedMixed.length === 1 &&
+          links.leakedMixed[0]?.key === "untouched"
+        ),
+      },
       // The submit handler, bound to a list configured with a threshold of
       // one, refuses to seal it, so the list holds nothing to release.
       {
@@ -180,5 +305,6 @@ export default pattern(() => {
     pool,
     probe,
     own,
+    links,
   };
 });
