@@ -1,3 +1,4 @@
+import { deployedPieceRef } from "../src/client.ts";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
@@ -357,6 +358,13 @@ describe("cli", () => {
         eventType: "viewed_in_loom",
       });
     }
+  });
+
+  it("keys a piece exactly as Loom does, so Loom's views reach the versions run_pattern and cf deployed", async () => {
+    // The same literal is pinned in Loom (tests/pattern_index/test_pattern_index_usage.py).
+    expect(await deployedPieceRef("did:key:z6Mkspace", "of:fid1:note")).toBe(
+      "piece:964d427d05870c59302580ffd9745a4b6e09a7e64ad6e83454ddbb89ebaf3a90",
+    );
   });
 
   it("refuses a view naming both, neither, or a piece that is not a piece key, calling nothing", async () => {
