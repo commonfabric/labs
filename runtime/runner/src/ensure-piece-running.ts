@@ -152,12 +152,14 @@ async function startInputSources(
  * that `owner`'s stored argument links to, at any depth. Each argument and
  * derived document a setup writes carries a `result` backlink to the piece it
  * belongs to, which `followResultCellChain()` follows, once for each document
- * however many links name it.
+ * however many links name it. With `internalOnly`, a linked document that is
+ * its own owning root, another piece's result root, is left out.
  */
 async function inputSourcesOf(
   runtime: Runtime,
   owner: OwningRootAddress,
   signal: AbortSignal | undefined,
+  internalOnly = false,
 ): Promise<NormalizedFullLink[]> {
   const tx = runtime.edit();
   tx.tx.immediate = true;
@@ -190,6 +192,7 @@ async function inputSourcesOf(
       if (root === undefined) continue;
       const source = root.getAsNormalizedFullLink();
       const key = rootKey(source);
+      if (internalOnly && key === document) continue;
       if (key !== ownerKey) sources.set(key, { ...source, path: [] });
     }
     return [...sources.values()];
@@ -204,9 +207,12 @@ async function inputSourcesOf(
  * piece at `owner`, the one recording it as the output of a nested node of
  * its own graph ({@link enclosesAsNested}), as a list of that one piece, or
  * an empty list where no piece does. The search starts from the pieces
- * `owner`'s argument links into (`inputSourcesOf()`) and goes up through
- * theirs in turn, so a nested instance whose argument links only a sibling's
- * output finds the instance enclosing them both; each piece is asked once.
+ * whose argument or internal documents `owner`'s argument links into
+ * (`inputSourcesOf()`) and goes up through theirs in turn, so a nested
+ * instance whose argument links only a sibling's output finds the instance
+ * enclosing them both; each piece is asked once. A link to another piece's
+ * result root is not followed, so the search does not walk the producers a
+ * piece is wired to.
  */
 async function enclosingPieceOf(
   runtime: Runtime,
@@ -214,7 +220,7 @@ async function enclosingPieceOf(
   signal: AbortSignal | undefined,
 ): Promise<NormalizedFullLink[]> {
   const asked = new Set([rootKey(owner)]);
-  let frontier = await inputSourcesOf(runtime, owner, signal);
+  let frontier = await inputSourcesOf(runtime, owner, signal, true);
   while (frontier.length > 0) {
     const next: NormalizedFullLink[] = [];
     for (const candidate of frontier) {
@@ -231,7 +237,9 @@ async function enclosingPieceOf(
         runtime.prepareTxForCommit(tx);
         await tx.commit().settled;
       }
-      for (const source of await inputSourcesOf(runtime, candidate, signal)) {
+      for (
+        const source of await inputSourcesOf(runtime, candidate, signal, true)
+      ) {
         next.push(source);
       }
     }
@@ -490,15 +498,25 @@ export type EnsurePieceOptions = {
    * enclosing instance's `internal` documents, as a document whose whole
    * value is a link to the nested instance's root. So the walk looks for the
    * piece that records the owning piece that way, starting from the pieces
-   * the owning piece's argument links into and going up through theirs, as a
-   * nested instance fed only by a sibling's output needs, and starts that one
-   * piece; the walk then does the same for it. A child a handler made is held behind a value-link slot, never
-   * named that way, so its creator is left to the event path, as is a piece
+   * whose argument or internal documents the owning piece's argument links
+   * into and going up through theirs, as a nested instance fed only by a
+   * sibling's output needs, and starts that one piece; the walk then does the
+   * same for it. A link to a piece's result root is not climbed through, so
+   * the search does not walk the producers a piece is wired to. A child a
+   * handler made is held behind a value-link slot, never named that way, so its creator is left to the event path, as is a piece
    * wired to another's output, and the owner of any other document the
-   * argument links into. A pattern that itself stores a link straight to a
-   * piece's root as the whole value of a document it owns reads as enclosing
-   * that piece; a nested instance whose argument links into its enclosing
-   * instance only at that instance's result root, or not at all, is not found.
+   * argument links into. Found this way: a named nested node, a pattern
+   * returning a nested instance's result whole, and nested instances fed by
+   * a sibling under one parent. Not found: the rows `map` builds, which the
+   * parent records through the builtin's list of row documents rather than
+   * as whole values; a nested instance whose argument links into its
+   * enclosing instance only at that instance's result root, or not at all;
+   * and children `ifElse` builds and wish results, which are unprobed. A
+   * pattern that itself stores a link straight to a piece's root as the whole
+   * value of a document it owns reads as enclosing that piece. Where no
+   * enclosing piece is found, the owning piece starts alone, as it did
+   * before, and silently: a piece nothing encloses and one whose enclosing
+   * piece is not found look the same to the walk.
    */
   enclosingSourcesOnly?: boolean;
 
