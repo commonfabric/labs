@@ -2448,6 +2448,20 @@ export async function loadCompiledClosure(
 }
 
 /**
+ * Returns a stored list of strings as a plain array, or `undefined` when the
+ * stored value is not one.
+ */
+function storedStringList(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") return undefined;
+    out.push(item);
+  }
+  return out;
+}
+
+/**
  * Helper for `loadCompiledClosure()`, which returns the authored import list
  * each verified compiled document of `docs` attests for its identity.
  */
