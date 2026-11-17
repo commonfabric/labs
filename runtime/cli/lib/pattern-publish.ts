@@ -323,10 +323,12 @@ export async function publishPatternFromDisk(
   // The index takes a remix credit beside a slot only on the version that
   // starts the slot's lineage, so it is owed until one is sent.
   let creditOwed = slot === undefined ||
-    !(await deps.client.listLineages()).lineages.some((l) => l.slot === slot);
+    !(await lineageSlots(deps)).includes(slot);
   let creditSent: string | undefined;
-  // Keeps the source as it stands as a private version, so a rewrite over
-  // files outside git can still be taken back with `cf pattern rollback`.
+  // Keeps the source as it stands as a version of the lineage, so a rewrite
+  // over files git cannot take back can be with `cf pattern rollback`. Like
+  // every version it is private; it was deployed to no piece, so opening one
+  // in a loom never shares it.
   const keepOriginal = slot === undefined
     ? undefined
     : async (): Promise<number | undefined> => {
@@ -437,6 +439,22 @@ export async function publishPatternFromDisk(
       }`
       : tryIt(response.patternId),
   };
+}
+
+/**
+ * The slots of the caller's lineages; none from an index that keeps no
+ * lineages, which answers 404, so sharing there works as it did before.
+ */
+async function lineageSlots(deps: PublishDeps): Promise<string[]> {
+  try {
+    const { lineages } = await deps.client.listLineages();
+    return lineages.flatMap((lineage) =>
+      lineage.slot === undefined ? [] : [lineage.slot]
+    );
+  } catch (error) {
+    if (error instanceof PatternIndexError && error.status === 404) return [];
+    throw error;
+  }
 }
 
 /**
@@ -603,7 +621,8 @@ async function checkLocally(
   let originalVersion: number | undefined;
   const dirty = options.allowDirty ? [] : await deps.uncommitted(diskPaths);
   if (
-    (dirty === undefined || dirty.length > 0) && keepOriginal !== undefined
+    (options.allowDirty || dirty === undefined || dirty.length > 0) &&
+    keepOriginal !== undefined
   ) {
     // Git cannot take the rewrite back, but a kept version can.
     originalVersion = await keepOriginal();

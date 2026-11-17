@@ -60,8 +60,9 @@ export const TOP_LEVEL_COMMANDS: readonly TopLevelCommand[] = [
   {
     name: "pattern",
     description:
-      "Keep, share and publish patterns in the pattern index: every deploy " +
-      "is kept as a private version, with history and rollback.",
+      "Keep, share and publish patterns in the pattern index: each deploy " +
+      "of your own pattern is kept as a private version, with history and " +
+      "rollback.",
     load: async () => (await import("./pattern.ts")).pattern,
   },
   {

@@ -60,10 +60,12 @@ deno task cf piece new patterns/[name]/main.tsx --test patterns/[name]/main.test
 # Output: Created piece bafyreia... <- SAVE this piece ID
 ```
 
-**Versions are kept for you.** Once the person has joined the pattern index,
-every `piece new <file>` and `piece setsrc` of their own pattern is kept as a
-private version, and the deploy prints one line saying which. Nobody runs a save
-command. To undo a bad step, `cf pattern history <entry>` lists the versions and
+**Versions are kept for you.** Once the person has joined a pattern index that
+keeps versions, each `piece new <file>` and `piece setsrc` of their own pattern
+whose source changed is kept as a private version, and the deploy prints one
+line saying which; a `setsrc --origin` deploy, or one of someone else's pattern
+unchanged, keeps none. Nobody runs a save command. To undo a bad step,
+`cf pattern history <entry>` lists the versions and
 `cf pattern rollback <entry> <version>` restores one over the files (then
 `setsrc` to update the piece). Rollback refuses over edits never deployed.
 Deploys never share by themselves. When the person's sharing setting covers what

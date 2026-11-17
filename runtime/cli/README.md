@@ -3345,7 +3345,7 @@ Use `--launcher-help` for launcher-specific help. Normal CLI flags such as
 The pattern index is where a person's patterns are kept while they work on them,
 and where shared and published patterns are found. `cf index` holds the
 membership commands and `cf pattern` the rest: `cf index join` once, after which
-every deploy of the person's own pattern is kept as a private version
+each deploy of the person's own pattern is kept as a private version
 (`cf pattern history`, `cf pattern rollback`); `cf pattern share` shares one
 anonymously, `cf pattern publish` under the person's name, and `cf pattern ls`
 (also `cf pattern mine`) says where shared ones stand. Every call to the index
@@ -3387,33 +3387,38 @@ the same person through chains the root issues:
 loom's settings change, and `cf index sharing on|off` and `--self-built on|off`
 change it. On, which is the default, their patterns are shared anonymously once
 they open them in their loom and they pass the privacy check, and they see what
-others share; off, nothing of theirs is shared, and search and listings show
-them only patterns published under a name, though a shared pattern opened by its
-id, as an import or `--from-index` does, still works. `--self-built` says
-whether that covers the patterns they build themselves in `cf` and Claude Code.
+others share; off, nothing of theirs is shared on its own (what they shared with
+`cf pattern share` stays shared until `cf pattern unshare`), and search and
+listings show them only patterns published under a name, though a shared pattern
+opened by its id, as an import or `--from-index` does, still works.
+`--self-built` says whether that covers the patterns they build themselves in
+`cf` and Claude Code.
 
 `cf index whoami` says which member the index sees the identity as. An admin
 admits a key without an invite with `cf index admit <did>`.
 
 ### Private versions
 
-Each `cf piece new <file>` and `cf piece setsrc` of a pattern the person owns is
-kept in the index as a version only they can read, once the deploy commits, and
-the deploy prints one line saying which version it is (`piece new --json`
-carries it as `version`). A version holds the source as deployed, personal
-details included, so it is kept where only its owner can read it, and admins
-cannot see it. The versions of one entry file form its lineage, which the index
-finds by a slot `cf` computes. In a git checkout with an `origin` remote the
-slot is a hash of the remote and the file's path in the repository, so every
-worktree and clone continues one lineage. Elsewhere it is the absolute path
-keyed with a secret kept in this machine's index store, so the index cannot
-confirm a guessed path; moving such a file starts a new lineage. A deploy from
-the index (`--from-index`), a `setsrc --origin` deploy (a system or repository
-pattern), and a file fetched from someone else's pattern and deployed unchanged
-keep no version; an edited one is kept as the person's remix of it. When this
-machine never joined an index, a deploy makes no index call and says so once.
-The index write never changes a deploy's outcome: a failure is reported in one
-line and the deploy's exit status stands.
+On an index that keeps versions, each `cf piece new <file>` and
+`cf piece setsrc` of a pattern the person owns is kept as a version only they
+can read, once the deploy commits, and the deploy prints one line saying which
+version it is (`piece new --json` carries it as `version`). A deploy whose
+source the newest version already has keeps no new one and says so. An index
+from before private versions is sent nothing, and the deploy says nothing about
+versions. A version holds the source as deployed, personal details included, so
+it is kept where only its owner can read it, and admins cannot see it. The
+versions of one entry file form its lineage, which the index finds by a slot
+`cf` computes. In a git checkout with an `origin` remote the slot is a hash of
+the remote and the file's path in the repository, so every worktree and clone
+continues one lineage. Elsewhere it is the absolute path keyed with a secret
+kept in this machine's index store, so the index cannot confirm a guessed path;
+moving such a file starts a new lineage. A deploy from the index
+(`--from-index`), a `setsrc --origin` deploy (a system or repository pattern),
+and a file fetched from someone else's pattern and deployed unchanged keep no
+version; an edited one is kept as the person's remix of it. When this machine
+never joined an index, a deploy makes no index call and says so once. The index
+write never changes a deploy's outcome: a failure is reported in one line and
+the deploy's exit status stands.
 
 A deploy never shares a version by itself: drafts land many times an hour. The
 index shares a version once it settles, when its owner opens it in a loom, and

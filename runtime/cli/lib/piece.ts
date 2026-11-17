@@ -2282,8 +2282,10 @@ export async function newPieceWithReceipt(
   );
   // Here rather than after the registry add below: the piece now exists in
   // the space, and a slug or registry step that throws afterwards leaves a
-  // partial write that the operator is owed the location of.
+  // partial write that the operator is owed the location of. The source it
+  // runs is deployed either way, so it is a version either way.
   noteWroteTo(config.space);
+  deployedFrom(piece.id);
 
   if (options?.slug) {
     try {
@@ -2314,7 +2316,6 @@ export async function newPieceWithReceipt(
     () => pieces.add([piece.getCell()], { reconcile: false }),
   );
 
-  deployedFrom(piece.id);
   return { pieceId: piece.id, ...named };
 }
 

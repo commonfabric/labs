@@ -186,7 +186,12 @@ export interface PatternIndexSearchResult {
   /** Which ranked bucket this hit came from, absent on older deployments. */
   bucket?: PatternIndexBucket;
 
-  /** The author's stable pseudonym on this index. */
+  /**
+   * @deprecated Read `author.pseudonym`. Deployments with private versions
+   * answer the same per-lineage pseudonym here, for older readers; older
+   * deployments answer one pseudonym per author, shared across their
+   * patterns.
+   */
   handle?: string;
 
   /** How the author is shown: a per-lineage pseudonym, a tier, a name if published. */
@@ -252,7 +257,12 @@ export interface PatternIndexPattern {
   /** The publisher's DID, from deployments that predate `handle`. */
   ownerDid?: string;
 
-  /** The author's stable pseudonym on this index. */
+  /**
+   * @deprecated Read `author.pseudonym`. Deployments with private versions
+   * answer the same per-lineage pseudonym here, for older readers; older
+   * deployments answer one pseudonym per author, shared across their
+   * patterns.
+   */
   handle?: string;
 
   /** How the author is shown: a per-lineage pseudonym, a tier, a name if published. */
@@ -328,7 +338,12 @@ export interface PatternIndexListedPattern {
   /** The publisher's DID, from deployments that predate `handle`. */
   ownerDid?: string;
 
-  /** The author's stable pseudonym on this index. */
+  /**
+   * @deprecated Read `author.pseudonym`. Deployments with private versions
+   * answer the same per-lineage pseudonym here, for older readers; older
+   * deployments answer one pseudonym per author, shared across their
+   * patterns.
+   */
   handle?: string;
 
   /** How the author is shown: a per-lineage pseudonym, a tier, a name if published. */
@@ -467,7 +482,6 @@ export type PatternIndexRecordUsageEventRequest = PatternIndexEventSubject & {
   eventType: PatternIndexUsageEventType;
 };
 
-/** Signed event payload; the client supplies the author from its identity. */
 /**
  * What an event is about: a pattern by id, or, for its owner's own use of a
  * version in a loom, the piece the version was deployed to
@@ -477,6 +491,7 @@ export type PatternIndexEventSubject =
   | { patternId: string; piece?: never }
   | { piece: string; patternId?: never };
 
+/** Signed event payload; the client supplies the author from its identity. */
 export interface PatternIndexRecordEventRequest {
   patternId: string;
   eventType: PatternIndexEventType;
@@ -566,9 +581,16 @@ const pieceRef = (field: string, ref: string): string => {
 export type PatternIndexVisibility = "private" | "shared" | "published";
 
 /**
- * Where a version's share stands: never asked, being checked by the privacy
- * gardener, held by it (the owner reads `gates`), failed, or readable by
- * others.
+ * Where a version's share stands:
+ *
+ * - `none`: never asked to share.
+ * - `pending`: the privacy gardener is checking it.
+ * - `held`: the gardener found something identifying; its owner reads
+ *   `gates`, and a changed source can be shared again.
+ * - `error`: the check failed to run; `shareVersion` asks again.
+ * - `exposed`: shared, and readable by others.
+ * - `public_elsewhere`: the same source is already shared under someone
+ *   else, so this one cannot be; a changed source can.
  */
 export type PatternIndexShareState =
   | "none"
