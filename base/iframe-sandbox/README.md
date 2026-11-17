@@ -75,8 +75,8 @@ reserved in a guest's document, and text that needs those characters writes the
 colon as `&#58;`. The element also writes the record into the document, right
 after its doctype and ahead of every script, as a
 `<script type="application/json" data-cf-assets>` element, which the guest reads
-with `fabric.asset()`. A change to `assets` reloads the guest; assigning a
-record that holds the same names and URLs does not.
+with `fabric.asset()` ([Assets](#assets)). A change to `assets` reloads the
+guest; assigning a record that holds the same names and URLs does not.
 
 A resource has a `kind`, optional schema and description, and only the
 operations the host supplies. A cell capability follows the runtime's Cell
@@ -250,6 +250,27 @@ await tasks.push({ title: "Review bridge", done: false });
 
 `pushAll()` appends every member of one list the same way, for a list too long
 to spread into `push()`'s arguments.
+
+### Assets
+
+`asset(name)` returns one of the assets the host wrote into the document. It is
+synchronous: the record is in the document from the start, ahead of every script
+and before the port arrives. A name the document carries no asset for throws,
+listing the names it does carry.
+
+```ts
+const glaze = fabric.asset("glaze");
+context.drawImage(await glaze.image(), 0, 0);
+const bell = await audio.decodeAudioData(fabric.asset("bell").bytes().buffer);
+```
+
+An asset has its `mediaType`, the `size` of its decoded bytes, and its `url`,
+for an element or a style the script sets. The guest's policy refuses `fetch()`
+of a `data:` URL, so the bytes are decoded in the guest: `bytes()` returns a
+fresh copy on each call, `blob()` returns them as a `Blob` of the asset's media
+type, and `text()` reads them as UTF-8. `image()` resolves with a new image
+element once it has decoded the asset, which is what a 2D canvas and most
+engines take, and `bitmap()` with the asset decoded by `createImageBitmap()`.
 
 ## React
 
