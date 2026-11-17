@@ -2414,12 +2414,10 @@ export async function loadCompiledClosure(
       ...(doc.importSpecs !== undefined
         ? { importSpecs: doc.importSpecs }
         : {}),
-      ...(() => {
-        const sourceImports = doc.kind === "data"
-          ? undefined
-          : storedStringList(doc.sourceImports);
-        return sourceImports === undefined ? {} : { sourceImports };
-      })(),
+      // The read schema holds `sourceImports` to a list of strings.
+      ...(doc.kind === "data" || doc.sourceImports === undefined
+        ? {}
+        : { sourceImports: [...doc.sourceImports] }),
       ...(coverageSpans === undefined
         ? {}
         : { patternCoverageSpans: coverageSpans }),
@@ -2450,8 +2448,8 @@ export async function loadCompiledClosure(
 }
 
 /**
- * Helper for `loadCompiledClosure()`, which returns a stored list of strings
- * as a plain array, or `undefined` when the stored value is not one.
+ * Returns a stored list of strings as a plain array, or `undefined` when the
+ * stored value is not one.
  */
 function storedStringList(value: unknown): readonly string[] | undefined {
   if (!Array.isArray(value)) return undefined;

@@ -380,8 +380,8 @@ describe("plain-schema array traversal", () => {
         activity,
       ) => activity.path),
     ).toEqual([["value", "0"], ["value", "1"]]);
-    const batchedLog = tx.getReactivityLog!();
-    const fallbackLog = fallbackTx.getReactivityLog!();
+    const batchedLog = tx.getReactivityLog();
+    const fallbackLog = fallbackTx.getReactivityLog();
     // Compared as sets of addresses: the reactivity log is one, so a repeated
     // address adds no dependency. The wrapper carries no snapshot memo, so
     // the fallback walk journals the repeated sigil probes the memoized walk

@@ -937,7 +937,7 @@ export async function runSchedulerAction(
 /** B7: the causes a fanned-out instance run carries as its CFC trigger
  * reads — those that dirtied ITS instance (a keyed cause resolving on the
  * instance identity's own chain) plus every untargeted one. */
-function causesForInstance(
+export function causesForInstance(
   causes: readonly IMemorySpaceAddress[],
   instance: FanOutInstance,
 ): IMemorySpaceAddress[] {
@@ -1087,12 +1087,24 @@ function finalizeSchedulerAction(
   }
 
   try {
-    if (args.error) {
+    // A served run that read a scoped instance the serving loop has not
+    // produced yet is withdrawn at its commit, below, whatever it derived
+    // from that absence; a throw is one more thing it derived from it, so it
+    // is withdrawn with the run rather than reported. The run's read of the
+    // instance stays subscribed, and a throw once the instance is produced is
+    // reported as any other.
+    if (args.error && args.tx.tx.unproducedScopedInstance === undefined) {
       logger.error("schedule-error", () => [
         `[RUN] Action failed: ${args.actionId}`,
         `Error: ${args.error}`,
       ]);
       state.handleError(normalizeThrownError(args.error), args.action);
+    } else if (args.error) {
+      logger.debug("schedule-withdrawn-error", () => [
+        `[RUN] Action threw after reading a scoped instance not yet ` +
+        `produced, withdrawn: ${args.actionId}`,
+        `Error: ${args.error}`,
+      ]);
     }
   } finally {
     finalizeReactiveActionCommit(state, args, elapsed);
@@ -1614,10 +1626,6 @@ export function schedulerImplementationFingerprint(
     telemetry?.moduleName,
   ].filter((part): part is string => !!part).join(":") || `action:${actionId}`;
   return `action:${telemetryId}:${actionId}`;
-}
-
-export function schedulerRuntimeFingerprint(): string {
-  return "runner:scheduler:v3";
 }
 
 function recordOptionalActionRunDiagnostics(

@@ -64,7 +64,7 @@ import {
 import { utf8Compare } from "@commonfabric/text/utf8";
 
 import { encodePointer } from "../../../memory/v2/path.ts";
-import type { JSONSchema } from "../builder/types.ts";
+import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 import { areLinksSame } from "../link-equality.ts";
 import { literalMemberMatches } from "../schema-literal-match.ts";
@@ -104,6 +104,7 @@ import {
   isWriteRedirectLink,
   type NormalizedLink,
   parseLink,
+  type PrimitiveCellLink,
 } from "../link-utils.ts";
 import { getValueAtPath, setValueAtPath } from "../path-utils.ts";
 import { isRuntimeSecretId } from "../runtime-secret-id.ts";
@@ -232,7 +233,10 @@ import {
 } from "./observation.ts";
 import { CFC_POLICY_MANIFEST_ID_PREFIX, type ExchangeRule } from "./policy.ts";
 import { createTxCfcModulePolicyResolver } from "./policy-resolver.ts";
-import { cfcSchemaEntries } from "./schema-label-view.ts";
+import {
+  type CfcDeclaringSchema,
+  cfcSchemaEntries,
+} from "./schema-label-view.ts";
 import { sinkClassOf } from "./sink-inventory.ts";
 import {
   type CfcSchemaMergeIssue,
@@ -1173,17 +1177,13 @@ const metadataAppliesToAnyPath = (
 // where the path carries no label, so the path stays policy-carrying for a
 // writer whose own schema restates nothing. A `requiredIntegrity` floor is
 // one: on a write target it is store policy (spec §8.12.4.1).
-const hasPersistedPolicyClaim = (schema: JSONSchema): boolean => {
-  if (!isObjectOrArray(schema) || !isObjectOrArray(schema.ifc)) {
-    return false;
-  }
-  return schema.ifc.requiredIntegrity !== undefined ||
-    schema.ifc.writeAuthorizedBy !== undefined ||
-    schema.ifc.writePolicyAnyOf !== undefined ||
-    schema.ifc.uiContract !== undefined ||
-    schema.ifc.exactCopyOf !== undefined ||
-    schema.ifc.projection !== undefined;
-};
+const hasPersistedPolicyClaim = (schema: CfcDeclaringSchema): boolean =>
+  schema.ifc.requiredIntegrity !== undefined ||
+  schema.ifc.writeAuthorizedBy !== undefined ||
+  schema.ifc.writePolicyAnyOf !== undefined ||
+  schema.ifc.uiContract !== undefined ||
+  schema.ifc.exactCopyOf !== undefined ||
+  schema.ifc.projection !== undefined;
 
 /**
  * The logical positions of `root` at which a writer claim holds whatever
@@ -1314,17 +1314,17 @@ const moduleSucceeds = (
     predecessor,
   ) === true;
 
+/**
+ * Why the writer claim `claim` refuses the write `targetIdentity` made at
+ * `path`, or `undefined` where there is no claim or it admits the write.
+ */
 const writeAuthorizedByReason = (
   tx: IExtendedStorageTransaction,
-  schema: JSONSchema,
+  claim: unknown,
   path: readonly string[],
   targetSpace: MemorySpace,
   targetIdentity?: ImplementationIdentity,
 ): string | undefined => {
-  if (!isObjectOrArray(schema) || !isObjectOrArray(schema.ifc)) {
-    return undefined;
-  }
-  const claim = schema.ifc.writeAuthorizedBy;
   if (claim === undefined) {
     return undefined;
   }
@@ -1397,11 +1397,8 @@ const writeAuthorizedByReason = (
 
 /** One alternative of a `writePolicyAnyOf`: a writer, and its gesture. */
 type WritePolicyAlternative = {
-  /**
-   * The alternative's writer claim, as a schema `writeAuthorizedByReason()`
-   * reads.
-   */
-  readonly writer: JSONSchema;
+  /** The alternative's writer claim, as `writeAuthorizedByReason()` reads. */
+  readonly writer: unknown;
 
   /** Whether the alternative names a reviewed gesture. */
   readonly namesGesture: boolean;
@@ -1424,10 +1421,9 @@ const writePolicyAlternatives = (
     return undefined;
   }
   return ifc.writePolicyAnyOf.map((policy) => {
-    const writeAuthorizedBy = isObjectNotArray(policy)
+    const writer = isObjectNotArray(policy)
       ? policy.writeAuthorizedBy
       : undefined;
-    const writer = { ifc: { writeAuthorizedBy } } as JSONSchema;
     if (!isObjectNotArray(policy) || policy.uiContract === undefined) {
       return { writer, namesGesture: false };
     }
@@ -1614,9 +1610,6 @@ const setupProjectionSourceMatchesValue = (
   // A link whose address omits its document names the document holding it,
   // so it is resolved against the target before it is compared.
   const projected = parseLink(targetValue, { ...target, path: [] });
-  if (projected === undefined) {
-    return false;
-  }
   const projectedPath = projected.path.map((entry) => String(entry));
   return projection.sources.some((source) =>
     projected.space === source.space && projected.id === source.id &&
@@ -1738,6 +1731,22 @@ const slotHoldsInitialization = (
 };
 
 /**
+ * The write details of `tx` for `target`'s document, or every write detail of
+ * its space where the transaction cannot narrow them to one document, or none
+ * where it cannot list its writes.
+ */
+const writeDetailsOf = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): Iterable<TransactionWriteDetail> =>
+  tx.getWriteDetailsForTarget?.(target) ?? tx.getWriteDetails?.(target.space) ??
+    [];
+
+/**
  * The write details of `tx` covering the logical `path` of `target`'s
  * document, in the order their paths were first written.
  */
@@ -1751,9 +1760,7 @@ const writeDetailsCovering = (
   path: readonly string[],
 ): TransactionWriteDetail[] => {
   const addressPath = ["value", ...path];
-  const details = tx.getWriteDetailsForTarget?.(target) ??
-    tx.getWriteDetails?.(target.space) ?? [];
-  return [...details].filter((detail) =>
+  return [...writeDetailsOf(tx, target)].filter((detail) =>
     detail.address.id === target.id &&
     normalizeCellScope(detail.address.scope) === target.scope &&
     concretePathHasPrefix(addressPath, detail.address.path.map(String))
@@ -1802,6 +1809,7 @@ const writeIsRuntimeInitialization = (
     id: URI;
     scope: ReturnType<typeof normalizeCellScope>;
   },
+  stored: ReadableStoredCfcEnvelope,
   path: readonly string[],
   waived: "writeAuthorizedBy" | "uiContract",
 ): boolean => {
@@ -1858,15 +1866,12 @@ const writeIsRuntimeInitialization = (
   ) return true;
   // A declaration the stored envelope already makes on the slot keeps its own
   // requirement, whatever the candidate schema introduces beside it.
-  const stored = loadStoredCfcEnvelope(tx, target);
-  if (stored.status === "unreadable") return false;
   if (
     stored.status === "loaded" &&
     cfcSchemaEntries(stored.schema).some((entry) =>
       pathPatternsOverlap(entry.path, path) &&
-      isObjectOrArray(entry.schema) &&
-      (entry.schema.ifc?.[waived] !== undefined ||
-        entry.schema.ifc?.writePolicyAnyOf !== undefined)
+      (entry.schema.ifc[waived] !== undefined ||
+        entry.schema.ifc.writePolicyAnyOf !== undefined)
     )
   ) return false;
   return !before.present;
@@ -2195,8 +2200,10 @@ const updateAddedOwnerCreator = (
   },
   path: readonly string[],
 ): string | undefined => {
-  const owners = storedRepresentedPrincipalsAt(tx, target, path);
-  if (owners === undefined || owners.length > 0) return undefined;
+  // An envelope that cannot be read names no owner and rules none out.
+  const stored = loadStoredCfcEnvelope(tx, target);
+  if (stored.status === "unreadable") return undefined;
+  if (representedPrincipalsAt(stored, path).length > 0) return undefined;
   return pieceCreatorOfDocument(tx, target);
 };
 
@@ -2605,10 +2612,7 @@ export class VerifierMetadataResolver {
   #linkSources = new WeakMap<CfcMetadata, Map<string, CfcMetadata>>();
   #prepared = new Set<string>();
   #coverIndexes = new WeakMap<CfcLabelView, ConsumedLabelIndex>();
-  #covers = new WeakMap<
-    CfcLabelView,
-    Map<string, { depth: number; label: IFCLabel } | undefined>
-  >();
+  #covers = new WeakMap<CfcLabelView, Map<string, IFCLabel | undefined>>();
 
   /** Binds metadata reads and write inspection to the same transaction. */
   constructor(tx: IExtendedStorageTransaction) {
@@ -2775,13 +2779,16 @@ export class VerifierMetadataResolver {
     return views.get(key);
   }
 
-  /** Resolves the view's longest cover, then layers the link-specific root. */
+  /**
+   * Returns the label of the view's entries that cover `path` most deeply,
+   * joined where several sit at that depth, or `undefined` where none covers
+   * it.
+   */
   cover(
     view: CfcLabelView | undefined,
     path: readonly string[],
-    root: IFCLabel | undefined,
   ): IFCLabel | undefined {
-    if (view === undefined) return root;
+    if (view === undefined) return undefined;
     let covers = this.#covers.get(view);
     if (covers === undefined) {
       covers = new Map();
@@ -2815,17 +2822,14 @@ export class VerifierMetadataResolver {
       }
       covers.set(
         key,
-        labels.length === 0 ? undefined : {
-          depth,
-          label: labels.length === 1 ? labels[0] : joinLabels(labels),
-        },
+        labels.length === 0
+          ? undefined
+          : labels.length === 1
+          ? labels[0]
+          : joinLabels(labels),
       );
     }
-    const covered = covers.get(key);
-    if (covered === undefined) return root;
-    return covered.depth === 0 && root !== undefined
-      ? mergeLabels(root, covered.label)
-      : covered.label;
+    return covers.get(key);
   }
 
   /**
@@ -4577,6 +4581,11 @@ const forEachFlowObservation = (
     const id = trigger.id as URI;
     const scope = normalizeCellScope(trigger.scope);
     const at = triggerReadAt(trigger.path);
+    // A trigger read of a `length` observes its parent's membership. A
+    // probe's trigger, read shallowly at its slot, is no read of a `length`.
+    const lengthOf = at.nonRecursive
+      ? undefined
+      : triggerReadLengthParent(at.path);
     if (
       consume(
         trigger.space,
@@ -4593,33 +4602,24 @@ const forEachFlowObservation = (
           declaredOnward: undefined,
           followedSlot: false,
         },
-      )
-    ) {
-      return true;
-    }
-    // A trigger read of a `length` observes its parent's membership. A
-    // probe's trigger, read shallowly at its slot, is no read of a `length`.
-    const lengthOf = at.nonRecursive
-      ? undefined
-      : triggerReadLengthParent(at.path);
-    if (
-      lengthOf !== undefined &&
-      consume(
-        trigger.space,
-        id,
-        scope,
-        "application/json",
-        lengthOf,
-        {
-          shape: "shape",
-          nonRecursive: true,
-          coveredByTrace: false,
-          machinery: false,
-          writeDestination: false,
-          declaredOnward: undefined,
-          followedSlot: false,
-        },
-      )
+      ) ||
+      (lengthOf !== undefined &&
+        consume(
+          trigger.space,
+          id,
+          scope,
+          "application/json",
+          lengthOf,
+          {
+            shape: "shape",
+            nonRecursive: true,
+            coveredByTrace: false,
+            machinery: false,
+            writeDestination: false,
+            declaredOnward: undefined,
+            followedSlot: false,
+          },
+        ))
     ) {
       return true;
     }
@@ -5692,7 +5692,6 @@ const deriveFlowJoinImpl = (
     ): void => {
       if (isPrimitiveCellLink(value)) {
         const link = parseLink(value, { ...location, path: [] });
-        if (link === undefined) return;
         references.push({
           slot: { ...location, path },
           target: {
@@ -5980,26 +5979,13 @@ export const gatedSinkRequestExists = (
   );
 };
 
-const policyOnlySchema = (schema: JSONSchema): JSONSchema => {
-  if (!isObjectOrArray(schema) || !isObjectOrArray(schema.ifc)) {
-    return {};
-  }
-  return { ifc: { ...schema.ifc } } as JSONSchema;
-};
-
 const linkWritePolicyOnlySchema = (
-  schema: JSONSchema,
+  schema: CfcDeclaringSchema,
   path: readonly string[],
-): JSONSchema => {
-  const policy = policyOnlySchema(schema);
-  if (
-    !isObjectOrArray(policy) || !isObjectOrArray(policy.ifc) ||
-    !path.includes("*")
-  ) {
-    return policy;
-  }
-  const { integrity: _integrity, ...ifc } = policy.ifc;
-  return Object.keys(ifc).length === 0 ? {} : { ifc } as JSONSchema;
+): JSONSchemaObj => {
+  if (!path.includes("*")) return { ifc: { ...schema.ifc } };
+  const { integrity: _integrity, ...ifc } = schema.ifc;
+  return Object.keys(ifc).length === 0 ? {} : { ifc };
 };
 
 const schemaClaimsForLinkWrites = (
@@ -6024,11 +6010,7 @@ const schemaClaimsForLinkWrites = (
       continue;
     }
     const policySchema = linkWritePolicyOnlySchema(entry.schema, entry.path);
-    if (
-      isObjectOrArray(policySchema) && Object.keys(policySchema).length === 0
-    ) {
-      continue;
-    }
+    if (Object.keys(policySchema).length === 0) continue;
     const envelope = schemaEnvelopeForTargetPath(
       policySchema,
       entry.path,
@@ -6066,12 +6048,9 @@ const LABEL_LIST_KEYS = [
 ] as const;
 
 const unsupportedTrustSensitiveReason = (
-  schema: JSONSchema,
+  schema: CfcDeclaringSchema,
   path: readonly string[],
 ): string | undefined => {
-  if (!isObjectOrArray(schema) || !isObjectOrArray(schema.ifc)) {
-    return undefined;
-  }
   // Claims the runner does not implement. A write to a path declaring one must
   // fail closed rather than be silently ignored (and dropped by schema-merge),
   // which would give an author no enforcement and no error (audit S10).
@@ -6193,12 +6172,9 @@ const isWellFormedWritePolicyAnyOf = (ifc: Record<string, unknown>) => {
 // validation in grants.ts (§8.12.7 route 2a), which enforces the same
 // rejection on grant audience entries at write time.
 const disallowedAuthoredClauseReason = (
-  schema: JSONSchema,
+  schema: CfcDeclaringSchema,
   path: readonly string[],
 ): string | undefined => {
-  if (!isObjectOrArray(schema) || !isObjectOrArray(schema.ifc)) {
-    return undefined;
-  }
   const confidentiality = (schema.ifc as Record<string, unknown>)
     .confidentiality;
   if (!Array.isArray(confidentiality)) {
@@ -6223,13 +6199,9 @@ const disallowedAuthoredClauseReason = (
 };
 
 const exactCopySourcePath = (
-  schema: JSONSchema,
-): readonly string[] | undefined => {
-  if (!isObjectOrArray(schema) || !isObjectOrArray(schema.ifc)) {
-    return undefined;
-  }
-  return claimPathToLogicalPath(schema.ifc.exactCopyOf);
-};
+  schema: CfcDeclaringSchema,
+): readonly string[] | undefined =>
+  claimPathToLogicalPath(schema.ifc.exactCopyOf);
 
 // §8.3 projection claims. The lowered authored form (`Projection` /
 // `ProjectionOf` / `ProjectionPath` in @commonfabric/api/cfc) is
@@ -6367,24 +6339,12 @@ const projectedSourceLabel = (
 /**
  * The principals the stored envelope's declared label at `path`, or at the
  * nearest declared path above it, names in `represents-principal` claims: the
- * owners a field has, as the store records them. `undefined` for an envelope
- * that cannot be read, which names no owner and rules none out.
+ * owners a field has, as the store records them.
  */
-const storedRepresentedPrincipalsAt = (
-  tx: IExtendedStorageTransaction,
-  target: {
-    space: MemorySpace;
-    id: string;
-    scope: ReturnType<typeof normalizeCellScope>;
-  },
+const representedPrincipalsAt = (
+  stored: ReadableStoredCfcEnvelope,
   path: readonly string[],
-): string[] | undefined => {
-  const stored = loadStoredCfcEnvelope(tx, {
-    space: target.space,
-    id: target.id as URI,
-    scope: target.scope,
-  });
-  if (stored.status === "unreadable") return undefined;
+): string[] => {
   if (stored.status !== "loaded") return [];
   const logicalPath = canonicalizeLogicalPath(path);
   let nearest: LabelMapEntry | undefined;
@@ -6441,13 +6401,10 @@ const currentPrincipalIntegrityReason = (
     id: string;
     scope: ReturnType<typeof normalizeCellScope>;
   },
-  schema: JSONSchema,
+  stored: ReadableStoredCfcEnvelope,
+  schema: CfcDeclaringSchema,
   path: readonly string[],
 ): string | undefined => {
-  if (!isObjectOrArray(schema) || !isObjectOrArray(schema.ifc)) {
-    return undefined;
-  }
-
   const ifc = schema.ifc;
   const integrity = Array.isArray(ifc.integrity) ? ifc.integrity : [];
   const addIntegrity = Array.isArray(ifc.addIntegrity) ? ifc.addIntegrity : [];
@@ -6527,12 +6484,7 @@ const currentPrincipalIntegrityReason = (
       isCurrentPrincipalPlaceholder(ownerPrincipalSpec) &&
       !pathHoldsUnattributedInitialization(tx, target, path)
     ) {
-      const owners = storedRepresentedPrincipalsAt(tx, target, path);
-      if (owners === undefined) {
-        return `ownerPrincipal requires a readable stored envelope at /${
-          path.join("/")
-        }`;
-      }
+      const owners = representedPrincipalsAt(stored, path);
       if (owners.length > 1) {
         return `ownerPrincipal requires a single stored owner at /${
           path.join("/")
@@ -6702,8 +6654,7 @@ export const writeDetailValueForTarget = (
   },
   key: "value" | "previousValue",
 ): FabricValue => {
-  const writeDetails = tx.getWriteDetailsForTarget?.(target) ??
-    tx.getWriteDetails?.(target.space) ?? [];
+  const writeDetails = writeDetailsOf(tx, target);
   const targetPath = target.path.map((entry) => String(entry));
   let matchingWrite:
     | {
@@ -7033,8 +6984,7 @@ const writtenInTransaction = (
   path: readonly string[],
 ): boolean => {
   const addressPath = ["value", ...path];
-  const details = tx.getWriteDetailsForTarget?.(document) ??
-    tx.getWriteDetails?.(document.space) ?? [];
+  const details = writeDetailsOf(tx, document);
   return [...details].some((detail) =>
     detail.address.id === document.id &&
     normalizeCellScope(detail.address.scope) === document.scope &&
@@ -7118,17 +7068,9 @@ const linkedWriteValueForPolicy = (
     id: URI;
     scope: ReturnType<typeof normalizeCellScope>;
   },
-  value: unknown,
+  value: PrimitiveCellLink,
 ): unknown => {
-  if (!isPrimitiveCellLink(value)) {
-    return undefined;
-  }
-
   const link = parseLink(value, { ...baseTarget, path: [] });
-  if (link?.id === undefined || link.space === undefined) {
-    return undefined;
-  }
-
   const linkedTarget = {
     space: link.space,
     id: link.id as URI,
@@ -7145,50 +7087,18 @@ const linkedWriteValueForPolicy = (
   });
 };
 
-// Whether a pattern-path descent may address `value` by key.
+// The values at a pattern path of `value` that differ from those at the same
+// positions of `previousValue`.
 //
 // A path segment never addresses anything inside a `FabricSpecialObject`, so
-// the two descents below stop at one rather than resolving the segment against
-// its class surface. That covers a `FabricInstance` as well: these descents run
-// over ordinary stored values, a `FabricError` among them.
+// the descent stops at one rather than resolving the segment against its class
+// surface. That covers a `FabricInstance` as well: the descent runs over
+// ordinary stored values, a `FabricError` among them.
 //
 // TODO(danfuzz): stopping is an incomplete answer for an instance. No key of
 // its codec contents is reachable by property name, so a pattern path into one
 // resolves to no values and the policy condition it feeds is never evaluated
 // for that content. Fails open.
-const valuesAtPatternPath = (
-  value: unknown,
-  path: readonly string[],
-): unknown[] => {
-  if (path.length === 0) {
-    return [value];
-  }
-
-  const [head, ...rest] = path;
-  if (head === "*") {
-    if (!Array.isArray(value)) {
-      return [];
-    }
-    return value.flatMap((item, index) =>
-      index in value ? valuesAtPatternPath(item, rest) : []
-    );
-  }
-
-  // A pattern path does not descend through a link: the reference is the value
-  // at that slot, and what it points at is resolved elsewhere. Under the
-  // legacy representation a link is written as a record, which the container
-  // question below reads as keyable, so this test is what stops the descent
-  // there. Under `modernCellRep` a link is a `FabricLink`, which that question
-  // stops at on its own.
-  if (isPrimitiveCellLink(value) || !isKeyableObjectOrArray(value)) {
-    return [];
-  }
-  if (!(head in value)) {
-    return [];
-  }
-  return valuesAtPatternPath((value as Record<string, unknown>)[head], rest);
-};
-
 const changedValuesAtPatternPath = (
   value: unknown,
   previousValue: unknown,
@@ -7211,8 +7121,12 @@ const changedValuesAtPatternPath = (
     );
   }
 
-  // As in `valuesAtPatternPath`: a link ends the descent, and the test comes
-  // before the walk question for the same reason.
+  // A pattern path does not descend through a link: the reference is the value
+  // at that slot, and what it points at is resolved elsewhere. Under the
+  // legacy representation a link is written as a record, which the container
+  // question reads as keyable, so this test is what stops the descent there.
+  // Under `modernCellRep` a link is a `FabricLink`, which that question stops
+  // at on its own.
   if (isPrimitiveCellLink(value) || !isKeyableObjectOrArray(value)) {
     return [];
   }
@@ -7488,8 +7402,7 @@ const ifcEntryAppliesToAttemptedWrite = (
     wildcardPolicyMatchesValue(tx, target, schema, value, root);
   const wildcardIndex = path.indexOf("*");
   if (wildcardIndex === -1) {
-    const writes = tx.getWriteDetailsForTarget?.(target) ??
-      tx.getWriteDetails?.(target.space) ?? [];
+    const writes = writeDetailsOf(tx, target);
     // Owner adoption changes policy while retaining the stored bytes. It is
     // still a policy attempt and must pass every ordinary requirement gate.
     let touched = writePolicyInputsForDocument(tx, target).some((input) =>
@@ -7526,7 +7439,7 @@ const ifcEntryAppliesToAttemptedWrite = (
       // there is, and an ancestor in it touches. Attempted writes, elided
       // no-op writes among them, are attempts wherever they sit, and touch in
       // both directions.
-      const log = tx.getReactivityLog?.();
+      const log = tx.getReactivityLog();
       const reaches = (
         write: IMemorySpaceAddress,
         ancestorTouches: boolean,
@@ -7540,9 +7453,8 @@ const ifcEntryAppliesToAttemptedWrite = (
         return concretePathHasPrefix(writePath, path) ||
           (ancestorTouches && concretePathHasPrefix(path, writePath));
       };
-      touched = (log?.writes ?? []).some((write) =>
-        reaches(write, !detailedTarget)
-      ) || (log?.attemptedWrites ?? []).some((write) => reaches(write, true));
+      touched = log.writes.some((write) => reaches(write, !detailedTarget)) ||
+        (log.attemptedWrites ?? []).some((write) => reaches(write, true));
     }
     if (!touched) {
       return false;
@@ -7563,9 +7475,10 @@ const ifcEntryAppliesToAttemptedWrite = (
   // Only a write of the payload names a path of the value. A write to a
   // metadata field such as `result` names none, so a wildcard never takes it
   // for an item.
+  const log = tx.getReactivityLog();
   const exactAttemptedPaths = [
-    ...(tx.getReactivityLog?.().writes ?? []),
-    ...(tx.getReactivityLog?.().attemptedWrites ?? []),
+    ...log.writes,
+    ...(log.attemptedWrites ?? []),
   ].flatMap((write) => {
     if (
       write.space !== target.space ||
@@ -7587,15 +7500,12 @@ const ifcEntryAppliesToAttemptedWrite = (
     );
   }
 
-  const writes = tx.getWriteDetailsForTarget?.(target) ??
-    tx.getWriteDetails?.(target.space) ?? [];
-  let sawTargetWrite = false;
+  const writes = writeDetailsOf(tx, target);
   const prefix = path.slice(0, wildcardIndex);
   for (const write of writes) {
     if (write.address.id !== target.id) continue;
     if (normalizeCellScope(write.address.scope) !== target.scope) continue;
     if (write.address.path[0] !== "value") continue;
-    sawTargetWrite = true;
     const writePath = write.address.path.slice(1).map((entry) => String(entry));
     if (pathPatternMatches(path, writePath)) {
       return !fabricAwareEqual(write.value, write.previousValue) &&
@@ -7620,16 +7530,7 @@ const ifcEntryAppliesToAttemptedWrite = (
     }
   }
 
-  if (sawTargetWrite) {
-    return false;
-  }
-
-  const value = writeValueForTarget(tx, { ...target, path: prefix });
-  if (value === undefined) {
-    return false;
-  }
-  const matches = valuesAtPatternPath(value, path.slice(wildcardIndex));
-  return matches.some((match) => matchesValue(match));
+  return false;
 };
 
 // Epic D4 — per-write read-prefix provenance
@@ -8308,6 +8209,8 @@ const verifyInputRequirements = (
     id: URI;
     scope: ReturnType<typeof normalizeCellScope>;
   },
+  // The target's stored envelope, as the commit read it.
+  stored: ReadableStoredCfcEnvelope,
   // Resolves the implementation identities that authored the schema
   // write-policy inputs a claim at a field path governs: the longest-prefix
   // input on this cell, and every input beneath the path. `writeAuthorizedBy`
@@ -8390,7 +8293,7 @@ const verifyInputRequirements = (
     ) {
       continue;
     }
-    const ifc = isObjectOrArray(entry.schema) ? entry.schema.ifc : undefined;
+    const ifc = entry.schema.ifc;
     const unsupportedTrustSensitive = unsupportedTrustSensitiveReason(
       entry.schema,
       entry.path,
@@ -8408,6 +8311,7 @@ const verifyInputRequirements = (
     const currentPrincipalFailure = currentPrincipalIntegrityReason(
       tx,
       target,
+      stored,
       entry.schema,
       entry.path,
     );
@@ -8418,7 +8322,7 @@ const verifyInputRequirements = (
     for (const identity of identitiesForPath(entry.path)) {
       writeAuthorizedByFailure = writeAuthorizedByReason(
         tx,
-        entry.schema,
+        entry.schema.ifc.writeAuthorizedBy,
         entry.path,
         target.space,
         identity,
@@ -8433,6 +8337,7 @@ const verifyInputRequirements = (
       writeIsRuntimeInitialization(
         tx,
         target,
+        stored,
         entry.path,
         "writeAuthorizedBy",
       ) ||
@@ -8460,14 +8365,20 @@ const verifyInputRequirements = (
               entry.path,
               entry.schema,
             ) ||
-            writeIsRuntimeInitialization(tx, target, entry.path, "uiContract"),
+            writeIsRuntimeInitialization(
+              tx,
+              target,
+              stored,
+              entry.path,
+              "uiContract",
+            ),
         },
         deferWriterRefusal,
       );
       if (failure !== undefined) return { reason: failure, verdict: true };
     }
-    const requiredIntegrity = ifc?.requiredIntegrity ?? [];
-    const maxConfidentiality = ifc?.maxConfidentiality;
+    const requiredIntegrity = ifc.requiredIntegrity ?? [];
+    const maxConfidentiality = ifc.maxConfidentiality;
     const protectedEntry = requiredIntegrity.length > 0 ||
       maxConfidentiality !== undefined;
     // D4: quantify this entry's input checks over its own read prefix —
@@ -8693,6 +8604,8 @@ const verifyTrustedEventRequirements = (
     id: URI;
     scope: ReturnType<typeof normalizeCellScope>;
   },
+  // The target's stored envelope, as the commit read it.
+  stored: ReadableStoredCfcEnvelope,
   schema: JSONSchema,
   // A UI contract names who may write its path, as `writeAuthorizedBy`
   // does, so its refusal is deferred on the same terms as a writer's.
@@ -8721,7 +8634,9 @@ const verifyTrustedEventRequirements = (
     }
     // A UI contract gates who may write the value, as `writeAuthorizedBy`
     // does, so a runtime initialization satisfies it on the same terms.
-    if (writeIsRuntimeInitialization(tx, target, entry.path, "uiContract")) {
+    if (
+      writeIsRuntimeInitialization(tx, target, stored, entry.path, "uiContract")
+    ) {
       continue;
     }
     if (!trustedEventMatchesContract(tx, target, entry.path, entry.contract)) {
@@ -8881,7 +8796,7 @@ const verifyProjectionRequirements = (
 
 const derivePersistedLabel = (
   tx: IExtendedStorageTransaction,
-  schema: JSONSchema,
+  schema: CfcDeclaringSchema,
   schemaLabel: IFCLabel,
   sourceEntryLabels?: Map<string, IFCLabel>,
   owningSpace?: MemorySpace,
@@ -9279,11 +9194,6 @@ const persistedLabelFromSchemaAtPath = (
   );
 };
 
-const mergeLabels = (
-  left: IFCLabel | undefined,
-  right: IFCLabel | undefined,
-): IFCLabel => joinLabels([left, right]);
-
 const rootLabelFromSchema = (
   tx: IExtendedStorageTransaction,
   schema: JSONSchema | undefined,
@@ -9604,8 +9514,7 @@ const checkedSchemaPrincipalClaims = (
     }
   }
   if (
-    match === undefined || !isObjectOrArray(match.schema) ||
-    !isObjectOrArray(match.schema.ifc) ||
+    match === undefined ||
     !ifcEntryAppliesToAttemptedWrite(
       tx,
       document,
@@ -9887,7 +9796,7 @@ const linkedSourceEvidence = (
     );
   const pendingLabel = joinLabels([
     pendingSourceLabel,
-    metadataResolver.cover(pendingSourceView, [], undefined),
+    metadataResolver.cover(pendingSourceView, []),
   ]);
   const sourceLabel = joinLabels([
     storedLabel,
@@ -10294,11 +10203,7 @@ const createLinkLabelDeriver = (
       }
       // A reference covering the source path supplies its root by longest
       // prefix, and its entries below the source path rebased onto it.
-      const label = metadataResolver.cover(
-        { version: 1, entries },
-        relative,
-        undefined,
-      );
+      const label = metadataResolver.cover({ version: 1, entries }, relative);
       views.push(rebaseCfcLabelView({
         version: 1,
         entries: withoutShadowedPrincipalClaims(linked, relative),
@@ -10644,8 +10549,7 @@ const storedValuesAt = (
   },
 ): (path: readonly string[]) => readonly FabricValue[] | undefined => {
   const details = [
-    ...(tx.getWriteDetailsForTarget?.(target) ??
-      tx.getWriteDetails?.(target.space) ?? []),
+    ...writeDetailsOf(tx, target),
   ].filter((write) => sameDocument(write.address, target));
   // A whole-envelope write replaces the value without a value path.
   const envelopeWritten = details.some((write) =>
@@ -10798,10 +10702,9 @@ const storedForeignPositions = (
   const guarded = storedSchema === undefined ? [] : cfcSchemaEntries(
     storedSchema,
   ).filter((entry) =>
-    isObjectOrArray(entry.schema) && isObjectOrArray(entry.schema.ifc) &&
-    (entry.schema.ifc.writeAuthorizedBy !== undefined ||
-      entry.schema.ifc.writePolicyAnyOf !== undefined ||
-      entry.schema.ifc.uiContract !== undefined)
+    entry.schema.ifc.writeAuthorizedBy !== undefined ||
+    entry.schema.ifc.writePolicyAnyOf !== undefined ||
+    entry.schema.ifc.uiContract !== undefined
   ).map((entry) => entry.path);
   return {
     holdsForeign: (path) => {
@@ -11281,6 +11184,12 @@ export type StoredCfcEnvelope =
   }
   | { readonly status: "unreadable"; readonly reason: string };
 
+/** A stored envelope that could be read: loaded, or absent. */
+type ReadableStoredCfcEnvelope = Exclude<
+  StoredCfcEnvelope,
+  { status: "unreadable" }
+>;
+
 export const loadStoredCfcEnvelope = (
   tx: IExtendedStorageTransaction,
   target: {
@@ -11326,9 +11235,7 @@ export const loadStoredCfcEnvelope = (
       // Untagged, so retryable: the schema document could not be read in
       // this transaction. A CID CONTENT mismatch is a different animal — it
       // is deterministic, and tagged as a verdict where it is detected.
-      reason: error instanceof Error
-        ? error.message
-        : `schema load failed for ${target.id}`,
+      reason: describeFailure(error),
     };
   }
 };
@@ -11864,6 +11771,7 @@ const noteModulePolicyResolutionFailures = (
     readonly reason: string;
   }[],
 ): void => {
+  const mode = tx.getCfcState().policyEvaluationMode;
   for (const failure of failures) {
     const reference = isObjectOrArray(failure.reference)
       ? failure.reference
@@ -11872,7 +11780,7 @@ const noteModulePolicyResolutionFailures = (
       ? ` digest ${reference.policyDigest}`
       : "";
     tx.noteCfcDiagnostic(
-      `policy-evaluation(observe): module policy ${failure.reason}${digest} at ${site}`,
+      `policy-evaluation(${mode}): module policy ${failure.reason}${digest} at ${site}`,
     );
   }
 };
@@ -12134,9 +12042,8 @@ const verifyWriteFloor = function* (
     entries.map((entry) => [pathKey(entry.path), entry.label]),
   );
   for (const entry of entries) {
-    const ifc = isObjectOrArray(entry.schema) ? entry.schema.ifc : undefined;
-    const floor = Array.isArray(ifc?.requiredIntegrity)
-      ? ifc.requiredIntegrity
+    const floor = Array.isArray(entry.schema.ifc.requiredIntegrity)
+      ? entry.schema.ifc.requiredIntegrity
       : [];
     if (floor.length === 0) continue;
     if (entry.path.includes("*")) {
@@ -13049,6 +12956,7 @@ export function* prepareBoundaryCommitSteps(
         tx,
         schema,
         target,
+        stored,
         (path) =>
           identitiesForClaimPath(
             writeAuthorIdentities.get(key),
@@ -13088,7 +12996,13 @@ export function* prepareBoundaryCommitSteps(
     const trustedEventFailure = policyApplication
       ? undefined
       : firstFailure((schema) =>
-        verifyTrustedEventRequirements(tx, target, schema, deferWriterRefusal)
+        verifyTrustedEventRequirements(
+          tx,
+          target,
+          stored,
+          schema,
+          deferWriterRefusal,
+        )
       );
     if (trustedEventFailure) {
       reasons.push(verdictReason(trustedEventFailure));
@@ -13168,7 +13082,7 @@ export function* prepareBoundaryCommitSteps(
         entry.label,
       ]),
     );
-    const mergedSchemaEntrySchemas = new Map<string, JSONSchema>(
+    const mergedSchemaEntrySchemas = new Map<string, CfcDeclaringSchema>(
       mergedSchemaEntries.map((entry) => [
         pathKey(entry.path),
         entry.schema,
@@ -13266,14 +13180,9 @@ export function* prepareBoundaryCommitSteps(
           ) {
             return [];
           }
-          const ifc =
-            isObjectOrArray(entry.schema) && isObjectOrArray(entry.schema.ifc)
-              ? entry.schema.ifc
-              : undefined;
           if (
-            ifc !== undefined &&
-            (ifc.confidentiality !== undefined ||
-              ifc.integrity !== undefined)
+            entry.schema.ifc.confidentiality !== undefined ||
+            entry.schema.ifc.integrity !== undefined
           ) {
             remintedDeclaredPaths.set(pathKey(entry.path), entry.path);
           }
@@ -14967,7 +14876,7 @@ export function* prepareBoundaryCommitSteps(
             .map((entry) => ({
               path: encodePointer(entry.path),
               ifc: withoutUndefinedMembers(
-                isObjectOrArray(entry.schema) ? entry.schema.ifc ?? null : null,
+                entry.schema.ifc,
               ),
               at: entry.path,
             })).sort((left, right) => utf8Compare(left.path, right.path));

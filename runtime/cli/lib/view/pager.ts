@@ -21,7 +21,7 @@ import { type BlameRunner, blameRunner } from "./blame.ts";
 import type { Document } from "./model.ts";
 import { decodeKeys } from "./keys.ts";
 import { cursorScreenPos, renderFrame, type ViewState } from "./render.ts";
-import { Session, type SessionOptions } from "./session.ts";
+import { type PushedFrame, Session, type SessionOptions } from "./session.ts";
 import { ui } from "./theme.ts";
 import { onGrammarLoad, type Semantics } from "./languages/language.ts";
 import type { EditableSource } from "./editsource.ts";
@@ -230,9 +230,6 @@ export async function runPager(
   );
 
   const paint = (doc: Document, view: ViewState) => {
-    // A push still running when the viewer closes ends after the screen is
-    // gone, and has nothing left to draw on.
-    if (cleanedUp) return;
     const rows = renderFrame(doc, view);
     // Re-assert the padding background every frame. Some terminals drop the
     // OSC 11 default set at startup after the first repaint, so setting it once
@@ -256,6 +253,8 @@ export async function runPager(
   // Closing the viewer stops the loads still running.
   const blameController = new AbortController();
   const draw = () => {
+    // A push still running when the viewer closes ends after the screen is
+    // gone, and has nothing left to draw on.
     if (cleanedUp) return;
     paint(session.displayDoc(), session.view());
     for (const load of session.takeBlameLoads()) {
@@ -315,9 +314,7 @@ export async function runPager(
       cancelPush = undefined;
     }
   };
-  const startPush = (): boolean => {
-    const push = session.pendingPush;
-    if (!push) return false;
+  const startPush = (push: PushedFrame) => {
     paint(push.doc, push.view);
     cancelPush = deps.setTimer(() => {
       cancelPush = undefined;
@@ -325,7 +322,6 @@ export async function runPager(
       draw();
       startExpiry();
     }, PUSH_FRAME_MS);
-    return true;
   };
 
   // Ctrl-L pressed where the bar does not offer it says why, and the key changed
@@ -972,11 +968,12 @@ export async function runPager(
         stopExpiry();
         stopPush();
         pushStarted = false;
-        session.handleKey(key, () => {
+        session.handleKey(key, (push) => {
           // activateButton calls this after capturing the pushed frame and
           // before running the action, so a slow synchronous save leaves the
           // button visibly depressed for the duration of the work.
-          pushStarted = startPush();
+          startPush(push);
+          pushStarted = true;
         });
         serviceSettings();
         // A task starts as soon as its key is handled, so that the keys after

@@ -282,6 +282,50 @@ fi`,
 });
 
 Deno.test({
+  name:
+    "realGit: rolls back a nested commit found in a file reflog whose subject has a line separator",
+  ignore: Deno.build.os === "windows",
+  async fn() {
+    const root = await Deno.makeTempDir();
+    try {
+      await git(root, ["init", "-q"]);
+      await git(root, ["config", "user.email", "t@t.test"]);
+      await git(root, ["config", "user.name", "Test"]);
+      await git(root, ["commit", "-q", "--allow-empty", "-m", "original"]);
+      const marker = `${root}/.git/nested-hook-ran`;
+      await installHook(
+        root,
+        "reference-transaction",
+        `if test "$1" = committed; then
+  if test ! -e ${shellQuote(marker)}; then
+    touch ${shellQuote(marker)}
+    git commit --allow-empty -q -m nested
+  fi
+  rm -f "$(dirname "$GIT_INDEX_FILE")/reference-transactions" || exit 1
+fi`,
+      );
+      const runner = realGit(root);
+      const original = runner.headSha();
+      assert(original, "repository has a HEAD commit");
+
+      assertThrows(
+        () => runner.amendCommit("one\u2028two", new Map(), original),
+        Error,
+        "HEAD changed",
+      );
+
+      assertEquals(runner.headSha(), original);
+      assertEquals(
+        (await git(root, ["rev-list", "--count", "HEAD"])).trim(),
+        "1",
+      );
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  },
+});
+
+Deno.test({
   name: "realGit: reports failures and malformed output from merge helpers",
   ignore: Deno.build.os === "windows",
   async fn() {

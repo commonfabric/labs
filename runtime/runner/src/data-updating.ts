@@ -917,12 +917,12 @@ export function initializeScopedArgumentSlots(
         )
         : { ...childLink, scope: "user" as const };
       if (!target) continue;
-      let targetBlocked = false;
-      const resolvedTarget = resolveLink(runtime, tx, target, "top", {
-        onScopeBlocked: () => targetBlocked = true,
-      });
+      // A target that resolves to any other link is not this slot's own
+      // continuation: one that links elsewhere, and one whose follow a scope
+      // cap blocks, which resolves to a `data:` link holding `undefined`.
+      const resolvedTarget = resolveLink(runtime, tx, target, "top");
       if (
-        targetBlocked || resolvedTarget.pendingHopDoc ||
+        resolvedTarget.pendingHopDoc ||
         !areNormalizedLinksSame(target, resolvedTarget)
       ) continue;
       if (!present) {

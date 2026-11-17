@@ -8,8 +8,7 @@
  * whom the server admits only as a writer of the space.
  */
 
-import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
-import { isFabricPlainObject } from "@commonfabric/data-model";
+import type { FabricPlainObject } from "@commonfabric/api";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { PatternLifecycleVerb } from "@commonfabric/memory/v2";
 import type { RuntimeProgram } from "@commonfabric/runner";
@@ -153,12 +152,9 @@ async function call<T>(
   verb: PatternLifecycleVerb,
   { space, ...payload }: Record<string, unknown> & { space: MemorySpace },
 ): Promise<T> {
-  // Through JSON, so the arguments are plain data: what JSON decodes to is a
-  // fabric value.
-  const body: FabricValue = JSON.parse(JSON.stringify(payload));
-  if (!isFabricPlainObject(body)) {
-    throw new Error(`The \`${verb}\` arguments are not a JSON object`);
-  }
+  // Through JSON, so the arguments are plain data: what JSON decodes an
+  // object to is a plain fabric object.
+  const body: FabricPlainObject = JSON.parse(JSON.stringify(payload));
   try {
     return await config.session(space, verb, body) as T;
   } catch (error) {

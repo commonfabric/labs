@@ -2242,9 +2242,6 @@ export class CellImpl<T extends FabricValue>
         ".exec() must be called within a transaction (e.g. inside a handler)",
       );
     }
-    if (!this.#tx.recordSqliteWrite) {
-      throw new Error("storage transaction does not support sqlite writes");
-    }
     // `"sqlite"` is a type-level kind (the public `SqliteDb` type restricts who
     // can call `.exec`); at runtime we validate the actual handle value rather
     // than `#kind`, since handler-input materialization doesn't always stamp the
@@ -3632,11 +3629,6 @@ export class CellImpl<T extends FabricValue>
       throw new Error(
         "Cell.applyChanges() requires a transaction and a string value\n" +
           "help: use in handlers only, ensure cell is typed as string",
-      );
-    }
-    if (!this.#tx.recordTextChanges) {
-      throw new Error(
-        "Cell.applyChanges() requires a transaction that records text changes",
       );
     }
     if (!this.#synced) this.#startLoad();

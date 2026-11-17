@@ -253,7 +253,7 @@ type CycleComponent = {
  * at the cost of the edges leaving them. Either way a break is bounded by
  * the cycle it fell in and not by the work set.
  */
-class CycleBreaks {
+export class CycleBreaks {
   /**
    * The actions unplaced at construction. An action's index is its place
    * here.

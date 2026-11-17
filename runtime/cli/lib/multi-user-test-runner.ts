@@ -92,6 +92,7 @@ import type {
   WorkerResponse,
 } from "./multi-user-test-worker.ts";
 import { patternTestExperimentalOptions } from "./pattern-test-experimental-options.ts";
+import { isParticipantEntry, participantPatternOf } from "./require-pattern.ts";
 import {
   type RuntimeErrorExpectation,
   unmetRuntimeErrorExpectation,
@@ -113,50 +114,48 @@ export interface MultiUserDescriptorMeta {
 
 /**
  * Recognize a multi-user descriptor (default export with a `participants`
- * record of pattern factories or `{ pattern, user?, access? }` entries).
+ * record of patterns or `{ pattern, user?, access? }` entries).
  * Returns the orchestration metadata, or undefined for ordinary
  * single-runtime tests.
  *
- * @throws If a participant declares an `access` that is not a
- *   `SpaceAccessLevel`.
+ * @throws If a participant names a function that is not a pattern, or
+ *   declares an `access` that is not a `SpaceAccessLevel`.
  */
 export function multiUserDescriptorMeta(
   defaultExport: unknown,
 ): MultiUserDescriptorMeta | undefined {
   if (
     !isObjectOrArray(defaultExport) ||
-    typeof (defaultExport as { participants?: unknown }).participants !==
-      "object"
+    !isObjectOrArray(defaultExport.participants)
   ) {
     return undefined;
   }
-  const raw = (defaultExport as { participants: Record<string, unknown> })
-    .participants;
-  const participants: MultiUserParticipantSpec[] = [];
-  for (const [name, entry] of Object.entries(raw)) {
-    if (typeof entry === "function") {
-      participants.push({ name, user: name });
-    } else if (
-      isObjectOrArray(entry) &&
-      typeof (entry as { pattern?: unknown }).pattern === "function"
-    ) {
-      const { user, access } = entry as { user?: unknown; access?: unknown };
-      if (access !== undefined && !isSpaceAccessLevel(access)) {
-        throw new Error(
-          debugStr`Participant \`${name}\` declares access $quote${access}, ` +
-            "which is not one of `OWNER`, `WRITE`, `READ`, or `none`",
-        );
-      }
-      participants.push({
-        name,
-        user: typeof user === "string" ? user : name,
-        ...(access === undefined ? {} : { access }),
-      });
-    } else {
-      return undefined;
-    }
+  // Every entry's shape decides whether this is a descriptor at all, before
+  // any one entry's pattern or `access` is checked.
+  const entries = Object.entries(defaultExport.participants);
+  if (
+    entries.length === 0 ||
+    !entries.every(([, entry]) => isParticipantEntry(entry))
+  ) {
+    return undefined;
   }
-  return participants.length > 0 ? { participants } : undefined;
+  const participants = entries.map(([name, entry]) => {
+    participantPatternOf(name, entry);
+    const { user, access }: { user?: unknown; access?: unknown } =
+      isObjectOrArray(entry) ? entry : {};
+    if (access !== undefined && !isSpaceAccessLevel(access)) {
+      throw new Error(
+        debugStr`Participant \`${name}\` declares access $quote${access}, ` +
+          "which is not one of `OWNER`, `WRITE`, `READ`, or `none`",
+      );
+    }
+    return {
+      name,
+      user: typeof user === "string" ? user : name,
+      ...(access === undefined ? {} : { access }),
+    };
+  });
+  return { participants };
 }
 
 /** Whether `value` is a level a participant may declare. */
@@ -782,9 +781,7 @@ export async function runMultiUserTestPattern(
       nonIdempotent,
       consoleErrors: [],
       consoleWarnings: [],
-      error: error instanceof Error
-        ? `${error.message}\n${error.stack ?? ""}`
-        : String(error),
+      error: formatError(error),
     };
   } finally {
     let teardownError: Error | undefined;

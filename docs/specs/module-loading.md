@@ -22,7 +22,7 @@ and replication use the empty runtime fingerprint until that provider is enabled
 
 ## Last Updated
 
-2026-07-30
+2026-11-13
 
 ## Summary
 
@@ -321,7 +321,8 @@ hash with the tag `cf/executable-runtime-fingerprint/v1`. The hash includes:
 
 - the compiler-input fingerprint (`computeCompilerFingerprint()` in
   `compiler-fingerprint.deno.ts`);
-- [`schedulerRuntimeFingerprint()`][c12];
+- a scheduler-semantics version, defined alongside the provider and changed
+  with every change to how the scheduler runs a pattern's actions;
 - an automatically generated catalog hash of the implementations and export
   surfaces of every pattern-facing runtime module; and
 - an automatically generated catalog hash of the sandbox and execution-policy
@@ -1225,8 +1226,8 @@ index's restart-stable `action` column,
   implementations install their accessors through
   [`annotateFunctionDebugMetadata`][c11]; pattern factories call
   `defineAuthoredDebugAccessors` directly.
-- Scheduler fingerprints: [`schedulerImplementationFingerprint`][c12] and
-  [`schedulerRuntimeFingerprint`][c12].
+- Scheduler implementation fingerprint:
+  [`schedulerImplementationFingerprint`][c12].
 - Hash primitive: [`hashStringOf`][c13] (and [`hashOf`][c13]).
 - Content-addressed cache: [`sourceDocKey`][c14], [`compiledDocKey`][c14],
   [`buildSourceDocs`][c14], [`verifySourceDocs`][c14],

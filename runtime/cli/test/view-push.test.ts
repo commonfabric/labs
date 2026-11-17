@@ -20,6 +20,7 @@ import {
   type PushIo,
   pushRefused,
   realPushIo,
+  relayText,
 } from "../lib/view/push.ts";
 import { dialogBox } from "../lib/view/render.ts";
 import { Session } from "../lib/view/session.ts";
@@ -32,6 +33,7 @@ import {
   mouseKey,
   parseDocument,
   pullRequestPayload,
+  relayFrame,
 } from "./view-helpers.ts";
 
 /** Query answers for a checkout of `feature` whose `origin` has `main` as its
@@ -1125,6 +1127,55 @@ describe("view-push", () => {
       expect(result.success).toBe(true);
       expect(result.output).toMatch(/^git version /);
       expect(written.join("")).toBe(result.output);
+    });
+  });
+
+  describe("relayText()", () => {
+    const encoder = new TextEncoder();
+
+    it("passes each decoded piece of the stream to its writer", async () => {
+      const written: string[] = [];
+      const stream = new ReadableStream<Uint8Array<ArrayBuffer>>({
+        start(controller) {
+          controller.enqueue(encoder.encode("one "));
+          controller.enqueue(encoder.encode("two"));
+          controller.close();
+        },
+      });
+
+      await relayText(stream, (text) => written.push(text));
+
+      expect(written.join("")).toBe("one two");
+    });
+
+    it("rejects with the stream's own failure", async () => {
+      const stream = new ReadableStream<Uint8Array<ArrayBuffer>>({
+        start(controller) {
+          controller.error(new Error("the pipe broke"));
+        },
+      });
+
+      await expect(
+        relayText(stream, () => {}, new AbortController().signal),
+      ).rejects.toThrow("the pipe broke");
+    });
+
+    it("resolves with what arrived when its signal aborts", async () => {
+      const controller = new AbortController();
+      const written: string[] = [];
+      // A stream that never ends, as when a process git started holds the pipe.
+      const stream = new ReadableStream<Uint8Array<ArrayBuffer>>({
+        start(stream) {
+          stream.enqueue(encoder.encode("started"));
+        },
+      });
+
+      await relayText(stream, (text) => {
+        written.push(text);
+        controller.abort();
+      }, controller.signal);
+
+      expect(written).toEqual(["started"]);
     });
   });
 
@@ -2551,6 +2602,73 @@ describe("view-push", () => {
         ]);
 
         expect(harness.writes.at(-1)).not.toContain(PULL_REQUEST);
+      });
+
+      it("says why it is not watching when git fails as it names what was pushed, and reports the push as it went", async () => {
+        const answers = viewerGit();
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: (args) => {
+              if (args.join(" ") === "rev-parse --verify --quiet HEAD") {
+                throw new Error("git is gone");
+              }
+              return answers(args);
+            },
+            relay: () => fakeRelay().connect,
+          },
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => closable, "c"]);
+
+        const shown = harness.writes.find((text) => text.includes(" Close "))!;
+        expect(shown).toContain(
+          "Not watching for the pull request: git is gone.",
+        );
+        expect(shown).toContain("Pushed feature to origin. Opened");
+      });
+
+      it("sets nothing going to quit for a pull request that opened as the viewer closed", async () => {
+        const delivered = Promise.withResolvers<void>();
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit(),
+            relay: () => () =>
+              Promise.resolve({
+                readable: new ReadableStream<Uint8Array>({
+                  // The delivery reaches the read in progress, and then the
+                  // viewer is told to terminate before it reads what came.
+                  pull: (controller) => {
+                    controller.enqueue(
+                      relayFrame("pull_request", pullRequestPayload()),
+                    );
+                    try {
+                      harness.handlers.get("SIGTERM")!();
+                    } catch {
+                      // The harness's exit throws in place of ending the
+                      // process.
+                    }
+                    delivered.resolve();
+                  },
+                }, { highWaterMark: 0 }),
+                close: () => {},
+              }),
+          },
+        );
+        const watching = harness.frame((text) =>
+          text.includes("Quitting when the pull request opens.")
+        );
+
+        await harness.run(["P", async () => {
+          await watching;
+          await delivered.promise;
+        }]);
+
+        expect(harness.exits).toEqual([143]);
+        expect(harness.timers).not.toContain(500);
+        expect(harness.writes.at(-1)?.endsWith("\x1b[?1049l")).toBe(true);
       });
     });
 
