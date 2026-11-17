@@ -98,11 +98,13 @@ event declares. An `identity` slot has the label of the link at the position
 that holds the reference, and is joined with a value read of its path only where
 an output passes the reference on. A write row is compared beside the label the
 target's type declares, and the slot of a handle its body only passes on has the
-stamp of the link without the entry of origin `link`. A binding of an element
-body gets its event at the last element of each enclosing collection, and its
-write edges and state are evaluated with that element bound. A state cell of
-another instance, an element's or a compiled-in pattern's, is read from the
-manifest of that instance's result document. An output that passes on a
+stamp of the link without the entry of origin `link`. An event is sent where the
+executor of `exec/`, which runs beside today's run, stored the link to the
+stream ("Value code and the executor", below): a binding of an element body gets
+its event at the last element of each enclosing collection whose row holds the
+stream, and its write edges and state are evaluated with that element bound. A
+state cell of another instance, an element's or a compiled-in pattern's, is read
+from the manifest of that instance's result document. An output that passes on a
 reference the instance computed is compared with both sides reading the cell the
 stored link leads to. The static part is separated by document.
 
@@ -408,65 +410,65 @@ putting what it is given at the position (ES §2.2, "Value code places a
 stream"). The executor gives it a marker with no member: the code cannot send to
 it or read through it. When the executor stores a value, it writes in the
 marker's place the link to the stream of that binding for the element keys of
-the cone instance that called. For a marker at a position of the result it
-checks that a path of `Binding.result` covers the position. An entry of
-`Binding.result` holds the path and, for each `*` of it, what the `*` stands for
-(`ResultPath.stars`, ruling Z21): `element` for a collection the binding has an
-`element` step for, `every` for a collection whose callback writes the one
-stream of a binding made outside it, `member` for the one position of a member
-written after a spread, with the number of entries written before it, and
-`inside` for a collection of which one element holds the stream inside its
-value. The check accepts a marker at a `*` only at a position of the stated
-kind: for `element` a position whose key starts with the key of the cone
-instance that placed the marker (ruling Z30), which at the result of a `map` or
-a `filter` is the position that holds the key and at the result of a `flatMap`
-each member of the segment of that source key
-(`compare/fixtures/flat-streams.tsx`), for `every` and `inside` an element of a
-collection and no member written beside it, and for `member` the member written
-at that entry. The executor knows which it is from how it assembled the array:
-value code hands it the entries of an array that has a spread apart (`$rt.list`,
-`$rt.spread`), and the assembled result of a `map`, a `filter` or a `flatMap`
-has the key of each position (`compare/fixtures/star-kinds.tsx`).
+the cone instance that called, wherever the marker is. It checks no position,
+and no evaluation fails for where a stream is (ruling Z43). The plan record has
+no `Binding.result`: a binding names no path of the result, and a reader that
+has the plan alone cannot say where a stream is stored. The store records the
+position of each link to a stream that it stores, in whichever document
+(`Store.streams`), and `Instance.streams()` gives the positions at which a
+reader of the stored result finds one, each with the binding, the keys, and the
+position of the element of each enclosing collection. That is the same over an
+array of references, over an array of plain values in place, and over the result
+of another per-element construct. `compare/fixtures/flat-inner.tsx` has a
+`flatMap` whose callback returns an inner `map` that binds a handler, over
+references and over plain values in place: the result of the `flatMap` has one
+level of positions, and each holds the link for the keys of both collections.
 
-A collection among the children of a view node is stored as one nested child,
-and its elements are at `children/<n>/*` (ruling Z31), over an array of
-references, over an array of plain values in place, and over the result of
-another per-element construct. A child written after it has a static position,
-and two collections among the children of one node are two child positions. So
-kind `member` arises only in an array value that the author spreads into
-(`compare/fixtures/member-kind.tsx`). Value code writes the members of an array
-literal among the children as children of their own, and a view node that a
-function body builds flattens the arrays it is handed (`$rt.hf`), as the JSX
-factory of today does. The harness of the comparison resolves a listed path from
-the plan and the kinds (`streamAt` in `compare/harness.ts`): a `*` below a child
-position is resolved in the array that the child holds. A `map` over an array
-written in place runs when today's pattern is built, and the harness then takes
-the children from the position of the expression on as the positions for kind
-`inside`. The comparison of values flattens the children of a view node on both
-sides.
+A collection among the children of a view node is stored as one nested child
+(ruling Z31), over an array of references, over an array of plain values in
+place, and over the result of another per-element construct. A child written
+after it has its own position, and two collections among the children of one
+node are two child positions. A JSX spread child, and an array literal with a
+spread or a hole among the children, is each one child at its written position,
+and the literal is stored as one nested array value (ruling Z39;
+`compare/fixtures/spread-child.tsx`). Value code writes the members of an array
+literal with no spread and no hole among the children as children of their own,
+and a view node that a function body builds flattens the arrays it is handed
+(`$rt.hf`), as the JSX factory of today does. An array literal with a spread is
+an array literal in value code, with the members of each spread operand read
+through `$rt.spread`. The comparison of values flattens the children of a view
+node on both sides.
 
-A marker at a position no listed path covers fails the evaluation that stores it
-(ruling Z19). What keeps its stored value is the top-level property of the
-result that holds the position, the whole of `$UI` for a marker anywhere in the
-tree (ruling Z29): nothing at or below the property is written, which leaves
-nothing there where nothing was stored, and every other property of the result
-is stored. The instance records an error with the binding, the position and the
-property (`Instance.errors`), which the next evaluation that stores the property
-clears, and `Instance.failures` has every such marker of every evaluation. That
-is the same for a marker of a cone of an element body over an array of
-references, over an array of plain values in place, and over the result of
-another per-element construct. So the crate lists a path for every position at
-which value code can place a stream: also for a member written after a spread,
-for a stream inside a value that the elements of a collection hold, for a
-binding of the body of a `flatMap`, and for a stream in what a promoted
-`computed` returns. A stream that is an input of the pattern is a reference like
-any other input, and what passes it on stores a link to its place. A sandboxed
-body that is handed a marker in its computed argument gets a handle to the
-stream, and a stream that a body returns into the result is stored as the link
-to it and checked against no listed path (ruling Z20;
-`compare/fixtures/stream-returned.tsx`). This is the same for an element body
-over an array of references, over an array of plain values in place, and over
-the result of another per-element construct.
+A stream that is an input of the pattern is a reference like any other input,
+and what passes it on stores a link to its place. A sandboxed body that is
+handed a marker in its computed argument gets a handle to the stream, and a
+stream that a body returns into the result is stored as the link to it (ruling
+Z20; `compare/fixtures/stream-returned.tsx`).
+
+The harness of the comparison finds the stream to send an event to from the
+executor's record (`Scenario.streams`, `streamAt` in `compare/harness.ts`). An
+executor runs beside today's run and handles each event that today's run
+committed, so its record is that of the same events when the next one is sent.
+For a binding, the harness takes the positions at which the executor's stored
+result holds the link, the last element of each enclosing collection first, and
+sends the event at the first of them at which today's run holds a stream. Two
+layouts of today's run differ from the executor's, and the harness translates
+both: today's run holds the result of a pattern at a child position, with its
+tree under `$UI`, and it nests the children of a view node differently, as where
+a `map` over an array written in place runs when the pattern is built. A child
+is found by the number of children before it, counted with each nested array
+flat. A scenario with events and no executor sends none. A binding whose stream
+the executor's result does not hold, and a module the executor does not run, get
+no event.
+
+On a re-key of a plain value in place (ruling Z24), what the old key holds moves
+to the new key: the state cells, the `asInstance()` instance, and the instance
+that a `lift` or a `computed` of the element body made, which moves as a child
+and keeps its documents (ruling Z41; `compare/fixtures/rekey-made.tsx`). What is
+moved replaces what is stored under the new key. Nothing moves for a binding
+that a function body made, and nothing for another element whose occurrence
+count the write changed. A write that is not through a reference by key re-keys
+nothing.
 
 A call of a pattern through the factory modifier `asInstance()`, as
 `Row.asInstance()({ item })`, is an instance of its own (rulings Z35 and Z36).
@@ -498,18 +500,23 @@ Z37 and Z38). The front end reads it as `T` with a key annotation, the schema of
 the items of the array has the keyword `keyField`, and the record of a
 collection whose source is a slot or an output holds a copy
 (`Collection.keyField`). The executor keys a plain value that holds the field by
-the value of the field, with the occurrence count, and the key names the field,
-so a reference by key is resolved with no schema at hand. A change of another
-member changes no key: the cone instances that read the changed member are
-evaluated, and the state cells and the `asInstance()` instance of the key stay,
-for a new array from a computation, a `set` of the whole array, and a write
-through a reference by key, which then re-keys nothing. A position that holds a
-link is keyed by its cell, and a construct over the result of another construct
-has the upstream key. `compare/fixtures/keyed-by.tsx` has a plain array
-generated from scratch whose elements change another field between evaluations,
-a `filter` and a `map` over it, and an array of plain values in place. Today's
-runtime has no `KeyedBy`, so the tests of it are of the executor alone. The
-crate does not report `keyed-by:declaration`.
+the value of the field, with the occurrence count. The key does not say how it
+was formed (ruling Z42): it has the form of a key formed from a whole value, and
+the store resolves a reference by key with the key field that the schema of the
+array declares for its items. The store keeps the schema each document is stored
+under (`Store.schemas`): the one it was made with, and for a document made with
+none the schema of the first position that links to it or of the first read of
+it. A change of another member changes no key: the cone instances that read the
+changed member are evaluated, and the state cells and the `asInstance()`
+instance of the key stay, for a new array from a computation, a `set` of the
+whole array, and a write through a reference by key, which then re-keys nothing.
+A position that holds a link is keyed by its cell, and a construct over the
+result of another construct has the upstream key.
+`compare/fixtures/keyed-by.tsx` has a plain array generated from scratch whose
+elements change another field between evaluations, a `filter` and a `map` over
+it, and an array of plain values in place. Today's runtime has no `KeyedBy`, so
+the tests of it are of the executor alone. The crate does not report
+`keyed-by:declaration`.
 
 `compare/values.ts` compares the values the executor computes with those of
 today's runtime: the members of the result and the state cells of the pattern's
@@ -525,23 +532,27 @@ deno run -A --no-check base/pattern-compiler/compare/values-corpus.ts again valu
 ```
 
 `run` keeps what today's runtime computed in the results file, and `again` runs
-the executor alone on the crate's current output against it. Before each event
-the comparison seeds `Math.random` alike on both sides (`compare/random.ts`), so
-a handler that draws a number, as the shuffle of
-`patterns/showcase/card-piles/main.tsx` does, draws the same one in today's run
-and in the executor's (`compare/fixtures/random.tsx`). Notes 281 on of
-`SPEC-NOTES.md` list what the executor needed that the plan and the documents do
-not give, and what the comparison found. Notes 307 on say what the rulings of
-2026-11-16 on those needs changed in the crate and the executor, what they leave
-undetermined, and the figures of the comparison after them. Notes 325 on do the
-same for the rulings on `Cone.within` and on who places a stream, and for
-`reduce`, the record of a key of a list, and the keys of the result of a
-`flatMap`. Notes 344 on have what today's runtime stores when a record gets into
-a list, and rulings Z12 to Z17. Notes 367 on have rulings Z18 to Z23, the seeded
-`Math.random`, and the instances and bindings a function body makes. Notes 387
-on have rulings Z24 to Z38: the layout of the children of a view node, the
-re-key of a plain value in place, the copy a function body holds, `asInstance()`
-and `KeyedBy`.
+the executor alone on the crate's current output against it, with each event
+sent for the elements that `run` recorded. The file holds a member or a position
+of today's values that holds nothing as a record that stands for it, so `again`
+compares what `run` compared. Before each event the comparison seeds
+`Math.random` alike on both sides (`compare/random.ts`), so a handler that draws
+a number, as the shuffle of `patterns/showcase/card-piles/main.tsx` does, draws
+the same one in today's run and in the executor's
+(`compare/fixtures/random.tsx`). Notes 281 on of `SPEC-NOTES.md` list what the
+executor needed that the plan and the documents do not give, and what the
+comparison found. Notes 307 on say what the rulings of 2026-11-16 on those needs
+changed in the crate and the executor, what they leave undetermined, and the
+figures of the comparison after them. Notes 325 on do the same for the rulings
+on `Cone.within` and on who places a stream, and for `reduce`, the record of a
+key of a list, and the keys of the result of a `flatMap`. Notes 344 on have what
+today's runtime stores when a record gets into a list, and rulings Z12 to Z17.
+Notes 367 on have rulings Z18 to Z23, the seeded `Math.random`, and the
+instances and bindings a function body makes. Notes 387 on have rulings Z24 to
+Z38: the layout of the children of a view node, the re-key of a plain value in
+place, the copy a function body holds, `asInstance()` and `KeyedBy`. Notes 406
+on have rulings Z39 to Z43: the plan without `Binding.result`, the key that does
+not name its field, and what a re-key moves.
 
 ## The parser
 
