@@ -709,8 +709,9 @@ export interface PatternIndexUnpublishLineageResponse {
  * The member's give-to-get setting. `enabled` is the main switch: while it
  * is on, the index shares versions agents make for the member, and the
  * member sees what others share; `selfBuilt` also shares the versions the
- * member builds themselves (`cf`, Claude Code). Turned off, the member sees
- * only named patterns.
+ * member builds themselves (`cf`, Claude Code). Turned off, the member's
+ * searches and listings hold only named patterns; fetching a shared one by
+ * id still works.
  */
 export interface PatternIndexSharingSettings {
   enabled: boolean;

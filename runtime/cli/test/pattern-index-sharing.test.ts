@@ -47,7 +47,7 @@ describe("pattern-index sharing", () => {
       );
     });
 
-    it("says you see only named patterns when sharing is off, whatever --self-built says", () => {
+    it("says search shows only named patterns, and opening by id still works, when sharing is off", () => {
       const lines = sharingLines({
         ...SETTINGS,
         enabled: false,
@@ -55,6 +55,7 @@ describe("pattern-index sharing", () => {
       });
 
       expect(lines[0]).toContain("only patterns published under a name");
+      expect(lines[0]).toContain("open by its id still works");
       expect(lines.join("\n")).not.toContain("build yourself");
     });
   });

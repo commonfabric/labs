@@ -3387,9 +3387,10 @@ the same person through chains the root issues:
 loom's settings change, and `cf index sharing on|off` and `--self-built on|off`
 change it. On, which is the default, their patterns are shared anonymously once
 they open them in their loom and they pass the privacy check, and they see what
-others share; off, nothing of theirs is shared and they see only patterns
-published under a name. `--self-built` says whether that covers the patterns
-they build themselves in `cf` and Claude Code.
+others share; off, nothing of theirs is shared, and search and listings show
+them only patterns published under a name, though a shared pattern opened by its
+id, as an import or `--from-index` does, still works. `--self-built` says
+whether that covers the patterns they build themselves in `cf` and Claude Code.
 
 `cf index whoami` says which member the index sees the identity as. An admin
 admits a key without an invite with `cf index admit <did>`.
