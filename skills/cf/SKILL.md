@@ -327,11 +327,11 @@ module read it.
 computed path, or one that ships with a program that does not read it. It adds
 to what the source declares rather than replacing it. A data file must be UTF-8
 text, or an image, a font, or a sound read with `dataFile.url()`, and sit inside
-the deployment root, which the CLI infers to cover the main
-entry, every test entry, and every data file unless `--root` says otherwise.
-Like `--test`, the flag is repeatable and defines part of the revision, so
-repeat the complete set on every `setsrc`. Changing a data file alone still
-produces a new source revision.
+the deployment root, which the CLI infers to cover the main entry, every test
+entry, and every data file unless `--root` says otherwise. Like `--test`, the
+flag is repeatable and defines part of the revision, so repeat the complete set
+on every `setsrc`. Changing a data file alone still produces a new source
+revision.
 
 `setsrc` normally rejects incompatible argument/result schema changes and
 retained links whose durable contracts no longer fit. For an intentional
