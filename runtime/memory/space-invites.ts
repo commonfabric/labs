@@ -227,23 +227,29 @@ export class SpaceInviteError extends Error {
   }
 }
 
-/** Canonical secure service origin, allowing loopback HTTP for development. */
-export function normalizeInviteHost(host: string): string {
-  let url: URL;
-  try {
-    url = new URL(host);
-  } catch {
-    throw new SpaceInviteError("invalid-host");
-  }
+/**
+ * Canonical secure service origin, allowing loopback HTTP for development, or
+ * `undefined` for a host that is not one.
+ */
+export function inviteHostOrigin(host: string): string | undefined {
+  if (!URL.canParse(host)) return undefined;
+  const url = new URL(host);
   const loopback = isLoopbackHostname(url.hostname);
   if (
     url.username || url.password || url.pathname !== "/" || url.search ||
     url.hash ||
     !(url.protocol === "https:" || (url.protocol === "http:" && loopback))
   ) {
-    throw new SpaceInviteError("invalid-host");
+    return undefined;
   }
   return url.origin;
+}
+
+/** Canonical secure service origin, allowing loopback HTTP for development. */
+export function normalizeInviteHost(host: string): string {
+  const origin = inviteHostOrigin(host);
+  if (origin === undefined) throw new SpaceInviteError("invalid-host");
+  return origin;
 }
 
 /** Whether a value is the canonical unpadded encoding of exactly 32 bytes. */

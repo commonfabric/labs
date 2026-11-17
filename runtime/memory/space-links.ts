@@ -23,10 +23,9 @@
 import type { DIDKey } from "@commonfabric/identity/did";
 import {
   INVITE_LINK_SCHEME,
+  inviteHostOrigin,
   isInviteDIDKey,
   isSchemeAction,
-  normalizeInviteHost,
-  SpaceInviteError,
 } from "./space-invites.ts";
 
 /** A space and the service that holds it. */
@@ -52,17 +51,12 @@ const SPACE_LINK_KEYS = ["host", "space"] as const;
 
 /**
  * `host` as a service origin, by the invitation link format's rule
- * (`normalizeInviteHost`).
+ * (`inviteHostOrigin`).
  */
 function serviceOrigin(host: string): string {
-  try {
-    return normalizeInviteHost(host);
-  } catch (error) {
-    if (error instanceof SpaceInviteError) {
-      throw new SpaceLinkError("invalid-host");
-    }
-    throw error;
-  }
+  const origin = inviteHostOrigin(host);
+  if (origin === undefined) throw new SpaceLinkError("invalid-host");
+  return origin;
 }
 
 /**
