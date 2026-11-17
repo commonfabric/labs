@@ -471,10 +471,12 @@ describe("an element construct", () => {
       true,
     ]);
     const tree = (instance.result() as { $UI: ViewNode }).$UI;
-    expect((tree.children as ViewNode[]).map((row) => row.children)).toEqual([
-      ["a", false],
-      ["a", true],
-    ]);
+    expect((tree.children[0] as ViewNode[]).map((row) => row.children)).toEqual(
+      [
+        ["a", false],
+        ["a", true],
+      ],
+    );
   });
 
   it("keeps an element's state with its value when the element moves", async () => {
@@ -487,10 +489,12 @@ describe("an element construct", () => {
     instance.writeArgument(["tags"], ["b", "a"]);
 
     const tree = (instance.result() as { $UI: ViewNode }).$UI;
-    expect((tree.children as ViewNode[]).map((row) => row.children)).toEqual([
-      ["b", true],
-      ["a", false],
-    ]);
+    expect((tree.children[0] as ViewNode[]).map((row) => row.children)).toEqual(
+      [
+        ["b", true],
+        ["a", false],
+      ],
+    );
     // The results of a key move with it, and nothing is evaluated for
     // the element (ruling Z6).
     expect(instance.counts.elementEvaluations).toBe(before);
@@ -524,7 +528,7 @@ describe("an element construct", () => {
     ]);
     const tree = (instance.result() as { $UI: ViewNode }).$UI;
     expect(
-      (tree.children as ViewNode[]).map((row) =>
+      (tree.children[0] as ViewNode[]).map((row) =>
         (row.children[0] as ViewNode).children
       ),
     ).toEqual([["b"], ["a"], ["c"]]);
@@ -546,7 +550,7 @@ describe("an element construct", () => {
     // the value: each holds the array, the key, and no path below it.
     const stored = JSON.stringify(instance.store.docs.get("result")?.value);
     expect(stored).not.toContain('"path":["tags","0"');
-    expect(stored).not.toContain('"children":["a",');
+    expect(stored).not.toContain('"children":[["a",');
     expect(stored).toContain(
       JSON.stringify({
         $link: { doc: "argument", path: ["tags", keySegment('value:"a"#0')] },
@@ -1443,6 +1447,9 @@ describe("the stream of a binding in a computed value", () => {
   };
   const tree = (instance: Instance) =>
     (instance.store.docs.get("result")?.value as { $UI: Stored }).$UI;
+  // The collection among the children of a list is one nested child, the
+  // first of the list (ruling Z31).
+  const rowsOf = (list: Stored) => list.children[0] as unknown as Stored[];
   const streamsOf = (rows: Stored[]) => rows.map((row) => row.props.onClick);
   const without = (artifact: Artifact, binding: number, path: string[]) => {
     const copy = structuredClone(artifact);
@@ -1485,11 +1492,11 @@ describe("the stream of a binding in a computed value", () => {
     };
     const one = { $stream: { binding: 0, keys: [] } };
 
-    // At a member of the result, below the conditional, and after the
-    // spread of a collection.
+    // At a member of the result, below the conditional, and at the child
+    // written after a collection, which is the second child of the list.
     expect(stored.inc).toEqual(one);
     expect(tree(instance).children[0].props.onClick).toEqual(one);
-    expect(tree(instance).children[1].children[2].props.onClick).toEqual(one);
+    expect(tree(instance).children[1].children[1].props.onClick).toEqual(one);
     expect(instance.failures).toEqual([]);
   });
 
@@ -1499,7 +1506,7 @@ describe("the stream of a binding in a computed value", () => {
       argument(),
     );
 
-    expect(streamsOf(tree(instance).children[1].children.slice(0, 2)))
+    expect(streamsOf(rowsOf(tree(instance).children[1])))
       .toEqual([
         { $stream: { binding: 1, keys: ['cell:argument:["pool","a"]#0'] } },
         { $stream: { binding: 1, keys: ['cell:argument:["pool","b"]#0'] } },
@@ -1517,7 +1524,7 @@ describe("the stream of a binding in a computed value", () => {
       argument(),
     );
 
-    expect(streamsOf(tree(instance).children[2].children)).toEqual([
+    expect(streamsOf(rowsOf(tree(instance).children[2]))).toEqual([
       { $stream: { binding: 2, keys: ['value:"x"#0'] } },
       { $stream: { binding: 2, keys: ['value:"skip"#0'] } },
       { $stream: { binding: 2, keys: ['value:"y"#0'] } },
@@ -1535,7 +1542,7 @@ describe("the stream of a binding in a computed value", () => {
     );
 
     // The keys are those of the elements the `filter` kept.
-    expect(streamsOf(tree(instance).children[3].children)).toEqual([
+    expect(streamsOf(rowsOf(tree(instance).children[3]))).toEqual([
       { $stream: { binding: 3, keys: ['value:"x"#0'] } },
       { $stream: { binding: 3, keys: ['value:"y"#0'] } },
     ]);
@@ -1569,7 +1576,7 @@ describe("the stream of a binding in a computed value", () => {
     >;
     expect("inc" in stored).toBe(false);
     expect(instance.result()).toMatchObject({ chosen: "", count: 0 });
-    expect(tree(instance).children[1].children[2].props.onClick).toEqual({
+    expect(tree(instance).children[1].children[1].props.onClick).toEqual({
       $stream: { binding: 0, keys: [] },
     });
   });
@@ -1608,7 +1615,8 @@ describe("the stream of a binding in a computed value", () => {
 
     expect((instance.result() as { count: number }).count).toBe(2);
     expect(tree(instance).children[0]).toBe(null);
-    expect(tree(instance).children[1].children.length).toBe(3);
+    expect(tree(instance).children[1].children.length).toBe(2);
+    expect(rowsOf(tree(instance).children[1]).length).toBe(2);
   });
 
   it("matches a `*` of a listed path at any element, in each of the three bodies", async () => {
@@ -1618,9 +1626,9 @@ describe("the stream of a binding in a computed value", () => {
     );
 
     expect(paths).toEqual([
-      [["$UI", "children", "1", "children", "*", "props", "onClick"]],
-      [["$UI", "children", "2", "children", "*", "props", "onClick"]],
-      [["$UI", "children", "3", "children", "*", "props", "onClick"]],
+      [["$UI", "children", "1", "children", "0", "*", "props", "onClick"]],
+      [["$UI", "children", "2", "children", "0", "*", "props", "onClick"]],
+      [["$UI", "children", "3", "children", "0", "*", "props", "onClick"]],
     ]);
     // Each `*` is of kind `element`: the binding has the `element` step
     // of the collection, over references, over plain values in place,
@@ -1631,35 +1639,35 @@ describe("the stream of a binding in a computed value", () => {
       { path: listed![0], stars: [{ kind: "element" }] },
     ]));
     expect(new Instance(artifact, argument()).failures).toEqual([]);
-    // Without its path, the output of each key that holds the stream
-    // fails, and each keeps what was stored for it, which is nothing.
-    // The outputs beside them are stored (ruling Z19).
+    // Without its path, the marker of each key is at a position no
+    // listed path covers. The output that holds those positions is the
+    // collection, the nested child of the list: it keeps what was stored
+    // for it, which is nothing, and the outputs beside it are stored
+    // (ruling Z19).
     const lengths = [2, 3, 2];
     for (const binding of [1, 2, 3]) {
       const instance = new Instance(
         without(artifact, binding, paths[binding - 1]![0]),
         argument(),
       );
-      const list = ["$UI", "children", `${binding}`, "children"];
+      const list = ["$UI", "children", `${binding}`, "children", "0"];
       expect(instance.failures.map(({ held, path }) => [held, path])).toEqual(
         Array.from({ length: lengths[binding - 1] }, (_, index) => [
-          [...list, `${index}`],
+          list,
           [...list, `${index}`, "props", "onClick"],
         ]),
       );
       expect(instance.failures.every((failure) => failure.binding === binding))
         .toBe(true);
-      const rows = tree(instance).children[binding].children;
-      expect(rows.slice(0, lengths[binding - 1]).every((row) => row == null))
-        .toBe(true);
-      // The member written after the spread, and the other lists.
+      expect(rowsOf(tree(instance).children[binding]) ?? null).toBe(null);
+      // The child written after the collection, and the other lists.
       if (binding === 1) {
-        expect(rows[2].props.onClick).toEqual({
+        expect(tree(instance).children[1].children[1].props.onClick).toEqual({
           $stream: { binding: 0, keys: [] },
         });
       }
       const other = binding === 2 ? 3 : 2;
-      expect(streamsOf(tree(instance).children[other].children).length).toBe(
+      expect(streamsOf(rowsOf(tree(instance).children[other])).length).toBe(
         lengths[other - 1],
       );
     }
@@ -2767,7 +2775,7 @@ describe("what a `*` of a result path stands for", () => {
   const failed = (artifact: Artifact) =>
     new Instance(artifact, argument()).failures.map(({ binding, path }) => [
       binding,
-      path.slice(1, 5).join("/"),
+      path.slice(1, 6).join("/"),
     ]);
 
   it("states the kind of each `*`", async () => {
@@ -2778,16 +2786,20 @@ describe("what a `*` of a result path stands for", () => {
     // The callback writes the stream of a binding made outside it, over
     // references and over plain values in place.
     expect(stars(INC)).toEqual([[{ kind: "every" }], [{ kind: "every" }]]);
-    // A text and a spread are written before the member.
-    expect(stars(MORE)).toEqual([[{ kind: "member", index: 2 }]]);
+    // A child written after a collection has a position of its own and
+    // no `*` (ruling Z31).
+    expect(plan.bindings[MORE].result).toEqual([{
+      path: ["$UI", "children", "2", "children", "2", "props", "onClick"],
+      stars: [],
+    }]);
     // One element of an array of plain values written in place holds the
     // stream inside its value.
     expect(stars(STORY)).toEqual([[{ kind: "inside" }]]);
     // Over the result of another per-element construct, whose keys the
     // collection has.
     expect(stars(ROW_PICK)).toEqual([[{ kind: "element" }]]);
-    // Two collections spread into one array, over references and over
-    // plain values in place.
+    // Two collections among the children of one node, over references
+    // and over plain values in place.
     expect(stars(ITEM_PICK)).toEqual([[{ kind: "element" }]]);
     expect(stars(TAG_PICK)).toEqual([[{ kind: "element" }]]);
   });
@@ -2806,46 +2818,69 @@ describe("what a `*` of a result path stands for", () => {
     // at the elements of the collection, over references.
     expect(failed(restated(artifact, INC, [{ kind: "member", index: 0 }])))
       .toEqual([
-        [INC, "children/0/children/0"],
-        [INC, "children/0/children/1"],
+        [INC, "children/0/children/0/0"],
+        [INC, "children/0/children/0/1"],
       ]);
     // And over plain values in place, with the second path of `inc`.
     const second = structuredClone(artifact);
     second.plan.bindings[INC].result![1].stars = [{ kind: "member", index: 0 }];
     expect(failed(second)).toEqual([
-      [INC, "children/1/children/0"],
-      [INC, "children/1/children/1"],
-      [INC, "children/1/children/2"],
+      [INC, "children/1/children/0/0"],
+      [INC, "children/1/children/0/1"],
+      [INC, "children/1/children/0/2"],
     ]);
   });
 
+  // Kind `member` arises in an array value with a spread alone, since a
+  // collection among the children of a view node is one child (ruling
+  // Z31). `fixtures/member-kind.tsx` has it after a spread over
+  // references and after one over plain values in place.
   it("accepts a marker of kind `member` at the position of that member alone", async () => {
-    const artifact = await artifactOf("star-kinds");
-    // The children hold the text, the two elements, and the member.
-    const position = [MORE, "children/2/children/3"];
+    const artifact = await artifactOf("member-kind");
+    const [AFTER, TAIL] = [0, 1];
+    const failures = (changed: Artifact) =>
+      new Instance(changed, argument()).failures.map(({ binding, path }) => [
+        binding,
+        path.join("/"),
+      ]);
+    expect(artifact.plan.bindings[AFTER].result).toEqual([{
+      path: ["rows", "*", "pick"],
+      stars: [{ kind: "member", index: 2 }],
+    }]);
+    expect(artifact.plan.bindings[TAIL].result).toEqual([{
+      path: ["words", "*", "pick"],
+      stars: [{ kind: "member", index: 1 }],
+    }]);
+    expect(failures(artifact)).toEqual([]);
+    // `rows` holds the first member, the two elements, and the member.
+    const position = [AFTER, "rows/3/pick"];
 
     // Stated as every position of a collection, or as another member.
-    expect(failed(restated(artifact, MORE, [{ kind: "every" }]))).toEqual([
+    expect(failures(restated(artifact, AFTER, [{ kind: "every" }]))).toEqual([
       position,
     ]);
-    expect(failed(restated(artifact, MORE, [{ kind: "inside" }]))).toEqual([
+    expect(failures(restated(artifact, AFTER, [{ kind: "inside" }]))).toEqual([
       position,
     ]);
-    expect(failed(restated(artifact, MORE, [{ kind: "member", index: 1 }])))
+    expect(failures(restated(artifact, AFTER, [{ kind: "member", index: 1 }])))
       .toEqual([position]);
-    expect(failed(restated(artifact, MORE, [{ kind: "member", index: 3 }])))
+    expect(failures(restated(artifact, AFTER, [{ kind: "member", index: 3 }])))
       .toEqual([position]);
+    // Over plain values in place, `words` holds three elements first.
+    expect(failures(restated(artifact, TAIL, [{ kind: "every" }]))).toEqual([
+      [TAIL, "words/3/pick"],
+    ]);
   });
 
   it("accepts a marker of kind `inside` at an element of the collection alone", async () => {
     const artifact = await artifactOf("star-kinds");
 
     expect(failed(restated(artifact, STORY, [{ kind: "member", index: 0 }])))
-      .toEqual([[STORY, "children/4/children/0"]]);
+      .toEqual([[STORY, "children/4/children/0/0"]]);
     // The binding has no `element` step, so no key of it is at a
     // position.
     expect(failed(restated(artifact, STORY, [{ kind: "element" }]))).toEqual([
-      [STORY, "children/4/children/0"],
+      [STORY, "children/4/children/0/0"],
     ]);
   });
 
@@ -2857,9 +2892,9 @@ describe("what a `*` of a result path stands for", () => {
     expect(
       failed(restated(artifact, ROW_PICK, [{ kind: "member", index: 0 }])),
     ).toEqual([
-      [ROW_PICK, "children/5/children/0"],
-      [ROW_PICK, "children/5/children/1"],
-      [ROW_PICK, "children/5/children/2"],
+      [ROW_PICK, "children/5/children/0/0"],
+      [ROW_PICK, "children/5/children/0/1"],
+      [ROW_PICK, "children/5/children/0/2"],
     ]);
     const listed = artifact.plan.bindings[ITEM_PICK].result![0];
     const position = [...listed.path];
@@ -2880,17 +2915,22 @@ describe("what a `*` of a result path stands for", () => {
     expect(coversPosition(listed, position, at(undefined), [b])).toBe(false);
   });
 
-  it("tells the positions of two collections spread into one array apart", async () => {
+  it("stores two collections among the children of one node as two children", async () => {
     const instance = new Instance(await artifactOf("star-kinds"), argument());
+    type Row = { props: { onClick: unknown } };
     const menu = (instance.store.docs.get("result")?.value as {
-      $UI: { children: { children: { props: { onClick: unknown } }[] }[] };
+      $UI: { children: { children: Row[][] }[] };
     }).$UI.children[3].children;
 
-    // Both bindings list `children/*` of kind `element`: each marker is
-    // at the position that holds its own key.
-    expect(menu.map((row) => row.props.onClick)).toEqual([
+    // Each binding lists the `*` below the position of its own
+    // collection, of kind `element`: over references in the first and
+    // over plain values in place in the second.
+    expect(menu.length).toBe(2);
+    expect(menu[0].map((row) => row.props.onClick)).toEqual([
       { $stream: { binding: 5, keys: ['cell:argument:["pool","a"]#0'] } },
       { $stream: { binding: 5, keys: ['cell:argument:["pool","b"]#0'] } },
+    ]);
+    expect(menu[1].map((row) => row.props.onClick)).toEqual([
       { $stream: { binding: 6, keys: ['value:"x"#0'] } },
       { $stream: { binding: 6, keys: ['value:"y"#0'] } },
       { $stream: { binding: 6, keys: ['value:"z"#0'] } },

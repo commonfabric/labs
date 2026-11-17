@@ -18,7 +18,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/outer-stream.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/outer-stream.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [$h.slot(6)])));\n}\n$rt.value(5, ($h) => ($rt.h(\"div\", {  }, [($h.v($h.slot(4)) ? $rt.h(\"b\", { \"onClick\": $h.stream(0) }, [\"+\"]) : (null)), $rt.h(\"ul\", {  }, [$h.output(0)]), $rt.h(\"i\", { \"onClick\": $h.stream(0) }, [\"+\"])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(3), count: $h.slot(3) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/outer-stream.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [$h.slot(6)])));\n}\n$rt.value(4, ($h) => ($rt.h(\"div\", {  }, [($h.v($h.slot(4)) ? $rt.h(\"b\", { \"onClick\": $h.stream(0) }, [\"+\"]) : (null)), $rt.h(\"ul\", {  }, [$h.output(0)]), $rt.h(\"i\", { \"onClick\": $h.stream(0) }, [\"+\"])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(3), count: $h.slot(3) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -40,9 +40,6 @@
               "collection": 0,
               "cone": 0,
               "output": 0
-            },
-            {
-              "cone": 1
             },
             {
               "cone": 1,
@@ -81,6 +78,7 @@
                     "children",
                     "1",
                     "children",
+                    "0",
                     "*",
                     "props",
                     "onClick"
@@ -353,51 +351,12 @@
                 "$UI",
                 "children",
                 "1",
-                "children"
+                "children",
+                "0"
               ],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 6
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 5
-                  }
-                ],
-                "op": "derive"
-              }
-            },
-            {
-              "cone": 1,
-              "constraints": [],
-              "kept": true,
-              "path": [
-                "$UI",
-                "children",
-                "1",
-                "children",
-                "*"
-              ],
-              "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 6
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 5
-                  }
-                ],
-                "op": "derive"
+                "op": "slot",
+                "slot": 5
               }
             },
             {

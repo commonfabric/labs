@@ -1756,7 +1756,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                     let children =
                         self.in_cone(cone, |rewriter| rewriter.jsx_children(&element.children));
                     self.generator.hoist(format!(
-                        "$rt.value({value}, ($h) => ($rt.children([{}])));",
+                        "$rt.value({value}, ($h) => ([{}]));",
                         children.join(", ")
                     ));
                     self.generator.registered_values.push(value);
@@ -1876,7 +1876,22 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                     &fragment.children,
                 )),
                 JSXChild::ExpressionContainer(container) => {
-                    if let Some(expression) = container.expression.as_expression() {
+                    let Some(expression) = container.expression.as_expression() else {
+                        continue;
+                    };
+                    // In the reactive tier an array literal among the
+                    // children is written as its members, one child
+                    // each, and any other expression is one child: a
+                    // collection is stored as one nested child (ruling
+                    // Z31). In a function body the factory flattens the
+                    // arrays it is handed, as the JSX factory of today
+                    // does.
+                    let members = if self.context.is_some() {
+                        crate::plan::written_children(expression)
+                    } else {
+                        vec![expression]
+                    };
+                    for expression in members {
                         let code = self.render(expression, Want::Pass);
                         // The result of a pattern at a child position is
                         // its tree (PL §1.1).
@@ -1893,7 +1908,11 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 }
                 JSXChild::Spread(spread) => {
                     let code = self.render(&spread.expression, Want::Use);
-                    written.push(format!("$rt.spread({code})"));
+                    written.push(if self.context.is_some() {
+                        code
+                    } else {
+                        format!("...{code}")
+                    });
                 }
             }
         }
@@ -1911,7 +1930,14 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
             Some(props) => format!("{{ {} }}", props.join(", ")),
             None => "null".to_string(),
         };
-        format!("$rt.h({name}, {props}, [{}])", children.join(", "))
+        // `$rt.h` stores each child as written, and `$rt.hf`, for a
+        // function body, flattens a child that is an array.
+        let factory = if self.context.is_some() {
+            "$rt.h"
+        } else {
+            "$rt.hf"
+        };
+        format!("{factory}({name}, {props}, [{}])", children.join(", "))
     }
 }
 

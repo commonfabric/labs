@@ -2883,8 +2883,12 @@ fn a_rendered_tree_has_the_paths_of_its_view_nodes() {
     // PL §3.4, "A JSX element": "the template of the path `props/title`
     // of an element is the template of the expression written at the
     // attribute `title`, and the template of `children/0` is that of the
-    // first child. A child whose type is an array, the assembled result
-    // of a `map` among them, is a spread child".
+    // first child". By ruling Z31 a child that is a collection, the
+    // assembled result of a `map` among them, is one child: the entry at
+    // its position is that of the collection, and its elements are the
+    // outputs of the collection, at `children/<n>/*`. The source here is
+    // an array of records, which the plan has alike for references and
+    // for plain values in place.
     let analysis = program(
         r#"import { pattern, UI } from "commonfabric";
 export const P = pattern<{ t: string; a: string; b: string; rows: { title: string }[] }>(({ t, a, b, rows }) => {
@@ -2906,10 +2910,9 @@ export const P = pattern<{ t: string; a: string; b: string; rows: { title: strin
         entries_below(&plan, "$UI"),
         [
             "$UI = const",
-            "$UI/children = derive(expression) { [element title : identity] [argument rows : enumeration] }",
-            "$UI/children/* = derive(expression) { [element title : identity] [argument rows : enumeration] }",
             "$UI/children/0 = [argument a : identity]",
             "$UI/children/1/children/0 = [argument b : identity]",
+            "$UI/children/2 = [argument rows : enumeration]",
             "$UI/props/title = [argument t : identity]",
         ]
     );
@@ -3457,10 +3460,12 @@ fn stars_of(plan: &Value, name: &str) -> Vec<Vec<String>> {
 /// order of the path, the kind of that `*`. `element` is a collection the
 /// binding has an `element` step for. `every` is a collection no step of
 /// the binding names, whose callback writes the stream. `member` is the
-/// one position of a member written after a spread, with the number of
-/// entries written before it. The source is over records in `items`, over
-/// plain values in `tags`, and the result of a `filter` in the third
-/// list: the kinds are the same in the three.
+/// one position of a member written after a spread in an array literal,
+/// with the number of entries written before it. Among the children of a
+/// view node a collection is one nested child (ruling Z31), so a child
+/// written after it has its own position and no `*`. The source is over
+/// records in `items`, over plain values in `tags`, and the result of a
+/// `filter` in the third list: the kinds are the same in the three.
 #[test]
 fn each_star_of_a_result_path_states_what_it_stands_for() {
     let analysis = program(
@@ -3517,8 +3522,8 @@ export const P = pattern<{ items: Item[]; tags: string[]; groups: { items: Item[
     assert_eq!(
         results_of(&plan, "outer")[0].1,
         concat!(
-            r#"[["$UI","children","3","children","*","props","onClick"],"#,
-            r#"["$UI","children","4","children","*","props","onClick"],"#,
+            r#"[["$UI","children","3","children","0","*","props","onClick"],"#,
+            r#"["$UI","children","4","children","0","*","props","onClick"],"#,
             r#"["rows","*","pick"]]"#
         )
     );
@@ -3526,22 +3531,20 @@ export const P = pattern<{ items: Item[]; tags: string[]; groups: { items: Item[
         stars_of(&plan, "outer"),
         [vec!["every"], vec!["every"], vec!["every"]]
     );
-    // A member written after a spread: three entries are written before
-    // it among the children, a member, the spread and a text, and two in
-    // the array literal. The member before the spread has its index in
-    // the path.
+    // A child written after a collection is at its own position, the
+    // fourth of the children: a member, the collection and a text are
+    // written before it. A member written after a spread in the array
+    // literal has two entries before it, and the member before the
+    // spread has its index in the path.
     assert_eq!(
         results_of(&plan, "after")[0].1,
         concat!(
-            r#"[["$UI","children","0","children","*","props","onClick"],"#,
+            r#"[["$UI","children","0","children","3","props","onClick"],"#,
             r#"["rows","0","pick"],"#,
             r#"["rows","*","pick"]]"#
         )
     );
-    assert_eq!(
-        stars_of(&plan, "after"),
-        [vec!["member:3"], vec![], vec!["member:2"]]
-    );
+    assert_eq!(stars_of(&plan, "after"), [vec![], vec![], vec!["member:2"]]);
 }
 
 /// Ruling Z21, kind `inside` (PL §1.1, "The stream is reached through a
@@ -3630,11 +3633,11 @@ export const P = pattern<{ items: Item[]; groups: { items: Item[] }[]; chosen: W
         [
             (
                 r#"[{"element":0}]"#.to_string(),
-                r#"[["$UI","children","1","children","*","props","onClick"]]"#.to_string()
+                r#"[["$UI","children","1","children","0","*","props","onClick"]]"#.to_string()
             ),
             (
                 r#"[{"element":1},{"element":2}]"#.to_string(),
-                r#"[["$UI","children","2","children","*","children","*","props","onClick"]]"#
+                r#"[["$UI","children","2","children","1","*","children","0","*","props","onClick"]]"#
                     .to_string()
             ),
             (
@@ -3678,25 +3681,26 @@ export const P = pattern<{ items: Item[]; chosen: Writable<string> }>(({ items, 
         [
             (
                 r#"[{"element":0},{"site":"Row"}]"#.to_string(),
-                r#"[["$UI","children","0","children","*","children","0","props","onClick"]]"#
+                r#"[["$UI","children","0","children","0","*","children","0","props","onClick"]]"#
                     .to_string()
             ),
             (
                 r#"[{"element":1},{"site":"Row"}]"#.to_string(),
-                r#"[["$UI","children","1","children","*","$UI","props","onClick"]]"#.to_string()
+                r#"[["$UI","children","1","children","0","*","$UI","props","onClick"]]"#
+                    .to_string()
             ),
         ]
     );
 }
 
-/// PL §1.1, "From a path to a position": "Two collections spread into one
-/// array of children. The path is a result path of each binding all the
-/// same: the instance stores the links at those positions, and section
-/// 3.4 gives each the path `children/*`." A binding whose stream is at no
-/// kept path of what the callback returns has no path, and is counted
-/// under that reason.
+/// Ruling Z31: two collections among the children of one view node are
+/// two child positions, so the `*` of each path names its collection by
+/// the position before it. A binding whose stream is at no kept path of
+/// what the callback returns has no path, and is counted under that
+/// reason. The sources are arrays of records, which the plan has alike
+/// for references and for plain values in place.
 #[test]
-fn a_binding_of_two_collections_spread_into_one_array_has_the_path_of_the_spread() {
+fn two_collections_among_the_children_of_one_node_are_two_child_positions() {
     let analysis = program(
         r#"import { Writable, handler, pattern, UI } from "commonfabric";
 interface Item { title: string }
@@ -3725,13 +3729,18 @@ export const P = pattern<{ items: Item[]; more: Item[]; chosen: Writable<string>
         .flat_map(|module| &module.plans)
         .find(|plan| plan.name.as_deref() == Some("P"))
         .expect("the plan");
-    let spread = r#"[["$UI","children","*","props","onClick"]]"#.to_string();
     assert_eq!(
         results_of(&found.plan, "select"),
         [
             (r#"[{"element":0}]"#.to_string(), "null".to_string()),
-            (r#"[{"element":1}]"#.to_string(), spread.clone()),
-            (r#"[{"element":2}]"#.to_string(), spread),
+            (
+                r#"[{"element":1}]"#.to_string(),
+                r#"[["$UI","children","0","*","props","onClick"]]"#.to_string()
+            ),
+            (
+                r#"[{"element":2}]"#.to_string(),
+                r#"[["$UI","children","1","*","props","onClick"]]"#.to_string()
+            ),
         ]
     );
     let reasons: Vec<&str> = found
@@ -3742,16 +3751,15 @@ export const P = pattern<{ items: Item[]; more: Item[]; chosen: Writable<string>
     assert_eq!(reasons, ["its stream is at no kept path of the result"]);
 }
 
-/// PL §1.1, "From a path to a position": "The same holds for a member
-/// written after a spread, whose path is `children/*` as well and whose
-/// stream is at one position." Ruling Z11 has the list complete, so the
-/// stream of a member written after a spread has that path, in a view
-/// node's children and in an array literal, also where the member is a
-/// conditional. The collection spread before it is over records in
-/// `items`, over plain values in `tags`, and the result of a `filter` in
-/// the third list: the path is the same in the three.
+/// Ruling Z31: a child written after a collection among the children of
+/// a view node has a static position, also where the child is a
+/// conditional. In an array literal a member written after a spread has
+/// the path of the positions from the spread on (PL §1.1, "From a path to
+/// a position"). The collection written before the child is over records
+/// in `items`, over plain values in `tags`, and the result of a `filter`
+/// in the third list: the path has the same form in the three.
 #[test]
-fn a_stream_written_after_a_spread_has_the_path_of_the_positions_from_the_spread_on() {
+fn a_child_written_after_a_collection_has_a_position_of_its_own() {
     let analysis = program(
         r#"import { Writable, handler, pattern, UI } from "commonfabric";
 interface Item { title: string }
@@ -3795,17 +3803,17 @@ export const P = pattern<{ items: Item[]; tags: string[]; show: boolean; count: 
         result("first"),
         concat!(
             r#"[["$UI","children","0","children","0","props","onClick"],"#,
-            r#"["$UI","children","0","children","*","props","onClick"],"#,
-            r#"["$UI","children","0","children","*","children","0","props","onClick"]]"#
+            r#"["$UI","children","0","children","2","props","onClick"],"#,
+            r#"["$UI","children","0","children","3","children","0","props","onClick"]]"#
         )
     );
     assert_eq!(
         result("second"),
-        r#"[["$UI","children","1","children","*","props","onClick"]]"#
+        r#"[["$UI","children","1","children","1","props","onClick"]]"#
     );
     assert_eq!(
         result("third"),
-        r#"[["$UI","children","2","children","*","props","onClick"]]"#
+        r#"[["$UI","children","2","children","1","props","onClick"]]"#
     );
     assert_eq!(result("fourth"), r#"[["rows","*","pick"]]"#);
 }
@@ -3855,8 +3863,8 @@ export const P = pattern<{ items: Item[]; chosen: Writable<string> }>(({ items, 
     );
     let plan = plan_of(&analysis, "P");
     let through = concat!(
-        r#"[["$UI","children","0","children","*","children","0","$UI","props","onClick"],"#,
-        r#"["$UI","children","1","children","*","children","0","props","onClick"]]"#
+        r#"[["$UI","children","0","children","0","*","children","0","$UI","props","onClick"],"#,
+        r#"["$UI","children","1","children","0","*","children","0","props","onClick"]]"#
     );
     for name in ["bump#1", "bump#2"] {
         assert_eq!(
@@ -3868,7 +3876,7 @@ export const P = pattern<{ items: Item[]; chosen: Writable<string> }>(({ items, 
     assert_eq!(rows.len(), 1);
     assert_eq!(
         rows[0].1,
-        r#"[["$UI","children","2","children","*","props","onClick"]]"#
+        r#"[["$UI","children","2","children","0","*","props","onClick"]]"#
     );
 }
 
@@ -3914,7 +3922,7 @@ export const P = pattern<{ items: Item[]; show: boolean; chosen: Writable<string
         results_of(&plan, "select"),
         [(
             r#"[{"element":0}]"#.to_string(),
-            r#"[["$UI","children","*","children","0","props","onClick"]]"#.to_string()
+            r#"[["$UI","children","1","*","children","0","props","onClick"]]"#.to_string()
         )]
     );
 }

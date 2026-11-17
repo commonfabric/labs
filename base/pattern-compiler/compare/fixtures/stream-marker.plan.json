@@ -32,16 +32,11 @@
                     "children",
                     "1",
                     "children",
-                    "*",
+                    "1",
                     "props",
                     "onClick"
                   ],
-                  "stars": [
-                    {
-                      "index": 1,
-                      "kind": "member"
-                    }
-                  ]
+                  "stars": []
                 },
                 {
                   "path": [
@@ -80,6 +75,7 @@
                     "children",
                     "1",
                     "children",
+                    "0",
                     "*",
                     "props",
                     "onClick"
@@ -138,6 +134,7 @@
                     "children",
                     "2",
                     "children",
+                    "0",
                     "*",
                     "props",
                     "onClick"
@@ -196,6 +193,7 @@
                     "children",
                     "3",
                     "children",
+                    "0",
                     "*",
                     "props",
                     "onClick"
@@ -841,78 +839,12 @@
                 "$UI",
                 "children",
                 "1",
-                "children"
+                "children",
+                "0"
               ],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 9
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 5
-                  }
-                ],
-                "op": "derive"
-              }
-            },
-            {
-              "cone": 4,
-              "constraints": [],
-              "kept": true,
-              "path": [
-                "$UI",
-                "children",
-                "1",
-                "children",
-                "*"
-              ],
-              "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 9
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 5
-                  }
-                ],
-                "op": "derive"
-              }
-            },
-            {
-              "cone": 4,
-              "constraints": [],
-              "kept": true,
-              "path": [
-                "$UI",
-                "children",
-                "2",
-                "children"
-              ],
-              "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 11
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 10
-                  }
-                ],
-                "op": "derive"
+                "op": "slot",
+                "slot": 5
               }
             },
             {
@@ -924,65 +856,11 @@
                 "children",
                 "2",
                 "children",
-                "*"
+                "0"
               ],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 11
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 10
-                  }
-                ],
-                "op": "derive"
-              }
-            },
-            {
-              "cone": 4,
-              "constraints": [],
-              "kept": true,
-              "path": [
-                "$UI",
-                "children",
-                "3",
-                "children"
-              ],
-              "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 14
-                  },
-                  {
-                    "body": {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "op": "slot",
-                          "slot": 12
-                        },
-                        {
-                          "op": "const"
-                        }
-                      ],
-                      "op": "derive"
-                    },
-                    "collection": 2,
-                    "op": "fold"
-                  }
-                ],
-                "op": "derive"
+                "op": "slot",
+                "slot": 10
               }
             },
             {
@@ -994,38 +872,26 @@
                 "children",
                 "3",
                 "children",
-                "*"
+                "0"
               ],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 14
+                "body": {
+                  "by": {
+                    "expression": true
                   },
-                  {
-                    "body": {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "op": "slot",
-                          "slot": 12
-                        },
-                        {
-                          "op": "const"
-                        }
-                      ],
-                      "op": "derive"
+                  "inputs": [
+                    {
+                      "op": "slot",
+                      "slot": 12
                     },
-                    "collection": 2,
-                    "op": "fold"
-                  }
-                ],
-                "op": "derive"
+                    {
+                      "op": "const"
+                    }
+                  ],
+                  "op": "derive"
+                },
+                "collection": 2,
+                "op": "fold"
               }
             },
             {

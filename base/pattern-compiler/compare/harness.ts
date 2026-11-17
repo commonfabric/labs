@@ -1171,14 +1171,13 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       // `element` and `every` it chooses the last position of the
       // collection, for kind `member` the one position of the member,
       // and for kind `inside` the position of the collection that holds
-      // the stream at the rest of the path. PL has the index of a
-      // position "in the stored array", for the layout the compiled path
-      // stores. The run of today does not store the children of a view
-      // node as one array: the assembled array of a `map` is one child,
-      // at the position the expression is written at. So among children
-      // a member is at the position its `index` gives, and an element of
-      // a collection is at the position of the assembled array and then
-      // at its own.
+      // the stream at the rest of the path. A collection among the
+      // children of a view node is one nested child in the plan (ruling
+      // Z31) and in the run of today, so a `*` below a child position
+      // is resolved in the array that child holds. One layout of today
+      // differs: a `map` over an array written in place runs when the
+      // pattern is built, and the run holds its elements as children of
+      // their own, from the position of the expression on.
       const streamAt = (
         binding: number,
       ): { path: string[]; elements: ElementBinding[] } => {
@@ -1228,6 +1227,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           from: AnyCell,
           path: string[],
           elements: ElementBinding[],
+          parent?: { cell: AnyCell; path: string[] },
         ): { path: string[]; elements: ElementBinding[] } => {
           if (index === listed.path.length) {
             // A position that holds the stream under one selection holds
@@ -1252,57 +1252,35 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               cell.key(key as never) as AnyCell,
               [...at, key],
               elements,
+              { cell, path: at },
             );
           }
           const stated = listed.stars[star];
           let cell = from;
           let value = valueOf(cell);
-          const at = [...path];
-          const children = listed.path[index - 1] === "children" &&
-            Array.isArray(value);
+          let at = [...path];
           if (stated?.kind === "member") {
-            // Among children the run of today holds a spread child as
-            // one child, so the member is at the position of its entry.
-            // Another array is stored flat, and the plan does not hold
-            // the lengths of the collections spread before the member.
-            if (!children) {
-              throw new Unsupported(
-                "a member written after a spread in an array the run stores flat",
-              );
-            }
-            const position = `${stated.index}`;
-            return resolve(
-              index + 1,
-              star + 1,
-              cell.key(position as never) as AnyCell,
-              [...at, position],
-              elements,
+            // An array value with a spread is stored flat, and the plan
+            // does not hold the lengths of the collections spread before
+            // the member.
+            throw new Unsupported(
+              "a member written after a spread in an array the run stores flat",
             );
           }
-          if (children) {
-            const holders = (value as unknown[]).flatMap((child, position) =>
-              Array.isArray(child) ? [position] : []
-            );
-            // A `map` over an array written in place runs when the
-            // pattern is built, and the run of today holds its elements
-            // as children of their own: with no assembled array among
-            // the children, the children are the positions for kind
-            // `inside`, which arises over such an array.
-            const inPlace = holders.length === 0 && stated?.kind === "inside";
-            if (holders.length !== 1 && !inPlace) {
-              // The kind does not say which of two collections spread
-              // into one array the `*` stands for (PL §8, question 78).
-              throw new Unsupported(
-                holders.length === 0
-                  ? "children that hold no assembled array"
-                  : "children that hold two assembled arrays",
-              );
-            }
-            if (!inPlace) {
-              cell = cell.key(`${holders[0]}` as never) as AnyCell;
-              at.push(`${holders[0]}`);
-              value = valueOf(cell);
-            }
+          // The elements of a `map` over an array written in place are
+          // children of their own in the run of today: the positions for
+          // kind `inside` are then those of the children, from the
+          // position of the expression on.
+          let offset = 0;
+          if (
+            stated?.kind === "inside" && !Array.isArray(value) &&
+            parent !== undefined && listed.path[index - 2] === "children" &&
+            /^\d+$/.test(listed.path[index - 1])
+          ) {
+            offset = Number(listed.path[index - 1]);
+            cell = parent.cell;
+            at = [...parent.path];
+            value = valueOf(cell);
           }
           if (!Array.isArray(value) || value.length === 0) {
             throw new Unsupported("an enclosing collection with no element");
@@ -1338,7 +1316,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             ).length;
             let missed: unknown;
             let held = 0;
-            for (let position = 0; position < value.length; position++) {
+            for (let position = offset; position < value.length; position++) {
               try {
                 const found = choose(`${position}`);
                 if (held === nth) return found;

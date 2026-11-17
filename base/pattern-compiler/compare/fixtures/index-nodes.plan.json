@@ -20,6 +20,7 @@
                   "path": [
                     "$UI",
                     "children",
+                    "0",
                     "*",
                     "props",
                     "onClick"
@@ -76,6 +77,7 @@
                   "path": [
                     "$UI",
                     "children",
+                    "0",
                     "*",
                     "children",
                     "0",
@@ -391,49 +393,12 @@
               "kept": true,
               "path": [
                 "$UI",
-                "children"
-              ],
-              "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 7
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 0
-                  }
-                ],
-                "op": "derive"
-              }
-            },
-            {
-              "cone": 1,
-              "constraints": [],
-              "kept": true,
-              "path": [
-                "$UI",
                 "children",
-                "*"
+                "0"
               ],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 7
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 0
-                  }
-                ],
-                "op": "derive"
+                "op": "slot",
+                "slot": 0
               }
             },
             {

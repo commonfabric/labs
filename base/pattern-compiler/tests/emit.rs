@@ -488,7 +488,7 @@ export const P = pattern<{ title: string }>(({ title }) => {
     // The callee reads the children as the output of the value the
     // caller's code computes.
     assert!(
-        text.contains("($h) => ($rt.children([$rt.h(\"b\", {  }, [$h.slot("),
+        text.contains("($h) => ([$rt.h(\"b\", {  }, [$h.slot("),
         "{text}"
     );
     assert_eq!(code["valuesWithoutOutput"], json!([]));
@@ -857,4 +857,60 @@ export default pattern<{ note: string }>(({ note }) => {
         written.contains("rows.push(Row({ title: event.title }));"),
         "{written}"
     );
+}
+
+/// Ruling Z31: in the reactive tier a collection among the children of a
+/// view node is written as one child, with no spread, and the members of
+/// an array literal that the author writes among the children are
+/// written as children of their own. A view node that a function body
+/// builds is written with the factory that flattens the arrays it is
+/// handed, as the JSX factory of today does. The collection is over an
+/// array of records, which value code writes alike for references and
+/// for plain values in place.
+#[test]
+fn a_collection_among_the_children_is_written_as_one_child() {
+    let (plan, code) = emitted(
+        r#"import { lift, pattern, UI } from "commonfabric";
+const build = lift((rows: { title: string }[]) => <p>{rows.map((row) => <i>{row.title}</i>)}</p>);
+export const P = pattern<{ a: string; b: string; rows: { title: string }[] }>(({ a, b, rows }) => {
+  const built = build(rows);
+  return {
+    [UI]: (
+      <div>
+        {[a, b]}
+        {rows.map((row) => <li>{row.title}</li>)}
+        <hr />
+        {built}
+      </div>
+    ),
+  };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    assert!(!text.contains("$rt.children("), "{text}");
+    assert!(!text.contains("$rt.spread("), "{text}");
+    assert!(text.contains("$rt.hf(\"p\""), "{text}");
+    assert!(text.contains("$rt.h(\"div\""), "{text}");
+    // The two members of the literal are the first two children, the
+    // collection the third, and the element after it the fourth.
+    let paths: Vec<String> = plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .filter(|output| output["kept"] == json!(true))
+        .map(|output| {
+            output["path"]
+                .as_array()
+                .expect("a path")
+                .iter()
+                .map(|segment| segment.as_str().expect("a segment"))
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .collect();
+    assert!(paths.contains(&"$UI/children/0".to_string()), "{paths:?}");
+    assert!(paths.contains(&"$UI/children/1".to_string()), "{paths:?}");
+    assert!(paths.contains(&"$UI/children/4".to_string()), "{paths:?}");
 }

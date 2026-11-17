@@ -192,33 +192,23 @@ class Spread {
 
 /**
  * The array a list of written entries stands for: a member at one
- * position, and what a spread holds at one position each. With
- * `children`, an entry that is an array is a spread, as among the
- * children of a view node. The array has the origin of each position: a
- * position spread from an array that has origins has the origin it has
- * there.
+ * position, and what a spread holds at one position each. The array has
+ * the origin of each position: a position spread from an array that has
+ * origins has the origin it has there.
  */
-const assembledFrom = (
-  entries: readonly unknown[],
-  children: boolean,
-): unknown[] => {
+const assembledFrom = (entries: readonly unknown[]): unknown[] => {
   if (origins.has(entries)) return entries as unknown[];
   const flat: unknown[] = [];
   const from: Origin[] = [];
   for (let entry = 0; entry < entries.length; entry++) {
     const written = entries[entry];
-    const values = written instanceof Spread
-      ? written.values
-      : children && Array.isArray(written)
-      ? written
-      : undefined;
-    if (values === undefined) {
+    if (!(written instanceof Spread)) {
       flat.push(written);
       from.push({ entry, spread: false });
       continue;
     }
-    const inner = origins.get(values);
-    values.forEach((value, index) => {
+    const inner = origins.get(written.values);
+    written.values.forEach((value, index) => {
       flat.push(value);
       from.push(inner?.[index] ?? { entry, spread: true });
     });
@@ -1401,9 +1391,9 @@ export class Instance {
       or: (value: unknown, fallback: () => unknown) =>
         value === undefined ? fallback() : value,
       h: viewNode,
-      // An array written with a spread, and the children of a tag that
-      // names a pattern: the executor assembles them, and has the entry
-      // each position came from (ruling Z21).
+      hf: viewNodeOfBody,
+      // An array written with a spread: the executor assembles it, and
+      // has the entry each position came from (ruling Z21).
       spread: (value: unknown) =>
         new Spread(
           Array.isArray(value)
@@ -1412,8 +1402,7 @@ export class Instance {
             ? []
             : Array.from(value as Iterable<unknown>),
         ),
-      list: (entries: unknown[]) => assembledFrom(entries, false),
-      children: (entries: unknown[]) => assembledFrom(entries, true),
+      list: (entries: unknown[]) => assembledFrom(entries),
     };
   }
 
@@ -3134,21 +3123,34 @@ export class Instance {
   }
 }
 
-/** A view node, as the JSX factory builds one (`h` in
- * `runtime/runner/src/builder/h.ts`). */
+/**
+ * A view node of the reactive tier, with its children as value code
+ * wrote them: one position for each child. A child that is an array, the
+ * assembled result of a per-element construct among them, is one nested
+ * child, and its elements are at `children/<n>/*` (ruling Z31). Value
+ * code writes the members of an array literal as children of their own.
+ */
 const viewNode = (
   name: unknown,
   props: Record<string, unknown> | null,
   children: unknown[],
 ): unknown => {
-  // A child that is an array is a spread child: the positions of the
-  // stored children are those of its elements.
-  const flat = assembledFrom(children, true);
   if (typeof name === "function") {
-    return name({ ...(props ?? {}), children: flat });
+    return name({ ...(props ?? {}), children });
   }
-  return { type: "vnode", name, props: props ?? {}, children: flat };
+  return { type: "vnode", name, props: props ?? {}, children };
 };
+
+/**
+ * A view node that a function body builds, as the JSX factory builds one
+ * (`h` in `runtime/runner/src/builder/h.ts`): a child that is an array
+ * the body holds is flattened into the children.
+ */
+const viewNodeOfBody = (
+  name: unknown,
+  props: Record<string, unknown> | null,
+  children: unknown[],
+): unknown => viewNode(name, props, children.flat());
 
 /** A helper that is a host element with the data attribute it sets. */
 const uiHelper = (

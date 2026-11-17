@@ -20,6 +20,7 @@
                   "path": [
                     "$UI",
                     "children",
+                    "0",
                     "*",
                     "props",
                     "onClick"
@@ -239,21 +240,8 @@
               "kept": true,
               "path": [
                 "$UI",
-                "children"
-              ],
-              "template": {
-                "op": "slot",
-                "slot": 0
-              }
-            },
-            {
-              "cone": 1,
-              "constraints": [],
-              "kept": true,
-              "path": [
-                "$UI",
                 "children",
-                "*"
+                "0"
               ],
               "template": {
                 "op": "slot",

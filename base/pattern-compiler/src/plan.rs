@@ -329,6 +329,29 @@ struct Computed {
     order: usize,
 }
 
+/// The children that an expression written among the children of a view
+/// node stands for: the members of an array literal with no spread and no
+/// elision, which the JSX factory flattens where the tree is built, and
+/// otherwise the expression itself, as one child (ruling Z31).
+pub(crate) fn written_children<'b, 'a>(expression: &'b Expression<'a>) -> Vec<&'b Expression<'a>> {
+    if let Expression::ArrayExpression(array) = crate::syntax::unwrap(expression) {
+        let members: Option<Vec<&Expression<'a>>> = array
+            .elements
+            .iter()
+            .map(|element| match element {
+                ArrayExpressionElement::SpreadElement(_) | ArrayExpressionElement::Elision(_) => {
+                    None
+                }
+                element => element.as_expression(),
+            })
+            .collect();
+        if let Some(members) = members {
+            return members.into_iter().flat_map(written_children).collect();
+        }
+    }
+    vec![expression]
+}
+
 /// What one `*` of a result path of a binding stands for (PL §1.1,
 /// `ResultStar`; ruling Z21).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -4302,150 +4325,58 @@ impl<'a> Emitter<'_, '_, 'a> {
         Place::Record(fields)
     }
 
-    /// The array literal of the children of an element. "A child whose
-    /// type is an array ... is a spread child", and "the rule for a
-    /// spread in an array literal gives the positions from it on": one
-    /// member at `*`, the join of what each later child holds and of the
-    /// membership of each spread child.
+    /// The array literal of the children of an element. Each child is at
+    /// a position of its own, counted over the children as written. A
+    /// child that is a collection, the assembled result of a `map` among
+    /// them, is one child, and its elements are at `children/<n>/*`
+    /// (ruling Z31), over an array of references, over an array of plain
+    /// values in place, and over the result of another per-element
+    /// construct alike. An array literal that the author writes among
+    /// the children is flattened where the tree is built, so each of its
+    /// members is a child.
     fn jsx_children(&mut self, children: &[JSXChild<'a>]) -> Place {
         let mut fields = BTreeMap::new();
         let mut position = 0usize;
-        let mut later: Option<Vec<Option<Value>>> = None;
-        // The streams at the positions from the first spread on: those
-        // below an element of a spread child, and those of a child
-        // written after the first spread.
-        let mut element_streams: Vec<StreamAt> = Vec::new();
-        // The number of entries written so far: the children that are a
-        // member, and the spreads (PL §1.1, `ResultStar`, kind `member`).
-        let mut entries = 0usize;
         for child in children {
-            let entry = entries;
-            let (place, spread) = match child {
+            match child {
                 // Text that is white space with a line break is no
                 // child, and other text is a constant.
                 JSXChild::Text(text) => {
                     if !(text.value.trim().is_empty() && text.value.contains('\n')) {
                         position += 1;
-                        entries += 1;
                     }
-                    continue;
                 }
-                JSXChild::Element(element) => (self.jsx_element_at(element, true), false),
-                JSXChild::Fragment(fragment) => (self.jsx_node(None, &fragment.children), false),
+                JSXChild::Element(element) => {
+                    let place = self.jsx_element_at(element, true);
+                    fields.insert(position.to_string(), place);
+                    position += 1;
+                }
+                JSXChild::Fragment(fragment) => {
+                    let place = self.jsx_node(None, &fragment.children);
+                    fields.insert(position.to_string(), place);
+                    position += 1;
+                }
                 JSXChild::ExpressionContainer(container) => {
                     let Some(expression) = container.expression.as_expression() else {
                         continue;
                     };
-                    // A call of a pattern, and a variable that holds the
-                    // result of one, render as the tag does (PL §1.1).
-                    let place = rendered_at_child(self.eval(expression, "child"));
-                    self.pass(&place);
-                    let listed = matches!(&place, Place::Value(value, path)
-                        if path.is_empty() && self.values[*value].collection.is_some() && !self.values[*value].scan)
-                        || self
-                            .resolver
-                            .typed_at(self.module, expression, 0)
-                            .is_ok_and(|ty| {
-                                matches!(
-                                    self.resolver.shape(self.resolver.present(ty)),
-                                    Shape::Array(_) | Shape::Tuple(_)
-                                )
-                            });
-                    (place, listed)
+                    for written in written_children(expression) {
+                        // A call of a pattern, and a variable that holds
+                        // the result of one, render as the tag does (PL
+                        // §1.1).
+                        let place = rendered_at_child(self.eval(written, "child"));
+                        self.pass(&place);
+                        fields.insert(position.to_string(), place);
+                        position += 1;
+                    }
                 }
                 JSXChild::Spread(spread) => {
                     let place = self.eval(&spread.expression, "child");
                     self.pass(&place);
-                    (place, true)
-                }
-            };
-            entries += 1;
-            if spread && later.is_none() {
-                later = Some(Vec::new());
-            }
-            if spread {
-                if let Place::Value(value, path) = &place {
-                    if path.is_empty() {
-                        for stream in &self.values[*value].streams {
-                            if let Some((mut below, star)) = stream.element() {
-                                below.head = Some(star);
-                                if !element_streams.contains(&below) {
-                                    element_streams.push(below);
-                                }
-                            }
-                        }
-                    }
-                }
-            } else if later.is_some() {
-                // "A member written after a spread, whose path is
-                // `children/*` as well and whose stream is at one
-                // position" (PL §1.1, "From a path to a position").
-                let mut found = Vec::new();
-                self.stream_paths(&place, &mut Vec::new(), &mut found);
-                for mut stream in found {
-                    stream.head = Some(Star::Member(entry));
-                    if !element_streams.contains(&stream) {
-                        element_streams.push(stream);
-                    }
-                }
-            }
-            match &mut later {
-                None => {
                     fields.insert(position.to_string(), place);
                     position += 1;
                 }
-                Some(_) => {
-                    let mut templates: Vec<Option<Value>> = Vec::new();
-                    match &place {
-                        Place::Value(value, path) if spread && path.is_empty() => {
-                            // The elements, and which of them there are.
-                            let value = *value;
-                            let element = match &self.values[value].element_entries {
-                                Some(entries) => entries_whole(entries, &[]),
-                                None => match &self.values[value].element {
-                                    Some(element) => element.clone(),
-                                    None => self.values[value].template.clone(),
-                                },
-                            };
-                            templates.push(element);
-                            templates.push(self.values[value].template.clone());
-                        }
-                        Place::Slot(root, path) if spread => {
-                            let mut element = path.clone();
-                            element.push("*".to_string());
-                            let (root, path) = (root.clone(), path.clone());
-                            templates.push(
-                                self.template_of(&Place::Slot(root.clone(), element), "identity"),
-                            );
-                            templates
-                                .push(self.template_of(&Place::Slot(root, path), "enumeration"));
-                        }
-                        other => {
-                            let other = other.clone();
-                            templates.push(self.one("identity", |_| other).1);
-                        }
-                    }
-                    if let Some(later) = &mut later {
-                        later.extend(templates);
-                    }
-                }
             }
-        }
-        if let Some(later) = later {
-            let at = children.first().map_or(0, |child| child.span().start);
-            let star = self.build("children", at, |_, _| {
-                Some(joined(later.into_iter().collect::<Option<Vec<Value>>>()?))
-            });
-            // "The positions from a spread on are at `children/*`" (PL
-            // §1.1). Where two collections are spread into one array, "the
-            // path is a result path of each binding all the same", and so
-            // is the path of a member written after a spread: the list is
-            // complete (ruling Z11), and the path does not say which
-            // positions are whose (PL §8, question 78).
-            if let Place::Value(value, _) = &star {
-                self.values[*value].streams = element_streams;
-            }
-            fields.insert("*".to_string(), star);
         }
         Place::Record(fields)
     }

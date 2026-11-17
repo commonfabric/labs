@@ -328,6 +328,7 @@
                     "children",
                     "1",
                     "children",
+                    "1",
                     "*",
                     "props",
                     "onClick"
@@ -399,6 +400,7 @@
                     "children",
                     "2",
                     "children",
+                    "0",
                     "*",
                     "$UI",
                     "props",
@@ -839,23 +841,8 @@
                 "$UI",
                 "children",
                 "1",
-                "children"
-              ],
-              "template": {
-                "op": "slot",
-                "slot": 1
-              }
-            },
-            {
-              "cone": 3,
-              "constraints": [],
-              "kept": true,
-              "path": [
-                "$UI",
                 "children",
-                "1",
-                "children",
-                "*"
+                "1"
               ],
               "template": {
                 "op": "slot",
@@ -870,51 +857,12 @@
                 "$UI",
                 "children",
                 "2",
-                "children"
+                "children",
+                "0"
               ],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 10
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 1
-                  }
-                ],
-                "op": "derive"
-              }
-            },
-            {
-              "cone": 3,
-              "constraints": [],
-              "kept": true,
-              "path": [
-                "$UI",
-                "children",
-                "2",
-                "children",
-                "*"
-              ],
-              "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 10
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 1
-                  }
-                ],
-                "op": "derive"
+                "op": "slot",
+                "slot": 1
               }
             },
             {

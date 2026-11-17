@@ -23,7 +23,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/index-nodes.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst pickAt = handler((_, { at, chosen }) => {\n  chosen.set(at);\n});\nconst clear = handler(\n  (_, { cleared }) => {\n    cleared.set(1);\n  },\n);\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/index-nodes.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [$rt.h(\"b\", { \"onClick\": $h.stream(1) }, [$h.slot(7)])])));\n}\n$rt.value(3, ($h) => ($rt.h(\"ul\", {  }, [$h.output(0)])));\n{\n$rt.element(1, ($h) => (($h.slot(8) + (1))));\n}\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(3), numbered: $h.output(6), chosen: $h.slot(4), cleared: $h.slot(6) })));\n});\n$rt.body(0, ($e, $s) => ((_, { at, chosen }) => {\n  chosen.set(at);\n})($e, $s));\n$rt.body(1, ($e, $s) => ((_, { cleared }) => {\n    cleared.set(1);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst pickAt = handler((_, { at, chosen }) => {\n  chosen.set(at);\n});\nconst clear = handler(\n  (_, { cleared }) => {\n    cleared.set(1);\n  },\n);\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/index-nodes.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [$rt.h(\"b\", { \"onClick\": $h.stream(1) }, [$h.slot(7)])])));\n}\n$rt.value(2, ($h) => ($rt.h(\"ul\", {  }, [$h.output(0)])));\n{\n$rt.element(1, ($h) => (($h.slot(8) + (1))));\n}\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(3), numbered: $h.output(5), chosen: $h.slot(4), cleared: $h.slot(6) })));\n});\n$rt.body(0, ($e, $s) => ((_, { at, chosen }) => {\n  chosen.set(at);\n})($e, $s));\n$rt.body(1, ($e, $s) => ((_, { cleared }) => {\n    cleared.set(1);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -41,9 +41,6 @@
               "output": 0
             },
             {
-              "cone": 1
-            },
-            {
               "cone": 1,
               "function": true,
               "output": 3
@@ -54,7 +51,7 @@
             {
               "collection": 1,
               "cone": 2,
-              "output": 6
+              "output": 5
             }
           ],
           "valuesWithoutOutput": []
@@ -76,6 +73,7 @@
                   "path": [
                     "$UI",
                     "children",
+                    "0",
                     "*",
                     "props",
                     "onClick"
@@ -132,6 +130,7 @@
                   "path": [
                     "$UI",
                     "children",
+                    "0",
                     "*",
                     "children",
                     "0",
@@ -447,49 +446,12 @@
               "kept": true,
               "path": [
                 "$UI",
-                "children"
-              ],
-              "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 7
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 0
-                  }
-                ],
-                "op": "derive"
-              }
-            },
-            {
-              "cone": 1,
-              "constraints": [],
-              "kept": true,
-              "path": [
-                "$UI",
                 "children",
-                "*"
+                "0"
               ],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 7
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 0
-                  }
-                ],
-                "op": "derive"
+                "op": "slot",
+                "slot": 0
               }
             },
             {
