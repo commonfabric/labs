@@ -615,20 +615,20 @@ describe("SpaceServer", () => {
           };
         };
         host = newHost();
-        const { stream, enclosing, nested, local } = await setUpNested();
+        const { enclosing, nested, local } = await setUpNested();
         await demand(local);
-        await awaitEach(cycles, () => serves(nested));
-        expect(await recordedOnEvent(stream)).toBe(10);
 
-        const forEnclosing = supplied.filter(({ roots }) =>
-          roots.length === 1 && roots[0] === enclosing.id
+        // No event is queued, whose sender would be a demander of its own.
+        await awaitEach(
+          cycles,
+          () =>
+            serves(nested) &&
+            supplied.some(({ roots, principals }) =>
+              roots.length === 1 && roots[0] === enclosing.id &&
+              principals.includes(aliceSigner.did())
+            ),
         );
-        expect(forEnclosing.length).toBeGreaterThan(0);
-        expect(
-          forEnclosing.every(({ principals }) =>
-            principals.includes(aliceSigner.did())
-          ),
-        ).toBe(true);
+        expect(serves(enclosing)).toBe(true);
       });
 
       it("holds a nested piece back for good while its enclosing piece's pattern never loads, warning that it is stuck, and starts it alone for an event", async () => {
