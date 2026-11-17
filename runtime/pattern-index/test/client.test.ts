@@ -690,7 +690,7 @@ describe("PatternIndexClient", () => {
       jsonResponse({ patternId: "pat-6", created: true }),
       jsonResponse({ ok: true, recorded: true }),
     ]);
-    const deployedTo = await deployedPieceRef("did:key:z6Mkspace", "of:fid1:p");
+    const deployedTo = deployedPieceRef("did:key:z6Mkspace", "of:fid1:p");
     await client.publishPattern({
       patternId: "pat-6",
       description: "Doubles a number",
@@ -707,7 +707,7 @@ describe("PatternIndexClient", () => {
     });
 
     expect(deployedTo).toBe(
-      await deployedPieceRef("did:key:z6Mkspace", "fid1:p"),
+      deployedPieceRef("did:key:z6Mkspace", "fid1:p"),
     );
     expect(deployedTo).toMatch(/^piece:[0-9a-f]{64}$/);
     expect(JSON.parse(requests[0].body).deployedTo).toBe(deployedTo);
@@ -715,6 +715,23 @@ describe("PatternIndexClient", () => {
     expect(requests[1].url).toBe("https://index.test/api/recordEvent");
     expect(event.piece).toBe(deployedTo);
     expect(Object.hasOwn(event, "patternId")).toBe(false);
+  });
+
+  it("refuses to send a raw piece id where a hashed piece reference belongs", async () => {
+    const { client, requests } = createClient([]);
+
+    await expect(client.recordUsageEvent({
+      piece: "fid1:raw",
+      eventType: "viewed_in_loom",
+    })).rejects.toThrow("piece reference");
+    await expect(client.publishPattern({
+      patternId: "pat-7",
+      description: "Doubles a number",
+      hashtags: [],
+      program: { main: "/main.tsx", files: [] },
+      deployedTo: "fid1:raw",
+    })).rejects.toThrow("piece reference");
+    expect(requests).toEqual([]);
   });
 
   it("posts each version, visibility and sharing-setting call to its function with only its fields", async () => {

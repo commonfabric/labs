@@ -46,6 +46,12 @@ describe("pattern-named", () => {
       expect(chooseProfile([work, home], "did:key:z6Mkwork")).toBe(work);
     });
 
+    it("asks for --profile when there are profiles but none is current", () => {
+      expect(() => chooseProfile([listed({})], undefined)).toThrow(
+        "name one with --profile",
+      );
+    });
+
     it("throws for no profile, a space none lives in, and a profile with no name", () => {
       expect(() => chooseProfile([], undefined)).toThrow(NamingError);
       expect(() => chooseProfile([listed({ current: true })], "did:key:z6Mkx"))
@@ -73,6 +79,24 @@ describe("pattern-named", () => {
       );
 
       expect(proof).toEqual(indexProofs([toPerson.bytes]));
+    });
+
+    it("passes over a recorded delegation that does not decode or whose signature does not hold", async () => {
+      const good = await rootDelegation(person.did());
+      const forged = new Uint8Array(good.bytes);
+      forged[forged.length - 1] ^= 0xff;
+
+      const proof = await profileProof(
+        {
+          space: profileKey.did(),
+          piece: "fid1:profile",
+          displayName: "Sam",
+          delegations: [new Uint8Array([1, 2, 3]), forged, good.bytes],
+        },
+        person.did(),
+      );
+
+      expect(proof).toEqual(indexProofs([good.bytes]));
     });
 
     it("throws when Home records no delegation of the whole space to the signer", async () => {

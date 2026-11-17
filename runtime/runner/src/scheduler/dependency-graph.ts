@@ -168,6 +168,9 @@ function notifyNodeLivenessChangeImpl(
   livenessWork.operations++;
   const node = state.nodes.get(action);
   if (!node) return;
+  // The node's root status or registration changed, which can make it live
+  // with no reference granted.
+  state.nodes.noteMayBeLive(action);
 
   if (wasLive) {
     withdrawDemandFrom(state, action);
@@ -214,6 +217,7 @@ function setNodeProvisionalDemandImpl(
   node.provisionalDemand = provisionalDemand;
   if (provisionalDemand) {
     node.provisionalDemandPass = passId;
+    state.nodes.noteMayBeLive(node.action);
   } else {
     node.provisionalDemandPass = undefined;
   }
@@ -252,7 +256,10 @@ function propagateDemand(
       const wasLive = isLive(state, record);
       livenessWork.nodeWrites++;
       record.liveRefs++;
-      if (!wasLive) stack.push(writer);
+      if (!wasLive) {
+        state.nodes.noteMayBeLive(writer);
+        stack.push(writer);
+      }
     }
   }
 }
@@ -498,7 +505,10 @@ function registerDependentEdgeImpl(
     const wasLive = isLive(state, writerRecord);
     livenessWork.nodeWrites++;
     writerRecord.liveRefs++;
-    if (!wasLive) grantDemandFrom(state, writer);
+    if (!wasLive) {
+      state.nodes.noteMayBeLive(writer);
+      grantDemandFrom(state, writer);
+    }
   }
   return true;
 }
@@ -579,6 +589,9 @@ function unregisterDependentEdgeImpl(
  * reference those updates are checked against.
  */
 export function recomputeLiveRefs(state: SchedulerLivenessState): void {
+  // The rebuild stands whatever the counts were, so it can find a node live
+  // that the counts it replaces called dormant.
+  state.nodes.noteAllMayBeLive();
   const records = [...state.nodes.nodes()];
   const reachable = new Set<Action>();
   const stack: Action[] = [];

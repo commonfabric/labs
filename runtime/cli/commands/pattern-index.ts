@@ -153,7 +153,7 @@ export const sharingLines = (
 ): string[] => {
   if (!settings.enabled) {
     return [
-      "Sharing: off. Nothing of yours is shared anonymously, and search and listings show you only patterns published under a name; a shared pattern you open by its id still works.",
+      "Sharing: off. Nothing of yours is shared on its own (what you shared with cf pattern share stays shared until cf pattern unshare), and search and listings show you only patterns published under a name; a shared pattern you open by its id still works.",
       "Turn it on with cf index sharing on.",
     ];
   }
@@ -320,7 +320,9 @@ export const index = new Command()
             "shared anonymously once you open them in your loom and they " +
             "pass the privacy " +
             "check, and you see what others share; off, nothing of yours " +
-            "is shared, and search and listings show you only patterns " +
+            "is shared on its own (what you shared with cf pattern share " +
+            "stays shared until cf pattern unshare), and search and " +
+            "listings show you only patterns " +
             "published under a name (one opened by its id still works). " +
             "--self-built says whether that covers the patterns you build " +
             "yourself in cf and Claude Code.",

@@ -27,6 +27,7 @@ import {
   SEPARATOR,
 } from "@std/path";
 import { encodeHex } from "@std/encoding/hex";
+import { sha256 } from "@commonfabric/content-hash";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import {
@@ -69,23 +70,25 @@ export async function gitCheckoutOf(
 
 /**
  * A remote URL with the differences that do not name a different repository
- * taken out: scheme, user, a trailing `.git`, and the `host:path` form.
+ * taken out: scheme, user, a trailing `.git`, the `host:path` form, and the
+ * host's case. The path keeps its case, which a host may treat as telling
+ * two repositories apart.
  */
-const normalizeRemote = (remote: string): string =>
-  remote.trim()
+const normalizeRemote = (remote: string): string => {
+  const bare = remote.trim()
     .replace(/^[a-z+]+:\/\//i, "")
     .replace(/^[^@/]+@/, "")
     .replace(/^([^/:]+):(?!\d)/, "$1/")
     .replace(/\.git$/, "")
-    .replace(/\/+$/, "")
-    .toLowerCase();
+    .replace(/\/+$/, "");
+  const slash = bare.indexOf("/");
+  return slash === -1
+    ? bare.toLowerCase()
+    : `${bare.slice(0, slash).toLowerCase()}${bare.slice(slash)}`;
+};
 
-const sha256Hex = async (text: string): Promise<string> =>
-  encodeHex(
-    new Uint8Array(
-      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)),
-    ),
-  );
+const sha256Hex = (text: string): string =>
+  encodeHex(sha256(new TextEncoder().encode(text)));
 
 const hmacHex = async (key: Uint8Array, text: string): Promise<string> => {
   const imported = await crypto.subtle.importKey(
@@ -136,9 +139,11 @@ export async function entrySlot(
     await Deno.realPath(checkout.root),
     await realPathOf(path),
   ).split(SEPARATOR).join("/");
-  return `cf-git:${await sha256Hex(
-    `${normalizeRemote(checkout.remote)}\n${inRepo}`,
-  )}`;
+  return `cf-git:${
+    sha256Hex(
+      `${normalizeRemote(checkout.remote)}\n${inRepo}`,
+    )
+  }`;
 }
 
 /**
@@ -294,7 +299,7 @@ export async function recordDeployedVersion(
       }),
       slot,
       origin: "self",
-      deployedTo: await deployedPieceRef(
+      deployedTo: deployedPieceRef(
         deployed.piece.space,
         deployed.piece.id,
       ),

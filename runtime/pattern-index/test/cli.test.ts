@@ -342,11 +342,13 @@ describe("cli", () => {
     });
   });
 
+  const PIECE = "piece:" + "ab".repeat(32);
+
   it("sends a view of a piece or of a pattern as the member's viewed_in_loom", async () => {
     reply = () => Response.json({ ok: true, recorded: false });
     for (
       const [request, sent] of [
-        [{ op: "view", piece: "piece:abc" }, { piece: "piece:abc" }],
+        [{ op: "view", piece: PIECE }, { piece: PIECE }],
         [{ op: "view", patternId: "pat-1" }, { patternId: "pat-1" }],
       ] as const
     ) {
@@ -371,7 +373,7 @@ describe("cli", () => {
     reply = () => Response.json({ ok: false });
     const output = await callHelper(directory, baseUrl, {
       op: "view",
-      piece: "piece:abc",
+      piece: PIECE,
     });
     expect(JSON.parse(output.stdout)).toMatchObject({ ok: false, status: 502 });
   });
@@ -380,8 +382,9 @@ describe("cli", () => {
     for (
       const request of [
         { op: "view" },
-        { op: "view", piece: "piece:a", patternId: "p" },
+        { op: "view", piece: PIECE, patternId: "p" },
         { op: "view", piece: "did:key:z/fid1:raw" },
+        { op: "view", piece: "piece:abc" },
       ]
     ) {
       const output = await callHelper(directory, baseUrl, request);

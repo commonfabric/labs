@@ -191,7 +191,7 @@ const answerRequest = async (
         const subject = typeof patternId === "string" && patternId !== "" &&
             piece === undefined
           ? { patternId }
-          : typeof piece === "string" && piece.startsWith("piece:") &&
+          : typeof piece === "string" && /^piece:[0-9a-f]{64}$/.test(piece) &&
               patternId === undefined
           ? { piece }
           : undefined;

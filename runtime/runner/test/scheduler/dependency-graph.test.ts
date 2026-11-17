@@ -245,6 +245,25 @@ describe("dependency-graph", () => {
     });
   });
 
+  describe("recomputeLiveRefs()", () => {
+    it("makes a node it finds live a seed candidate again", () => {
+      const { nodes, state } = createGraph();
+      const writer = named("writer");
+      const reader = named("reader");
+      nodes.register(writer, "computation");
+      nodes.register(reader, "effect");
+      registerDependentEdge(state, writer, reader);
+      // Counts that drifted: the writer reads as dormant, and a scan parks it.
+      nodes.get(writer)!.liveRefs = 0;
+      nodes.parkSeedCandidate(writer);
+
+      recomputeLiveRefs(state);
+
+      expect(isLive(state, nodes.get(writer)!)).toBe(true);
+      expect(nodes.getSeedCandidates().has(writer)).toBe(true);
+    });
+  });
+
   describe("assertLivenessEquivalence()", () => {
     it("returns without checking when not enabled", () => {
       const { nodes, state } = createGraph();
@@ -362,6 +381,83 @@ describe("dependency-graph", () => {
             );
           }
         }
+      });
+    }
+
+    // What a pull seed scan does to the registry: it parks each candidate
+    // that is not live. Nothing here is pending.
+    const parkDormant = (
+      nodes: NodeRegistry,
+      state: DependencyGraphState,
+    ): void => {
+      for (const action of nodes.getSeedCandidates()) {
+        if (!isLive(state, nodes.get(action)!)) nodes.parkSeedCandidate(action);
+      }
+    };
+
+    for (const run of runs) {
+      it(`keeps every live invalid node a seed candidate after every mutation ${run.name}`, () => {
+        let returned = 0;
+        let liveChecked = 0;
+        for (let seed = 1; seed <= 20; seed++) {
+          const random = createRandom(seed * 15485863);
+          const { nodes, state, toggleMaterializer } = createGraph();
+          const actions: Action[] = [];
+          for (let i = 0; i < 10; i++) {
+            const action = named(`node${i}`);
+            actions.push(action);
+            nodes.register(
+              action,
+              random() < run.effectShare ? "effect" : "computation",
+            );
+          }
+          const pick = () => actions[Math.floor(random() * actions.length)];
+
+          for (let step = 0; step < 300; step++) {
+            parkDormant(nodes, state);
+            const parked = actions.filter((action) =>
+              nodes.isInvalid(action) && !nodes.getSeedCandidates().has(action)
+            );
+            const roll = random();
+            const writer = pick();
+            const reader = pick();
+            if (roll < 0.4) {
+              registerDependentEdge(state, writer, reader);
+            } else if (roll < 0.7) {
+              unregisterDependentEdge(state, writer, reader);
+            } else if (roll < 0.8 && run.provisional) {
+              const record = nodes.get(writer)!;
+              setNodeProvisionalDemand(
+                state,
+                record,
+                !record.provisionalDemand,
+              );
+            } else if (roll < 0.9) {
+              toggleMaterializer(writer);
+            } else {
+              // A node that ran: it leaves the invalid nodes, and joins
+              // them again on its next invalidation.
+              nodes.setStatus(
+                writer,
+                nodes.isInvalid(writer) ? "clean" : "invalid",
+              );
+            }
+            for (const action of nodes.getInvalidNodes()) {
+              if (!isLive(state, nodes.get(action)!)) continue;
+              liveChecked++;
+              expect(
+                nodes.getSeedCandidates().has(action),
+                `${run.name} seed ${seed} step ${step}: ${action.name}`,
+              ).toBe(true);
+            }
+            returned += parked.filter((action) =>
+              nodes.isInvalid(action) && isLive(state, nodes.get(action)!)
+            ).length;
+          }
+        }
+        // The comparison above says nothing unless parked nodes came alive.
+        expect(liveChecked).toBeGreaterThan(1000);
+        expect(returned).toBeGreaterThan(100);
       });
     }
 

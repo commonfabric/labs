@@ -20,6 +20,8 @@ import {
 } from "@commonfabric/js-values/types";
 import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
 import type { PatternIndexFetch } from "./http-fetch.ts";
+import { encodeHex } from "@std/encoding/hex";
+import { sha256 } from "@commonfabric/content-hash";
 
 /** Own and publication-bounded inherited evidence computed by the index. */
 export interface PatternIndexSignals {
@@ -184,7 +186,12 @@ export interface PatternIndexSearchResult {
   /** Which ranked bucket this hit came from, absent on older deployments. */
   bucket?: PatternIndexBucket;
 
-  /** The author's stable pseudonym on this index. */
+  /**
+   * @deprecated Read `author.pseudonym`. Deployments with private versions
+   * answer the same per-lineage pseudonym here, for older readers; older
+   * deployments answer one pseudonym per author, shared across their
+   * patterns.
+   */
   handle?: string;
 
   /** How the author is shown: a per-lineage pseudonym, a tier, a name if published. */
@@ -250,7 +257,12 @@ export interface PatternIndexPattern {
   /** The publisher's DID, from deployments that predate `handle`. */
   ownerDid?: string;
 
-  /** The author's stable pseudonym on this index. */
+  /**
+   * @deprecated Read `author.pseudonym`. Deployments with private versions
+   * answer the same per-lineage pseudonym here, for older readers; older
+   * deployments answer one pseudonym per author, shared across their
+   * patterns.
+   */
   handle?: string;
 
   /** How the author is shown: a per-lineage pseudonym, a tier, a name if published. */
@@ -326,7 +338,12 @@ export interface PatternIndexListedPattern {
   /** The publisher's DID, from deployments that predate `handle`. */
   ownerDid?: string;
 
-  /** The author's stable pseudonym on this index. */
+  /**
+   * @deprecated Read `author.pseudonym`. Deployments with private versions
+   * answer the same per-lineage pseudonym here, for older readers; older
+   * deployments answer one pseudonym per author, shared across their
+   * patterns.
+   */
   handle?: string;
 
   /** How the author is shown: a per-lineage pseudonym, a tier, a name if published. */
@@ -465,7 +482,6 @@ export type PatternIndexRecordUsageEventRequest = PatternIndexEventSubject & {
   eventType: PatternIndexUsageEventType;
 };
 
-/** Signed event payload; the client supplies the author from its identity. */
 /**
  * What an event is about: a pattern by id, or, for its owner's own use of a
  * version in a loom, the piece the version was deployed to
@@ -475,6 +491,7 @@ export type PatternIndexEventSubject =
   | { patternId: string; piece?: never }
   | { piece: string; patternId?: never };
 
+/** Signed event payload; the client supplies the author from its identity. */
 export interface PatternIndexRecordEventRequest {
   patternId: string;
   eventType: PatternIndexEventType;
@@ -532,20 +549,30 @@ export interface PatternIndexRetractResponse {
  * index learns neither. `pieceId` is the bare `fid1:…` form; an `of:` prefix
  * is taken off.
  */
-export async function deployedPieceRef(
-  spaceDid: string,
-  pieceId: string,
-): Promise<string> {
+export function deployedPieceRef(spaceDid: string, pieceId: string): string {
   const bare = pieceId.startsWith("of:") ? pieceId.slice(3) : pieceId;
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(`${spaceDid}/${bare}`),
-  );
   return `piece:${
-    [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0"))
-      .join("")
+    encodeHex(sha256(new TextEncoder().encode(`${spaceDid}/${bare}`)))
   }`;
 }
+
+/** What {@link deployedPieceRef} answers, and nothing else is sent as one. */
+const PIECE_REF = /^piece:[0-9a-f]{64}$/;
+
+/**
+ * `ref`, checked to be a hashed piece reference, so a raw piece id never
+ * reaches the index.
+ *
+ * @throws Error naming the field for anything else.
+ */
+const pieceRef = (field: string, ref: string): string => {
+  if (!PIECE_REF.test(ref)) {
+    throw new Error(
+      `${field} must be a piece reference from deployedPieceRef, not a piece id`,
+    );
+  }
+  return ref;
+};
 
 /**
  * Who may read a version: its owner alone, any member who shares (under the
@@ -554,9 +581,16 @@ export async function deployedPieceRef(
 export type PatternIndexVisibility = "private" | "shared" | "published";
 
 /**
- * Where a version's share stands: never asked, being checked by the privacy
- * gardener, held by it (the owner reads `gates`), failed, or readable by
- * others.
+ * Where a version's share stands:
+ *
+ * - `none`: never asked to share.
+ * - `pending`: the privacy gardener is checking it.
+ * - `held`: the gardener found something identifying; its owner reads
+ *   `gates`, and a changed source can be shared again.
+ * - `error`: the check failed to run; `shareVersion` asks again.
+ * - `exposed`: shared, and readable by others.
+ * - `public_elsewhere`: the same source is already shared under someone
+ *   else, so this one cannot be; a changed source can.
  */
 export type PatternIndexShareState =
   | "none"
@@ -1407,7 +1441,7 @@ export class PatternIndexClient {
     });
   }
 
-  publishPattern(
+  async publishPattern(
     request: PatternIndexPublishRequest,
   ): Promise<PatternIndexPublishResponse> {
     const schemas = {
@@ -1418,7 +1452,7 @@ export class PatternIndexClient {
         ? { resultSchema: request.resultSchema }
         : {}),
     };
-    return this.#call<PatternIndexPublishResponse>("publishPattern", {
+    return await this.#call<PatternIndexPublishResponse>("publishPattern", {
       patternId: request.patternId,
       program: request.program,
       meta: {
@@ -1456,7 +1490,7 @@ export class PatternIndexClient {
       ...(request.origin !== undefined ? { origin: request.origin } : {}),
       ...(request.keepPrivate === true ? { keepPrivate: true } : {}),
       ...(request.deployedTo !== undefined
-        ? { deployedTo: request.deployedTo }
+        ? { deployedTo: pieceRef("deployedTo", request.deployedTo) }
         : {}),
     });
   }
@@ -1467,13 +1501,13 @@ export class PatternIndexClient {
    * same function as a run's outcome, which is why the two are kept apart
    * here by type.
    */
-  recordUsageEvent(
+  async recordUsageEvent(
     request: PatternIndexRecordUsageEventRequest,
   ): Promise<PatternIndexRecordEventResponse> {
-    return this.#call("recordEvent", {
+    return await this.#call("recordEvent", {
       ...(request.patternId !== undefined
         ? { patternId: request.patternId }
-        : { piece: request.piece }),
+        : { piece: pieceRef("piece", request.piece) }),
       eventType: request.eventType,
       did: this.did,
     });

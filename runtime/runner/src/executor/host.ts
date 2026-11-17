@@ -378,10 +378,17 @@ export class ExecutorHost {
       // re-traversed on push), not client demand — counting it in
       // `pushGrowthWakes` and waking the loop spins an extra cycle and
       // demand pass that finds no client delta (W1 review MINOR-4).
-      demandChanged: (space, reason, principal, _sessionId, servingOwn) => {
+      demandChanged: (
+        space,
+        reason,
+        principal,
+        _sessionId,
+        servingOwn,
+        notDemand,
+      ) => {
         if (
           isServingSessionOf(
-            { principal, servingOwn },
+            { principal, servingOwn, notDemand },
             this.#options.serviceIdentity,
           )
         ) {

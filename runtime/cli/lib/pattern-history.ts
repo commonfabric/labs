@@ -4,10 +4,10 @@
  * and restored. History is the owner's alone; nobody else, admins included,
  * can list it.
  *
- * Rollback puts an old version back in two places: the index, where it
- * becomes the lineage's newest version, and the files on disk, which the
- * person edits next. It never runs over edits that are not kept as a
- * version, since nothing could bring those back.
+ * Rollback puts an old version back in two places: the files on disk, which
+ * the person edits next, and the index, where it becomes the lineage's
+ * newest version. Unless told `force`, it refuses to write over edits no
+ * version keeps, since nothing could bring those back.
  */
 
 import {
@@ -84,7 +84,7 @@ const requireLineage = async (
   const lineage = await lineageForEntry(client, entry, sources);
   if (lineage === undefined) {
     throw new PatternHistoryError(
-      `No versions of ${entry} are kept yet: deploying it (cf piece new or cf piece setsrc) keeps one each time.`,
+      `No versions of ${entry} are kept yet: once this machine has joined an index that keeps them, each cf piece new or cf piece setsrc of it from this file keeps one (a deploy that follows an origin, or of someone else's pattern unchanged, keeps none).`,
     );
   }
   return lineage;
@@ -130,7 +130,7 @@ export const lineageLines = (
 ): string[] =>
   lineages.length === 0
     ? [
-      "No patterns of yours are kept yet: deploying one with cf piece new or cf piece setsrc keeps a version each time.",
+      "No patterns of yours are kept yet: once this machine has joined an index that keeps them, each cf piece new or cf piece setsrc of your own pattern from a file keeps a version.",
     ]
     : lineages.map((lineage) =>
       `${lineage.name ?? lineage.description}: ${lineage.versions} version${
@@ -193,7 +193,11 @@ export interface RollbackReport {
 
 const programRoot = (entry: string, main: string): string => {
   const path = resolve(entry);
-  if (!path.endsWith(main) || normalize(main) !== main) {
+  // A program's names are rooted (`/main.tsx`), so the suffix match below
+  // ends at a path separator and `domain.tsx` cannot pass for `main.tsx`.
+  if (
+    !main.startsWith("/") || normalize(main) !== main || !path.endsWith(main)
+  ) {
     throw new PatternHistoryError(
       `${entry} is not where this version's entry ${main} lives; run this on the entry file it was deployed from.`,
     );
@@ -217,6 +221,27 @@ const diskPath = (root: string, name: string): string => {
   return path;
 };
 
+/**
+ * The contents of `path`, or `undefined` where there is no file. Any other
+ * failure to read is thrown, so a file that could not be read is never
+ * taken for one that is not there and written over.
+ */
+const readIfThere = async (
+  read: (path: string) => Promise<string>,
+  path: string,
+): Promise<string | undefined> => {
+  try {
+    return await read(path);
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return undefined;
+    throw new PatternHistoryError(
+      `${relative(Deno.cwd(), path)} could not be read (${
+        error instanceof Error ? error.message : String(error)
+      }); nothing was restored.`,
+    );
+  }
+};
+
 /** The files of `files` whose contents on disk under `root` differ. */
 const differing = async (
   files: readonly PatternIndexProgramFile[],
@@ -225,32 +250,58 @@ const differing = async (
 ): Promise<PatternIndexProgramFile[]> => {
   const out: PatternIndexProgramFile[] = [];
   for (const file of files) {
-    const now = await read(diskPath(root, file.name)).catch(() => undefined);
+    const now = await readIfThere(read, diskPath(root, file.name));
     if (now !== file.contents) out.push(file);
   }
   return out;
 };
 
 /**
- * The files a restore would write over that hold something no version
- * keeps: a file of the current version that differs from it on disk, and a
- * file only the restored version has that exists on disk with other
- * contents.
+ * Of the files a restore writes, `writing`, those that hold something no
+ * version keeps: one of the current version's files that differs from it
+ * on disk, or a file only the restored version has that exists on disk.
+ * A file the restore leaves alone is never counted.
  */
 const unkept = async (
   current: readonly PatternIndexProgramFile[],
-  restoring: readonly PatternIndexProgramFile[],
+  writing: readonly PatternIndexProgramFile[],
   root: string,
   read: (path: string) => Promise<string>,
 ): Promise<string[]> => {
-  const inCurrent = new Set(current.map((file) => file.name));
-  const edited = (await differing(current, root, read)).map((f) => f.name);
-  for (const file of restoring) {
-    if (inCurrent.has(file.name)) continue;
-    const now = await read(diskPath(root, file.name)).catch(() => undefined);
-    if (now !== undefined && now !== file.contents) edited.push(file.name);
+  const kept = new Map(current.map((file) => [file.name, file.contents]));
+  const lost: string[] = [];
+  for (const file of writing) {
+    const path = diskPath(root, file.name);
+    const now = await readIfThere(read, path);
+    if (now !== undefined && now !== kept.get(file.name)) {
+      lost.push(relative(Deno.cwd(), path));
+    }
   }
-  return edited.map((name) => relative(Deno.cwd(), diskPath(root, name)));
+  return lost;
+};
+
+/**
+ * Refuses a write that a symbolic link would carry outside `root`: the
+ * file itself a link, or a directory on its way that resolves elsewhere.
+ * Run once the directories exist.
+ */
+const requireInside = async (root: string, path: string): Promise<void> => {
+  const realRoot = await Deno.realPath(root);
+  const realDir = await Deno.realPath(dirname(path));
+  const link = await Deno.lstat(path).then(
+    (info) => info.isSymlink,
+    () => false,
+  );
+  if (
+    link ||
+    (realDir !== realRoot && !realDir.startsWith(join(realRoot, SEPARATOR)))
+  ) {
+    throw new PatternHistoryError(
+      `${
+        relative(Deno.cwd(), path)
+      } is reached through a symbolic link; nothing more was restored.`,
+    );
+  }
 };
 
 /**
@@ -310,7 +361,7 @@ export async function rollbackEntry(
     }
     const lost = await unkept(
       current.program.files,
-      restored.program.files,
+      changed,
       root,
       deps.readTextFile,
     );
@@ -322,10 +373,14 @@ export async function rollbackEntry(
       );
     }
   }
-  const written: string[] = [];
   for (const file of changed) {
     const path = diskPath(root, file.name);
     await Deno.mkdir(dirname(path), { recursive: true });
+    await requireInside(root, path);
+  }
+  const written: string[] = [];
+  for (const file of changed) {
+    const path = diskPath(root, file.name);
     await deps.writeTextFile(path, file.contents);
     written.push(relative(Deno.cwd(), path));
   }

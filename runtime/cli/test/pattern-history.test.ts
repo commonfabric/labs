@@ -189,6 +189,86 @@ describe("pattern-history", () => {
       expect(rollbacks).toEqual([]);
     });
 
+    it("restores over an edited file the restored version leaves alone", async () => {
+      const notes = join(dir, "notes.ts");
+      const { deps, rollbacks } = await indexWith(entry, {
+        "ver-2": {
+          main: "/count.tsx",
+          files: [
+            { name: "/count.tsx", contents: V2 },
+            { name: "/notes.ts", contents: "export const n = 2;\n" },
+          ],
+        },
+      });
+      await Deno.writeTextFile(notes, "export const n = 'edited';\n");
+
+      await rollbackEntry(entry, "1", {}, deps);
+
+      expect(await Deno.readTextFile(entry)).toBe(V1);
+      expect(await Deno.readTextFile(notes)).toBe(
+        "export const n = 'edited';\n",
+      );
+      expect(rollbacks).toHaveLength(1);
+    });
+
+    it("refuses, writing nothing, when a file it would write cannot be read", async () => {
+      const { deps, rollbacks } = await indexWith();
+
+      await expect(rollbackEntry(entry, "1", {}, {
+        ...deps,
+        readTextFile: () => Promise.reject(new Deno.errors.PermissionDenied()),
+      })).rejects.toThrow("could not be read");
+      expect(await Deno.readTextFile(entry)).toBe(V2);
+      expect(rollbacks).toEqual([]);
+    });
+
+    it("refuses, writing nothing, a file reached through a symbolic link out of the pattern's directory", async () => {
+      const outside = await Deno.makeTempDir();
+      try {
+        await Deno.symlink(outside, join(dir, "lib"));
+        const { deps, rollbacks } = await indexWith(entry, {
+          "ver-1": {
+            main: "/count.tsx",
+            files: [
+              { name: "/count.tsx", contents: V1 },
+              { name: "/lib/helper.ts", contents: "export const x = 1;\n" },
+            ],
+          },
+        });
+
+        await expect(rollbackEntry(entry, "1", { force: true }, deps)).rejects
+          .toThrow("symbolic link");
+        await expect(Deno.stat(join(outside, "helper.ts"))).rejects.toThrow();
+        expect(await Deno.readTextFile(entry)).toBe(V2);
+        expect(rollbacks).toEqual([]);
+      } finally {
+        await Deno.remove(outside, { recursive: true });
+      }
+    });
+
+    it("refuses an entry file whose name only ends like the version's entry", async () => {
+      const other = join(dir, "account.tsx");
+      await Deno.writeTextFile(other, V2);
+      const { deps } = await indexWith(other);
+
+      await expect(rollbackEntry(other, "1", {}, {
+        ...deps,
+        client: {
+          ...deps.client,
+          getVersion: () =>
+            Promise.resolve({
+              ...summary(1),
+              keywords: [],
+              dependencies: [],
+              program: {
+                main: "count.tsx",
+                files: [{ name: "count.tsx", contents: V1 }],
+              },
+            }),
+        },
+      })).rejects.toThrow("is not where this version's entry");
+    });
+
     it("leaves the index where it was when writing the files fails", async () => {
       const { deps, rollbacks } = await indexWith();
 

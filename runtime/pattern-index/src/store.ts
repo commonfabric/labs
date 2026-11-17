@@ -259,14 +259,7 @@ export class PatternIndexStore {
    * fetch it by id, so `cf` sends a deploy's source only once this is true.
    */
   async keepsVersions(): Promise<boolean> {
-    await this.#checkPrivate();
-    return await Deno.lstat(join(this.#dir, KEEPS_VERSIONS)).then(
-      () => true,
-      (error) => {
-        if (isNotFound(error)) return false;
-        throw error;
-      },
-    );
+    return await this.#hasMarker(KEEPS_VERSIONS);
   }
 
   /** Records that this index keeps private versions. */
@@ -285,20 +278,26 @@ export class PatternIndexStore {
   async slotKey(): Promise<Uint8Array> {
     await this.#ensureDir();
     const path = join(this.#dir, SLOT_KEY);
-    try {
-      return await Deno.readFile(path);
-    } catch (error) {
-      if (!isNotFound(error)) throw error;
-    }
-    const key = crypto.getRandomValues(new Uint8Array(32));
-    try {
-      await Deno.writeFile(path, key, { createNew: true, mode: 0o600 });
-      return key;
-    } catch (error) {
-      // Another process made it first; theirs is the one kept.
-      if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
-      return await Deno.readFile(path);
-    }
+    const existing = await this.#readSlotKey(path);
+    if (existing !== undefined) return existing;
+    // Written beside and linked into place, so the key appears only once
+    // whole; a process that loses the race to make it reads the winner's.
+    const temp = `${path}.${crypto.randomUUID()}.tmp`;
+    await Deno.writeFile(temp, crypto.getRandomValues(new Uint8Array(32)), {
+      createNew: true,
+      mode: 0o600,
+    });
+    const linked = await Deno.link(temp, path).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await Deno.remove(temp);
+    // Linked, or another process linked its key first: either way the key
+    // is there now, and only a link that failed for another reason left
+    // none.
+    const key = await this.#readSlotKey(path);
+    if (key === undefined) throw linked;
+    return key;
   }
 
   /**
@@ -306,14 +305,7 @@ export class PatternIndexStore {
    * machine never joined the index, which it says only once.
    */
   async notedNotJoined(): Promise<boolean> {
-    await this.#checkPrivate();
-    return await Deno.lstat(join(this.#dir, NOTED_NOT_JOINED)).then(
-      () => true,
-      (error) => {
-        if (isNotFound(error)) return false;
-        throw error;
-      },
-    );
+    return await this.#hasMarker(NOTED_NOT_JOINED);
   }
 
   /** Records that the person has been told. */
@@ -387,6 +379,37 @@ export class PatternIndexStore {
    */
   async sourceOf(entryPath: string): Promise<string | undefined> {
     return (await this.#readPublished()).sources[resolve(entryPath)];
+  }
+
+  /**
+   * The slot key at `path`, `undefined` where there is none.
+   *
+   * @throws Error for a key file that is not 32 bytes, which no version of
+   *   this store wrote.
+   */
+  async #readSlotKey(path: string): Promise<Uint8Array | undefined> {
+    let key: Uint8Array;
+    try {
+      key = await Deno.readFile(path);
+    } catch (error) {
+      if (isNotFound(error)) return undefined;
+      throw error;
+    }
+    if (key.length !== 32) {
+      throw new Error(`${path} is not a slot key; remove it to make a new one`);
+    }
+    return key;
+  }
+  /** Whether the marker file `name` exists in the store. */
+  async #hasMarker(name: string): Promise<boolean> {
+    await this.#checkPrivate();
+    try {
+      await Deno.lstat(join(this.#dir, name));
+      return true;
+    } catch (error) {
+      if (isNotFound(error)) return false;
+      throw error;
+    }
   }
 
   async #readMembership(): Promise<MembershipFile | undefined> {

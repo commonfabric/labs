@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { Identity } from "@commonfabric/identity";
-import { PatternIndexClient } from "@commonfabric/pattern-index/client";
+import {
+  PatternIndexClient,
+  PatternIndexError,
+} from "@commonfabric/pattern-index/client";
 import type { ObjectGenerator } from "@commonfabric/pattern-index/privacy";
 import type { CompiledPattern } from "@commonfabric/pattern-index/publish";
 import type { RuntimeProgram } from "@commonfabric/runner";
@@ -249,8 +252,10 @@ describe("pattern-publish", () => {
       });
       expect(await Deno.readTextFile(entry)).toBe(GENERALIZED);
       const publishes = index.calls.filter((c) => c.fn === "publishPattern");
+      // No version is marked keepPrivate: a publish never shares by itself,
+      // and the mark would keep a deployed head from ever sharing.
       expect(publishes.map((c) => [c.body.patternId, c.body.keepPrivate]))
-        .toEqual([["id-original", true], ["id-generalized", undefined]]);
+        .toEqual([["id-original", undefined], ["id-generalized", undefined]]);
       expect(publishes.every((c) => c.body.slot === "cf-path:abc")).toBe(true);
       expect(publishes.every((c) => c.body.origin === "self")).toBe(true);
       expect(report.version).toBe(2);
@@ -273,6 +278,41 @@ describe("pattern-publish", () => {
         undefined,
       ]);
       expect(first.remixedFrom).toBe("pat-theirs");
+    });
+
+    it("keeps the source as a version before a rewrite it writes over uncommitted edits with allowDirty", async () => {
+      dirty = [entry];
+      const report = await publishedReport(
+        { entry, allowDirty: true, slot: "cf-path:dirty" },
+        depsWith(scripted([FAIL, PASS], [REWRITE])),
+      );
+
+      expect(report.localCheck).toMatchObject({
+        applied: true,
+        originalVersion: 1,
+      });
+    });
+
+    it("shares through an index that keeps no lineages as it did before", async () => {
+      const deps = depsWith(scripted([PASS], []));
+      const client = deps.client;
+      const report = await publishedReport(
+        { entry, slot: "cf-path:old" },
+        {
+          ...deps,
+          client: {
+            getGardenerPrompt: (r) => client.getGardenerPrompt(r),
+            publishPattern: (r) => client.publishPattern(r),
+            requestListing: (r) => client.requestListing(r),
+            getPattern: (r) => client.getPattern(r),
+            whoami: () => client.whoami(),
+            listLineages: () =>
+              Promise.reject(new PatternIndexError("listLineages", 404)),
+          },
+        },
+      );
+
+      expect(report.outcome).toBe("shared");
     });
 
     it("throws naming cf index join, before compiling, for an identity that is no member", async () => {

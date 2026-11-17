@@ -507,7 +507,7 @@ const shareOptions = (cmd: Command<any>) =>
     )
     .option(
       "--allow-dirty",
-      "Apply a privacy rewrite over files with uncommitted edits, keeping no version of them first.",
+      "Apply a privacy rewrite over files with uncommitted edits; your source as it was is still kept as a version that cf pattern rollback restores.",
     )
     .option(
       "--skip-local-check",
@@ -531,8 +531,9 @@ const shareOptions = (cmd: Command<any>) =>
 export const pattern = new Command()
   .name("pattern")
   .description(
-    "Keep, share and publish patterns in the pattern index: every deploy " +
-      "is kept as a private version, with history and rollback.",
+    "Keep, share and publish patterns in the pattern index: each deploy " +
+      "of your own pattern is kept as a private version, with history and " +
+      "rollback.",
   )
   .default("help")
   /* pattern share */
