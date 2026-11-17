@@ -10,6 +10,7 @@ import { ExecutorHost } from "../../src/executor/host.ts";
 import { STRUCTURE_LOAD_STUCK_AFTER } from "../../src/executor/space-server.ts";
 import type { NormalizedFullLink } from "../../src/link-types.ts";
 import { getMetaLink } from "../../src/link-utils.ts";
+import { setResultCell } from "../../src/result-utils.ts";
 import { PieceStateMovedError } from "../../src/stored-setup-build.ts";
 import { rawMetaWriteAuthorization } from "../../src/meta-seam.ts";
 import type { RuntimeProgram } from "../../src/harness/types.ts";
@@ -33,6 +34,9 @@ const setupSigner = await Identity.fromPassphrase(
 );
 const aliceSigner = await Identity.fromPassphrase(
   "space-server enclosing start alice",
+);
+const bobSigner = await Identity.fromPassphrase(
+  "space-server enclosing start bob",
 );
 
 // A handler a nested pattern defines, whose input the pattern enclosing it
@@ -152,6 +156,52 @@ const DEEP_PROGRAM: RuntimeProgram = {
   }],
 };
 
+// A handler of the outer pattern makes the child, handing it what the outer
+// pattern derives; the child is held behind a value-link slot, not set up by
+// the outer pattern's graph.
+const HANDLER_MADE_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { type Cell, computed, Default, handler, pattern, Stream, Writable } from 'commonfabric';",
+      "",
+      "type Seen = Writable<number | Default<0>>;",
+      "type Child = { record: Stream<unknown>; local: number };",
+      "",
+      "const record = handler<unknown, { base?: number; seen: Seen }>(",
+      "  (_event, { base, seen }) => {",
+      "    seen.set(base ?? -1);",
+      "  },",
+      ");",
+      "",
+      "const child = pattern<{ base?: number; seen: Seen }, Child>(",
+      "  ({ base, seen }) => ({",
+      "    record: record({ base, seen }),",
+      "    local: Writable.of<number>(7),",
+      "  }),",
+      ");",
+      "",
+      "const make = handler<",
+      "  unknown,",
+      "  { slot: Writable<{ child?: Cell<Child> }>; doubled: Cell<number>; seen: Seen }",
+      ">((_event, { slot, doubled, seen }) => {",
+      "  if (slot.get().child !== undefined) return;",
+      "  slot.set({ child: child({ base: doubled, seen }) });",
+      "});",
+      "",
+      "export default pattern<",
+      "  { value: number; seen?: Seen },",
+      "  { make: Stream<unknown>; slot: { child?: Cell<Child> } }",
+      ">(({ value, seen }) => {",
+      "  const doubled = computed(() => value * 2);",
+      "  const slot = Writable.of<{ child?: Cell<Child> }>({});",
+      "  return { make: make({ slot, doubled, seen: seen! }), slot };",
+      "});",
+    ].join("\n"),
+  }],
+};
+
 /** The addresses of a piece set up before any serving loop runs. */
 interface Piece {
   /** The enclosing instance's root. */
@@ -170,6 +220,7 @@ describe("SpaceServer", () => {
   let servingRuntime: Runtime | undefined;
   let cycles: ArrivalLog<unknown>;
   let demanded: NormalizedFullLink[];
+  let demanders: Identity[];
   let onServingRuntime: ((runtime: Runtime) => void) | undefined;
   const opened: { runtime: Runtime; manager: EmulatedStorageManager }[] = [];
 
@@ -197,21 +248,27 @@ describe("SpaceServer", () => {
     servingRuntime = undefined;
     cycles = new ArrivalLog();
     demanded = [];
+    demanders = [aliceSigner];
     onServingRuntime = undefined;
-    // The demand is the one document each case names, demanded by one
-    // session of alice's: a demand that reaches a nested instance without
-    // reaching anything of its enclosing instance's.
+    // The demand is the documents each case names, each demanded by one
+    // session of each of `demanders`, alice unless the case says otherwise: a
+    // demand that reaches a nested instance without reaching anything of its
+    // enclosing instance's.
     const scopeKey = resolveScopeKey("space", {
       principal: serviceSigner.did(),
     });
     (server as { demandForSpace: unknown }).demandForSpace = () =>
-      sessionDemandOf(demanded.map(({ id }) => ({
-        id,
-        scope: "space" as const,
-        scopeKey,
-        root: true,
-        identity: { principal: aliceSigner.did(), sessionId: "viewer" },
-      })));
+      sessionDemandOf(
+        demanders.flatMap((who, session) =>
+          demanded.map(({ id }) => ({
+            id,
+            scope: "space" as const,
+            scopeKey,
+            root: true,
+            identity: { principal: who.did(), sessionId: `viewer-${session}` },
+          }))
+        ),
+      );
   });
 
   afterEach(async () => {
@@ -682,14 +739,164 @@ describe("SpaceServer", () => {
         expect(host.stats().structureLoadStuck).toBe(1);
         expect(serves(nested)).toBe(false);
         expect(logs.textsOf("structure-load-stuck")[0]).toContain(
-          `(pattern-unloadable at ${enclosing.id}, a piece enclosing it)`,
+          `(pattern-unloadable held back by ${enclosing.id})`,
         );
         // An event to the nested piece's stream starts it alone, as the event
         // path starts a piece whose sources do not start, and its handler
         // reads what the enclosing piece derived last.
+        // TODO(danfuzz): Expect the event held back with the demand, once an
+        // event's auto-load of a nested piece on a serving runtime requires
+        // the pieces enclosing it, as the demand start does.
         expect(await recordedOnEvent(stream)).toBe(2);
         expect(serves(nested)).toBe(true);
         expect(serves(enclosing)).toBe(false);
+      });
+
+      it("parks both demanded documents of a nested piece demanded together once its enclosing piece's start commit fails", async () => {
+        using logs = captureLogs("space-server");
+        host = newHost();
+        const { enclosing, nested, local, nestedArgument } =
+          await setUpNested();
+        await demand(local, nestedArgument);
+        await awaitEach(cycles, () => serves(nested));
+        await awaitEach(
+          cycles,
+          () => host!.stats().demand.demandKeysReconciled >= 2,
+        );
+
+        servingRuntime!.pieceStartCommitFailureObserver!({
+          actionId: `piece-start/${enclosing.id}`,
+          error: new Error("test failure of the enclosing start's commit"),
+        });
+        expect(logs.textsOf("structure-load-start-failed")).toEqual([
+          `piece ${enclosing.id}'s start commit failed; its 2 demanded ` +
+          "document(s) parked until a commit touches the piece",
+        ]);
+      });
+
+      it("re-arms the enclosing piece's runs for a demander who arrives at a demanded document later", async () => {
+        const rearmed: string[][] = [];
+        onServingRuntime = (runtime) => {
+          const invalidate = runtime.scheduler.invalidateActionsForDemandRoots
+            .bind(runtime.scheduler);
+          runtime.scheduler.invalidateActionsForDemandRoots = (roots) => {
+            rearmed.push([...roots]);
+            return invalidate(roots);
+          };
+        };
+        host = newHost();
+        const { enclosing, nested, local } = await setUpNested();
+        await demand(local);
+        await awaitEach(cycles, () => serves(nested));
+        const arrivals = host.stats().demandArrivals;
+        const before = rearmed.length;
+        demanders = [aliceSigner, bobSigner];
+        host.spaceServer(space)!.noteDemandChanged();
+        await awaitEach(cycles, () => host!.stats().demandArrivals > arrivals);
+
+        expect(
+          rearmed.slice(before).some((roots) => roots.includes(enclosing.id)),
+        ).toBe(true);
+      });
+
+      it("holds a nested piece back while a link in its argument names a document whose chain cycles, counting it as the chain's failure", async () => {
+        host = newHost();
+        const { nested, local, nestedArgument } = await setUpNested();
+        // A link to the first of two documents whose `result` backlinks name
+        // each other, added to the nested piece's argument.
+        {
+          const writer = openRuntime(false, setupSigner);
+          const argument = writer.getCellFromLink(nestedArgument);
+          await argument.sync();
+          const tx = writer.edit();
+          const first = writer.getCell<unknown>(space, "cycle first", {}, tx);
+          const second = writer.getCell<unknown>(space, "cycle second", {}, tx);
+          first.setRaw({});
+          second.setRaw({});
+          setResultCell(first, second);
+          setResultCell(second, first);
+          argument.withTx(tx).setRaw({
+            ...(argument.getRaw() as Record<string, unknown>),
+            cycling: first.getAsLink(),
+          } as never);
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await writer.storageManager.synced();
+          await closeLastRuntime();
+        }
+        using logs = captureLogs("space-server");
+        await demand(local);
+        for (let cycle = 0; cycle < 2; cycle++) {
+          const deferred = host.stats().structureLoadDeferred;
+          await touchSpace();
+          await awaitEach(
+            cycles,
+            () =>
+              host!.stats().structureLoadDeferred > deferred || serves(nested),
+          );
+        }
+
+        expect(serves(nested)).toBe(false);
+        expect(
+          logs.textsOf("structure-load-deferred").some((text) =>
+            text.includes("(chain-cycle held back by ")
+          ),
+        ).toBe(true);
+      });
+
+      it("starts a child a handler made alone, so its handler reads no value its maker derives", async () => {
+        // TODO(danfuzz): Expect 10, as for a nested piece, once the demand
+        // start finds the piece whose handler made a demanded piece.
+        host = newHost();
+        const setup = openRuntime(false, setupSigner);
+        const compiled = await setup.patternManager.compilePattern(
+          HANDLER_MADE_PROGRAM,
+          { space },
+        );
+        const argument = setup.getCell<{ value: number; seen?: number }>(
+          space,
+          "enclosing start argument",
+          compiled.argumentSchema,
+        );
+        const maker = setup.getCell<{ slot: { child?: unknown } }>(
+          space,
+          "enclosing start maker",
+          compiled.resultSchema,
+        );
+        {
+          const tx = setup.edit();
+          argument.withTx(tx).set({ value: 1 });
+          setup.run(tx, compiled, argument, maker);
+          expect((await tx.commit().settled).error).toBeUndefined();
+        }
+        await maker.pull();
+        sendEvent(maker.key("make" as never), {});
+        await setup.idle();
+        await setup.storageManager.synced();
+        const child = maker.key("slot").key("child" as never).resolveAsCell();
+        await child.pull();
+        const childRoot = {
+          ...child.getAsNormalizedFullLink(),
+          path: [],
+        } as NormalizedFullLink;
+        const stream = child.key("record" as never).resolveAsCell()
+          .getAsNormalizedFullLink();
+        const local = child.key("local" as never).resolveAsCell()
+          .getAsNormalizedFullLink();
+        setup.runner.stop(child);
+        setup.runner.stop(maker);
+        {
+          const tx = setup.edit();
+          argument.withTx(tx).key("value").set(5);
+          expect((await tx.commit().settled).error).toBeUndefined();
+        }
+        await setup.idle();
+        await setup.storageManager.synced();
+        await closeLastRuntime();
+        await demand(local);
+
+        await awaitEach(cycles, () => serves(childRoot));
+        expect(serves(maker.getAsNormalizedFullLink())).toBe(false);
+        expect(await recordedOnEvent(stream)).toBe(-1);
       });
 
       it("leaves unstarted a producer a hub's nested piece takes its input from", async () => {

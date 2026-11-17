@@ -6056,8 +6056,11 @@ export class SpaceServer implements TransactionSealDestination {
             // reachable: those nodes re-arm for them exactly as they do for
             // a demander who arrives after the mapping (the arrival re-arm
             // below).
+            let owningRootId = root.id;
             const onOwningRoot = (owning: OwningRootAddress) => {
               const rootId = owning.id;
+              owningRootId = rootId;
+              this.#indexKeyUnderEnclosing(runtime, key, rootId);
               if (rootId === root.id) return;
               if (this.#pieceRootByDemandKey.get(key) === rootId) return;
               this.#pieceRootByDemandKey.set(key, rootId);
@@ -6065,19 +6068,10 @@ export class SpaceServer implements TransactionSealDestination {
               this.#indexResolvedRoot(key, rootId);
               runtime.scheduler.invalidateActionsForDemandRoots([rootId]);
             };
-            // The pieces enclosing the owning piece, which its start starts
-            // first, are this key's as well: their runs are supplied this
-            // key's demanders, and a failed start commit of one parks this
-            // key. The runner knows them once the owning piece runs, so they
-            // are indexed after each start, whether this key's start started
-            // the owning piece or found it running.
-            const indexEnclosing = (owningRootId: string) => {
-              const indexed = runtime.runner.enclosingPiecesOf(owningRootId)
-                .filter((id) => this.#indexEnclosingRoot(key, id));
-              if (indexed.length > 0) {
-                runtime.scheduler.invalidateActionsForDemandRoots(indexed);
-              }
-            };
+            // The pieces the walk finds enclosing the owning piece are this
+            // key's, and every other key's on that piece (`onSourceRoot`).
+            const onSourceRoot = (source: OwningRootAddress) =>
+              this.#noteEnclosingRoot(runtime, owningRootId, source.id);
             const rearmedAt = minOf([
               this.#rearmSeqsUnderRetry.get(key) ?? Infinity,
               this.#rearmSeqsAwaitingFollow.get(key) ?? Infinity,
@@ -6088,11 +6082,11 @@ export class SpaceServer implements TransactionSealDestination {
               runtime,
               root,
               onOwningRoot,
+              onSourceRoot,
             );
             const verdict = attempt.verdict;
             if (!this.#active || this.#runtime !== runtime) return;
             if (verdict.started) {
-              indexEnclosing(verdict.root?.id ?? root.id);
               this.#pendingStructureLoads.delete(key);
               this.#structureLoadDeferralStreaks.delete(key);
             } else if (verdict.reason === "no-pattern-meta") {
@@ -6105,10 +6099,10 @@ export class SpaceServer implements TransactionSealDestination {
                 root,
                 attempt,
                 onOwningRoot,
+                onSourceRoot,
               )).verdict;
               if (!this.#active || this.#runtime !== runtime) return;
               if (confirmed.started) {
-                indexEnclosing(confirmed.root?.id ?? root.id);
                 this.#pendingStructureLoads.delete(key);
                 this.#structureLoadDeferralStreaks.delete(key);
               } else if (confirmed.reason === "no-pattern-meta") {
@@ -6206,8 +6200,8 @@ export class SpaceServer implements TransactionSealDestination {
                 root.id,
                 verdict.heldBy === undefined
                   ? verdict.reason
-                  : `${verdict.reason ?? "unclassified"} at ` +
-                    `${verdict.heldBy.id}, a piece enclosing it`,
+                  : `${verdict.reason ?? "unclassified"} held back by ` +
+                    `${verdict.heldBy.id}`,
                 stats,
               );
               logger.debug?.("structure-load-deferred", () => [
@@ -6215,7 +6209,7 @@ export class SpaceServer implements TransactionSealDestination {
                 `(${verdict.reason ?? "unclassified"}` +
                 (verdict.heldBy === undefined
                   ? ""
-                  : ` at ${verdict.heldBy.id}, a piece enclosing it`) +
+                  : ` held back by ${verdict.heldBy.id}`) +
                 "); retrying next demand cycle",
               ]);
             }
@@ -6353,6 +6347,11 @@ export class SpaceServer implements TransactionSealDestination {
         rootIds.add(key.slice(key.indexOf("\0") + 1));
         const resolved = this.#pieceRootByDemandKey.get(key);
         if (resolved !== undefined) rootIds.add(resolved);
+        for (
+          const enclosing of this.#enclosingRootsByDemandKey.get(key) ?? []
+        ) {
+          rootIds.add(enclosing);
+        }
       }
       const rearmed = runtime.scheduler.invalidateActionsForDemandRoots(
         [...rootIds],
@@ -6470,12 +6469,18 @@ export class SpaceServer implements TransactionSealDestination {
 
   readonly #keysByResolvedRoot = new Map<string, Set<string>>();
 
-  /** The roots of the pieces enclosing each demanded key's owning piece, as
-   * the runner records them (`Runner.enclosingPiecesOf()`), each also indexed
-   * in `#keysByResolvedRoot`: the runs of an enclosing piece, and of every
-   * piece nested in it, are supplied the key's demanders, as a demand of that
-   * piece itself would supply them, and a failed start commit of it parks the
-   * key. */
+  /** The roots of the pieces the structure load's walk found enclosing each
+   * owning piece this tenure (`EnsurePieceOptions.onSourceRoot`). A walk runs
+   * only while the owning piece is not running, so an owning piece started
+   * some other way, by an event or by an enclosing piece demanded itself,
+   * has none recorded. */
+  readonly #enclosingRootsByOwningRoot = new Map<string, Set<string>>();
+
+  /** The roots of `#enclosingRootsByOwningRoot` each demanded key is indexed
+   * under, for the key's owning piece, each also indexed in
+   * `#keysByResolvedRoot`: the runs of an enclosing piece, and of every piece
+   * nested in it, are supplied the key's demanders, as a demand of that piece
+   * itself would supply them, and a failed start commit of it parks the key. */
   readonly #enclosingRootsByDemandKey = new Map<string, Set<string>>();
 
   #indexDemandKey(key: string, id: string): void {
@@ -6494,6 +6499,61 @@ export class SpaceServer implements TransactionSealDestination {
       this.#keysByResolvedRoot.set(rootId, keys);
     }
     keys.add(key);
+  }
+
+  /**
+   * Records `enclosingId`, the root of a piece the walk found enclosing the
+   * piece at `owningRootId`, and indexes under it every key resolving to that
+   * piece.
+   */
+  #noteEnclosingRoot(
+    runtime: Runtime,
+    owningRootId: string,
+    enclosingId: string,
+  ): void {
+    let enclosing = this.#enclosingRootsByOwningRoot.get(owningRootId);
+    if (enclosing === undefined) {
+      enclosing = new Set();
+      this.#enclosingRootsByOwningRoot.set(owningRootId, enclosing);
+    }
+    enclosing.add(enclosingId);
+    const keys = new Set([
+      ...(this.#keysByRootId.get(owningRootId) ?? []),
+      ...(this.#keysByResolvedRoot.get(owningRootId) ?? []),
+    ]);
+    let indexed = false;
+    for (const key of keys) {
+      if (this.#pieceRootOfKey(key) !== owningRootId) continue;
+      indexed = this.#indexEnclosingRoot(key, enclosingId) || indexed;
+    }
+    if (indexed) {
+      runtime.scheduler.invalidateActionsForDemandRoots([enclosingId]);
+    }
+  }
+
+  /** The owning piece root `key` resolves to: the one its structure load
+   * recorded, or the key's own id. */
+  #pieceRootOfKey(key: string): string {
+    return this.#pieceRootByDemandKey.get(key) ??
+      key.slice(key.indexOf("\0") + 1);
+  }
+
+  /**
+   * Indexes `key` under every enclosing root recorded for `owningRootId`, the
+   * piece the key resolves to.
+   */
+  #indexKeyUnderEnclosing(
+    runtime: Runtime,
+    key: string,
+    owningRootId: string,
+  ): void {
+    const indexed = [
+      ...this.#enclosingRootsByOwningRoot.get(owningRootId) ?? [],
+    ]
+      .filter((id) => this.#indexEnclosingRoot(key, id));
+    if (indexed.length > 0) {
+      runtime.scheduler.invalidateActionsForDemandRoots(indexed);
+    }
   }
 
   /**
@@ -6663,6 +6723,7 @@ export class SpaceServer implements TransactionSealDestination {
     runtime: Runtime,
     root: { id: string; scope?: string },
     onOwningRoot: (root: OwningRootAddress) => void,
+    onSourceRoot: (root: OwningRootAddress) => void,
   ): Promise<StructureLoadAttempt> {
     const scope = root.scope ?? "space";
     const termini: OwningRootAddress[] = [];
@@ -6672,6 +6733,7 @@ export class SpaceServer implements TransactionSealDestination {
       startInputSources: true,
       enclosingSourcesOnly: true,
       sourcesRequired: true,
+      onSourceRoot,
     };
     const verdict = await ensurePieceRunningVerdict(runtime, {
       space: this.#options.space,
@@ -6735,12 +6797,18 @@ export class SpaceServer implements TransactionSealDestination {
     root: { id: string; scope?: string },
     attempt: StructureLoadAttempt,
     onOwningRoot: (root: OwningRootAddress) => void,
+    onSourceRoot: (root: OwningRootAddress) => void,
   ): Promise<StructureLoadAttempt> {
     if (this.#enginePatternIdentityAbsent(runtime, attempt.termini)) {
       this.#options.stats.structureLoadConfirmationsSkipped += 1;
       return Promise.resolve(attempt);
     }
-    return this.#attemptStructureLoad(runtime, root, onOwningRoot);
+    return this.#attemptStructureLoad(
+      runtime,
+      root,
+      onOwningRoot,
+      onSourceRoot,
+    );
   }
 
   /**
@@ -8620,6 +8688,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#keysByRootId.clear();
     this.#keysByResolvedRoot.clear();
     this.#enclosingRootsByDemandKey.clear();
+    this.#enclosingRootsByOwningRoot.clear();
     this.#demandRootAddresses.clear();
     this.#rootsAwaitingFirstLoad.clear();
     // The registry is empty, so the next tenure's first pass reconciles
