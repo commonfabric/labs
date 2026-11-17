@@ -588,13 +588,6 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     });
 
     const publish = action(() => {
-      // An empty set says nothing a pool could count.
-      if (rules.get().length === 0) return;
-      // Randomness is allowed in an action, so the first publish mints the
-      // pseudonym. The pool binds this principal, whatever it is called.
-      if (!pseudonym.get()) {
-        pseudonym.set(`p-${Math.random().toString(36).slice(2, 12)}`);
-      }
       const question = goal.get().trim();
       const { rules: snapshot, withheld, adopted: fromPool } = shareable(
         rules.get(),
@@ -602,6 +595,12 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       );
       const reached = snapshot.length > 0 && target !== null &&
         sameGoal(target.goal ?? "", question);
+      // Randomness is allowed in an action, so the first publish with a rule
+      // to send mints the pseudonym, kept for when a pool for the goal
+      // appears. The pool binds this principal, whatever it is called.
+      if (snapshot.length > 0 && !pseudonym.get()) {
+        pseudonym.set(`p-${Math.random().toString(36).slice(2, 12)}`);
+      }
       published.set({
         goal: question,
         rules: snapshot,
@@ -610,10 +609,12 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         withheld,
         adopted: fromPool,
       });
-      // Nothing to send leaves nothing of an earlier publish behind either.
+      // Nothing to send leaves nothing of an earlier publish behind either,
+      // an empty rule set included. Without a pseudonym nothing was sent, so
+      // there is nothing to withdraw.
       if (reached) {
         target.submit.send({ pseudonym: pseudonym.get(), rules: snapshot });
-      } else withdrawFrom(target, question);
+      } else if (pseudonym.get() !== "") withdrawFrom(target, question);
     });
 
     // Nothing to take back before the first publish, which mints the

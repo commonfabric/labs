@@ -72,18 +72,18 @@ connector, another piece, an agent).
    whose goal is the inductor's, ignoring case and surrounding or repeated
    space; otherwise nothing leaves the piece. The view says whether a pool for
    the goal is connected, and disables Publish when none is or there is nothing
-   to send. The first publish mints the pseudonym, a random string the piece
-   keeps, so it is the same every time this goal is published. Each goal's piece
-   mints its own, so the strings do not relate across goals, but they are not
-   unlinkable: the pool space's commits and `authored-by` labels name the
-   person's core identity (cut 2 under "CFC debt"). The view says which
-   happened: "Sent N rules to the pool for …" or "No pool for … found". It says
-   sent, not published: whether the pool took them is not visible to the piece
-   (a refusal is thrown in the pool's handler, and a contribution is
-   confidential to the pool). Anything with a pool's shape and the goal receives
-   the rules, a fake pool included: the inductor does not vet the receiver. What
-   it sends is labelled with the real pool's policy instead (see "CFC debt"), so
-   a fake can receive the rules but not publish them.
+   to send. The first publish with a rule to send mints the pseudonym, a random
+   string the piece keeps, so it is the same every time this goal is published.
+   Each goal's piece mints its own, so the strings do not relate across goals,
+   but they are not unlinkable: the pool space's commits and `authored-by`
+   labels name the person's core identity (cut 2 under "CFC debt"). The view
+   says which happened: "Sent N rules to the pool for …" or "No pool for …
+   found". It says sent, not published: whether the pool took them is not
+   visible to the piece (a refusal is thrown in the pool's handler, and a
+   contribution is confidential to the pool). Anything with a pool's shape and
+   the goal receives the rules, a fake pool included: the inductor does not vet
+   the receiver. What it sends is labelled with the real pool's policy instead
+   (see "CFC debt"), so a fake can receive the rules but not publish them.
 
 6. The pool's release comes back. The inductor reads the rules the pool for its
    goal releases (`consensus`, public by the pool's policy) and offers them as a
@@ -182,7 +182,9 @@ Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
   3).
 - `publish` records `{goal, rules, publishedAt, pooled}` in `published`, where
   `pooled` says whether the rules were sent to a pool, and sends them to the
-  pool's `submit` (see step 5 and `showcase/inductor/pool`).
+  pool's `submit` (see step 5 and `showcase/inductor/pool`). With nothing to
+  send, an empty rule set included, it withdraws this piece's earlier
+  contribution instead, so a publish after `resetRules` leaves nothing behind.
 - The goal changes only through `setGoal` (the view's "Set goal" button sends
   it), never per keystroke: every hi-fi call is asked for the goal, so each
   change asks about every item again. A new goal first withdraws this piece's

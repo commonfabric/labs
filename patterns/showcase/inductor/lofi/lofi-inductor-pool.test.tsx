@@ -4,7 +4,8 @@
  * publish mints, and replaces it when the inductor republishes, and a pool for another
  * goal receives nothing. The goal matches ignoring case and space, the view
  * says the rules were sent, a rule with an @ or a six-digit run is held back,
- * and an inductor with no rules publishes nothing.
+ * an inductor with no rules sends nothing, and a publish after the rules are
+ * reset withdraws the earlier contribution.
  *
  * Patterns under test: ./lofi-inductor.tsx publishing into
  * ../pool/inductor-pool.tsx. Release across contributors is in
@@ -190,12 +191,28 @@ export default pattern(() => {
         ),
       },
 
-      // An inductor with no rules publishes nothing, and mints nothing.
+      // An inductor with no rules sends nothing, and mints nothing: the
+      // publish only records that nothing was sent.
       { action: empty.publish },
       {
         assertion: assert(() =>
-          empty.published === null && empty.pseudonym === "" &&
+          empty.published?.pooled === false &&
+          empty.published?.rules.length === 0 &&
+          empty.pseudonym === "" &&
           billPool.contributions.length === 1
+        ),
+      },
+
+      // Publishing after the rules are reset takes back what the earlier
+      // publish sent, rather than leaving it in the pool.
+      { action: matching.resetRules },
+      { action: matching.publish },
+      {
+        assertion: assert(() =>
+          matching.published?.pooled === false &&
+          matching.published?.rules.length === 0 &&
+          /^p-[0-9a-z]+$/.test(matching.pseudonym) &&
+          billPool.contributions.length === 0
         ),
       },
     ],
