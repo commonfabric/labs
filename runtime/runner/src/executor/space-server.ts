@@ -1654,6 +1654,13 @@ export class SpaceServer implements TransactionSealDestination {
    * the document arrives or the event is covered by a terminal notice. */
   readonly #programClosureWaits = new Map<string, Set<string>>();
 
+  /** The documents events whose served handler did not run wait on
+   * (events.md §5): a scoped instance of each the handler's run read while
+   * the serving loop had not produced it, and a writer that owes it will still
+   * run. By document id, each with the events waiting on it; a commit writing
+   * the document re-drains them. */
+  readonly #notRunWaits = new Map<string, Set<string>>();
+
   /** The deferral backstop timer (see EVENT_DEFERRAL_REARM_MS): armed
    * when a drain pass left deferred/transient work behind, so the scan
    * re-arms after a REAL wait even when no input ever arrives. Input
@@ -4562,6 +4569,13 @@ export class SpaceServer implements TransactionSealDestination {
           });
         }
       }
+      // A commit writing a document an event whose handler did not run waits
+      // on re-drains it (events.md §5).
+      if (this.#notRunWaits.size > 0) {
+        for (const write of record.writes) {
+          if (this.#notRunWaits.delete(write.id)) this.#eventScanOwed = true;
+        }
+      }
       // Deferred events re-try on NEW INPUT (the creation-race arm:
       // the piece's pattern-run commit is exactly such a record) —
       // this is the input signal the deferral budget counts, not a
@@ -5378,9 +5392,32 @@ export class SpaceServer implements TransactionSealDestination {
                       this.#options.stats.events.originPendingDeferrals += 1;
                       this.#options.onEventDeferred?.();
                     }
+                    // A handler that did not run because it read a scoped
+                    // instance a writer here will still produce waits on
+                    // that document (events.md §5): settlement, which spends
+                    // no budget and arms no backstop, since a commit writing
+                    // the document is what re-drains it. A document in
+                    // another space is one this loop sees no commit for, so
+                    // that withdrawal spends the budget as any other does.
+                    const waitsOn = "cause" in outcome &&
+                        outcome.cause === "handler-not-run" &&
+                        outcome.waitsOn?.space === this.#options.space
+                      ? outcome.waitsOn
+                      : undefined;
+                    if (waitsOn !== undefined) {
+                      this.#options.stats.events.handlerNotRunWaits += 1;
+                      let waiting = this.#notRunWaits.get(waitsOn.id);
+                      if (waiting === undefined) {
+                        waiting = new Set();
+                        this.#notRunWaits.set(waitsOn.id, waiting);
+                      }
+                      waiting.add(entry.eventId);
+                    }
                     const deferrals =
                       (this.#eventDeferrals.get(entry.eventId) ?? 0) +
-                      (arrivalHeld || originPending ? 0 : 1);
+                      (arrivalHeld || originPending || waitsOn !== undefined
+                        ? 0
+                        : 1);
                     this.#eventDeferrals.set(entry.eventId, deferrals);
                     if (deferrals < EVENT_DEFERRAL_DROP_THRESHOLD) {
                       if (
@@ -5411,7 +5448,9 @@ export class SpaceServer implements TransactionSealDestination {
                       // release the guard so the rescan can queue it
                       // again.
                       this.#drainInFlight.delete(eventId);
-                      if (!arrivalHeld && !originPending) {
+                      if (
+                        !arrivalHeld && !originPending && waitsOn === undefined
+                      ) {
                         this.#armDeferredRescan();
                       }
                       return;

@@ -543,6 +543,15 @@ export type ServingLoopStats = {
     handlerNotRunDeferrals: number;
 
     /**
+     * Of `handlerNotRunDeferrals`, the withdrawals that waited on a document
+     * rather than spending the deferral budget (events.md §5): the run read
+     * a scoped instance of it the serving loop had not produced, and a writer
+     * that owes it will still run. A commit writing the document re-drains
+     * the entry.
+     */
+    handlerNotRunWaits: number;
+
+    /**
      * Events requeued at a wave commit because a recorded read of the handler
      * run was stale: a commit the serving replica had not taken wrote what
      * the run read (serving-loop.md §3d). Counted per event, the later
@@ -858,6 +867,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     lt1LateSealsRefused: 0,
     orphanDeliveriesRefused: 0,
     handlerNotRunDeferrals: 0,
+    handlerNotRunWaits: 0,
     staleReadRequeues: 0,
     arrivalHeldDeferrals: 0,
     originPendingDeferrals: 0,

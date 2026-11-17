@@ -36,6 +36,7 @@ const space = owner.did();
 const stream = { id: "of:event-drain-stream" as const, path: [] };
 const sidecar = streamEntriesDocId(stream) as `of:${string}`;
 const logId = "of:event-drain-log";
+const awaitedId = "of:event-drain-awaited";
 const warnings = (key: string): number =>
   getLogger("space-server").countsByKey[key]?.warn ?? 0;
 
@@ -119,9 +120,13 @@ describe("SpaceServer", () => {
       /** Whether the serving runtime loads the log before its tenure
        * begins, rather than leaving the handler's first read to. */
       loadLog?: boolean;
+      /** Asked on each dispatch: when it answers true, the handler does not
+       * run, as one whose argument read the scoped instance of `awaitedId`
+       * that the serving loop has not produced does not. */
+      withdraw?: () => boolean;
     } = {},
   ) {
-    const { policy, prepare, loadLog = true } = options;
+    const { policy, prepare, loadLog = true, withdraw } = options;
     /** The sink calls held by `holdNext()`: while a method has a gate, its
      * next call waits for the gate before reaching the store. */
     const gates = new Map<HeldSinkCall, Promise<void>>();
@@ -210,6 +215,12 @@ describe("SpaceServer", () => {
         runtime.scheduler.addEventHandler((tx, event) => {
           const name = (event as { name?: string } | undefined)?.name ?? "?";
           called.push(name);
+          if (withdraw?.()) {
+            // What the runner and link resolution record for such a run.
+            tx.dispatchedHandlerNotRun = { reason: "argument did not resolve" };
+            tx.tx.unproducedScopedInstance = `${space}/user/${awaitedId}`;
+            return;
+          }
           const cell = log.withTx(tx);
           cell.set([...(cell.get() ?? []), name]);
         }, { space, ...stream, scope: "space" });
@@ -317,6 +328,62 @@ describe("SpaceServer", () => {
         true,
         true,
       ]);
+    });
+  });
+
+  describe("a served event whose handler did not run", () => {
+    // The handler's argument read a scoped instance the serving loop has not
+    // produced. Whether a writer that owes it will still run is the
+    // scheduler's answer (`owedScopedInstanceComing()`), stubbed here so each
+    // test fixes it.
+
+    const withdrawUntilAwaitedArrives = async (coming: boolean) => {
+      let arrived = false;
+      const fixture = await serve({
+        prepare: (runtime) => {
+          stub(runtime.scheduler, "owedScopedInstanceComing", () => coming);
+        },
+        withdraw: () => !arrived,
+      });
+      await admit("waiting", { name: "W" });
+      await fixture.activate();
+      // More unrelated commits and backstop periods than the deferral
+      // budget allows.
+      for (let i = 0; i < 12; i++) {
+        await settle(
+          server.writeDocument(space, `of:event-drain-unrelated-${i}`, { i }),
+        );
+        await fixture.feed();
+        await clock.tick(1_000);
+      }
+      return {
+        fixture,
+        async arrive() {
+          arrived = true;
+          await settle(server.writeDocument(space, awaitedId, { ready: true }));
+          await fixture.feed();
+        },
+      };
+    };
+
+    it("waits on the document a writer still owes, spending no deferral budget, and delivers the event once a commit writes it", async () => {
+      const { fixture, arrive } = await withdrawUntilAwaitedArrives(true);
+      expect(fixture.entries()[0].consequenced).not.toBe(true);
+      expect(fixture.entries()[0].status).toBeUndefined();
+      expect(fixture.stats.events.handlerNotRunWaits).toBeGreaterThanOrEqual(1);
+
+      await arrive();
+      expect(fixture.called.at(-1)).toBe("W");
+      expect(fixture.entries()[0].consequenced).toBe(true);
+      expect(fixture.entries()[0].status).toBeUndefined();
+      expect(fixture.storedLog()).toEqual(["W"]);
+    });
+
+    it("drops the event through the deferral budget when no writer that owes the document will run", async () => {
+      const { fixture } = await withdrawUntilAwaitedArrives(false);
+      expect(fixture.entries()[0].status).toBe("dropped");
+      expect(fixture.stats.events.handlerNotRunWaits).toBe(0);
+      expect(fixture.storedLog()).toEqual([]);
     });
   });
 

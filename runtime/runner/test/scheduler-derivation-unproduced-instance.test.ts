@@ -139,6 +139,36 @@ async function fixture(name: string, serving: boolean) {
     },
 
     /**
+     * Whether the scheduler reports a writer that owes `state`'s user
+     * instance as coming to produce it, asked for a transaction of the
+     * consumer's kind.
+     */
+    stateComing: () =>
+      runtime.scheduler.owedScopedInstanceComing(
+        state.getAsNormalizedFullLink(),
+        runtime.edit(),
+      ),
+
+    /**
+     * Registers a derivation that declares a write to `state` and an effect
+     * that reads `state`, which makes the derivation live, so the scheduler
+     * queues it. Neither has run when this returns.
+     */
+    registerQueuedWriter() {
+      const link = toMemorySpaceAddress(state.getAsNormalizedFullLink());
+      runtime.scheduler.subscribe(() => {}, {
+        reads: [],
+        shallowReads: [],
+        writes: [link],
+      });
+      runtime.scheduler.subscribe(() => {}, {
+        reads: [link],
+        shallowReads: [],
+        writes: [],
+      }, { isEffect: true });
+    },
+
+    /**
      * Registers a derivation that declares a write to `upstream` and never
      * produces it.
      */
@@ -298,6 +328,32 @@ describe("scheduler-derivation-unproduced-instance", () => {
 
       expect(f.consumerRuns()).toBe(1);
       expect(f.output.get()).toBe("as it was");
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("reports an owed instance as coming while a writer that owes it is queued to run", async () => {
+    const f = await fixture("coming-queued", true);
+    try {
+      f.registerQueuedWriter();
+
+      expect(f.stateComing()).toBe(true);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("reports an owed instance as not coming when the only writer that owes it is dormant", async () => {
+    // A derivation nothing demands is never queued, so nothing is coming to
+    // produce the instance.
+
+    const f = await fixture("coming-dormant", true);
+    try {
+      f.registerWriter();
+      await f.runtime.idle();
+
+      expect(f.stateComing()).toBe(false);
     } finally {
       await f.close();
     }

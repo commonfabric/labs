@@ -2092,24 +2092,51 @@ export class Scheduler {
 
   /**
    * Whether an action registered here, other than the one `tx` runs, declares
-   * a write to some instance of `address`'s document, at any scope, and has
-   * not yet produced the instance `tx` reads: it is not a JavaScript
-   * derivation, or no run of it for that instance
-   * (`address`'s scope resolved against the run identity of `tx` on a
-   * fanned-out writer, any on a writer that is not fanned out) has finished
-   * without being withdrawn. A
-   * writer whose run finished and left the instance absent has produced it,
-   * and its value is `undefined`; one whose run was withdrawn has not.
+   * a write to some instance of `address`'s document and has not yet produced
+   * the instance `tx` reads (`#owingWriters()`). A writer whose run finished
+   * and left the instance absent has produced it, and its value is
+   * `undefined`; one whose run was withdrawn has not.
+   */
+  owesScopedInstance(
+    address: Pick<IMemorySpaceAddress, "space" | "id" | "scope">,
+    tx: IExtendedStorageTransaction,
+  ): boolean {
+    return this.#owingWriters(address, tx).owing.length > 0;
+  }
+
+  /**
+   * Whether some writer that owes `address`'s instance to the run `tx`
+   * carries (`owesScopedInstance()`) will run: it is invalid or has never run,
+   * and it is live, a materializer, or pending, which is what has the
+   * scheduler queue it. A writer nothing demands stays dormant, and one that
+   * has run stays clean until an input changes, so neither is coming to
+   * produce the instance, and a served event waiting on it would wait for
+   * nothing.
+   */
+  owedScopedInstanceComing(
+    address: Pick<IMemorySpaceAddress, "space" | "id" | "scope">,
+    tx: IExtendedStorageTransaction,
+  ): boolean {
+    const { owing, instance } = this.#owingWriters(address, tx);
+    return owing.some((writer) => this.#willRunForInstance(writer, instance));
+  }
+
+  /**
+   * The writers registered here, other than the one `tx` runs, that declare a
+   * write to some instance of `address`'s document, at any scope, and have not
+   * produced the instance `tx` reads (`#hasProducedInstance()`), with that
+   * instance's key: `address`'s scope resolved against the run identity of
+   * `tx`.
    *
    * The lookup spans every scope because the write index keys a derivation by
    * its declared scope, while a JavaScript derivation writes its output at the
    * scope its reads narrowed to: a user instance of an output declared at
    * space scope has a writer indexed only at space scope.
    */
-  owesScopedInstance(
+  #owingWriters(
     address: Pick<IMemorySpaceAddress, "space" | "id" | "scope">,
     tx: IExtendedStorageTransaction,
-  ): boolean {
+  ): { owing: Action[]; instance: ScopeKey | undefined } {
     const reader = tx.tx.sourceAction;
     const identity = waveRunContextOf(tx)?.scopeKeyIdentity ??
       this.runtime.scopeKeyIdentity;
@@ -2120,19 +2147,40 @@ export class Scheduler {
       // An identity that cannot name the instance (a sessionless one read
       // at session scope) names none any writer has produced.
     }
+    const owing: Action[] = [];
     for (const scope of ["space", "user", "session"] as const) {
       const writers = this.#writeIndex.writersByEntity.get(
         entityNameKey({ ...address, scope }),
       );
       for (const writer of writers ?? []) {
         if (
-          writer !== reader && !this.#hasProducedInstance(writer, instance)
+          writer !== reader && !owing.includes(writer) &&
+          !this.#hasProducedInstance(writer, instance)
         ) {
-          return true;
+          owing.push(writer);
         }
       }
     }
-    return false;
+    return { owing, instance };
+  }
+
+  /**
+   * Whether `action` will run for the instance keyed `instance`: the
+   * scheduler's own test for queueing it (invalid or never run, and live, a
+   * materializer, or pending), and on a fanned-out node an instance key that
+   * is not current.
+   */
+  #willRunForInstance(action: Action, instance: ScopeKey | undefined): boolean {
+    const node = this.#nodes.get(action);
+    if (node === undefined) return false;
+    const queued = this.#isLiveAction(action) ||
+      this.#materializers.isMaterializer(action) ||
+      this.#pending.has(action);
+    if (!queued) return false;
+    if (node.fanOut !== undefined && instance !== undefined) {
+      return !node.fanOut.clean.has(instance);
+    }
+    return this.#isInvalidAction(action);
   }
 
   /**
