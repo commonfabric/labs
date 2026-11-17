@@ -3,7 +3,10 @@ import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 
-import { toMemorySpaceAddress } from "../src/link-utils.ts";
+import {
+  createSigilLinkFromParsedLink,
+  toMemorySpaceAddress,
+} from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
@@ -11,7 +14,8 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 /**
  * A runtime whose storage manager serves its signer's space when `serving`
  * is set, as a serving runtime's does, and a client runtime otherwise.
- * `holder` holds, at `state`, a link to `state`, a user-scoped document.
+ * `holder` holds, at `state`, a link to `state`, a user-scoped document, and
+ * at `upstream`, a link to `upstream`, another.
  */
 async function fixture(name: string, serving: boolean) {
   const signer = await Identity.fromPassphrase(`unproduced instance ${name}`);
@@ -32,7 +36,14 @@ async function fixture(name: string, serving: boolean) {
     undefined,
     "user",
   );
-  const holder = runtime.getCell<{ state?: unknown }>(
+  const upstream = runtime.getCell<string>(
+    space,
+    `unproduced-instance-upstream-${name}`,
+    undefined,
+    undefined,
+    "user",
+  );
+  const holder = runtime.getCell<{ state?: unknown; upstream?: unknown }>(
     space,
     `unproduced-instance-holder-${name}`,
   );
@@ -41,7 +52,10 @@ async function fixture(name: string, serving: boolean) {
     `unproduced-instance-output-${name}`,
   );
   const seed = runtime.edit();
-  holder.withTx(seed).set({ state: state.getAsLink() });
+  holder.withTx(seed).set({
+    state: state.getAsLink(),
+    upstream: upstream.getAsLink(),
+  });
   output.withTx(seed).set("as it was");
   expect((await seed.commit().settled).error).toBeUndefined();
 
@@ -85,6 +99,54 @@ async function fixture(name: string, serving: boolean) {
         reads: [],
         shallowReads: [],
         writes: [toMemorySpaceAddress(scope ? { ...link, scope } : link)],
+      });
+    },
+
+    /**
+     * Registers a derivation that runs as one narrowed to user scope whose
+     * result for this principal is `undefined` does: it points the space slot
+     * of `state`'s document at the user instance and leaves that instance
+     * absent. Waits for it to settle.
+     */
+    async runEmptyWriter(
+      options: { readsUpstream?: boolean; moduleType?: string } = {},
+    ) {
+      const user = state.getAsNormalizedFullLink();
+      const slot = { ...user, scope: "space" as const };
+      const writer = (tx: IExtendedStorageTransaction) => {
+        if (options.readsUpstream) holder.withTx(tx).key("upstream").get();
+        tx.writeValueOrThrow(
+          slot,
+          createSigilLinkFromParsedLink(user, {
+            base: slot,
+            overwrite: "redirect",
+          }),
+        );
+      };
+      // The module annotation a JavaScript derivation's action carries, or a
+      // builtin's when the test names another type.
+      Object.assign(writer, {
+        module: { type: options.moduleType ?? "javascript" },
+      });
+      runtime.scheduler.subscribe(writer, {
+        reads: [],
+        shallowReads: [],
+        writes: [toMemorySpaceAddress(slot)],
+      });
+      await runtime.scheduler.run(writer);
+      await runtime.idle();
+      await storage.synced();
+    },
+
+    /**
+     * Registers a derivation that declares a write to `upstream` and never
+     * produces it.
+     */
+    registerUpstreamWriter() {
+      runtime.scheduler.subscribe(() => {}, {
+        reads: [],
+        shallowReads: [],
+        writes: [toMemorySpaceAddress(upstream.getAsNormalizedFullLink())],
       });
     },
 
@@ -186,6 +248,56 @@ describe("scheduler-derivation-unproduced-instance", () => {
 
       expect(f.consumerRuns()).toBe(1);
       expect(errors.map((error) => error.message)).toEqual(["read nothing"]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("commits the output of a served derivation that read a scoped instance its registered derivation ran and left absent", async () => {
+    // A writer that has run for the instance has produced it, and its value
+    // is `undefined`: the absence is the instance's state.
+
+    const f = await fixture("ran-empty", true);
+    try {
+      await f.runEmptyWriter();
+      await f.runConsumer();
+
+      expect(f.consumerRuns()).toBe(1);
+      expect(f.output.get()).toBe("derived from nothing");
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("commits nothing from a served derivation that read a scoped instance a builtin writer ran and left absent", async () => {
+    // A builtin can write its output after its run returns, so its finished
+    // run shows nothing about whether it has produced the instance.
+
+    const f = await fixture("ran-empty-builtin", true);
+    try {
+      await f.runEmptyWriter({ moduleType: "raw" });
+      await f.runConsumer();
+
+      expect(f.consumerRuns()).toBe(1);
+      expect(f.output.get()).toBe("as it was");
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("commits nothing from a served derivation that read a scoped instance whose writer's run was withdrawn for reading one not yet produced", async () => {
+    // A writer whose run was withdrawn has not produced its instance: what it
+    // left absent is not its output, so the reader waits as for one that has
+    // not run.
+
+    const f = await fixture("withdrawn-writer", true);
+    try {
+      f.registerUpstreamWriter();
+      await f.runEmptyWriter({ readsUpstream: true });
+      await f.runConsumer();
+
+      expect(f.consumerRuns()).toBe(1);
+      expect(f.output.get()).toBe("as it was");
     } finally {
       await f.close();
     }

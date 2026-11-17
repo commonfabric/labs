@@ -1588,10 +1588,16 @@ or dropped meanwhile; that refusal is retried like a stale read.
   landing, runs it again.
 - A derivation run that read, through a link, an absent user- or
   session-scoped instance of a document another derivation registered in
-  this runtime declares as a write (a builtin's stores included) aborts its
-  tx the same way: the serving loop has not produced that instance yet, so
-  the absence is not its state (speculation.md §2's serving-runtime
-  corollary to the scoped first-write carve-out). Its read of the instance
+  this runtime declares as a write (a builtin's stores included), and that
+  writer has not yet run for that instance, aborts its tx the same way: the
+  serving loop has not produced that instance yet, so the absence is not
+  its state (speculation.md §2's serving-runtime corollary to the scoped
+  first-write carve-out). A JavaScript derivation whose run for the
+  instance finished without being withdrawn and left it absent, as a run
+  whose result is `undefined` does, has produced it, and the read commits.
+  "For the instance" is per instance key on a fanned-out writer and any
+  run on one that is not; a withdrawn run produced nothing, and a builtin
+  writer is owed until it writes. Its read of the instance
   stays subscribed, so it runs again once the instance is produced. A run
   that threw after such a read is withdrawn the same way and its error is
   not reported: the throw came from the same absence its writes did. A

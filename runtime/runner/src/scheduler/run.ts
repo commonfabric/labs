@@ -1485,6 +1485,18 @@ function finalizeReactiveActionCommit(
         fanOutRun.instance.key,
     );
   const owner = fanOutRun === undefined ? node : instanceRecord;
+  // Whether the run finished without being withdrawn. For a JavaScript
+  // derivation, which writes its whole result in its run, that means it has
+  // produced its output, whatever it wrote: a served reader of an instance it
+  // left absent reads that absence as the instance's state
+  // (`Scheduler.owesScopedInstance()`, which ignores the flag on a builtin,
+  // whose output can land after its run returns). A withdrawn run read
+  // something it could not take as state, so what it left is not its output.
+  if (
+    owner !== undefined && refused === undefined && unproduced === undefined
+  ) {
+    owner.produced = true;
+  }
   const registrationToken = args.registrationToken;
   // Sealing is not durable acceptance. A withdrawn contribution can have read
   // an unchanged field through another contribution's pending document; rolling

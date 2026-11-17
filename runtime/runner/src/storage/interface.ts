@@ -1864,10 +1864,11 @@ export interface IStorageTransaction {
   /**
    * The first user- or session-scoped instance, as `<space>/<scope>/<id>`,
    * that this transaction read through a link while the instance was missing
-   * and another derivation registered in the same runtime writes the
-   * document. Set by link resolution on a serving runtime only, where such an
-   * instance is one the serving loop has not produced yet, and read by the
-   * reactive action's commit, which a run that read one does not make.
+   * and another derivation registered in the same runtime writes the document
+   * and has not yet run for that instance. Set by link resolution on a serving
+   * runtime only, where such an instance is one the serving loop has not
+   * produced yet, and read by the reactive action's commit, which a run that
+   * read one does not make.
    */
   unproducedScopedInstance?: string;
 

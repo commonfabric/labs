@@ -51,6 +51,10 @@ export interface FanOutInstance {
 interface InstanceRecord {
   /** Whether this instance has an accepted result to retain while gated. */
   hasCommittedResult?: boolean;
+  /** Whether a run of this instance has finished without being withdrawn
+   * for a read it could not take as state: its output, absent or not, is
+   * what it produced. */
+  produced?: boolean;
   /** The latest sealed publication; write-free reruns retain its obligation. */
   pendingWaveRun?: object;
 
