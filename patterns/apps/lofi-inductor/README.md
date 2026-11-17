@@ -70,30 +70,32 @@ contributed, and a pseudonym is not linkable to its owner or to their other
 pseudonyms.
 
 **What is real CFC.** Items and induced rules are private by default; LLM output
-carries `LlmDerived` and the confidentiality of what it read. Contributions are
-`Confidential<…, [PolicyOf<rules>]>`, and the only release is through one
-blessed function in the policy module (`TransformedBy`, as in
-`examples/cfc-exchange-rules/blessed-computation.tsx`), into a public store.
+carries `LlmDerived` and the confidentiality of what it read. Contributions,
+and the secret keying the threshold offsets, are
+`Confidential<…, [PolicyOf<rules>]>`. The only release is through one trusted
+function of the policy module, `releaseConsensus`: the runtime stamps what it
+writes `TransformedBy{THIS_POLICY.moduleIdentity, "releaseConsensus"}`, and the
+policy's one exchange rule drops the clause on that stamp, as
+`examples/cfc-exchange-rules/blessed-computation.tsx` releases a tally. The
+threshold, its hidden offset, and the rule that nothing below threshold is
+emitted (not the rule, not its count, not that it exists) are that function's
+own logic, so they need no new CFC machinery. The secret and the per-rule
+counts never leave the function; only released rules and their counts do, into
+a public store.
 
 **Proposed cuts** (each pending approval; this section is updated as each is
 decided):
 
-1. *Threshold release.* The rule "release once the threshold of distinct
-   contributors is met" is enforced inside the blessed function, not by CFC.
-   CFC can certify which code released the value, not that the code counted.
-   Missing semantics: a k-of-open-set release rule over identical values.
-2. *Distinct people.* Distinct contributors are counted as distinct pseudonyms
-   held in data. Nothing attests that two pseudonyms are two people. Missing
-   semantics: an attested distinct-principal (personhood) atom.
-3. *Pseudonym linkability.* Commits and owner-integrity labels in the pool space
+1. *Distinct people.* The trusted function counts distinct pseudonyms. Nothing
+   attests that two pseudonyms are two people, so one person with many
+   pseudonyms counts as many. The hidden offset raises the cost of probing but
+   does not stop it. Missing semantics: an attested distinct-principal
+   (personhood) atom.
+2. *Pseudonym linkability.* Commits and owner-integrity labels in the pool space
    name the contributor's core identity (`docs/specs/profile-delegation.md`,
    "Attribution and unlinkability"; the intermediate key is deferred). Missing
    semantics: unlinkable pseudonymous authorship.
-4. *Raw-readable pool.* Labels are enforced by the client; a reader of the pool
-   space with raw access sees confidential contributions.
-5. *Existence before release.* Within the aggregator, whether a rule exists and
-   how many people proposed it are not fully hidden before release (spec
-   §8.17.1: existence is information).
-6. *The offset secret.* The secret keying each rule's threshold offset lives in
-   the pool policy's private state, readable only by the release function. It
-   cannot live in source, which is public.
+
+**Platform limit, not a pattern cut.** Labels are enforced by the client; a
+reader with raw access to the pool space sees confidential contributions. This
+holds for every labelled store today.
