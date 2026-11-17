@@ -306,7 +306,10 @@ effort (`EnsurePieceOptions.sourcesRequired`): an enclosing piece that does not
 start holds the demanded root back with it, as an enclosing piece owed its
 origin's follow does (serving-loop.md §3e), and an error starting it or reading
 the links that name it is the demanded root's error, so the demand pass
-retries, parks and reports it as it does a piece of its own. Every key whose
+retries, parks and reports it as it does a piece of its own. An enclosing piece
+that can never start leaves the demanded root pending for good, with the stuck
+warning a root deferred that long gets, though an event to one of the nested
+instance's streams still starts it alone (`startEventPiece()`). Every key whose
 owning piece runs nested is indexed under each piece enclosing it, as the
 runner records them (`Runner.enclosingPiecesOf()`): the runs of an enclosing
 piece, and of every piece nested in it, are then supplied that key's demanders,
