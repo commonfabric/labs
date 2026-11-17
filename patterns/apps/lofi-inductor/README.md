@@ -82,9 +82,10 @@ parameter slots rather than a rule's text. Parameter slots are not built. The
 protection against a published rule carrying someone's details is the pool's
 threshold: a rule that names one person is held by one contributor and is never
 released. Publishing also holds back, cheaply, any rule whose pattern has an `@`
-or a run of six or more digits (`looksPersonal`); the view says how many it held
-back. Neither is a guarantee: a rule with a name in it is sent, and stays
-confidential in the pool only by its policy.
+or a run of six or more digits (`looksPersonal`), a run that spaces, dots,
+dashes, or brackets break (`123-456-7890`) or a count repeats (`1{6}`) included;
+the view says how many it held back. Neither is a guarantee: a rule with a name
+in it is sent, and stays confidential in the pool only by its policy.
 
 **`inductor-pool`** collects contributions and releases consensus.
 

@@ -526,6 +526,40 @@ describe("looksPersonal", () => {
     expect(looksPersonal(rule("subject", "\\d{6,}"))).toBe(false);
     expect(looksPersonal(rule("subject", "12345 due"))).toBe(false);
   });
+
+  it("flags a run broken by separators, escaped or not, or written as a count", () => {
+    for (
+      const pattern of [
+        "123-456-7890",
+        "555 1234 5678",
+        "555\\s1234\\s5678",
+        "12345\\.6789",
+        "\\(555\\) 123-4567",
+        "1{6}",
+        "12{5}",
+        "acct 9{3}1{3}",
+      ]
+    ) {
+      expect({ pattern, personal: looksPersonal(rule("subject", pattern)) })
+        .toEqual({ pattern, personal: true });
+    }
+    for (
+      const pattern of [
+        "\\d{6}",
+        "\\d{3}-\\d{3}-\\d{4}",
+        "20\\d{2}",
+        "\\s{0,88}x",
+        "x{100}",
+        "order\\s*#?\\s*\\d+",
+        "\\$\\d+\\.\\d\\d",
+        "1{5}",
+        "12 34 5",
+      ]
+    ) {
+      expect({ pattern, personal: looksPersonal(rule("subject", pattern)) })
+        .toEqual({ pattern, personal: false });
+    }
+  });
 });
 
 describe("sameGoal", () => {

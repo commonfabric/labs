@@ -721,13 +721,30 @@ export function poolOffer(
 /**
  * Whether a rule looks like it carries a personal detail: an `@` (an email
  * address or handle) or a run of six or more digits (an account, order, or
- * phone number) written into its pattern. Such a rule is held back from a
- * pool. It is a cheap filter, not a guarantee: the pool's threshold is the
- * real protection, since a detail only one person's rules hold is never
- * released.
+ * phone number) written into its pattern. A run may be broken by a space, a
+ * dot, a dash, or a bracket, escaped or not, as phone and account numbers are
+ * written (`123-456-7890`, `555\s1234`, `12345\.6789`), and a digit repeated
+ * by a count (`1{6}`) counts that many times. A digit class (`\d{6,}`) is
+ * not a detail. Such a rule is held back from a pool. It is a cheap filter,
+ * not a guarantee: the pool's threshold is the real protection, since a
+ * detail only one person's rules hold is never released.
  */
 export function looksPersonal(rule: Pick<CanonicalRule, "pattern">): boolean {
-  return rule.pattern.includes("@") || /[0-9]{6,}/.test(rule.pattern);
+  if (rule.pattern.includes("@")) return true;
+  // The canonical text with each escape as what it stands for in a number
+  // (a separator, or a space for \s) or, for any other, a character that
+  // breaks a run; then each digit repeated by a count written out.
+  const plain = rule.pattern
+    .replace(
+      /\\(.)/g,
+      (_, c: string) => ".-()".includes(c) ? c : c === "s" ? " " : "\u0000",
+    )
+    .replace(
+      /(\d)\{(\d+)(?:,\d*)?\}/g,
+      (_, digit: string, count: string) =>
+        digit.repeat(Math.min(Number(count), 6)),
+    );
+  return /(?:\d[\s.\-()]?){6,}/.test(plain);
 }
 
 // =============================================================================
