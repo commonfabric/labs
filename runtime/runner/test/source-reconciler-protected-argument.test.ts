@@ -1566,6 +1566,208 @@ const join = handler<{ name: string }, { roster: Writable<string[]> }>(
       });
     });
 
+    describe("a writer appended where the waiver cannot tell the position, or above the restated slot", () => {
+      // Each room holds a value under `join`'s lone claim, which the release's
+      // setup restates as it found it, and the release appends a writer to a
+      // policy at or beneath that slot. The waiver compares such a position
+      // exactly, and one whose path it cannot tell, so each is refused.
+
+      /**
+       * `source` with `repost` appended to the `typeName` write policy, as the
+       * alternative `alternative`.
+       */
+      const appending = (
+        source: string,
+        typeName: string,
+        write: string,
+        alternative =
+          'TrustedActionWrite<unknown, typeof repost, "Post", "GuardedRoom">',
+      ) =>
+        withTitle(
+          source
+            .replace(
+              `type ${typeName} = WritePolicyAnyOf<`,
+              `const repost = handler<{ text: string }, { notes: NotesCell }>(
+  ({ text }, { notes }) => {
+    ${write}
+  },
+);
+
+type ${typeName} = WritePolicyAnyOf<`,
+            )
+            .replace(
+              /(type \w+ = WritePolicyAnyOf<[^,]+, \[\n)/,
+              `$1  ${alternative},\n`,
+            )
+            .replace(
+              "  join: Stream<{ name: string }>;",
+              "  join: Stream<{ name: string }>;\n  repost: Stream<{ text: string }>;",
+            )
+            .replace(
+              "  join: join({ notes }),",
+              "  join: join({ notes }),\n  repost: repost({ notes }),",
+            ),
+        );
+
+      it("refuses a release that adds a writer to a rest claim beside a named member of the guarded record, and keeps the stored policy", async () => {
+        // The rest claim beside `owner` describes no single path, so only the
+        // policy comparison reaches it.
+        const previous = `/// <cts-enable />
+import {
+  Default,
+  handler,
+  pattern,
+  Stream,
+  type TrustedActionWrite,
+  Writable,
+  type WriteAuthorizedBy,
+  type WritePolicyAnyOf,
+} from "commonfabric";
+
+const post = handler<{ text: string }, { notes: NotesCell }>(
+  ({ text }, { notes }) => {
+    notes.set({ ...notes.get(), [text]: text as SentText });
+  },
+);
+
+type SentText = WritePolicyAnyOf<string, [
+  TrustedActionWrite<unknown, typeof post, "Post", "GuardedRoom">,
+]>;
+
+interface Members {
+  owner?: string;
+  [name: string]: SentText | string | undefined;
+}
+
+const join = handler<{ name: string }, { notes: NotesCell }>(
+  ({ name }, { notes }) => {
+    notes.set({ ...notes.get(), [name]: name as SentText });
+  },
+);
+
+type NotesCell = Writable<Members>;
+
+interface Input {
+  notes?: Default<
+    WriteAuthorizedBy<Members, typeof join>,
+    Record<PropertyKey, never>
+  >;
+}
+
+interface Output {
+  notes: Members;
+  post: Stream<{ text: string }>;
+  join: Stream<{ name: string }>;
+}
+
+export default pattern<Input, Output>(({ notes }) => ({
+  notes,
+  post: post({ notes }),
+  join: join({ notes }),
+}));
+`;
+        const current = appending(
+          previous,
+          "SentText",
+          "notes.set({ ...notes.get(), [text]: text as SentText });",
+        );
+        expect(modulesOf(current)[route]).toContain("typeof repost");
+        await reconcileRelease(
+          "rest-policy-release",
+          previous,
+          current,
+          async (runtime, room) => {
+            await send(runtime, room, "join", { name: "ada" });
+            expect(room.getArgumentCell<Room>()!.getRaw()).toEqual({
+              notes: { ada: "ada" },
+            });
+          },
+          ({ outcome, room, recorded, previousIdentity }) => {
+            expect(outcome).not.toBe("updated");
+            expect(recorded?.detail).toContain("at /notes");
+            expect(getPatternIdentityRef(room)?.identity).toBe(
+              previousIdentity,
+            );
+          },
+        );
+      });
+
+      it("refuses a release that adds a writer to a policy at and above the guarded slots, and keeps the stored policy", async () => {
+        // `join` alone writes the roster's `items`, beneath a policy on the
+        // whole roster, naming no gesture, that the release extends. Both are
+        // restated as the room holds them, so both writer refusals are
+        // deferred, and the appended writer lands at one deferred path and
+        // above the other.
+        const previous = `/// <cts-enable />
+import {
+  Default,
+  handler,
+  pattern,
+  Stream,
+  type TrustedActionWrite,
+  Writable,
+  type WriteAuthorizedBy,
+  type WritePolicyAnyOf,
+} from "commonfabric";
+
+const join = handler<{ name: string }, { notes: NotesCell }>(
+  ({ name }, { notes }) => {
+    notes.key("items").push(name);
+  },
+);
+
+interface Roster {
+  items?: WriteAuthorizedBy<string[], typeof join>;
+}
+
+type SentRoster = WritePolicyAnyOf<Roster, [
+  WriteAuthorizedBy<unknown, typeof join>,
+]>;
+
+type NotesCell = Writable<Roster>;
+
+interface Input {
+  notes?: Default<SentRoster, Record<PropertyKey, never>>;
+}
+
+interface Output {
+  notes: Roster;
+  join: Stream<{ name: string }>;
+}
+
+export default pattern<Input, Output>(({ notes }) => ({
+  notes,
+  join: join({ notes }),
+}));
+`;
+        const current = appending(
+          previous,
+          "SentRoster",
+          'notes.key("items").push(text);',
+          "WriteAuthorizedBy<unknown, typeof repost>",
+        );
+        expect(modulesOf(current)[route]).toContain("typeof repost");
+        await reconcileRelease(
+          "above-policy-release",
+          previous,
+          current,
+          async (runtime, room) => {
+            await send(runtime, room, "join", { name: "ada" });
+            expect(room.getArgumentCell<Room>()!.getRaw()).toEqual({
+              notes: { items: ["ada"] },
+            });
+          },
+          ({ outcome, room, recorded, previousIdentity }) => {
+            expect(outcome).not.toBe("updated");
+            expect(recorded?.detail).toContain("at /notes");
+            expect(getPatternIdentityRef(room)?.identity).toBe(
+              previousIdentity,
+            );
+          },
+        );
+      });
+    });
+
     describe("a writer added to another artifact's gesture", () => {
       // `rewrite` is of the records module, whose lineage the stored policy
       // pairs with `Post` alone. `Amend` it pairs only with the room's own

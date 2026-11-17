@@ -14969,10 +14969,17 @@ export function* prepareBoundaryCommitSteps(
             })).sort((left, right) => utf8Compare(left.path, right.path));
         const storedPositions = declaredPositions(storedSchema);
         const derivedPositions = declaredPositions(schemaAndHash.schema);
-        const samePolicy = release === undefined
-          ? undefined
-          : (left: unknown, right: unknown) =>
-            ifcDiffersOnlyByReleaseAppend(left, right, release);
+        // A position whose path is unknown, or that overlaps a deferred
+        // path, is compared exactly.
+        const samePolicy = release === undefined ? undefined : (
+          left: unknown,
+          right: unknown,
+          path: readonly string[] | undefined,
+        ) =>
+          path === undefined ||
+            deferredWriterPaths.some((deferred) => pathsOverlap(path, deferred))
+            ? deepEqual(left, right)
+            : ifcDiffersOnlyByReleaseAppend(left, right, release);
         return cfcSchemaPoliciesEqual(
           storedSchema,
           schemaAndHash.schema,
@@ -14983,12 +14990,9 @@ export function* prepareBoundaryCommitSteps(
           storedPositions.every((position, i) => {
             const derived = derivedPositions[i];
             return position.path === derived.path &&
-              (samePolicy === undefined ||
-                  deferredWriterPaths.some((path) =>
-                    pathsOverlap(position.at, path)
-                  )
+              (samePolicy === undefined
                 ? deepEqual(position.ifc, derived.ifc)
-                : samePolicy(position.ifc, derived.ifc));
+                : samePolicy(position.ifc, derived.ifc, position.at));
           }) &&
           deferredWriterPaths.every((path) =>
             deepEqual(
