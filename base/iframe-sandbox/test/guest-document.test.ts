@@ -52,5 +52,102 @@ describe("guest-document", () => {
         new Function(`let x; ${source} return x;`)();
       expect(read(escaped)).toBe(read(script));
     });
+
+    describe("with assets", () => {
+      const GLAZE = "data:image/png;base64,iVBORw0KGgo=";
+      const MENU = "data:font/woff2;base64,d09GMg==";
+      const ASSETS = { glaze: GLAZE, menu: MENU };
+      const RECORD = '<script type="application/json" data-cf-assets>' +
+        `{"glaze":"${GLAZE}","menu":"${MENU}"}</script>`;
+
+      it("replaces each reference in the document with its asset's URL", () => {
+        const document = guestDocument(
+          '<img src="cf-asset:glaze"><style>p { font: url(cf-asset:menu); }' +
+            "</style>",
+          undefined,
+          ASSETS,
+        );
+        expect(document).toBe(
+          `${RECORD}<img src="${GLAZE}">` +
+            `<style>p { font: url(${MENU}); }</style>`,
+        );
+      });
+
+      it("leaves a reference to a name the assets lack in place", () => {
+        expect(guestDocument('<img src="cf-asset:logo">', undefined, ASSETS))
+          .toBe(`${RECORD}<img src="cf-asset:logo">`);
+      });
+
+      it("searches the document and not the script", () => {
+        const document = guestDocument(
+          "<p>cf-asset:glaze</p>",
+          'image.src = "cf-asset:glaze";',
+          ASSETS,
+        );
+        expect(document).toBe(
+          `${RECORD}<p>${GLAZE}</p>` +
+            '<script type="module">image.src = "cf-asset:glaze";</script>',
+        );
+      });
+
+      it("writes the record right after the doctype, ahead of every script", () => {
+        const document = guestDocument(
+          '<!DOCTYPE html>\n<html lang="en"><head><script>go();</script>' +
+            "</head></html>",
+          "run();",
+          ASSETS,
+        );
+        expect(document).toBe(
+          `<!DOCTYPE html>${RECORD}\n<html lang="en"><head>` +
+            "<script>go();</script></head></html>" +
+            '<script type="module">run();</script>',
+        );
+      });
+
+      it("writes the record after the whitespace and comments ahead of a doctype", () => {
+        const document = guestDocument(
+          "\n<!-- <!doctype x> --> <!doctype html><p></p>",
+          undefined,
+          ASSETS,
+        );
+        expect(document).toBe(
+          `\n<!-- <!doctype x> --> <!doctype html>${RECORD}<p></p>`,
+        );
+      });
+
+      it("writes the record at the start of a document with no doctype", () => {
+        expect(guestDocument("<p>plain</p><!doctype html>", undefined, ASSETS))
+          .toBe(`${RECORD}<p>plain</p><!doctype html>`);
+      });
+
+      it("writes the record as JSON that reads back as the assets", () => {
+        const document = guestDocument("<p></p>", undefined, ASSETS);
+        const text = document.slice(
+          document.indexOf(">") + 1,
+          document.indexOf("</script>"),
+        );
+        expect(JSON.parse(text)).toEqual(ASSETS);
+      });
+
+      it("escapes every `<` in the record", () => {
+        const document = guestDocument("<p></p>", undefined, {
+          glaze: "</script><!--",
+        });
+        expect(document).toBe(
+          '<script type="application/json" data-cf-assets>' +
+            '{"glaze":"\\u003c/script>\\u003c!--"}</script><p></p>',
+        );
+      });
+
+      it("writes no record for no assets", () => {
+        expect(guestDocument("<p>cf-asset:glaze</p>", undefined, {})).toBe(
+          "<p>cf-asset:glaze</p>",
+        );
+      });
+
+      it("returns an empty document empty", () => {
+        expect(guestDocument("", "go();", ASSETS)).toBe("");
+      });
+    });
   });
 });
