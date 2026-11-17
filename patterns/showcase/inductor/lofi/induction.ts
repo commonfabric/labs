@@ -45,9 +45,8 @@ export interface HifiAnswer {
 export interface HifiState {
   id: string;
   /**
-   * The prompt the item is asked now. An answer counts only if its call
-   * asked this: right after the goal changes, the call can still hold the
-   * old goal's answer, not yet marked pending.
+   * The prompt the item is asked now. An answer counts only if its call asked
+   * this, so an answer still held for an old goal is not graded.
    */
   asked?: string;
   answer: {

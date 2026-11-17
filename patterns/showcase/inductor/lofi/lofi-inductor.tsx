@@ -314,19 +314,6 @@ function appendItems(
 }
 
 /**
- * Takes the element at `index` out of `list`. An element written by `push` is
- * stored as a link, which only the element's cell matches; one seeded with the
- * piece is stored inline, which only its value matches. So both are sent, and
- * each removes nothing of the other kind. `value` is the element's value,
- * copied out of what `get()` read. The callers read the list to find the
- * index, so the removal still conflicts with a concurrent change to it.
- */
-function removeElement<T>(list: Writable<T[]>, index: number, value: T): void {
-  list.removeByValue(list.key(index));
-  list.removeByValue(value);
-}
-
-/**
  * Asks `target` to withdraw this piece's contribution, if it is the pool for
  * `question`. A pool binds the principal, so it takes out only the sender's.
  */
@@ -357,19 +344,23 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     // picks only when no model is given.
     const hifiModelName = computed(() => hifiModel.get() || undefined);
 
-    // One cached model call per item. Expression-bodied on purpose: in a
-    // block body, the transformer wraps a `const answer = generateObject(...)`
-    // in a lift that never settles.
-    const hifi = items.map((item) => ({
-      id: item.id,
-      asked: computed(() => buildHifiPrompt(goal.get(), item)),
-      answer: generateObject<HifiAnswer>({
-        prompt: computed(() => buildHifiPrompt(goal.get(), item)),
-        system: HIFI_SYSTEM,
-        schema: HIFI_SCHEMA,
-        model: hifiModelName,
-      }),
-    }));
+    // One cached model call per item. `asked` lets grading ignore an answer
+    // the call still holds for the previous goal.
+    // TODO(alex-claude): remove `asked` once a `generateObject` whose prompt
+    // changes reads as pending until it answers the new one (top/TBD)
+    const hifi = items.map((item) => {
+      const prompt = computed(() => buildHifiPrompt(goal.get(), item));
+      return {
+        id: item.id,
+        asked: prompt,
+        answer: generateObject<HifiAnswer>({
+          prompt,
+          system: HIFI_SYSTEM,
+          schema: HIFI_SCHEMA,
+          model: hifiModelName,
+        }),
+      };
+    });
 
     const rows = computed(() =>
       gradeItems(items.get(), hifi, rules.get(), heldOutPercent.get())
@@ -523,10 +514,9 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       if (event?.item === undefined || event.item === null) {
         throw new Error("`item` is an item read from `items`.");
       }
-      const index = items.get().findIndex((each) => equals(each, event.item));
-      if (index < 0) return;
-      const { id, fields } = items.get()[index];
-      removeElement(items, index, { id, fields: { ...fields } });
+      const current = items.get();
+      const index = current.findIndex((each) => equals(each, event.item));
+      if (index >= 0) items.set(current.toSpliced(index, 1));
     });
 
     const removeRule = action((event: RuleRef) => {
@@ -535,10 +525,10 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       }
       // A rule is a value, known by its canonical key.
       const key = event.rule.key;
-      const index = rules.get().findIndex((each) => each.key === key);
+      const current = rules.get();
+      const index = current.findIndex((each) => each.key === key);
       if (index < 0) return;
-      const { field, pattern, predicts } = rules.get()[index];
-      removeElement(rules, index, { field, pattern, predicts, key });
+      rules.set(current.toSpliced(index, 1));
       adopted.removeByValue(key);
     });
 
