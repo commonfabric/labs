@@ -214,9 +214,11 @@ chain of links reads the default of the last link that declares one, and the
 reader's own where no link does (`Store.locate`). The state entry of a binding
 of the callee whose place is such a slot has the default in a member `default`,
 as the documents assume. The crate gives a reference the default where the value
-code of the callee stores it. Where code of the caller names a path of the
-callee's result, the crate resolves it to the caller's slot at compile time and
-writes a read of that slot with no default, which is a defect of the crate.
+code of the callee stores it. A state path of a binding of the callee that is
+bound to a name whose property the call writes as a literal holds the literal as
+its constant. Where code of the caller names a path of the callee's result, the
+crate resolves it to the caller's slot at compile time and writes a read of that
+slot with no default, which is a defect of the crate.
 
 A module's text registers a setup function for the pattern (`$rt.setup`) and for
 each pattern compiled into it, and each setup function registers a value
@@ -230,8 +232,10 @@ The name a pattern binds to `[SELF]` is, in value code, a reference to the
 result cell of the instance (`$rt.self`, ruling Z17): where value code places it
 in a value the executor stores a link to the result document, in the pattern's
 body and in an element body alike (`compare/fixtures/self.tsx`). The state entry
-of a binding that captures the name has no `place`, and the executor hands the
-handler nothing for it.
+of a binding that captures the name has the place `{ result: true }` (ruling
+Z28), and the executor hands the handler a reference to the result cell there,
+for a binding of the pattern's body and for one of an element body over an array
+of references and over an array of plain values in place.
 
 A `reduce` in the reactive tier registers two functions where it is written
 (`$rt.reduce`): that of its initial value, in the cone the `reduce` is written
@@ -252,7 +256,11 @@ over an array of plain values in place, and over the result of another
 per-element construct. A write below the root of a cell that has no document
 creates the document from the default with the write applied (ruling Z14;
 `compare/fixtures/state-below.tsx`, with a cell in each of the three kinds of
-element body).
+element body). A `push` through a handle to a path of the argument that holds
+nothing starts from the default that the place declares in the same way (ruling
+Z27; `compare/fixtures/push-default.tsx`, with an array of plain values in place
+and an array whose default record stays in place while the pushed record is a
+reference).
 
 `exec/executor.ts` runs an artifact on an argument, with Deno: it loads the
 module texts, makes the argument document and the result document in memory,
@@ -338,7 +346,9 @@ again, and when the upstream key enters the result of another per-element
 construct again, as an element that a `filter` dropped and keeps again does
 (`compare/fixtures/key-returns.tsx`, with a body over the result of a `filter`
 of references and one over the result of a `filter` of plain values in place).
-The executor has no state of an operation to keep, and no child of a body.
+The executor has no state of an operation to keep. An event for the stream of a
+binding of an element body is refused while the key is away. A pattern called
+through `asInstance()` is the exception to both, below.
 
 An element that is a plain value in place is named by its collection and its key
 (ruling Z12). The executor holds such a reference as a path whose segment at the
@@ -348,19 +358,40 @@ read or a write through it finds the position that holds the key at that time
 read the array through a handle are all given that reference, and what passes
 the element or a member of it on stores it. A read through it depends on the
 value at the key and the path and on no position, so a move evaluates nothing.
-`equals` compares two such references as the collection, the key and the path
-they hold and resolves no key, and a reference by key is not equal to a
-reference to a cell or to a handle that names a position. After the element is
-removed a read gives nothing, and a write is refused, which rejects a handler's
-event. A write that changes the value leaves the position with another key, and
-the reference keeps the key it was made with, as the documents assume: a second
-write through it is refused. `compare/fixtures/value-identity.tsx` and the tests
-of "an element that is a plain value in place" in `exec/test/executor.test.ts`
-show each of these over an array of plain values in place, and beside it what
-holds over an array of references, where the element is a cell and nothing of
-this applies. An element of the result of a `map` whose body computes a value is
-passed on as that value: the executor stores no assembled result at an address a
-reference could name.
+`equals` resolves each operand to the position it names at that time and
+compares the two there (ruling Z26). `items.key(i)` is a handle by position, at
+the call and when it is stored (ruling Z33), so it is equal to a reference by
+key to the element that is at position `i` then, and over an array of references
+to the element's cell. An evaluation that calls `equals` depends on the outcome
+of the comparison and on no position, so a move evaluates nothing for two
+references by key. After the element is removed a read gives nothing, and a
+write is refused, which rejects a handler's event.
+
+A write through a reference by key that changes the value leaves the position
+with another key, and the element is re-keyed in the same transaction (ruling
+Z24). Until the transaction ends, a reference that holds the old key resolves to
+the position (`Store.rekeys`), so the writer's later writes succeed and a handle
+it stores afterwards is stored with the new key. When the transaction ends the
+executor moves the state cells of the old key to the new key, in the body over
+the array and in the bodies over the results of the constructs applied to it,
+and re-keys an instance called through `asInstance()` with the element. A
+reference that was stored elsewhere under the old key reads as nothing
+(`compare/fixtures/rekey.tsx`, beside an array of references, where no key
+changes).
+
+A function body that reads a plain value in place through a handle holds a copy
+(ruling Z25): the value carries no address, writing it to a cell stores the
+value, and writing it into an array stores it in place and makes no document for
+it. A handle or a state entry that a handler bound in the element body is given
+for its element is a reference by key. `compare/fixtures/value-copy.tsx` moves
+values between two arrays, keeps one in a cell, and finds the element of a row
+with `left.key(at).equals(card)`, and is compared with today's runtime.
+`compare/fixtures/value-identity.tsx` and the tests of "an element that is a
+plain value in place" in `exec/test/executor.test.ts` show each of these over an
+array of plain values in place, and beside it what holds over an array of
+references, where the element is a cell and nothing of this applies. An element
+of the result of a `map` whose body computes a value is passed on as that value:
+the executor stores no assembled result at an address a reference could name.
 
 A cone with side-writes has its kind in `Cone.sideWrites`, from the tier
 footprint analysis gives its bodies: `static` where every write target is one
@@ -386,36 +417,99 @@ stream of a binding made outside it, `member` for the one position of a member
 written after a spread, with the number of entries written before it, and
 `inside` for a collection of which one element holds the stream inside its
 value. The check accepts a marker at a `*` only at a position of the stated
-kind: for `element` the position that holds the key of the cone instance that
-placed the marker, for `every` and `inside` an element of a collection and no
-member written beside it, and for `member` the member written at that entry. The
-executor knows which it is from how it assembled the array: value code hands it
-the entries of an array that has a spread, and of the children of a view node,
-apart (`$rt.list`, `$rt.spread`, `$rt.children`), and the assembled result of a
-`map`, a `filter` or a `flatMap` has the key of each position
-(`compare/fixtures/star-kinds.tsx`). The harness of the comparison resolves a
-listed path from the plan and the kinds (`streamAt` in `compare/harness.ts`). It
-does not resolve a path through two collections spread into one array, since the
-kind does not say which of the two a `*` stands for. A marker at a position no
-listed path covers fails the evaluation that stores it (ruling Z19): the kept
-output that holds the position is not written and keeps what was stored for it,
-which is nothing where nothing was stored, and every other output of the result
-is stored. `Instance.failures` has, for each such marker, the output, its path
-with the index of the element in the place of a `*`, the binding, and the
-position. For a cone of an element body the output that fails is that of the
-element whose row holds the position, and the rows of the other elements are
-stored, over an array of references, over an array of plain values in place, and
-over the result of another per-element construct alike. So the crate lists a
-path for every position at which value code can place a stream: also for a
-member written after a spread, for two collections spread into one array, and
-for a stream inside a value that the elements of a collection hold. A stream
-that is an input of the pattern is a reference like any other input, and what
-passes it on stores a link to its place. A sandboxed body that is handed a
-marker in its computed argument gets a handle to the stream, and a stream that a
-body returns into the result is stored as the link to it and checked against no
-listed path (ruling Z20; `compare/fixtures/stream-returned.tsx`). This is the
-same for an element body over an array of references, over an array of plain
-values in place, and over the result of another per-element construct.
+kind: for `element` a position whose key starts with the key of the cone
+instance that placed the marker (ruling Z30), which at the result of a `map` or
+a `filter` is the position that holds the key and at the result of a `flatMap`
+each member of the segment of that source key
+(`compare/fixtures/flat-streams.tsx`), for `every` and `inside` an element of a
+collection and no member written beside it, and for `member` the member written
+at that entry. The executor knows which it is from how it assembled the array:
+value code hands it the entries of an array that has a spread apart (`$rt.list`,
+`$rt.spread`), and the assembled result of a `map`, a `filter` or a `flatMap`
+has the key of each position (`compare/fixtures/star-kinds.tsx`).
+
+A collection among the children of a view node is stored as one nested child,
+and its elements are at `children/<n>/*` (ruling Z31), over an array of
+references, over an array of plain values in place, and over the result of
+another per-element construct. A child written after it has a static position,
+and two collections among the children of one node are two child positions. So
+kind `member` arises only in an array value that the author spreads into
+(`compare/fixtures/member-kind.tsx`). Value code writes the members of an array
+literal among the children as children of their own, and a view node that a
+function body builds flattens the arrays it is handed (`$rt.hf`), as the JSX
+factory of today does. The harness of the comparison resolves a listed path from
+the plan and the kinds (`streamAt` in `compare/harness.ts`): a `*` below a child
+position is resolved in the array that the child holds. A `map` over an array
+written in place runs when today's pattern is built, and the harness then takes
+the children from the position of the expression on as the positions for kind
+`inside`. The comparison of values flattens the children of a view node on both
+sides.
+
+A marker at a position no listed path covers fails the evaluation that stores it
+(ruling Z19). What keeps its stored value is the top-level property of the
+result that holds the position, the whole of `$UI` for a marker anywhere in the
+tree (ruling Z29): nothing at or below the property is written, which leaves
+nothing there where nothing was stored, and every other property of the result
+is stored. The instance records an error with the binding, the position and the
+property (`Instance.errors`), which the next evaluation that stores the property
+clears, and `Instance.failures` has every such marker of every evaluation. That
+is the same for a marker of a cone of an element body over an array of
+references, over an array of plain values in place, and over the result of
+another per-element construct. So the crate lists a path for every position at
+which value code can place a stream: also for a member written after a spread,
+for a stream inside a value that the elements of a collection hold, for a
+binding of the body of a `flatMap`, and for a stream in what a promoted
+`computed` returns. A stream that is an input of the pattern is a reference like
+any other input, and what passes it on stores a link to its place. A sandboxed
+body that is handed a marker in its computed argument gets a handle to the
+stream, and a stream that a body returns into the result is stored as the link
+to it and checked against no listed path (ruling Z20;
+`compare/fixtures/stream-returned.tsx`). This is the same for an element body
+over an array of references, over an array of plain values in place, and over
+the result of another per-element construct.
+
+A call of a pattern through the factory modifier `asInstance()`, as
+`Row.asInstance()({ item })`, is an instance of its own (rulings Z35 and Z36).
+The front end accepts the modifier beside `asScope` and `inSpace`. The plan
+records the call as an entry of `Plan.children` with `asInstance: true` and the
+identity of the compiled pattern as its callee, a write edge with target
+`argument` for each path of the argument on the cone the call is written in, and
+slots of root `child` for the reads of the result. Nothing of the callee is
+compiled into the plan, and no `site` step stands for the call. Value code
+registers the function of the argument (`$rt.child`). The executor makes an
+instance of the callee's plan with an argument document and a result document of
+its own, identified by the child, which stands for the site, and the key of each
+enclosing collection. It writes the argument again when what the argument holds
+changed. The instance is not torn down when its key leaves, the key that returns
+has the same instance, and an event for one of its streams is handled while the
+key is away. Over an array of references the argument holds the link to the
+element's cell. Over an array of plain values in place, and over the result of
+another per-element construct whose position holds a value, it holds the value.
+`compare/fixtures/as-instance.tsx` has the call over an array that a test gives
+as references and as plain values in place, over an array of plain values, over
+the result of a `filter`, and outside an element body, beside the same pattern
+compiled in with no modifier. Today's runtime has no `asInstance()`, so the
+tests of it are of the executor alone. `Child` of the crate's plan has no
+`argumentSchema` and no `resultSchema`, and the documents of an instance that
+was re-keyed keep the name of the key it was made under.
+
+The type marker `KeyedBy<T, "field">` declares the key of a plain value (rulings
+Z37 and Z38). The front end reads it as `T` with a key annotation, the schema of
+the items of the array has the keyword `keyField`, and the record of a
+collection whose source is a slot or an output holds a copy
+(`Collection.keyField`). The executor keys a plain value that holds the field by
+the value of the field, with the occurrence count, and the key names the field,
+so a reference by key is resolved with no schema at hand. A change of another
+member changes no key: the cone instances that read the changed member are
+evaluated, and the state cells and the `asInstance()` instance of the key stay,
+for a new array from a computation, a `set` of the whole array, and a write
+through a reference by key, which then re-keys nothing. A position that holds a
+link is keyed by its cell, and a construct over the result of another construct
+has the upstream key. `compare/fixtures/keyed-by.tsx` has a plain array
+generated from scratch whose elements change another field between evaluations,
+a `filter` and a `map` over it, and an array of plain values in place. Today's
+runtime has no `KeyedBy`, so the tests of it are of the executor alone. The
+crate does not report `keyed-by:declaration`.
 
 `compare/values.ts` compares the values the executor computes with those of
 today's runtime: the members of the result and the state cells of the pattern's
@@ -444,7 +538,10 @@ same for the rulings on `Cone.within` and on who places a stream, and for
 `reduce`, the record of a key of a list, and the keys of the result of a
 `flatMap`. Notes 344 on have what today's runtime stores when a record gets into
 a list, and rulings Z12 to Z17. Notes 367 on have rulings Z18 to Z23, the seeded
-`Math.random`, and the instances and bindings a function body makes.
+`Math.random`, and the instances and bindings a function body makes. Notes 387
+on have rulings Z24 to Z38: the layout of the children of a view node, the
+re-key of a plain value in place, the copy a function body holds, `asInstance()`
+and `KeyedBy`.
 
 ## The parser
 
