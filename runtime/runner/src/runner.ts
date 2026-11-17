@@ -6872,9 +6872,8 @@ export class Runner {
           // failure surfaces loudly and, on a serving runtime, counted.
           const instantiateActionId = startActionId;
           const patternKeyAtInstantiation = currentPatternKey;
-          // Each caller calls this only while the registration is the one
-          // `registrations` holds for the key.
-          const teardownRegistration = () => {
+          const teardownRegistrationIfCurrent = () => {
+            if (registrations.get(key) !== cancel) return;
             registrations.delete(key);
             if (registrations === this.#cancels) {
               this.#forgetStartsOf(pieceKey, cancel);
@@ -6950,7 +6949,7 @@ export class Runner {
                 instantiateActionId,
                 error,
               );
-              teardownRegistration();
+              teardownRegistrationIfCurrent();
               return failure;
             }
 
@@ -7059,7 +7058,7 @@ export class Runner {
                   unloaded,
                 ),
               );
-              teardownRegistration();
+              teardownRegistrationIfCurrent();
               return failure;
             }
             try {
@@ -7081,7 +7080,7 @@ export class Runner {
                 instantiateActionId,
                 retryError,
               );
-              teardownRegistration();
+              teardownRegistrationIfCurrent();
               return failure;
             }
           };
@@ -7142,7 +7141,7 @@ export class Runner {
                   instantiateActionId,
                   error,
                 );
-                if (exactNodesAreCurrent()) teardownRegistration();
+                if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
                 return failure;
               }
               const settlement = waveSettlementOf(actualTx);
@@ -7160,7 +7159,7 @@ export class Runner {
                   "wave abandon; the enclosing lifecycle owns any restart",
                   settled.error,
                 ]);
-                if (exactNodesAreCurrent()) teardownRegistration();
+                if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
                 return;
               }
               // A WHOLE contribution drop is recoverable in the same sense the
@@ -7179,7 +7178,7 @@ export class Runner {
               instantiateActionId,
               error,
             );
-            if (exactNodesAreCurrent()) teardownRegistration();
+            if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
             return failure;
           });
           this.#pendingPieceInstantiationSettlements.add(commitWork);

@@ -115,6 +115,17 @@ describe("captureLogsForTestingOnly()", () => {
     );
   });
 
+  it("rejects `first()` at once on a disposed capture without the key, and resolves it with one", async () => {
+    const captured = captureLogsForTestingOnly("capture-test");
+    logger.info("logged", "here");
+    captured[Symbol.dispose]();
+
+    expect((await captured.first("logged")).text).toBe("here");
+    await expect(captured.first("never")).rejects.toThrow(
+      'The capture of "capture-test" ended before a line was logged under "never".',
+    );
+  });
+
   it("leaves another logger's lines to reach `console`", () => {
     using captured = captureLogsForTestingOnly("capture-test");
 

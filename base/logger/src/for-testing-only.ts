@@ -40,7 +40,8 @@ export type CapturedLogs = Disposable & {
    * Resolves with the first line logged under `key` since the capture began:
    * at once when one is already recorded, otherwise when the logger logs one.
    * A line logged under another key does not resolve it. Rejects, naming the
-   * key, when the capture is disposed before such a line is logged.
+   * key, when the capture is disposed before such a line is logged, and at
+   * once when it is called on a capture already disposed without one.
    */
   first(key: string): Promise<CapturedLog>;
 };
@@ -100,11 +101,17 @@ export const captureLogsForTestingOnly = (
     for (const waiter of waiters.get(key) ?? []) waiter.resolve(log);
     waiters.delete(key);
   });
+  let ended = false;
+  const endedBefore = (key: string) =>
+    new Error(
+      `The capture of "${moduleName}" ended before a line was logged under "${key}".`,
+    );
   return {
     logs,
     first: (key) => {
       const found = logs.find((log) => log.key === key);
       if (found !== undefined) return Promise.resolve(found);
+      if (ended) return Promise.reject(endedBefore(key));
       const waiter = Promise.withResolvers<CapturedLog>();
       waiters.set(key, [...waiters.get(key) ?? [], waiter]);
       return waiter.promise;
@@ -118,14 +125,9 @@ export const captureLogsForTestingOnly = (
       logger.disabled = prior.disabled;
       logger.level = prior.level;
       if (--runningCaptures === 0) setGlobalLogFloor(floorBeforeCaptures);
+      ended = true;
       for (const [key, waiting] of waiters) {
-        for (const waiter of waiting) {
-          waiter.reject(
-            new Error(
-              `The capture of "${moduleName}" ended before a line was logged under "${key}".`,
-            ),
-          );
-        }
+        for (const waiter of waiting) waiter.reject(endedBefore(key));
       }
       waiters.clear();
     },
