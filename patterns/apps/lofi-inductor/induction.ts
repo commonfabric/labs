@@ -122,6 +122,25 @@ export interface HistoryEntry {
   /** The surprises this round answered, so the next round counts new ones. */
   answered: string[];
   decidedAt: number;
+  /**
+   * Set when the round judged the pool's released rules rather than a
+   * rewrite: the offer's key, so the same offer is not made again.
+   */
+  poolOffer?: string;
+}
+
+/** A rule a pool released, as the inductor reads it. */
+export interface PoolRule {
+  field: string;
+  pattern: string;
+  predicts: boolean;
+}
+
+/** The pool's released rules, judged as a candidate set. */
+export interface PoolOffer {
+  /** Which set this is: a hash of its rules' keys. */
+  key: string;
+  judgement: Judgement;
 }
 
 /** The rules a person is ready to share for a goal. */
@@ -592,7 +611,9 @@ function copyRule(rule: CanonicalRule): CanonicalRule {
  * naming the surprises it answered, and the rule set that follows it, which is
  * the proposed set only when it was accepted. Everything is a plain copy: the
  * judgement is read from a computed that goes idle once the round is recorded,
- * so a stored reference into it would come to read as nothing.
+ * so a stored reference into it would come to read as nothing. `poolOffer`,
+ * given when the round judged the pool's rules, is recorded so that offer is
+ * not made again.
  */
 export function settle(
   rules: readonly CanonicalRule[],
@@ -600,6 +621,7 @@ export function settle(
   judgement: Judgement,
   answered: readonly string[],
   decidedAt: number,
+  poolOffer?: string,
 ): { rules: CanonicalRule[]; entry: HistoryEntry } {
   const proposed = judgement.rules.map(copyRule);
   return {
@@ -607,7 +629,9 @@ export function settle(
     entry: {
       round,
       accepted: judgement.accepted,
-      reason: judgement.reason,
+      reason: poolOffer === undefined
+        ? judgement.reason
+        : `the pool's rules: ${judgement.reason}`,
       proposed,
       refusals: [...judgement.refusals],
       currentF1: judgement.currentF1,
@@ -615,8 +639,48 @@ export function settle(
       heldOut: judgement.heldOut,
       answered: [...answered],
       decidedAt,
+      ...(poolOffer === undefined ? {} : { poolOffer }),
     },
   };
+}
+
+// =============================================================================
+// THE POOL'S RULES
+// =============================================================================
+
+/**
+ * The pool's released rules for this goal, judged as a candidate set by the
+ * same gate as a rewrite, on this person's own held-out items. Null when the
+ * pool releases nothing, when the set is the current one, or when a recorded
+ * round already judged this very set. The pool releases its most-held rules
+ * first, so a release past `MAX_RULES` is cut to its first `MAX_RULES`.
+ */
+export function poolOffer(
+  current: readonly CanonicalRule[],
+  released: readonly PoolRule[] | undefined,
+  heldOut: ReadonlyArray<{ fields: Record<string, string>; label: boolean }>,
+  history: readonly HistoryEntry[],
+): PoolOffer | null {
+  const drafts = (released ?? []).slice(0, MAX_RULES).map((rule) => ({
+    field: rule?.field,
+    pattern: rule?.pattern,
+    predicts: rule?.predicts,
+  }));
+  if (drafts.length === 0) return null;
+  const judgement = judgeProposal(current, { rules: drafts }, heldOut);
+  const keysOf = (rules: readonly CanonicalRule[]) =>
+    rules.map((rule) => rule.key).sort().join(",");
+  if (
+    judgement.refusals.length === 0 &&
+    keysOf(judgement.rules) === keysOf(current)
+  ) {
+    return null;
+  }
+  const key = stableHash(
+    `${keysOf(judgement.rules)}|${judgement.refusals.join("|")}`,
+  );
+  if (history.some((entry) => entry.poolOffer === key)) return null;
+  return { key, judgement };
 }
 
 // =============================================================================

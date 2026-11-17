@@ -1,7 +1,8 @@
 /**
  * Two people, each with their own lo-fi inductor for the same goal, publish
  * to one pool whose threshold is exactly two. The rule both hold is released
- * with its count; the rule only one holds is not.
+ * with its count; the rule only one holds is not; and the release comes back
+ * to each inductor as a candidate set.
  *
  * Patterns under test: ./lofi-inductor.tsx publishing into
  * ../inductor-pool/inductor-pool.tsx
@@ -59,6 +60,16 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       { await: "bob-published" },
       // Both hold `invoice`; only Alice holds `lunch`.
       { assertion: assert(() => invoiceReleased(setup.pool)) },
+      // Alice's inductor offers the pool's release back to her as a
+      // candidate set. With no held-out items of hers it cannot be scored,
+      // so it would not be adopted.
+      {
+        assertion: assert(() =>
+          inductor.poolOffer?.judgement.rules.length === 1 &&
+          inductor.poolOffer?.judgement.rules[0]?.pattern === "invoice" &&
+          inductor.poolOffer?.judgement.accepted === false
+        ),
+      },
     ],
     inductor,
   };

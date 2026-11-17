@@ -40,6 +40,9 @@ import {
   markdownOf,
   newSurprises,
   percent,
+  type PoolOffer,
+  poolOffer,
+  type PoolRule,
   type Proposal,
   type Published,
   REWRITE_SYSTEM,
@@ -63,6 +66,8 @@ export type {
   HistoryEntry,
   Item,
   ItemRow,
+  PoolOffer,
+  PoolRule,
   Published,
   RewriteStatus,
   Summary,
@@ -76,6 +81,8 @@ export type {
 export interface PoolTarget {
   goal: string;
   submit: Stream<PoolSubmission>;
+  /** The rules the pool releases, most-held first. */
+  consensus: PoolRule[];
 }
 
 /** What a pool's `submit` takes: a rule set under a pseudonym. */
@@ -179,6 +186,16 @@ export interface LofiInductorOutput {
   settleRewrite: Stream<void>;
   /** Ask the model again after the rewrite's call failed. */
   retryRewrite: Stream<void>;
+  /**
+   * The pool's released rules for this goal, judged as a candidate set on
+   * this piece's held-out items, or null when there is nothing new to offer.
+   */
+  poolOffer: PoolOffer | null;
+  /**
+   * Record the pool offer's judgement: adopt the pool's rules if they were
+   * accepted, and add the round to the history either way.
+   */
+  settlePoolOffer: Stream<void>;
   /** Publish the current rules for the goal. */
   publish: Stream<void>;
 }
@@ -349,6 +366,47 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     // holds an undefined value does not run.
     const target = pool ?? poolWish.result ?? null;
 
+    // ========================================================================
+    // THE POOL'S RULES: a candidate set, judged like a rewrite
+    // ========================================================================
+
+    // What the pool for this goal releases. A pool for another goal offers
+    // nothing.
+    const releasedHere = computed((): PoolRule[] => {
+      if (target === null || !sameGoal(target.goal ?? "", goal.get())) {
+        return [];
+      }
+      return (target.consensus ?? []).map((rule) => ({
+        field: rule.field,
+        pattern: rule.pattern,
+        predicts: rule.predicts,
+      }));
+    });
+    const offer = computed(() =>
+      poolOffer(
+        rules.get(),
+        releasedHere,
+        heldOutExamples(rows),
+        history.get(),
+      )
+    );
+
+    // Recorded by a send, as a rewrite is, and for the same reasons.
+    const settlePoolOffer = action(() => {
+      const current = offer;
+      if (current === null) return;
+      const next = settle(
+        rules.get(),
+        history.get().length + 1,
+        current.judgement,
+        [],
+        Date.now(),
+        current.key,
+      );
+      if (current.judgement.accepted) rules.set(next.rules);
+      history.push(next.entry);
+    });
+
     const publish = action(() => {
       // An empty set says nothing a pool could count.
       if (rules.get().length === 0) return;
@@ -455,6 +513,28 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         : `No pool for “${snapshot.goal}” found; nothing was sent.`;
     });
     const noRules = computed(() => rules.get().length === 0);
+    const hasOffer = computed(() => offer !== null);
+    const offerLine = computed(() =>
+      offer === null
+        ? ""
+        : `The pool for this goal releases ${offer.judgement.rules.length} ` +
+          `rules. On your held-out items: ${offer.judgement.reason}.`
+    );
+    const offerLines = computed(() =>
+      offer === null ? [] : [
+        ...offer.judgement.rules.map(describeRule),
+        ...offer.judgement.refusals,
+      ]
+    );
+    const offerLabel = computed(() => {
+      if (offer === null) return "";
+      const { accepted, currentF1, proposedF1 } = offer.judgement;
+      return accepted
+        ? `Adopt the pool's rules (F1 ${percent(currentF1)} → ${
+          percent(proposedF1)
+        })`
+        : "Dismiss the pool's rules";
+    });
     const itemLines = computed(() =>
       [...rows].reverse().map((row) => ({
         text: Object.values(row.fields).join(" · "),
@@ -501,6 +581,17 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
                       <cf-button onClick={() => retryRewrite.send()}>
                         Try again
                       </cf-button>
+                    )
+                    : null}
+                  {hasOffer
+                    ? (
+                      <cf-vstack gap="1">
+                        <span>{offerLine}</span>
+                        {offerLines.map((line) => <code>{line}</code>)}
+                        <cf-button onClick={() => settlePoolOffer.send()}>
+                          {offerLabel}
+                        </cf-button>
+                      </cf-vstack>
                     )
                     : null}
                   <cf-hstack gap="2" align="center">
@@ -569,6 +660,8 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       removeItem,
       settleRewrite,
       retryRewrite,
+      poolOffer: offer,
+      settlePoolOffer,
       publish,
     };
   },

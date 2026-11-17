@@ -62,6 +62,13 @@ agent).
    (a refusal is thrown in the pool's handler, and a contribution is
    confidential to the pool).
 
+6. The pool's release comes back. The inductor reads the rules the pool for its
+   goal releases (`consensus`, public by the pool's policy) and offers them as a
+   candidate set, judged by the same gate as a rewrite on the person's own
+   held-out items (`poolOffer`). Recording it takes a send of `settlePoolOffer`:
+   "Adopt the pool's rules (F1 a → b)" or "Dismiss the pool's rules". A set
+   already judged is not offered again; a new release is.
+
 Rules use a restricted regex grammar (no backreferences, no lookaround) and are
 compared by a canonical form, so two people who learned the same rule in
 slightly different spellings count as proposing the same rule. Personal details
@@ -126,8 +133,8 @@ Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
   piece's contributions for two questions; the items stay, and the hi-fi model
   labels them for the new goal.
 - Agents drive it through its streams: `setGoal`, `submitItem`, `removeItem`,
-  `settleRewrite`, `retryRewrite`, and `publish`. The pool's are `submit` and
-  `withdraw`.
+  `settleRewrite`, `retryRewrite`, `settlePoolOffer`, and `publish`. The pool's
+  are `submit` and `withdraw`.
 - Choose the hi-fi model with `hifiModel`; omitted, the deployment's default
   `generateObject` model answers.
 

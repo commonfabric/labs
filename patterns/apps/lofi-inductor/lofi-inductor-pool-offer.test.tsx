@@ -1,0 +1,165 @@
+/**
+ * The payoff of the pool: an inductor offers the pool's released rules for
+ * its goal as a candidate set, judged on its own held-out items by the same
+ * gate as a rewrite, and adopted or dismissed the same way. A better set is
+ * adopted; a worse one is dismissed, and neither is offered again; a pool
+ * for another goal offers nothing.
+ *
+ * Patterns under test: ./lofi-inductor.tsx, reading a pool's release. The
+ * pool here is a stand-in that releases a given set; a real pool's release
+ * takes several contributors (../inductor-pool/inductor-pool-multi-user
+ * .test.tsx).
+ */
+import {
+  action,
+  assert,
+  type Default,
+  handler,
+  NAME,
+  pattern,
+  type Stream,
+  TESTS,
+  UI,
+  type VNode,
+} from "commonfabric";
+import { hasText } from "../../tools/test-support/vnode-helpers.ts";
+import {
+  HELD_OUT_ITEMS,
+  HIFI_MOCKS,
+  INVOICE_ONLY,
+  TRAINING_ITEMS,
+} from "./lofi-inductor-test-fixture.ts";
+import LofiInductor, {
+  type PoolRule,
+  type PoolSubmission,
+} from "./lofi-inductor.tsx";
+
+const GOAL = "Is this email a bill?";
+
+export const llmMocks = HIFI_MOCKS;
+
+const ignore = handler<PoolSubmission, Record<string, never>>(() => {});
+
+interface StandInInput {
+  goal: Default<string, "">;
+  consensus: Default<PoolRule[], []>;
+}
+
+interface StandInOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  goal: string;
+  consensus: PoolRule[];
+  submit: Stream<PoolSubmission>;
+}
+
+/** A pool that releases the set it is given and ignores submissions. */
+const StandInPool = pattern<StandInInput, StandInOutput>(
+  ({ goal, consensus }) => ({
+    [NAME]: "Stand-in pool",
+    [UI]: <div />,
+    goal,
+    consensus,
+    submit: ignore({}),
+  }),
+);
+
+const BETTER = {
+  field: "subject",
+  pattern: "invoice|\\bbill\\b",
+  predicts: true,
+};
+const WORSE = { field: "subject", pattern: "lunch", predicts: true };
+
+const ITEMS = [...HELD_OUT_ITEMS, ...TRAINING_ITEMS];
+
+const inductor = (pool: StandInOutput) =>
+  LofiInductor({
+    goal: GOAL,
+    items: [],
+    rules: INVOICE_ONLY,
+    history: [],
+    published: null,
+    // No rewrite here: only the pool's rules are proposed.
+    rewriteAfter: 100,
+    heldOutPercent: 30,
+    pool,
+  });
+
+export default pattern(() => {
+  const goodPool = StandInPool(
+    { goal: ` ${GOAL.toLowerCase()}`, consensus: [BETTER] } as Parameters<
+      typeof StandInPool
+    >[0],
+  );
+  const badPool = StandInPool(
+    { goal: GOAL, consensus: [WORSE] } as Parameters<typeof StandInPool>[0],
+  );
+  const otherPool = StandInPool(
+    { goal: "Is this email a newsletter?", consensus: [BETTER] } as Parameters<
+      typeof StandInPool
+    >[0],
+  );
+  const adopter = inductor(goodPool);
+  const dismisser = inductor(badPool);
+  const elsewhere = inductor(otherPool);
+
+  const action_submit_items = action(() => {
+    ITEMS.forEach((item) => adopter.submitItem.send(item));
+    ITEMS.forEach((item) => dismisser.submitItem.send(item));
+    ITEMS.forEach((item) => elsewhere.submitItem.send(item));
+  });
+  const action_settle = action(() => {
+    adopter.settlePoolOffer.send();
+    dismisser.settlePoolOffer.send();
+    elsewhere.settlePoolOffer.send();
+  });
+
+  // Judged on the inductor's own held-out items, before anything changes.
+  const assert_offered = assert(() =>
+    adopter.poolOffer?.judgement.accepted === true &&
+    adopter.poolOffer?.judgement.proposedF1 === 1 &&
+    dismisser.poolOffer?.judgement.accepted === false &&
+    elsewhere.poolOffer === null &&
+    adopter.rules[0]?.pattern === "invoice" && adopter.history.length === 0
+  );
+  const assert_view_offers = assert(() =>
+    hasText(adopter[UI], "Adopt the pool's rules (F1 67% → 100%)") &&
+    hasText(dismisser[UI], "Dismiss the pool's rules")
+  );
+
+  const assert_adopted = assert(() =>
+    adopter.rules.length === 1 &&
+    adopter.rules[0]?.pattern === "\\bbill\\b|invoice" &&
+    adopter.history.length === 1 && adopter.history[0]?.accepted === true &&
+    typeof adopter.history[0]?.poolOffer === "string" &&
+    adopter.poolOffer === null
+  );
+  const assert_dismissed = assert(() =>
+    dismisser.rules[0]?.pattern === "invoice" &&
+    dismisser.history.length === 1 &&
+    dismisser.history[0]?.accepted === false &&
+    dismisser.poolOffer === null
+  );
+  const assert_elsewhere_untouched = assert(() =>
+    elsewhere.history.length === 0 && elsewhere.rules[0]?.pattern === "invoice"
+  );
+
+  return {
+    [TESTS]: [
+      { action: action_submit_items },
+      { settle: true },
+      { assertion: assert_offered },
+      { render: adopter[UI] },
+      { render: dismisser[UI] },
+      { assertion: assert_view_offers },
+      { action: action_settle },
+      { assertion: assert_adopted },
+      { assertion: assert_dismissed },
+      { assertion: assert_elsewhere_untouched },
+    ],
+    adopter,
+    dismisser,
+    elsewhere,
+  };
+});

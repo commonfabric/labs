@@ -18,6 +18,7 @@ import {
   MIN_F1_GAIN,
   MIN_HELD_OUT,
   newSurprises,
+  poolOffer,
   rewriteRequest,
   rewriteStatus,
   sameGoal,
@@ -426,6 +427,46 @@ describe("rewrite gating", () => {
       training,
     );
     expect(ready.status === "ready" && ready.answered).toEqual(["mail-1"]);
+  });
+});
+
+describe("poolOffer", () => {
+  const heldOut = heldOutExamples(HELD_OUT_ROWS);
+  const current = [rule("subject", "invoice")];
+  const better = {
+    field: "subject",
+    pattern: "invoice|\\bbill\\b",
+    predicts: true,
+  };
+
+  it("judges the pool's rules on the held-out items, as a rewrite", () => {
+    const offer = poolOffer(current, [better], heldOut, []);
+    expect(offer?.judgement.accepted).toBe(true);
+    expect(offer?.judgement.proposedF1).toBe(1);
+    const worse = poolOffer(
+      current,
+      [{ field: "subject", pattern: "lunch", predicts: true }],
+      heldOut,
+      [],
+    );
+    expect(worse?.judgement.accepted).toBe(false);
+  });
+
+  it("offers nothing empty, nothing current, and nothing already judged", () => {
+    expect(poolOffer(current, [], heldOut, [])).toBeNull();
+    expect(poolOffer(current, undefined, heldOut, [])).toBeNull();
+    expect(poolOffer(current, [current[0]], heldOut, [])).toBeNull();
+    const offer = poolOffer(current, [better], heldOut, [])!;
+    const judged = settle(current, 1, offer.judgement, [], 0, offer.key).entry;
+    expect(judged.poolOffer).toBe(offer.key);
+    expect(judged.reason).toMatch(/^the pool's rules: /);
+    expect(poolOffer(current, [better], heldOut, [judged])).toBeNull();
+    // A different release is a new offer
+    expect(
+      poolOffer(current, [better, { ...better, pattern: "receipt" }], heldOut, [
+        judged,
+      ]),
+    ).not.toBeNull();
   });
 });
 
