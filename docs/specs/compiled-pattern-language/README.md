@@ -480,7 +480,15 @@ which element keys what they hold is kept
   an array of plain values in place, and a move still evaluates
   nothing. A cone that passes such an element on stores that
   reference and no copy. After the element is removed the reference
-  reads as nothing, which is a deliberate difference from today. Over
+  reads as nothing, which is a deliberate difference from today. A
+  write through the reference that changes the value re-keys the
+  element in the same transaction, and what its key holds moves with
+  it. A function body that reads such a value holds a copy and stores
+  the value where it writes it elsewhere, as today. `items.key(i)` is
+  a handle by position that nothing rewrites to a reference to the
+  element, over all three kinds of source, and it is equal to the
+  reference of the element that stands at `i` at the moment of the
+  comparison. Over
   an array of references a reference to an element is the link to its
   cell ([plan format and label templates](plan-and-label-templates.md),
   §1.3).
@@ -493,8 +501,14 @@ which element keys what they hold is kept
   stand in a collection and the first is removed, the state that remains
   is that of the first occurrence
   ([language subset](language-subset.md), §4.4.1).
+- A collection among the children of a view node is stored as one
+  nested child, with its elements at `children/<n>/*`, over an array
+  of references, over an array of plain values in place, and over the
+  result of another per-element construct alike
+  ([execution and storage](execution-and-storage.md), §4.2).
 - The removal of an element drops the cone instances of its key and
-  deletes nothing that is stored under the key. An element that
+  deletes nothing that is stored under the key. An event for a stream
+  of the element's body is refused while the key is away. An element that
   returns under the same key reads what its state cells held, over an
   array of references, over an array of plain values in place, and
   over the result of another per-element construct alike. Nothing in
@@ -1171,6 +1185,19 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   carries the label of the element and of the collection's array; and
   the comparison of a handle by position with such a reference gives
   "not equal" where the parent cannot be read.
+- **A pattern call that is an instance of its own.** The modifier
+  `asInstance()` and what it does in a per-element body are ruled.
+  Two things are assumed: that a function body which stores, outside
+  the collection, a reference to the result of a pattern call written
+  in a per-element body without the modifier is a compile error, and
+  that the modifier is legal outside a per-element body
+  ([language subset](language-subset.md), §13, questions 41 and 42).
+  Whether an author can declare a key field for an array of plain
+  values that one computation generates whole is not ruled either
+  ([plan format and label templates](plan-and-label-templates.md), §8,
+  question 122). Each is the same over the three cases of a source,
+  except the key field, which concerns an array of plain values in
+  place alone.
 - **Element bodies and equal elements.** The rulings leave five things
   open ([plan format and label templates](plan-and-label-templates.md),
   §8, questions 36, 90, 101, 105, and 111). By ruling each says which case
