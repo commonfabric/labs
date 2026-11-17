@@ -4365,7 +4365,7 @@ export class Runner {
     resultCell: Cell<R>,
     options: { preserveName: boolean; setupBegan: number },
   ): void {
-    const { result, fabricResult, changed, nameCarried } = this
+    const { result, fabricResult, codeDocuments, changed, nameCarried } = this
       .#nextResultProjection(
         tx,
         pattern,
@@ -4413,6 +4413,9 @@ export class Runner {
       const writableResultCell = pattern.resultSchema === undefined
         ? resultCell.withTx(tx)
         : resultCell.withTx(tx).asSchema(pattern.resultSchema);
+      for (const code of codeDocuments) {
+        tx.stageContentAddressedDocument(resultLink.space, code);
+      }
       // The result root marks the whole result document as generated: setup
       // rewrites the complete projection.
       writableResultCell.setRawUntyped(fabricResult, false, "output");
@@ -4423,7 +4426,10 @@ export class Runner {
    * The projection setting `pattern` up stores on `resultCell`, beside the
    * one stored now: `result` is the projection as bound to the document,
    * which the policy-input recorder walks; `fabricResult` is what a write
-   * stores; and `changed` is whether that differs from what is stored, which
+   * stores, with each string a data-file reader returned written as a link to
+   * a code document, and `codeDocuments` the strings those links name, whose
+   * documents a write stages; and `changed` is whether that differs from what
+   * is stored, which
    * is the one condition under which setup writes it. `nameCarried` is
    * whether the projection's name is the one stored rather than the
    * pattern's. `argumentCellLink` is the argument link the projection binds
@@ -4439,6 +4445,7 @@ export class Runner {
   ): {
     result: R;
     fabricResult: FabricValue;
+    codeDocuments: readonly string[];
     changed: boolean;
     nameCarried: boolean;
   } {
@@ -4497,12 +4504,20 @@ export class Runner {
     // artifact is not a `FabricValue`, so it is replaced before the
     // conversion. That keeps the gate below comparing what a write would
     // actually store, which is the whole point of converting first.
-    const fabricResult = fabricFromConvertibleJsValue(
-      flattenBuilderArtifacts(result),
-    );
+    //
+    // A data-file string becomes a link here, on the copy a write stores, and
+    // not in `result`: a link to a code document records no policy input, and
+    // the comparison below has to see the link a write would store.
+    const { value: linked, documents: codeDocuments } = this.#runtime.harness
+      .dataFileStrings.linkInto(
+        flattenBuilderArtifacts(result),
+        resultCell.getAsNormalizedFullLink().space,
+      );
+    const fabricResult = fabricFromConvertibleJsValue(linked);
     return {
       result,
       fabricResult,
+      codeDocuments,
       changed: !valueEqualByWalk(fabricResult, previousResult),
       nameCarried,
     };

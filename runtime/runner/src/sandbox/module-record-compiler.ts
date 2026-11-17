@@ -15,6 +15,7 @@ import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type ts from "typescript";
 
+import type { DataFileStrings } from "../data-file-strings.ts";
 import { compilerStack } from "../harness/deferred-compiler-stack.ts";
 import {
   computeModuleHashes,
@@ -497,6 +498,12 @@ export interface CompileSourcesOptions {
    * Omitted, a source's name is its stored path.
    */
   storedNameFor?: (name: string) => string;
+
+  /**
+   * Where each module's `dataFile()` reader records the strings it returns,
+   * so that setup can store them by reference. Omitted, nothing is recorded.
+   */
+  dataFileStrings?: DataFileStrings;
 }
 
 export interface CompiledModuleGraph {
@@ -767,12 +774,16 @@ type NamespaceBinder = (
  * The read is a map lookup: the closure is fully loaded before any module
  * executes, so it needs no storage access and cannot be asynchronous.
  *
+ * Each string a read returns is recorded in `dataFileStrings`, when one is
+ * given, so that setup can store it by reference.
+ *
  * A graph carrying no data files hands every namespace straight through, and a
  * read reaches the builder's placeholder, which reports that the load attached
  * nothing.
  */
 function dataFileBinding(
   dataByPath: ReadonlyMap<string, string>,
+  dataFileStrings: DataFileStrings | undefined,
 ): (moduleName: string) => NamespaceBinder {
   if (dataByPath.size === 0) {
     const passThrough: NamespaceBinder = (namespace) => namespace;
@@ -783,7 +794,10 @@ function dataFileBinding(
     const read = freezeSandboxValue((path: string): string => {
       const resolved = resolveDataFilePath(path, moduleName);
       const bytes = dataByPath.get(resolved);
-      if (bytes !== undefined) return bytes;
+      if (bytes !== undefined) {
+        dataFileStrings?.record(bytes);
+        return bytes;
+      }
       // The message states what is attached and stops there. How a caller
       // attaches one differs by the surface driving the compile — a CLI flag, a
       // scenario field, an argument to `resolveLocalProgram` — and the runtime
@@ -814,7 +828,7 @@ export function compileSourcesToRecords(
 ): CompiledModuleGraph {
   const runtimeModules = options.runtimeModules ?? {};
   const dataByPath = new Map(options.dataFiles ?? []);
-  const bindDataFileFor = dataFileBinding(dataByPath);
+  const bindDataFileFor = dataFileBinding(dataByPath, options.dataFileStrings);
   const storedNameFor = options.storedNameFor ?? ((name: string) => name);
   // Identities are computed prefix-free (see computeModuleIdentities) so
   // `cf:module/<hash>` is entry-point independent and dedupes across programs.
@@ -1170,7 +1184,10 @@ export function cachedModuleSourceNames(
  */
 export function buildRecordsFromCompiled(
   modules: readonly CachedCompiledModule[],
-  options: { runtimeModules?: Record<string, string[]> } = {},
+  options: {
+    runtimeModules?: Record<string, string[]>;
+    dataFileStrings?: DataFileStrings;
+  } = {},
 ): CompiledModuleGraph {
   const runtimeModules = options.runtimeModules ?? {};
   const specifierOf = (identity: string) => `cf:module/${identity}`;
@@ -1184,7 +1201,7 @@ export function buildRecordsFromCompiled(
   });
   const byIdentity = new Map(moduleEntries.map((m) => [m.identity, m]));
   const sourceNames = cachedModuleSourceNames(moduleEntries);
-  const bindDataFileFor = dataFileBinding(dataByPath);
+  const bindDataFileFor = dataFileBinding(dataByPath, options.dataFileStrings);
 
   // Fix B: use the record surface persisted on the compiled doc; parse the body
   // only when it wasn't precomputed. A module carries the full surface (a warm
