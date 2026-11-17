@@ -26,18 +26,24 @@ import {
   rollbackEntry,
   rollbackLines,
 } from "../lib/pattern-history.ts";
-import { entrySlot, lineageForEntry } from "../lib/pattern-versions.ts";
+import {
+  entrySlot,
+  lineageForEntry,
+  type SlotSources,
+} from "../lib/pattern-versions.ts";
 import {
   chooseProfile,
   NamingError,
   namingWarning,
   profileProof,
 } from "../lib/pattern-named.ts";
-import { listProfiles } from "../lib/profile.ts";
+import { type ListedProfile, listProfiles } from "../lib/profile.ts";
 import type { DIDKey } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import {
   publishPatternFromDisk,
+  type PublishReport,
   publishReportLines,
 } from "../lib/pattern-publish.ts";
 import { loadPieces } from "../lib/piece.ts";
@@ -136,25 +142,29 @@ const toolshedGenerator = (apiUrl: string): ObjectGenerator => {
 /** What `cf pattern publish` takes beyond what `share` does. */
 interface NamedPublishCLIOptions extends PublishCLIOptions {
   profile?: string;
-  yes?: boolean;
+
+  /** The profile name the person agreed to show, which must match. */
+  as?: string;
 }
 
 /**
  * Checks and shares `entry`, printing the report; with `naming`, then names
- * its lineage under that profile when the share went through.
+ * the lineage the share was kept in, once the report is out, so a naming
+ * that fails never hides what the share did.
  */
 async function share(
   options: PublishCLIOptions,
   entry: string,
   naming?: (
     client: PatternIndexClient,
-    signer: DIDKey,
+    report: Extract<PublishReport, { outcome: "shared" }>,
   ) => Promise<string>,
 ): Promise<void> {
   const config = parseSpaceOptions(options);
   const baseUrl = resolvePatternIndexUrl(options.patternIndexUrl);
   const signer = await loadIdentity(config.identity);
-  const client = await openPatternIndexClient({ baseUrl, signer });
+  const store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
+  const client = await openPatternIndexClient({ baseUrl, signer, store });
   const pieces = await loadPieces(config);
   try {
     const runtime = pieces.runtime;
@@ -182,7 +192,7 @@ async function share(
           ? {}
           : { keywords: listFlag(options.keywords) }),
         allowDirty: !!options.allowDirty,
-        slot: await entrySlot(absPath(entry)),
+        slot: await entrySlot(absPath(entry), slotSources(store)),
         skipLocalCheck: !!options.skipLocalCheck,
         ...(options.remixedFrom === undefined
           ? {}
@@ -201,23 +211,30 @@ async function share(
         uncommitted: gitUncommitted,
         readTextFile: (path) => Deno.readTextFile(path),
         writeTextFile: (path, contents) => Deno.writeTextFile(path, contents),
-        store: new PatternIndexStore(patternIndexStoreDir(baseUrl)),
+        store,
       },
     );
-    const named = naming !== undefined && report.outcome === "shared"
-      ? await naming(client, signer.did())
-      : undefined;
-    render(
-      options.json
-        ? { ...report, ...(named === undefined ? {} : { named }) }
-        : [
-          ...publishReportLines(report),
-          ...(named === undefined ? [] : [named]),
-        ]
-          .join("\n"),
-      { json: options.json },
-    );
-    if (report.outcome === "blocked") Deno.exitCode = 1;
+    if (naming === undefined || report.outcome !== "shared") {
+      render(
+        options.json ? report : publishReportLines(report).join("\n"),
+        { json: options.json },
+      );
+      if (report.outcome === "blocked") Deno.exitCode = 1;
+      return;
+    }
+    if (!options.json) render(publishReportLines(report).join("\n"));
+    let named: string;
+    try {
+      named = await naming(client, report);
+    } catch (error) {
+      named = `Shared, but not published under your name: ${
+        describeFailure(error)
+      }`;
+      Deno.exitCode = 1;
+    }
+    render(options.json ? { ...report, named } : named, {
+      json: options.json,
+    });
   } finally {
     await pieces.dispose();
   }
@@ -225,8 +242,10 @@ async function share(
 
 /**
  * `cf pattern publish`: shares `entry` as `share` does, then names the
- * person as its author under one of their profiles. Says what that reveals
- * first, and names nothing without `--yes`.
+ * person as its author under one of their profiles. It names nothing unless
+ * `--as` repeats the profile's name, so whoever runs it has had to read the
+ * name it shows, and an agent has to have asked the person. Everything that
+ * can refuse the naming is checked before anything is shared.
  */
 async function publishNamed(
   options: NamedPublishCLIOptions,
@@ -234,45 +253,66 @@ async function publishNamed(
 ): Promise<void> {
   const config = parseSpaceOptions(options);
   const identity = await loadIdentity(config.identity);
-  const profiles = await listProfiles({ ...config, space: identity.did() });
-  let chosen;
+  const refuse = (message: string) => {
+    console.error(message);
+    Deno.exitCode = 1;
+  };
+  let proof: string[];
+  let chosen: ListedProfile;
   try {
+    const profiles = await listProfiles({ ...config, space: identity.did() });
     chosen = chooseProfile(profiles, options.profile);
+    if (options.as !== chosen.name) {
+      refuse(
+        `${
+          namingWarning(chosen.name)
+        } Nothing was published. Ask the person whether to show it; if they agree, run this again with --as ${
+          JSON.stringify(chosen.name)
+        }.`,
+      );
+      return;
+    }
+    proof = await profileProof(
+      {
+        space: chosen.space,
+        piece: chosen.id,
+        displayName: chosen.name,
+        delegations: await recordedDelegations(config, chosen.space),
+      },
+      identity.did(),
+    );
   } catch (error) {
     if (!(error instanceof NamingError)) throw error;
-    console.error(error.message);
-    Deno.exitCode = 1;
+    refuse(`${error.message} Nothing was published.`);
     return;
   }
-  console.error(namingWarning(chosen.name));
-  if (!options.yes) {
-    console.error(
-      `Nothing was published. Pass --yes to publish ${entry} under "${chosen.name}".`,
-    );
-    Deno.exitCode = 1;
-    return;
-  }
-  const delegations = await recordedDelegations(config, chosen.space);
-  await share(options, entry, async (client, signer) => {
-    const lineage = await lineageForEntry(client, absPath(entry));
-    if (lineage === undefined) {
-      return `Not published under your name: the index keeps no versions of ${entry}.`;
+  const sources = slotSources(
+    new PatternIndexStore(
+      patternIndexStoreDir(resolvePatternIndexUrl(options.patternIndexUrl)),
+    ),
+  );
+  await share(options, entry, async (client, report) => {
+    // The lineage the share landed in, which the index may have found by
+    // an earlier publication rather than by this file's slot.
+    const lineageId = report.lineageId ??
+      (await lineageForEntry(client, absPath(entry), sources))?.lineageId;
+    if (lineageId === undefined) {
+      throw new Error(`the index keeps no versions of ${entry}`);
     }
-    const profile = {
-      space: chosen.space,
-      piece: chosen.id,
-      displayName: chosen.name,
-      delegations,
-    };
     const { published } = await client.publishLineage({
-      lineageId: lineage.lineageId,
-      profile: { space: profile.space, piece: profile.piece },
-      displayName: profile.displayName,
-      profileProof: await profileProof(profile, signer),
+      lineageId,
+      profile: { space: chosen.space, piece: chosen.id },
+      displayName: chosen.name,
+      profileProof: proof,
     });
     return `Published under "${published.displayName}"; cf pattern unpublish ${entry} stops showing it.`;
   });
 }
+
+/** Where a lineage slot's inputs come from: `store`'s key, and git. */
+const slotSources = (store: PatternIndexStore): SlotSources => ({
+  pathKey: () => store.slotKey(),
+});
 
 /** The delegations Home records over the profile space `space`. */
 async function recordedDelegations(
@@ -294,11 +334,18 @@ interface IndexCLIOptions {
   json?: boolean;
 }
 
-/** The client and store for the index `options` names, signing as its identity. */
+/**
+ * The client for the index `options` names, signing as its identity, and
+ * where that index's lineage slots get their inputs.
+ */
 async function indexFor(options: IndexCLIOptions) {
   const signer = await loadIdentity(requireIdentityPath(options));
   const baseUrl = resolvePatternIndexUrl(options.patternIndexUrl);
-  return await openPatternIndexClient({ baseUrl, signer });
+  const store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
+  return {
+    client: await openPatternIndexClient({ baseUrl, signer, store }),
+    sources: slotSources(store),
+  };
 }
 
 /**
@@ -320,7 +367,7 @@ async function history(
   entry: string | undefined,
 ): Promise<void> {
   await ownerOnly(async () => {
-    const client = await indexFor(options);
+    const { client, sources } = await indexFor(options);
     if (entry === undefined) {
       const { lineages } = await client.listLineages();
       render(options.json ? lineages : lineageLines(lineages).join("\n"), {
@@ -328,7 +375,7 @@ async function history(
       });
       return;
     }
-    const { rows } = await entryHistory(client, absPath(entry));
+    const { rows } = await entryHistory(client, absPath(entry), sources);
     render(options.json ? rows : historyLines(entry, rows).join("\n"), {
       json: options.json,
     });
@@ -341,12 +388,14 @@ async function rollback(
   version: string,
 ): Promise<void> {
   await ownerOnly(async () => {
+    const { client, sources } = await indexFor(options);
     const report = await rollbackEntry(
       absPath(entry),
       version,
       { force: !!options.force },
       {
-        client: await indexFor(options),
+        client,
+        sources,
         readTextFile: (path) => Deno.readTextFile(path),
         writeTextFile: (path, contents) => Deno.writeTextFile(path, contents),
       },
@@ -363,8 +412,8 @@ async function unpublish(
   entry: string,
 ): Promise<void> {
   await ownerOnly(async () => {
-    const client = await indexFor(options);
-    const lineage = await lineageForEntry(client, absPath(entry));
+    const { client, sources } = await indexFor(options);
+    const lineage = await lineageForEntry(client, absPath(entry), sources);
     if (lineage === undefined) {
       throw new PatternHistoryError(`No versions of ${entry} are kept.`);
     }
@@ -497,16 +546,19 @@ export const pattern = new Command()
           "Publish a pattern under your name: shares it as cf pattern share " +
             "does, then shows one of your profiles as its author to every " +
             "member. Only this pattern is named; your other patterns stay " +
-            "anonymous and unlinked. Says what it reveals and names nothing " +
-            "without --yes.",
+            "anonymous and unlinked. Says what it reveals, and names nothing " +
+            "unless --as repeats the name it shows.",
         )
         .option(
           "--profile <space:string>",
           "The profile to publish under, by its space; the one #profile answers with by default.",
         )
-        .option("--yes", "Publish under your name, having read what it shows.")
+        .option(
+          "--as <name:string>",
+          "The profile's name, repeated to confirm the person agreed to show it; nothing is named without it.",
+        )
         .example(
-          cliText("cf pattern publish ./bins.tsx --yes"),
+          cliText('cf pattern publish ./bins.tsx --as "Sam Lee"'),
           "Share ./bins.tsx and name you as its author.",
         ),
       { global: false },

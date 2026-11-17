@@ -159,6 +159,7 @@ import {
 import {
   type DeployedSource,
   recordDeployedVersion,
+  versionJson,
   versionLine,
   type VersionOutcome,
 } from "../lib/pattern-versions.ts";
@@ -5080,16 +5081,24 @@ export async function restoreFromCommand(
 
 /**
  * Keeps a deploy of the person's own source as a private version in the
- * pattern index named by `CF_PATTERN_INDEX_URL` (the deployment's by
- * default), signing as the deploying identity. Never throws.
+ * pattern index `CF_PATTERN_INDEX_URL` names, else the default index,
+ * signing as the deploying identity. Never throws, synchronously or not:
+ * the deploy it follows has committed, and an index that is misconfigured
+ * or unreachable must not turn that into a failure.
  */
-export function recordVersionInIndex(
+export async function recordVersionInIndex(
   identity: string,
   deployed: DeployedSource,
 ): Promise<VersionOutcome> {
-  const baseUrl = resolvePatternIndexUrl(undefined);
-  const store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
-  return recordDeployedVersion(deployed, {
+  let baseUrl: string;
+  let store: PatternIndexStore;
+  try {
+    baseUrl = resolvePatternIndexUrl(undefined);
+    store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
+  } catch (error) {
+    return { status: "failed", reason: describeFailure(error) };
+  }
+  return await recordDeployedVersion(deployed, {
     store,
     openClient: async () =>
       openPatternIndexClient({
@@ -5103,7 +5112,11 @@ export function recordVersionInIndex(
 
 /**
  * The version a deploy is recording, started from `onDeployed` once the
- * deploy commits; `settle` waits for it and prints its one line, if any.
+ * deploy commits; `settle` waits for it, prints its one line, if any, and
+ * answers the outcome (`undefined` when nothing was deployed). The deploy
+ * has committed by then, so the index adds latency to the command's exit
+ * and never changes its outcome; a hung index connection holds the exit
+ * for as long as the operating system keeps the connection open.
  */
 function versionRecorder(
   record: (deployed: DeployedSource) => Promise<VersionOutcome>,
@@ -5112,7 +5125,7 @@ function versionRecorder(
   print: (line: string) => void,
 ): {
   onDeployed: (deployed: DeployedProgram) => void;
-  settle: () => Promise<void>;
+  settle: () => Promise<VersionOutcome | undefined>;
 } {
   let pending: Promise<VersionOutcome> | undefined;
   return {
@@ -5124,9 +5137,11 @@ function versionRecorder(
       });
     },
     settle: async () => {
-      if (pending === undefined) return;
-      const line = versionLine(await pending);
+      if (pending === undefined) return undefined;
+      const outcome = await pending;
+      const line = versionLine(outcome);
       if (line !== undefined) print(line);
+      return outcome;
     },
   };
 }
@@ -5282,17 +5297,23 @@ export async function newPieceFromCommand(
     },
   );
   // `--json` is the machine surface: one object naming the piece and, for a
-  // piece from the index that has one, the pattern's display name.
+  // piece from the index that has one, the pattern's display name, and for
+  // one from a file, what became of its private version.
   const print = deps.render ?? render;
   if (options.json) {
+    const kept = await version?.settle();
     print(
-      { pieceId, ...(name === undefined ? {} : { name }) },
+      {
+        pieceId,
+        ...(name === undefined ? {} : { name }),
+        ...(kept === undefined ? {} : { version: versionJson(kept) }),
+      },
       { json: true },
     );
   } else {
     print(pieceId);
+    await version?.settle();
   }
-  await version?.settle();
   if ("patternId" in entry) {
     await (deps.recordIndexedPiece ?? recordIndexedPiece)(
       entry.patternIndexUrl,

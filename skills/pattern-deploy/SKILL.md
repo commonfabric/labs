@@ -79,19 +79,20 @@ deno task cf pattern share patterns/[name]/main.tsx --test patterns/[name]/main.
 ```
 
 Sharing is anonymous: others see a pseudonym of this pattern alone.
-`cf pattern publish` instead shows the person's name, which cannot be unseen, so
-run it only when they ask, and pass `--yes` only after telling them that. The
-person joins once by piping their invite link to `cf index join` (the link
-carries a secret; keep it off the command line). A second machine does not
-redeem another invite: the first runs `cf delegation issue --index --to <DID>`
-and the second `cf index join --chain <file>`. Sharing checks the pattern for
-personal details and may rewrite the files into a general version; when
-`localCheck.applied` is `true`, tell the person what changed (`git diff`, or the
-kept version that `cf pattern rollback` restores), and update the deployed piece
-with the rewritten files (`cf piece setsrc`, below) so it runs the source the
-index shared. `outcome: "blocked"` shared nothing, and `next` says what to do
-before running it again. The rest is in `runtime/cli/README.md`, "Keeping,
-sharing and publishing in the pattern index".
+`cf pattern publish` instead shows the person's name, which cannot be unseen:
+run it only when they ask, and pass `--as "<name>"` only after they agree to the
+name it prints. The person joins once by piping their invite link to
+`cf index join` (the link carries a secret; keep it off the command line). A
+second machine does not redeem another invite: the first runs
+`cf delegation issue --index --to <DID>` and the second
+`cf index join --chain <file>`. Sharing checks the pattern for personal details
+and may rewrite the files into a general version; when `localCheck.applied` is
+`true`, tell the person what changed (`git diff`, or the kept version that
+`cf pattern rollback` restores), and update the deployed piece with the
+rewritten files (`cf piece setsrc`, below) so it runs the source the index
+shared. `outcome: "blocked"` shared nothing, and `next` says what to do before
+running it again. The rest is in `runtime/cli/README.md`, "Keeping, sharing and
+publishing in the pattern index".
 
 **Update deployed pattern (all subsequent iterations):**
 

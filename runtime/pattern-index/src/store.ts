@@ -68,6 +68,7 @@ const MEMBERSHIP = "membership.json";
 const PUBLISHED = "published.json";
 const PENDING_MOVE = "pending-root-move";
 const NOTED_NOT_JOINED = "noted-not-joined";
+const SLOT_KEY = "slot.key";
 
 /**
  * The directory every index's store lives under, one subdirectory per index
@@ -249,6 +250,30 @@ export class PatternIndexStore {
       return;
     }
     await Deno.writeTextFile(path, `${cid}\n`, { mode: 0o600 });
+  }
+
+  /**
+   * The secret this machine keys lineage slots of files outside a git
+   * checkout with, made on first use, so the index cannot confirm a guessed
+   * path from a slot. It never leaves this directory.
+   */
+  async slotKey(): Promise<Uint8Array> {
+    await this.#ensureDir();
+    const path = join(this.#dir, SLOT_KEY);
+    try {
+      return await Deno.readFile(path);
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+    }
+    const key = crypto.getRandomValues(new Uint8Array(32));
+    try {
+      await Deno.writeFile(path, key, { createNew: true, mode: 0o600 });
+      return key;
+    } catch (error) {
+      // Another process made it first; theirs is the one kept.
+      if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
+      return await Deno.readFile(path);
+    }
   }
 
   /**

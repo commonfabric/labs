@@ -311,8 +311,11 @@ export interface SetPiecePatternOptions {
 export interface DeployedProgram {
   program: RuntimeProgram;
 
-  /** Absent when the deploy's pattern pointer could not be read back. */
-  patternId?: string;
+  /**
+   * Reads the pattern id the deploy committed; `undefined` when it cannot be
+   * read back. Lazy, so a caller that records nothing never pays the read.
+   */
+  patternId: () => Promise<string | undefined>;
 }
 
 export interface GetCellValueOptions {
@@ -2163,20 +2166,20 @@ export async function newPieceWithReceipt(
           ),
       ),
     };
-  // Told only once the piece exists, with the pattern id its pointer reads
-  // back; a read that fails leaves the id out rather than failing a creation
-  // that succeeded.
-  const deployedFrom = async (pieceId: string): Promise<void> => {
+  // Told only once the piece exists. The pattern id is what its pointer
+  // reads back, read only when the caller asks; a read that fails answers no
+  // id rather than failing a creation that succeeded.
+  const deployedFrom = (pieceId: string): void => {
     if (
       options?.onDeployed === undefined || indexed === undefined ||
       "patternId" in entry
     ) return;
-    const patternId = await pieces.get(pieceId, false).then(
-      (piece) => piece.getPatternRef(),
-    ).then((ref) => ref?.identity, () => undefined);
     options.onDeployed({
       program: indexed.program,
-      ...(patternId === undefined ? {} : { patternId }),
+      patternId: () =>
+        pieces.get(pieceId, false).then(
+          (piece) => piece.getPatternRef(),
+        ).then((ref) => ref?.identity, () => undefined),
     });
   };
   const source: ServedPatternSource = indexed === undefined
@@ -2253,7 +2256,7 @@ export async function newPieceWithReceipt(
       throw error;
     });
     noteWroteTo(config.space);
-    await deployedFrom(id);
+    deployedFrom(id);
     return { pieceId: id, ...named };
   }
   // Only a request key replays a receipt, and a request key always takes the
@@ -2307,7 +2310,7 @@ export async function newPieceWithReceipt(
     () => pieces.add([piece.getCell()], { reconcile: false }),
   );
 
-  await deployedFrom(piece.id);
+  deployedFrom(piece.id);
   return { pieceId: piece.id, ...named };
 }
 
@@ -2737,7 +2740,11 @@ export async function setPiecePattern(
       options,
       deps,
     );
-    options.onDeployed?.({ program, patternId: served.ref.identity });
+    const patternId = served.ref.identity;
+    options.onDeployed?.({
+      program,
+      patternId: () => Promise.resolve(patternId),
+    });
     return served;
   }
   const piece = await pieces.get(
@@ -2754,7 +2761,11 @@ export async function setPiecePattern(
     ...(options.origin === undefined ? {} : { origin: options.origin }),
   });
   noteWroteTo(config.space);
-  options.onDeployed?.({ program, patternId: receipt.ref.identity });
+  const patternId = receipt.ref.identity;
+  options.onDeployed?.({
+    program,
+    patternId: () => Promise.resolve(patternId),
+  });
   return receipt;
 }
 

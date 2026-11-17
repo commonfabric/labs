@@ -4,6 +4,7 @@ import { join } from "@std/path";
 import {
   type PatternIndexClient,
   PatternIndexError,
+  type PatternIndexLineage,
   type PatternIndexPattern,
   type PatternIndexPublishRequest,
   type PatternIndexPublishResponse,
@@ -14,6 +15,7 @@ import type { RuntimeProgram } from "@commonfabric/runner";
 import {
   applyPieceSourceCommandAction,
   newPieceFromCommand,
+  recordVersionInIndex,
 } from "../commands/piece.ts";
 import {
   type DeployedSource,
@@ -56,9 +58,19 @@ const RECORDED: PatternIndexPublishResponse = {
 const stubClient = (answers: {
   publish?: () => Promise<PatternIndexPublishResponse>;
   patterns?: Record<string, Partial<PatternIndexPattern>>;
+  slots?: string[];
 } = {}) => {
   const published: PatternIndexPublishRequest[] = [];
-  const client: Pick<PatternIndexClient, "publishPattern" | "getPattern"> = {
+  const client: Pick<
+    PatternIndexClient,
+    "publishPattern" | "getPattern" | "listLineages"
+  > = {
+    listLineages: () =>
+      Promise.resolve({
+        lineages: (answers.slots ?? []).map((slot) =>
+          ({ slot }) as PatternIndexLineage
+        ),
+      }),
     publishPattern: (request) => {
       published.push(request);
       return answers.publish?.() ?? Promise.resolve(RECORDED);
@@ -99,7 +111,10 @@ describe("pattern-versions", () => {
 
   /** Deps whose client is `client`, counting how often it was opened. */
   const depsWith = (
-    client: Pick<PatternIndexClient, "publishPattern" | "getPattern">,
+    client: Pick<
+      PatternIndexClient,
+      "publishPattern" | "getPattern" | "listLineages"
+    >,
   ) => {
     const opened = { count: 0 };
     const deps: VersionDeps = {
@@ -109,6 +124,7 @@ describe("pattern-versions", () => {
         return Promise.resolve(client);
       },
       readTextFile: (path) => Deno.readTextFile(path),
+      checkoutOf: () => Promise.resolve(undefined),
     };
     return { deps, opened };
   };
@@ -116,7 +132,7 @@ describe("pattern-versions", () => {
   const deployed = (more: Partial<DeployedSource> = {}): DeployedSource => ({
     entry,
     program: PROGRAM,
-    patternId: "pat-1",
+    patternId: () => Promise.resolve("pat-1"),
     ...more,
   });
 
@@ -133,8 +149,12 @@ describe("pattern-versions", () => {
       const request = published[0];
       expect(request.patternId).toBe("pat-1");
       expect(request.origin).toBe("self");
-      expect(request.slot).toBe(await entrySlot(entry));
-      expect(request.slot).not.toContain(dir);
+      expect(request.slot).toBe(
+        await entrySlot(entry, {
+          pathKey: () => store.slotKey(),
+          checkoutOf: () => Promise.resolve(undefined),
+        }),
+      );
       expect(request.description).toBe(
         "Reminds the household to take the bins out on collection day.",
       );
@@ -143,16 +163,24 @@ describe("pattern-versions", () => {
       expect(Object.hasOwn(request, "keepPrivate")).toBe(false);
     });
 
-    it("makes no index call on a machine that never joined, and says so only the first time", async () => {
+    it("makes no index call and reads no pattern id on a machine that never joined, and says so only the first time", async () => {
       const { client, published } = stubClient();
       const { deps, opened } = depsWith(client);
+      let reads = 0;
+      const unread = deployed({
+        patternId: () => {
+          reads += 1;
+          return Promise.resolve("pat-1");
+        },
+      });
 
-      const first = await recordDeployedVersion(deployed(), deps);
-      const second = await recordDeployedVersion(deployed(), deps);
+      const first = await recordDeployedVersion(unread, deps);
+      const second = await recordDeployedVersion(unread, deps);
 
       expect(first).toEqual({ status: "not-joined", firstTime: true });
       expect(second).toEqual({ status: "not-joined", firstTime: false });
       expect(opened.count).toBe(0);
+      expect(reads).toBe(0);
       expect(published).toHaveLength(0);
       expect(versionLine(first)).toContain("cf index join");
       expect(versionLine(second)).toBeUndefined();
@@ -202,6 +230,24 @@ describe("pattern-versions", () => {
       expect(published[0].remixedFrom).toBe("pat-theirs");
     });
 
+    it("credits the remix only on the version that starts its lineage", async () => {
+      await joinIndex();
+      await store.recordSource([entry], "pat-theirs");
+      const slot = await entrySlot(entry, {
+        pathKey: () => store.slotKey(),
+        checkoutOf: () => Promise.resolve(undefined),
+      });
+      const { client, published } = stubClient({
+        patterns: { "pat-theirs": { patternId: "pat-theirs", mine: false } },
+        slots: [slot],
+      });
+      const { deps } = depsWith(client);
+
+      await recordDeployedVersion(deployed(), deps);
+
+      expect(Object.hasOwn(published[0], "remixedFrom")).toBe(false);
+    });
+
     it("continues the person's own fetched pattern without crediting it as a remix", async () => {
       await joinIndex();
       await store.recordSource([entry], "pat-mine");
@@ -245,6 +291,65 @@ describe("pattern-versions", () => {
     });
   });
 
+  describe("entrySlot()", () => {
+    it("answers one slot for the same file in two checkouts of one repository, whatever the remote's spelling", async () => {
+      const a = join(dir, "a");
+      const b = join(dir, "b");
+      await Deno.mkdir(join(a, "patterns"), { recursive: true });
+      await Deno.mkdir(join(b, "patterns"), { recursive: true });
+      const checkouts: Record<string, string> = {
+        [join(a, "patterns")]: "git@github.com:acme/patterns.git",
+        [join(b, "patterns")]: "https://github.com/acme/patterns",
+      };
+      const checkoutOf = (d: string) =>
+        Promise.resolve({
+          root: d === join(a, "patterns") ? a : b,
+          remote: checkouts[d],
+        });
+      const pathKey = () => Promise.reject(new Error("unused in a checkout"));
+
+      const first = await entrySlot(join(a, "patterns", "bins.tsx"), {
+        pathKey,
+        checkoutOf,
+      });
+      const second = await entrySlot(join(b, "patterns", "bins.tsx"), {
+        pathKey,
+        checkoutOf,
+      });
+      const other = await entrySlot(join(b, "patterns", "other.tsx"), {
+        pathKey,
+        checkoutOf,
+      });
+
+      expect(first).toMatch(/^cf-git:[0-9a-f]{64}$/);
+      expect(second).toBe(first);
+      expect(other).not.toBe(first);
+    });
+
+    it("keys the path outside a checkout with the machine's key, so the slot cannot confirm a guessed path", async () => {
+      const outside = () => Promise.resolve(undefined);
+      const keyed = (byte: number) => () =>
+        Promise.resolve(new Uint8Array(32).fill(byte));
+
+      const one = await entrySlot(entry, {
+        pathKey: keyed(1),
+        checkoutOf: outside,
+      });
+      const again = await entrySlot(entry, {
+        pathKey: keyed(1),
+        checkoutOf: outside,
+      });
+      const otherKey = await entrySlot(entry, {
+        pathKey: keyed(2),
+        checkoutOf: outside,
+      });
+
+      expect(one).toMatch(/^cf-path:[0-9a-f]{64}$/);
+      expect(again).toBe(one);
+      expect(otherKey).not.toBe(one);
+    });
+  });
+
   describe("versionLine()", () => {
     const recorded = (
       response: Partial<PatternIndexPublishResponse>,
@@ -273,6 +378,24 @@ describe("pattern-versions", () => {
     });
   });
 
+  describe("recordVersionInIndex()", () => {
+    it("answers a pattern index URL it cannot use as a failed version instead of throwing", async () => {
+      const before = Deno.env.get("CF_PATTERN_INDEX_URL");
+      Deno.env.set("CF_PATTERN_INDEX_URL", "https://index.test/?x=1");
+      try {
+        const outcome = await recordVersionInIndex(
+          "/unused/test.key",
+          deployed(),
+        );
+
+        expect(outcome.status).toBe("failed");
+      } finally {
+        if (before === undefined) Deno.env.delete("CF_PATTERN_INDEX_URL");
+        else Deno.env.set("CF_PATTERN_INDEX_URL", before);
+      }
+    });
+  });
+
   describe("piece setsrc", () => {
     it("prints the version's line after the deploy's own, and leaves the exit status alone when the index fails", async () => {
       const lines: string[] = [];
@@ -282,7 +405,10 @@ describe("pattern-versions", () => {
         entry,
         {
           setPieceSourceFromCommand: (_options, _main, deps) => {
-            deps?.onDeployed?.({ program: PROGRAM, patternId: "pat-1" });
+            deps?.onDeployed?.({
+              program: PROGRAM,
+              patternId: () => Promise.resolve("pat-1"),
+            });
             return Promise.resolve({
               config: { piece: "fid1:p" },
               update: {
@@ -322,7 +448,10 @@ describe("pattern-versions", () => {
         entry,
         {
           setPieceSourceFromCommand: (_options, _main, deps) => {
-            deps?.onDeployed?.({ program: PROGRAM, patternId: "pat-1" });
+            deps?.onDeployed?.({
+              program: PROGRAM,
+              patternId: () => Promise.resolve("pat-1"),
+            });
             return Promise.resolve({
               config: { piece: "fid1:p" },
               update: {
@@ -351,6 +480,49 @@ describe("pattern-versions", () => {
   });
 
   describe("piece new", () => {
+    it("carries the version's outcome in its --json receipt", async () => {
+      const printed: unknown[] = [];
+      await captureStderr(() =>
+        newPieceFromCommand(
+          {
+            apiUrl: "https://cf.dev",
+            space: "s",
+            identity: "/unused/test.key",
+            quiet: true,
+            json: true,
+          },
+          entry,
+          {
+            newPiece: (_config, _entry, options) => {
+              options?.onDeployed?.({
+                program: PROGRAM,
+                patternId: () => Promise.resolve("pat-1"),
+              });
+              return Promise.resolve({ pieceId: "fid1:created" });
+            },
+            recordVersion: () =>
+              Promise.resolve({
+                status: "recorded",
+                created: true,
+                response: RECORDED,
+              }),
+            render: (value) => printed.push(value),
+            note: () => {},
+          },
+        )
+      );
+
+      expect(printed).toEqual([{
+        pieceId: "fid1:created",
+        version: {
+          status: "recorded",
+          version: 3,
+          visibility: "private",
+          autoShare: "sharing_off",
+        },
+      }]);
+    });
+
     it("records a version of a piece made from a file, and none of one made from the index", async () => {
       const recorded: DeployedSource[] = [];
       const deps = {
@@ -358,10 +530,16 @@ describe("pattern-versions", () => {
           _config: unknown,
           _entry: unknown,
           options?: {
-            onDeployed?: (d: { program: RuntimeProgram }) => void;
+            onDeployed?: (d: {
+              program: RuntimeProgram;
+              patternId: () => Promise<string | undefined>;
+            }) => void;
           },
         ) => {
-          options?.onDeployed?.({ program: PROGRAM });
+          options?.onDeployed?.({
+            program: PROGRAM,
+            patternId: () => Promise.resolve("pat-1"),
+          });
           return Promise.resolve({ pieceId: "fid1:created" });
         },
         recordIndexedPiece: () => Promise.resolve(),

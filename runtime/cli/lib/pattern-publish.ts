@@ -192,6 +192,9 @@ export type PublishReport =
     /** The version of the entry's lineage it was kept as. */
     version?: number;
 
+    /** The lineage it was kept in; the person's own view only. */
+    lineageId?: string;
+
     priorPatternId?: string;
     remixedFrom?: string;
     localCheck: LocalCheckReport;
@@ -411,6 +414,9 @@ export async function publishPatternFromDisk(
     created: response.created,
     ...(handle !== undefined ? { handle } : {}),
     ...(response.seq !== undefined ? { version: response.seq } : {}),
+    ...(response.lineageId !== undefined
+      ? { lineageId: response.lineageId }
+      : {}),
     ...(priorPatternId !== undefined ? { priorPatternId } : {}),
     ...(remixedFrom !== undefined ? { remixedFrom } : {}),
     localCheck,

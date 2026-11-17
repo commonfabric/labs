@@ -13,7 +13,12 @@ import {
   type RollbackDeps,
   rollbackEntry,
 } from "../lib/pattern-history.ts";
-import { entrySlot } from "../lib/pattern-versions.ts";
+import { entrySlot, type SlotSources } from "../lib/pattern-versions.ts";
+
+const SOURCES: SlotSources = {
+  pathKey: () => Promise.resolve(new Uint8Array(32)),
+  checkoutOf: () => Promise.resolve(undefined),
+};
 
 const V1 = "export default () => 1;\n";
 const V2 = "export default () => 2;\n";
@@ -54,10 +59,13 @@ describe("pattern-history", () => {
    * A client holding one lineage for `entry` with versions v1 (source V1)
    * and v2 (source V2, current), recording rollbacks.
    */
-  const indexWith = async (slotEntry = entry) => {
+  const indexWith = async (
+    slotEntry = entry,
+    extra: Record<string, PatternIndexProgram> = {},
+  ) => {
     const lineage: PatternIndexLineage = {
       lineageId: "lin-1",
-      slot: await entrySlot(slotEntry),
+      slot: await entrySlot(slotEntry, SOURCES),
       origin: "self",
       pseudonym: "a-xyz",
       description: "Counts",
@@ -75,6 +83,7 @@ describe("pattern-history", () => {
         main: "/count.tsx",
         files: [{ name: "/count.tsx", contents: V2 }],
       },
+      ...extra,
     };
     const rollbacks: unknown[] = [];
     const client: RollbackDeps["client"] = {
@@ -98,6 +107,7 @@ describe("pattern-history", () => {
     };
     const deps: RollbackDeps = {
       client,
+      sources: SOURCES,
       readTextFile: (path) => Deno.readTextFile(path),
       writeTextFile: (path, contents) => Deno.writeTextFile(path, contents),
     };
@@ -108,7 +118,7 @@ describe("pattern-history", () => {
     it("lists the entry's versions newest first and marks the current one", async () => {
       const { deps } = await indexWith();
 
-      const { rows } = await entryHistory(deps.client, entry);
+      const { rows } = await entryHistory(deps.client, entry, SOURCES);
 
       expect(rows.map((r) => [r.seq, r.current])).toEqual([[2, true], [
         1,
@@ -120,13 +130,75 @@ describe("pattern-history", () => {
     it("throws saying deploys keep versions for an entry with none", async () => {
       const { deps } = await indexWith(join(dir, "other.tsx"));
 
-      await expect(entryHistory(deps.client, entry)).rejects.toThrow(
+      await expect(entryHistory(deps.client, entry, SOURCES)).rejects.toThrow(
         PatternHistoryError,
       );
     });
   });
 
   describe("rollbackEntry()", () => {
+    it("writes the current version's files back with force, keeping no new version", async () => {
+      const { deps, rollbacks } = await indexWith();
+      await Deno.writeTextFile(entry, "export default () => 99;\n");
+
+      const report = await rollbackEntry(entry, "2", { force: true }, deps);
+
+      expect(await Deno.readTextFile(entry)).toBe(V2);
+      expect(report.version).toBeUndefined();
+      expect(rollbacks).toEqual([]);
+    });
+
+    it("refuses, writing nothing, over a file only the restored version has whose contents no version keeps", async () => {
+      const helper = join(dir, "helper.ts");
+      const { deps, rollbacks } = await indexWith(entry, {
+        "ver-1": {
+          main: "/count.tsx",
+          files: [
+            { name: "/count.tsx", contents: V1 },
+            { name: "/helper.ts", contents: "export const x = 1;\n" },
+          ],
+        },
+      });
+      await Deno.writeTextFile(helper, "export const x = 'mine';\n");
+
+      await expect(rollbackEntry(entry, "1", {}, deps)).rejects.toThrow(
+        "edits that no version keeps",
+      );
+      expect(await Deno.readTextFile(helper)).toBe(
+        "export const x = 'mine';\n",
+      );
+      expect(await Deno.readTextFile(entry)).toBe(V2);
+      expect(rollbacks).toEqual([]);
+    });
+
+    it("refuses a version naming a file outside the pattern's directory, writing nothing", async () => {
+      const { deps, rollbacks } = await indexWith(entry, {
+        "ver-1": {
+          main: "/count.tsx",
+          files: [
+            { name: "/count.tsx", contents: V1 },
+            { name: "/../escaped.txt", contents: "x" },
+          ],
+        },
+      });
+
+      await expect(rollbackEntry(entry, "1", { force: true }, deps)).rejects
+        .toThrow("outside the pattern's directory");
+      await expect(Deno.stat(join(dir, "..", "escaped.txt"))).rejects.toThrow();
+      expect(await Deno.readTextFile(entry)).toBe(V2);
+      expect(rollbacks).toEqual([]);
+    });
+
+    it("leaves the index where it was when writing the files fails", async () => {
+      const { deps, rollbacks } = await indexWith();
+
+      await expect(rollbackEntry(entry, "1", {}, {
+        ...deps,
+        writeTextFile: () => Promise.reject(new Error("disk full")),
+      })).rejects.toThrow("disk full");
+      expect(rollbacks).toEqual([]);
+    });
+
     it("restores an earlier version in the index and over the file", async () => {
       const { deps, rollbacks } = await indexWith();
 
@@ -135,7 +207,7 @@ describe("pattern-history", () => {
       expect(rollbacks).toEqual([{ lineageId: "lin-1", toVersionId: "ver-1" }]);
       expect(await Deno.readTextFile(entry)).toBe(V1);
       expect(report.restored).toBe(1);
-      expect(report.version.seq).toBe(3);
+      expect(report.version?.seq).toBe(3);
     });
 
     it("refuses, writing nothing anywhere, over edits no version keeps", async () => {
@@ -160,7 +232,7 @@ describe("pattern-history", () => {
       expect(await Deno.readTextFile(entry)).toBe(V1);
     });
 
-    it("refuses to restore the current version, and a version that does not exist", async () => {
+    it("refuses to restore the current version over matching files, and a version that does not exist", async () => {
       const { deps, rollbacks } = await indexWith();
 
       await expect(rollbackEntry(entry, "2", {}, deps)).rejects.toThrow(

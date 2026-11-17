@@ -3390,27 +3390,36 @@ admits a key without an invite with `cf index admit <did>`.
 
 Each `cf piece new <file>` and `cf piece setsrc` of a pattern the person owns is
 kept in the index as a version only they can read, once the deploy commits, and
-the deploy prints one line saying which version it is. The versions of one entry
-file form its lineage. The index finds the lineage by a slot that is a hash of
-the entry file's absolute path, so it never stores the person's directory names.
-A deploy from the index (`--from-index`), a `setsrc --origin` deploy (a system
-or repository pattern), and a file fetched from someone else's pattern and
-deployed unchanged keep no version; an edited one is kept as the person's remix
-of it. When this machine never joined an index, a deploy makes no index call and
-says so once. The index write never changes a deploy's outcome: a failure is
-reported in one line and the deploy's exit status stands.
+the deploy prints one line saying which version it is (`piece new --json`
+carries it as `version`). A version holds the source as deployed, personal
+details included, so it is kept where only its owner can read it, and admins
+cannot see it. The versions of one entry file form its lineage, which the index
+finds by a slot `cf` computes. In a git checkout with an `origin` remote the
+slot is a hash of the remote and the file's path in the repository, so every
+worktree and clone continues one lineage. Elsewhere it is the absolute path
+keyed with a secret kept in this machine's index store, so the index cannot
+confirm a guessed path; moving such a file starts a new lineage. A deploy from
+the index (`--from-index`), a `setsrc --origin` deploy (a system or repository
+pattern), and a file fetched from someone else's pattern and deployed unchanged
+keep no version; an edited one is kept as the person's remix of it. When this
+machine never joined an index, a deploy makes no index call and says so once.
+The index write never changes a deploy's outcome: a failure is reported in one
+line and the deploy's exit status stands.
 
 When the person's sharing setting (kept by the index; Loom's settings change it)
 says to share what they build, the index also asks its privacy check to share
 each new version anonymously, and the deploy's line says so. With it off,
-versions stay private.
+versions stay private. The index write follows the deploy's commit and never
+changes its outcome, but the command waits for it before exiting.
 
 `cf pattern history` lists the person's lineages; `cf pattern history <entry>`
 lists one entry's versions, newest first, and where each stands.
-`cf pattern rollback <entry> <version>` makes an earlier version the newest
-again, in the index and over the entry's files on disk. It refuses when the
-files have edits that no version keeps, since nothing could bring them back,
-unless `--force`. Running pieces keep the source they have until the next
+`cf pattern rollback <entry> <version>` writes an earlier version's files over
+the entry's, then makes it the newest version in the index. It refuses when a
+file it would write over holds something no version keeps, since nothing could
+bring that back, unless `--force`, and it never writes outside the pattern's
+directory. Naming the current version with `--force` writes its files back
+without a new version. Running pieces keep the source they have until the next
 `cf piece setsrc`.
 
 ### Sharing
@@ -3466,11 +3475,14 @@ author opens it in a loom.
 then names the person as its author under one of their Common Fabric profiles
 (`--profile <space>`, the one `#profile` answers with by default). Only that
 lineage is named; the person's other lineages stay anonymous and are not linked
-to it. It first prints one line saying the name will be shown to every member
-and cannot be unseen, and names nothing without `--yes`. The index takes the
-profile only with proof that it is the person's: the delegation the profile
-space issued to their identity, which Home records. A profile made before
-profiles owned themselves has none and cannot be published under yet.
+to it. Without `--as "<the profile's name>"` it prints one line saying the name
+will be shown to every member and cannot be unseen, and names nothing: repeating
+the name is how an agent shows it asked the person. The index takes the profile
+only with proof that it is the person's: the delegation the profile space issued
+to their identity, which Home records. A profile made before profiles owned
+themselves has none and cannot be published under yet. Everything that can
+refuse the naming is checked before anything is shared; a naming the index
+refuses afterwards leaves the pattern shared, says so, and exits 1.
 `cf pattern unpublish <entry>` stops showing the name from then on; the lineage
 stays shared under its pseudonym.
 
