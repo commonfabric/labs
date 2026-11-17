@@ -131,7 +131,7 @@ import {
   type SettlingTracker,
   summarizeNonSettlingWindow,
 } from "./execution.ts";
-import { dirtyFanOutKey, keyAtRatchet } from "./fan-out.ts";
+import { dirtyFanOutKey, fanOutInstances, keyAtRatchet } from "./fan-out.ts";
 import { SchedulerGates } from "./gates.ts";
 import {
   buildSchedulerGraphSnapshot,
@@ -2167,8 +2167,10 @@ export class Scheduler {
   /**
    * Whether `action` will run for the instance keyed `instance`: the
    * scheduler's own test for queueing it (invalid or never run, and live, a
-   * materializer, or pending), and on a fanned-out node an instance key that
-   * is not current.
+   * materializer, or pending). On a fanned-out node the run supply runs only
+   * the instances its current demanders produce (`fanOutInstances()`, as
+   * `runSchedulerAction()` asks), so the instance must be one of them, and not
+   * current; a principal nothing demands this node for gets no run of it.
    */
   #willRunForInstance(action: Action, instance: ScopeKey | undefined): boolean {
     const node = this.#nodes.get(action);
@@ -2177,10 +2179,19 @@ export class Scheduler {
       this.#materializers.isMaterializer(action) ||
       this.#pending.has(action);
     if (!queued) return false;
-    if (node.fanOut !== undefined && instance !== undefined) {
-      return !node.fanOut.clean.has(instance);
-    }
-    return this.#isInvalidAction(action);
+    if (node.fanOut === undefined) return this.#isInvalidAction(action);
+    if (instance === undefined || node.fanOut.clean.has(instance)) return false;
+    const observation = (action as Partial<TelemetryAnnotations>)
+      .schedulerObservationIdentity;
+    const roots = observation?.demandRootIds ??
+      (observation?.pieceRootId !== undefined
+        ? [observation.pieceRootId]
+        : undefined);
+    if (roots === undefined) return false;
+    const demanders = this.runtime.serverRunDemandersFor(roots) ?? [];
+    return fanOutInstances(node.fanOut, demanders).some((candidate) =>
+      candidate.key === instance
+    );
   }
 
   /**

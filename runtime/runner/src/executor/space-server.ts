@@ -1658,8 +1658,13 @@ export class SpaceServer implements TransactionSealDestination {
    * (events.md §5): a scoped instance of each the handler's run read while
    * the serving loop had not produced it, and a writer that owes it will still
    * run. By document id, each with the events waiting on it; a commit writing
-   * the document re-drains them. */
+   * the document wakes them. */
   readonly #notRunWaits = new Map<string, Set<string>>();
+
+  /** The events in `#notRunWaits` that no commit has woken yet. The drain
+   * dispatches none of them, and stops its pass at one, as at any other
+   * barrier, so that no later arrival in the space overtakes it. */
+  readonly #notRunWaiting = new Set<string>();
 
   /** The deferral backstop timer (see EVENT_DEFERRAL_REARM_MS): armed
    * when a drain pass left deferred/transient work behind, so the scan
@@ -4573,7 +4578,11 @@ export class SpaceServer implements TransactionSealDestination {
       // on re-drains it (events.md §5).
       if (this.#notRunWaits.size > 0) {
         for (const write of record.writes) {
-          if (this.#notRunWaits.delete(write.id)) this.#eventScanOwed = true;
+          const woken = this.#notRunWaits.get(write.id);
+          if (woken === undefined) continue;
+          this.#notRunWaits.delete(write.id);
+          for (const eventId of woken) this.#notRunWaiting.delete(eventId);
+          this.#eventScanOwed = true;
         }
       }
       // Deferred events re-try on NEW INPUT (the creation-race arm:
@@ -4808,7 +4817,14 @@ export class SpaceServer implements TransactionSealDestination {
           candidate?.eventId === entry.eventId &&
           candidate?.seq === entry.seq
         );
-        if (index < 0 || stored[index].consequenced === true) continue;
+        if (index < 0 || stored[index].consequenced === true) {
+          this.#notRunWaiting.delete(entry.eventId);
+          continue;
+        }
+        // An entry whose handler did not run, waiting on a document no commit
+        // has written since (events.md §5), is a barrier: it is not
+        // dispatched, and everything behind it in the space waits with it.
+        if (this.#notRunWaiting.has(entry.eventId)) break;
         // The mark every arm below writes (the handler tx's, the
         // skip/error/drop notices') is INDEX-ADDRESSED against the
         // REPLICA view: verify the view holds this entry at this index
@@ -5405,19 +5421,26 @@ export class SpaceServer implements TransactionSealDestination {
                       ? outcome.waitsOn
                       : undefined;
                     if (waitsOn !== undefined) {
+                      // Out of the deferral count altogether: an entry held
+                      // there re-drains on every commit, and this one waits
+                      // for one commit only. Should it withdraw again with
+                      // nothing owed, it spends the budget from the start.
                       this.#options.stats.events.handlerNotRunWaits += 1;
+                      this.#eventDeferrals.delete(entry.eventId);
                       let waiting = this.#notRunWaits.get(waitsOn.id);
                       if (waiting === undefined) {
                         waiting = new Set();
                         this.#notRunWaits.set(waitsOn.id, waiting);
                       }
                       waiting.add(entry.eventId);
+                      this.#notRunWaiting.add(entry.eventId);
+                      this.#drainInFlight.delete(eventId);
+                      this.#loadParkDeferredInPass = true;
+                      return;
                     }
                     const deferrals =
                       (this.#eventDeferrals.get(entry.eventId) ?? 0) +
-                      (arrivalHeld || originPending || waitsOn !== undefined
-                        ? 0
-                        : 1);
+                      (arrivalHeld || originPending ? 0 : 1);
                     this.#eventDeferrals.set(entry.eventId, deferrals);
                     if (deferrals < EVENT_DEFERRAL_DROP_THRESHOLD) {
                       if (
@@ -5448,9 +5471,7 @@ export class SpaceServer implements TransactionSealDestination {
                       // release the guard so the rescan can queue it
                       // again.
                       this.#drainInFlight.delete(eventId);
-                      if (
-                        !arrivalHeld && !originPending && waitsOn === undefined
-                      ) {
+                      if (!arrivalHeld && !originPending) {
                         this.#armDeferredRescan();
                       }
                       return;
@@ -8559,6 +8580,11 @@ export class SpaceServer implements TransactionSealDestination {
       this.#endProgramClosureGrace(eventId);
     }
     this.#programClosureWaits.clear();
+    // A waiting entry is dispatched afresh by the next tenure, which judges
+    // it against the state it finds: the commit that would have woken it can
+    // land while no tenure is watching.
+    this.#notRunWaits.clear();
+    this.#notRunWaiting.clear();
     for (const eventId of [...this.#deliveryCheckpoints.keys()]) {
       this.#setActiveDeliveryCheckpoint(eventId, undefined);
     }

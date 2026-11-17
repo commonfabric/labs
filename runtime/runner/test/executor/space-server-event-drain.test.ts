@@ -343,10 +343,12 @@ describe("SpaceServer", () => {
         prepare: (runtime) => {
           stub(runtime.scheduler, "owedScopedInstanceComing", () => coming);
         },
-        withdraw: () => !arrived,
+        withdraw: () => !arrived && fixture.called.at(-1) === "W",
       });
       await admit("waiting", { name: "W" });
       await fixture.activate();
+      await admit("later", { name: "L" });
+      await fixture.feed();
       // More unrelated commits and backstop periods than the deferral
       // budget allows.
       for (let i = 0; i < 12; i++) {
@@ -366,24 +368,29 @@ describe("SpaceServer", () => {
       };
     };
 
-    it("waits on the document a writer still owes, spending no deferral budget, and delivers the event once a commit writes it", async () => {
+    it("waits on the document a writer still owes, dispatching neither it nor a later arrival, and delivers both in order once a commit writes the document", async () => {
       const { fixture, arrive } = await withdrawUntilAwaitedArrives(true);
+      // Dispatched once; the unrelated commits and backstop periods neither
+      // re-dispatch it nor let the later arrival overtake it.
+      expect(fixture.called).toEqual(["W"]);
       expect(fixture.entries()[0].consequenced).not.toBe(true);
       expect(fixture.entries()[0].status).toBeUndefined();
-      expect(fixture.stats.events.handlerNotRunWaits).toBeGreaterThanOrEqual(1);
+      expect(fixture.stats.events.handlerNotRunWaits).toBe(1);
 
       await arrive();
-      expect(fixture.called.at(-1)).toBe("W");
-      expect(fixture.entries()[0].consequenced).toBe(true);
-      expect(fixture.entries()[0].status).toBeUndefined();
-      expect(fixture.storedLog()).toEqual(["W"]);
+      expect(fixture.called).toEqual(["W", "W", "L"]);
+      expect(fixture.entries().map((entry) => entry.consequenced)).toEqual([
+        true,
+        true,
+      ]);
+      expect(fixture.storedLog()).toEqual(["W", "L"]);
     });
 
     it("drops the event through the deferral budget when no writer that owes the document will run", async () => {
       const { fixture } = await withdrawUntilAwaitedArrives(false);
       expect(fixture.entries()[0].status).toBe("dropped");
       expect(fixture.stats.events.handlerNotRunWaits).toBe(0);
-      expect(fixture.storedLog()).toEqual([]);
+      expect(fixture.storedLog()).toEqual(["L"]);
     });
   });
 

@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
 
@@ -9,6 +10,7 @@ import {
 } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 
 /**
@@ -163,6 +165,52 @@ async function fixture(name: string, serving: boolean) {
       });
       runtime.scheduler.subscribe(() => {}, {
         reads: [link],
+        shallowReads: [],
+        writes: [],
+      }, { isEffect: true });
+    },
+
+    /**
+     * Registers a writer of `state` that the run supply fans out over
+     * `demanders` (a piece root resolving to them), runs it once, which
+     * narrows it to user instances because it reads `upstream`, a
+     * user-scoped document, marks every instance it has invalid, and
+     * registers an effect that reads `state` through the space slot, which
+     * makes it live. The writer
+     * has not run again when this returns.
+     */
+    async runFannedOutWriter(demanders: () => ScopeKeyIdentity[]) {
+      stub(runtime, "serverRunDemandersFor", () => demanders());
+      const user = state.getAsNormalizedFullLink();
+      const slot = { ...user, scope: "space" as const };
+      const writer = (tx: IExtendedStorageTransaction) => {
+        upstream.withTx(tx).get();
+        tx.writeValueOrThrow(
+          slot,
+          createSigilLinkFromParsedLink(user, {
+            base: slot,
+            overwrite: "redirect",
+          }),
+        );
+      };
+      Object.assign(writer, {
+        schedulerObservationIdentity: {
+          pieceId: "fanned-out-root",
+          pieceRootId: "fanned-out-root",
+        },
+      });
+      runtime.scheduler.subscribe(writer, {
+        reads: [],
+        shallowReads: [],
+        writes: [toMemorySpaceAddress(slot)],
+      });
+      await runtime.scheduler.run(writer);
+      await runtime.idle();
+      runtime.scheduler.invalidateAction(writer);
+      // A reader of `state` reads the space slot's redirect on its way to
+      // the user instance.
+      runtime.scheduler.subscribe(() => {}, {
+        reads: [toMemorySpaceAddress(slot), toMemorySpaceAddress(user)],
         shallowReads: [],
         writes: [],
       }, { isEffect: true });
@@ -339,6 +387,35 @@ describe("scheduler-derivation-unproduced-instance", () => {
       f.registerQueuedWriter();
 
       expect(f.stateComing()).toBe(true);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("reports an owed instance as coming from a fanned-out writer whose demanders include the reading principal", async () => {
+    const f = await fixture("coming-fanned-out-demanded", true);
+    try {
+      await f.runFannedOutWriter(() => [f.runtime.scopeKeyIdentity]);
+
+      expect(f.stateComing()).toBe(true);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("reports an owed instance as not coming from a fanned-out writer no demander of which is the reading principal", async () => {
+    // The run supply runs only the instances its current demanders
+    // produce, so a principal nothing demands the writer for gets no run of
+    // it, whatever its instance's dirtiness.
+
+    const other = await Identity.fromPassphrase("unproduced instance other");
+    const f = await fixture("coming-fanned-out-undemanded", true);
+    try {
+      await f.runFannedOutWriter(() => [
+        { principal: other.did(), sessionId: "other-session" },
+      ]);
+
+      expect(f.stateComing()).toBe(false);
     } finally {
       await f.close();
     }

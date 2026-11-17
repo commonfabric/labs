@@ -691,10 +691,15 @@ loop's duty).
   `handlerNotRunWaits` as well). "Owes" is link resolution's
   `unproducedScopedInstance` (serving-loop.md §3d), and "will run" is
   the scheduler's own test for queueing the writer: invalid or never
-  run, and live, a materializer, or pending. Such a deferral spends no
+  run, and live, a materializer, or pending; on a fanned-out writer, the
+  instance must also be one its current demanders produce and not
+  current, since the run supply runs no other. Such a deferral spends no
   deferral budget and arms no backstop: the entry waits on that
-  document, and a commit writing it re-drains the entry. Time and
-  unrelated commits decide nothing about it. A withdrawal with nothing
+  document and is not dispatched again until a commit writes it, and
+  the drain stops its pass at the waiting entry, so later arrivals in
+  the space wait behind it. Time and unrelated commits decide nothing
+  about it. A tenure that parks forgets the wait, and the next one
+  dispatches the entry afresh. A withdrawal with nothing
   owed, or owed only by a writer that is dormant or clean, spends the
   budget as above, so an argument that nothing will change still ends
   in the drop notice, and an instance in another space, whose commits
