@@ -47,6 +47,10 @@
           "heldOut": {
             "type": "number"
           },
+          "poolOffer": {
+            "description": "Set when the round judged the pool's released rules rather than a\nrewrite: the offer's key, so the same offer is not made again.",
+            "type": "string"
+          },
           "proposed": {
             "items": {
               "$ref": "#/$defs/CanonicalRule"
@@ -102,10 +106,76 @@
         ],
         "type": "object"
       },
+      "PoolRule": {
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "predicts": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "field",
+          "pattern",
+          "predicts"
+        ],
+        "type": "object"
+      },
+      "PoolSubmission": {
+        "properties": {
+          "pseudonym": {
+            "type": "string"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/$defs/CanonicalRule"
+            },
+            "type": "array"
+          },
+          "withdraw": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "PoolTarget": {
+        "properties": {
+          "consensus": {
+            "description": "The rules the pool releases, most-held first.",
+            "items": {
+              "$ref": "#/$defs/PoolRule"
+            },
+            "type": "array"
+          },
+          "goal": {
+            "type": "string"
+          },
+          "submit": {
+            "$ref": "#/$defs/PoolSubmission",
+            "asCell": [
+              "stream"
+            ]
+          }
+        },
+        "required": [
+          "goal",
+          "submit",
+          "consensus"
+        ],
+        "type": "object"
+      },
       "Published": {
         "properties": {
           "goal": {
             "type": "string"
+          },
+          "pooled": {
+            "description": "Whether the rules were sent to a pool for this goal.",
+            "type": "boolean"
           },
           "publishedAt": {
             "type": "number"
@@ -115,6 +185,10 @@
               "$ref": "#/$defs/CanonicalRule"
             },
             "type": "array"
+          },
+          "withheld": {
+            "description": "How many rules were held back as looking personal (`looksPersonal`).",
+            "type": "number"
           }
         },
         "required": [
@@ -176,6 +250,21 @@
         },
         "type": "array"
       },
+      "pool": {
+        "$ref": "#/$defs/PoolTarget",
+        "description": "The pool to publish to. Omitted, the inductor wishes for a\n`#inductorPool`; either way it publishes only to a pool for its goal."
+      },
+      "pseudonym": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "description": "This piece's pseudonym in the goal's pool, minted on the first publish.\nOne piece holds one goal, so it is one per goal, and unlinkable to the\nperson's pseudonyms for other goals.",
+        "type": "string"
+      },
       "published": {
         "anyOf": [
           {
@@ -198,6 +287,17 @@
         "default": 3,
         "description": "How many new surprises start a rewrite.",
         "scope": "space",
+        "type": "number"
+      },
+      "rewriteAttempt": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": 0,
+        "description": "Retries of the current rewrite's failed model call.",
         "type": "number"
       },
       "rules": {
@@ -245,6 +345,17 @@
         ],
         "type": "object"
       },
+      "GoalEvent": {
+        "properties": {
+          "goal": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "goal"
+        ],
+        "type": "object"
+      },
       "HistoryEntry": {
         "properties": {
           "accepted": {
@@ -265,6 +376,10 @@
           },
           "heldOut": {
             "type": "number"
+          },
+          "poolOffer": {
+            "description": "Set when the round judged the pool's released rules rather than a\nrewrite: the offer's key, so the same offer is not made again.",
+            "type": "string"
           },
           "proposed": {
             "items": {
@@ -318,6 +433,17 @@
         "required": [
           "id",
           "fields"
+        ],
+        "type": "object"
+      },
+      "ItemRef": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
         ],
         "type": "object"
       },
@@ -409,10 +535,30 @@
         ],
         "type": "object"
       },
+      "PoolOffer": {
+        "properties": {
+          "judgement": {
+            "$ref": "#/$defs/Judgement"
+          },
+          "key": {
+            "description": "Which set this is: a hash of its rules' keys.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "judgement"
+        ],
+        "type": "object"
+      },
       "Published": {
         "properties": {
           "goal": {
             "type": "string"
+          },
+          "pooled": {
+            "description": "Whether the rules were sent to a pool for this goal.",
+            "type": "boolean"
           },
           "publishedAt": {
             "type": "number"
@@ -422,6 +568,10 @@
               "$ref": "#/$defs/CanonicalRule"
             },
             "type": "array"
+          },
+          "withheld": {
+            "description": "How many rules were held back as looking personal (`looksPersonal`).",
+            "type": "number"
           }
         },
         "required": [
@@ -463,6 +613,30 @@
           },
           {
             "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "failed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "answered": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "judgement": {
                 "$ref": "#/$defs/Judgement"
               },
@@ -475,7 +649,8 @@
             },
             "required": [
               "status",
-              "judgement"
+              "judgement",
+              "answered"
             ],
             "type": "object"
           }
@@ -603,6 +778,21 @@
         },
         "type": "array"
       },
+      "poolOffer": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/PoolOffer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The pool's released rules for this goal, judged as a candidate set on\nthis piece's held-out items, or null when there is nothing new to offer."
+      },
+      "pseudonym": {
+        "description": "This piece's pseudonym in the goal's pool, or \"\" before it publishes.",
+        "type": "string"
+      },
       "publish": {
         "asCell": [
           "stream",
@@ -620,6 +810,20 @@
           }
         ]
       },
+      "removeItem": {
+        "$ref": "#/$defs/ItemRef",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Take one item out, by id. An id the list does not hold does nothing."
+      },
+      "retryRewrite": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Ask the model again after the rewrite's call failed."
+      },
       "rewrite": {
         "$ref": "#/$defs/RewriteStatus",
         "description": "Where the current rewrite stands."
@@ -636,6 +840,20 @@
           "$ref": "#/$defs/CanonicalRule"
         },
         "type": "array"
+      },
+      "setGoal": {
+        "$ref": "#/$defs/GoalEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Ask a new question. The rules, the history, the pseudonym, and what was\npublished were all for the old one, so they are cleared; the items stay,\nand the hi-fi model labels them for the new question."
+      },
+      "settlePoolOffer": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Record the pool offer's judgement: adopt the pool's rules if they were\naccepted, and add the round to the history either way."
       },
       "settleRewrite": {
         "asCell": [
@@ -661,12 +879,18 @@
       "rules",
       "history",
       "published",
+      "pseudonym",
       "rows",
       "summary",
       "heldOutF1",
       "rewrite",
+      "setGoal",
       "submitItem",
+      "removeItem",
       "settleRewrite",
+      "retryRewrite",
+      "poolOffer",
+      "settlePoolOffer",
       "publish",
       "$NAME",
       "$UI",
