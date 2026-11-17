@@ -119,7 +119,7 @@ Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
 
 ## Building `lofi-inductor`
 
-- `../inductor-pool/rule-grammar.ts` holds the grammar and the canonical form.
+- `../shared/rule-grammar.ts` holds the grammar and the canonical form.
   It lives with the pool, whose policy module imports it, and the inductor
   imports it from there. The canonical form keeps what `RegExp.test` answers
   with the `i` flag and rewrites only what cannot change it: alternation order,
@@ -156,7 +156,7 @@ Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
   3).
 - `publish` records `{goal, rules, publishedAt, pooled}` in `published`, where
   `pooled` says whether the rules were sent to a pool, and sends them to the
-  pool's `submit` (see step 5 and `apps/inductor-pool`).
+  pool's `submit` (see step 5 and `showcase/inductor/pool`).
 - The goal changes only through `setGoal` (the view's "Set goal" button sends
   it), never per keystroke: every hi-fi call is asked for the goal, so a live
   input re-asked about every item on each key. A new goal clears the rules, the
@@ -209,7 +209,7 @@ emitted (not the rule, not its count, not that it exists) are that function's
 own logic, so they need no new CFC machinery. The rule also requires an input
 witness: everything the function read was written by the pool's own
 `submitContribution`, so the function run over contributions anyone else made up
-is not released (`apps/inductor-pool/README.md`). The secret and the per-rule
+is not released (`showcase/inductor/pool/README.md`). The secret and the per-rule
 counts never leave the function; only released rules and their counts do, as the
 pool's public result, read where it is computed (the runtime refuses storing it
 today; see the pool's README).

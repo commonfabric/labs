@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { isRegexSafe } from "../self-improving-classifier/classifier-logic.ts";
+import { isRegexSafe } from "../../../apps/self-improving-classifier/classifier-logic.ts";
 import {
   canonicalizePattern,
   checkRule,

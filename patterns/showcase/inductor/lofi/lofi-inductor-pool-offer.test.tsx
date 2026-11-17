@@ -8,7 +8,7 @@
  *
  * Patterns under test: ./lofi-inductor.tsx, reading a pool's release. The
  * pool here is a stand-in that releases a given set; a real pool's release
- * takes several contributors (../inductor-pool/inductor-pool-multi-user
+ * takes several contributors (../pool/inductor-pool-multi-user
  * .test.tsx).
  */
 import {
@@ -23,7 +23,7 @@ import {
   UI,
   type VNode,
 } from "commonfabric";
-import { hasText } from "../../tools/test-support/vnode-helpers.ts";
+import { hasText } from "../../../tools/test-support/vnode-helpers.ts";
 import {
   HELD_OUT_ITEMS,
   HIFI_MOCKS,

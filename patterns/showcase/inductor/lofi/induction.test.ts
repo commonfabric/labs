@@ -33,7 +33,7 @@ import {
 import {
   type CanonicalRule,
   checkRule,
-} from "../inductor-pool/rule-grammar.ts";
+} from "../shared/rule-grammar.ts";
 
 /** A rule in canonical form, failing the test when it is refused. */
 function rule(field: string, pattern: string, predicts = true): CanonicalRule {

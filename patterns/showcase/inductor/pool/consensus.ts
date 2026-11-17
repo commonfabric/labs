@@ -15,9 +15,9 @@ import {
   checkRule,
   MAX_RULES,
   ruleSetCostRefusal,
-} from "./rule-grammar.ts";
+} from "../shared/rule-grammar.ts";
 
-export type { CanonicalRule } from "./rule-grammar.ts";
+export type { CanonicalRule } from "../shared/rule-grammar.ts";
 
 // =============================================================================
 // TYPES

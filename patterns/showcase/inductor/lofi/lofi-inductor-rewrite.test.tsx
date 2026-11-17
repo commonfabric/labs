@@ -11,7 +11,7 @@
  * Pattern under test: ./lofi-inductor.tsx
  */
 import { action, assert, pattern, TESTS, UI } from "commonfabric";
-import { hasText } from "../../tools/test-support/vnode-helpers.ts";
+import { hasText } from "../../../tools/test-support/vnode-helpers.ts";
 import {
   HELD_OUT_ITEMS,
   HIFI_MOCKS,

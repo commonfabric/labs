@@ -6,13 +6,13 @@
  * and an inductor with no held-out items is offered none of it.
  *
  * Patterns under test: ./lofi-inductor.tsx publishing into
- * ../inductor-pool/inductor-pool.tsx
+ * ../pool/inductor-pool.tsx
  */
 import { assert, multiUserTest, pattern, TESTS } from "commonfabric";
-import { MIN_SEALED_THRESHOLD } from "../inductor-pool/consensus.ts";
+import { MIN_SEALED_THRESHOLD } from "../pool/consensus.ts";
 import InductorPool, {
   type InductorPoolOutput,
-} from "../inductor-pool/inductor-pool.tsx";
+} from "../pool/inductor-pool.tsx";
 import { INVOICE_ONLY, rule } from "./lofi-inductor-test-fixture.ts";
 import LofiInductor from "./lofi-inductor.tsx";
 

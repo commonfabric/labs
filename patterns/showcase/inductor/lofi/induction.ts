@@ -11,7 +11,7 @@
 import {
   calculateF1,
   calculatePrecisionRecall,
-} from "../self-improving-classifier/classifier-logic.ts";
+} from "../../../apps/self-improving-classifier/classifier-logic.ts";
 import {
   type CanonicalRule,
   checkRule,
@@ -20,9 +20,9 @@ import {
   MAX_TESTED_LENGTH,
   ruleSetCostRefusal,
   stableHash,
-} from "../inductor-pool/rule-grammar.ts";
+} from "../shared/rule-grammar.ts";
 
-export { MAX_RULES, MAX_TESTED_LENGTH } from "../inductor-pool/rule-grammar.ts";
+export { MAX_RULES, MAX_TESTED_LENGTH } from "../shared/rule-grammar.ts";
 
 // =============================================================================
 // TYPES

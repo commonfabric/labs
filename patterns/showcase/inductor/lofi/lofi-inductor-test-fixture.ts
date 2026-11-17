@@ -8,7 +8,7 @@
 import {
   type CanonicalRule,
   checkRule,
-} from "../inductor-pool/rule-grammar.ts";
+} from "../shared/rule-grammar.ts";
 
 /** A rule in canonical form; throws on a rule outside the grammar. */
 export function rule(

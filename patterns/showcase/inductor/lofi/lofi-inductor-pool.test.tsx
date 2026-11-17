@@ -7,12 +7,12 @@
  * and an inductor with no rules publishes nothing.
  *
  * Patterns under test: ./lofi-inductor.tsx publishing into
- * ../inductor-pool/inductor-pool.tsx. Release across contributors is in
+ * ../pool/inductor-pool.tsx. Release across contributors is in
  * ./lofi-inductor-pool-multi-user.test.tsx.
  */
 import { assert, pattern, TESTS, UI } from "commonfabric";
-import { hasText } from "../../tools/test-support/vnode-helpers.ts";
-import InductorPool from "../inductor-pool/inductor-pool.tsx";
+import { hasText } from "../../../tools/test-support/vnode-helpers.ts";
+import InductorPool from "../pool/inductor-pool.tsx";
 import { INVOICE_ONLY, rule } from "./lofi-inductor-test-fixture.ts";
 import LofiInductor from "./lofi-inductor.tsx";
 

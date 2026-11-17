@@ -139,9 +139,9 @@ are stored, while each viewer's pointer and a shape held mid-drag or mid-resize
 travel through a presence room and are stored nowhere),
 `examples/iframe-verb-list/` (a list in a sandboxed iframe whose guest adds an
 item only by sending the pattern's `addItem` verb, which writes the pattern's
-own state), `apps/inductor-pool/` (lo-fi rule sets for one goal, contributed
+own state), `showcase/inductor/pool/` (lo-fi rule sets for one goal, contributed
 under per-goal pseudonyms; a rule and its count become public only once enough
-distinct contributors hold it), `product/lobby/`, `apps/lofi-inductor/` (a model
+distinct contributors hold it), `product/lobby/`, `showcase/inductor/lofi/` (a model
 labels a stream of items while a regex rule set learns to match it; a proposed
 rule set replaces the current one only when it is in grammar, safe, and better
 on a held-out split), `apps/lunch-poll/`, `examples/math-note/`,

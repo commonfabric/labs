@@ -61,9 +61,9 @@ import {
 import {
   type CanonicalRule,
   describeRule,
-} from "../inductor-pool/rule-grammar.ts";
+} from "../shared/rule-grammar.ts";
 
-export type { CanonicalRule } from "../inductor-pool/rule-grammar.ts";
+export type { CanonicalRule } from "../shared/rule-grammar.ts";
 export type {
   HistoryEntry,
   Item,

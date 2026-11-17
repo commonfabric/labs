@@ -2,12 +2,12 @@
 
 ## Why
 
-A lo-fi inductor (`apps/lofi-inductor`) learns cheap regex rules for one
+A lo-fi inductor (`showcase/inductor/lofi`) learns cheap regex rules for one
 yes-or-no goal from one person's private items. A rule many people learned
 independently is worth sharing, and sharing it says nothing about any of them; a
 rule only one person learned may say a lot. The pool collects rule sets for one
 goal and releases a rule, with its count, only once enough distinct contributors
-hold it. The policy is the one in `apps/lofi-inductor/README.md` ("CFC debt");
+hold it. The policy is the one in `showcase/inductor/lofi/README.md` ("CFC debt");
 this pattern is its implementation.
 
 ## How it works
@@ -22,7 +22,7 @@ this pattern is its implementation.
   centre less the jitter is never below it (see "What the witness does not
   cover" for why).
 - **Contribute.** `submit` takes `{pseudonym, rules}`, the rules in canonical
-  form (`CanonicalRule` from `rule-grammar.ts`, beside the pool). The handler
+  form (`CanonicalRule` from `../shared/rule-grammar.ts`). The handler
   checks every rule against the grammar again, stores it in canonical form, and
   keeps a rule given twice once. A rule out of grammar refuses the whole set.
 - **One pseudonym per person per goal.** Each stored contribution is labelled
@@ -61,7 +61,7 @@ this pattern is its implementation.
   view derived from it. It is not stored (see "Workaround: the release is not
   stored").
 
-The pure logic is in `consensus.ts`, and the rule grammar in `rule-grammar.ts`.
+The pure logic is in `consensus.ts`, and the rule grammar in `../shared/rule-grammar.ts`.
 The policy module's identity covers both, because a module's identity covers the
 modules it imports. Both live in this folder so that the policy's identity
 depends only on the pool's own files; the lo-fi inductor imports the grammar
@@ -121,7 +121,7 @@ names, is refused by a public store, and so is a contribution copied out raw.
 
 **Editing the policy module strands stored contributions.** The rule names
 `THIS_POLICY.moduleIdentity`, the content identity of `inductor-pool.tsx` with
-everything it imports (`consensus.ts`, `rule-grammar.ts`). Any edit to those
+everything it imports (`consensus.ts`, `../shared/rule-grammar.ts`). Any edit to those
 files, a grammar fix included, gives the module a new identity, and stored
 contributions carry the old one's `PolicyOf` clause and `TransformedBy`
 witnesses. As far as we can tell, the new release rule matches neither, so a
