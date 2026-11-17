@@ -133,9 +133,9 @@ describe("fabrichat file store across runtimes", () => {
        * A harness whose creator and member each have a profile of their own,
        * unless `memberProfile` is `false`, and a store the creator's runtime
        * alone created, as one member's client does in a room, with a file the
-       * creator added unless `creatorAdds` is `false`. Returns the harness's sessions, the
-       * member's identity, the store, the link the room's record holds to it,
-       * and the means to add a file to it.
+       * creator added unless `creatorAdds` is `false`. Returns the harness's
+       * sessions, the member's identity, the store, the link the room's record
+       * holds to it, and the means to add a file to it.
        */
       const storeTheCreatorMade = async (
         { creatorAdds = true, memberProfile = true } = {},

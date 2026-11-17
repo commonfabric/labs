@@ -382,16 +382,16 @@ A session demands one of its values when it is sent a document the piece's
 setup wrote, other than its argument, which holds inputs current without it. A
 read that stops at a link to the piece is sent only its result document, and
 starts nothing (`carriesPieceMeta` in `runtime/memory/v2/server-sync.ts`). A
-demand that reaches a nested instance's values starts the instances that
-enclose it first, whether or not it reaches any of theirs (runtime-mapping.md,
-N22): the documents an enclosing instance's setup wrote may all be ones the
-demand pass starts nothing from, such as its nested node's output, a
-`computed:` document, and its argument. A
 piece whose document a client session tracks at that commit keeps running,
 because that session's demand has already made its attempt to load it. The result
 pattern's index entry goes with the release, and so do the watches of the
 documents only the stopped pieces read: the release asks for the pass a stop
-asks for (`docs/features/document-release.md`).
+asks for (`docs/features/document-release.md`). A
+demand that reaches a nested instance's values starts the instances that
+enclose it first, whether or not it reaches any of theirs (runtime-mapping.md,
+N22): the documents of an enclosing instance's that a demand reaches may all
+be ones the demand pass starts nothing from, such as its argument and a
+`computed:` document holding a link to the nested instance.
 
 **Parking.** A park releases the lease and stops the loop. A park for a
 failed loop, a failed initialization or a closing host disposes the runtime. An IDLE park (§3's "on idle") that abandoned no

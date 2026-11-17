@@ -301,11 +301,19 @@ it starts a piece a demand reaches (`#attemptStructureLoad()` in
 without reaching any of the enclosing instance's that the demand pass starts a
 piece from, as when the session reads through a link that names the nested
 instance's result and never opens the enclosing instance, and the nested
-instance would then run alone. The walk there is best effort as an open's is
-(`EnsurePieceOptions.sourcesBestEffort`), except that an enclosing piece
-owed its origin's follow holds the demanded root pending until the follow has
-run (serving-loop.md §3e). Each enclosing piece it starts runs for the rest of
-the tenure.
+instance would then run alone. Unlike an open's, the walk there is not best
+effort (`EnsurePieceOptions.sourcesRequired`): an enclosing piece that does not
+start holds the demanded root back with it, as an enclosing piece owed its
+origin's follow does (serving-loop.md §3e), and an error starting it or
+reading the links that name it is the demanded root's error, so the demand
+pass retries, parks and reports it as it does a piece of its own. Each
+enclosing piece's root is indexed under the demanded key, so that piece's runs
+are supplied the key's demanders and a failed start commit of it parks the
+key. A demand-started nested instance runs as the child its outermost
+enclosing piece's graph sets up and lives as long as that piece does, where an
+opened one is started in its own right; each enclosing piece runs for the rest
+of the tenure. Where the walk finds no enclosing piece, as for a child a
+handler made, the demanded instance starts alone, as it does for an open.
 The derivation path needs no analog: a commit dirtying docs read by
 unmaterialized nodes leaves them dirty-unmaterialized until a
 value-granular client pull (a subscription) demands them and their
