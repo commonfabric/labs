@@ -1761,7 +1761,10 @@ function resolvedSchemaPolicyGraph(
   if (!isObjectNotArray(schema)) return undefined;
   for (let cursor = active; cursor !== undefined; cursor = cursor.parent) {
     if (cursor.root === root && cursor.schema === schema) {
-      return { ifc: schema.ifc, ref: "#recursive", children: [] };
+      return atPolicyGraphPath(
+        { ifc: schema.ifc, ref: "#recursive", children: [] },
+        path,
+      );
     }
   }
   // A claim beside a reference overlays the referenced body's claims of the
@@ -1799,8 +1802,28 @@ function resolvedSchemaPolicyGraph(
     utf8Compare(left.key ?? "", right.key ?? "") ||
     (left.index ?? -1) - (right.index ?? -1)
   );
-  return { ifc: resolved.ifc, ref, children };
+  return atPolicyGraphPath({ ifc: resolved.ifc, ref, children }, path);
 }
+
+/**
+ * The logical path each position of a policy graph describes, as
+ * `resolvedSchemaPolicyGraph()` walked to it, or `undefined` where the walk
+ * could not tell one. Kept beside the graph rather than in it, so that it
+ * takes no part in a graph's hash.
+ */
+const policyGraphPaths = new WeakMap<
+  SchemaPolicyGraph,
+  readonly string[] | undefined
+>();
+
+/** `node`, recorded as the position at `path` (see `policyGraphPaths`). */
+const atPolicyGraphPath = (
+  node: SchemaPolicyGraph,
+  path: readonly string[] | undefined,
+): SchemaPolicyGraph => {
+  policyGraphPaths.set(node, path);
+  return node;
+};
 
 /**
  * Whether two envelopes declare the same policies at the same positions: the
@@ -1810,23 +1833,100 @@ function resolvedSchemaPolicyGraph(
  * declares nothing. A claim spelled as a member holding `undefined` compares
  * as no claim. Positions at a logical path `omits` names, and everything
  * beneath them, are not compared; a position whose path the walk cannot tell
- * is compared whatever `omits` says.
+ * is compared whatever `omits` says. Given `ifcEqual`, two positions' policies
+ * are the same where it says so, rather than where they are equal; it is told
+ * the logical path the position describes, or `undefined` where the walk could
+ * not tell one, or the two envelopes place the position at different paths.
  */
 export const cfcSchemaPoliciesEqual = (
   left: JSONSchema,
   right: JSONSchema,
   omits: (path: readonly string[]) => boolean = () => false,
-): boolean =>
-  hashStringOf(
-    withoutUndefinedMembers(
-      resolvedSchemaPolicyGraph(left, left, [], omits, undefined),
-    ),
-  ) ===
-    hashStringOf(
-      withoutUndefinedMembers(
-        resolvedSchemaPolicyGraph(right, right, [], omits, undefined),
-      ),
+  ifcEqual?: (
+    left: unknown,
+    right: unknown,
+    path: readonly string[] | undefined,
+  ) => boolean,
+): boolean => {
+  const [leftGraph, rightGraph] = [left, right].map((schema) =>
+    resolvedSchemaPolicyGraph(schema, schema, [], omits, undefined)
+  );
+  return ifcEqual === undefined
+    ? hashStringOf(withoutUndefinedMembers(leftGraph)) ===
+      hashStringOf(withoutUndefinedMembers(rightGraph))
+    : policyGraphsEqual(leftGraph, rightGraph, ifcEqual);
+};
+
+/**
+ * Helper for `cfcSchemaPoliciesEqual()`: whether two policy graphs have the
+ * same shape, each pair of positions declaring policies `ifcEqual` takes for
+ * the same.
+ */
+const policyGraphsEqual = (
+  left: SchemaPolicyGraph | undefined,
+  right: SchemaPolicyGraph | undefined,
+  ifcEqual: (
+    left: unknown,
+    right: unknown,
+    path: readonly string[] | undefined,
+  ) => boolean,
+): boolean => {
+  if (left === undefined || right === undefined) return left === right;
+  const leftPath = policyGraphPaths.get(left);
+  const rightPath = policyGraphPaths.get(right);
+  const path = leftPath !== undefined && rightPath !== undefined &&
+      leftPath.length === rightPath.length &&
+      leftPath.every((segment, i) => segment === rightPath[i])
+    ? leftPath
+    : undefined;
+  return left.ref === right.ref &&
+    ifcEqual(
+      withoutUndefinedMembers(left.ifc),
+      withoutUndefinedMembers(right.ifc),
+      path,
+    ) &&
+    left.children.length === right.children.length &&
+    left.children.every((child, i) => {
+      const other = right.children[i];
+      return child.keyword === other.keyword && child.key === other.key &&
+        child.index === other.index &&
+        policyGraphsEqual(child.policy, other.policy, ifcEqual);
+    });
+};
+
+/**
+ * Whether the policy `merged` declares at a position is the policy `stored`
+ * declares there but for write-policy alternatives `release` appended: the
+ * stored `writePolicyAnyOf` list begins the merged one, alternative for
+ * alternative and in order, each further alternative is one the release may
+ * append (`writePolicyAlternativeAdmissible()`), and every other member is
+ * the same. Equal policies are trivially so.
+ */
+export const ifcDiffersOnlyByReleaseAppend = (
+  stored: unknown,
+  merged: unknown,
+  release: WritePolicyRelease,
+): boolean => {
+  if (deepEqual(stored, merged)) return true;
+  if (!isObjectNotArray(stored) || !isObjectNotArray(merged)) return false;
+  const storedList = stored.writePolicyAnyOf;
+  const mergedList = merged.writePolicyAnyOf;
+  if (
+    !Array.isArray(storedList) || !Array.isArray(mergedList) ||
+    mergedList.length <= storedList.length
+  ) {
+    return false;
+  }
+  const { writePolicyAnyOf: _s, ...storedRest } = stored;
+  const { writePolicyAnyOf: _m, ...mergedRest } = merged;
+  return deepEqual(storedRest, mergedRest) &&
+    storedList.every((alternative, i) =>
+      deepEqual(alternative, mergedList[i])
+    ) &&
+    mergedList.slice(storedList.length).every((added) =>
+      writePolicyAlternativeAdmissible(added, storedList, release)
     );
+};
 
 /**
  * `value` with every object member holding `undefined` removed, recursively.

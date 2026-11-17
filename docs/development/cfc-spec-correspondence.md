@@ -450,6 +450,33 @@ an omitted alternative lands the same way, following specs#96 as amended
 (§8.15.6.1, "Write-Policy Alternatives"). The conformance statement's §10
 records the gap.
 
+The restatement of a setup replay's carried-over argument slots (§8.15.4)
+implements [specs#67](https://github.com/commonfabric/specs/pull/67) ahead of
+its ruling. A setup of a piece over its stored argument records each slot it
+carries over, preparation defers a protected field's writer requirements at or
+under one where the transaction changes nothing there, and the persist loop
+waives the deferred refusal where the envelope it would store declares the same
+policy throughout the document and the same labels at, above and below each
+deferred field, leaving out, in a release, the positions beneath held links,
+and the claims at new fields. In a release, the comparison that stores the
+derived envelope also counts as unchanged a position whose write policy the
+release extended: the stored alternatives begin the derived list, element for
+element and in order, each further alternative is one the release may append
+under [specs#96](https://github.com/commonfabric/specs/pull/96) (§8.15.13
+carve-out (c)), and every other claim at the position is the same. A position
+whose logical path the comparison cannot tell, or that is at, above or beneath
+a deferred field, is compared exactly. specs#67 as amended says the same, in
+§8.15.4's replayed-setup restatement. Its set of paths whose writer refusal is
+discharged is decided against the stored envelope's requirements; the
+runtime's is decided against every schema the write answers to, the stored
+envelope among them, so it holds those paths and can hold more, and compares
+more positions exactly. The waiver admits more than the pin at strict, with no
+default-off dial, so it does not satisfy step 4 above; the deferral it
+discharges carries the `SPEC-PENDING` marker for specs#67. @danfuzz ruled on
+2026-11-17 that the part counting a release's append as no change lands the
+same way, ahead of that ruling, as he ruled for specs#96 and specs#103. The
+conformance statement's §10 records the gap.
+
 The resolution that certifies a new JavaScript action node's static read set
 (`#collectStaticReadTargetsWithCompleteness` in `runner.ts`) implements
 [specs#100](https://github.com/commonfabric/specs/pull/100) ahead of its
