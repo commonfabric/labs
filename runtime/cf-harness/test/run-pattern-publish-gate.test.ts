@@ -1,8 +1,10 @@
-import { deployedPieceRef } from "@commonfabric/pattern-index/client";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
-import { PatternIndexClient } from "@commonfabric/pattern-index/client";
+import {
+  deployedPieceRef,
+  PatternIndexClient,
+} from "@commonfabric/pattern-index/client";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
