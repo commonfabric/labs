@@ -10,13 +10,18 @@
  * State lives in the space (`PerSpace`): the items, the rules learned from
  * them, and the history are the piece's own, and every reader derives the same
  * hi-fi labels, so they are asked for once per item, not once per viewer. Only
- * the draft in the add-an-item box is per session.
+ * the drafts in the goal and add-an-item boxes are per session.
+ *
+ * This pattern holds the state, the verbs, and the judgements; the cards it
+ * lays out (`items-card.tsx`, `rules-card.tsx`, `pool-card.tsx`,
+ * `history-card.tsx`) render them and send the verbs.
  */
 
 import {
   action,
   computed,
   type Default,
+  equals,
   FS,
   generateObject,
   NAME,
@@ -40,7 +45,6 @@ import {
   type ItemRow,
   looksPersonal,
   markdownOf,
-  newSurprises,
   percent,
   type PoolOffer,
   poolOffer,
@@ -56,12 +60,12 @@ import {
   settle,
   summarize,
   type Summary,
-  verdictText,
 } from "./induction.ts";
-import {
-  type CanonicalRule,
-  describeRule,
-} from "../shared/rule-grammar.ts";
+import type { CanonicalRule } from "../shared/rule-grammar.ts";
+import ItemsCard, { type ItemRef, type SubmittedItem } from "./items-card.tsx";
+import RulesCard, { type RuleRef } from "./rules-card.tsx";
+import PoolCard from "./pool-card.tsx";
+import HistoryCard from "./history-card.tsx";
 
 export type { CanonicalRule } from "../shared/rule-grammar.ts";
 export type {
@@ -74,29 +78,27 @@ export type {
   RewriteStatus,
   Summary,
 } from "./induction.ts";
+export type { ItemRef, RuleRef, SubmittedItem };
 
 /**
- * What the inductor needs of a pool: its goal, and where to contribute. It is
- * written out here rather than picked from the pool's output type, so the
- * inductor depends on the pool's shape, not its module.
+ * What the inductor needs of a pool: its goal, where to contribute, and how
+ * to take a contribution back. It is written out here rather than picked from
+ * the pool's output type, so the inductor depends on the pool's shape, not its
+ * module.
  */
 export interface PoolTarget {
   goal: string;
   submit: Stream<PoolSubmission>;
+  /** Takes the sender's contribution out of the pool. */
+  withdraw: Stream<void>;
   /** The rules the pool releases, most-held first. */
   consensus: PoolRule[];
 }
 
 /** What a pool's `submit` takes: a rule set under a pseudonym. */
 export interface PoolSubmission {
-  pseudonym?: string;
-  rules?: CanonicalRule[];
-  withdraw?: boolean;
-}
-
-/** The item `removeItem` takes out, by id. */
-export interface ItemRef {
-  id: string;
+  pseudonym: string;
+  rules: CanonicalRule[];
 }
 
 /** A new goal, as `setGoal` takes it. */
@@ -104,16 +106,33 @@ export interface GoalEvent {
   goal: string;
 }
 
-/** An item as `submitItem` takes it; an id is minted when none is given. */
-export interface SubmittedItem {
-  id?: string;
-  fields: Record<string, string>;
+/** Several items, as `addItems` takes them. */
+export interface SubmittedItems {
+  items: SubmittedItem[];
+}
+
+/** How many new surprises start a rewrite, as `setRewriteAfter` takes it. */
+export interface RewriteAfterEvent {
+  count: number;
+}
+
+/** The held-out share, as `setHeldOutPercent` takes it. */
+export interface HeldOutPercentEvent {
+  percent: number;
+}
+
+/**
+ * The hi-fi model, as `setHifiModel` takes it: a model name, or "" for the
+ * deployment's default.
+ */
+export interface HifiModelEvent {
+  model: string;
 }
 
 interface LofiInductorInput {
   /** The yes-or-no question, such as "Is this email a bill?". */
   goal?: PerSpace<Writable<string | Default<"">>>;
-  /** The items to label. Anything can feed them, through `submitItem`. */
+  /** The items to label. Anything can feed them, through `addItem`. */
   items?: PerSpace<Writable<Item[] | Default<[]>>>;
   /** The current rule set, in canonical form. */
   rules?: PerSpace<Writable<CanonicalRule[] | Default<[]>>>;
@@ -133,16 +152,16 @@ interface LofiInductorInput {
    */
   pool?: PoolTarget;
   /**
-   * The model that labels items. Omitted, the deployment's default
+   * The model that labels items. Empty, the deployment's default
    * `generateObject` model answers; a stronger one, such as
    * `gateway:claude-opus-5-5` where the gateway lists it
    * (`/api/ai/llm/models`), can be named.
    */
-  hifiModel?: PerSpace<string>;
+  hifiModel?: PerSpace<Writable<string | Default<"">>>;
   /** How many new surprises start a rewrite. */
-  rewriteAfter?: PerSpace<number | Default<3>>;
+  rewriteAfter?: PerSpace<Writable<number | Default<3>>>;
   /** The share of items held out to score proposals on, in percent. */
-  heldOutPercent?: PerSpace<number | Default<30>>;
+  heldOutPercent?: PerSpace<Writable<number | Default<30>>>;
   /** Retries of the current rewrite's failed model call. */
   rewriteAttempt?: PerSpace<Writable<number | Default<0>>>;
   /**
@@ -171,6 +190,12 @@ export interface LofiInductorOutput {
   pseudonym: string;
   /** The keys of the current rules adopted from the pool, never published. */
   adopted: string[];
+  /** The model that labels items, or "" for the deployment's default. */
+  hifiModel: string;
+  /** How many new surprises start a rewrite. */
+  rewriteAfter: number;
+  /** The share of items held out to score proposals on, in percent. */
+  heldOutPercent: number;
   /** Every item with its hi-fi and lo-fi labels. */
   rows: ItemRow[];
   summary: Summary;
@@ -179,15 +204,30 @@ export interface LofiInductorOutput {
   /** Where the current rewrite stands. */
   rewrite: RewriteStatus;
   /**
-   * Ask a new question. The rules, the history, the pseudonym, and what was
-   * published were all for the old one, so they are cleared; the items stay,
-   * and the hi-fi model labels them for the new question.
+   * Ask a new question. The old goal's contribution is withdrawn from its
+   * pool, and the rules, the history, the pseudonym, and what was published
+   * were all for the old question, so they are cleared; the items stay, and
+   * the hi-fi model labels them for the new question. The same question again
+   * changes nothing; a blank one is refused.
    */
   setGoal: Stream<GoalEvent>;
-  /** Add one item. An id the list holds already adds nothing. */
-  submitItem: Stream<SubmittedItem>;
-  /** Take one item out, by id. An id the list does not hold does nothing. */
+  /**
+   * Add one item: string fields, at least one, and an optional id that
+   * deduplicates (an id the list holds already adds nothing). An item with no
+   * fields, or a field that is not a string, is refused.
+   */
+  addItem: Stream<SubmittedItem>;
+  /** Add several items at once, each as `addItem` takes it. */
+  addItems: Stream<SubmittedItems>;
+  /**
+   * Take one item out, by reference: the item as read from `items`. An item
+   * the list no longer holds changes nothing.
+   */
   removeItem: Stream<ItemRef>;
+  /** Take one rule out of the current set, by reference, as read from `rules`. */
+  removeRule: Stream<RuleRef>;
+  /** Empty the current rule set. The history stays. */
+  resetRules: Stream<void>;
   /**
    * Record the rewrite's judgement once it is ready: adopt the proposed set if
    * it was accepted, and add the round to the history either way.
@@ -195,6 +235,12 @@ export interface LofiInductorOutput {
   settleRewrite: Stream<void>;
   /** Ask the model again after the rewrite's call failed. */
   retryRewrite: Stream<void>;
+  /** Set how many new surprises start a rewrite: a whole number, at least 1. */
+  setRewriteAfter: Stream<RewriteAfterEvent>;
+  /** Set the held-out share: a number above 0 and below 100. */
+  setHeldOutPercent: Stream<HeldOutPercentEvent>;
+  /** Name the hi-fi model, or "" for the default. Every item is asked again. */
+  setHifiModel: Stream<HifiModelEvent>;
   /**
    * The pool's released rules for this goal, judged as a candidate set on
    * this piece's held-out items, or null when there is nothing new to offer.
@@ -207,6 +253,48 @@ export interface LofiInductorOutput {
   settlePoolOffer: Stream<void>;
   /** Publish the current rules for the goal. */
   publish: Stream<void>;
+  /**
+   * Take this piece's contribution back out of the goal's pool and forget
+   * what was published. The pseudonym stays, for the next publish.
+   */
+  unpublish: Stream<void>;
+}
+
+/** The item an `addItem` event describes; throws on one that is malformed. */
+function checkedItem(
+  event: SubmittedItem,
+): { id: string; fields: Item["fields"] } {
+  if (typeof event !== "object" || event === null) {
+    throw new Error("An item is an object with `fields`.");
+  }
+  const raw = event.fields;
+  if (typeof raw !== "object" || raw === null) {
+    throw new Error("An item needs `fields`, an object of strings.");
+  }
+  const fields: Record<string, string> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    if (typeof value !== "string") {
+      throw new Error(`An item's field \`${name}\` is not a string.`);
+    }
+    fields[name] = value;
+  }
+  if (Object.keys(fields).length === 0) {
+    throw new Error("An item needs at least one field.");
+  }
+  if (event.id !== undefined && typeof event.id !== "string") {
+    throw new Error("An item's `id` is a string when given.");
+  }
+  return { id: event.id?.trim() ?? "", fields };
+}
+
+/**
+ * Asks `target` to withdraw this piece's contribution, if it is the pool for
+ * `question`. A pool binds the principal, so it takes out only the sender's.
+ */
+function withdrawFrom(target: PoolTarget | null, question: string): void {
+  if (target !== null && sameGoal(target.goal ?? "", question)) {
+    target.withdraw.send();
+  }
 }
 
 export default pattern<LofiInductorInput, LofiInductorOutput>(
@@ -224,47 +312,40 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     rewriteAttempt,
     adopted,
   }) => {
-    const draft = new Writable.perSession("");
     const goalDraft = new Writable.perSession("");
 
-    // ========================================================================
-    // HI-FI: one cached model call per item
-    // ========================================================================
+    // An empty name asks for the deployment's default, which the builtin
+    // picks only when no model is given.
+    const hifiModelName = computed(() => hifiModel.get() || undefined);
 
-    // Expression-bodied on purpose: in a block body, the transformer wraps a
-    // `const answer = generateObject(...)` in a lift that never settles.
+    // One cached model call per item. Expression-bodied on purpose: in a
+    // block body, the transformer wraps a `const answer = generateObject(...)`
+    // in a lift that never settles.
     const hifi = items.map((item) => ({
       id: item.id,
       answer: generateObject<HifiAnswer>({
         prompt: computed(() => buildHifiPrompt(goal.get(), item)),
         system: HIFI_SYSTEM,
-        model: hifiModel,
+        model: hifiModelName,
       }),
     }));
 
-    // ========================================================================
-    // LO-FI and SURPRISES
-    // ========================================================================
-
     const rows = computed(() =>
-      gradeItems(items.get(), hifi, rules.get(), heldOutPercent)
+      gradeItems(items.get(), hifi, rules.get(), heldOutPercent.get())
     );
     const summary = computed(() => summarize(rows));
     const heldOutF1 = computed(() =>
       scoreRules(rules.get(), heldOutExamples(rows)).f1
     );
 
-    // ========================================================================
-    // REWRITE: a whole new rule set once enough surprises are new
-    // ========================================================================
-
+    // A whole new rule set once enough surprises are new.
     const request = computed(() =>
       rewriteRequest(
         goal.get(),
         rules.get(),
         rows,
         history.get(),
-        rewriteAfter,
+        rewriteAfter.get(),
         rewriteAttempt.get(),
       )
     );
@@ -314,16 +395,59 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     // A failed model call records nothing; this asks the same question again.
     const retryRewrite = action(() => {
       if (rewrite.status !== "failed") return;
-      rewriteAttempt.set(rewriteAttempt.get() + 1);
+      rewriteAttempt.increment(1);
     });
+
+    const setRewriteAfter = action((event: RewriteAfterEvent) => {
+      const count = event?.count;
+      if (typeof count !== "number" || !Number.isInteger(count) || count < 1) {
+        throw new Error("`count` is a whole number, at least 1.");
+      }
+      rewriteAfter.set(count);
+    });
+
+    const setHeldOutPercent = action((event: HeldOutPercentEvent) => {
+      const share = event?.percent;
+      if (
+        typeof share !== "number" || !Number.isFinite(share) || share <= 0 ||
+        share >= 100
+      ) {
+        throw new Error("`percent` is a number above 0 and below 100.");
+      }
+      heldOutPercent.set(share);
+    });
+
+    const setHifiModel = action((event: HifiModelEvent) => {
+      if (typeof event?.model !== "string") {
+        throw new Error('`model` is a model name, or "" for the default.');
+      }
+      hifiModel.set(event.model.trim());
+    });
+
+    // The pool to publish to. A pool serves one goal, and the wish cannot yet
+    // match on it, so every use checks the goal first.
+    const poolWish = wish<PoolTarget>({
+      query: "#inductorPool",
+      scope: ["~", "."],
+    });
+    // Null, not undefined, when there is none: an action whose context
+    // holds an undefined value does not run.
+    const target = pool ?? poolWish.result ?? null;
 
     // The goal changes only here, never per keystroke: every hi-fi call is
     // asked for the goal, so a live input re-asked about every item on each
     // key. A new question also gets a new pseudonym, so the pool cannot link
-    // this piece's contributions for two questions.
+    // this piece's contributions for two questions; the old question's
+    // contribution is withdrawn first, while the pool for it is still the
+    // one the goal names.
     const setGoal = action((event: GoalEvent) => {
-      const next = typeof event?.goal === "string" ? event.goal.trim() : "";
-      if (next === "" || next === goal.get().trim()) return;
+      if (typeof event?.goal !== "string" || event.goal.trim() === "") {
+        throw new Error("`goal` is a yes-or-no question, not blank.");
+      }
+      const next = event.goal.trim();
+      const current = goal.get().trim();
+      if (next === current) return;
+      if (pseudonym.get() !== "") withdrawFrom(target, current);
       goal.set(next);
       rules.set([]);
       history.set([]);
@@ -339,50 +463,53 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       goalDraft.set("");
     });
 
-    const submitItem = action((event: SubmittedItem) => {
-      const fields = Object.fromEntries(
-        Object.entries(event?.fields ?? {}).filter(([, value]) =>
-          typeof value === "string"
-        ),
-      );
-      if (Object.keys(fields).length === 0) return;
-      const id = typeof event.id === "string" && event.id.trim() !== ""
-        ? event.id.trim()
-        : `item-${Math.random().toString(36).slice(2, 10)}`;
-      if (items.get().some((existing) => existing.id === id)) return;
-      items.push({ id, fields });
+    // The id is only a dedupe key, so a connector that sends the same record
+    // twice adds it once; nothing addresses an item by it.
+    const addItems = action((event: SubmittedItems) => {
+      if (!Array.isArray(event?.items)) {
+        throw new Error("`items` is a list of items.");
+      }
+      const checked = event.items.map(checkedItem);
+      const seen = new Set(items.get().map((existing) => existing.id));
+      const added: Item[] = [];
+      for (const { id, fields } of checked) {
+        const key = id !== ""
+          ? id
+          : `item-${Math.random().toString(36).slice(2, 10)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        added.push({ id: key, fields });
+      }
+      if (added.length > 0) items.pushAll(added);
+    });
+
+    const addItem = action((event: SubmittedItem) => {
+      addItems.send({ items: [event] });
     });
 
     const removeItem = action((event: ItemRef) => {
-      const id = typeof event?.id === "string" ? event.id.trim() : "";
-      const kept = items.get().filter((item) => item.id !== id);
-      if (kept.length < items.get().length) items.set(kept);
+      if (event?.item === undefined || event.item === null) {
+        throw new Error("`item` is an item read from `items`.");
+      }
+      const index = items.get().findIndex((each) => equals(each, event.item));
+      if (index >= 0) items.removeByValue(items.key(index));
     });
 
-    const addDraft = action(() => {
-      const text = draft.get().trim();
-      if (text === "") return;
-      submitItem.send({ fields: { text } });
-      draft.set("");
+    const removeRule = action((event: RuleRef) => {
+      if (event?.rule === undefined || event.rule === null) {
+        throw new Error("`rule` is a rule read from `rules`.");
+      }
+      const index = rules.get().findIndex((each) => equals(each, event.rule));
+      if (index < 0) return;
+      const key = rules.get()[index].key;
+      rules.removeByValue(rules.key(index));
+      adopted.removeByValue(key);
     });
 
-    // ========================================================================
-    // PUBLISH: the rules leave this piece only into a pool for its goal
-    // ========================================================================
-
-    // A pool serves one goal, and the wish cannot yet match on it, so
-    // `publish` checks the goal before it sends.
-    const poolWish = wish<PoolTarget>({
-      query: "#inductorPool",
-      scope: ["~", "."],
+    const resetRules = action(() => {
+      rules.set([]);
+      adopted.set([]);
     });
-    // Null, not undefined, when there is none: an action whose context
-    // holds an undefined value does not run.
-    const target = pool ?? poolWish.result ?? null;
-
-    // ========================================================================
-    // THE POOL'S RULES: a candidate set, judged like a rewrite
-    // ========================================================================
 
     // What the pool for this goal releases. A pool for another goal offers
     // nothing.
@@ -458,9 +585,13 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       }
     });
 
-    // ========================================================================
-    // VIEW
-    // ========================================================================
+    // Nothing to take back before the first publish, which mints the
+    // pseudonym.
+    const unpublish = action(() => {
+      if (pseudonym.get() === "") return;
+      withdrawFrom(target, goal.get().trim());
+      published.set(null);
+    });
 
     const title = computed(() => {
       const question = goal.get().trim();
@@ -475,128 +606,38 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         percent(summary.agreementRate)
       } agreement · ${summary.surprises} surprises`
     );
-    const rulesHeading = computed(() =>
-      `Rules · held-out F1 ${percent(heldOutF1)} on ${summary.heldOut} items`
-    );
-    const ruleLines = computed(() => rules.get().map(describeRule));
-    const rewriteLine = computed(() => {
-      const status = rewrite;
-      if (status.status === "idle") {
-        const missing = Math.max(1, rewriteAfter) -
-          newSurprises(rows, history.get()).length;
-        return missing > 0
-          ? `Waiting for ${missing} more surprises before proposing new rules.`
-          : "Waiting for the hi-fi model to label the items so far.";
-      }
-      if (status.status === "pending") return "Proposing a new rule set…";
-      if (status.status === "failed") {
-        return `Proposing failed (${status.reason}); nothing was recorded.`;
-      }
-      return `Proposed: ${status.judgement.reason}.`;
+
+    // The cards are known by their order here (composition.md): a new card
+    // goes after the last, so the items card keeps its draft.
+    const rulesCard = RulesCard({
+      rules,
+      heldOutF1,
+      summary,
+      rewrite,
+      rewriteAfter,
+      rows,
+      history,
+      settleRewrite,
+      retryRewrite,
+      removeRule,
+      resetRules,
     });
-    const rewriteReady = computed(() => rewrite.status === "ready");
-    const rewriteFailed = computed(() => rewrite.status === "failed");
-    // What the ready proposal holds: its rules, and why any were refused.
-    const proposalLines = computed(() => {
-      const status = rewrite;
-      if (status.status !== "ready") return [];
-      return [
-        ...status.judgement.rules.map(describeRule),
-        ...status.judgement.refusals,
-      ];
+    const poolCard = PoolCard({
+      offer,
+      published,
+      rules,
+      settlePoolOffer,
+      publish,
+      unpublish,
     });
-    const settleLabel = computed(() => {
-      const status = rewrite;
-      if (status.status !== "ready") return "";
-      const { accepted, currentF1, proposedF1 } = status.judgement;
-      return accepted
-        ? `Apply new rules (F1 ${percent(currentF1)} → ${percent(proposedF1)})`
-        : "Dismiss rejected proposal";
-    });
-    const historyLines = computed(() =>
-      [...history.get()].reverse().map((entry) => ({
-        round: `Round ${entry.round}: ${
-          entry.accepted ? "accepted" : "rejected"
-        }`,
-        reason: entry.reason,
-        detail: [
-          ...entry.proposed.map(describeRule),
-          ...entry.refusals,
-        ].join("\n"),
-      }))
-    );
-    // The pool's answer to a submission is not visible here: a refusal is
-    // thrown in the pool's handler, and a contribution is confidential to the
-    // pool. So the line says what this piece did, which is send.
-    const publishedLine = computed(() => {
-      const snapshot = published.get();
-      if (!snapshot) {
-        return rules.get().length === 0
-          ? "No rules to publish yet."
-          : "Not published yet.";
-      }
-      const withheld = (snapshot.withheld
-        ? ` Held back ${snapshot.withheld} that look personal (an @ or a ` +
-          `run of six digits).`
-        : "") +
-        (snapshot.adopted
-          ? ` Left out ${snapshot.adopted} adopted from the pool.`
-          : "");
-      if (snapshot.pooled) {
-        return `Sent ${snapshot.rules.length} rules to the pool for ` +
-          `“${snapshot.goal}”. No one learns a rule from it until enough ` +
-          `others hold it too.${withheld}`;
-      }
-      return snapshot.rules.length === 0
-        ? `Nothing was sent.${withheld}`
-        : `No pool for “${snapshot.goal}” found; nothing was sent.${withheld}`;
-    });
-    const noRules = computed(() => rules.get().length === 0);
-    const hasOffer = computed(() => offer !== null);
-    const offerLine = computed(() =>
-      offer === null
-        ? ""
-        : `The pool for this goal offers ${offer.judgement.rules.length} ` +
-          `rules your held-out items exercise. On those items: ` +
-          `${offer.judgement.reason}.`
-    );
-    // Each released rule, and what became of it: offered, refused, or left
-    // out because none of the held-out items exercises it.
-    const offerLines = computed(() =>
-      offer === null ? [] : [
-        ...offer.judgement.rules.map((rule) =>
-          `offered: ${describeRule(rule)}`
-        ),
-        ...offer.judgement.refusals.map((reason) => `refused: ${reason}`),
-        ...(offer.unexercised ?? []).map((rule) =>
-          `left out, no held-out item matches it: ${describeRule(rule)}`
-        ),
-      ]
-    );
-    const offerLabel = computed(() => {
-      if (offer === null) return "";
-      const { accepted, currentF1, proposedF1 } = offer.judgement;
-      return accepted
-        ? `Adopt the pool's rules (F1 ${percent(currentF1)} → ${
-          percent(proposedF1)
-        })`
-        : "Dismiss the pool's rules";
-    });
-    const itemLines = computed(() =>
-      [...rows].reverse().map((row) => ({
-        text: Object.values(row.fields).join(" · "),
-        verdict: verdictText(row),
-        color: row.surprise
-          ? "var(--cf-theme-color-error)"
-          : "var(--cf-theme-color-text-muted)",
-      }))
-    );
+    const historyCard = HistoryCard({ history });
+    const itemsCard = ItemsCard({ items, rows, addItem, removeItem });
 
     return {
       [NAME]: title,
       [UI]: (
         <cf-screen>
-          <cf-vstack slot="header" gap="2">
+          <cf-vstack slot="header" gap="2" padding="4">
             <cf-heading level={4}>{title}</cf-heading>
             <cf-hstack gap="2">
               <cf-input
@@ -604,87 +645,18 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
                 placeholder="A new yes-or-no question, such as “Is this email a bill?”"
                 style="flex: 1;"
               />
-              <cf-button onClick={applyGoalDraft}>Set goal</cf-button>
+              <cf-button color="primary" onClick={applyGoalDraft}>
+                Set goal
+              </cf-button>
             </cf-hstack>
-            <span>{statsLine}</span>
+            <cf-text tone="muted">{statsLine}</cf-text>
           </cf-vstack>
-          <cf-vscroll>
-            <cf-vstack gap="3" style="padding: 1rem;">
-              <cf-card>
-                <cf-vstack gap="2">
-                  <cf-heading level={5}>{rulesHeading}</cf-heading>
-                  {ruleLines.map((line) => <code>{line}</code>)}
-                  <span>{rewriteLine}</span>
-                  {proposalLines.map((line) => <code>{line}</code>)}
-                  {rewriteReady
-                    ? (
-                      <cf-button onClick={() => settleRewrite.send()}>
-                        {settleLabel}
-                      </cf-button>
-                    )
-                    : null}
-                  {rewriteFailed
-                    ? (
-                      <cf-button onClick={() => retryRewrite.send()}>
-                        Try again
-                      </cf-button>
-                    )
-                    : null}
-                  {hasOffer
-                    ? (
-                      <cf-vstack gap="1">
-                        <span>{offerLine}</span>
-                        {offerLines.map((line) => <code>{line}</code>)}
-                        <cf-button onClick={() => settlePoolOffer.send()}>
-                          {offerLabel}
-                        </cf-button>
-                      </cf-vstack>
-                    )
-                    : null}
-                  <cf-hstack gap="2" align="center">
-                    <cf-button
-                      disabled={noRules}
-                      onClick={() => publish.send()}
-                    >
-                      Publish rules
-                    </cf-button>
-                    <span>{publishedLine}</span>
-                  </cf-hstack>
-                </cf-vstack>
-              </cf-card>
-              <cf-card>
-                <cf-vstack gap="2">
-                  <cf-heading level={5}>Proposals</cf-heading>
-                  {historyLines.map((entry) => (
-                    <cf-vstack gap="0">
-                      <strong>{entry.round}</strong>
-                      <span>{entry.reason}</span>
-                      <pre style="margin: 0; white-space: pre-wrap;">{entry.detail}</pre>
-                    </cf-vstack>
-                  ))}
-                </cf-vstack>
-              </cf-card>
-              <cf-card>
-                <cf-vstack gap="2">
-                  <cf-heading level={5}>Items</cf-heading>
-                  <cf-hstack gap="2">
-                    <cf-input
-                      $value={draft}
-                      placeholder="Add an item's text"
-                      style="flex: 1;"
-                    />
-                    <cf-button onClick={addDraft}>Add</cf-button>
-                  </cf-hstack>
-                  {itemLines.map((line) => (
-                    <cf-hstack gap="2">
-                      <span style="flex: 1;">{line.text}</span>
-                      <span style={{ color: line.color }}>{line.verdict}</span>
-                    </cf-hstack>
-                  ))}
-                </cf-vstack>
-              </cf-card>
-            </cf-vstack>
-          </cf-vscroll>
+          <cf-vstack gap="3" padding="4">
+            {rulesCard}
+            {poolCard}
+            {historyCard}
+            {itemsCard}
+          </cf-vstack>
         </cf-screen>
       ),
       [FS]: {
@@ -699,18 +671,28 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       published,
       pseudonym,
       adopted,
+      hifiModel,
+      rewriteAfter,
+      heldOutPercent,
       rows,
       summary,
       heldOutF1,
       rewrite,
       setGoal,
-      submitItem,
+      addItem,
+      addItems,
       removeItem,
+      removeRule,
+      resetRules,
       settleRewrite,
       retryRewrite,
+      setRewriteAfter,
+      setHeldOutPercent,
+      setHifiModel,
       poolOffer: offer,
       settlePoolOffer,
       publish,
+      unpublish,
     };
   },
 );

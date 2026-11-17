@@ -88,11 +88,11 @@ export default pattern(() => {
   // Straight-line, one statement per inductor: a test's action is pattern
   // code, which keeps loops out of callbacks
   const action_submit_items = action(() => {
-    ITEMS.forEach((item) => better.submitItem.send(item));
-    ITEMS.forEach((item) => worse.submitItem.send(item));
-    ITEMS.forEach((item) => unsafe.submitItem.send(item));
-    ITEMS.forEach((item) => outOfGrammar.submitItem.send(item));
-    ITEMS.forEach((item) => flaky.submitItem.send(item));
+    ITEMS.forEach((item) => better.addItem.send(item));
+    ITEMS.forEach((item) => worse.addItem.send(item));
+    ITEMS.forEach((item) => unsafe.addItem.send(item));
+    ITEMS.forEach((item) => outOfGrammar.addItem.send(item));
+    ITEMS.forEach((item) => flaky.addItem.send(item));
   });
   const action_settle = action(() => {
     better.settleRewrite.send();

@@ -5,10 +5,7 @@
  * that word surprises them.
  */
 
-import {
-  type CanonicalRule,
-  checkRule,
-} from "../shared/rule-grammar.ts";
+import { type CanonicalRule, checkRule } from "../shared/rule-grammar.ts";
 
 /** A rule in canonical form; throws on a rule outside the grammar. */
 export function rule(

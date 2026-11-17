@@ -30,10 +30,7 @@ import {
   splitOf,
   summarize,
 } from "./induction.ts";
-import {
-  type CanonicalRule,
-  checkRule,
-} from "../shared/rule-grammar.ts";
+import { type CanonicalRule, checkRule } from "../shared/rule-grammar.ts";
 
 /** A rule in canonical form, failing the test when it is refused. */
 function rule(field: string, pattern: string, predicts = true): CanonicalRule {

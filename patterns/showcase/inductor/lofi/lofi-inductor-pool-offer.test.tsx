@@ -3,8 +3,9 @@
  * its goal as a candidate set, judged on its own held-out items by the same
  * gate as a rewrite, and adopted or dismissed the same way. A better set is
  * adopted, without a released rule that none of the held-out items
- * exercises, and is not published back as the person's own; a worse one is dismissed, and neither is offered again; a pool
- * for another goal offers nothing.
+ * exercises, and is not published back as the person's own; a worse one is
+ * dismissed, and neither is offered again; a pool for another goal offers
+ * nothing.
  *
  * Patterns under test: ./lofi-inductor.tsx, reading a pool's release. The
  * pool here is a stand-in that releases a given set; a real pool's release
@@ -40,6 +41,7 @@ const GOAL = "Is this email a bill?";
 export const llmMocks = HIFI_MOCKS;
 
 const ignore = handler<PoolSubmission, Record<string, never>>(() => {});
+const ignoreWithdraw = handler<void, Record<string, never>>(() => {});
 
 interface StandInInput {
   goal: Default<string, "">;
@@ -52,9 +54,13 @@ interface StandInOutput {
   goal: string;
   consensus: PoolRule[];
   submit: Stream<PoolSubmission>;
+  withdraw: Stream<void>;
 }
 
-/** A pool that releases the set it is given and ignores submissions. */
+/**
+ * A pool that releases the set it is given and ignores submissions and
+ * withdrawals.
+ */
 const StandInPool = pattern<StandInInput, StandInOutput>(
   ({ goal, consensus }) => ({
     [NAME]: "Stand-in pool",
@@ -62,6 +68,7 @@ const StandInPool = pattern<StandInInput, StandInOutput>(
     goal,
     consensus,
     submit: ignore({}),
+    withdraw: ignoreWithdraw({}),
   }),
 );
 
@@ -115,9 +122,9 @@ export default pattern(() => {
   const elsewhere = inductor(otherPool);
 
   const action_submit_items = action(() => {
-    ITEMS.forEach((item) => adopter.submitItem.send(item));
-    ITEMS.forEach((item) => dismisser.submitItem.send(item));
-    ITEMS.forEach((item) => elsewhere.submitItem.send(item));
+    ITEMS.forEach((item) => adopter.addItem.send(item));
+    ITEMS.forEach((item) => dismisser.addItem.send(item));
+    ITEMS.forEach((item) => elsewhere.addItem.send(item));
   });
   const action_settle = action(() => {
     adopter.settlePoolOffer.send();

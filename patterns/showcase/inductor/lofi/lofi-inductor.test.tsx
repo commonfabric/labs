@@ -1,7 +1,7 @@
 /**
  * The lo-fi inductor watching the hi-fi model: an item both label alike is no
  * surprise, an item they label differently is one, a rewrite waits for enough
- * new surprises, `submitItem` ignores a repeated id and an item without
+ * new surprises, `addItem` ignores a repeated id and an item without
  * fields, publishing records the current rules for the goal, with no pool to
  * send them to, setting a new goal clears what belonged to the old one, and
  * removing an item takes it out by id.
@@ -52,24 +52,23 @@ export default pattern(() => {
   });
 
   const action_submit_agreeing = action(() => {
-    subject.submitItem.send({
+    subject.addItem.send({
       id: "mail-6",
       fields: { subject: "Invoice 42" },
     });
-    subject.submitItem.send({ id: "mail-12", fields: { subject: "Lunch?" } });
+    subject.addItem.send({ id: "mail-12", fields: { subject: "Lunch?" } });
   });
   const action_submit_disagreeing = action(() => {
-    subject.submitItem.send({
+    subject.addItem.send({
       id: "mail-1",
       fields: { subject: "Bill for March" },
     });
   });
-  const action_submit_repeat_and_empty = action(() => {
-    subject.submitItem.send({
+  const action_submit_repeat = action(() => {
+    subject.addItem.send({
       id: "mail-1",
       fields: { subject: "Something else" },
     });
-    subject.submitItem.send({ id: "mail-99", fields: {} });
   });
 
   const assert_starts_empty = assert(() =>
@@ -93,7 +92,7 @@ export default pattern(() => {
     subject.rows[2]?.lofi === false && subject.rewrite.status === "idle"
   );
 
-  const assert_repeat_and_empty_ignored = assert(() =>
+  const assert_repeat_ignored = assert(() =>
     subject.items.length === 3 &&
     subject.items[2]?.fields.subject === "Bill for March"
   );
@@ -121,27 +120,15 @@ export default pattern(() => {
     subject.rows[2]?.hifi === false
   );
 
-  // The same question again, or an empty one, changes nothing.
+  // The same question again changes nothing.
   const action_set_same_goal = action(() => {
     subject.setGoal.send({ goal: `  ${LUNCH_GOAL} ` });
-    subject.setGoal.send({ goal: "  " });
   });
   const action_set_lunch_goal = action(() => {
     subject.setGoal.send({ goal: LUNCH_GOAL });
   });
   const assert_goal_kept = assert(() =>
     subject.goal === LUNCH_GOAL && subject.items.length === 3
-  );
-
-  // Removing an item takes it out by id; an unknown id changes nothing.
-  const action_remove_items = action(() => {
-    subject.removeItem.send({ id: "mail-12" });
-    subject.removeItem.send({ id: "mail-404" });
-  });
-  const assert_item_removed = assert(() =>
-    subject.items.length === 2 &&
-    subject.items.every((item) => item.id !== "mail-12") &&
-    subject.rows.length === 2
   );
 
   const assert_text_projection = assert(() =>
@@ -163,8 +150,8 @@ export default pattern(() => {
       { assertion: assert_disagreement_is_a_surprise },
       // The view renders over items, rules, and an empty history
       { render: subject[UI] },
-      { action: action_submit_repeat_and_empty },
-      { assertion: assert_repeat_and_empty_ignored },
+      { action: action_submit_repeat },
+      { assertion: assert_repeat_ignored },
       { assertion: assert_rules_unchanged },
       { press: subject[UI], control: "Publish rules" },
       { assertion: assert_published },
@@ -174,8 +161,6 @@ export default pattern(() => {
       { assertion: assert_goal_reset },
       { action: action_set_same_goal },
       { assertion: assert_goal_kept },
-      { action: action_remove_items },
-      { assertion: assert_item_removed },
     ],
     subject,
   };

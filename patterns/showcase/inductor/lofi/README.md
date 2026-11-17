@@ -119,13 +119,13 @@ Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
 
 ## Building `lofi-inductor`
 
-- `../shared/rule-grammar.ts` holds the grammar and the canonical form.
-  It lives with the pool, whose policy module imports it, and the inductor
-  imports it from there. The canonical form keeps what `RegExp.test` answers
-  with the `i` flag and rewrites only what cannot change it: alternation order,
-  laziness, capturing groups, letter case, equivalent spellings of one character
-  or class, and quantifier spelling. When unsure it leaves a pattern as written,
-  so two rules may compare different that mean the same, but never the reverse.
+- `../shared/rule-grammar.ts` holds the grammar and the canonical form. It lives
+  with the pool, whose policy module imports it, and the inductor imports it
+  from there. The canonical form keeps what `RegExp.test` answers with the `i`
+  flag and rewrites only what cannot change it: alternation order, laziness,
+  capturing groups, letter case, equivalent spellings of one character or class,
+  and quantifier spelling. When unsure it leaves a pattern as written, so two
+  rules may compare different that mean the same, but never the reverse.
 - The grammar is also the safety check, and it runs on the canonical form, which
   is what runs, so `(a|b)+` is accepted as `[ab]+`. It refuses a repeated group
   holding a choice (`(a|aa)+`, exponential), and bounds polynomial backtracking:
@@ -209,10 +209,10 @@ emitted (not the rule, not its count, not that it exists) are that function's
 own logic, so they need no new CFC machinery. The rule also requires an input
 witness: everything the function read was written by the pool's own
 `submitContribution`, so the function run over contributions anyone else made up
-is not released (`showcase/inductor/pool/README.md`). The secret and the per-rule
-counts never leave the function; only released rules and their counts do, as the
-pool's public result, read where it is computed (the runtime refuses storing it
-today; see the pool's README).
+is not released (`showcase/inductor/pool/README.md`). The secret and the
+per-rule counts never leave the function; only released rules and their counts
+do, as the pool's public result, read where it is computed (the runtime refuses
+storing it today; see the pool's README).
 
 **Cuts** (both approved by Alex, 2026-11-16):
 
