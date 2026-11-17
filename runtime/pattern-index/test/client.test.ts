@@ -811,7 +811,7 @@ describe("PatternIndexClient", () => {
       baseUrl: "https://index.test/api",
       fetchFn,
       signer,
-      githubOidc: "jwt",
+      githubOidc: () => Promise.resolve("jwt"),
     });
     await client.listRepoHeads({ repository: "acme/patterns" });
     expect(requests[0].url).toBe("https://index.test/api/listRepoHeads");
@@ -827,6 +827,23 @@ describe("PatternIndexClient", () => {
       }),
     });
     expect(verified.userDid).toBe(signer.did());
+  });
+  it("mints a GitHub OIDC token for each call", async () => {
+    const { fetchFn, requests } = recordingFetch([
+      jsonResponse({ heads: [] }),
+      jsonResponse({ heads: [] }),
+    ]);
+    let minted = 0;
+    const client = new PatternIndexClient({
+      baseUrl: "https://index.test/api",
+      fetchFn,
+      signer,
+      githubOidc: () => Promise.resolve(`jwt-${++minted}`),
+    });
+    await client.listRepoHeads({ repository: "acme/patterns" });
+    await client.listRepoHeads({ repository: "acme/patterns" });
+    expect(requests.map((request) => JSON.parse(request.body).githubOidc))
+      .toEqual(["jwt-1", "jwt-2"]);
   });
   it("throws when `listRepoHeads` returns no list of heads", async () => {
     const { client } = createClient([jsonResponse({ heads: "none" })]);

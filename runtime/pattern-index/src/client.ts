@@ -823,11 +823,13 @@ export interface PatternIndexClientOptions {
   proofs?: readonly string[];
 
   /**
-   * A GitHub Actions OIDC token whose audience names the signer, sent inside
-   * every signed call. It makes the signer act for the brand that owns the
-   * token's repository; `github-oidc.ts` says how the token is minted.
+   * Mints a GitHub Actions OIDC token whose audience names the signer, sent
+   * inside every signed call. It makes the signer act for the brand that
+   * owns the token's repository; `github-oidc.ts` says how the token is
+   * minted. Called once per call, since a token lives only minutes and a
+   * sync can run longer.
    */
-  githubOidc?: string;
+  githubOidc?: () => Promise<string>;
 }
 
 /** A JSON object's own property, or `undefined` for anything else. */
@@ -888,7 +890,7 @@ export class PatternIndexClient {
   readonly #fetchFn: PatternIndexFetch;
   readonly #signer: FirstPartyHttpSigner;
   readonly #proofs?: readonly string[];
-  readonly #githubOidc?: string;
+  readonly #githubOidc?: () => Promise<string>;
 
   constructor(options: PatternIndexClientOptions) {
     // The function name is appended to the base's path, so a base carrying a
@@ -949,7 +951,7 @@ export class PatternIndexClient {
       ...(this.#proofs === undefined ? {} : { proofs: [...this.#proofs] }),
       ...(this.#githubOidc === undefined
         ? {}
-        : { githubOidc: this.#githubOidc }),
+        : { githubOidc: await this.#githubOidc() }),
     });
     const headers = await signFirstPartyHttpRequest({
       url,

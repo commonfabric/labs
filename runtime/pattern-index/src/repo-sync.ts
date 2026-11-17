@@ -3,74 +3,54 @@
  * entry file on the default branch is one lineage, and a sync publishes a new
  * version of a lineage when, and only when, that entry's source changed.
  *
- * "Changed" is decided by hashing the program the entry resolves to (its own
- * file and every file it imports), not by a git diff. The index keeps that
- * hash on each lineage's newest version and returns it from
- * `listRepoHeads`, so a sync compiles only the entries whose hash moved. A
- * sync that failed partway leaves the index behind, and the next one, from
- * whatever commit, catches it up; nothing about past runs is kept anywhere
- * but the index.
+ * A sync runs in two phases, in two separate jobs, because compiling a
+ * pattern evaluates the repository's code and publishing needs a credential.
+ * The plan phase (`repo-plan.ts`) finds the entries and compiles each one,
+ * in a job that holds no credential. The publish phase ({@link publishPlan})
+ * reads the plan as untrusted data, asks the index what it already holds,
+ * and publishes what changed, in a job that evaluates no pattern code. A
+ * pattern that escaped evaluation in the first job finds nothing to take, and
+ * the second job holds the credential without running anything the
+ * repository wrote.
+ *
+ * "Changed" is decided by a hash of the program an entry resolves to (its own
+ * file and every file it imports) together with the compiler flags that bear
+ * on a pattern's identity, not by a git diff. The index keeps that hash on
+ * each lineage's newest version and returns it from `listRepoHeads`. A sync
+ * that failed partway leaves the index behind, and the next one catches it
+ * up; nothing about past runs is kept anywhere but the index.
  *
  * Gardener verdicts are reported and never block: the index gardens a new
  * version after it is published, so a sync shows the verdicts the heads carry
  * when it starts, which includes those that arrived since the last sync.
  */
 
-import { globToRegExp, join, resolve } from "@std/path";
 import { encodeHex } from "@std/encoding/hex";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import type {
   PatternIndexClient,
   PatternIndexFinding,
+  PatternIndexPublishRequest,
   PatternIndexRepoHead,
 } from "./client.ts";
-import {
-  type CompiledPattern,
-  patternDocMetadata,
-  publishRequestFor,
-} from "./publish.ts";
 
-/** What a sync is asked to do. */
-export interface RepoSyncOptions {
-  /** `owner/name`. */
-  repository: string;
+/** One entry as the plan phase found it. */
+export type PlannedEntry =
+  | {
+    path: string;
+    status: "compiled";
+    sourceHash: string;
 
-  /** The commit the working tree holds. */
-  commit: string;
+    /** The publish request, without its repository source. */
+    request: PatternIndexPublishRequest;
+  }
+  | { path: string; status: "undescribed"; sourceHash: string }
+  | { path: string; status: "failed"; reason: string };
 
-  /** The working tree's root, absolute. */
-  repoRoot: string;
-
-  /**
-   * The directory, relative to `repoRoot`, that program file names are
-   * written against. Every file an entry imports must lie inside it.
-   */
-  programRoot: string;
-
-  /** Globs, relative to `repoRoot`, naming the files that may be entries. */
-  include: readonly string[];
-
-  /** Globs, relative to `repoRoot`, removing files `include` named. */
-  exclude: readonly string[];
-}
-
-/** What a sync reaches the world through, so a test can stand in for it. */
-export interface RepoSyncDeps {
-  /** The repository's tracked files, relative to its root. */
-  trackedFiles: () => Promise<readonly string[]>;
-
-  readTextFile: (path: string) => Promise<string>;
-
-  /** Assembles the program an entry and its imports make, without compiling. */
-  resolveProgram: (entry: string, root: string) => Promise<RuntimeProgram>;
-
-  /** Compiles an assembled program. */
-  compileProgram: (program: RuntimeProgram) => Promise<CompiledPattern>;
-
-  client: Pick<
-    PatternIndexClient,
-    "listRepoHeads" | "publishPattern" | "requestListing"
-  >;
+/** What the plan phase hands the publish phase. */
+export interface RepoSyncPlan {
+  entries: readonly PlannedEntry[];
 }
 
 /** What happened to one entry. */
@@ -103,60 +83,26 @@ export interface RepoSyncReport {
   gardeners: readonly GardenerReport[];
 }
 
-/** Whether a repository-relative path is a test module rather than an entry. */
-const isTestModule = (path: string): boolean =>
-  /(?:\.test|_test)\.tsx?$/.test(path);
+/** Orders keyed pairs by key, so a hash does not depend on insertion order. */
+const byKey = <T>(pairs: [string, T][]): [string, T][] =>
+  pairs.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
 
 /**
- * A top-level default export: what makes a module a pattern entry rather
- * than a helper it imports. It is the same set of files the pattern type
- * check gives a recorded baseline.
- */
-const DEFAULT_EXPORT = /^export\s+default\b/m;
-
-/** The globs as one test on a repository-relative path. */
-const globMatcher = (globs: readonly string[]): (path: string) => boolean => {
-  const patterns = globs.map((glob) =>
-    globToRegExp(glob, { extended: true, globstar: true })
-  );
-  return (path) => patterns.some((pattern) => pattern.test(path));
-};
-
-/**
- * The repository-relative entry files `options` names: tracked TypeScript
- * modules that `include` matches and `exclude` does not, that are not tests,
- * and that have a default export. Sorted, so reports read the same each run.
- */
-export const findEntries = async (
-  options: Pick<RepoSyncOptions, "repoRoot" | "include" | "exclude">,
-  deps: Pick<RepoSyncDeps, "trackedFiles" | "readTextFile">,
-): Promise<string[]> => {
-  const included = globMatcher(options.include);
-  const excluded = globMatcher(options.exclude);
-  const entries: string[] = [];
-  for (const path of await deps.trackedFiles()) {
-    if (!/\.tsx?$/.test(path) || isTestModule(path)) continue;
-    if (!included(path) || excluded(path)) continue;
-    const source = await deps.readTextFile(join(options.repoRoot, path));
-    if (DEFAULT_EXPORT.test(source)) entries.push(path);
-  }
-  return entries.sort();
-};
-
-/**
- * A hash of everything in `program` that a compile reads: the entry, the
- * export it runs, and each file's name and contents. File order does not
- * count, since the resolver's walk order is not part of the source.
+ * A hash of everything a compile of `program` reads: the entry, the export it
+ * runs, each file's name and contents, and the `experimental` flags. File
+ * and flag order do not count.
  */
 export const programSourceHash = async (
   program: RuntimeProgram,
+  experimental: object,
 ): Promise<string> => {
   const canonical = JSON.stringify({
+    experimental: byKey(
+      Object.entries(experimental).filter(([, value]) => value !== undefined),
+    ),
     main: program.main,
     mainExport: program.mainExport ?? null,
-    files: [...program.files]
-      .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
-      .map((file) => [file.name, file.contents]),
+    files: byKey(program.files.map((file) => [file.name, file.contents])),
     sourceRoots: [...(program.sourceRoots ?? [])].sort(),
     dataFiles: [...(program.dataFiles ?? [])].sort(),
   });
@@ -168,51 +114,79 @@ export const programSourceHash = async (
 };
 
 /** A failure's message, for a report. */
-const reasonOf = (error: unknown): string =>
+export const reasonOf = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-/** Syncs one entry whose head is `head`, or that has none yet. */
-const syncEntry = async (
-  path: string,
+/**
+ * What keeps `plan` from being a {@link RepoSyncPlan}, or `undefined` when
+ * nothing does. The publish phase reads a plan the plan phase wrote while
+ * evaluating the repository's code, so it checks the shape before trusting
+ * any of it. A publish request's own fields are the index's to judge.
+ */
+export const planProblem = (plan: unknown): string | undefined => {
+  if (!isObjectNotArray(plan) || !Array.isArray(plan.entries)) {
+    return "the plan has no list of entries";
+  }
+  for (const [index, entry] of plan.entries.entries()) {
+    const where = `entries[${index}]`;
+    if (!isObjectNotArray(entry) || typeof entry.path !== "string") {
+      return `${where} has no path`;
+    }
+    if (entry.status === "failed") {
+      if (typeof entry.reason !== "string") return `${where} has no reason`;
+      continue;
+    }
+    if (typeof entry.sourceHash !== "string") {
+      return `${where} has no source hash`;
+    }
+    if (entry.status === "undescribed") continue;
+    if (entry.status !== "compiled") return `${where} has an unknown status`;
+    if (
+      !isObjectNotArray(entry.request) ||
+      typeof entry.request.patternId !== "string"
+    ) {
+      return `${where} has no publish request`;
+    }
+  }
+  return undefined;
+};
+
+/** Where the publish phase publishes, and as what. */
+export interface PublishPlanOptions {
+  /** `owner/name`, from the job's own environment, never from the plan. */
+  repository: string;
+
+  /** The commit the job runs at, from its own environment. */
+  commit: string;
+}
+
+/** Publishes one compiled entry whose head is `head`, or that has none. */
+const publishEntry = async (
+  entry: Extract<PlannedEntry, { status: "compiled" }>,
   head: PatternIndexRepoHead | undefined,
-  options: RepoSyncOptions,
-  deps: RepoSyncDeps,
+  options: PublishPlanOptions,
+  client: Pick<PatternIndexClient, "publishPattern">,
 ): Promise<EntryOutcome> => {
-  const entry = join(options.repoRoot, path);
-  const root = resolve(options.repoRoot, options.programRoot);
-  const program = await deps.resolveProgram(entry, root);
-  const sourceHash = await programSourceHash(program);
-  if (head?.sourceHash === sourceHash) {
-    return { path, status: "unchanged", patternId: head.patternId };
+  if (head?.sourceHash === entry.sourceHash) {
+    return { path: entry.path, status: "unchanged", patternId: head.patternId };
   }
-  const doc = patternDocMetadata(await deps.readTextFile(entry));
-  // The index finds patterns by what their description says, so one with
-  // none would be found by nothing; the report asks for the doc comment.
-  if (doc.description === undefined) return { path, status: "undescribed" };
-  const compiled = await deps.compileProgram(program);
-  if (compiled.patternId === undefined) {
-    throw new Error("the compile produced no durable pattern id");
-  }
-  const response = await deps.client.publishPattern({
-    ...publishRequestFor({
-      patternId: compiled.patternId,
-      program: compiled.program,
-      description: doc.description,
-      hashtags: doc.hashtags.map((tag) => tag.replace(/^#/, "").toLowerCase()),
-      keywords: doc.keywords,
-      argumentSchema: compiled.argumentSchema,
-      resultSchema: compiled.resultSchema,
-    }),
+  const response = await client.publishPattern({
+    ...entry.request,
     source: {
       repository: options.repository,
-      path,
+      path: entry.path,
       commit: options.commit,
-      sourceHash,
+      sourceHash: entry.sourceHash,
     },
   });
+  // An index that predates repository sync drops `source` and publishes an
+  // unlinked version; that is a failure, not a success.
+  if (response.ignored?.includes("source")) {
+    throw new Error("the index ignored the repository source");
+  }
   return response.unchanged === true
-    ? { path, status: "unchanged", patternId: response.patternId }
-    : { path, status: "published", patternId: response.patternId };
+    ? { path: entry.path, status: "unchanged", patternId: response.patternId }
+    : { path: entry.path, status: "published", patternId: response.patternId };
 };
 
 /** The gate verdicts with findings that `heads` carry. */
@@ -231,44 +205,60 @@ const gardenerReports = (
   );
 
 /**
- * Publishes a new version of every entry whose source changed, and asks for
- * each new version to be listed.
+ * The publish phase: publishes a new version of every compiled entry whose
+ * hash differs from its lineage's newest, and asks for each to be listed.
  *
- * An entry that fails to resolve, compile or publish is recorded and the
- * others still run, so one broken pattern does not hold the rest back; the
- * caller fails the job when any did. A failed listing request is reported
- * but is not a failure: the version is published either way.
+ * A refused publish is recorded and the others still run; the caller fails
+ * the job when any entry failed, here or in the plan. A failed listing
+ * request is reported but is not a failure: the version is published either
+ * way.
  *
  * @throws PatternIndexError when the index refuses `listRepoHeads`, before
  *   anything is published.
  */
-export const syncRepo = async (
-  options: RepoSyncOptions,
-  deps: RepoSyncDeps,
+export const publishPlan = async (
+  plan: RepoSyncPlan,
+  options: PublishPlanOptions,
+  client: Pick<
+    PatternIndexClient,
+    "listRepoHeads" | "publishPattern" | "requestListing"
+  >,
 ): Promise<RepoSyncReport> => {
-  const entries = await findEntries(options, deps);
-  const { heads } = await deps.client.listRepoHeads({
+  const { heads } = await client.listRepoHeads({
     repository: options.repository,
   });
   const headOf = new Map(heads.map((head) => [head.path, head]));
   const outcomes: EntryOutcome[] = [];
   const listingFailures: { path: string; reason: string }[] = [];
-  for (const path of entries) {
+  for (const entry of plan.entries) {
+    if (entry.status !== "compiled") {
+      outcomes.push(
+        entry.status === "failed"
+          ? entry
+          : { path: entry.path, status: "undescribed" },
+      );
+      continue;
+    }
     let outcome: EntryOutcome;
     try {
-      outcome = await syncEntry(path, headOf.get(path), options, deps);
+      outcome = await publishEntry(
+        entry,
+        headOf.get(entry.path),
+        options,
+        client,
+      );
     } catch (error) {
-      outcome = { path, status: "failed", reason: reasonOf(error) };
+      outcome = { path: entry.path, status: "failed", reason: reasonOf(error) };
     }
     outcomes.push(outcome);
     if (outcome.status !== "published") continue;
     try {
-      await deps.client.requestListing({ patternId: outcome.patternId });
+      await client.requestListing({ patternId: outcome.patternId });
     } catch (error) {
-      listingFailures.push({ path, reason: reasonOf(error) });
+      listingFailures.push({ path: entry.path, reason: reasonOf(error) });
     }
   }
-  const current = new Set(entries);
+  const current = new Set(plan.entries.map((entry) => entry.path));
   return {
     repository: options.repository,
     commit: options.commit,
@@ -290,21 +280,22 @@ const cell = (text: string): string =>
 
 /**
  * The report as Markdown, for a GitHub job summary. Findings are reported by
- * category, file and line, as the index records them; their `why` is the
- * gardener's own wording about the source, which is public in this
- * repository already.
+ * category, file and line, as the index records them, with the gardener's
+ * `why`. The summary is visible to whoever can read the repository's runs,
+ * which is whoever can read the source the findings are about.
  */
 export const reportMarkdown = (report: RepoSyncReport): string => {
-  const count = (status: EntryOutcome["status"]) =>
+  const withStatus = (status: EntryOutcome["status"]) =>
     report.entries.filter((entry) => entry.status === status);
-  const published = count("published");
-  const failed = count("failed");
-  const undescribed = count("undescribed");
+  const published = withStatus("published");
+  const failed = withStatus("failed");
+  const undescribed = withStatus("undescribed");
   const lines = [
     `## Pattern index sync: ${report.repository}`,
     "",
     `At \`${report.commit.slice(0, 12)}\`: ${report.entries.length} entries, ` +
-    `${published.length} published, ${count("unchanged").length} unchanged, ` +
+    `${published.length} published, ` +
+    `${withStatus("unchanged").length} unchanged, ` +
     `${undescribed.length} without a description, ${failed.length} failed.`,
   ];
   if (failed.length > 0) {
@@ -345,16 +336,17 @@ export const reportMarkdown = (report: RepoSyncReport): string => {
       "| Entry | Gardener | Status | Category | Where | Why |",
       "| --- | --- | --- | --- | --- | --- |",
     );
-    for (const report_ of report.gardeners) {
-      for (const finding of report_.findings) {
+    for (const gardenerReport of report.gardeners) {
+      for (const finding of gardenerReport.findings) {
         const where = finding.file === undefined
           ? ""
           : `\`${finding.file}${
             finding.line === undefined ? "" : `:${finding.line}`
           }\``;
         lines.push(
-          `| \`${report_.path}\` | ${report_.gardener} | ${report_.status} | ` +
-            `${cell(finding.category)} | ${where} | ${cell(finding.why)} |`,
+          `| \`${gardenerReport.path}\` | ${gardenerReport.gardener} | ` +
+            `${gardenerReport.status} | ${cell(finding.category)} | ` +
+            `${where} | ${cell(finding.why)} |`,
         );
       }
     }

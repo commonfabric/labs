@@ -10,11 +10,8 @@ on:
     paths: ["patterns/**"]
   workflow_dispatch:
 
-# The OIDC token is the run's whole credential: `id-token: write` lets the job
-# ask GitHub for one, and nothing here needs to write to the repository.
 permissions:
   contents: read
-  id-token: write
 
 # One sync at a time. A push arriving while one runs waits rather than
 # cancelling it, and of several waiting only the newest runs; a sync reads the
@@ -24,17 +21,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  sync:
-    name: Sync patterns to the index
+  # Compiles the patterns, which evaluates their code, so it holds no
+  # credential: no id-token, and no git credential left in the checkout.
+  plan:
+    name: Compile patterns
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: 🚀 Sync patterns
+      - name: 🏗️ Compile patterns
         uses: ./.github/actions/pattern-index-sync
         with:
+          step: plan
           program-root: patterns
           include: |
             patterns/**
@@ -46,3 +48,24 @@ jobs:
             patterns/integration/**
             patterns/tools/**
             patterns/baselines/**
+
+  # Publishes what the plan says changed. It may ask GitHub for an OIDC token,
+  # the sync's only credential, and runs none of the repository's patterns.
+  publish:
+    name: Publish to the index
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 🚀 Publish patterns
+        uses: ./.github/actions/pattern-index-sync
+        with:
+          step: publish
