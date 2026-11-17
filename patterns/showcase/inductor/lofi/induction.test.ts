@@ -29,8 +29,10 @@ import {
   sameGoal,
   scoreRules,
   settle,
+  shareable,
   splitOf,
   summarize,
+  verdictsOf,
 } from "./induction.ts";
 import { type CanonicalRule, checkRule } from "../shared/rule-grammar.ts";
 
@@ -543,6 +545,53 @@ describe("poolOffer", () => {
         ],
       ),
     ).not.toBeNull();
+  });
+});
+
+describe("verdictsOf", () => {
+  const graded = rows(
+    [["mail-1", "bill", true], ["mail-6", "invoice", true]],
+    [rule("subject", "invoice")],
+  );
+
+  it("words each item's labels, marking surprises and held-out items", () => {
+    expect(verdictsOf(graded, true, true)).toEqual({
+      "mail-1": { text: "lo-fi NO, hi-fi YES", surprise: true, heldOut: false },
+      "mail-6": {
+        text: "lo-fi YES, hi-fi YES",
+        surprise: false,
+        heldOut: true,
+      },
+    });
+  });
+
+  it("says there are no rules rather than NO, and no surprise", () => {
+    expect(verdictsOf(graded, true, false)["mail-1"]).toEqual({
+      text: "no rules yet, hi-fi YES",
+      surprise: false,
+      heldOut: false,
+    });
+  });
+
+  it("says nothing with no question", () => {
+    expect(verdictsOf(graded, false, true)["mail-1"]).toEqual({
+      text: "",
+      surprise: false,
+      heldOut: false,
+    });
+  });
+});
+
+describe("shareable", () => {
+  it("holds back adopted rules and rules that look personal", () => {
+    const own = rule("subject", "invoice");
+    const personal = rule("from", "billing@example\\.org");
+    const adopted = rule("subject", "\\bbill\\b");
+    expect(shareable([own, personal, adopted], [adopted.key])).toEqual({
+      rules: [own],
+      withheld: 1,
+      adopted: 1,
+    });
   });
 });
 

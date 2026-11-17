@@ -54,8 +54,12 @@ export default pattern<RulesCardInput, RulesCardOutput>(
     removeRule,
     resetRules,
   }) => {
+    // The F1 means something only once held-out items have hi-fi labels.
     const heading = computed(() =>
-      `Rules · held-out F1 ${percent(heldOutF1)} on ${summary.heldOut} items`
+      summary.heldOut === 0
+        ? "Rules"
+        : `Rules · held-out F1 ${percent(heldOutF1)} on ${summary.heldOut} ` +
+          "held-out items"
     );
     const noRules = computed(() => rules.length === 0);
     const rewriteLine = computed(() => {

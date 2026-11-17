@@ -1,8 +1,8 @@
 /**
- * The lo-fi inductor's items: each with its lo-fi and hi-fi labels, a surprise
- * in the error tone, a button that takes it out, and a box that adds one. The
- * draft in the box is per session; everything else is the inductor's, read
- * and changed through the cells and streams it passes in.
+ * The lo-fi inductor's items: a box that adds one, then each item with its
+ * labels as the inductor words them, a surprise in the error tone, a badge on
+ * a held-out item, and a button that takes it out. The draft in the box is per
+ * session; everything else is the inductor's.
  */
 
 import {
@@ -15,11 +15,12 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
-import { type Item, type ItemRow, verdictText } from "./induction.ts";
+import type { Item, Verdict } from "./induction.ts";
 
 /** An item as `addItem` takes it; an id is minted when none is given. */
 export interface SubmittedItem {
   id?: string;
+
   /**
    * The item's text fields. The event's schema drops a field that is not a
    * string before `addItem` sees it.
@@ -35,8 +36,10 @@ export interface ItemRef {
 interface ItemsCardInput {
   /** The inductor's items, in the order they were added. */
   items: Item[];
-  /** The same items, graded. */
-  rows: ItemRow[];
+
+  /** Each item's labels, by id (`verdictsOf`). */
+  verdicts: Record<string, Verdict>;
+
   addItem: Stream<SubmittedItem>;
   removeItem: Stream<ItemRef>;
 }
@@ -48,7 +51,7 @@ export interface ItemsCardOutput {
 }
 
 export default pattern<ItemsCardInput, ItemsCardOutput>(
-  ({ items, rows, addItem, removeItem }) => {
+  ({ items, verdicts, addItem, removeItem }) => {
     const draft = new Writable.perSession("");
 
     // The box sends one text field; an empty box sends nothing.
@@ -59,16 +62,6 @@ export default pattern<ItemsCardInput, ItemsCardOutput>(
       draft.set("");
     });
 
-    // The rows are graded copies; the view maps the items themselves, so the
-    // remove button sends the item, and looks its labels up here.
-    const verdicts = computed(() =>
-      Object.fromEntries(
-        rows.map((row) => [row.id, {
-          text: verdictText(row),
-          surprise: row.surprise,
-        }]),
-      )
-    );
     const noItems = computed(() => items.length === 0);
 
     return {
@@ -77,9 +70,17 @@ export default pattern<ItemsCardInput, ItemsCardOutput>(
         <cf-card>
           <cf-vstack gap="2">
             <cf-heading level={5}>Items</cf-heading>
+            <cf-hstack gap="2">
+              <cf-input
+                $value={draft}
+                placeholder="Add an item's text"
+                style="flex: 1;"
+              />
+              <cf-button color="primary" onClick={addDraft}>Add</cf-button>
+            </cf-hstack>
             {noItems
               ? (
-                <cf-empty-state message="No items yet. Add one below, or have a connector or an agent send them." />
+                <cf-empty-state message="No items yet. Add one above, or have a connector or an agent send them." />
               )
               : null}
             {items.map((item) => (
@@ -87,6 +88,11 @@ export default pattern<ItemsCardInput, ItemsCardOutput>(
                 <cf-text style="flex: 1;">
                   {computed(() => Object.values(item.fields ?? {}).join(" · "))}
                 </cf-text>
+                {computed(() =>
+                  verdicts[item.id]?.heldOut
+                    ? <cf-badge size="xs" color="neutral">held out</cf-badge>
+                    : null
+                )}
                 <cf-text
                   variant="caption"
                   tone={computed(() =>
@@ -104,14 +110,6 @@ export default pattern<ItemsCardInput, ItemsCardOutput>(
                 </cf-button>
               </cf-hstack>
             ))}
-            <cf-hstack gap="2">
-              <cf-input
-                $value={draft}
-                placeholder="Add an item's text"
-                style="flex: 1;"
-              />
-              <cf-button color="primary" onClick={addDraft}>Add</cf-button>
-            </cf-hstack>
           </cf-vstack>
         </cf-card>
       ),

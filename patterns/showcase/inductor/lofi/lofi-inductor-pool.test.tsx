@@ -11,13 +11,21 @@
  * ./lofi-inductor-pool-multi-user.test.tsx.
  */
 import { action, assert, pattern, TESTS, UI } from "commonfabric";
-import { hasText } from "../../../tools/test-support/vnode-helpers.ts";
+import {
+  findElementByExactText,
+  hasText,
+  propValue,
+} from "../../../tools/test-support/vnode-helpers.ts";
 import InductorPool from "../pool/inductor-pool.tsx";
 import { INVOICE_ONLY, rule } from "./lofi-inductor-test-fixture.ts";
 import LofiInductor from "./lofi-inductor.tsx";
 
 const GOAL = "Is this email a bill?";
 const OTHER_GOAL = "Is this email a newsletter?";
+
+/** Whether the button labelled `label` in `view` is disabled. */
+const disabled = (view: unknown, label: string): unknown =>
+  propValue(findElementByExactText(view, "cf-button", label), "disabled");
 
 export default pattern(() => {
   const billPool = InductorPool(
@@ -91,6 +99,22 @@ export default pattern(() => {
   return {
     [TESTS]: [
       { assertion: assert(() => billPool.contributions.length === 0) },
+      // Connected to a pool for its goal, with a rule to send, the inductor
+      // can publish; with nothing published, it cannot unpublish. One with no
+      // rules, or with a pool for another goal, cannot publish.
+      { render: matching[UI] },
+      { render: empty[UI] },
+      { render: mismatched[UI] },
+      {
+        assertion: assert(() =>
+          hasText(matching[UI], "A pool for this question is connected.") &&
+          disabled(matching[UI], "Publish rules") === false &&
+          disabled(matching[UI], "Unpublish") === true &&
+          disabled(empty[UI], "Publish rules") === true &&
+          hasText(mismatched[UI], "No pool for this question is connected") &&
+          disabled(mismatched[UI], "Publish rules") === true
+        ),
+      },
       { action: matching.publish },
       // One contribution, under a pseudonym the publish minted, holding its
       // rules. One contributor is below threshold, so nothing is public.
@@ -110,7 +134,8 @@ export default pattern(() => {
       { render: matching[UI] },
       {
         assertion: assert(() =>
-          hasText(matching[UI], "Sent 1 rules to the pool for")
+          hasText(matching[UI], "Sent 1 rules to the pool for") &&
+          disabled(matching[UI], "Unpublish") === false
         ),
       },
       // Republishing replaces the contribution, under the pseudonym the

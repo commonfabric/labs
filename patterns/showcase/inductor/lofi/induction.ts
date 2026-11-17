@@ -861,6 +861,34 @@ export function looksPersonal(rule: Pick<CanonicalRule, "pattern">): boolean {
   return /(?:\d[\s.\-()]?){6,}/.test(plain);
 }
 
+/** The rules a publish sends, and how many it holds back and why. */
+export interface Shareable {
+  rules: CanonicalRule[];
+
+  /** Rules held back as looking personal (`looksPersonal`). */
+  withheld: number;
+
+  /** Rules held back as adopted from the pool (`adoptedAfter`). */
+  adopted: number;
+}
+
+/**
+ * The rules of `rules` a publish sends: not one adopted from the pool, which
+ * is others' learning, and not one that looks personal. Plain copies.
+ */
+export function shareable(
+  rules: readonly CanonicalRule[],
+  adopted: readonly string[],
+): Shareable {
+  const own = rules.filter((rule) => !adopted.includes(rule.key));
+  const sent = own.filter((rule) => !looksPersonal(rule)).map(copyRule);
+  return {
+    rules: sent,
+    withheld: own.length - sent.length,
+    adopted: rules.length - own.length,
+  };
+}
+
 //
 // Goals
 //
@@ -921,9 +949,35 @@ export function markdownOf(
   return lines.join("\n");
 }
 
-/** One item's labels, as the view shows them. */
-export function verdictText(row: ItemRow): string {
-  const lofi = row.lofi ? "YES" : "NO";
-  if (row.hifi === null) return `lo-fi ${lofi}, hi-fi …`;
-  return `lo-fi ${lofi}, hi-fi ${row.hifi ? "YES" : "NO"}`;
+/** One item's labels, as the items card shows them. */
+export interface Verdict {
+  /** The labels in words, or "" while there is no question to label for. */
+  text: string;
+
+  /** Whether to show the item as a surprise. */
+  surprise: boolean;
+
+  /** Whether the item is on the held-out side of the split. */
+  heldOut: boolean;
+}
+
+/**
+ * Each row's labels by item id. With no goal there is nothing to label, and
+ * with no rules the lo-fi side says so rather than reading as NO.
+ */
+export function verdictsOf(
+  rows: readonly ItemRow[],
+  hasGoal: boolean,
+  hasRules: boolean,
+): Record<string, Verdict> {
+  const yesNo = (value: boolean) => value ? "YES" : "NO";
+  return Object.fromEntries(rows.map((row) => {
+    const lofi = hasRules ? `lo-fi ${yesNo(row.lofi)}` : "no rules yet";
+    const hifi = row.hifi === null ? "…" : yesNo(row.hifi);
+    return [row.id, {
+      text: hasGoal ? `${lofi}, hi-fi ${hifi}` : "",
+      surprise: hasGoal && hasRules && row.surprise,
+      heldOut: row.split === "heldout",
+    }];
+  }));
 }

@@ -44,7 +44,6 @@ import {
   type HistoryEntry,
   type Item,
   type ItemRow,
-  looksPersonal,
   markdownOf,
   percent,
   type PoolOffer,
@@ -60,14 +59,17 @@ import {
   sameGoal,
   scoreRules,
   settle,
+  shareable,
   summarize,
   type Summary,
+  verdictsOf,
 } from "./induction.ts";
 import type { CanonicalRule } from "../shared/rule-grammar.ts";
 import ItemsCard, { type ItemRef, type SubmittedItem } from "./items-card.tsx";
 import RulesCard, { type RuleRef } from "./rules-card.tsx";
 import PoolCard from "./pool-card.tsx";
 import HistoryCard from "./history-card.tsx";
+import SettingsCard from "./settings-card.tsx";
 
 export type { CanonicalRule } from "../shared/rule-grammar.ts";
 export type {
@@ -541,10 +543,11 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
 
     // What the pool for this goal releases. A pool for another goal offers
     // nothing.
+    const poolConnected = computed(() =>
+      target !== null && sameGoal(target.goal ?? "", goal.get())
+    );
     const releasedHere = computed((): PoolRule[] => {
-      if (target === null || !sameGoal(target.goal ?? "", goal.get())) {
-        return [];
-      }
+      if (target === null || !poolConnected) return [];
       return (target.consensus ?? []).map((rule) => ({
         field: rule.field,
         pattern: rule.pattern,
@@ -590,14 +593,10 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         pseudonym.set(`p-${Math.random().toString(36).slice(2, 12)}`);
       }
       const question = goal.get().trim();
-      // A rule that looks like it names someone stays here, and so does one
-      // adopted from the pool, which is others' learning, not this person's.
-      const all = rules.get();
-      const fromPool = adopted.get();
-      const own = all.filter((rule) => !fromPool.includes(rule.key));
-      const snapshot = own.filter((rule) => !looksPersonal(rule)).map((
-        rule,
-      ) => ({ ...rule }));
+      const { rules: snapshot, withheld, adopted: fromPool } = shareable(
+        rules.get(),
+        adopted.get(),
+      );
       const reached = snapshot.length > 0 && target !== null &&
         sameGoal(target.goal ?? "", question);
       published.set({
@@ -605,8 +604,8 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         rules: snapshot,
         publishedAt: Date.now(),
         pooled: reached,
-        withheld: own.length - snapshot.length,
-        adopted: all.length - own.length,
+        withheld,
+        adopted: fromPool,
       });
       // Nothing to send leaves nothing of an earlier publish behind either.
       if (reached) {
@@ -629,15 +628,26 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     const content = computed(() =>
       markdownOf(goal.get(), summary, rules.get(), heldOutF1, history.get())
     );
+    const hasGoal = computed(() => goal.get().trim() !== "");
     const statsLine = computed(() =>
-      `${summary.items} items · ${summary.labelled} labelled · ` +
-      `${
-        percent(summary.agreementRate)
-      } agreement · ${summary.surprises} surprises`
+      !hasGoal
+        ? "Set a question first. The model answers it for each item, and " +
+          "rules are learned from its answers."
+        : `${summary.items} items · ${summary.labelled} labelled · ` +
+          `${
+            percent(summary.agreementRate)
+          } agreement · ${summary.surprises} surprises`
+    );
+    const verdicts = computed(() =>
+      verdictsOf(rows, hasGoal, rules.get().length > 0)
+    );
+    const sendable = computed(() =>
+      shareable(rules.get(), adopted.get()).rules.length
     );
 
-    // The cards are known by their position in the view (composition.md): a
-    // new one goes after the last, so the items card keeps its draft.
+    // The cards are known by their position in the view (composition.md), in
+    // the order a person works through them; the settings card comes last.
+    const itemsCard = ItemsCard({ items, verdicts, addItem, removeItem });
     const rulesCard = RulesCard({
       rules,
       heldOutF1,
@@ -648,17 +658,25 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       removeRule,
       resetRules,
     });
+    const historyCard = HistoryCard({ history });
     const poolCard = PoolCard({
       offer,
       published,
-      pseudonym,
       rules,
+      sendable,
+      connected: poolConnected,
       settlePoolOffer,
       publish,
       unpublish,
     });
-    const historyCard = HistoryCard({ history });
-    const itemsCard = ItemsCard({ items, rows, addItem, removeItem });
+    const settingsCard = SettingsCard({
+      hifiModel,
+      rewriteAfter,
+      heldOutPercent,
+      setHifiModel,
+      setRewriteAfter,
+      setHeldOutPercent,
+    });
 
     return {
       [NAME]: title,
@@ -679,10 +697,11 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
             <cf-text tone="muted">{statsLine}</cf-text>
           </cf-vstack>
           <cf-vstack gap="3" padding="4">
-            {rulesCard}
-            {poolCard}
-            {historyCard}
             {itemsCard}
+            {rulesCard}
+            {historyCard}
+            {poolCard}
+            {settingsCard}
           </cf-vstack>
         </cf-screen>
       ),

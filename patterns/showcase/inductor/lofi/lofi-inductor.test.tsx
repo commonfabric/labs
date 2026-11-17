@@ -10,6 +10,13 @@
  */
 import { action, assert, FS, pattern, TESTS, UI } from "commonfabric";
 import {
+  findElementByExactText,
+  findElements,
+  hasExactText,
+  hasText,
+  propValue,
+} from "../../../tools/test-support/vnode-helpers.ts";
+import {
   HIFI_MOCKS,
   INVOICE_ONLY,
   rewriteMock,
@@ -40,7 +47,24 @@ export const llmMocks = [
   rewriteMock(GOAL, [{ field: "subject", pattern: "lunch", predicts: true }]),
 ];
 
+/** Whether the button labelled `label` in `view` is disabled. */
+const disabled = (view: unknown, label: string): unknown =>
+  propValue(findElementByExactText(view, "cf-button", label), "disabled");
+
 export default pattern(() => {
+  // No question yet: nothing is labelled, and the view says to set one.
+  const unasked = LofiInductor({
+    goal: "",
+    items: [{ id: "mail-1", fields: { subject: "Bill for March" } }],
+    rules: INVOICE_ONLY,
+  });
+  // A question but no rules: the lo-fi side says so rather than NO.
+  const ruleless = LofiInductor({
+    goal: GOAL,
+    items: [{ id: "mail-1", fields: { subject: "Bill for March" } }],
+    rules: [],
+  });
+
   const subject = LofiInductor({
     goal: GOAL,
     items: [],
@@ -71,9 +95,33 @@ export default pattern(() => {
     });
   });
 
+  // With no held-out item labelled, the rules card shows no F1.
   const assert_starts_empty = assert(() =>
     subject.summary.items === 0 && subject.summary.agreementRate === null &&
-    subject.rewrite.status === "idle"
+    subject.rewrite.status === "idle" &&
+    !hasText(subject[UI], "held-out F1") && hasText(subject[UI], "Rules")
+  );
+
+  const assert_unasked_says_so = assert(() =>
+    hasText(unasked[UI], "Set a question first") &&
+    hasText(unasked[UI], "Bill for March") &&
+    !hasText(unasked[UI], "lo-fi") && !hasText(unasked[UI], "hi-fi") &&
+    !hasText(subject[UI], "Set a question first")
+  );
+
+  const assert_ruleless_says_so = assert(() =>
+    hasText(ruleless[UI], "no rules yet, hi-fi YES") &&
+    !hasText(ruleless[UI], "lo-fi NO")
+  );
+
+  // Two held-out items are labelled now: the F1 is over them, and they are
+  // marked; the training item is not.
+  const assert_held_out_shown = assert(() =>
+    hasText(subject[UI], "held-out F1 100% on 2 held-out items") &&
+    hasText(subject[UI], "lo-fi YES, hi-fi YES") &&
+    findElements(subject[UI], "cf-badge").filter((badge) =>
+        hasExactText(badge, "held out")
+      ).length === 2
   );
 
   // Both labels agree on both items: no surprise
@@ -89,7 +137,16 @@ export default pattern(() => {
   const assert_disagreement_is_a_surprise = assert(() =>
     subject.summary.surprises === 1 && subject.rows[2]?.id === "mail-1" &&
     subject.rows[2]?.surprise === true && subject.rows[2]?.hifi === true &&
-    subject.rows[2]?.lofi === false && subject.rewrite.status === "idle"
+    subject.rows[2]?.lofi === false && subject.rewrite.status === "idle" &&
+    subject.rewrite.missing === 1 &&
+    hasText(subject[UI], "Waiting for 1 more surprises")
+  );
+
+  // No pool is given or found: the view says so, and Publish is disabled.
+  const assert_publish_needs_pool = assert(() =>
+    hasText(subject[UI], "No pool for this question is connected") &&
+    disabled(subject[UI], "Publish rules") === true &&
+    disabled(subject[UI], "Unpublish") === true
   );
 
   const assert_repeat_ignored = assert(() =>
@@ -140,20 +197,30 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      { render: subject[UI] },
       { assertion: assert_starts_empty },
+      { render: unasked[UI] },
+      { assertion: assert_unasked_says_so },
+      { settle: true },
+      { render: ruleless[UI] },
+      { assertion: assert_ruleless_says_so },
       { action: action_submit_agreeing },
       // The hi-fi calls the new items start have landed
       { settle: true },
       { assertion: assert_agreement_is_no_surprise },
+      { render: subject[UI] },
+      { assertion: assert_held_out_shown },
       { action: action_submit_disagreeing },
       { settle: true },
-      { assertion: assert_disagreement_is_a_surprise },
       // The view renders over items, rules, and an empty history
       { render: subject[UI] },
+      { assertion: assert_disagreement_is_a_surprise },
       { action: action_submit_repeat },
       { assertion: assert_repeat_ignored },
       { assertion: assert_rules_unchanged },
-      { press: subject[UI], control: "Publish rules" },
+      { assertion: assert_publish_needs_pool },
+      // An agent can still publish, which records the rules locally.
+      { action: subject.publish },
       { assertion: assert_published },
       { assertion: assert_text_projection },
       { action: action_set_lunch_goal },
@@ -163,5 +230,7 @@ export default pattern(() => {
       { assertion: assert_goal_kept },
     ],
     subject,
+    unasked,
+    ruleless,
   };
 });

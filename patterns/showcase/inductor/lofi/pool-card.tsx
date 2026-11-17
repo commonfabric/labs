@@ -25,9 +25,14 @@ import { type CanonicalRule, describeRule } from "../shared/rule-grammar.ts";
 interface PoolCardInput {
   offer: PoolOffer | null;
   published: Published | null;
-  /** The piece's pseudonym, "" until its first publish. */
-  pseudonym: string;
   rules: CanonicalRule[];
+
+  /** How many of the rules a publish would send (`shareable`). */
+  sendable: number;
+
+  /** Whether a pool for the inductor's goal is connected. */
+  connected: boolean;
+
   settlePoolOffer: Stream<void>;
   publish: Stream<void>;
   unpublish: Stream<void>;
@@ -43,8 +48,9 @@ export default pattern<PoolCardInput, PoolCardOutput>(
   ({
     offer,
     published,
-    pseudonym,
     rules,
+    sendable,
+    connected,
     settlePoolOffer,
     publish,
     unpublish,
@@ -89,8 +95,10 @@ export default pattern<PoolCardInput, PoolCardOutput>(
     const publishedLine = computed(() => {
       const snapshot = published;
       if (!snapshot) {
-        return rules.length === 0
-          ? "No rules to publish yet."
+        if (rules.length === 0) return "No rules to publish yet.";
+        return sendable === 0
+          ? "Nothing to publish: every rule was adopted from the pool or " +
+            `looks personal (${LOOKS_PERSONAL}).`
           : "Not published yet.";
       }
       const withheld = (snapshot.withheld
@@ -109,8 +117,15 @@ export default pattern<PoolCardInput, PoolCardOutput>(
         ? `Nothing was sent.${withheld}`
         : `No pool for “${snapshot.goal}” found; nothing was sent.${withheld}`;
     });
-    const noRules = computed(() => rules.length === 0);
-    const neverPublished = computed(() => pseudonym === "");
+    const connectionLine = computed(() =>
+      connected
+        ? "A pool for this question is connected."
+        : "No pool for this question is connected. To get one, deploy an " +
+          "inductor-pool with the same question in a space you can reach, " +
+          "or link one to this piece as `pool`."
+    );
+    const cannotPublish = computed(() => !connected || sendable === 0);
+    const nothingPublished = computed(() => published?.pooled !== true);
 
     return {
       [NAME]: "Pool",
@@ -118,6 +133,7 @@ export default pattern<PoolCardInput, PoolCardOutput>(
         <cf-card>
           <cf-vstack gap="2">
             <cf-heading level={5}>Pool</cf-heading>
+            <cf-text tone="muted">{connectionLine}</cf-text>
             {hasOffer
               ? (
                 <cf-vstack gap="1">
@@ -139,14 +155,14 @@ export default pattern<PoolCardInput, PoolCardOutput>(
             <cf-hstack gap="2">
               <cf-button
                 color="primary"
-                disabled={noRules}
+                disabled={cannotPublish}
                 onClick={() => publish.send()}
               >
                 Publish rules
               </cf-button>
               <cf-button
                 variant="ghost"
-                disabled={neverPublished}
+                disabled={nothingPublished}
                 onClick={() => unpublish.send()}
               >
                 Unpublish

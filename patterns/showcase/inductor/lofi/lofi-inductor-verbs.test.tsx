@@ -9,7 +9,11 @@
  *
  * Pattern under test: ./lofi-inductor.tsx
  */
-import { action, assert, pattern, TESTS, Writable } from "commonfabric";
+import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
+import {
+  findNodeByProp,
+  setBound,
+} from "../../../tools/test-support/vnode-helpers.ts";
 import { HIFI_MOCKS, rule } from "./lofi-inductor-test-fixture.ts";
 import LofiInductor, { type Item } from "./lofi-inductor.tsx";
 
@@ -182,15 +186,26 @@ export default pattern(() => {
     subject.rewriteAfter === 5 && subject.heldOutPercent === 50 &&
     subject.hifiModel === "gateway:stronger-model"
   );
-  const action_default_model = action(() => {
-    subject.setHifiModel.send({ model: "" });
+  // The settings card: a filled draft is applied, a blank one is left alone,
+  // and its button returns to the default model.
+  const action_fill_settings = action(() => {
+    setBound(
+      findNodeByProp(subject[UI], "placeholder", "5"),
+      "$value",
+      "4",
+      "the rewrite-after box",
+    );
   });
+  const assert_settings_applied = assert(() =>
+    subject.rewriteAfter === 4 && subject.heldOutPercent === 50 &&
+    subject.hifiModel === "gateway:stronger-model"
+  );
   const assert_default_model = assert(() => subject.hifiModel === "");
 
   // Every refusal leaves what it would have changed as it was.
   const assert_unchanged_by_refusals = assert(() =>
     subject.items.length === 2 && subject.goal === GOAL &&
-    subject.rewriteAfter === 5 && subject.heldOutPercent === 50 &&
+    subject.rewriteAfter === 4 && subject.heldOutPercent === 50 &&
     subject.hifiModel === ""
   );
 
@@ -217,7 +232,11 @@ export default pattern(() => {
       { assertion: assert_rules_reset },
       { action: action_settings },
       { assertion: assert_settings },
-      { action: action_default_model },
+      { render: subject[UI] },
+      { action: action_fill_settings },
+      { press: subject[UI], control: "Apply" },
+      { assertion: assert_settings_applied },
+      { press: subject[UI], control: "Use the default model" },
       { assertion: assert_default_model },
       // The refusals, in the order of `REFUSALS`.
       { action: subject.addItem, event: { id: "mail-9", fields: {} } },
