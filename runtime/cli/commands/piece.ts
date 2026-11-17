@@ -5145,8 +5145,15 @@ function versionRecorder(
     settle: async () => {
       if (pending === undefined) return undefined;
       const outcome = await pending;
-      const { versionLine } = (await loadVersionModules()).versions;
-      const line = versionLine(outcome);
+      // A module that failed to load already made the outcome a failure;
+      // reporting it must not fail the deploy either.
+      const line = await loadVersionModules().then(
+        ({ versions }) => versions.versionLine(outcome),
+        () =>
+          outcome.status === "failed"
+            ? `Version not kept: ${outcome.reason}. The deploy itself succeeded.`
+            : undefined,
+      );
       if (line !== undefined) print(line);
       return outcome;
     },
@@ -5311,7 +5318,10 @@ export async function newPieceFromCommand(
     const kept = await version?.settle();
     const versionJson = kept === undefined
       ? undefined
-      : (await loadVersionModules()).versions.versionJson;
+      : await loadVersionModules().then(
+        ({ versions }) => versions.versionJson,
+        () => undefined,
+      );
     print(
       {
         pieceId,
