@@ -28,6 +28,7 @@ import {
   type DialogButton,
   dialogControlAt,
   type DialogField,
+  type DialogLink,
   type DialogRadioButton,
   type DialogState,
   DIFF_MARGIN_WIDTH,
@@ -45,6 +46,7 @@ import {
   type OverlayState,
   radioButtonAt,
   type ViewState,
+  webAddresses,
 } from "./render.ts";
 import {
   clamp,
@@ -254,6 +256,12 @@ const MOUSE_WHEEL_STEP = 3;
  * request needs. */
 const PUSH_ROWS = 16;
 const PUSH_COLUMNS = 80;
+
+/** A row of the task dialog's body, and the links on it. */
+interface TaskRow {
+  readonly text: string;
+  readonly links: readonly DialogLink[];
+}
 
 /** How the task dialog names each merge method, as GitHub's merge button
  * does. */
@@ -496,6 +504,10 @@ export class Session {
    * {@link continueTask}, and clears this. */
   mergeRequested: MergeRequest | null = null;
 
+  /** The task dialog's Push button was pressed. The driver pushes without
+   * asking, continuing the dialog, and clears this. */
+  pushConfirmed = false;
+
   /** The task dialog's retry button was pressed. The driver starts the task
    * again and clears this. */
   retryRequested = false;
@@ -549,8 +561,11 @@ export class Session {
   /** The settings dialog's controls, while it is up. */
   #settingsDraft: SettingsDraft | null = null;
 
-  /** The merge the task dialog asks whether to make, while it asks. */
-  #landDraft: MergeRequest | null = null;
+  /** The button that does what the task dialog asks whether to do, such as
+   * merging, and what pressing it does, while it asks. */
+  #confirmation:
+    | { readonly button: DialogButton; readonly confirm: () => void }
+    | null = null;
 
   /** The address of the pull request that has opened or merged while the
    * task dialog was up, until a quit that it did not ask for. */
@@ -1439,9 +1454,9 @@ export class Session {
    * ended; how many of them it shows; what it says about watching for the
    * pull request under them; and how wide its rows are. */
   #taskLayout(): {
-    output: Array<{ text: string; emphasized: boolean }>;
+    output: Array<TaskRow & { emphasized: boolean }>;
     rows: number;
-    watch: string[];
+    watch: TaskRow[];
     columns: number;
   } {
     const lines = this.#taskLines.at(-1) === ""
@@ -1460,17 +1475,42 @@ export class Session {
     // an address no wider than the box stays on one row, and a word wider than
     // the box is broken. Git pads the lines a server sends with spaces when its
     // output is not a terminal, and those would wrap onto rows of their own.
+    // Each piece of a web address links to the whole address.
     const columns = Math.max(1, Math.min(PUSH_COLUMNS, this.width - 8));
-    const wrap = (line: string) => {
-      let chars = [...line.trimEnd()];
-      const rowsOfLine: string[] = [];
-      while (chars.length > columns) {
-        const space = chars.lastIndexOf(" ", columns);
-        const words = chars.slice(0, space + 1).join("").trimEnd();
-        rowsOfLine.push(words || chars.slice(0, columns).join(""));
-        chars = chars.slice(words ? space + 1 : columns);
+    const wrap = (line: string): TaskRow[] => {
+      const text = line.trimEnd();
+      const chars = [...text];
+      const addresses = Array.from(webAddresses(text), (match) => {
+        const from = cpLen(text.slice(0, match.index));
+        return { from, to: from + cpLen(match[0]), url: match[0] };
+      });
+      const rowsOfLine: TaskRow[] = [];
+      let at = 0;
+      const take = (length: number, next: number) => {
+        const end = at + length;
+        rowsOfLine.push({
+          text: chars.slice(at, end).join(""),
+          links: addresses.flatMap(({ from, to, url }) =>
+            from < end && to > at
+              ? [{
+                from: Math.max(from, at) - at,
+                to: Math.min(to, end) - at,
+                url,
+              }]
+              : []
+          ),
+        });
+        at = next;
+      };
+      while (chars.length - at > columns) {
+        const space = chars.lastIndexOf(" ", at + columns);
+        const words = space < at
+          ? 0
+          : cpLen(chars.slice(at, space + 1).join("").trimEnd());
+        if (words > 0) take(words, space + 1);
+        else take(columns, at + columns);
       }
-      rowsOfLine.push(chars.join(""));
+      take(chars.length - at, chars.length);
       return rowsOfLine;
     };
     // The output keeps at least one row, and what the dialog says about the
@@ -1479,11 +1519,11 @@ export class Session {
     const watch =
       (this.#pullRequestWatch === ""
         ? []
-        : ["", ...this.#pullRequestWatch.split("\n").flatMap(wrap)])
+        : ["", ...this.#pullRequestWatch.split("\n")].flatMap(wrap))
         .slice(0, total - 1);
     return {
       output: output.flatMap(({ text, emphasized }) =>
-        wrap(text).map((row) => ({ text: row, emphasized }))
+        wrap(text).map((row) => ({ ...row, emphasized }))
       ),
       rows: total - watch.length,
       watch,
@@ -1524,21 +1564,21 @@ export class Session {
       Math.max(0, output.length - rows),
     );
     const shown = output.slice(top, top + rows);
-    const body = shown.map((row) => row.text);
-    while (body.length < rows) body.push("");
+    const body: TaskRow[] = [...shown];
+    while (body.length < rows) body.push({ text: "", links: [] });
+    for (const row of watch) body.push(row);
     return {
       title: this.#taskTitle,
-      body: [...body, ...watch],
+      body: body.map((row) => row.text),
+      links: body.map((row) => row.links),
       emphasized: shown.flatMap((row, i) => row.emphasized ? [i] : []),
       output: true,
       width: columns,
       buttons: this.#abortTask
         ? [{ label: "Abort", hotkey: "a", kind: "cancel" }]
-        : this.#landDraft
-        // The button's letter is not the `L` that opened the dialog, so that
-        // pressing `L` again does not merge.
+        : this.#confirmation
         ? [
-          { label: "Merge", hotkey: "m" },
+          this.#confirmation.button,
           { label: "Cancel", hotkey: "c", kind: "cancel" },
         ]
         : [
@@ -3843,7 +3883,7 @@ export class Session {
     this.#taskReturned = false;
     this.#taskRetry = "";
     this.#taskSummary = "";
-    this.#landDraft = null;
+    this.#confirmation = null;
     this.#pullRequestWatch = "";
     this.#pullRequestUrl = null;
     this.#abortTask = abort;
@@ -3958,20 +3998,49 @@ export class Session {
   /**
    * End the task the task dialog shows, which has found the pull request to
    * land, by asking whether to merge as `request` describes, saying how and
-   * at which commit as GitHub's merge button does. A merge cannot be undone,
-   * so no button is the default, and Enter does nothing until a button has
-   * the focus. Does nothing unless the task is running.
+   * at which commit as GitHub's merge button does. Merge asks the driver to
+   * merge. Does nothing unless the task is running.
    */
   confirmLand(request: MergeRequest): void {
-    if (this.#mode !== "taskPrompt" || !this.#abortTask) return;
-    this.#abortTask = null;
-    this.#landDraft = request;
-    this.appendTaskOutput(
+    // The button's letter is not the `L` that opened the dialog, so that
+    // pressing `L` again does not merge.
+    this.#ask(
       `${MERGE_VERBS[request.method]} pull request ${request.number} of ` +
         `${request.repository},\nif its head is still ` +
-        `${request.sha.slice(0, 12)}?\n`,
-      true,
+        `${request.sha.slice(0, 12)}?`,
+      { label: "Merge", hotkey: "m" },
+      () => {
+        this.mergeRequested = request;
+      },
     );
+  }
+
+  /**
+   * End the task the task dialog shows, which has found that the branch to
+   * push is already pushed, by asking whether to push it again, saying
+   * `question` about it. Push asks the driver to push. Does nothing unless
+   * the task is running.
+   */
+  confirmPush(question: string): void {
+    // The button's letter is not the `P` that opened the dialog, so that
+    // pressing `P` again does not push.
+    this.#ask(
+      question,
+      { label: "Push", hotkey: "u" },
+      () => {
+        this.pushConfirmed = true;
+      },
+    );
+  }
+
+  /** End the running task by asking `question`, offering `button`, which
+   * calls `confirm`, and Cancel. No button is the default, so Enter does
+   * nothing until a button has the focus. */
+  #ask(question: string, button: DialogButton, confirm: () => void): void {
+    if (this.#mode !== "taskPrompt" || !this.#abortTask) return;
+    this.#abortTask = null;
+    this.#confirmation = { button, confirm };
+    this.appendTaskOutput(`${question}\n`, true);
     this.#dialogFocus = -1;
   }
 
@@ -4700,19 +4769,19 @@ export class Session {
     else this.#applyTaskButton(button);
   }
 
-  /** Abort stops the task, which then ends; Merge asks the driver to merge
-   * as the dialog asked, and Cancel takes the dialog down; Close takes the
-   * dialog down and leaves how the task ended in the status line; the retry
-   * button asks the driver to try the task again; Quit takes the dialog down
-   * and quits, by way of the save prompt when there are unsaved edits,
-   * keeping the address of the pull request the dialog says it is quitting
-   * for. */
+  /** Abort stops the task, which then ends; the button that does what the
+   * dialog asked whether to do does it, and Cancel takes the dialog down;
+   * Close takes the dialog down and leaves how the task ended in the status
+   * line; the retry button asks the driver to try the task again; Quit takes
+   * the dialog down and quits, by way of the save prompt when there are
+   * unsaved edits, keeping the address of the pull request the dialog says it
+   * is quitting for. */
   #applyTaskButton(button: DialogButton): void {
-    const draft = this.#landDraft;
-    this.#landDraft = null;
+    const confirmation = this.#confirmation;
+    this.#confirmation = null;
     if (this.#abortTask) this.#abortTask();
-    else if (draft && button.kind !== "cancel") this.mergeRequested = draft;
-    else if (draft) this.#closeTaskDialog(false);
+    else if (confirmation && button.kind !== "cancel") confirmation.confirm();
+    else if (confirmation) this.#closeTaskDialog(false);
     else if (button.hotkey === "p") this.retryRequested = true;
     else if (button.hotkey === "Q") this.#quitTaskDialog();
     else this.#closeTaskDialog(false);

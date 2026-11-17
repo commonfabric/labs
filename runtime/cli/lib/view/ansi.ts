@@ -136,6 +136,12 @@ export const term = {
    * ASCII is percent-encoded as its UTF-8 bytes, so that a link taken
    * from content cannot end the sequence or start another. */
   hyperlink(url: string, text: string): string {
+    return `${term.linkStart(url)}${text}${term.linkEnd}`;
+  },
+
+  /** Starts a link to `url` (OSC 8), percent-encoded as
+   * {@link term.hyperlink} encodes it, which {@link term.linkEnd} ends. */
+  linkStart(url: string): string {
     const safe = url.replace(
       /[^!-~]/gu,
       (char) =>
@@ -144,6 +150,9 @@ export const term = {
           (byte) => `%${byte.toString(16).toUpperCase().padStart(2, "0")}`,
         ).join(""),
     );
-    return `${OSC}8;;${safe}${BEL}${text}${OSC}8;;${BEL}`;
+    return `${OSC}8;;${safe}${BEL}`;
   },
+
+  /** Ends the link {@link term.linkStart} started. */
+  linkEnd: `${OSC}8;;${BEL}`,
 };

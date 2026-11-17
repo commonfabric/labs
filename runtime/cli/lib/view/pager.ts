@@ -51,9 +51,11 @@ import {
   watchForPullRequest,
 } from "./pullrequest.ts";
 import {
+  describePush,
   type GitQuery,
   openPage,
   pushBranch,
+  type PushedBranch,
   type PushIo,
   pushRefused,
   realPushIo,
@@ -81,7 +83,7 @@ const MESSAGE_LINGER_MS = 2000;
 
 /** How long the task dialog gives the address of the pull request that quits
  * the viewer, saying it is quitting, before the viewer closes. */
-const PULL_REQUEST_QUIT_MS = 500;
+const PULL_REQUEST_QUIT_MS = 2000;
 
 export type PagerOptions = SessionOptions;
 
@@ -591,6 +593,17 @@ export async function runPager(
       await deps.github.find(target, signal);
   };
 
+  /** Says in the task dialog where it looks for `branch`'s open pull
+   * request, and resolves with where that is and the pull request, or null
+   * when there is none. */
+  const lookForPullRequest = async (branch: string, signal: AbortSignal) => {
+    const target = pullRequestTarget(deps.git, branch);
+    writeTask(
+      `Looking for the pull request of ${branch} in ${target.repository}.\n`,
+    );
+    return { target, found: await findPullRequest(target, signal) };
+  };
+
   // A push, or creating or merging a pull request, that fails leaves a button
   // in the task dialog that tries it again, as `retry` says.
   let retry: { readonly label: string; readonly run: () => void } | null = null;
@@ -732,8 +745,35 @@ export async function runPager(
     }
   };
 
+  // Pushing a branch that origin already has asks first, saying what the
+  // push would do, and which pull request is open from the branch, if one
+  // is. A pull request that cannot be looked for, or whose search Abort
+  // stops, leaves the push to ask without it.
+  const askToPush = async (
+    branch: string,
+    remote: PushedBranch,
+    signal: AbortSignal,
+  ): Promise<null> => {
+    let pullRequest: string;
+    try {
+      const { found } = await lookForPullRequest(branch, signal);
+      pullRequest = found === null
+        ? "It has no open pull request."
+        : `Pull request ${found.number} is open from it: ${found.url}`;
+    } catch (error) {
+      pullRequest = signal.aborted
+        ? "Stopped looking for its pull request."
+        : `Could not look for its pull request: ${describeFailure(error)}.`;
+    }
+    session.confirmPush(`${describePush(branch, remote)}\n${pullRequest}`);
+    return null;
+  };
+
+  // Once the push dialog has asked, or a push has failed, pushing again
+  // continues the dialog, and asks nothing.
   const startBranchPush = async (again = false) => {
     session.branchPushRequested = false;
+    session.pushConfirmed = false;
     // A watch is for the push whose dialog it outlived.
     stopWatching();
     const controller = new AbortController();
@@ -741,7 +781,7 @@ export async function runPager(
     if (again) session.continueTask(() => controller.abort());
     else session.beginTask("Push", () => controller.abort());
     retry = null;
-    let summary: string;
+    let summary: string | null;
     try {
       const io = deps.pushIo(writeTask, controller.signal);
       summary = await pushBranch(
@@ -749,11 +789,15 @@ export async function runPager(
         controller.signal,
         (branch, url) => pushed(io, branch, url, controller.signal),
         pushFailed,
+        again
+          ? undefined
+          : (branch, remote) => askToPush(branch, remote, controller.signal),
       );
     } catch (error) {
       summary = `Push failed: ${describeFailure(error)}.`;
     }
-    endTask(summary);
+    if (summary === null) draw();
+    else endTask(summary);
   };
 
   // A merge that fails, unless GitHub refused it as one that cannot succeed,
@@ -817,11 +861,7 @@ export async function runPager(
     if (branch === undefined) {
       throw new Error("this checkout is not on a branch");
     }
-    const target = pullRequestTarget(deps.git, branch);
-    writeTask(
-      `Looking for the pull request of ${branch} in ${target.repository}.\n`,
-    );
-    const found = await findPullRequest(target, signal);
+    const { target, found } = await lookForPullRequest(branch, signal);
     signal.throwIfAborted();
     if (found === null) {
       return `${branch} has no open pull request in ${target.repository}.`;
@@ -889,6 +929,7 @@ export async function runPager(
 
   const startRequested = () => {
     if (session.branchPushRequested) startBranchPush();
+    if (session.pushConfirmed) startBranchPush(true);
     if (session.retryRequested) {
       session.retryRequested = false;
       retry?.run();
