@@ -24,9 +24,8 @@ const logger = getLogger("ensure-piece-running", {
 
 /**
  * Warns where an open starts a piece without a piece its inputs come from
- * (`startWithInputSources()`), or a start that asks for
- * `EnsurePieceOptions.sourcesBestEffort` does, whose handlers then read what
- * that source derived last.
+ * (`startWithInputSources()`), whose handlers then read what that source
+ * derived last.
  */
 const openLogger = getLogger("ensure-piece-running.open", {
   enabled: true,
@@ -34,48 +33,6 @@ const openLogger = getLogger("ensure-piece-running.open", {
 });
 
 const MAX_RESULT_LINK_DEPTH = 10;
-
-/** A piece the walk of `startInputSources()` could not start. */
-interface UnstartedSource {
-  /** The piece's root. */
-  source: NormalizedFullLink;
-
-  /** Why it did not start. */
-  verdict: EnsurePieceVerdict;
-}
-
-/**
- * Warns that `verb` ("Opened" or "Started") put the piece `ownerId` in motion
- * without `source`, a piece that encloses it, which could not start.
- */
-function warnUnstartedSource(
-  verb: string,
-  ownerId: string,
-  { source, verdict }: UnstartedSource,
-): void {
-  openLogger.warn("input-sources", () => [
-    `${verb} ${ownerId} without ${source.id}, a piece that encloses it, ` +
-    `which could not start (${verdict.reason ?? "failed"}); its ` +
-    `handlers read what ${source.id} derived last.`,
-  ]);
-}
-
-/**
- * Warns that `verb` ("Opened" or "Started") put the piece `ownerId` in motion
- * without the pieces that enclose it, because the links that name them could
- * not be read.
- */
-function warnUnreadSources(
-  verb: string,
-  ownerId: string,
-  error: unknown,
-): void {
-  openLogger.warn("input-sources", () => [
-    `${verb} ${ownerId} without the pieces that enclose it, whose links ` +
-    `could not be read; its handlers read what those derived last:`,
-    error,
-  ]);
-}
 
 /**
  * Follows `result` backlinks from `rootCell` to the result document that
@@ -147,23 +104,29 @@ async function followResultCellChain(
  * `owner`'s start, as a chain of its own that cannot be read does: a handler
  * started without its sources reads what they derived last. Each source that
  * could not start, other than a linked document that is no piece's, is added
- * to `unstarted` with its verdict.
+ * to `unstarted` with its verdict. With `EnsurePieceOptions.sourcesRequired`,
+ * the first such source's verdict is returned instead, and an error starting a
+ * source is thrown, so `owner` does not start without it.
+ * `EnsurePieceOptions.onSourceRoot` is told of each source before it is asked
+ * about, running or not.
  */
 async function startInputSources(
   runtime: Runtime,
   owner: OwningRootAddress,
   options: EnsurePieceOptions | undefined,
   visited: Set<string>,
-  unstarted?: UnstartedSource[],
+  unstarted?: { source: NormalizedFullLink; verdict: EnsurePieceVerdict }[],
 ): Promise<EnsurePieceVerdict | undefined> {
   const signal = options?.signal;
   const sources = options?.enclosingSourcesOnly === true
     ? await enclosingPieceOf(runtime, owner, signal)
     : await inputSourcesOf(runtime, owner, signal);
+  const required = options?.sourcesRequired === true;
   for (const source of sources) {
     const key = rootKey(source);
     if (visited.has(key)) continue;
     visited.add(key);
+    options?.onSourceRoot?.(source);
     if (runtime.runner.isRunning(runtime.getCellFromLink(source))) continue;
     const verdict = await ensureVerdict(
       runtime,
@@ -178,45 +141,21 @@ async function startInputSources(
         ...(options?.forEvent !== undefined && { forEvent: options.forEvent }),
         ...(options?.enclosingSourcesOnly !== undefined &&
           { enclosingSourcesOnly: options.enclosingSourcesOnly }),
+        ...(required && { sourcesRequired: true, propagateErrors: true }),
+        ...(options?.onSourceRoot !== undefined &&
+          { onSourceRoot: options.onSourceRoot }),
       },
       visited,
       unstarted,
     );
     signal?.throwIfAborted();
-    if (!verdict.started && verdict.reason === "origin-pending") return verdict;
-    if (!verdict.started && verdict.reason !== "no-pattern-meta") {
-      unstarted?.push({ source, verdict });
+    if (verdict.started || verdict.reason === "no-pattern-meta") continue;
+    if (required || verdict.reason === "origin-pending") {
+      return { ...verdict, heldBy: verdict.heldBy ?? source };
     }
+    unstarted?.push({ source, verdict });
   }
   return undefined;
-}
-
-/**
- * Helper for `ensureVerdict()`, which runs `startInputSources()` for `owner`
- * under `EnsurePieceOptions.sourcesBestEffort`: each source the walk could not
- * start is warned of, and so are links it could not read, which leave `owner`
- * to start without its sources rather than fail. A source still owed its
- * follow is returned as `startInputSources()` returns it, and an abort is
- * rethrown.
- */
-async function startSourcesBestEffort(
-  runtime: Runtime,
-  owner: OwningRootAddress,
-  options: EnsurePieceOptions,
-  visited: Set<string>,
-): Promise<EnsurePieceVerdict | undefined> {
-  const unstarted: UnstartedSource[] = [];
-  try {
-    return await startInputSources(runtime, owner, options, visited, unstarted);
-  } catch (error) {
-    if (options.signal?.aborted) throw error;
-    warnUnreadSources("Started", owner.id, error);
-    return undefined;
-  } finally {
-    for (const entry of unstarted) {
-      warnUnstartedSource("Started", owner.id, entry);
-    }
-  }
 }
 
 /**
@@ -497,6 +436,11 @@ export type EnsurePieceVerdict = {
    * could not load. */
   patternIdentity?: string;
 
+  /** The root of the piece whose own verdict this is, where a piece the
+   * owning piece's inputs come from held the owning piece back
+   * (`startInputSources()`): `reason` and `patternIdentity` are that piece's. */
+  heldBy?: OwningRootAddress;
+
   /** Every doc id the traversal read (the demanded root plus chain
    * links): the demand cycle's commit-triggered re-arm watches these. */
   observedDocIds: string[];
@@ -598,14 +542,25 @@ export type EnsurePieceOptions = {
   enclosingSourcesOnly?: boolean;
 
   /**
-   * With `startInputSources`, start the owning piece whatever the walk could
-   * not do, as an open does (`startWithInputSources()`): a source that could
-   * not start, and links the walk could not read, are each warned of, and the
-   * owning piece starts without them. Without it, a walk whose links cannot
-   * be read fails the owning piece's start. A source still owed its origin's
-   * follow holds the owning piece back either way.
+   * With `startInputSources`, a piece the owning piece's inputs come from that
+   * does not start holds the owning piece back: the walk returns that piece's
+   * verdict as the owning piece's, naming it in `heldBy`, and an error starting
+   * it is thrown as `propagateErrors` throws the owning piece's own, rather
+   * than leaving the owning piece to start without it. A caller that retries,
+   * parks and reports an owning piece that cannot start asks for this, so that
+   * a source's failure is retried, parked and reported the same way. A linked
+   * document that is no piece's is passed over either way.
    */
-  sourcesBestEffort?: boolean;
+  sourcesRequired?: boolean;
+
+  /**
+   * With `startInputSources`, called with the root of each piece the owning
+   * piece's inputs come from as the walk reaches it, before it is started and
+   * whether or not it is running already, at any depth. A caller keying what
+   * it supplies a started piece by what was demanded records the mapping
+   * here, as it does for the owning piece in `onOwningRoot`.
+   */
+  onSourceRoot?: (root: OwningRootAddress) => void;
 
   /**
    * The walk delivers an event, so each piece it starts, the pieces its
@@ -642,7 +597,7 @@ async function ensureVerdict(
   cellLink: NormalizedFullLink,
   options: EnsurePieceOptions | undefined,
   visited: Set<string>,
-  unstarted?: UnstartedSource[],
+  unstarted?: { source: NormalizedFullLink; verdict: EnsurePieceVerdict }[],
 ): Promise<EnsurePieceVerdict> {
   const observedDocIds: string[] = [];
   const observedDocs: OwningRootAddress[] = [];
@@ -771,23 +726,26 @@ async function ensureVerdict(
         !runtime.runner.isRunning(resultCell)
       ) {
         visited.add(rootKey(root));
-        const pending = options.sourcesBestEffort === true
-          ? await startSourcesBestEffort(runtime, root, options, visited)
-          : await startInputSources(
-            runtime,
-            root,
-            options,
-            visited,
-            unstarted,
-          );
+        const pending = await startInputSources(
+          runtime,
+          root,
+          options,
+          visited,
+          unstarted,
+        );
         signal?.throwIfAborted();
-        // A source still owed its follow holds this piece back with it; the
-        // caller asks again once the follow has run, and the re-arm watches
-        // what the source's chain read as well as this one's.
+        // A source still owed its follow holds this piece back with it, as
+        // any source that did not start does under `sourcesRequired`; the
+        // caller asks again once the follow has run, or as it retries this
+        // piece for the same reason, and the re-arm watches what the source's
+        // chain read as well as this one's.
         if (pending !== undefined) {
           return {
             started: false,
-            reason: "origin-pending",
+            ...(pending.reason !== undefined && { reason: pending.reason }),
+            ...(pending.patternIdentity !== undefined &&
+              { patternIdentity: pending.patternIdentity }),
+            ...(pending.heldBy !== undefined && { heldBy: pending.heldBy }),
             root,
             observedDocIds: [...observedDocIds, ...pending.observedDocIds],
             observedDocs: [...observedDocs, ...pending.observedDocs],
@@ -910,7 +868,11 @@ export async function startWithInputSources(
     try {
       await startEnclosingFollowingOrigins(runtime, root, options);
     } catch (error) {
-      warnUnreadSources("Opened", id, error);
+      openLogger.warn("input-sources", () => [
+        `Opened ${id} without the pieces that enclose it, whose links ` +
+        `could not be read; its handlers read what those derived last:`,
+        error,
+      ]);
     }
   }
   return await start();
@@ -939,7 +901,10 @@ async function startEnclosingFollowingOrigins(
     : undefined;
   while (true) {
     owed = [];
-    const unstarted: UnstartedSource[] = [];
+    const unstarted: {
+      source: NormalizedFullLink;
+      verdict: EnsurePieceVerdict;
+    }[] = [];
     const pending = await startInputSources(
       runtime,
       root,
@@ -951,8 +916,12 @@ async function startEnclosingFollowingOrigins(
       new Set([rootKey(root)]),
       unstarted,
     );
-    for (const entry of unstarted) {
-      warnUnstartedSource("Opened", root.id, entry);
+    for (const { source, verdict } of unstarted) {
+      openLogger.warn("input-sources", () => [
+        `Opened ${root.id} without ${source.id}, a piece that encloses it, ` +
+        `which could not start (${verdict.reason ?? "failed"}); its ` +
+        `handlers read what ${source.id} derived last.`,
+      ]);
     }
     if (pending === undefined) return;
     const toFollow = owed.filter((source) => !followed.has(rootKey(source)));

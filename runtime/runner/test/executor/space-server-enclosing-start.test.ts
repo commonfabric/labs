@@ -10,6 +10,7 @@ import { sendEvent } from "../../src/cell.ts";
 import { ExecutorHost } from "../../src/executor/host.ts";
 import type { NormalizedFullLink } from "../../src/link-types.ts";
 import { getMetaLink } from "../../src/link-utils.ts";
+import { PieceStateMovedError } from "../../src/stored-setup-build.ts";
 import { rawMetaWriteAuthorization } from "../../src/meta-seam.ts";
 import type { RuntimeProgram } from "../../src/harness/types.ts";
 import { Runtime } from "../../src/runtime.ts";
@@ -32,13 +33,14 @@ const setupSigner = await Identity.fromPassphrase(
 const aliceSigner = await Identity.fromPassphrase(
   "space-server enclosing start alice",
 );
-const openLogger = getLogger("ensure-piece-running.open");
+const logger = getLogger("space-server");
 
 // A handler a nested pattern defines, whose input the pattern enclosing it
 // derives: the event's stream belongs to the nested instance, and `doubled` is
-// written only by the enclosing instance's `computed`. `local` is a document
-// of the nested instance alone, which a demand can name without naming
-// anything of the enclosing instance's.
+// written only by the enclosing instance's `computed`, so the handler records
+// -1 where no run of that `computed` has given it a value to read. `local` is
+// a document of the nested instance alone, which a demand can name without
+// naming anything of the enclosing instance's.
 const NESTED_PROGRAM: RuntimeProgram = {
   main: "/main.tsx",
   files: [{
@@ -103,6 +105,45 @@ const HUB_PROGRAM: RuntimeProgram = {
       "",
       "export default pattern<{ input: number }, { input: number; local: number }>(",
       "  ({ input }) => shown({ input }),",
+      ");",
+    ].join("\n"),
+  }],
+};
+
+// Three levels: the outermost pattern derives `tripled`, the middle one passes
+// it on, and the innermost one's handler records it.
+const DEEP_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, Default, handler, pattern, Stream, Writable } from 'commonfabric';",
+      "",
+      "type Seen = Writable<number | Default<0>>;",
+      "type Inner = { record: Stream<unknown>; local: number };",
+      "",
+      "const record = handler<unknown, { tripled?: number; seen: Seen }>(",
+      "  (_event, { tripled, seen }) => {",
+      "    seen.set(tripled ?? -1);",
+      "  },",
+      ");",
+      "",
+      "const inner = pattern<{ tripled?: number; seen: Seen }, Inner>(",
+      "  ({ tripled, seen }) => ({",
+      "    record: record({ tripled, seen }),",
+      "    local: Writable.of<number>(7),",
+      "  }),",
+      ");",
+      "",
+      "const middle = pattern<{ tripled?: number; seen: Seen }, Inner>(",
+      "  ({ tripled, seen }) => inner({ tripled, seen }),",
+      ");",
+      "",
+      "export default pattern<{ value: number; seen?: Seen }, Inner>(",
+      "  ({ value, seen }) => {",
+      "    const tripled = computed(() => value * 3);",
+      "    return middle({ tripled, seen: seen! });",
+      "  },",
       ");",
     ].join("\n"),
   }],
@@ -224,17 +265,23 @@ describe("SpaceServer", () => {
     runtime?.runner.isRunning(runtime.getCellFromLink(root)) === true;
 
   /**
-   * Sets up `NESTED_PROGRAM` with `value` 1, so the store holds `doubled` 2,
-   * then stops it and moves `value` to 5 with nothing running to derive
-   * `doubled` again. With `origin`, the enclosing instance records that
-   * origin.
+   * Sets up `program` (`NESTED_PROGRAM` by default) with `value` 1, then stops
+   * it and moves `value` to 5 with nothing running, so that what its
+   * outermost instance derives now is what a run of it in the serving runtime
+   * derives. With `origin`, the outermost instance records that origin.
+   * Returns the innermost instance as `nested`, with its argument.
    */
   const setUpNested = async (
-    { origin }: { origin?: string } = {},
-  ): Promise<Piece & { stream: NormalizedFullLink }> => {
+    { origin, program = NESTED_PROGRAM }: {
+      origin?: string;
+      program?: RuntimeProgram;
+    } = {},
+  ): Promise<
+    Piece & { stream: NormalizedFullLink; nestedArgument: NormalizedFullLink }
+  > => {
     const setup = openRuntime(false, setupSigner);
     const compiled = await setup.patternManager.compilePattern(
-      NESTED_PROGRAM,
+      program,
       { space },
     );
     const argument = setup.getCell<{ value: number; seen?: number }>(
@@ -269,6 +316,10 @@ describe("SpaceServer", () => {
     } as NormalizedFullLink;
     const local = setup.getCellFromLink(nested).key("local" as never)
       .resolveAsCell().getAsNormalizedFullLink();
+    const nestedArgument = getMetaLink(
+      setup.getCellFromLink(nested),
+      "argument",
+    )!;
     setup.runner.stop(result);
     {
       const tx = setup.edit();
@@ -283,7 +334,23 @@ describe("SpaceServer", () => {
       enclosing: result.getAsNormalizedFullLink(),
       nested,
       local,
+      nestedArgument,
     };
+  };
+
+  let touches = 0;
+
+  /** Commits a write to the space as a runtime that runs nothing. */
+  const touchSpace = async () => {
+    const writer = openRuntime(false, setupSigner);
+    const cell = writer.getCell<number>(space, "enclosing start touch", {
+      type: "number",
+    });
+    const tx = writer.edit();
+    cell.withTx(tx).set(++touches);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await writer.storageManager.synced();
+    await closeLastRuntime();
   };
 
   /**
@@ -331,6 +398,18 @@ describe("SpaceServer", () => {
         expect(serves(enclosing)).toBe(true);
       });
 
+      it("starts every piece enclosing a piece nested two levels deep", async () => {
+        host = newHost();
+        const { stream, enclosing, nested, local } = await setUpNested({
+          program: DEEP_PROGRAM,
+        });
+        await demand(local);
+
+        await awaitEach(cycles, () => serves(nested));
+        expect(await recordedOnEvent(stream)).toBe(15);
+        expect(serves(enclosing)).toBe(true);
+      });
+
       it("starts the enclosing piece again in the tenure after a park, and leaves none running in the parked one", async () => {
         host = newHost();
         const { stream, enclosing, nested, local } = await setUpNested();
@@ -341,11 +420,15 @@ describe("SpaceServer", () => {
 
         expect(serves(enclosing, parked)).toBe(false);
         expect(serves(nested, parked)).toBe(false);
-        // The event's append is what reactivates the space.
-        expect(await recordedOnEvent(stream)).toBe(10);
-        expect(servingRuntime).not.toBe(parked);
+        // A write reactivates the space, and the next tenure's demand pass
+        // starts both before any event could.
+        await touchSpace();
+        await awaitEach(
+          cycles,
+          () => servingRuntime !== parked && serves(nested),
+        );
         expect(serves(enclosing)).toBe(true);
-        expect(serves(nested)).toBe(true);
+        expect(await recordedOnEvent(stream)).toBe(10);
       });
 
       it("follows the origin of an enclosing piece before starting it, holding the nested piece back until it has", async () => {
@@ -371,26 +454,127 @@ describe("SpaceServer", () => {
         expect(await recordedOnEvent(stream)).toBe(10);
       });
 
-      it("starts a nested piece whose enclosing piece cannot start, warning that it did", async () => {
-        const failing: { id?: string } = {};
+      it("holds a nested piece back while its enclosing piece's start throws, counts the failure, and starts both on a later cycle", async () => {
+        const failing: { id?: string; left: number } = { left: 1 };
+        onServingRuntime = (runtime) => {
+          const start = runtime.start.bind(runtime);
+          runtime.start = (cell, options) => {
+            if (
+              cell.getAsNormalizedFullLink().id === failing.id &&
+              failing.left > 0
+            ) {
+              failing.left -= 1;
+              return Promise.reject(
+                new Error("test failure of the enclosing start"),
+              );
+            }
+            return start(cell, options);
+          };
+        };
+        const warned = () =>
+          logger.countsByKey["structure-load-failed"]?.warn ?? 0;
+        host = newHost();
+        const { stream, enclosing, nested, local } = await setUpNested();
+        failing.id = enclosing.id;
+        const warnedBefore = warned();
+        await demand(local);
+
+        await awaitEach(
+          cycles,
+          () => host!.stats().structureLoadFailures > 0,
+        );
+        expect(failing.left).toBe(0);
+        expect(serves(nested)).toBe(false);
+        expect(warned()).toBe(warnedBefore + 1);
+        await touchSpace();
+        await awaitEach(cycles, () => serves(nested));
+        expect(serves(enclosing)).toBe(true);
+        expect(await recordedOnEvent(stream)).toBe(10);
+      });
+
+      it("holds a nested piece back while the links naming its enclosing piece cannot be read, and starts both on a later cycle", async () => {
+        const failing: { id?: string; left: number } = { left: 1 };
+        onServingRuntime = (runtime) => {
+          const manager = runtime.storageManager;
+          const syncCell = manager.syncCell.bind(manager);
+          manager.syncCell = (cell, options) => {
+            if (
+              cell.getAsNormalizedFullLink().id === failing.id &&
+              failing.left > 0
+            ) {
+              failing.left -= 1;
+              return Promise.reject(
+                new Error("test failure of the argument's read"),
+              );
+            }
+            return syncCell(cell, options);
+          };
+        };
+        host = newHost();
+        const { stream, enclosing, nested, local, nestedArgument } =
+          await setUpNested();
+        failing.id = nestedArgument.id;
+        await demand(local);
+
+        await awaitEach(
+          cycles,
+          () => host!.stats().structureLoadFailures > 0,
+        );
+        expect(failing.left).toBe(0);
+        expect(serves(nested)).toBe(false);
+        await touchSpace();
+        await awaitEach(cycles, () => serves(nested));
+        expect(serves(enclosing)).toBe(true);
+        expect(await recordedOnEvent(stream)).toBe(10);
+      });
+
+      it("counts a nested piece whose enclosing piece's start is refused as refused, and leaves it unstarted", async () => {
+        const refusing: { id?: string } = {};
         onServingRuntime = (runtime) => {
           const start = runtime.start.bind(runtime);
           runtime.start = (cell, options) =>
-            cell.getAsNormalizedFullLink().id === failing.id
-              ? Promise.reject(new Error("test failure of the enclosing start"))
+            cell.getAsNormalizedFullLink().id === refusing.id
+              ? Promise.reject(
+                new PieceStateMovedError(
+                  refusing.id,
+                  { identity: "enclosing start pattern", symbol: "default" },
+                  [],
+                  [],
+                ),
+              )
               : start(cell, options);
         };
-        const warnings = () =>
-          openLogger.countsByKey["input-sources"]?.warn ?? 0;
         host = newHost();
         const { enclosing, nested, local } = await setUpNested();
-        failing.id = enclosing.id;
-        const warnedBefore = warnings();
+        refusing.id = enclosing.id;
         await demand(local);
 
-        await awaitEach(cycles, () => serves(nested));
+        await awaitEach(cycles, () => host!.stats().structureLoadRefused > 0);
+        expect(serves(nested)).toBe(false);
         expect(serves(enclosing)).toBe(false);
-        expect(warnings()).toBeGreaterThan(warnedBefore);
+        expect(host.stats().structureLoadFailures).toBe(0);
+      });
+
+      it("parks the demanded document of a nested piece once its enclosing piece's start commit fails", async () => {
+        const previousLevel = logger.level;
+        logger.level = "debug";
+        try {
+          const parkedLogs = () =>
+            logger.countsByKey["structure-load-start-failed"]?.info ?? 0;
+          host = newHost();
+          const { enclosing, nested, local } = await setUpNested();
+          await demand(local);
+          await awaitEach(cycles, () => serves(nested));
+          const before = parkedLogs();
+
+          servingRuntime!.pieceStartCommitFailureObserver!({
+            actionId: `piece-start/${enclosing.id}`,
+            error: new Error("test failure of the enclosing start's commit"),
+          });
+          expect(parkedLogs()).toBe(before + 1);
+        } finally {
+          logger.level = previousLevel;
+        }
       });
 
       it("leaves unstarted a producer a hub's nested piece takes its input from", async () => {
