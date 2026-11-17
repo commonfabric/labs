@@ -131,14 +131,14 @@ next.
   The crate accepts 333 modules and reports 389 errors. It does not
   yet emit `$defs` for a recursive type. The crate's `SPEC-NOTES.md`
   lists the places where it found the documents ambiguous. Its notes through
-  272, notes 281 to 302, notes 307 to 320, notes 325 to 341, and notes 344
-  to 363 are written into the documents.
+  272, notes 281 to 302, notes 307 to 320, notes 325 to 341, notes 344
+  to 363, and notes 367 to 382 are written into the documents.
   Notes 273 to 280, which measure cost, are written into
   [What compiling, running, and storing cost](#what-compiling-running-and-storing-cost)
-  below, and notes 303 to 306, 321 to 324, 342 and 343, and 364 to 366, the
-  results of the value comparison, into
+  below, and notes 303 to 306, 321 to 324, 342 and 343, 364 to 366, and
+  383 to 386, the results of the value comparison, into
   [What the prototype's executor computes](#what-the-prototypes-executor-computes).
-  The latest prototype commit read is `77993077e4`. From commit
+  The latest prototype commit read is `e63b3d305c`. From commit
   `3e518147df` on the crate also emits value code and an executor runs
   a plan with it. At `3e518147df`, in the fixtures 122 of 122 compared
   values equal those of today's runtime, and in the corpus 4,472 of
@@ -153,7 +153,20 @@ next.
   passed on, a write below the root of an empty state cell, a first value,
   the callee's default, and `[SELF]` implemented, they are 489 of 490 in the
   fixtures and 4,641 to 4,650 of 4,735 in the corpus, over 194 modules. The
-  range is one module that draws from `Math.random`. No compared row of the
+  range is one module that draws from `Math.random`. At `e63b3d305c`,
+  with the rulings on a key that left its collection, on which
+  evaluation fails the check of a stream, on a stream a function body
+  returns, on what a `*` of a result path stands for, on the key of a
+  `flatMap` member, and on the record of a key implemented, with
+  `Math.random` seeded in both runs, and with a pattern instantiated
+  and a handler bound in a function body, they are 673 of 674 in the
+  fixtures and, over 196 modules of the corpus, 4,680 of 4,769 against
+  the saved values of today's runtime and 5,324 of 5,410 against a
+  fresh seeded run of it. That commit does not have the rulings on the
+  top-level property a failed check keeps, on the prefix match at a
+  `flatMap` result, on a collection as one nested child, on a write
+  that re-keys a plain value, on a body's copy of one, on a handle by
+  position, or on `asInstance()`. No compared row of the
   corpus evaluates the label of an
   index: the 54 index slots of the corpus plans are read by outputs
   below the elements of a collection and by handlers with no
@@ -182,7 +195,11 @@ the plans say of the compiled path, at prototype commit `4ca9fe56cb`
 is faster at run time: no time of the compiled path is measured. The
 executor of
 [What the prototype's executor computes](#what-the-prototypes-executor-computes)
-computes values and was not timed.
+computes values and was not timed. The prototype's later commits, to
+`e63b3d305c`, measure no cost, and the figures of this section are not
+computed again for them. The one later figure that bears on storage is
+the count of documents the executor stores, under
+[Documents](#documents).
 
 ### What is measured and what is derived
 
@@ -516,7 +533,16 @@ place, on an output that passes a derived collection on, on a write
 below the root of an empty state cell, on a first value stored as a
 value, on where the callee's default is held, and on the name bound to
 `[SELF]`. Those are notes 344 to 363, which are written into the
-documents, and notes 364 to 366, which run the comparison again. Each
+documents, and notes 364 to 366, which run the comparison again. At
+commit `e63b3d305c` the crate and the executor implement the rulings on
+what a key that left its collection keeps, on which evaluation fails
+the check of a stream's position, on a stream that a function body
+returns, on what a `*` of a result path stands for, on the key of an
+element that a `flatMap` contributes, and on the record of a key of a
+list. The comparison seeds `Math.random` in both runs, and the
+executor instantiates a pattern and binds a handler in a function
+body. Those are notes 367 to 382, which are written into the
+documents, and notes 383 to 386, which run the comparison again. Each
 part below gives the figures of each commit, the earliest first.
 
 Notes 281 to 302 say what the executor needed that the
@@ -548,8 +574,15 @@ stays open, and question 167 is what the ruling on 166 leaves
 undetermined in the reactive tier. Questions 168 to 173 are what notes
 344 to 363 found undetermined, and questions 149, 160, 161, and 163 are
 restated with what the prototype observed under their assumptions.
-Notes 303 to 306, 321 to 323, 342, and 364 and 365 are the results
-here.
+Questions 160, 163, 164, 170, and 173 are ruled since, and so is what
+notes 368, 369, 374, and 375 asked: an event for the stream of a key
+that left its collection, what keeps its value where the check of a
+stream fails, the kind of a `*` at a `flatMap` result, and a
+collection among the children of a view node. Questions 174 to 183 are
+what those rulings, the ruling on `asInstance()`, and notes 367 to 382
+leave undetermined.
+Notes 303 to 306, 321 to 323, 342, 364 and 365, and 383 and 384 are
+the results here.
 Nothing was timed.
 
 Note 324 says what the later round did not keep to and did not verify.
@@ -596,6 +629,24 @@ was written after the code. The counts of evaluations over the corpus
 differ by a few from those of the run of commit `59055fd0c5` before any
 change of this round, which was not examined. No fresh run of today's
 runtime over the corpus was made.
+
+Note 386 says the same of the round of commit `e63b3d305c`. The tests
+of the rulings on a key that left its collection and on the record of
+a key describe what the executor did and changed no code. The tests of
+the rulings on which evaluation fails, on a stream a body returns, on
+the kinds of a `*`, and on the key of a `flatMap` member, of the seed,
+and of the executor's part of instantiating and binding in a function
+body were written and seen to fail before the code. The test of the
+emitter's pattern identity was written in the same step as the code.
+The fresh run of today's runtime was made once, with the crate and the
+executor as they were before the instances of a function body, and the
+current ones are compared with it. That today's values are the same in
+a second fresh run is shown for the 14 modules of `showcase/` alone.
+The differences of `apps/base/person.tsx` and
+`apps/base/family-member.tsx` are not examined. The classes of note
+374 rest on a reading of the crate and have no fixture. The
+comparison's scripts are run without the type check, which
+`values-corpus.ts` does not pass.
 
 ### What is compared, and what is not
 
@@ -645,7 +696,18 @@ fixture uses the scenario its label test writes, where it writes one.
   record that is set at one position of an array and the records of an
   array that a body creates a cell with, and writes no default of the
   argument into the argument document, where today's runtime writes
-  one. It reads `spaceOf` as the
+  one. At commit `e63b3d305c` it instantiates a pattern in a function
+  body, as an instance of the callee's plan with documents of its own
+  in the same store, and binds a handler there, as a stream that an
+  event runs the handler for with the state the body bound. It finds
+  the callee by the identity that the factory value carries, among the
+  artifacts of the program it is given, and the crate's `Child` has no
+  `callee` (question 183). It names such an instance and such a stream
+  by the run that made it and an ordinal among all that the run made,
+  names a run of a handler by a count of the events handled, never
+  tears an instance down, and writes the argument of an instance that
+  a run names again whole; the documents name them by the site and by
+  the receipt. It reads `spaceOf` as the
   space it is given and has no acting principal. It does not use
   `Cone.writes`,
   `ConeResult.selections`, or `ConeResult.picks`: a body's side-write
@@ -673,7 +735,24 @@ fixture uses the scenario its label test writes, where it writes one.
   collection, in each of the three cases, and a key that comes back has
   new instances, which are evaluated; it keeps the state cells declared
   under the key, as the ruling on a key that left has it
-  ([Decided](#decided)).
+  ([Decided](#decided)). At commit `e63b3d305c` it refuses an event
+  for the stream of a key that is away, as the ruling since has it,
+  and it has no state of an operation that is kept per key and no
+  child of an element body.
+- **`Math.random` is seeded at commit `e63b3d305c`.** The comparison
+  installs a `Math.random` before today's runtime freezes the
+  intrinsics of the realm, and both runs seed it with the index of
+  each event. The sequence starts again for each run of a handler,
+  since today's runtime can run the handler of one event more than
+  once. Two callers are kept out of the sequence: the jitter of a
+  retry's delay (`computeBackoffDelayMs` in
+  `runtime/runner/src/scheduler/backpressure.ts`), which draws from
+  the realm's own generator; and the timing statistics of the logger
+  (`TimingDataStore.record` in `base/logger/src/logger.ts`), which the
+  harness empties before each event. A handler that sends to another
+  stream is one run in the executor and two in today's runtime, and
+  the two would then draw differently; no module of the corpus run
+  shows it.
 - **The emitter departs from the documents in three ways** that the
   results depend on. It writes one function per value a cone computes,
   where `execution-and-storage.md` §2.1 has one per cone. A pattern
@@ -790,7 +869,9 @@ beside the three fixtures that were not compared before.
   has the three handlers of question 160: one write through the
   element's reference commits and the row loses its state, two writes
   in turn are rejected, and one `update` commits. Over the array of
-  references all three commit and the row keeps its state.
+  references all three commit and the row keeps its state. By the
+  ruling on question 160 the design re-keys the element, so the first
+  two outcomes are the prototype's and not the design's.
 - **`passes-collection`.** An output that passes the result of a
   `filter` on, over an array of references and over an array of plain
   values in place, each with a `map` over the output, which is the
@@ -819,6 +900,59 @@ beside the three fixtures that were not compared before.
   pattern's body and in an element body over an array of references
   and over an array of plain values in place. The executor stores a
   link to the result.
+
+At commit `e63b3d305c`, 37 of the 41 fixtures are run, in 44 runs, and
+673 of 674 compared values are equal. The added runs are
+`fixtures/key-returns.tsx` with 72 values,
+`fixtures/stream-returned.tsx` with 16, `fixtures/star-kinds.tsx` with
+49, `fixtures/random.tsx` with 18, and `fixtures/instantiate.tsx` with
+27, and `fixtures/flat-keys.tsx` has 6 values where it had 4. The one
+value that differs is that of `callee-default`, above. The run prints
+the events the harness did not send: one, of `star-kinds`. One event
+of `handle-passed` is not handled: its handler instantiates a pattern,
+which the executor does at this commit, and then calls `navigateTo`.
+
+- **`key-returns`.** A state cell declared in the body of a `map` over
+  the result of a `filter`, once over records that a handler pushed,
+  which are references, and once over plain values in place. The keys
+  leave the result of the `filter` and enter it again. The cone
+  instances of a key are gone while it is away, no document is made or
+  deleted, and the key that returns reads what its cell held. The
+  executor's tests add a link that leaves an array of references and
+  stands in it again, a plain value that leaves an array in place and
+  is written again at another position, and the last occurrence of two
+  equal plain values. Over plain values in place today's key is the
+  position, so a value that returns at another position is the one
+  case where today's runtime would read another cell, and the
+  comparison does not have it.
+- **`stream-returned`.** A `lift` that returns the stream it is handed,
+  for a binding outside every element body and for a binding of an
+  element body over references and over plain values in place. The
+  stored link has the key of the element in each, and no path of
+  `Binding.result` names the position.
+- **`star-kinds`.** Each kind of a `*`: `every` and `element` over
+  references and over plain values in place, `inside` over an array of
+  plain values written in place, and `element` over the result of
+  another construct, with an event for each binding but one. The one
+  is of two collections spread into one array of children, which the
+  harness could not resolve with the children stored flat; by the
+  ruling since, each collection is a child position of its own.
+- **`random`.** A pattern that draws from `Math.random`, under the
+  seed.
+- **`instantiate`.** A function body that instantiates a pattern, with
+  two instances made by two events, and a `computed` that binds a handler
+  twice. An event for the second stream writes the cell, the
+  `computed` is not evaluated again, and the streams are the ones it
+  bound.
+- **`flat-keys`.** Over a source of references, a segment of plain
+  values and a segment of references that the element holds; over a
+  source of plain values in place, a segment of plain values that the
+  callback writes in an order an input chooses. Two members of one
+  segment that change places evaluate nothing in the body over the
+  result. Where the callback computes the members, the callback is
+  evaluated once per source element, and the body over the result for
+  no member. No fixture declares a state cell in a body over the
+  result.
 
 ### The corpus
 
@@ -1070,16 +1204,18 @@ give of the changes:
   `dev/gideon-tests/test-handler-capture-key-equals.tsx`. A handler of
   a row finds its element with `inboxItems.key(i).equals(inboxItem)`.
   The handle of `key(i)` names the position, the row's element is a
-  reference by key, the two are not equal under the assumption of
-  question 163, and the handler removes nothing. Today's runtime finds
-  the element, because both name the position there. The case is an
+  reference by key, the two are not equal in the prototype, and the
+  handler removes nothing. Today's runtime finds
+  the element, because both name the position there. By the ruling on
+  question 163 the two are equal in the design. The case is an
   array of plain values in place; over an array of references both
   resolve to the cell.
 - **`card-piles` varies.** Its handler reads two piles, shuffles the
-  cards, and sets both piles. Under the assumption of question 163
+  cards, and sets both piles. In the prototype
   the first pile then holds references by key into the second, which
   is set next, and the cards that changed piles read as nothing.
-  Today's runtime stores copies. The executor of the earlier commit
+  Today's runtime stores copies, and by the ruling on question 163 so
+  does the design. The executor of the earlier commit
   stored a link to the position, which read whatever card stood
   there, and the cards of the scenario are all equal. The case is an
   array of plain values in place.
@@ -1103,8 +1239,8 @@ the tables above.
 | `system/agent-run` | 4 | The scenario, not verified by a run | The generator gives `run` no value for four required members of type `unknown`, and today's read of `run` under its schema gives nothing |
 | `dev/catalog/catalog` | 2 | Prototype defect, not verified | As at commit `96f3b83a73` |
 | `examples/cfc-spec-gallery` | 1 | Prototype defect, not verified | As at commit `96f3b83a73` |
-| `dev/gideon-tests/test-handler-capture-key-equals` | 2 | Assumption of question 163, open | A handle that names a position compared with a reference by key |
-| `showcase/card-piles` | 0, 6 or 9 | Assumption of question 163, open | A handler that moves plain values between two arrays |
+| `dev/gideon-tests/test-handler-capture-key-equals` | 2 | Prototype, against the ruling on question 163 | A handle that names a position compared with a reference by key |
+| `showcase/card-piles` | 0, 6 or 9 | Prototype, against the ruling on question 163 | A handler that moves plain values between two arrays |
 
 With the crate's constants right, the first row would still differ:
 the handler writes through a handle to a constant of the call, which
@@ -1114,6 +1250,89 @@ today's runtime writes the callee's argument document. The rows of
 source and of the two values. The last two rows are of the case of an
 array of plain values in place, and neither arises over an array of
 references.
+
+### The corpus at commit `e63b3d305c`
+
+Two runs, both of the executor alone on the crate's output of this
+commit. The first is against the values that today's runtime computed
+in the run of commit `96f3b83a73`, with the line of
+`showcase/card-piles/main.tsx` from a seeded run of today's runtime in
+its place. The second is against a fresh seeded run of today's runtime
+over all 272 modules, which sends more events: with the kinds of a `*`
+the harness resolves the stream of more bindings, most of them through
+a `*` of kind `inside`. Each run gives the same file byte for byte
+when it is repeated.
+
+| | `77993077e4` | `e63b3d305c`, saved values | `e63b3d305c`, fresh run |
+| --- | ---: | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 | 215 |
+| Executed | 194 | 196 | 196 |
+| Every value equal and every event handled | 168 or 169 | 168 | 169 |
+| Values compared | 4,735 | 4,769 | 5,410 |
+| Values equal | 4,641 to 4,650 | 4,680 | 5,324 |
+| Values that differ | 85 to 94 | 89 | 86 |
+| Modules with a difference | 22 or 23 | 25 | 24 |
+| Committed events the executor does not handle | 15 of 293 | 10 of 295 | 10 of 475 |
+| Evaluations that fail the check of a marker | 0 | 3 | 3 |
+| Stored stream positions at no listed path | 3 | 31 | 31 |
+| Documents the executor stored | 598 | 615 | 793 |
+
+With the rulings applied and before the instances of a function body,
+the first run had 4,641 of 4,735 values equal, 94 that differ in 23
+modules, 168 modules fully equal, 15 of 293 events not handled, and
+598 documents: the figures of the earlier commit with `card-piles` at
+its 9 differences. No value that was equal differs for a ruling. What
+the notes give of the changes against that, in the first run:
+
+- **`card-piles` is fixed by the seed, at 9 of 28.** With the seed the
+  module has the same values in three runs of today's runtime, alone
+  and in one process with 13 other modules, and 9 of its 28 values
+  differ in every run. The cause is the prototype's reference by key
+  where a handler moves plain values between two arrays. By the ruling
+  since, such a handler holds copies, and the design stores what
+  today's runtime stores (question 163). The case is an array of plain
+  values in place.
+- **`apps/base/contacts.tsx`** has 17 differences where it had 26,
+  with its 4 events handled.
+- **`apps/base/person.tsx` and `apps/base/family-member.tsx`** are
+  executed for the first time, with 2 of 18 and 2 of 16 values that
+  differ, at a child of the tree that today's run holds as nothing.
+  They are the 2 modules more with a difference, and they are not
+  examined.
+- **`dev/self-reference-test`** has its event handled, and its 2
+  differences still.
+- **Events.** Of the 6 events that failed with a pattern called in a
+  function body, 3 are handled and 3 fail at `navigateTo` in the
+  handler, which requests an effect.
+- **Evaluations that fail the check.** The 3 are of
+  `apps/base/contacts.tsx`: a promoted `computed` with a block body
+  returns a tree that holds the stream of `openInNewView`, value code
+  places the marker, and the crate lists no path for the binding. It
+  is a defect of the crate's list, which the check found. Over the
+  scenarios of the earlier commit no evaluation fails.
+- **Stored stream positions at no listed path.** 9 are of a stream
+  that a function body returns, where the earlier commit had 3: the 6
+  more are in `examples/cfc-spec-gallery/main.tsx` and held a record
+  in the place of the stream before. 22 are in `person.tsx`,
+  `family-member.tsx`, `contacts.tsx` and `dev/self-reference-test`:
+  the streams of bindings a function body made, and those of bindings
+  of an instance a function body made, which the count reads against
+  the plan of the instance it started with.
+- **Documents.** The 17 documents more are 5 argument and 5 result
+  documents, of the 2 modules and of 3 instances, and 7 cells and
+  records of theirs.
+- **The fresh run.** `showcase/wordsearch/wordsearch.tsx`, which draws
+  from `Math.random` as well, has no difference where it had 3, which
+  is the seed. 7 modules send more events than before, 180 more
+  committed in all, with every value of theirs equal.
+
+19 modules that today's runtime runs are not executed: 6 whose value
+code throws, 4 at an output that no value function computes, 5 at a
+debug string, and one each at `linksOf`, at a spread in the argument
+of a pattern compiled in, at value code that does not parse, and at a
+name value code does not bind. The crate's `null` constants for the
+literal arguments of a call of a pattern compiled in
+(`product/primitives/demo/atoms-demo.tsx`) are as they were.
 
 ### What the run conformed to
 
@@ -1286,6 +1505,66 @@ the corpus.
   `execution-and-storage.md` §4.1 assumes a link (question 155): a
   limit of the prototype.
 
+At commit `e63b3d305c` the plan and the run have the following. The
+counts of plans are over all 382 corpus patterns.
+
+- **The kinds of a `*`.** An entry of `Binding.result` is a path with
+  one kind for each `*`. Of the 1,420 listed paths, 448 have a `*`,
+  and their 476 `*` are 215 `inside`, 207 `element`, 51 `member` and 3
+  `every`. In every path with a `*` the number of `element` kinds is
+  the number of `element` steps of the binding. The kinds are the same
+  whether the collection is over references or over plain values in
+  place, since the plan does not say which. The crate counts a child
+  written after a collection among the children of a view node as
+  kind `member`, with the children stored flat; by the ruling since,
+  such a child has a static position and no `*`, so the 51 are an
+  upper bound on kind `member`. The executor accepts a marker by the
+  kind, from the origin it keeps for each position of an array it
+  assembled.
+- **Where the kind is not determined or not right.** The crate states
+  `element` at the result of a `flatMap` for a binding of the upstream
+  body, and the executor compares the upstream key with the composed
+  one and would refuse; by the ruling since, the match is a prefix. No
+  pattern of the corpus has the case. The crate records the streams of
+  what a callback returns for a `map` alone, so a stream inside an
+  element that a `filter` passes on has no listed path: a defect of
+  the crate, with no case in the corpus run. An array assembled from
+  entries that is spread into another keeps, for each position, the
+  kind it has in the inner array (question 182).
+- **Which output keeps its value.** Where a marker fails the check,
+  the executor puts back the stored value at the kept entry of
+  `Plan.outputs` with the longest path at or above the position, for
+  a cone of an element body the row alone, and leaves a position that
+  no entry is above as it was. By the ruling since, the unit is the
+  top-level property of the result. The stored value that is put back
+  is the one at the same position, so where the element moved in the
+  evaluation that fails, the row keeps what another key had stored
+  there: a limit of the prototype, which stores a result by position.
+- **A stream handed to a body.** The crate records nothing for a
+  stream bound to a formal of a body, so `Body.computed` has no entry
+  that says the position holds a stream (question 179). The executor
+  hands the body a handle to the stream wherever a marker is in the
+  computed argument.
+- **The key of a `flatMap` member.** The member part is formed by the
+  rule for any array, with the count among the members of the one
+  segment, after the source key. A member that is a plain value in
+  place of a stored array that the callback passed on is named by
+  that array and its key in it (question 180). A segment that is the
+  assembled result of another per-element construct has the keys of
+  that result, with no test. A member the callback computes has no
+  address and is passed on as its value.
+- **The record of a key.** The plan holds no record that names the
+  record of a key: the body has a write edge and an envelope with
+  target `handle` at `*` below the list, and the executor uses the
+  path for a count alone (question 181).
+- **The identity of a pattern in value code.** The marker of each
+  `pattern(...)` in the text of a module holds the identity of the
+  pattern, the entry that the pattern's own `Plan.patterns` begins
+  with, and an artifact holds the text of every module its code
+  imports. The output of the crate for one file holds the artifacts
+  of that file alone, so a callee from another file is found only in
+  the output for the corpus.
+
 ### Documents
 
 The executor stores an argument document, a result document, and one
@@ -1314,9 +1593,14 @@ module; the 26 more include 5 state cells and 11 records of a key of a
 list, which the executor stores as documents of their own (question
 166). At commit `77993077e4`, over the same 194 modules, it stores 598
 documents, 3.1 per module; 64 of them are records that a handler wrote
-into a list, each a document of its own as in today's runtime. The
-notes give no
-other row of the table for those two commits. The prototype's cost model
+into a list, each a document of its own as in today's runtime. At
+commit `e63b3d305c`, over 196 modules, it stores 615 documents for the
+scenarios of the saved values, 3.1 per module, and 793 for the
+scenarios of the fresh run, which send more events. The 17 more of
+the first are 5 argument and 5 result documents of the 2 modules more
+and of 3 instances that a function body made, and 7 cells and records
+of theirs. The notes give no
+other row of the table for those three commits. The prototype's cost model
 still counts one document per state cell, which is an upper bound under
 the ruling, and the derived figures of [Storage](#storage) are not
 computed again.
@@ -1460,7 +1744,8 @@ is relitigated.
   A `*` covers one of these: one position per element key of a
   collection the binding is within; every position of a collection
   whose callback writes the one stream of an outer binding; the one
-  position of a member written after a spread; or the one element
+  position of a member written after a spread in an array value; or
+  the one element
   that holds the stream inside a value. The check of a stream's
   position accepts a marker only at a position of the stated kind,
   and a reader with the plan resolves the path by it
@@ -2677,9 +2962,11 @@ as an assumption, which is what the prototype does.
      earlier occurrences among the members of that source element's
      segment. Two members of one segment that change places evaluate
      nothing, and a state cell declared in a body over the result
-     stays with the member. The prototype keys by the position in the
-     segment in the place of the member part, and its fixture has both
-     kinds of segment. Open: a segment that is itself the result of
+     stays with the member. The prototype forms the member part so at
+     commit `e63b3d305c`, and its fixture has both kinds of segment:
+     two members of one segment that change places evaluate nothing.
+     Question 180 has which collection a reference by key to such a
+     member names. Open: a segment that is itself the result of
      another per-element construct, as
      `xs.flatMap((x) => x.items.map(f))` yields. *Assumed:* the member
      part is the key the member has in that result. The alternative
@@ -2907,7 +3194,10 @@ leaves undetermined.
      a function body returns: the link is stored, reads through it are
      dynamic, and no path of `Binding.result` names the position. The
      corpus has 3 such positions, in rows that one `computed` returns
-     as a whole array of plain values; the rule is the same for a body
+     as a whole array of plain values, and 9 at prototype commit
+     `e63b3d305c`, where a body is handed a reference to the stream
+     wherever its computed argument holds a marker (question 179);
+     the rule is the same for a body
      used in an element body in all three cases. The entry keeps its
      number.
 
@@ -3080,6 +3370,61 @@ undetermined, written into the documents as an assumption.
      that the new key continues the old instance, so that a stored
      link stays current.
 
+179. **Which record says that a position of a body's argument holds
+     the stream of a binding** (PL question 124). By ruling a stream
+     that a function body returns is allowed and not checked, and a
+     marker at a path of the argument of a sandboxed body is handed
+     to the body as a reference to the stream (question 144).
+     `execution-and-storage.md` §2.2 assumes an `identity` entry of
+     `Body.computed` at the path. The prototype's crate records
+     nothing for a stream bound to a formal of a body, and its
+     executor hands the body a handle wherever a marker is in the
+     computed argument. *Assumed:* the compiler owes the `identity`
+     entry of `Body.computed`, and a marker at a path that no entry
+     names is not handed on. The same for a body used in an element
+     body over an array of references, over an array of plain values
+     in place, and over the result of another per-element construct.
+180. **Which collection a reference by key to a member of a `flatMap`
+     result names** (PL question 125). PL §1.3 names the assembled
+     result for an element of a `map` or `flatMap` result whose body
+     computed a value. For a member that is a plain value in place of
+     a stored array that the callback passed on, the prototype names
+     that stored array and the member's key in it. The two differ in
+     what a move of a member between two segments is. *Assumed:* the
+     stored array, as the prototype does, since a write through the
+     reference has to land there. The case is a segment of plain
+     values in place that the callback passes on, over a source of
+     any of the three cases; a member that is a reference is the link
+     to its cell.
+181. **Which template labels a write to the record of a key** (PL
+     question 126; with question 166). By ruling the record that
+     `elementById` yields a handle of is a cell of its own and no
+     member of the list. The plan has a write edge and an envelope
+     with target `handle` at `*` below the list, and that edge is the
+     only one whose template could label the write. *Assumed:* the
+     template of that edge labels the write to the record, and the
+     write is no write at `*` of the list for a reader of the list.
+     The list holds references to its records, so this is the case of
+     an array of references.
+182. **The kind of a `*` in an array assembled from entries that is
+     spread into another** (PL question 127). The prototype gives
+     each position the kind it has in the inner array, so a `member`
+     has the `index` it has there. No document has the case.
+     *Assumed:* as the prototype does, with the inner array a spread
+     of the outer one for the count of positions before it. The case
+     is an array value outside the children of a view node, over
+     collections of any of the three cases.
+183. **Whether a runtime instantiates from `Child.callee` or from the
+     factory value** (PL question 128). PL §1.1 has the hash of the
+     compiled pattern in `Child.callee` for a callee the compiler
+     knows. The prototype's value code carries the identity of each
+     `pattern(...)` in the factory value, and its executor finds the
+     callee's artifact by that identity; its `Child` has no `callee`.
+     *Assumed:* `Child.callee` is what the runtime instantiates from
+     where the compiler knows the callee, and the identity in the
+     factory value is used for a factory value received as data. Not
+     about a per-element construct.
+
 One question above is restated by the notes 307 to 320. For the
 assumption of ES question 83, in which transaction a first value that is not a
 constant is written, the prototype does the alternative: it computes
@@ -3179,7 +3524,23 @@ is when the key enters the element table, in all three cases.
   argument from the empty array. The crate marks no output of a
   `computed` with a block body or of a sandboxed body that passes a
   derived collection on, and writes a caller's read of a path that a
-  callee passes on with no default.
+  callee passes on with no default. At commit `e63b3d305c` the crate
+  lists no result path for a stream that a promoted `computed` with a
+  block body places in a tree it returns
+  (`apps/base/contacts.tsx`, 3 evaluations that fail the check), and
+  none for a stream inside an element that a `filter` passes on;
+  records nothing for a stream bound to a formal of a body; has no
+  `callee` on `Child`; and counts a child written after a collection
+  as kind `member`, with the children of a view node flat. Its
+  executor keeps the nearest entry of `Plan.outputs` where a check
+  fails, and not the top-level property; compares the whole key at a
+  `*` of kind `element`, and not a prefix; does not re-key a plain
+  value that a write through its reference changes; stores a
+  reference by key where a function body moves a plain value; holds a
+  handle by position unequal to a reference by key; names an instance
+  and a binding that a function body makes by the run and an ordinal;
+  tears no instance down; and has no `asInstance()`. The comparison's
+  `values-corpus.ts` does not pass the type check.
 
 The open questions each document ends with stay where they are.
 

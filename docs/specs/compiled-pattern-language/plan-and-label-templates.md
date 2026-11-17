@@ -1727,6 +1727,12 @@ a `within` step"), and the compiler owes the following.
   positions hold such a stream, in
   `patterns/dev/gideon-tests/computed-array-repro.tsx`, where a
   `computed` returns rows that each hold a handler written in the body.
+  With a body handed a reference to the stream wherever its computed
+  argument holds a marker, a later run has 9: the 6 more are in
+  `patterns/examples/cfc-spec-gallery/main.tsx`, where a record stood
+  in the place of the stream before. Which record of the plan says
+  that a position of a body's argument holds the stream of a binding
+  is assumed (section 8, question 124).
 
 The rule and what the compiler owes are the same in the three cases of
 section 1.3. A marker of a binding of an element body is replaced by
@@ -1739,7 +1745,13 @@ is assumed in `execution-and-storage.md` (its §2.2 and question 78).
 The prototype's executor implements the marker, the replacement and the
 check, with a fixture that binds a handler per element in each of the
 three cases: the stored link has the key of the element in each, and
-without the listed path each fails at the first element.
+without the listed path each fails at the first element. In a later
+run of it, which handles the events of bindings that a function body
+makes, 3 evaluations of `patterns/apps/base/contacts.tsx` fail the
+check: a promoted `computed` with a block body returns a tree that
+holds the stream of a binding, value code places the marker, and the
+prototype's compiler lists no path for the binding. That is a missing
+path of the first kind above, which the check found.
 
 **What a `*` of a result path stands for.** A `*` of a path of
 `Binding.result` can stand for four things: the positions of a
@@ -11946,13 +11958,17 @@ this document made.
      members of that source element's segment (section 1.3). Two
      members of one segment that change places then evaluate nothing,
      as for a `map`, and a state cell declared in a body over the
-     result stays with the member. The prototype keys by the position
-     in the segment in the place of the member part: in its fixture a
-     segment behind a reference that grows evaluates the new position
-     alone, a move of the source elements evaluates nothing, a plain
-     value that enters the source evaluates its own segment, and two
-     members of one segment that change places are both evaluated
-     again, which the ruling does not have. The case is the result of
+     result stays with the member. The prototype's executor forms the
+     member part so: in its fixture two members of one segment that
+     change places evaluate nothing in the body over the result, for
+     plain values and for references; equal members of one segment
+     are occurrences 0 and 1; an equal member of another segment has
+     another key; a plain member whose value changes is another key;
+     and a member that is a reference keeps its key when the value of
+     its cell changes. Where the callback computes the members, the
+     callback is evaluated once per source element, and the body over
+     the result for no member. No fixture declares a state cell in a
+     body over the result. The case is the result of
      another per-element construct, the `flatMap`, over a source of
      any of the three cases, with a segment of references and with a
      segment of plain values. Open: a segment that is itself the
@@ -11961,7 +11977,8 @@ this document made.
      part is the key the member has in that result, which is the key
      of the element of `x.items` it came from, and not a key formed
      from what the position holds. The alternative forms it from what
-     the position holds. The case of that question is a segment that
+     the position holds. The prototype's executor does as assumed,
+     with no test. The case of that question is a segment that
      is the result of another per-element construct, over upstream
      references and upstream plain values alike. The entry keeps its
      number.
@@ -12346,3 +12363,77 @@ this document made.
      references and the value otherwise, and a path bound to a slot
      outside the element stays bound and is read as current. The
      alternative freezes the whole argument when the key leaves.
+124. **Which record says that a position of a body's argument holds
+     the stream of a binding** (for the project owner; from the
+     prototype). A value function can give a sandboxed body a value
+     that holds the marker of a stream, and the runtime hands the body
+     a reference to the stream at that path
+     (`execution-and-storage.md` §2.2, "A marker handed to a sandboxed
+     body"). That document assumes an `identity` entry of
+     `Body.computed` at the path. The prototype's compiler records
+     nothing for a stream bound to a formal of a body, and its
+     executor hands the body a handle wherever a marker is in the
+     computed argument. *Assumed:* the compiler owes an `identity`
+     entry of `Body.computed` at each such path, as for any reference
+     in a computed input (section 3.9), and the runtime hands on no
+     marker at a path that no entry names. The alternative lets the
+     runtime hand on every marker, so that no record states where a
+     body receives a stream. The same for a body used in an element
+     body over an array of references, over an array of plain values
+     in place, and over the result of another per-element construct.
+125. **Which collection a reference by key to a member of a `flatMap`
+     result names** (for the project owner; from the prototype).
+     Section 1.3 names the assembled result as the collection of a
+     reference by key to an element of a `map` or `flatMap` result
+     whose body computed a value. A member of a `flatMap` result can
+     also be a plain value in place of a stored array that the
+     callback passed on. *Assumed:* the reference then names that
+     stored array and the key the member has in it, as the
+     prototype's executor does, because a write through the reference
+     has to land in the stored array. A member that moves from one
+     segment to another is then another element. The alternative
+     names the assembled result, with the composed key, and resolves
+     a write through the segment. The case is a segment of plain
+     values in place that the callback passes on, over a source of
+     any of the three cases. A member that is a reference is the link
+     to its cell, and a member the callback computes has no address
+     and is passed on as its value.
+126. **Which template labels a write to the record of a key** (for the
+     project owner; from the prototype). By ruling the record that
+     `elementById` yields a handle of is a cell of its own, and a
+     write through the handle is no write at `*` below the list for
+     the label. The footprint has a write edge and an envelope with
+     target `handle` at `*` below the list
+     (`footprint-analysis.md` §7), and no other edge of the plan
+     could label the write. *Assumed:* the template of that edge
+     labels the write to the record, and the edge names the record
+     for the label while it names no position of the list for a
+     reader of the list. The alternative gives the plan a target of
+     its own for the record of a key. The list holds references to
+     its records, so for a per-element construct over it this is the
+     case of an array of references.
+127. **The kind of a `*` in an array assembled from entries that is
+     spread into another** (from the prototype). For
+     `[...[head, ...xs.map(f)], tail]`, written as a value outside the
+     children of a view node, section 1.1 does not say what kind and
+     what `index` a position of the inner array has in the outer one.
+     *Assumed:* each position keeps the kind it has in the inner
+     array, a `member` with the `index` it has there, and a reader
+     counts the inner array as one spread of the outer one. The
+     prototype does so. The same over collections of any of the three
+     cases.
+128. **Whether a runtime instantiates from `Child.callee` or from the
+     factory value** (from the prototype). `Child.callee` holds the
+     hash of the compiled pattern where the compiler knows the callee
+     (section 1.1). The prototype's value code writes, in the marker
+     of each `pattern(...)`, the identity that the pattern's own
+     `Plan.patterns` begins with, so a factory value that a body
+     calls carries the identity of its callee, and its executor finds
+     the callee's artifact by that identity; the prototype's `Child`
+     has no `callee`. A runtime that takes the callee from the
+     factory value needs no member for a named pattern. *Assumed:*
+     the member stays and is what the runtime instantiates from where
+     the compiler knows the callee, so that a reader of the plan
+     knows the callee without value code; the identity in the factory
+     value serves a factory value received as data. Not about a
+     per-element construct.

@@ -1032,7 +1032,15 @@ check. Its marker is a frozen object with no member, and the binding and
 the keys it stands for are held where value code does not reach them. It
 makes the check where it stores the result document. Over the 194
 modules its corpus run executes, 683 stored positions hold a stream at a
-listed path, and no evaluation fails the check.
+listed path, and no evaluation fails the check. It accepts a marker by
+the kind of the `*`, from an origin it keeps for each position of an
+array it assembled: the entry the position was written with, whether
+it is an element of what a spread holds, and the key for an element of
+the result of a `map`, a `filter` or a `flatMap`. In a later run over
+196 modules, which handles the events of bindings that a function body
+makes, 3 evaluations of one module fail the check, at a stream for
+which the prototype's compiler lists no path
+(`plan-and-label-templates.md` §1.1, "The listed paths are complete").
 
 An earlier run, without the marker and the check, compared where the
 stored results hold a stream with the listed paths. By kind, the
@@ -1082,7 +1090,10 @@ of section 11).
   of `host.invoke` holds a marker at a path that an `identity` entry of
   `Body.computed` names, the runtime hands the body the reference to
   the stream, as it hands it any reference at such a path (section
-  2.4).
+  2.4). The prototype's compiler records no such entry for a stream
+  bound to a formal of a body, and its executor hands the body a
+  handle to the stream wherever a marker is in the computed argument
+  (`plan-and-label-templates.md` §8, question 124).
 - **A listed path that holds no stream under any selection** is not
   reported at run time.
 
@@ -2093,6 +2104,18 @@ over the result of another per-element construct.
   returns there today is a position, and under this design a value.
 - **Reclaiming the storage** would be a separate mechanism. This design
   has none: the state under a key that does not return stays stored.
+- **The prototype.** Its executor drops the cone instances of a key
+  that left and their memo entries and keeps the document of a state
+  cell declared under the key. A fixture of it declares a cell in the
+  body of a `map` over the result of a `filter`, over references and
+  over plain values in place: while a key is away its cone instances
+  are gone, no document is made or deleted, and the key that returns
+  reads what its cell held (72 of 72 values equal those of the runtime
+  of today). It has no state of an operation that is kept per key and
+  no child of an element body, so neither is exercised. Over plain
+  values in place a value that returns at another position is the one
+  case where the runtime of today, whose key is the position, would
+  read another cell, and the comparison does not have it.
 
 The ruling names the state cells and the operation state under the
 key. A child of the body under the key that was called through
@@ -5758,7 +5781,14 @@ Added by the ruling that the scheduler is switched per space (section 9):
     reader of the list stale. The alternative records a dynamic write,
     as for a cell made under a cause computed from data. In the
     prototype's fixture 48 of 48 values equal those of the runtime of
-    today. The question is about a list whose members are references
+    today. Its executor names the record by the address of the list
+    and the key, with no document until something writes it: a write
+    through the handle makes no document of the list and evaluates no
+    reader of the list before a reference to the record is a member,
+    and a reader that follows the reference is stale on a write to
+    the record afterwards. Which template labels the write is assumed
+    in `plan-and-label-templates.md` (its §8, question 126). The
+    question is about a list whose members are references
     to the records. It is the case of an array of references for a
     per-element construct over the list, and does not arise over an
     array of plain values in place or over the result of another
