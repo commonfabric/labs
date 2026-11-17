@@ -942,13 +942,15 @@ cell's contents. The cache is designed around this:
     write if any changed since. The source record of each module whose
     compiled record it erases guards the erase: it is read as the verifier
     reads, so its label flows nowhere, and the read still refuses the commit
-    if the record changed. The transaction reads and writes nothing
-    else, is refused if it is CFC-relevant, and commits with no explicit
-    preparation, refused if its commit would prepare it.
+    if the record changed. The transaction reads and writes nothing else but
+    content-addressed documents, is refused if it is CFC-relevant, and
+    commits with no explicit preparation, refused if its commit would prepare
+    it.
   - A stamped compiled record is erased, value and label together, and the
     next load compiles it again. It is left, and the closure refused, where
-    its delegation list names an identity the source record's attested list
-    does not.
+    its attested delegation list names an identity the source record's
+    attested list does not, or is stored as anything but an inline list of
+    identities.
   - A stamped source record is rewritten to the value the compile-cache
     writer stores for its identity, computed from the verified closure: its
     code, filename, the authored edges a scan of its code yields in scan
@@ -976,14 +978,25 @@ cell's contents. The cache is designed around this:
     already loaded it.
   - A refused closure is not tried again in the session; one whose commit
     lost a race, or failed for another reason, is tried again at the next
-    load.
+    load. A module that is a non-entry member of one closure and the entry of
+    another is repaired with its own cache-root edges only through the
+    closure it enters: a test program's closure verified before its page's
+    is refused when the page's dropped edges were the only way to reach a
+    member, and is clean once the page's closure is repaired.
   - Not repaired: a stamped compiled record of a module the source closure
     does not reach, such as a `fabric:` dependency the compiled closure
-    links, is neither checked nor erased, and a setup that reads it is
-    refused as before. On a serving runtime, a closure in a space other than
-    the one it serves is not repaired, since a direct commit there may write
-    only the served space; that setup is refused as before, and the closure
-    is tried again at its next load.
+    links, is neither checked nor erased. A setup of its importer still
+    commits, since a setup reads source records only, but a write-back of the
+    importer that reads it re-stamps the importer's compiled record, which
+    the next load erases again. On a serving runtime, a closure in a space
+    other than the one it serves is not repaired, since a direct commit
+    there may write only the served space; that setup is refused as before,
+    and the closure is tried again at its next load.
+  - Not repaired first: a creation whose closure no load prepares through
+    `PatternManager.prepareSourceClosureVerification()`. Those are a wish
+    sidecar's, whose supplied source is prepared only for parsing, and a
+    child a pattern's own graph places in another space. Each reads a
+    stamped record as before.
 - **Fail-closed, not fail-hard.** A compiled document with a missing or invalid
   integrity label is treated as a **cache miss** and recompiled from the
   (self-verifying) source set, which re-runs the SES verifier. So the verifier
