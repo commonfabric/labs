@@ -52,8 +52,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "iYceZV48BDyV5xqSIPYiVklmPVyCZ6Ef7TIzAmxeWOM",
-              "policyDigest": "Rf92ETJZidTYNatikvuhdRmtWauTnjdnRDhUSbM9ayw",
+              "moduleIdentity": "HID_qFHpFwuV7HjgDB0gUuRlkiJ4Jk0jG5mrdruwI5M",
+              "policyDigest": "N6-UBOGyfLsV8XqzBYkAUzjeyLTbuNlNGjRDs0prRKY",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -89,8 +89,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "iYceZV48BDyV5xqSIPYiVklmPVyCZ6Ef7TIzAmxeWOM",
-              "policyDigest": "Rf92ETJZidTYNatikvuhdRmtWauTnjdnRDhUSbM9ayw",
+              "moduleIdentity": "HID_qFHpFwuV7HjgDB0gUuRlkiJ4Jk0jG5mrdruwI5M",
+              "policyDigest": "N6-UBOGyfLsV8XqzBYkAUzjeyLTbuNlNGjRDs0prRKY",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -114,8 +114,8 @@
           ],
           "confidentiality": [
             {
-              "moduleIdentity": "iYceZV48BDyV5xqSIPYiVklmPVyCZ6Ef7TIzAmxeWOM",
-              "policyDigest": "Rf92ETJZidTYNatikvuhdRmtWauTnjdnRDhUSbM9ayw",
+              "moduleIdentity": "HID_qFHpFwuV7HjgDB0gUuRlkiJ4Jk0jG5mrdruwI5M",
+              "policyDigest": "N6-UBOGyfLsV8XqzBYkAUzjeyLTbuNlNGjRDs0prRKY",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -127,7 +127,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/apps/inductor-pool/inductor-pool.tsx",
-              "moduleIdentity": "iYceZV48BDyV5xqSIPYiVklmPVyCZ6Ef7TIzAmxeWOM",
+              "moduleIdentity": "HID_qFHpFwuV7HjgDB0gUuRlkiJ4Jk0jG5mrdruwI5M",
               "path": [
                 "submitContribution"
               ]
@@ -160,7 +160,7 @@
       },
       "thresholdCenter": {
         "default": 15,
-        "description": "The threshold a rule has before its offset. The first contribution seals\nit, with `jitter`; the release never reads it again.",
+        "description": "The threshold a rule has before its offset, at least\n`MIN_SEALED_THRESHOLD` (5). The first contribution seals it, with\n`jitter`, narrowed so no rule's threshold is below that floor; the\nrelease never reads it again.",
         "type": "number"
       }
     },
@@ -243,8 +243,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "iYceZV48BDyV5xqSIPYiVklmPVyCZ6Ef7TIzAmxeWOM",
-              "policyDigest": "Rf92ETJZidTYNatikvuhdRmtWauTnjdnRDhUSbM9ayw",
+              "moduleIdentity": "HID_qFHpFwuV7HjgDB0gUuRlkiJ4Jk0jG5mrdruwI5M",
+              "policyDigest": "N6-UBOGyfLsV8XqzBYkAUzjeyLTbuNlNGjRDs0prRKY",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -280,8 +280,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "iYceZV48BDyV5xqSIPYiVklmPVyCZ6Ef7TIzAmxeWOM",
-              "policyDigest": "Rf92ETJZidTYNatikvuhdRmtWauTnjdnRDhUSbM9ayw",
+              "moduleIdentity": "HID_qFHpFwuV7HjgDB0gUuRlkiJ4Jk0jG5mrdruwI5M",
+              "policyDigest": "N6-UBOGyfLsV8XqzBYkAUzjeyLTbuNlNGjRDs0prRKY",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -332,8 +332,8 @@
           ],
           "confidentiality": [
             {
-              "moduleIdentity": "iYceZV48BDyV5xqSIPYiVklmPVyCZ6Ef7TIzAmxeWOM",
-              "policyDigest": "Rf92ETJZidTYNatikvuhdRmtWauTnjdnRDhUSbM9ayw",
+              "moduleIdentity": "HID_qFHpFwuV7HjgDB0gUuRlkiJ4Jk0jG5mrdruwI5M",
+              "policyDigest": "N6-UBOGyfLsV8XqzBYkAUzjeyLTbuNlNGjRDs0prRKY",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -345,7 +345,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/apps/inductor-pool/inductor-pool.tsx",
-              "moduleIdentity": "iYceZV48BDyV5xqSIPYiVklmPVyCZ6Ef7TIzAmxeWOM",
+              "moduleIdentity": "HID_qFHpFwuV7HjgDB0gUuRlkiJ4Jk0jG5mrdruwI5M",
               "path": [
                 "submitContribution"
               ]
