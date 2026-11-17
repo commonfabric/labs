@@ -2299,6 +2299,59 @@ describe("a write through a reference by key that changes the value", () => {
     expect(instance.documents()["state cell"]).toBe(documents);
   });
 
+  // Ruling Z41, for the state cell of a row over plain values in place.
+  it("replaces the state cell that is stored under the new key with the one that is moved", async () => {
+    const instance = await start({ tasks: [task("a", true)] });
+    // The key of `a` with `done` holds a note, and leaves.
+    instance.send(NOTE, { text: "left" }, [0]);
+    instance.writeArgument(["tasks"], [task("a")]);
+    instance.send(NOTE, { text: "mine" }, [0]);
+
+    // The element is re-keyed to the key that left.
+    instance.send(FINISH_AND_PICK, {}, [0]);
+
+    expect(result(instance).rows).toMatchObject([
+      { title: "a", done: true, noted: "mine" },
+    ]);
+    expect(cells(instance, "noted")).toEqual([[keyOf("a", true), "mine"]]);
+  });
+
+  it("moves nothing for another element whose occurrence count the write changed", async () => {
+    // Two elements with one value: occurrences 0 and 1.
+    const instance = await start({ tasks: [task("a"), task("a")] });
+    instance.send(NOTE, { text: "second" }, [1]);
+
+    // The first is re-keyed. The second is occurrence 0 of its value
+    // now, and the cell of its old key stays where it is.
+    instance.send(FINISH_AND_PICK, {}, [0]);
+
+    expect(result(instance).rows).toMatchObject([
+      { title: "a", done: true, noted: "" },
+      { title: "a", done: false, noted: "" },
+    ]);
+    expect(cells(instance, "noted")).toEqual([[
+      keyOf("a").replace("#0", "#1"),
+      "second",
+    ]]);
+  });
+
+  it("re-keys nothing on a write that is not through a reference by key", async () => {
+    const instance = await start();
+    instance.send(NOTE, { text: "mine" }, [1]);
+
+    // A `set` of the whole array: the element with another value is
+    // another element, and the cell of the old key stays where it is.
+    instance.writeArgument(["tasks"], [
+      task("a"),
+      task("b", true),
+      task("hidden"),
+    ]);
+
+    expect(instance.store.rekeys).toEqual([]);
+    expect(result(instance).rows[1]).toMatchObject({ done: true, noted: "" });
+    expect(cells(instance, "noted")).toEqual([[keyOf("b"), "mine"]]);
+  });
+
   it("moves the state cell of a row over the result of a `filter` with the upstream key", async () => {
     const instance = await start();
     instance.send(SEE, { text: "seen" }, [1]);
@@ -2401,6 +2454,148 @@ describe("a write through a reference by key that changes the value", () => {
     });
     expect(cells(instance, "noted")).toEqual(before);
     expect(result(instance).picked).toEqual(task("renamed", true));
+  });
+});
+
+// Ruling Z41 on `fixtures/rekey-made.tsx`: what a re-key moves of what
+// the function bodies of an element body made.
+describe("what a function body of an element body made, on a re-key", () => {
+  const task = (title: string, done = false) => ({ title, done });
+  const start = async (argument: unknown) => {
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL(
+          "../../compare/fixtures/rekey-made.emit.json",
+          import.meta.url,
+        ),
+      ),
+    ) as { patterns: Artifact[] }[];
+    const artifacts = (id: string) =>
+      patterns.find((pattern) => pattern.plan.patterns?.[0] === id);
+    const main = patterns.find((pattern) => pattern.name === "default")!;
+    return new Instance(main, argument, { artifacts });
+  };
+  const inPlace = () => ({ tasks: [task("a"), task("b")] });
+  type Stream = { $stream: { binding: number; keys: string[] } };
+  type Rows = {
+    pressed: number;
+    rows: { done: boolean; row: { title: string; count: number } }[];
+  };
+  const result = (instance: Instance) => instance.result() as Rows;
+  const FINISH = (instance: Instance) =>
+    instance.plan.bindings.findIndex((binding) => binding.name === "finish");
+  /** The link the result stores at a path, with each link on the way followed. */
+  const storedAt = (instance: Instance, path: string[]) =>
+    instance.store.locate(new Ref("result", path), true).value;
+  /** A handle to the stream the result stores at a path. */
+  const streamAt = (instance: Instance, path: string[]) =>
+    new Handle(instance, new Ref("result", path), undefined, undefined, []);
+  /** The document the result of the instance of a row is stored in. */
+  const rowDocument = (instance: Instance, row: number) =>
+    instance.store.locate(new Ref("result", ["rows", `${row}`, "row"]), true)
+      .ref.doc;
+
+  it("moves the instance that a `lift` of the body made to the new key, over plain values in place", async () => {
+    const instance = await start(inPlace());
+    streamAt(instance, ["rows", "0", "row", "bump"]).send({ by: 3 });
+    instance.dispatch();
+    expect(result(instance).rows[0].row.count).toBe(3);
+    const before = rowDocument(instance, 0);
+
+    // The write changes the value of the element, and so its key.
+    instance.send(FINISH(instance), {}, [0]);
+
+    expect(result(instance).rows[0]).toMatchObject({
+      done: true,
+      row: { title: "a", count: 3 },
+    });
+    expect(rowDocument(instance, 0)).toBe(before);
+    // The stream of the instance is handled as before.
+    streamAt(instance, ["rows", "0", "row", "bump"]).send({ by: 1 });
+    instance.dispatch();
+    expect(result(instance).rows[0].row.count).toBe(4);
+    expect(result(instance).rows[1].row.count).toBe(0);
+  });
+
+  it("gives a value that is written anew, with no write through a reference by key, another instance", async () => {
+    const instance = await start(inPlace());
+    streamAt(instance, ["rows", "0", "row", "bump"]).send({ by: 3 });
+    instance.dispatch();
+
+    // A `set` of the whole array: the element with `done` is another
+    // element, and nothing is re-keyed.
+    instance.writeArgument(["tasks"], [task("a", true), task("b")]);
+
+    expect(instance.store.rekeys).toEqual([]);
+    expect(result(instance).rows[0].row.count).toBe(0);
+  });
+
+  it("replaces the instance that is stored under the new key with the one that is moved", async () => {
+    const instance = await start(inPlace());
+    // The key of `a` with `done` is made, its instance is counted up,
+    // and the key leaves.
+    instance.writeArgument(["tasks"], [task("a", true), task("b")]);
+    streamAt(instance, ["rows", "0", "row", "bump"]).send({ by: 9 });
+    instance.dispatch();
+    instance.writeArgument(["tasks"], [task("a"), task("b")]);
+    streamAt(instance, ["rows", "0", "row", "bump"]).send({ by: 3 });
+    instance.dispatch();
+
+    // The element that is not done is re-keyed to the key that left.
+    instance.send(FINISH(instance), {}, [0]);
+
+    expect(result(instance).rows[0].row.count).toBe(3);
+  });
+
+  it("moves nothing for the binding that a function body made", async () => {
+    const instance = await start(inPlace());
+    const press = () =>
+      (storedAt(instance, ["rows", "0", "button", "press"]) as Stream).$stream;
+    const before = press();
+    expect(before.binding).toBe(-1);
+
+    instance.send(FINISH(instance), {}, [0]);
+
+    // The body is evaluated for the new key and binds a handler of its
+    // own: the stream is named by the run of the new key.
+    expect(press().keys).not.toEqual(before.keys);
+    streamAt(instance, ["rows", "0", "button", "press"]).send({ by: 2 });
+    instance.dispatch();
+    expect(result(instance).pressed).toBe(2);
+  });
+
+  it("moves nothing for another element whose occurrence count the write changed", async () => {
+    // Two elements with one value: occurrences 0 and 1.
+    const instance = await start({ tasks: [task("a"), task("a")] });
+    streamAt(instance, ["rows", "1", "row", "bump"]).send({ by: 5 });
+    instance.dispatch();
+    expect(result(instance).rows.map(({ row }) => row.count)).toEqual([0, 5]);
+
+    // The first is re-keyed, and the second is occurrence 0 of its
+    // value now: a key that was the first element's. Nothing of the
+    // second element's old key moves to it.
+    instance.send(FINISH(instance), {}, [0]);
+
+    expect(result(instance).rows.map(({ row }) => row.count)).toEqual([0, 0]);
+  });
+
+  it("keeps the instance over references, where the write changes no key", async () => {
+    const instance = await start({
+      pool: { a: task("a"), b: task("b") },
+      tasks: [
+        { $link: { doc: "argument", path: ["pool", "a"] } },
+        { $link: { doc: "argument", path: ["pool", "b"] } },
+      ],
+    });
+    streamAt(instance, ["rows", "0", "row", "bump"]).send({ by: 3 });
+    instance.dispatch();
+
+    instance.send(FINISH(instance), {}, [0]);
+
+    expect(result(instance).rows[0]).toMatchObject({
+      done: true,
+      row: { title: "a", count: 3 },
+    });
   });
 });
 

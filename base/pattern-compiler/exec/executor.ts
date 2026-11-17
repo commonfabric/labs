@@ -912,11 +912,9 @@ export class Host {
       if (given === undefined) continue;
       argument = instance.placed(argument, at, given);
     }
+    const keyed = { body, keys: instance.contextKeys(this.context) };
     return instance.returned(
-      instance.during(
-        `body:${body}:${canonical(instance.contextKeys(this.context))}`,
-        () => run(argument),
-      ),
+      instance.during(runName(keyed), () => run(argument), keyed),
     );
   }
 
@@ -982,6 +980,16 @@ export type StreamHeld = {
   elements?: number[];
 };
 
+/**
+ * The run of a `lift` or a `computed` that an instance evaluates: the
+ * body, and the element keys it is evaluated for, by collection.
+ */
+type KeyedRun = { body: number; keys: [number, string][] };
+
+/** The name of such a run, which names what it makes. */
+const runName = ({ body, keys }: KeyedRun): string =>
+  `body:${body}:${canonical(keys)}`;
+
 /** How a handled event ended. */
 export type Outcome = {
   binding: number;
@@ -1014,10 +1022,22 @@ export class Instance {
     { run: (...given: unknown[]) => unknown; state: unknown }
   >();
   /**
-   * The run of a function body in progress: what names it, and how many
-   * instances and bindings it has made (ES §2.8, "Identity").
+   * On the root: each instance a function body made, by its name: the
+   * instance that made it, the run, and the ordinal among what the run
+   * made. `keyed` is absent for the run of a handler. An instance that
+   * was re-keyed has another name than the one its documents begin
+   * with (ruling Z41).
    */
-  #running: { name: string; made: number } | undefined;
+  readonly #made = new Map<
+    string,
+    { instance: Instance; keyed?: KeyedRun; ordinal: number }
+  >();
+  /**
+   * The run of a function body in progress: what names it, how many
+   * instances and bindings it has made (ES §2.8, "Identity"), and for
+   * the run of a `lift` or a `computed` the body and the element keys.
+   */
+  #running: { name: string; made: number; keyed?: KeyedRun } | undefined;
   /** The events handled, which name the run of a handler. */
   #events = 0;
   readonly plan: Plan;
@@ -2824,17 +2844,28 @@ export class Instance {
    * same things again names the same ones. The run of a handler is named
    * by its event, so each event makes its own.
    */
-  #made(): string {
+  #next(): { name: string; ordinal: number; keyed?: KeyedRun } {
     const running = this.#running ?? { name: "outside", made: 0 };
-    const name = `${running.name}/${running.made}`;
+    const ordinal = running.made;
     running.made += 1;
-    return name;
+    return {
+      name: `${running.name}/${ordinal}`,
+      ordinal,
+      ...(running.keyed === undefined ? {} : { keyed: running.keyed }),
+    };
   }
 
-  /** Runs a function body under a name for what it makes. */
-  during<T>(name: string, run: () => T): T {
+  /**
+   * Runs a function body under a name for what it makes. `keyed` is the
+   * body and the element keys of the run of a `lift` or a `computed`.
+   */
+  during<T>(name: string, run: () => T, keyed?: KeyedRun): T {
     const outer = this.#running;
-    this.#running = { name, made: 0 };
+    this.#running = {
+      name,
+      made: 0,
+      ...(keyed === undefined ? {} : { keyed }),
+    };
     try {
       return run();
     } finally {
@@ -2849,7 +2880,10 @@ export class Instance {
    * The body gets a handle to the instance's result. The argument is
    * stored as the body wrote it: a handle in it as a link, so a write of
    * the callee through it lands in the caller's cell. A run that names
-   * an instance that exists writes its argument and makes nothing.
+   * an instance that exists writes its argument and makes nothing. The
+   * documents of an instance begin with the name it was made under, and
+   * keep it when the instance is re-keyed, so an instance made later
+   * under that name gets a name beside it.
    */
   instantiate(id: unknown, argument: unknown): Handle {
     const artifact = typeof id === "string"
@@ -2858,16 +2892,26 @@ export class Instance {
     if (artifact === undefined) {
       throw new Unsupported("a pattern called in a function body");
     }
-    const prefix = `${this.prefix}instance:${this.#made()}:`;
+    const { name: run, ordinal, keyed } = this.#next();
+    const name = `${this.prefix}instance:${run}`;
     const given = this.stored(this.returned(argument));
-    let child = this.root.#instances.get(prefix);
+    let child = this.root.#made.get(name)?.instance;
     if (child === undefined) {
+      let prefix = `${name}:`;
+      for (let other = 1; this.root.#instances.has(prefix); other++) {
+        prefix = `${name}~${other}:`;
+      }
       child = new Instance(artifact, given, {
         ...this.options,
         parent: this,
         prefix,
       });
       this.root.#instances.set(prefix, child);
+      this.root.#made.set(name, {
+        instance: child,
+        ordinal,
+        ...(keyed === undefined ? {} : { keyed }),
+      });
       this.#children.push(child);
     } else {
       this.store.write(new Ref(child.doc("argument"), []), given);
@@ -2887,7 +2931,7 @@ export class Instance {
    * An event for the stream runs the handler with that state.
    */
   bind(run: (...given: unknown[]) => unknown, state: unknown): StreamRef {
-    const key = `${this.prefix}bound:${this.#made()}`;
+    const key = `${this.prefix}bound:${this.#next().name}`;
     this.root.#bound.set(key, { run, state });
     return new StreamRef(-1, [key], this.prefix);
   }
@@ -3152,6 +3196,9 @@ export class Instance {
       for (const prefix of [...root.#instances.keys()]) {
         if (!instances.has(prefix)) root.#instances.delete(prefix);
       }
+      for (const [name, { instance }] of [...root.#made]) {
+        if (!root.#instances.has(instance.prefix)) root.#made.delete(name);
+      }
       root.#bound.clear();
       for (const [key, held] of bound) root.#bound.set(key, held);
       this.#children.length = children;
@@ -3262,6 +3309,25 @@ export class Instance {
         ...held,
         keys: moved,
       });
+    }
+    // An instance that a `lift` or a `computed` of the body made moves
+    // to the new key as a child, and replaces one that is named there
+    // (ruling Z41). It keeps its documents. A binding that a function
+    // body made is named by its run and is not moved.
+    for (const [name, made] of [...this.root.#made]) {
+      const { instance, keyed, ordinal } = made;
+      if (keyed === undefined || instance.options.parent !== this) continue;
+      const keys = keyed.keys.map(([collection, key]): [number, string] => [
+        collection,
+        over.has(collection) ? renamed(key) : key,
+      ]);
+      if (canonical(keys) === canonical(keyed.keys)) continue;
+      const moved = { body: keyed.body, keys };
+      this.root.#made.delete(name);
+      this.root.#made.set(
+        `${this.prefix}instance:${runName(moved)}/${ordinal}`,
+        { instance, ordinal, keyed: moved },
+      );
     }
     for (const [id, { cell, keys }] of [...this.#cells]) {
       const steps = this.plan.stateCells[cell].within.flatMap((step) =>
