@@ -121,28 +121,14 @@ async function startInputSources(
 ): Promise<EnsurePieceVerdict | undefined> {
   const signal = options?.signal;
   const required = options?.sourcesRequired === true;
-  const unfollowed: OwningRootAddress[] = [];
   const sources = options?.enclosingSourcesOnly === true
-    ? await enclosingPieceOf(runtime, owner, signal, unfollowed)
-    : await inputSourcesOf(runtime, owner, signal, false, unfollowed);
-  // A link whose `result` chain cycles or runs too deep may name the very
-  // piece the walk is looking for, so under `sourcesRequired` it holds the
-  // owner back as that chain's own failure would.
-  if (required && unfollowed.length > 0) {
-    return {
-      started: false,
-      reason: "chain-cycle",
-      root: owner,
-      heldBy: unfollowed[0],
-      observedDocIds: unfollowed.map(({ id }) => id),
-      observedDocs: unfollowed,
-    };
-  }
+    ? await enclosingPieceOf(runtime, owner, signal)
+    : await inputSourcesOf(runtime, owner, signal);
   for (const source of sources) {
     const key = rootKey(source);
     if (visited.has(key)) continue;
     visited.add(key);
-    options?.onSourceRoot?.(source);
+    options?.onSourceRoot?.(source, owner);
     if (runtime.runner.isRunning(runtime.getCellFromLink(source))) continue;
     let verdict: EnsurePieceVerdict;
     try {
@@ -200,14 +186,14 @@ async function startInputSources(
  * its own owning root, another piece's result root, is left out, and the
  * pieces each chain passes through on the way to its owning root are
  * included beside it. A linked document whose `result` chain cycles or runs
- * too deep names no source, and is added to `unfollowed`.
+ * too deep names no source: it is no evidence of a piece the owner's inputs
+ * come from.
  */
 async function inputSourcesOf(
   runtime: Runtime,
   owner: OwningRootAddress,
   signal: AbortSignal | undefined,
   internalOnly = false,
-  unfollowed?: OwningRootAddress[],
 ): Promise<NormalizedFullLink[]> {
   const tx = runtime.edit();
   tx.tx.immediate = true;
@@ -238,10 +224,7 @@ async function inputSourcesOf(
         signal,
       );
       signal?.throwIfAborted();
-      if (root === undefined) {
-        unfollowed?.push({ space: link.space, id: link.id, scope: link.scope });
-        continue;
-      }
+      if (root === undefined) continue;
       const source = root.getAsNormalizedFullLink();
       const key = rootKey(source);
       if (internalOnly && key === document) continue;
@@ -280,27 +263,19 @@ async function inputSourcesOf(
  * argument or internal documents `owner`'s argument links into
  * (`inputSourcesOf()`), each asked at once; a link to another piece's result
  * root names no candidate, so the producers a piece is wired to are not
- * asked. A linked document whose chain cannot be followed is added to
- * `unfollowed`.
+ * asked.
  */
 async function enclosingPieceOf(
   runtime: Runtime,
   owner: OwningRootAddress,
   signal: AbortSignal | undefined,
-  unfollowed?: OwningRootAddress[],
 ): Promise<NormalizedFullLink[]> {
   // TODO(danfuzz): Find the piece whose handler made `owner` as well, once a
   // child a handler made records its maker where this can read it; until then
   // such a child starts without its maker, and its handlers read inputs
   // nothing in the runtime derives. `space-server-enclosing-start.test.ts`
   // pins it.
-  const candidates = await inputSourcesOf(
-    runtime,
-    owner,
-    signal,
-    true,
-    unfollowed,
-  );
+  const candidates = await inputSourcesOf(runtime, owner, signal, true);
   const encloses = await Promise.all(candidates.map(async (candidate) => {
     const tx = runtime.edit();
     tx.tx.immediate = true;
@@ -493,9 +468,7 @@ export type EnsurePieceVerdict = {
 
   /** The root of the piece whose own verdict this is, where a piece the
    * owning piece's inputs come from held the owning piece back
-   * (`startInputSources()`): `reason` and `patternIdentity` are that piece's.
-   * For a `chain-cycle` under `sourcesRequired`, it is instead the linked
-   * document whose `result` chain could not be followed. */
+   * (`startInputSources()`): `reason` and `patternIdentity` are that piece's. */
   heldBy?: OwningRootAddress;
 
   /** Every doc id the traversal read (the demanded root plus chain
@@ -614,12 +587,13 @@ export type EnsurePieceOptions = {
 
   /**
    * With `startInputSources`, called with the root of each piece the walk
-   * finds the owning piece's inputs come from, before that piece is asked
-   * about and whether or not it runs already. A piece found running ends the
-   * walk there, so the pieces beyond it are not reported. A walk runs only
-   * for an owning piece that is not running.
+   * finds a piece's inputs come from, and that piece's root as `owner`: the
+   * owning piece's own sources, then theirs in turn. Called before the source
+   * is asked about, whether or not it runs already. A piece found running
+   * ends the walk there, so the pieces beyond it are not reported, and a walk
+   * runs only for an owning piece that is not running.
    */
-  onSourceRoot?: (root: OwningRootAddress) => void;
+  onSourceRoot?: (root: OwningRootAddress, owner: OwningRootAddress) => void;
 
   /**
    * The walk delivers an event, so each piece it starts, the pieces its

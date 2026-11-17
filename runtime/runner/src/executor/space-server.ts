@@ -6056,10 +6056,8 @@ export class SpaceServer implements TransactionSealDestination {
             // reachable: those nodes re-arm for them exactly as they do for
             // a demander who arrives after the mapping (the arrival re-arm
             // below).
-            let owningRootId = root.id;
             const onOwningRoot = (owning: OwningRootAddress) => {
               const rootId = owning.id;
-              owningRootId = rootId;
               this.#indexKeyUnderEnclosing(runtime, key, rootId);
               if (rootId === root.id) return;
               if (this.#pieceRootByDemandKey.get(key) === rootId) return;
@@ -6070,8 +6068,10 @@ export class SpaceServer implements TransactionSealDestination {
             };
             // The pieces the walk finds enclosing the owning piece are this
             // key's, and every other key's on that piece (`onSourceRoot`).
-            const onSourceRoot = (source: OwningRootAddress) =>
-              this.#noteEnclosingRoot(runtime, owningRootId, source.id);
+            const onSourceRoot = (
+              source: OwningRootAddress,
+              owner: OwningRootAddress,
+            ) => this.#noteEnclosingRoot(runtime, owner.id, source.id);
             const rearmedAt = minOf([
               this.#rearmSeqsUnderRetry.get(key) ?? Infinity,
               this.#rearmSeqsAwaitingFollow.get(key) ?? Infinity,
@@ -6473,7 +6473,8 @@ export class SpaceServer implements TransactionSealDestination {
    * owning piece this tenure (`EnsurePieceOptions.onSourceRoot`). A walk runs
    * only while the owning piece is not running, so an owning piece started
    * some other way, by an event or by an enclosing piece demanded itself,
-   * has none recorded. */
+   * has none recorded. It only grows within a tenure, and is not checked
+   * against a graph a pattern update rebuilds. */
   readonly #enclosingRootsByOwningRoot = new Map<string, Set<string>>();
 
   /** The roots of `#enclosingRootsByOwningRoot` each demanded key is indexed
@@ -6503,28 +6504,35 @@ export class SpaceServer implements TransactionSealDestination {
 
   /**
    * Records `enclosingId`, the root of a piece the walk found enclosing the
-   * piece at `owningRootId`, and indexes under it every key resolving to that
-   * piece.
+   * piece at `ownerId`, under that piece and under every piece already
+   * recorded as enclosed by it, and indexes under it every key resolving to
+   * one of those pieces.
    */
   #noteEnclosingRoot(
     runtime: Runtime,
-    owningRootId: string,
+    ownerId: string,
     enclosingId: string,
   ): void {
-    let enclosing = this.#enclosingRootsByOwningRoot.get(owningRootId);
-    if (enclosing === undefined) {
-      enclosing = new Set();
-      this.#enclosingRootsByOwningRoot.set(owningRootId, enclosing);
+    const enclosed = [ownerId];
+    for (const [owningRootId, enclosing] of this.#enclosingRootsByOwningRoot) {
+      if (enclosing.has(ownerId)) enclosed.push(owningRootId);
     }
-    enclosing.add(enclosingId);
-    const keys = new Set([
-      ...(this.#keysByRootId.get(owningRootId) ?? []),
-      ...(this.#keysByResolvedRoot.get(owningRootId) ?? []),
-    ]);
     let indexed = false;
-    for (const key of keys) {
-      if (this.#pieceRootOfKey(key) !== owningRootId) continue;
-      indexed = this.#indexEnclosingRoot(key, enclosingId) || indexed;
+    for (const owningRootId of enclosed) {
+      let enclosing = this.#enclosingRootsByOwningRoot.get(owningRootId);
+      if (enclosing === undefined) {
+        enclosing = new Set();
+        this.#enclosingRootsByOwningRoot.set(owningRootId, enclosing);
+      }
+      enclosing.add(enclosingId);
+      const keys = new Set([
+        ...(this.#keysByRootId.get(owningRootId) ?? []),
+        ...(this.#keysByResolvedRoot.get(owningRootId) ?? []),
+      ]);
+      for (const key of keys) {
+        if (this.#pieceRootOfKey(key) !== owningRootId) continue;
+        indexed = this.#indexEnclosingRoot(key, enclosingId) || indexed;
+      }
     }
     if (indexed) {
       runtime.scheduler.invalidateActionsForDemandRoots([enclosingId]);
@@ -6547,6 +6555,10 @@ export class SpaceServer implements TransactionSealDestination {
     key: string,
     owningRootId: string,
   ): void {
+    // TODO(danfuzz): Index the key under the pieces enclosing an owning piece
+    // that started without a walk, once those are known without one; until
+    // then such a key is parked by no enclosing piece's failed start commit.
+    // `space-server-enclosing-start.test.ts` pins it.
     const indexed = [
       ...this.#enclosingRootsByOwningRoot.get(owningRootId) ?? [],
     ]
@@ -6725,12 +6737,16 @@ export class SpaceServer implements TransactionSealDestination {
     runtime: Runtime,
     root: { id: string; scope?: string },
     onOwningRoot: (root: OwningRootAddress) => void,
-    onSourceRoot: (root: OwningRootAddress) => void,
+    onSourceRoot: (root: OwningRootAddress, owner: OwningRootAddress) => void,
   ): Promise<StructureLoadAttempt> {
     const scope = root.scope ?? "space";
     const termini: OwningRootAddress[] = [];
     const admitStart = (owning: OwningRootAddress) =>
       !this.#failedStartRoots.has(owning.id);
+    // TODO(danfuzz): Start a demanded row as the child of the `map` that
+    // builds it, once the walk can name that `map`; until then a row starts in
+    // its own right after the piece that built it, and outlives that piece.
+    // `space-server-enclosing-start.test.ts` pins it.
     const enclosingFirst = {
       startInputSources: true,
       enclosingSourcesOnly: true,
@@ -6799,7 +6815,7 @@ export class SpaceServer implements TransactionSealDestination {
     root: { id: string; scope?: string },
     attempt: StructureLoadAttempt,
     onOwningRoot: (root: OwningRootAddress) => void,
-    onSourceRoot: (root: OwningRootAddress) => void,
+    onSourceRoot: (root: OwningRootAddress, owner: OwningRootAddress) => void,
   ): Promise<StructureLoadAttempt> {
     if (this.#enginePatternIdentityAbsent(runtime, attempt.termini)) {
       this.#options.stats.structureLoadConfirmationsSkipped += 1;
