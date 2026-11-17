@@ -565,6 +565,10 @@ struct Emitter<'r, 'm, 'a> {
     /// The names a pattern binds to `[SELF]` of its parameter: each is a
     /// reference to the result of the instance (ruling Z17).
     self_names: BTreeSet<String>,
+    /// The paths that hold the stream of a binding in what the statements
+    /// of a promoted `computed` return, over all its `return` statements,
+    /// while the statements of one are being evaluated.
+    returned_streams: Vec<StreamAt>,
     /// The patterns whose source the plan holds code of, by the module
     /// and the start of the function: the pattern the plan is compiled
     /// from, then each pattern compiled in, in the order of its first
@@ -1899,8 +1903,20 @@ impl<'a> Emitter<'_, '_, 'a> {
                 Statement::ReturnStatement(statement) => {
                     return Ok(match &statement.argument {
                         Some(argument) => {
-                            self.one("identity", |emitter| emitter.eval(argument, "branch"))
-                                .1
+                            let (place, template) =
+                                self.one("identity", |emitter| emitter.eval(argument, "branch"));
+                            // A stream in what a `return` gives is stored
+                            // below the position of the `computed` while
+                            // that path is taken, as one in a branch of a
+                            // `select` is.
+                            let mut found = Vec::new();
+                            self.stream_paths(&place, &mut Vec::new(), &mut found);
+                            for stream in found {
+                                if !self.returned_streams.contains(&stream) {
+                                    self.returned_streams.push(stream);
+                                }
+                            }
+                            template
                         }
                         None => Some(json!({ "op": "const" })),
                     });
@@ -3763,9 +3779,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                         // has the expression's template.
                         let mut origin = None;
                         let mut passes = None;
+                        let mut streams = Vec::new();
                         let built = self.build(hint, at, |emitter, _| {
                             let (place, template) =
                                 emitter.one("identity", |emitter| emitter.eval(expression, hint));
+                            // The positions of what the expression
+                            // gives that hold a stream (PL §1.1, "The
+                            // listed paths are complete").
+                            emitter.stream_paths(&place, &mut Vec::new(), &mut streams);
                             // The expression is the assembled result of
                             // an element construct, or an output that
                             // passes one on (ruling Z13).
@@ -3787,12 +3808,16 @@ impl<'a> Emitter<'_, '_, 'a> {
                             if self.values[*value].collection.is_none() {
                                 self.values[*value].passes = passes;
                             }
+                            if !streams.is_empty() {
+                                self.values[*value].streams = streams;
+                            }
                         }
                         built
                     }
                     None => {
                         let statements = function.block_body().unwrap_or(&[]);
                         let saved = self.env.clone();
+                        let outer = std::mem::take(&mut self.returned_streams);
                         let place = self.build(hint, at, |emitter, _| {
                             match emitter.code_block(statements) {
                                 Ok(template) => template,
@@ -3801,8 +3826,10 @@ impl<'a> Emitter<'_, '_, 'a> {
                             }
                         });
                         self.env = saved;
+                        let streams = std::mem::replace(&mut self.returned_streams, outer);
                         if let Place::Value(value, _) = &place {
                             self.values[*value].origin = self.returned_origin(function);
+                            self.values[*value].streams = streams;
                         }
                         place
                     }
@@ -7900,6 +7927,7 @@ pub fn emit_module<'a>(
             handle_writes: Vec::new(),
             member_streams: Vec::new(),
             self_names: BTreeSet::new(),
+            returned_streams: Vec::new(),
             patterns: vec![(module, *start)],
             inline_at: Vec::new(),
             given_constants: HashSet::new(),

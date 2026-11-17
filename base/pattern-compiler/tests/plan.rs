@@ -4404,3 +4404,52 @@ export const P = pattern<{ names: string[]; saved: KeyedBy<Repo, "id">[]; plain:
     );
     assert_eq!(items_of("plain")["keyField"], Value::Null);
 }
+
+/// PL §1.1, "The listed paths are complete" (ruling Z11): a promoted
+/// `computed` that returns a tree which holds the stream of a binding
+/// gives the binding a path below the position of the `computed`, for a
+/// statement body, where each `return` is a branch, and for an
+/// expression body. No per-element construct is involved.
+#[test]
+fn a_stream_in_what_a_promoted_computed_returns_has_a_result_path() {
+    let analysis = program(
+        r#"import { Writable, computed, handler, pattern, UI } from "commonfabric";
+const bump = handler<unknown, { count: Writable<number> }>((_, state) => {
+  state.count.set(state.count.get() + 1);
+});
+export const P = pattern<{ index: number; count: Writable<number> }>(({ index, count }) => {
+  const first = bump({ count });
+  const second = bump({ count });
+  const third = bump({ count });
+  return {
+    [UI]: (
+      <div>
+        {computed(() => {
+          if (index < 0) {
+            return <i onClick={second}>none</i>;
+          }
+          const shown = index + 1;
+          return <p><b onClick={first}>{shown}</b></p>;
+        })}
+        {computed(() => <u onClick={third}>{index + 1}</u>)}
+      </div>
+    ),
+  };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let result = |name: &str| results_of(&plan, name)[0].1.clone();
+    assert_eq!(
+        result("first"),
+        r#"[["$UI","children","0","children","0","props","onClick"]]"#
+    );
+    assert_eq!(
+        result("second"),
+        r#"[["$UI","children","0","props","onClick"]]"#
+    );
+    assert_eq!(
+        result("third"),
+        r#"[["$UI","children","1","props","onClick"]]"#
+    );
+}
