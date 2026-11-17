@@ -429,6 +429,9 @@ export interface DialogState {
    * than the rest. */
   readonly emphasized?: readonly number[];
 
+  /** The links on each of the body's rows, by row. */
+  readonly links?: readonly (readonly DialogLink[])[];
+
   /** The width the box gives the body, in columns, when that is fixed rather
    * than fitted to the body's lines. */
   readonly width?: number;
@@ -447,6 +450,20 @@ export interface DialogState {
 
   /** Index of the focused field, or -1 when none is. */
   readonly fieldFocus?: number;
+}
+
+/** A link to `url` on the columns of a row of text from `from` up to `to`,
+ * counted in code points. */
+export interface DialogLink {
+  readonly from: number;
+  readonly to: number;
+  readonly url: string;
+}
+
+/** Returns the web addresses in `text`, each of which ends before
+ * punctuation that ends a clause or a sentence. */
+export function webAddresses(text: string): IterableIterator<RegExpExecArray> {
+  return text.matchAll(/https?:\/\/\S*[^\s.,;:!?)\]'"]/g);
 }
 
 /** A check box, drawn as Turbo Vision draws one: `[X]` when it is checked
@@ -506,6 +523,9 @@ export type DialogField = DialogCheckBox | DialogInputLine | DialogRadioButtons;
 interface Cell {
   ch: string;
   style: Style;
+
+  /** The address the cell links to, if any. */
+  link?: string;
 }
 
 const EMPTY_STYLE: Style = {};
@@ -1279,8 +1299,7 @@ function linkAddresses(
   const kept = shown === text ? text.length : shown.length - 1;
   let out = "";
   let at = 0;
-  // An address ends before punctuation that ends a clause or a sentence.
-  for (const match of text.matchAll(/https?:\/\/\S*[^\s.,;:!?)\]'"]/g)) {
+  for (const match of webAddresses(text)) {
     if (match.index >= kept) break;
     const end = Math.min(match.index + match[0].length, kept);
     out += paintText(shown.slice(at, match.index)) +
@@ -1898,6 +1917,7 @@ function applyDialog(
         dialog.body[bodyIdx],
         dialog.emphasized?.includes(bodyIdx) ? emphasisStyle : textStyle,
         dialog.output,
+        dialog.links?.[bodyIdx],
       );
     } else if (field && fieldRow < fieldHeight(field)) {
       placeField(
@@ -1922,12 +1942,14 @@ function applyDialog(
 }
 
 /** Write `text` in `cells`, centered or starting after the dialog's margin,
- * and clipped to leave one blank column inside each edge. */
+ * and clipped to leave one blank column inside each edge, with `links` on
+ * it. */
 function placeText(
   cells: Cell[],
   text: string,
   style: Style,
   leftAligned = false,
+  links: readonly DialogLink[] = [],
 ): void {
   const innerW = cells.length;
   const chars = [...showControls(text)];
@@ -1936,7 +1958,12 @@ function placeText(
     : 1 + Math.max(0, Math.floor((innerW - 2 - chars.length) / 2));
   for (let j = 0; j < chars.length; j++) {
     const col = start + j;
-    if (col >= 1 && col <= innerW - 2) cells[col] = { ch: chars[j], style };
+    const link = links.find(({ from, to }) => from <= j && j < to)?.url;
+    if (col >= 1 && col <= innerW - 2) {
+      cells[col] = link === undefined
+        ? { ch: chars[j], style }
+        : { ch: chars[j], style, link };
+    }
   }
 }
 
@@ -2086,7 +2113,13 @@ function cellsToAnsi(cells: Cell[], color: boolean): string {
   let out = "";
   let curKey: string | null = null;
   let curOpen = "";
+  let curLink: string | undefined;
   for (const cell of cells) {
+    if (cell.link !== curLink) {
+      if (curLink !== undefined) out += term.linkEnd;
+      if (cell.link !== undefined) out += term.linkStart(cell.link);
+      curLink = cell.link;
+    }
     const open = sgrInline(cell.style);
     if (open !== curKey) {
       if (curKey !== null) out += RESET;
@@ -2096,6 +2129,7 @@ function cellsToAnsi(cells: Cell[], color: boolean): string {
     }
     out += cell.ch;
   }
+  if (curLink !== undefined) out += term.linkEnd;
   if (curOpen !== "") out += RESET;
   return out;
 }

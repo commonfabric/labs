@@ -691,20 +691,33 @@ but fails rather than discard commits on `origin` that the branch has never
 included, even when they have been fetched. A dialog says which branch it pushes
 where, then shows git's output as it arrives, with an Abort button that stops
 the push. Up, Down, Page Up, Page Down, Home, End, and the mouse wheel scroll
-the output, and Left and Right move the focus between the buttons. When the push
-ends, the dialog adds how it ended, and two buttons replace Abort. Close leaves
-that summary in the status line. Quit (`Q`) closes the viewer, first offering to
-save any unsaved edits. Git asks nothing on the terminal while the viewer holds
-it; a question such as a key's passphrase goes to the program `SSH_ASKPASS`
-names, and fails when it names none. `P` refuses to push `origin`'s default
-branch, and refuses when `origin` names no default branch
+the output, and Left and Right move the focus between the buttons. When color is
+on, each web address in the dialog is a link for terminals that open links. When
+the push ends, the dialog adds how it ended, and two buttons replace Abort.
+Close leaves that summary in the status line. Quit (`Q`) closes the viewer,
+first offering to save any unsaved edits. Git asks nothing on the terminal while
+the viewer holds it; a question such as a key's passphrase goes to the program
+`SSH_ASKPASS` names, and fails when it names none. `P` refuses to push
+`origin`'s default branch, and refuses when `origin` names no default branch
 (`git remote set-head origin --auto` finds it). It also refuses a checkout not
 on a branch, and refuses when git started the viewer as its pager for a
 different repository.
 
-When a push fails or is aborted, as it can when the network is unreliable, a
-Retry push button (`P`) pushes again, unless git says the push was rejected, or
-GitHub says the account has no permission to push, which pushing again cannot
+When `origin` already has the branch, as git last fetched or pushed it, the
+dialog asks before pushing. It says which commit `origin`'s branch is at, and
+what pushing would do to it: add commits, replace it, removing the commits that
+the checkout does not have, or leave it as it is. In a shallow checkout, whose
+history git cannot count to the end, it says so in place of the counts. It also
+gives the number and address of the pull request open from the branch, which it
+looks for as `L` does, below, or says that there is none, or why it could not
+look; Abort stops that search, and the dialog asks without it. Push (`u`) then
+pushes, its output following the question, and Cancel takes the dialog down. No
+button is the default, so Enter does nothing until a button has the focus, and
+pressing `P` again does not push.
+
+When git fails to push or is aborted, as it can when the network is unreliable,
+a Retry push button (`P`) pushes again, unless git says the push was rejected,
+or GitHub says the account has no permission to push, which pushing again cannot
 change. Each later push's output follows the earlier one's in the same dialog.
 
 Once the push succeeds, the settings say what happens next, and the radio
@@ -800,10 +813,10 @@ page once it has connected or failed to. While it connects, Abort, or an
 interrupt, gives up on the connection. When a delivery reports that a pull
 request was opened from the pushed branch, at the pushed commit, in the GitHub
 repository that `origin` names, or that the pull request `L` found merged, the
-dialog gives the pull request's address and says it is quitting, and half a
-second later the viewer closes the dialog and quits as Quit does, unless the
-dialog was closed meanwhile. Pressing Quit in that moment quits at once, for the
-pull request all the same. Quitting once the viewer creates or merges the pull
+dialog gives the pull request's address and says it is quitting, and two seconds
+later the viewer closes the dialog and quits as Quit does, unless the dialog was
+closed meanwhile. Pressing Quit in that moment quits at once, for the pull
+request all the same. Quitting once the viewer creates or merges the pull
 request works the same way. Once the screen is restored, it prints the pull
 request's address on the terminal. The address is printed only when the viewer
 quit for it, so a quit after cancelling the save prompt it raised prints
