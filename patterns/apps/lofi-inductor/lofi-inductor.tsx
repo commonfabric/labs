@@ -68,6 +68,11 @@ export type {
 /** What the inductor needs of a pool: its goal, and where to contribute. */
 export type PoolTarget = Pick<InductorPoolOutput, "goal" | "submit">;
 
+/** A new goal, as `setGoal` takes it. */
+export interface GoalEvent {
+  goal: string;
+}
+
 /** An item as `submitItem` takes it; an id is minted when none is given. */
 export interface SubmittedItem {
   id?: string;
@@ -133,6 +138,12 @@ export interface LofiInductorOutput {
   heldOutF1: number;
   /** Where the current rewrite stands. */
   rewrite: RewriteStatus;
+  /**
+   * Ask a new question. The rules, the history, the pseudonym, and what was
+   * published were all for the old one, so they are cleared; the items stay,
+   * and the hi-fi model labels them for the new question.
+   */
+  setGoal: Stream<GoalEvent>;
   /** Add one item. An id the list holds already adds nothing. */
   submitItem: Stream<SubmittedItem>;
   /**
@@ -158,6 +169,7 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     heldOutPercent,
   }) => {
     const draft = new Writable.perSession("");
+    const goalDraft = new Writable.perSession("");
 
     // ========================================================================
     // HI-FI: one cached model call per item
@@ -233,6 +245,27 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       );
       if (status.judgement.accepted) rules.set(next.rules);
       history.push(next.entry);
+    });
+
+    // The goal changes only here, never per keystroke: every hi-fi call is
+    // asked for the goal, so a live input re-asked about every item on each
+    // key. A new question also gets a new pseudonym, so the pool cannot link
+    // this piece's contributions for two questions.
+    const setGoal = action((event: GoalEvent) => {
+      const next = typeof event?.goal === "string" ? event.goal.trim() : "";
+      if (next === "" || next === goal.get().trim()) return;
+      goal.set(next);
+      rules.set([]);
+      history.set([]);
+      published.set(null);
+      pseudonym.set("");
+    });
+
+    const applyGoalDraft = action(() => {
+      const next = goalDraft.get().trim();
+      if (next === "") return;
+      setGoal.send({ goal: next });
+      goalDraft.set("");
     });
 
     const submitItem = action((event: SubmittedItem) => {
@@ -360,10 +393,14 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
         <cf-screen>
           <cf-vstack slot="header" gap="2">
             <cf-heading level={4}>{title}</cf-heading>
-            <cf-input
-              $value={goal}
-              placeholder="A yes-or-no question, such as “Is this email a bill?”"
-            />
+            <cf-hstack gap="2">
+              <cf-input
+                $value={goalDraft}
+                placeholder="A new yes-or-no question, such as “Is this email a bill?”"
+                style="flex: 1;"
+              />
+              <cf-button onClick={applyGoalDraft}>Set goal</cf-button>
+            </cf-hstack>
             <span>{statsLine}</span>
           </cf-vstack>
           <cf-vscroll>
@@ -438,6 +475,7 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       summary,
       heldOutF1,
       rewrite,
+      setGoal,
       submitItem,
       settleRewrite,
       publish,

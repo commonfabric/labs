@@ -103,6 +103,12 @@ Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
 - `publish` records `{goal, rules, publishedAt, pooled}` in `published`, where
   `pooled` says whether the rules were sent to a pool, and sends them to the
   pool's `submit` (see step 5 and `apps/inductor-pool`).
+- The goal changes only through `setGoal` (the view's "Set goal" button sends
+  it), never per keystroke: every hi-fi call is asked for the goal, so a live
+  input re-asked about every item on each key. A new goal clears the rules, the
+  history, what was published, and the pseudonym, so the pool cannot link this
+  piece's contributions for two questions; the items stay, and the hi-fi model
+  labels them for the new goal.
 - Choose the hi-fi model with `hifiModel`; omitted, the deployment's default
   `generateObject` model answers.
 
