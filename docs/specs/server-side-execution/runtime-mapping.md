@@ -276,7 +276,29 @@ source it had. An argument whose links cannot be read fails the start
 rather than running the handler over what those pieces derived last. A
 client under server execution runs the handler only as its speculative
 echo, which the served run replaces, so its auto-start starts the nested
-instance alone.
+instance alone. A start that names a piece on its own, as a client's open,
+a `cf` command's and the agent harness's start of a piece do, starts the
+pieces that ENCLOSE it first wherever the runtime's run of a handler counts
+(`startWithInputSources()` in `ensure-piece-running.ts`), with the same walk
+restricted to them (`EnsurePieceOptions.enclosingSourcesOnly`): once a
+nested instance runs, no event starts its enclosing instance, so a nested
+instance opened alone would run every later event's handler against inputs
+nothing in the runtime derives. A piece whose output the opened piece's
+argument links to, as `cf piece link` wires one, is not started by the open;
+an event's auto-load of a piece that is not running starts it. An open
+that follows the opened piece's origin follows each enclosing piece's
+origin first. The opened piece
+is started in its own right after them, so it keeps running when one of them
+stops; each enclosing piece is started in its own right too, and runs until
+it is stopped itself or the runtime ends, as a piece an event's auto-load
+starts does. That start is best effort: an enclosing
+piece that cannot start, one whose origin's follow cannot be settled, and an
+argument whose links cannot be read leave the opened piece to start alone,
+with a warning naming it, so an open fails only where the piece's own start
+does. A serving runtime's demand start passes no
+`startInputSources`: the demand a session hands it reaches the documents
+upstream of what the session watches, the enclosing instance's among them,
+so the demand pass starts that instance itself.
 The derivation path needs no analog: a commit dirtying docs read by
 unmaterialized nodes leaves them dirty-unmaterialized until a
 value-granular client pull (a subscription) demands them and their
