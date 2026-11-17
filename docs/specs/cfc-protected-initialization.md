@@ -198,7 +198,12 @@ again. A sub-piece whose code changed is set up again the same way, over the
 argument document it already has, with the argument its parent supplies. In
 both, the slots the caller does not name are carried over from the stored
 document with the bytes they hold, and the runtime records each such slot as a
-replay. The record permits nothing but leaving those bytes as they are. A slot
+replay. The record permits nothing but leaving those bytes as they are. The
+setup's write of the document leaves each slot recorded as a replay, and still
+staged with the bytes recorded, as it stands, and attempts each other slot at
+that slot's own path (`leavesSlots` in `data-updating.ts`). So a replayed slot
+is no attempt of the setup's, and a field beneath one meets its writer
+requirements only where another write in the transaction reaches it. A slot
 the changed code's argument schema refuses is not carried over, and receives
 no record. Its value is copied into the piece's refused-slot store instead
 ([pattern updates](./pattern-imports/pattern-updates.md)), which the runtime
