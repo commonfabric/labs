@@ -1087,12 +1087,24 @@ function finalizeSchedulerAction(
   }
 
   try {
-    if (args.error) {
+    // A served run that read a scoped instance the serving loop has not
+    // produced yet is withdrawn at its commit, below, whatever it derived
+    // from that absence; a throw is one more thing it derived from it, so it
+    // is withdrawn with the run rather than reported. The run's read of the
+    // instance stays subscribed, and a throw once the instance is produced is
+    // reported as any other.
+    if (args.error && args.tx.tx.unproducedScopedInstance === undefined) {
       logger.error("schedule-error", () => [
         `[RUN] Action failed: ${args.actionId}`,
         `Error: ${args.error}`,
       ]);
       state.handleError(normalizeThrownError(args.error), args.action);
+    } else if (args.error) {
+      logger.debug("schedule-withdrawn-error", () => [
+        `[RUN] Action threw after reading a scoped instance not yet ` +
+        `produced, withdrawn: ${args.actionId}`,
+        `Error: ${args.error}`,
+      ]);
     }
   } finally {
     finalizeReactiveActionCommit(state, args, elapsed);
