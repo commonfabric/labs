@@ -15007,11 +15007,12 @@ export function* prepareBoundaryCommitSteps(
           storedSchema,
           deferredWriterPaths,
         );
-        // SPEC-PENDING https://github.com/commonfabric/specs/pull/67
         // TODO(danfuzz): Taking a position whose policy differs only by the
         // write-policy alternatives this transaction's release appended for
         // an unchanged one (commonfabric/specs pull request 96, "Release")
-        // admits more than §8.15.4 permits, and runs by default ahead of an
+        // admits more than §8.15.4 permits, and more than commonfabric/specs
+        // pull request 67 proposes, through the marker at the restatement
+        // deferral this waiver discharges. It runs by default ahead of an
         // amendment to pull request 67, by Dan's decision of 2026-11-17. The
         // stored envelope is not kept then: the merged one, which holds the
         // appended alternatives, is stored.

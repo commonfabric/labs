@@ -450,6 +450,29 @@ an omitted alternative lands the same way, following specs#96 as amended
 (§8.15.6.1, "Write-Policy Alternatives"). The conformance statement's §10
 records the gap.
 
+The restatement of a setup replay's carried-over argument slots (§8.15.4)
+implements [specs#67](https://github.com/commonfabric/specs/pull/67) ahead of
+its ruling. A setup of a piece over its stored argument records each slot it
+carries over, preparation defers a protected field's writer requirements at or
+under one where the transaction changes nothing there, and the persist loop
+waives the deferred refusal where the envelope it would store declares the same
+policy throughout the document and the same labels at, above and below each
+deferred field, leaving out, in a release, the positions beneath held links,
+and the claims at new fields. In a release, the comparison that stores the
+derived envelope also takes a position whose write policy the release extended
+for unchanged: the stored alternatives begin the derived list, element for
+element and in order, each further alternative is one the release may append
+under [specs#96](https://github.com/commonfabric/specs/pull/96) (§8.15.13
+carve-out (c)), and every other claim at the position is the same. A position
+at, above or beneath a deferred field must be exactly as it was. specs#67 as
+proposed compares every position, so that part is ahead of an amendment to it
+as well. The waiver admits more than the pin at strict, with no default-off
+dial, so it does not satisfy step 4 above; the deferral it discharges carries
+the `SPEC-PENDING` marker for specs#67. @danfuzz ruled on 2026-11-17 that the part
+taking a release's append for no change lands the same way, ahead of the
+amendment, as he ruled for specs#96 and specs#103. The conformance statement's
+§10 records the gap.
+
 The resolution that certifies a new JavaScript action node's static read set
 (`#collectStaticReadTargetsWithCompleteness` in `runner.ts`) implements
 [specs#100](https://github.com/commonfabric/specs/pull/100) ahead of its
