@@ -12,6 +12,22 @@ make possible: a rule learned from one person's private mail stays theirs, until
 enough different people have independently learned the very same rule that
 knowing it says nothing about any one of them.
 
+## Using it
+
+1. Type a yes-or-no question about your items, such as "Is this email a bill?",
+   and press "Set goal".
+2. Add items: type one into the Items card, or have a connector or an agent send
+   them through `addItem`. The model answers the question for each one.
+3. Watch the Rules card. Once enough items surprise the current rules, the model
+   proposes a new set, and the card offers to apply it if it scores better on
+   the held-out items, or to dismiss it.
+4. To share what you learned, connect a pool for the same question (deploy an
+   `inductor-pool` with that question in a space you can reach, or link one as
+   `pool`) and press "Publish rules".
+
+The model, how many surprises start a rewrite, and the held-out share are in the
+Settings card.
+
 ## How it works
 
 Two patterns.
@@ -26,26 +42,27 @@ connector, another piece, an agent).
 2. When they disagree, the lo-fi set was _surprised_. Every item the hi-fi model
    has labelled is a graded example, on the training or held-out side of a split
    fixed by a hash of its id; surprises are what start a rewrite.
-3. After enough new surprises (`rewriteAfter`, default 3), another LLM call sees
-   the current rules and the training examples and proposes a whole new rule
-   set. The request is frozen on the items up to the surprise that crossed the
-   threshold, so items arriving while the model answers do not ask it again;
-   they count toward the next round. The gate judges the answer at once: it
-   would replace the current rules only if every rule is in the grammar (which
-   includes the backtracking check), there are at least `MIN_HELD_OUT` (5)
-   held-out examples, and the set's F1 on them beats the current set's by at
-   least `MIN_F1_GAIN` (two points). Below five examples one example moves F1 by
-   twenty points, so a win is mostly luck; the margin keeps a set that only ties
-   from churning the rules and what was published. No one approves rules one by
-   one, but **recording the judgement takes a send** of `settleRewrite`: the
-   view's button, labelled with what it does ("Apply new rules (F1 62% → 81%)"
-   or "Dismiss rejected proposal", under the proposed rules), or an agent. A
-   computed cannot write, and an action that recorded on its own whenever an
-   item arrived would read the rewrite while hi-fi calls are in flight, which
-   can lose their results (the second runtime issue below). Every recorded
-   proposal goes into the history, accepted or not, and marks answered only the
-   surprises its request was frozen on. A failed model call is not a proposal:
-   nothing is recorded, and "Try again" (`retryRewrite`) asks again.
+3. A rewrite. Once enough surprises are new (`rewriteAfter`, default 3):
+   - Another call to the same model sees the current rules and the training
+     examples, and proposes a whole new rule set.
+   - The request is frozen on the items up to the surprise that crossed the
+     threshold. Items arriving while the model answers count toward the next
+     round.
+   - The gate judges the answer at once. It replaces the current rules only if
+     every rule is in the grammar (which includes the backtracking check), there
+     are at least `MIN_HELD_OUT` (5) held-out examples, and the set's F1 on them
+     beats the current set's by at least `MIN_F1_GAIN` (two points). Below five
+     examples one example moves F1 by twenty points, so a win is mostly luck;
+     the margin keeps a set that only ties from churning the rules.
+   - Recording the judgement takes a send of `settleRewrite`: the view's button
+     ("Apply new rules (F1 62% → 81%)" or "Dismiss rejected proposal") or an
+     agent. A computed cannot write, and recording on every new item would read
+     the rewrite while hi-fi calls are in flight (the first runtime issue
+     below).
+   - Every recorded proposal goes into the history, accepted or not, and marks
+     answered only the surprises its request was frozen on.
+   - A failed model call is not a proposal: nothing is recorded, and "Try again"
+     (`retryRewrite`) asks again.
 4. Some goals never settle into rules. That is a valid outcome: they stay on the
    hi-fi model.
 5. Publishing sends the accepted rules to a pool for the goal, under the piece's
@@ -53,14 +70,14 @@ connector, another piece, an agent).
    the `#inductorPool` a wish finds (favorites, then this space). A pool serves
    one goal and the wish cannot match on it, so the rules go only to a pool
    whose goal is the inductor's, ignoring case and surrounding or repeated
-   space; otherwise nothing leaves the piece. With no rules there is nothing to
-   publish, and the button is disabled. The first publish mints the pseudonym, a
-   random string the piece keeps, so it is the same every time this goal is
-   published and unlinkable to the person's other goals. The view says which
-   happened: "Sent N rules to the pool for …" or "No pool for … found". It says
-   sent, not published: whether the pool took them is not visible to the piece
-   (a refusal is thrown in the pool's handler, and a contribution is
-   confidential to the pool).
+   space; otherwise nothing leaves the piece. The view says whether a pool for
+   the goal is connected, and disables Publish when none is or there is nothing
+   to send. The first publish mints the pseudonym, a random string the piece
+   keeps, so it is the same every time this goal is published and unlinkable to
+   the person's other goals. The view says which happened: "Sent N rules to the
+   pool for …" or "No pool for … found". It says sent, not published: whether
+   the pool took them is not visible to the piece (a refusal is thrown in the
+   pool's handler, and a contribution is confidential to the pool).
 
 6. The pool's release comes back. The inductor reads the rules the pool for its
    goal releases (`consensus`, public by the pool's policy) and offers them as a
@@ -158,12 +175,12 @@ Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
   `pooled` says whether the rules were sent to a pool, and sends them to the
   pool's `submit` (see step 5 and `showcase/inductor/pool`).
 - The goal changes only through `setGoal` (the view's "Set goal" button sends
-  it), never per keystroke: every hi-fi call is asked for the goal, so a live
-  input re-asked about every item on each key. A new goal first withdraws this
-  piece's contribution from the old goal's pool, then clears the rules, the
-  history, what was published, and the pseudonym, so the pool cannot link this
-  piece's contributions for two questions; the items stay, and the hi-fi model
-  labels them for the new goal.
+  it), never per keystroke: every hi-fi call is asked for the goal, so each
+  change asks about every item again. A new goal first withdraws this piece's
+  contribution from the old goal's pool, then clears the rules, the history,
+  what was published, and the pseudonym, so the pool cannot link this piece's
+  contributions for two questions; the items stay, and the hi-fi model labels
+  them for the new goal.
 - `unpublish` takes this piece's contribution back out of the goal's pool (the
   pool's `withdraw`, which removes only the sender's) and clears `published`.
   The pseudonym stays, so publishing again comes back under it.
@@ -174,23 +191,29 @@ Design notes: the "hi-fi → lo-fi pump" in the enricher-ecosystem PRD
   required), which strict providers such as OpenAI's structured outputs take.
 
 **Layout.** `lofi-inductor.tsx` holds the state, the verbs, and the judgements
-(`rows`, `summary`, `heldOutF1`, `rewrite`, `poolOffer`), and lays out four
-sub-patterns in sibling files. Each takes the cells and streams it shows and
-sends, and words them itself:
+(`rows`, `summary`, `heldOutF1`, `rewrite`, `poolOffer`, and each item's
+wording, `verdictsOf`), and lays out five sub-patterns in sibling files, in the
+order a person works through them. Each takes the values it shows and the
+streams it sends:
 
-- `rules-card.tsx`: the current rules with their held-out F1, where the rewrite
-  stands, the ready proposal, and the buttons that apply or dismiss it, retry a
-  failed call, take a rule out, or clear the set.
-- `pool-card.tsx`: the pool's offer, what was last published, and the buttons
-  that adopt or dismiss the offer, publish, and unpublish.
+- `items-card.tsx`: the add-an-item box, whose draft is per session, then each
+  item with its labels, a surprise in the error tone, a "held out" badge, and a
+  remove button. With no question it shows no labels; with no rules the lo-fi
+  side reads "no rules yet".
+- `rules-card.tsx`: the current rules, with their F1 once held-out items are
+  labelled, where the rewrite stands, the ready proposal, and the buttons that
+  apply or dismiss it, retry a failed call, take a rule out, or clear the set.
 - `history-card.tsx`: every judged proposal, newest first.
-- `items-card.tsx`: each item with its labels, a surprise in the error tone, a
-  remove button, and the add-an-item box, whose draft is per session.
+- `pool-card.tsx`: whether a pool for the goal is connected and how to get one,
+  the pool's offer, what was last published, and the buttons that adopt or
+  dismiss the offer, publish, and unpublish.
+- `settings-card.tsx`: the model, `rewriteAfter`, and `heldOutPercent`, folded
+  away; "Apply" sends each filled-in draft to its setter.
 
-The cards are known by their position in the view, so a new one goes after the
-last. The hi-fi calls stay in the parent's map rather than in a per-item
-sub-pattern: one that owned its item's `generateObject` never delivered a label
-(the third runtime issue below).
+The cards are known by their position in the view (`composition.md`), so a new
+one goes after the last. The hi-fi calls stay in the parent's map rather than in
+a per-item sub-pattern: one that owned its item's `generateObject` never
+delivered a label (the second runtime issue below).
 
 **Verbs.** Everything the view does, an agent can do through a stream, and a
 malformed event throws rather than doing nothing:
@@ -212,37 +235,23 @@ malformed event throws rather than doing nothing:
 
 Known runtime issues this pattern works around:
 
-1. In a block-bodied `map` callback, `const answer = generateObject({...})` with
-   a reactive argument is lowered into a `lift` that calls `generateObject`, and
-   the graph never settles. The hi-fi map is written expression-bodied. (Not yet
-   reduced to a minimal repro: a plain block-bodied map settles.)
-2. An action that reads state derived from mapped `generateObject` calls while
+1. An action that reads state derived from mapped `generateObject` calls while
    two or more of them are in flight can lose their results for good
    (`contribution-dropped`, a builtin write superseded). Recording the judgement
    while hi-fi calls are in flight can still hit it. Filed as top/3204.
-
-3. A sub-pattern instance per item that owns the item's `generateObject` (an
+2. A sub-pattern instance per item that owns the item's `generateObject` (an
    `ItemLabel({goal, item})` mapped over the items, returning `{id, answer}`)
    never delivers a label: every row stays unlabelled. The hi-fi calls stay in
-   the parent's expression-bodied map.
-4. `removeByValue` with an element's cell (`list.key(i)`) matches only an
-   element stored as a link, which `push` writes; an element seeded with the
-   piece is stored inline, and only its value matches it. `removeItem` and
-   `removeRule` send both, and each removes nothing of the other kind. An inline
-   element also has no document of its own, so a reference held to one names its
-   slot: once an earlier item is removed, that reference matches nothing, and
-   `removeItem` with it does nothing. An item added through `addItem` is a link,
-   and its reference survives the move.
-5. Right after the goal changes, a hi-fi call can still hold the old goal's
-   answer, not yet marked pending, so grading read it as an answer to the new
-   question and could ask for a rewrite on it. Each hi-fi entry carries the
-   prompt it is asked now (`asked`), and an answer counts only if the call's
-   last user message is that prompt.
-
-(Another, a first publish that ran twice under server execution and minted two
-pseudonyms, locked the contributor out of the pool. The pool now binds the
-principal rather than the pseudonym, so the second run's submission replaces the
-first's.)
+   the parent's map.
+3. Right after the goal changes, a hi-fi call can still hold the old goal's
+   answer, not yet marked pending. Each hi-fi entry carries the prompt it is
+   asked now (`asked`), and an answer counts only if the call's last user
+   message is that prompt.
+4. An item seeded with the piece is stored inline and has no document of its
+   own, so a reference held to one names its slot: once an earlier item is
+   removed, that reference matches nothing, and `removeItem` with it does
+   nothing. An item added through `addItem` is a link, and its reference
+   survives the move.
 
 ## CFC debt
 

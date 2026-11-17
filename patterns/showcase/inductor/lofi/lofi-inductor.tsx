@@ -13,8 +13,8 @@
  * the drafts in the goal and add-an-item boxes are per session.
  *
  * This pattern holds the state, the verbs, and the judgements; the cards it
- * lays out (`items-card.tsx`, `rules-card.tsx`, `pool-card.tsx`,
- * `history-card.tsx`) render them and send the verbs.
+ * lays out (`items-card.tsx`, `rules-card.tsx`, `history-card.tsx`,
+ * `pool-card.tsx`, `settings-card.tsx`) render them and send the verbs.
  */
 
 import {
@@ -405,11 +405,10 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       )
     );
 
-    // A computed cannot write, so the judgement is recorded here, by an
-    // action, when a person or an agent sends `settleRewrite`. Adding an item
-    // does not settle as well: an action that reads `rewrite` while hi-fi
-    // calls are in flight can lose their results (see README.md, "Known
-    // runtime issues").
+    // A computed cannot write, so a person or an agent records the judgement
+    // by sending `settleRewrite`. Recording on every new item would read
+    // `rewrite` while hi-fi calls are in flight, which can lose their results
+    // (README.md, "Known runtime issues").
     const settleRewrite = action(() => {
       const status = rewrite;
       if (status.status !== "ready") return;
@@ -472,12 +471,9 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     // holds an undefined value does not run.
     const target = pool ?? poolWish.result ?? null;
 
-    // The goal changes only here, never per keystroke: every hi-fi call is
-    // asked for the goal, so each change asks about every item again. A new
-    // question also gets a new pseudonym, so the pool cannot link
-    // this piece's contributions for two questions; the old question's
-    // contribution is withdrawn first, while the pool for it is still the
-    // one the goal names.
+    // Every hi-fi call is asked for the goal, so it changes only here, never
+    // per keystroke. A new question withdraws the old one's contribution and
+    // gets a new pseudonym, so the pool cannot link the two.
     const setGoal = action((event: GoalEvent) => {
       if (typeof event?.goal !== "string" || event.goal.trim() === "") {
         throw new Error("`goal` is a yes-or-no question, not blank.");
