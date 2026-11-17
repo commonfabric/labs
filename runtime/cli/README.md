@@ -865,7 +865,10 @@ wrapping, and word wrapping. Hard wrapping fills every screen row before it
 continues. Word wrapping breaks at whitespace and indents each continuation row
 by the width of the line's leading punctuation and whitespace. A row is drawn
 unindented when it could hold the rest of the line only without the indentation,
-or when it is too narrow for the indentation and any text.
+or when it is too narrow for the indentation and any text. Either way, a row
+does not start in the middle of a character that takes two columns, such as a
+Han character or an emoji. A character the edge of the screen would cut in two
+when lines are not wrapped is left blank.
 
 Press `c` to cycle how non-printable characters are shown. The pager starts in
 the ANSI color mode, which applies color escape sequences to the text that

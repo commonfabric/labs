@@ -1306,6 +1306,42 @@ describe("view-push", () => {
       ]);
     });
 
+    it("wraps by the columns the characters take, not by how many there are", () => {
+      // Forty Han characters take eighty columns, so the first thirty-six
+      // fill a row of the dialog's seventy-two. Seventy-two letters with
+      // combining accents take seventy-two columns, and so a row of their
+      // own, though they are twice as many code points.
+      const session = editableSession();
+      session.beginTask("Push", () => {});
+      const han = "漢".repeat(40);
+      const accented = "e\u0301".repeat(72);
+
+      session.appendTaskOutput(`${han}\n${accented}\n`);
+
+      expect(session.view().dialog!.body.slice(0, 4)).toEqual([
+        han.slice(0, 36),
+        han.slice(36),
+        accented,
+        "",
+      ]);
+    });
+
+    it("gives a character wider than the dialog a row of its own", () => {
+      // The view is nine columns wide, so the dialog's rows are one column
+      // wide, too narrow for a Han character.
+      const session = editableSession();
+      session.resize(9, 24);
+      session.beginTask("Push", () => {});
+
+      session.appendTaskOutput("漢字a\n");
+
+      expect(session.view().dialog!.body.slice(0, 3)).toEqual([
+        "漢",
+        "字",
+        "a",
+      ]);
+    });
+
     it("aborts a running push on an interrupt, keeping the dialog up", () => {
       const session = editableSession();
       let aborted = 0;
@@ -1778,6 +1814,31 @@ describe("view-push", () => {
         expect(linked(LONG)).toEqual([LONG.slice(0, 72), LONG.slice(72)]);
         expect(plain).not.toContain("\x1b]8;");
         expect(plain).toContain(`See ${PULL_REQUEST}.`);
+      });
+
+      it("links an address after wide characters by code points, and draws the link over the address's columns", () => {
+        // The Han characters take two columns each but one code point.
+        const session = new Session(
+          parseDocument("const a = 1;\n"),
+          { color: true, showLineNumbers: false },
+          { width: 80, height: 24 },
+        );
+        session.beginTask("Push", () => {});
+        session.appendTaskOutput(`漢字 ${PULL_REQUEST}\n`);
+        const dialog = session.view().dialog!;
+        const drawn = drawnRows(session).join("\n");
+        // The text each link covers, leaving out links that cover none.
+        const linked = drawn.split(term.linkStart(PULL_REQUEST)).slice(1)
+          .map((part) => stripAnsi(part.split(term.linkEnd)[0]))
+          .filter((text) => text !== "");
+
+        expect(dialog.links![dialog.body.indexOf(`漢字 ${PULL_REQUEST}`)])
+          .toEqual([{
+            from: 3,
+            to: 3 + PULL_REQUEST.length,
+            url: PULL_REQUEST,
+          }]);
+        expect(linked).toEqual([PULL_REQUEST]);
       });
     });
   });

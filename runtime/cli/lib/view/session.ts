@@ -73,8 +73,10 @@ import {
   type DisplayMode,
   displayModeLabel,
   displayWidth,
+  drawnCharacters,
   drawsAsPictures,
   hasNonPrintable,
+  shownCells,
   sourceColumnOf,
 } from "./display.ts";
 import {
@@ -1489,22 +1491,28 @@ export class Session {
     const columns = Math.max(1, Math.min(PUSH_COLUMNS, this.width - 8));
     const wrap = (line: string): TaskRow[] => {
       const text = line.trimEnd();
-      const chars = [...text];
+      const chars = drawnCharacters(text);
+      // The code points before each character, and before the end.
+      const offsets = [0];
+      for (const char of chars) {
+        offsets.push(offsets[offsets.length - 1] + cpLen(char));
+      }
       const addresses = Array.from(webAddresses(text), (match) => {
         const from = cpLen(text.slice(0, match.index));
         return { from, to: from + cpLen(match[0]), url: match[0] };
       });
       const rowsOfLine: TaskRow[] = [];
       let at = 0;
-      const take = (length: number, next: number) => {
-        const end = at + length;
+      const take = (end: number, next: number) => {
+        const first = offsets[at];
+        const last = offsets[end];
         rowsOfLine.push({
           text: chars.slice(at, end).join(""),
           links: addresses.flatMap(({ from, to, url }) =>
-            from < end && to > at
+            from < last && to > first
               ? [{
-                from: Math.max(from, at) - at,
-                to: Math.min(to, end) - at,
+                from: Math.max(from, first) - first,
+                to: Math.min(to, last) - first,
                 url,
               }]
               : []
@@ -1512,15 +1520,22 @@ export class Session {
         });
         at = next;
       };
-      while (chars.length - at > columns) {
-        const space = chars.lastIndexOf(" ", at + columns);
-        const words = space < at
-          ? 0
-          : cpLen(chars.slice(at, space + 1).join("").trimEnd());
-        if (words > 0) take(words, space + 1);
-        else take(columns, at + columns);
+      for (;;) {
+        let fit = at;
+        for (let used = 0; fit < chars.length; fit++) {
+          used += shownCells(chars[fit]).length;
+          if (used > columns) break;
+        }
+        if (fit === chars.length) break;
+        // A character wider than the box takes a row of its own.
+        fit = Math.max(at + 1, fit);
+        const space = chars.lastIndexOf(" ", fit);
+        let words = space + 1;
+        while (words > at && /\s/.test(chars[words - 1])) words--;
+        if (space >= at && words > at) take(words, space + 1);
+        else take(fit, fit);
       }
-      take(chars.length - at, chars.length);
+      take(chars.length, chars.length);
       return rowsOfLine;
     };
     // The output keeps at least one row, and what the dialog says about the
@@ -3007,13 +3022,17 @@ export class Session {
     this.#wrapMode = "off";
     this.#cursorOn = true;
     this.#selectedIndex = null;
-    // Editing relies on every source column mapping to one display column, which
-    // only "pictures" guarantees (it hides nothing and collapses nothing).
+    // Editing relies on every source column having a display column of its own
+    // or sharing one with the rest of its character, which only "pictures"
+    // guarantees (it hides nothing and collapses nothing).
     const picturesAppear = this.#currentDoc.lines.some((line) =>
       !drawsAsPictures(line.text, this.#displayMode)
     );
     this.#displayMode = "pictures";
-    if (anchor) this.left = cursorCol;
+    const topLine = this.#currentDoc.lines[topDoc];
+    if (anchor && topLine) {
+      this.left = displayColumnOf(topLine, "pictures", cursorCol);
+    }
     // Editing works on the full text, so expand every folded file; the top
     // display row becomes its document line.
     this.#clearFolds();
@@ -4109,7 +4128,7 @@ export class Session {
   #cursorPage(dir: number): void {
     const b = this.#buffer!;
     const step = Math.max(1, this.#contentRows() - 1);
-    b.place(b.row + dir * step, b.col);
+    b.moveRows(dir * step);
     this.top = clamp(
       this.top + dir * step,
       0,
@@ -4126,8 +4145,18 @@ export class Session {
     else if (b.row >= this.top + rows) this.top = b.row - rows + 1;
     this.top = clamp(this.top, 0, maxTop(this.doc.lines.length, this.height));
     const cw = this.#contentWidth();
-    if (b.col < this.left) this.left = b.col;
-    else if (b.col >= this.left + cw) this.left = b.col - cw + 1;
+    // The cursor's whole character comes into view, both its columns when it
+    // is wide.
+    const line = this.#foldPlan().displayLines[this.#toFolded(b.row)];
+    const col = line ? displayColumnOf(line, this.#displayMode, b.col) : 0;
+    const last = line
+      ? Math.max(
+        col,
+        displayColumnOf(line, this.#displayMode, b.characterEnd) - 1,
+      )
+      : 0;
+    if (col < this.left) this.left = col;
+    else if (last >= this.left + cw) this.left = last - cw + 1;
     this.left = clamp(this.left, 0, this.#maxLeft());
   }
 
