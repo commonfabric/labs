@@ -90,13 +90,15 @@ after `pull()` safely materializes it before a child write. The resource kinds
 are `cell`, `stream`, `sqlite`, `service`, and `presence`. Named methods let an
 application expose a narrow service without expanding the cell protocol.
 
-The higher-level `cf-iframe` component accepts the same `bridge`, `src`, and
-`script` properties. Its `context` convenience property turns Fabric cells into
-resources: a pattern binds a record of them, and each field becomes a cell
-resource, a read-only resource without `set`, a `send` resource for a stream, or
-a `query`/`exec` resource for a SQLite database. A pattern names the kinds the
-renderer cannot read off a cell, which in a record are every stream, database,
-and presence room:
+The higher-level `cf-iframe` component accepts the same `bridge`, `src`,
+`script`, and `assets` properties. It refuses an `assets` value that is not a
+record from a name to a base64 `data:` URL without throwing: it shows why in its
+error display, and holds the guest closed until `assets` changes. Its `context`
+convenience property turns Fabric cells into resources: a pattern binds a record
+of them, and each field becomes a cell resource, a read-only resource without
+`set`, a `send` resource for a stream, or a `query`/`exec` resource for a SQLite
+database. A pattern names the kinds the renderer cannot read off a cell, which
+in a record are every stream, database, and presence room:
 
 ```tsx
 <cf-iframe

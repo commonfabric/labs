@@ -95,6 +95,115 @@ describe("CFIframe", () => {
     );
   });
 
+  describe("assets", () => {
+    // The sixth binding is the sandbox's `assets`, after its bridge, source,
+    // outer frame, presentation and script.
+
+    const GLAZE = "data:image/png;base64,iVBORw0KGgo=";
+
+    const assetsChange = (): PropertyValues<CFIframe> =>
+      new Map([["assets", null]]) as PropertyValues<CFIframe>;
+
+    it("forwards a record of base64 `data:` URLs to the sandbox, with the source", () => {
+      const element = new CFIframe();
+      element.src = '<img src="cf-asset:glaze">';
+      expect(element.assets).toBeNull();
+      expect(templateValues(element)[5]).toEqual({});
+      element.assets = { glaze: GLAZE };
+
+      internals(element).willUpdate(assetsChange());
+
+      expect(element._errorDetails).toBeNull();
+      expect(templateValues(element)[1]).toBe('<img src="cf-asset:glaze">');
+      expect(templateValues(element)[5]).toEqual({ glaze: GLAZE });
+    });
+
+    for (
+      const [what, value, description] of [
+        [
+          "a URL that is not a base64 `data:` URL",
+          { glaze: "https://example.com/glaze.png" },
+          'The asset `glaze` is not a base64 `data:` URL: `"https://example.com/glaze.png"`',
+        ],
+        [
+          "a name outside `[A-Za-z0-9_-]+`",
+          { "glaze.png": GLAZE },
+          'The asset name `"glaze.png"` does not match `[A-Za-z0-9_-]+`.',
+        ],
+        [
+          "a value that is not a record",
+          GLAZE,
+          "Assets are a record from a name to a base64 `data:` URL, not " +
+          '`"data:image/png;base64,iVBORw0KGgo="`.',
+        ],
+      ] as const
+    ) {
+      it(`refuses ${what}, saying why and holding the guest closed`, () => {
+        const element = new CFIframe();
+        element.src = "<p>guest</p>";
+        Reflect.set(element, "assets", value);
+
+        internals(element).willUpdate(assetsChange());
+
+        expect(element._errorDetails).toEqual({
+          description,
+          source: "cf-iframe assets",
+          lineno: 0,
+          colno: 0,
+          stacktrace: description,
+        });
+        expect(templateValues(element)[1]).toBe("");
+        expect(templateValues(element)[5]).toEqual({});
+      });
+    }
+
+    it("keeps the guest closed when a refusal is dismissed", () => {
+      const element = new CFIframe();
+      element.src = "<p>guest</p>";
+      element.assets = { glaze: "https://example.com/glaze.png" };
+      internals(element).willUpdate(assetsChange());
+
+      internals(element).dismissError();
+
+      expect(element._errorDetails).toBeNull();
+      expect(templateValues(element)[1]).toBe("");
+    });
+
+    it("opens the guest and clears the refusal once the assets are a record of base64 `data:` URLs", () => {
+      const element = new CFIframe();
+      element.src = "<p>guest</p>";
+      element.assets = { glaze: "https://example.com/glaze.png" };
+      internals(element).willUpdate(assetsChange());
+      expect(element._errorDetails?.source).toBe("cf-iframe assets");
+
+      element.assets = { glaze: GLAZE };
+      internals(element).willUpdate(assetsChange());
+
+      expect(element._errorDetails).toBeNull();
+      expect(templateValues(element)[1]).toBe("<p>guest</p>");
+      expect(templateValues(element)[5]).toEqual({ glaze: GLAZE });
+    });
+
+    it("leaves an error the guest raised in place when the assets change", () => {
+      const element = new CFIframe();
+      const error = {
+        description: "broken",
+        source: "guest.js",
+        lineno: 3,
+        colno: 5,
+        stacktrace: "broken at guest.js:3:5",
+      };
+      internals(element).onError(
+        new CustomEvent("common-iframe-error", { detail: error }),
+      );
+
+      element.assets = { glaze: GLAZE };
+      internals(element).willUpdate(assetsChange());
+
+      expect(element._errorDetails).toEqual(error);
+    });
+  });
+
   it("reports a non-Error context failure and clears it on replacement", async () => {
     const runtime = {
       [$conn]: () => ({ request: () => Promise.reject("context refused") }),
