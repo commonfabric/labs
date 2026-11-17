@@ -245,15 +245,21 @@ async function runTest() {
         await click(label, "decrement", 0);
       };
 
+      console.log("derive array leak: warmup cycles");
       for (let i = 0; i < WARM_UP_CYCLES; i++) {
         await cycle(`warmup cycle ${i + 1}/${WARM_UP_CYCLES}`);
       }
+      console.log("derive array leak: baseline client memory");
       const clientBeforeMB = getClientMemoryMB();
+      console.log("derive array leak: baseline server memory");
       const serverBeforeMB = await getServerMemoryMB();
+      console.log("derive array leak: measured cycles");
       for (let i = 0; i < MEASURED_CYCLES; i++) {
         await cycle(`measured cycle ${i + 1}/${MEASURED_CYCLES}`);
       }
+      console.log("derive array leak: final client memory");
       const clientGrowthMB = getClientMemoryMB() - clientBeforeMB;
+      console.log("derive array leak: final server memory");
       const serverGrowthMB = await getServerMemoryMB() - serverBeforeMB;
       if (failure) throw failure;
 
@@ -281,11 +287,14 @@ async function runTest() {
         );
       }
     } finally {
+      console.log("derive array leak: view cleanup");
       cancelValueSink();
       render.cancel();
     }
   } finally {
+    console.log("derive array leak: runtime disposal");
     await runtime.dispose();
+    console.log("derive array leak: storage close");
     await storageManager.close();
   }
 }
