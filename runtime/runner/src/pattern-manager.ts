@@ -2744,12 +2744,18 @@ export class PatternManager {
       let parserNeeded = false;
       for (const identity of new Set(identities)) {
         if (PatternManager.isKeylessPatternIdentity(identity)) continue;
-        if (!await this.#closureVerifiesWithoutParser(space, identity, tx)) {
-          parserNeeded = true;
-        }
-        // The closure is already loaded here, so asking whether a record of
-        // it is stamped reads its labels and nothing more.
-        if (await this.#closureHoldsStamp(space, identity, tx)) {
+        const { verifies, closure } = await this.#closureVerifiesWithoutParser(
+          space,
+          identity,
+          tx,
+        );
+        if (!verifies) parserNeeded = true;
+        // The source closure is already loaded here, so asking whether a
+        // record of it is stamped syncs only its compiled records.
+        if (
+          closure !== undefined &&
+          await this.#closureHoldsStamp(space, identity, tx, closure)
+        ) {
           stamped.push(identity);
         }
       }
@@ -2772,6 +2778,7 @@ export class PatternManager {
     space: MemorySpace,
     identity: string,
     tx: IExtendedStorageTransaction,
+    closure: ReadonlyMap<string, SourceDoc>,
   ): Promise<boolean> {
     if (
       this.#unrepairedStampedClosures.has(stringTupleKey([space, identity]))
@@ -2787,6 +2794,7 @@ export class PatternManager {
           patternCoverage: this.#patternCoverageFor() !== undefined,
         }),
         tx,
+        closure,
       );
     } catch (error) {
       logger.warn("compile-cache-stamp-check-failed", () => [
@@ -2857,20 +2865,18 @@ export class PatternManager {
     space: MemorySpace,
     identity: string,
     tx: IExtendedStorageTransaction,
-  ): Promise<boolean> {
+  ): Promise<{ verifies: boolean; closure?: Map<string, SourceDoc> }> {
+    let closure: Map<string, SourceDoc> | undefined;
     try {
-      const closure = await loadSourceClosure(
-        this.#runtime,
-        space,
-        identity,
-        tx,
-      );
-      if (closure === undefined) return true;
-      if (!sourceClosureNeedsParser(this.#runtime, space, closure)) return true;
+      closure = await loadSourceClosure(this.#runtime, space, identity, tx);
+      if (closure === undefined) return { verifies: true };
+      if (!sourceClosureNeedsParser(this.#runtime, space, closure)) {
+        return { verifies: true, closure };
+      }
       const runtimeVersion = await this.compileCacheRuntimeVersion({
         patternCoverage: this.#patternCoverageFor() !== undefined,
       });
-      if (runtimeVersion === undefined) return false;
+      if (runtimeVersion === undefined) return { verifies: false, closure };
       await loadCompiledClosure(
         this.#runtime,
         space,
@@ -2878,14 +2884,17 @@ export class PatternManager {
         { runtimeVersion },
         tx,
       );
-      return !sourceClosureNeedsParser(this.#runtime, space, closure);
+      return {
+        verifies: !sourceClosureNeedsParser(this.#runtime, space, closure),
+        closure,
+      };
     } catch (error) {
       logger.warn("source-closure-preparation-read-failed", () => [
         `entry=${identity}`,
         `space=${space}`,
         error,
       ]);
-      return false;
+      return { verifies: false, closure };
     }
   }
 

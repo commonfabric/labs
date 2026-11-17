@@ -2552,7 +2552,9 @@ const isStampEntry = (entry: LabelMapEntry): boolean =>
  * Whether a record of the closure of `entryIdentity` in `space`, its source
  * record or its compiled record of `runtimeVersion`, holds a flow stamp, read
  * in `tx`. It reads the closure's labels and verifies nothing, so a load can
- * ask it cheaply before {@link repairCompileCacheStamps} does more.
+ * ask it cheaply before {@link repairCompileCacheStamps} does more. A caller
+ * that already loaded the source closure in `tx` passes it as `loaded`, and
+ * only the compiled records are synchronized.
  */
 export async function compileCacheClosureHoldsStamp(
   runtime: Runtime,
@@ -2560,8 +2562,10 @@ export async function compileCacheClosureHoldsStamp(
   entryIdentity: string,
   runtimeVersion: string | undefined,
   tx: IExtendedStorageTransaction,
+  loaded?: ReadonlyMap<string, SourceDoc>,
 ): Promise<boolean> {
-  const closure = await loadSourceClosure(runtime, space, entryIdentity, tx);
+  const closure = loaded ??
+    await loadSourceClosure(runtime, space, entryIdentity, tx);
   if (closure === undefined) return false;
   if (runtimeVersion !== undefined) {
     await syncCompiledRecords(
