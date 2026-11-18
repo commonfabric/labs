@@ -5617,6 +5617,29 @@ describe("a reader typed as a plain array that is given an array with a declared
     );
   });
 
+  it("names each instance called through `asInstance()` by the hash of a cause that holds the name of its child as the record of the name and its ordinal", async () => {
+    const instance = await start();
+    instance.result();
+
+    // The four calls of `Rows` through `asInstance()` are four
+    // declarations of one name, so each has the name and its ordinal.
+    expect(instance.plan.children?.map(({ name }) => name)).toEqual(
+      [1, 2, 3, 4].map((ordinal) => ({ name: "Rows", ordinal })),
+    );
+    expect(made(instance, MADE).id).toBe(identifierOf({
+      parent: "result",
+      type: "child",
+      within: [],
+      cause: { name: "Rows", ordinal: 1 },
+    }));
+    expect(made(instance, MADE_SCRATCH).id).toBe(identifierOf({
+      parent: "result",
+      type: "child",
+      within: [],
+      cause: { name: "Rows", ordinal: 2 },
+    }));
+  });
+
   it("gives an instance called through `asInstance()` a plain array generated from scratch as a link to the stored output with the array schema, and keys its rows by the declared field", async () => {
     const instance = await start();
     instance.result();

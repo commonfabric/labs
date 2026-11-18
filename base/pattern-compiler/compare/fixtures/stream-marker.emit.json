@@ -357,7 +357,10 @@
                 "op": "slot",
                 "slot": 5
               },
-              "name": "map#1",
+              "name": {
+                "name": "map",
+                "ordinal": 1
+              },
               "source": {
                 "slot": 5
               },
@@ -369,7 +372,10 @@
                 "op": "slot",
                 "slot": 10
               },
-              "name": "map#2",
+              "name": {
+                "name": "map",
+                "ordinal": 2
+              },
               "source": {
                 "slot": 10
               },
@@ -423,7 +429,10 @@
                 "collection": 2,
                 "op": "fold"
               },
-              "name": "map#3",
+              "name": {
+                "name": "map",
+                "ordinal": 3
+              },
               "source": {
                 "collection": 2,
                 "via": "map"

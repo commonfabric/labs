@@ -530,7 +530,10 @@
                 "op": "slot",
                 "slot": 1
               },
-              "name": "map#1",
+              "name": {
+                "name": "map",
+                "ordinal": 1
+              },
               "source": {
                 "slot": 1
               },
@@ -542,7 +545,10 @@
                 "op": "slot",
                 "slot": 1
               },
-              "name": "map#2",
+              "name": {
+                "name": "map",
+                "ordinal": 2
+              },
               "source": {
                 "slot": 1
               },

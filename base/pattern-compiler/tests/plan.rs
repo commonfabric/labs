@@ -293,15 +293,17 @@ export const Two = pattern<{ a: Cell<number>; b: Cell<number> }>(({ a, b }) => {
 "#,
     );
     let plan = plan_of(&analysis, "Two");
-    let names: Vec<&str> = plan["bindings"]
+    let names: Vec<Value> = plan["bindings"]
         .as_array()
         .expect("bindings")
         .iter()
-        .map(|binding| binding["name"].as_str().expect("a name"))
+        .map(|binding| binding["name"].clone())
         .collect();
-    // "two bindings of a handler `save` are `save#1` and `save#2`": the
-    // handler's name comes before the attribute's.
-    assert_eq!(names, ["bump#1", "bump#2"]);
+    // "two bindings of a handler `save` are `{ name: "save", ordinal: 1 }`
+    // and `{ name: "save", ordinal: 2 }`": the handler's name comes
+    // before the attribute's, and no string joins the name and the
+    // ordinal (PL §1.2, "Written forms").
+    assert_eq!(names, [nth("bump", 1), nth("bump", 2)]);
     // "A handler is one record however many bindings name it." The body
     // is not one more declaration of that name (SPEC-NOTES 113).
     assert_eq!(plan["bodies"].as_array().expect("bodies").len(), 1);
@@ -941,7 +943,14 @@ fn pattern_plan(analysis: &ProgramAnalysis, name: &str) -> Value {
         .clone()
 }
 
-fn body_named<'p>(plan: &'p Value, name: &str) -> &'p Value {
+/// The name of one of several declarations of one name: the record of
+/// the name and its ordinal from 1 (PL §1.1, `Name`).
+fn nth(name: &str, ordinal: u64) -> Value {
+    json!({ "name": name, "ordinal": ordinal })
+}
+
+fn body_named(plan: &Value, name: impl Into<Value>) -> &Value {
+    let name = name.into();
     plan["bodies"]
         .as_array()
         .expect("bodies")
@@ -952,8 +961,9 @@ fn body_named<'p>(plan: &'p Value, name: &str) -> &'p Value {
 
 /// The template of a use of a body: that of the computed input another
 /// body has from it.
-fn facts_template(plan: &Value, name: &str) -> Value {
-    let index = body_index(plan, name);
+fn facts_template(plan: &Value, name: impl Into<Value>) -> Value {
+    let name = name.into();
+    let index = body_index(plan, name.clone());
     plan["bodies"]
         .as_array()
         .expect("bodies")
@@ -964,7 +974,8 @@ fn facts_template(plan: &Value, name: &str) -> Value {
         .unwrap_or_else(|| panic!("no computed input from {name}"))
 }
 
-fn body_index(plan: &Value, name: &str) -> usize {
+fn body_index(plan: &Value, name: impl Into<Value>) -> usize {
+    let name = name.into();
     plan["bodies"]
         .as_array()
         .expect("bodies")
@@ -997,7 +1008,7 @@ fn the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2() {
     // root of the list. The tests at `threadInfo/*` and at
     // `threadInfo/*/root` are decided by the type, and FA §2.3 removes
     // their entries (SPEC-NOTES 160).
-    let titles = body_named(&plan, "threadTitles#1");
+    let titles = body_named(&plan, nth("threadTitles", 1));
     assert_eq!(titles["kind"], "function");
     assert_eq!(
         reads_of(&plan, titles),
@@ -1013,7 +1024,7 @@ fn the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2() {
     assert_eq!(titles["handles"], json!([]));
     // "T_titles = derive(by B1) [ s2 s3 s4 s5 dynamic(link through s4) ]":
     // "the links followed below it are a `dynamic` node of kind `link`".
-    let template = facts_template(&plan, "threadTitles#1");
+    let template = facts_template(&plan, nth("threadTitles", 1));
     let dynamic: Vec<&Value> = template["inputs"]
         .as_array()
         .expect("inputs")
@@ -1066,7 +1077,7 @@ fn the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2() {
     for input in facts["computed"].as_array().expect("computed") {
         assert_eq!(
             input["template"]["by"]["body"],
-            json!(body_index(&plan, "threadTitles#1"))
+            json!(body_index(&plan, nth("threadTitles", 1)))
         );
     }
     // "By the partition of section 1.4, the cones of the slice are
@@ -1084,7 +1095,7 @@ fn the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2() {
     assert_eq!(
         cones[facts_cone]["bodies"],
         json!([
-            body_index(&plan, "threadTitles#1"),
+            body_index(&plan, nth("threadTitles", 1)),
             body_index(&plan, "messageFacts")
         ])
     );
@@ -1147,7 +1158,7 @@ fn the_function_bodies_of_a_row_are_the_records_of_pl_section_6_2() {
     // the element, belongs to the element construct and is not in the
     // row's own plan. "`m4` is at a position of handle type, so it has
     // `inPlace`".
-    let text = body_named(&plan, "bodyText#1");
+    let text = body_named(&plan, nth("bodyText", 1));
     assert_eq!(text["kind"], "function");
     assert_eq!(
         reads_of(&plan, text),
@@ -1162,7 +1173,7 @@ fn the_function_bodies_of_a_row_are_the_records_of_pl_section_6_2() {
     // "`viewKeyOf` uses the handle that the static resolution returned
     // and not `message` itself, so the body has the resolved `identity`
     // entry and no plain entry beside it".
-    let key = body_named(&plan, "viewKeyOf#1");
+    let key = body_named(&plan, nth("viewKeyOf", 1));
     assert_eq!(key["kind"], "function");
     assert_eq!(
         reads_of(&plan, key),
@@ -1190,7 +1201,7 @@ fn the_function_bodies_of_a_row_are_the_records_of_pl_section_6_2() {
     };
     assert_eq!(
         cone("text")["bodies"],
-        json!([body_index(&plan, "bodyText#1")])
+        json!([body_index(&plan, nth("bodyText", 1))])
     );
     assert_eq!(
         cone("isEdited")["selectors"].as_array().map(Vec::len),
@@ -1198,7 +1209,7 @@ fn the_function_bodies_of_a_row_are_the_records_of_pl_section_6_2() {
     );
     assert_eq!(
         cone("replies")["bodies"],
-        json!([body_index(&plan, "viewKeyOf#1")])
+        json!([body_index(&plan, nth("viewKeyOf", 1))])
     );
     assert_eq!(cone("replies")["picks"].as_array().map(Vec::len), Some(1));
     assert_eq!(
@@ -1301,12 +1312,15 @@ fn template_line(plan: &Value, template: &Value) -> String {
                 .map(|input| template_line(plan, input))
                 .collect();
             let by = match template["by"].get("body") {
-                Some(body) => format!(
-                    "by {}",
-                    plan["bodies"][body.as_u64().unwrap() as usize]["name"]
-                        .as_str()
-                        .unwrap()
-                ),
+                // A name of one part as it is, and a name of several
+                // parts as the JSON text of its record.
+                Some(body) => {
+                    let name = &plan["bodies"][body.as_u64().unwrap() as usize]["name"];
+                    match name.as_str() {
+                        Some(name) => format!("by {name}"),
+                        None => format!("by {name}"),
+                    }
+                }
                 None => "expression".to_string(),
             };
             format!("derive({by}) {{ {} }}", inputs.join(" "))
@@ -1584,9 +1598,12 @@ export const P = pattern<{ title: string }>(({ title }) => {
     );
     let plan = pattern_plan(&analysis, "P");
     let bodies = plan["bodies"].as_array().expect("bodies");
-    assert_eq!(bodies[0]["name"], "make#1");
-    assert_eq!(bodies[1]["name"], "make#2");
-    for (body, expected) in bodies.iter().zip(["make#1/n1", "make#2/n1"]) {
+    assert_eq!(bodies[0]["name"], nth("make", 1));
+    assert_eq!(bodies[1]["name"], nth("make", 2));
+    // The name of a child that a site of a body makes is the record of
+    // the body's name, with its ordinal, and the index of the site.
+    let made = |ordinal: u64| json!({ "body": nth("make", ordinal), "site": 1 });
+    for (body, expected) in bodies.iter().zip([made(1), made(2)]) {
         let calls = body["calls"].as_array().expect("calls");
         let site = calls
             .iter()
@@ -2024,12 +2041,13 @@ fn the_templates_of_a_row_are_those_of_pl_section_6_2() {
     let analysis = fabrichat();
     let plan = pattern_plan(&analysis, "FabriChatMessageRow");
     let message = "[argument message : shape]";
+    let text_body = nth("bodyText", 1);
     // "T_text = derive(by B3) [ m0 m1 m2 m4 ]". The row is a plan of its
     // own, so the slots are at `argument message`, and `m1` is not among
     // them (SPEC-NOTES 114).
     assert_eq!(
         interim_template(&plan, "text"),
-        format!("derive(by bodyText#1) {{ {message} [argument message/authorProfile : shape, inPlace] [argument message/body : value] }}")
+        format!("derive(by {text_body}) {{ {message} [argument message/authorProfile : shape, inPlace] [argument message/body : value] }}")
     );
     // "T_isSet = derive(expression) [ m0 m1 m5 ]", "T_edited = select(
     // condition: T_isSet, branches: [ derive(expression) [ m3 ], T_isSet
@@ -2046,7 +2064,10 @@ fn the_templates_of_a_row_are_those_of_pl_section_6_2() {
     // and its choice joins the `shape` of the chosen child (§3.18).
     // "`T_repl` leaves out the guard on a missing key, which is one more
     // `select` on `T_key`": the crate has it.
-    let key = "derive(by viewKeyOf#1) { [argument message : identity, resolved] }";
+    let key = format!(
+        "derive(by {}) {{ [argument message : identity, resolved] }}",
+        nth("viewKeyOf", 1)
+    );
     let place = format!("pick(container [argument places/* : shape], choice derive(expression) {{ {key} [argument places/* : shape] }}, body [argument places/* : value])");
     let guarded = format!("select(derive(expression) {{ {key} }} ? const | {place})");
     let replies = format!("select({guarded} ? {guarded} | const)");
@@ -2227,12 +2248,12 @@ fn operation_named<'p>(plan: &'p Value, name: &str) -> (usize, &'p Value) {
         .unwrap_or_else(|| panic!("no operation named {name}"))
 }
 
-fn names_of(plan: &Value, table: &str) -> Vec<String> {
+fn names_of(plan: &Value, table: &str) -> Vec<Value> {
     plan[table]
         .as_array()
         .expect("a table")
         .iter()
-        .map(|record| record["name"].as_str().expect("a name").to_string())
+        .map(|record| record["name"].clone())
         .collect()
 }
 
@@ -2311,21 +2332,28 @@ fn a_constant_query_decides_the_scope_and_the_records_beside_the_operation() {
     // and the plan has the `StateCell` of the one-shot clock and a `Child`
     // for each of the three sidecars".
     assert_eq!(scope("any"), Some(json!("user")));
-    assert_eq!(names_of(&plan, "stateCells"), ["now/now", "any/now"]);
+    // The name of a sidecar is the record of the operation's name and
+    // the sidecar's (PL §1.1, `Name`).
+    let sidecar =
+        |operation: &str, sidecar: &str| json!({ "operation": operation, "sidecar": sidecar });
+    assert_eq!(
+        names_of(&plan, "stateCells"),
+        [sidecar("now", "now"), sidecar("any", "now")]
+    );
     assert_eq!(
         names_of(&plan, "children"),
         [
             // "For a profile target without `headless: true`, a `Child`
             // for each of the two profile sidecars".
-            "me/profileCreate",
-            "me/profilePicker",
+            sidecar("me", "profileCreate"),
+            sidecar("me", "profilePicker"),
             // "Without `headless: true`, a `Child` for the suggestion
             // sidecar".
-            "note/suggestion",
-            "person/suggestion",
-            "any/suggestion",
-            "any/profileCreate",
-            "any/profilePicker",
+            sidecar("note", "suggestion"),
+            sidecar("person", "suggestion"),
+            sidecar("any", "suggestion"),
+            sidecar("any", "profileCreate"),
+            sidecar("any", "profilePicker"),
         ]
     );
 }

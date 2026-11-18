@@ -57,7 +57,10 @@
                 "collection": 2,
                 "op": "fold"
               },
-              "name": "loud#1",
+              "name": {
+                "name": "loud",
+                "ordinal": 1
+              },
               "source": {
                 "slot": 3
               },
@@ -84,7 +87,10 @@
                 "collection": 2,
                 "op": "fold"
               },
-              "name": "loud#2",
+              "name": {
+                "name": "loud",
+                "ordinal": 2
+              },
               "source": {
                 "collection": 2,
                 "via": "map"

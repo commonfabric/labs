@@ -668,7 +668,10 @@
                 "op": "slot",
                 "slot": 7
               },
-              "name": "map#1",
+              "name": {
+                "name": "map",
+                "ordinal": 1
+              },
               "source": {
                 "slot": 7
               },
@@ -722,7 +725,10 @@
                 "collection": 1,
                 "op": "fold"
               },
-              "name": "map#2",
+              "name": {
+                "name": "map",
+                "ordinal": 2
+              },
               "source": {
                 "collection": 1,
                 "via": "map"
@@ -735,7 +741,10 @@
                 "op": "slot",
                 "slot": 14
               },
-              "name": "map#3",
+              "name": {
+                "name": "map",
+                "ordinal": 3
+              },
               "source": {
                 "slot": 14
               },

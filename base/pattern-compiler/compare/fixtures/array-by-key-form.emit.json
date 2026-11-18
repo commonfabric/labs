@@ -537,7 +537,10 @@
                 "collection": 0,
                 "op": "fold"
               },
-              "name": "filter#1",
+              "name": {
+                "name": "filter",
+                "ordinal": 1
+              },
               "source": {
                 "output": 0
               },
@@ -565,7 +568,10 @@
                 "collection": 0,
                 "op": "fold"
               },
-              "name": "map#1",
+              "name": {
+                "name": "map",
+                "ordinal": 1
+              },
               "source": {
                 "collection": 0,
                 "via": "map"
@@ -598,7 +604,10 @@
                 "collection": 2,
                 "op": "fold"
               },
-              "name": "filter#2",
+              "name": {
+                "name": "filter",
+                "ordinal": 2
+              },
               "source": {
                 "slot": 19
               },
@@ -626,7 +635,10 @@
                 "collection": 2,
                 "op": "fold"
               },
-              "name": "map#2",
+              "name": {
+                "name": "map",
+                "ordinal": 2
+              },
               "source": {
                 "collection": 2,
                 "via": "map"

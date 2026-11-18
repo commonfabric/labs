@@ -26,6 +26,7 @@ import type { RuntimeProgram } from "../../../runtime/runner/src/harness/types.t
 import type { JSONSchema } from "../../../runtime/runner/src/builder/types.ts";
 import { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../runtime/runner/src/storage/cache.deno.ts";
+import { type Name, nameText } from "../exec/store.ts";
 import { eventSeed, restoreRandom, seedRandom } from "./random.ts";
 import {
   type Atom,
@@ -88,7 +89,7 @@ export type Plan = {
     interim?: string;
   }[];
   bindings?: {
-    name?: string;
+    name?: Name;
     handler?: { body?: number };
     state?: PlanStateEntry[];
     within?: unknown[];
@@ -97,13 +98,13 @@ export type Plan = {
   }[];
   bodies?: {
     kind: string;
-    name?: string;
+    name?: Name;
     writes?: PlanWrite[];
     /** The inputs the instance computed (PL §1.1, `Body.computed`). */
     computed?: { observes?: string; template?: Template }[];
   }[];
   operations?: { kind?: string; input?: Template }[];
-  stateCells?: { name: string; within?: unknown[] }[];
+  stateCells?: { name: Name; within?: unknown[] }[];
   selectors?: { arity: number }[];
 };
 
@@ -2240,7 +2241,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             }, runtimeLabel).integrity === "equal";
         return {
           binding,
-          handler: plan.bindings?.[binding]?.name ?? "",
+          handler: nameText(plan.bindings?.[binding]?.name ?? ""),
           write: index,
           path,
           runtime: runtimeLabel,
@@ -2301,7 +2302,9 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       // draws for the same event (`random.ts`).
       seedRandom(eventSeed(sent));
       const record = plan.bindings?.[binding];
-      const name = `event of ${record?.name ?? binding}`;
+      const name = `event of ${
+        record?.name === undefined ? binding : nameText(record.name)
+      }`;
       const inElement = (record?.within ?? []).some((step) =>
         (step as { element?: number }).element !== undefined
       );
@@ -2313,7 +2316,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         skipped.push({ what: name, reason: error.reason, binding });
         events.push({
           binding,
-          handler: record?.name ?? "",
+          handler: nameText(record?.name ?? ""),
           outcome: "not sent",
           reason: error.reason,
         });
@@ -2341,7 +2344,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       await probe("before event", { binding });
       sendEvent(stream, event as never, (tx) => {
         const status = tx.status();
-        const handler = record?.name ?? "";
+        const handler = nameText(record?.name ?? "");
         if (status.status === "error") {
           const { name, message, reasons, refusals, reason: aborted } = status
             .error as {

@@ -650,7 +650,10 @@
           ],
           "children": [
             {
-              "name": "made/n0",
+              "name": {
+                "body": "made",
+                "site": 0
+              },
               "within": [
                 {
                   "element": 0

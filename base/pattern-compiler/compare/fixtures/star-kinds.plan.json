@@ -670,7 +670,10 @@
                 "op": "slot",
                 "slot": 11
               },
-              "name": "map#1",
+              "name": {
+                "name": "map",
+                "ordinal": 1
+              },
               "source": {
                 "slot": 11
               },
@@ -682,7 +685,10 @@
                 "op": "slot",
                 "slot": 6
               },
-              "name": "map#2",
+              "name": {
+                "name": "map",
+                "ordinal": 2
+              },
               "source": {
                 "slot": 6
               },
@@ -694,7 +700,10 @@
                 "op": "slot",
                 "slot": 11
               },
-              "name": "map#3",
+              "name": {
+                "name": "map",
+                "ordinal": 3
+              },
               "source": {
                 "slot": 11
               },
@@ -706,7 +715,10 @@
                 "op": "slot",
                 "slot": 11
               },
-              "name": "map#4",
+              "name": {
+                "name": "map",
+                "ordinal": 4
+              },
               "source": {
                 "slot": 11
               },
@@ -718,7 +730,10 @@
                 "op": "slot",
                 "slot": 6
               },
-              "name": "map#5",
+              "name": {
+                "name": "map",
+                "ordinal": 5
+              },
               "source": {
                 "slot": 6
               },
@@ -729,7 +744,10 @@
               "membership": {
                 "op": "const"
               },
-              "name": "map#6",
+              "name": {
+                "name": "map",
+                "ordinal": 6
+              },
               "source": {
                 "output": 20
               },
@@ -741,7 +759,10 @@
                 "op": "slot",
                 "slot": 6
               },
-              "name": "map#7",
+              "name": {
+                "name": "map",
+                "ordinal": 7
+              },
               "source": {
                 "collection": 0,
                 "via": "map"

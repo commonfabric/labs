@@ -148,7 +148,10 @@
                 "collection": 0,
                 "op": "fold"
               },
-              "name": "map#1",
+              "name": {
+                "name": "map",
+                "ordinal": 1
+              },
               "source": {
                 "output": 2
               },
@@ -175,7 +178,10 @@
                 "collection": 1,
                 "op": "fold"
               },
-              "name": "map#2",
+              "name": {
+                "name": "map",
+                "ordinal": 2
+              },
               "source": {
                 "output": 5
               },

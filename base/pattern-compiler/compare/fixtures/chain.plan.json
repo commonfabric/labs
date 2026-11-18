@@ -18,7 +18,10 @@
                 "op": "slot",
                 "slot": 0
               },
-              "name": "open#1",
+              "name": {
+                "name": "open",
+                "ordinal": 1
+              },
               "source": {
                 "slot": 0
               },
@@ -42,7 +45,10 @@
                 "collection": 1,
                 "op": "fold"
               },
-              "name": "open#2",
+              "name": {
+                "name": "open",
+                "ordinal": 2
+              },
               "source": {
                 "collection": 0,
                 "via": "filter"
@@ -67,7 +73,10 @@
                 "collection": 1,
                 "op": "fold"
               },
-              "name": "open#3",
+              "name": {
+                "name": "open",
+                "ordinal": 3
+              },
               "source": {
                 "collection": 1,
                 "via": "map"
@@ -80,7 +89,10 @@
                 "op": "slot",
                 "slot": 6
               },
-              "name": "loud#1",
+              "name": {
+                "name": "loud",
+                "ordinal": 1
+              },
               "source": {
                 "slot": 6
               },
@@ -107,7 +119,10 @@
                 "collection": 4,
                 "op": "fold"
               },
-              "name": "loud#2",
+              "name": {
+                "name": "loud",
+                "ordinal": 2
+              },
               "source": {
                 "collection": 3,
                 "via": "filter"
@@ -135,7 +150,10 @@
                 "collection": 4,
                 "op": "fold"
               },
-              "name": "loud#3",
+              "name": {
+                "name": "loud",
+                "ordinal": 3
+              },
               "source": {
                 "collection": 4,
                 "via": "map"

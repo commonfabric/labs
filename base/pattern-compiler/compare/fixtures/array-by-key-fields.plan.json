@@ -490,7 +490,10 @@
                 "collection": 0,
                 "op": "fold"
               },
-              "name": "map#1",
+              "name": {
+                "name": "map",
+                "ordinal": 1
+              },
               "source": {
                 "collection": 0,
                 "via": "map"
@@ -507,7 +510,10 @@
                 "op": "slot",
                 "slot": 9
               },
-              "name": "map#2",
+              "name": {
+                "name": "map",
+                "ordinal": 2
+              },
               "source": {
                 "slot": 9
               },

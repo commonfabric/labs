@@ -176,7 +176,10 @@
                 "op": "slot",
                 "slot": 4
               },
-              "name": "map#1",
+              "name": {
+                "name": "map",
+                "ordinal": 1
+              },
               "source": {
                 "slot": 4
               },
@@ -188,7 +191,10 @@
                 "op": "slot",
                 "slot": 6
               },
-              "name": "map#2",
+              "name": {
+                "name": "map",
+                "ordinal": 2
+              },
               "source": {
                 "slot": 6
               },

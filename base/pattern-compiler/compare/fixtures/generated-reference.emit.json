@@ -366,7 +366,10 @@
                 ],
                 "op": "derive"
               },
-              "name": "map#1",
+              "name": {
+                "name": "map",
+                "ordinal": 1
+              },
               "source": {
                 "output": 0
               },
@@ -394,7 +397,10 @@
                 ],
                 "op": "derive"
               },
-              "name": "map#2",
+              "name": {
+                "name": "map",
+                "ordinal": 2
+              },
               "source": {
                 "output": 0
               },

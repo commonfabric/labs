@@ -180,6 +180,21 @@ export const argumentOf = (result: string): string =>
   identifierOf({ type: "argument", parent: result });
 
 /**
+ * The name of a record of a plan (`plan-and-label-templates.md` §1.1,
+ * `Name`): a string for a name of one part, and the record of its parts
+ * for a name of several.
+ */
+export type Name = FabricValue;
+
+/**
+ * A name where a string is needed, as in a report or as the member of a
+ * record: a name of one part as it is, and a name of several parts as
+ * the text that the codec writes for its record.
+ */
+export const nameText = (name: Name): string =>
+  typeof name === "string" ? name : textOf(name);
+
+/**
  * The record that a key is the text of. Throws for a text that is not
  * the serialization of a record.
  */

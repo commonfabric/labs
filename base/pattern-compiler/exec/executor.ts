@@ -28,6 +28,7 @@ import {
   keysOfParts,
   markerOf,
   memberKey,
+  type Name,
   OUTPUT,
   type Position,
   recordOfKey,
@@ -42,12 +43,6 @@ import {
   textOf,
   withDefaults,
 } from "./store.ts";
-
-/**
- * The name of a record of the plan (PL §1.1, `Name`): a string, or the
- * record of its parts.
- */
-type Name = FabricValue;
 
 /** One step of where a declaration sits (PL §1.1, `WithinStep`). */
 type Step = { element?: number; site?: Name };
@@ -176,7 +171,7 @@ export type Plan = {
     implementation?: { cone?: number };
   }[];
   bindings: {
-    name?: string;
+    name?: Name;
     handler: { body?: number };
     within: Step[];
     state: {

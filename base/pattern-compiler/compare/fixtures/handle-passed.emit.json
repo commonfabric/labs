@@ -410,7 +410,10 @@
           ],
           "children": [
             {
-              "name": "join/n1",
+              "name": {
+                "body": "join",
+                "site": 1
+              },
               "within": []
             }
           ],

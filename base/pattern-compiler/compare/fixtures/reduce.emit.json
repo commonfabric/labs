@@ -73,7 +73,10 @@
                 "op": "slot",
                 "slot": 0
               },
-              "name": "reduce#1",
+              "name": {
+                "name": "reduce",
+                "ordinal": 1
+              },
               "source": {
                 "slot": 0
               },
@@ -85,7 +88,10 @@
                 "op": "slot",
                 "slot": 3
               },
-              "name": "reduce#2",
+              "name": {
+                "name": "reduce",
+                "ordinal": 2
+              },
               "source": {
                 "slot": 3
               },
@@ -97,7 +103,10 @@
                 "op": "slot",
                 "slot": 3
               },
-              "name": "doubled#2",
+              "name": {
+                "name": "doubled",
+                "ordinal": 2
+              },
               "source": {
                 "slot": 3
               },
@@ -109,7 +118,10 @@
                 "op": "slot",
                 "slot": 3
               },
-              "name": "reduce#3",
+              "name": {
+                "name": "reduce",
+                "ordinal": 3
+              },
               "source": {
                 "output": 2
               },
@@ -439,7 +451,10 @@
                 "op": "derive"
               },
               "kind": "reduce",
-              "name": "doubled#1",
+              "name": {
+                "name": "doubled",
+                "ordinal": 1
+              },
               "within": []
             }
           ],

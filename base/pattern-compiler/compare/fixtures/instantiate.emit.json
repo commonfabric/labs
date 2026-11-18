@@ -37,7 +37,10 @@
               "handler": {
                 "body": 0
               },
-              "name": "bump#1",
+              "name": {
+                "name": "bump",
+                "ordinal": 1
+              },
               "state": [
                 {
                   "capture": "link",
@@ -60,7 +63,10 @@
               "handler": {
                 "body": 0
               },
-              "name": "bump#2",
+              "name": {
+                "name": "bump",
+                "ordinal": 2
+              },
               "state": [
                 {
                   "capture": "link",
@@ -736,7 +742,10 @@
           ],
           "children": [
             {
-              "name": "add/n0",
+              "name": {
+                "body": "add",
+                "site": 0
+              },
               "within": []
             }
           ],

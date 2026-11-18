@@ -10,6 +10,7 @@ import { parseLink } from "../../../runtime/runner/src/link-utils.ts";
 import type { NormalizedFullLink } from "../../../runtime/runner/src/link-types.ts";
 
 import { type Artifact, Instance, Unsupported } from "../exec/executor.ts";
+import { nameText } from "../exec/store.ts";
 import { drawing, eventSeed, restoreRandom, seedRandom } from "./random.ts";
 import {
   type EventOutcome,
@@ -302,7 +303,7 @@ export const readingValues = (
             | NormalizedFullLink
             | undefined;
           if (link === undefined) continue;
-          state[cell.name] = plain(
+          state[nameText(cell.name)] = plain(
             runtime.getCellFromLink(link, undefined, read).get(),
           );
         }
@@ -431,7 +432,7 @@ export class ExecutorRun implements StreamRecord {
   ): void {
     const instance = this.#instance;
     if (instance === undefined) return;
-    const name = this.#artifact.plan.bindings[binding]?.name;
+    const name = this.#nameOf(binding);
     // The seed today's run had for this event (`random.ts`).
     seedRandom(eventSeed(index));
     try {
@@ -520,9 +521,7 @@ export class ExecutorRun implements StreamRecord {
       const outcome = outcomes[index];
       if (outcome?.outcome === "not sent") {
         (comparison.notSent ??= []).push(
-          `${this.#artifact.plan.bindings[binding]?.name}: ${
-            outcome.reason ?? ""
-          }`,
+          `${this.#nameOf(binding)}: ${outcome.reason ?? ""}`,
         );
       }
       if (outcome === undefined || outcome.outcome === "not sent") return;
@@ -538,6 +537,12 @@ export class ExecutorRun implements StreamRecord {
     return comparison;
   }
 
+  /** The name of a binding as a report has it, and `undefined` for none. */
+  #nameOf(binding: number): string {
+    const name = this.#artifact.plan.bindings[binding]?.name;
+    return name === undefined ? "undefined" : nameText(name);
+  }
+
   /**
    * The values of the instance now, as a copy that a later write to the
    * store does not change.
@@ -548,7 +553,7 @@ export class ExecutorRun implements StreamRecord {
       state: Object.fromEntries(
         instance.stateCells().filter(({ keys }) => keys.length === 0).map((
           { name, value },
-        ) => [name, value]),
+        ) => [nameText(name), value]),
       ),
     });
   }

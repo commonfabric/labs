@@ -4121,7 +4121,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         if clock {
             self.state_cells.push(json!({
                 "name": "now",
-                "$ofOperation": [operation, "/now"],
+                "$ofOperation": [operation, "now"],
                 "scope": "space",
                 "within": self.within_json(),
             }));
@@ -4131,7 +4131,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 "callee": { "compiled": null },
                 "sidecar": sidecar,
                 "name": sidecar,
-                "$ofOperation": [operation, format!("/{sidecar}")],
+                "$ofOperation": [operation, sidecar],
                 "within": self.within_json(),
             }));
         }
@@ -4866,7 +4866,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 "instantiate:order" | "instantiate:tag" => {
                     self.children.push(json!({
                         "name": call_name,
-                        "$of": [index, format!("/n{number}")],
+                        "$of": [index, number],
                         "within": self.within_json(),
                     }));
                     child_of_call.insert(number, self.children.len() - 1);
@@ -4882,7 +4882,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 "createCell:cause (state)" => {
                     self.state_cells.push(json!({
                         "name": call_name,
-                        "$of": [index, format!("/n{number}")],
+                        "$of": [index, number],
                         "scope": "space",
                         "within": self.within_json(),
                     }));
@@ -7485,6 +7485,8 @@ fn resolve_values(
 
 /// Where two declarations of one pattern body have the same name, each
 /// takes the name and its ordinal among them, in source order (PL §1.3).
+/// A name of several parts is the record of its parts, and no string
+/// joins them (PL §1.1, `Name`; §1.2, "Written forms").
 fn name_ordinals(plan: &mut Value) {
     let tables = [
         "stateCells",
@@ -7526,12 +7528,15 @@ fn name_ordinals(plan: &mut Value) {
             if counts.get(&key).copied().unwrap_or(0) > 1 {
                 let ordinal = ordinals.entry(key).or_default();
                 *ordinal += 1;
-                record["name"] = json!(format!("{name}#{ordinal}"));
+                record["name"] = json!({ "name": name, "ordinal": *ordinal });
             }
         }
     }
-    // "A `Child` that a site of `Body.calls` instantiates has the body's
-    // `name`, `/n`, and the index of the site in `Body.calls`" (PL §1.3).
+    // "The name of a `Child` that a site of `Body.calls` instantiates is
+    // the record of the body's `name` and the index of the site in
+    // `Body.calls`" (PL §1.3). A state cell that a site creates under a
+    // constant cause is named the same way: the crate records the site
+    // and not the cause.
     let bodies = plan["bodies"].clone();
     let operations = plan["operations"].clone();
     for table in ["children", "stateCells"] {
@@ -7539,25 +7544,20 @@ fn name_ordinals(plan: &mut Value) {
             let Some(record) = record.as_object_mut() else {
                 continue;
             };
-            // "Its `name` is the operation's `name`, `/`, and the
-            // sidecar's name" (PL §3.19).
+            // The name of a sidecar is the record of the operation's
+            // `name` and the sidecar's (PL §1.1, `Name`; §3.19).
             if let Some(of) = record.remove("$ofOperation") {
                 let operation = of[0].as_u64().unwrap_or(0) as usize;
-                let name = format!(
-                    "{}{}",
-                    operations[operation]["name"].as_str().unwrap_or(""),
-                    of[1].as_str().unwrap_or("")
-                );
-                record.insert("name".to_string(), json!(name));
+                let name = json!({
+                    "operation": operations[operation]["name"],
+                    "sidecar": of[1],
+                });
+                record.insert("name".to_string(), name);
             }
             if let Some(of) = record.remove("$of") {
                 let body = of[0].as_u64().unwrap_or(0) as usize;
-                let name = format!(
-                    "{}{}",
-                    bodies[body]["name"].as_str().unwrap_or(""),
-                    of[1].as_str().unwrap_or("")
-                );
-                record.insert("name".to_string(), json!(name));
+                let name = json!({ "body": bodies[body]["name"], "site": of[1] });
+                record.insert("name".to_string(), name);
             }
         }
     }

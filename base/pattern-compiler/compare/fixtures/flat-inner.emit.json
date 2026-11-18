@@ -366,7 +366,10 @@
                 "collection": 0,
                 "op": "fold"
               },
-              "name": "flatMap#1",
+              "name": {
+                "name": "flatMap",
+                "ordinal": 1
+              },
               "source": {
                 "slot": 0
               },
@@ -398,7 +401,10 @@
                 "collection": 2,
                 "op": "fold"
               },
-              "name": "flatMap#2",
+              "name": {
+                "name": "flatMap",
+                "ordinal": 2
+              },
               "source": {
                 "slot": 8
               },

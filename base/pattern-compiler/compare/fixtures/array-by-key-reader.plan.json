@@ -610,7 +610,10 @@
               "callee": {
                 "compiled": "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
               },
-              "name": "Rows#1",
+              "name": {
+                "name": "Rows",
+                "ordinal": 1
+              },
               "within": []
             },
             {
@@ -618,7 +621,10 @@
               "callee": {
                 "compiled": "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
               },
-              "name": "Rows#2",
+              "name": {
+                "name": "Rows",
+                "ordinal": 2
+              },
               "within": []
             },
             {
@@ -626,7 +632,10 @@
               "callee": {
                 "compiled": "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
               },
-              "name": "Rows#3",
+              "name": {
+                "name": "Rows",
+                "ordinal": 3
+              },
               "within": []
             },
             {
@@ -634,7 +643,10 @@
               "callee": {
                 "compiled": "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
               },
-              "name": "Rows#4",
+              "name": {
+                "name": "Rows",
+                "ordinal": 4
+              },
               "within": []
             }
           ],
@@ -649,7 +661,10 @@
                 "op": "slot",
                 "slot": 3
               },
-              "name": "map#1",
+              "name": {
+                "name": "map",
+                "ordinal": 1
+              },
               "source": {
                 "slot": 3
               },
@@ -684,7 +699,10 @@
                 ],
                 "op": "derive"
               },
-              "name": "map#2",
+              "name": {
+                "name": "map",
+                "ordinal": 2
+              },
               "source": {
                 "output": 0
               },
@@ -718,7 +736,10 @@
                 "collection": 2,
                 "op": "fold"
               },
-              "name": "filter#1",
+              "name": {
+                "name": "filter",
+                "ordinal": 1
+              },
               "source": {
                 "output": 0
               },
@@ -745,7 +766,10 @@
                 "collection": 2,
                 "op": "fold"
               },
-              "name": "map#3",
+              "name": {
+                "name": "map",
+                "ordinal": 3
+              },
               "source": {
                 "collection": 2,
                 "via": "map"
@@ -762,7 +786,10 @@
                 "op": "slot",
                 "slot": 17
               },
-              "name": "map#4",
+              "name": {
+                "name": "map",
+                "ordinal": 4
+              },
               "source": {
                 "slot": 17
               },
@@ -796,7 +823,10 @@
                 "collection": 5,
                 "op": "fold"
               },
-              "name": "filter#2",
+              "name": {
+                "name": "filter",
+                "ordinal": 2
+              },
               "source": {
                 "output": 0
               },
@@ -826,7 +856,10 @@
                 "collection": 6,
                 "op": "fold"
               },
-              "name": "filter#3",
+              "name": {
+                "name": "filter",
+                "ordinal": 3
+              },
               "source": {
                 "slot": 3
               },

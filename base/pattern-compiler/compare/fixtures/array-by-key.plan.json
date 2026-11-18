@@ -829,7 +829,10 @@
                 ],
                 "op": "derive"
               },
-              "name": "map#1",
+              "name": {
+                "name": "map",
+                "ordinal": 1
+              },
               "source": {
                 "output": 0
               },
@@ -860,7 +863,10 @@
                 "collection": 1,
                 "op": "fold"
               },
-              "name": "filter#1",
+              "name": {
+                "name": "filter",
+                "ordinal": 1
+              },
               "source": {
                 "output": 0
               },
@@ -888,7 +894,10 @@
                 "collection": 1,
                 "op": "fold"
               },
-              "name": "map#2",
+              "name": {
+                "name": "map",
+                "ordinal": 2
+              },
               "source": {
                 "collection": 1,
                 "via": "map"
@@ -904,7 +913,10 @@
                 "op": "slot",
                 "slot": 13
               },
-              "name": "map#3",
+              "name": {
+                "name": "map",
+                "ordinal": 3
+              },
               "source": {
                 "slot": 13
               },
@@ -931,7 +943,10 @@
                 "collection": 4,
                 "op": "fold"
               },
-              "name": "filter#2",
+              "name": {
+                "name": "filter",
+                "ordinal": 2
+              },
               "source": {
                 "output": 1
               },
@@ -958,7 +973,10 @@
                 "collection": 4,
                 "op": "fold"
               },
-              "name": "map#4",
+              "name": {
+                "name": "map",
+                "ordinal": 4
+              },
               "source": {
                 "collection": 4,
                 "via": "map"
@@ -990,7 +1008,10 @@
                 "collection": 6,
                 "op": "fold"
               },
-              "name": "filter#3",
+              "name": {
+                "name": "filter",
+                "ordinal": 3
+              },
               "source": {
                 "output": 0
               },
@@ -1018,7 +1039,10 @@
                 "collection": 6,
                 "op": "fold"
               },
-              "name": "map#5",
+              "name": {
+                "name": "map",
+                "ordinal": 5
+              },
               "source": {
                 "collection": 6,
                 "via": "map"

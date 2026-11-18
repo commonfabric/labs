@@ -17,6 +17,7 @@
 import { fromFileUrl } from "@std/path";
 
 import type { Artifact } from "../exec/executor.ts";
+import { nameText } from "../exec/store.ts";
 import { generateEvent, generateInputs, type Schemas } from "./generate.ts";
 import {
   type LabeledInput,
@@ -355,7 +356,7 @@ export const runModule = async (
     if (binding.handler?.body === undefined) return [];
     const within = withinOf(binding.within);
     return [{
-      name: binding.name ?? "",
+      name: nameText(binding.name ?? ""),
       ...(within === undefined ? {} : { within }),
       writes: plan.bodies?.[binding.handler.body]?.writes?.length ?? 0,
     }];
