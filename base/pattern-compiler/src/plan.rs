@@ -449,6 +449,8 @@ struct Emitter<'r, 'm, 'a> {
     formal_types: HashMap<String, TypeId>,
     /// For each collection, the membership of what it iterates.
     iterated: Vec<Option<Value>>,
+    /// Where each entry of `collections` is written.
+    collection_starts: Vec<u32>,
     /// What the compiler reports as a hint: a `wish` whose query is not
     /// a constant (PL §3.19, question 48).
     hints: Vec<(String, u32)>,
@@ -3265,6 +3267,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
         self.collections.push(record);
         self.iterated.push(iterated.clone());
+        self.collection_starts.push(at);
         // The cone the `reduce` is written in computes `init`.
         let initial = initial.map(|initial| {
             let (cone, made) = self.computing(hint, at);
@@ -3452,6 +3455,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             "source": source,
         }));
         self.iterated.push(iterated.clone());
+        self.collection_starts.push(at);
         // The body: one cone, evaluated once per element key.
         let saved_env = self.env.clone();
         let saved_cone = self.cone.take();
@@ -6798,6 +6802,82 @@ impl<'a> Emitter<'_, '_, 'a> {
         )
     }
 
+    /// `array-by-key:state-without-key` (provisional decision P21): the
+    /// body of a per-element construct holds per-element state, the
+    /// elements are records, and neither the array nor, for a construct
+    /// over the result of another one, the array that the chain of
+    /// constructs starts at declares a key. An element is taken as a
+    /// record where a slot of root `element` of the collection has a
+    /// path. The type does not say whether the array holds plain values
+    /// in place or references, so the report is made for both.
+    fn state_without_key(&self, plan: &Value, flows: &mut Vec<(&'static str, u32, String)>) {
+        let collections = plan["collections"].as_array().cloned().unwrap_or_default();
+        let inside = |record: &Value, collection: usize| {
+            record["within"].as_array().is_some_and(|steps| {
+                steps
+                    .iter()
+                    .any(|step| step["element"] == json!(collection))
+            })
+        };
+        for (index, collection) in collections.iter().enumerate() {
+            if !matches!(
+                collection["construct"].as_str(),
+                Some("map" | "filter" | "flatMap")
+            ) {
+                continue;
+            }
+            // The array that the chain of constructs starts at.
+            let mut source = collection;
+            while let Some(upstream) = source["source"]["collection"].as_u64() {
+                source = &collections[upstream as usize];
+            }
+            if source.get("keyFields").is_some() {
+                continue;
+            }
+            let record = plan["slots"].as_array().is_some_and(|slots| {
+                slots.iter().any(|slot| {
+                    slot["root"]["kind"] == "element"
+                        && slot["root"]["collection"] == json!(index)
+                        && slot["path"].as_array().is_some_and(|path| !path.is_empty())
+                })
+            });
+            if !record {
+                continue;
+            }
+            let kinds = [
+                ("stateCells", "a state cell"),
+                ("bindings", "a handler binding"),
+                ("operations", "an operation"),
+                ("children", "a child instance"),
+                ("bodies", "a `lift` or a `computed`"),
+            ];
+            let held: Vec<&str> = kinds
+                .iter()
+                .filter(|(list, _)| {
+                    plan[*list].as_array().is_some_and(|records| {
+                        records.iter().any(|record| {
+                            inside(record, index)
+                                && (*list != "bodies" || record["kind"] != "handler")
+                        })
+                    })
+                })
+                .map(|(_, name)| *name)
+                .collect();
+            if held.is_empty() {
+                continue;
+            }
+            flows.push((
+                "array-by-key:state-without-key",
+                self.collection_starts[index],
+                format!(
+                    "The body of this `{}` holds {} for each element, and the array declares no key, so an element that is a plain value in place has a key formed from its whole value, and an edit of it is another element with new state",
+                    collection["construct"].as_str().unwrap_or("map"),
+                    held.join(", ")
+                ),
+            ));
+        }
+    }
+
     /// `Plan.constraints` (PL §1.5 and §4.4), and the constraints that
     /// fail at compile time (PL §4.4, "What the compiler decides"). At a
     /// write target, which is a write edge of a body or of a cone and a
@@ -7179,6 +7259,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
         }
         plan["constraints"] = Value::Array(constraints);
+        self.state_without_key(plan, &mut flows);
         flows
     }
 }
@@ -8002,6 +8083,7 @@ pub fn emit_module<'a>(
             body_dynamic: Vec::new(),
             formal_types: HashMap::new(),
             iterated: Vec::new(),
+            collection_starts: Vec::new(),
             hints: Vec::new(),
             handle_writes: Vec::new(),
             self_names: BTreeSet::new(),

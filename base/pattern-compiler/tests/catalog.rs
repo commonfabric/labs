@@ -134,6 +134,11 @@ fn provisional_holds_the_rows_that_the_document_in_this_tree_lacks() {
             ),
             ("array-by-key:declaration", "error", "implemented in part"),
             ("array-by-key:mismatch", "error", "implemented in part"),
+            (
+                "array-by-key:state-without-key",
+                "warning",
+                "implemented in part"
+            ),
         ]
     );
 }

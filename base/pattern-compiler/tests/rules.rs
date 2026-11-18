@@ -1764,3 +1764,73 @@ fn a_mismatched_declared_key_is_reported_at_the_value_at_each_kind_of_call() {
         assert_eq!(found[0].severity, Severity::Error);
     }
 }
+
+/// The identifiers of the warnings of the `array-by-key` rules.
+fn warnings(diagnostics: &[Diagnostic]) -> Vec<&'static str> {
+    diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.severity == Severity::Warning && diagnostic.id.starts_with("array-by-key:")
+        })
+        .map(|diagnostic| diagnostic.id)
+        .collect()
+}
+
+/// Provisional decision P21: `array-by-key:state-without-key`, a warning
+/// where the body of a per-element construct holds per-element state and
+/// the array declares no key. `items` is a pattern input whose elements
+/// are records, an array of plain values in place or of references,
+/// which the type does not tell apart; `items.filter(...)` is the result
+/// of another per-element construct, whose elements have the upstream
+/// key; `names` is an array of strings. No case is of a plain array
+/// generated from scratch.
+#[test]
+fn per_element_state_under_a_key_formed_from_the_value_is_a_warning() {
+    let found = |items: &str, receiver: &str, body: &str| -> Vec<&'static str> {
+        warnings(&check(&format!(
+            "interface Item {{ id: string; title: string }}\n\
+             const toggle = handler<unknown, {{ open: Writable<boolean> }}>((_, {{ open }}) => {{ open.set(!open.get()); }});\n\
+             const loud = lift((input: {{ title: string }}) => input.title.toUpperCase());\n\
+             export default pattern<{{ items: {items}; names: string[] }}>(({{ items, names }}) => ({{\n\
+               rows: {receiver}.map((item) => {body}),\n\
+             }}));"
+        )))
+    };
+    let none = Vec::<&str>::new();
+    let warned = vec!["array-by-key:state-without-key"];
+    let cell = "{ const open = Writable.of(false); return { title: item.title, open }; }";
+    let bound = "{ const open = Writable.of(false); return { title: item.title, toggle: toggle({ open }) }; }";
+    let lifted = "({ title: loud({ title: item.title }) })";
+    let stateless = "({ title: item.title })";
+    assert_eq!(found("Item[]", "items", cell), warned);
+    assert_eq!(found("Item[]", "items", bound), warned);
+    assert_eq!(found("Item[]", "items", lifted), warned);
+    assert_eq!(
+        found(
+            "Item[]",
+            "items.filter((item) => item.title !== \"\")",
+            cell
+        ),
+        warned
+    );
+    // No state in the body, a declared key, and elements that are no
+    // records.
+    assert_eq!(found("Item[]", "items", stateless), none);
+    assert_eq!(found("ArrayByKey<Item, \"id\">", "items", cell), none);
+    assert_eq!(
+        found(
+            "ArrayByKey<Item, \"id\">",
+            "items.filter((item) => item.title !== \"\")",
+            cell
+        ),
+        none
+    );
+    assert_eq!(
+        found(
+            "Item[]",
+            "names",
+            "{ const open = Writable.of(false); return { open }; }"
+        ),
+        none
+    );
+}

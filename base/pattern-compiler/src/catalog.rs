@@ -531,6 +531,13 @@ pub const PROVISIONAL: &[Entry] = &[
          not a literal, the result of a `filter` or a `map` over an array with a declared \
          key included; an assignment and the argument of a handle method are not checked",
     ),
+    part(
+        "array-by-key:state-without-key",
+        Warning,
+        "reported from the plan, for an array whose elements have a member that the body \
+         reads; the type does not say whether the array holds plain values in place or \
+         references, and the report is made for both",
+    ),
 ];
 
 /// The entry for `id`, if the catalog has one.

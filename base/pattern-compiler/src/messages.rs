@@ -341,6 +341,10 @@ pub fn rewrite(id: &str) -> &'static str {
             "Name one required top-level property of type `string` or `number`, or a union \
              of such names, as in `ArrayByKey<Repo, \"owner\" | \"name\">`."
         }
+        "array-by-key:state-without-key" => {
+            "Declare the key of the elements with `ArrayByKey<T, \"field\">`, or hold the \
+             elements as references."
+        }
         "array-by-key:mismatch" => {
             "Declare the same key fields on both types, or declare a plain array type on the \
              receiving side."
