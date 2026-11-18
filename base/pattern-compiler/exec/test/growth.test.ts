@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { CASES, keystrokes, polled } from "../../compare/rekey-cost.ts";
 import { type Artifact, Instance } from "../executor.ts";
 import { argumentOf, Ref } from "../store.ts";
 
@@ -383,5 +384,107 @@ describe("the documents that a result is stored in", () => {
     expect(last(instance)).toMatchObject({ documents: 2, created: 1 });
     expect(last(instance).patchBytes).toBeLessThan(200);
     expect(last(instance).bytes).toBeGreaterThan(65_536 * 2);
+  });
+});
+
+// A row that holds the rows of another collection, on
+// `fixtures/scale.tsx`: `nested` is a `map` inside a `map`, over arrays
+// of plain values in place.
+describe("a stored row that holds the rows of another collection", () => {
+  it("is stored anew, with the rows in it, where its key leaves and enters in one change", async () => {
+    const { groups, rows } = inPlace(4);
+    const moved = [groups[2], groups[0], groups[3], groups[1]];
+    const options = { secret: "one secret for both" };
+    const instance = new Instance(
+      await artifactOf("scale"),
+      { groups, rows },
+      options,
+    );
+
+    instance.writeArgument(["groups"], moved);
+
+    const fresh = new Instance(
+      await artifactOf("scale"),
+      { groups: moved, rows },
+      options,
+    );
+    expect(instance.result()).toEqual(fresh.result());
+    expect(instance.store.docs.get(instance.id)?.value).toEqual(
+      fresh.store.docs.get(fresh.id)?.value,
+    );
+  });
+});
+
+// What follows from the rule that the key of a plain value is formed
+// from the value (`plan-and-label-templates.md` §1.3, "A plain value
+// edited in place is a new element"), on `fixtures/rows-state.tsx`:
+// each row has a state cell, a handler binding with a stream, a `lift`
+// in the body and an instance called through `asInstance()`.
+describe("an edit of one member of an element that has state", () => {
+  const artifacts = async (): Promise<Artifact[]> => {
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL("../../compare/fixtures/rows-state.emit.json", import.meta.url),
+      ),
+    ) as { patterns: Artifact[] }[];
+    return patterns;
+  };
+  const [unkeyed, keyed, references] = CASES;
+
+  it("moves what is stored under the key, and adds a stream document, for each keystroke over plain values in place with no declared key", async () => {
+    const patterns = await artifacts();
+    const [small, large] = [
+      keystrokes(patterns, unkeyed, 20),
+      keystrokes(patterns, unkeyed, 60),
+    ];
+
+    // The state cell of the row moves to the new key, and the event of
+    // the next keystroke is for a stream of the new key, which gets a
+    // document of its own.
+    expect(small.documentsMoved).toBe(1);
+    expect(small.documentsAdded).toBe(1);
+    expect(small.hashes).toBe(1);
+    for (
+      const count of [
+        "documentsWritten",
+        "documentsMoved",
+        "documentsAdded",
+        "hashes",
+        "evaluations",
+      ] as const
+    ) {
+      expect(large[count]).toBe(small[count]);
+    }
+  });
+
+  it("moves nothing with a key field declared with `ArrayByKey`, and nothing over an array of references", async () => {
+    const patterns = await artifacts();
+
+    for (const one of [keyed, references]) {
+      const cost = keystrokes(patterns, one, 20);
+      expect(cost.documentsMoved).toBe(0);
+      // The one stream document, which the first event creates.
+      expect(cost.documentsAdded).toBeLessThan(0.1);
+      expect(cost.instancesMade).toBe(0);
+    }
+    expect(keystrokes(patterns, keyed, 20).patchBytes).toBeLessThan(
+      keystrokes(patterns, unkeyed, 20).patchBytes / 4,
+    );
+  });
+
+  it("keeps the instance and its two documents of every value that a list of plain values with no declared key ever held", async () => {
+    const patterns = await artifacts();
+    const of = (one: typeof unkeyed) => polled(patterns, one, 10, 5, [0, 5]);
+
+    const [first, last] = of(unkeyed);
+    // Each round replaces the ten values by ten new ones: ten keys, ten
+    // instances, and an argument and a result document for each.
+    expect(last.instances - first.instances).toBe(50);
+    expect(last.documents - first.documents).toBe(100);
+    for (const one of [keyed, references]) {
+      const [before, after] = of(one);
+      expect(after.instances).toBe(before.instances);
+      expect(after.documents).toBe(before.documents);
+    }
   });
 });

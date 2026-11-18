@@ -756,6 +756,75 @@ than one position is written once in `Plan.templates` and named by
 `{ op: "shared", template }`, and a schema that a schema document holds at more
 than one position is written once under `$defs`.
 
+## What a change costs the executor, and the documents of a result
+
+The executor finds what a change makes stale by marking, as
+`scheduler-and-serving-loop.md` §3 has the scheduler do it. Each memo entry is
+registered as a reader of the positions it read and as a user of the entries it
+used. A write marks the readers of the path it wrote, of a path above it and of
+a path below it, and a mark passes on to the users of a marked entry. An entry
+that is not marked is taken as current and is compared with nothing. A read
+through a reference by key is registered under the array and the key, so a write
+to one element marks the readers of that element. `Instance.checks` counts the
+comparisons that are still made. An entry whose evaluation called `equals`, has
+a cone with static side-writes among what it demanded, or read through a key
+into the document of a computed output is compared on every pull, and so is each
+entry that used one.
+
+The store keeps the key of each position of a stored array and brings the keys
+up to date with a change of the array: a write below an element forms the key of
+that element, a splice (`Store.splice`, `Instance.spliceArgument`, and the
+`push` of a handle) forms the keys of the members it put in, and an array that
+is written whole keeps the keys of the members that stand at its start and at
+its end as they stood. With the option `keys: "formed"` the keys of an array are
+formed again after each write to it.
+
+A cone that places the result of a `map`, a `filter` or a `flatMap` in a value,
+and observes nothing of it, holds a reference to the collection (`Assembled`),
+over an array of references, over an array of plain values in place and over the
+result of another per-element construct alike. The executor stores the rows
+where the reference stands in the result, and stores a row again when the body's
+result for its key is another value, so the cone that placed the collection, and
+the result, are not evaluated for a change of one row. Code that observes the
+collection is given the array. The assembly of a `map` or a `filter` over a
+stored array, or over the result of such a construct, is brought up to date from
+the changes of the array: the element table and the result are spliced, and the
+body is evaluated for the keys that entered and for the keys whose entry is
+marked. With the option `assembly: "formed"` an assembly is formed whole.
+
+A transaction keeps what each of its changes replaced (`Store.journal`) and no
+copy of a document. `Transaction.patchBytes` has the bytes that the changes put
+into the documents, and `Transaction.stored` what the transaction wrote of the
+results by the layout of `execution-and-storage.md` §4.10: the rows of a
+collection that stands in the result, and the array of the collection, are split
+points, a split point of 1,024 bytes is a part, a part of 512 bytes is stored in
+place again, and a document of more than 65,536 bytes has each split point
+directly below it stored as a part. The executor reads the result from one
+document that holds it whole, and `Instance.laidOut()` gives the result document
+and the part documents of the layout, formed from it. A node of the rendered
+tree that is no row is no split point here.
+
+```sh
+deno run -A --no-check base/pattern-compiler/compare/growth.ts 100 1000 10000
+deno run -A --no-check base/pattern-compiler/compare/growth.ts --formed 100 1000
+deno run -A --no-check base/pattern-compiler/compare/growth-today.ts 100 1000
+deno run -A --no-check base/pattern-compiler/compare/rekey-cost.ts keystrokes 100 1000
+deno run -A --no-check base/pattern-compiler/compare/rekey-cost.ts polled 100 100
+deno run -A --no-check base/pattern-compiler/compare/growth-today.ts keystrokes 100
+deno run -A base/pattern-compiler/compare/sites.ts
+deno run -A base/pattern-compiler/compare/times.ts again.jsonl run.jsonl compile.jsonl crate-time.jsonl
+```
+
+`growth.ts` prints what one change of a list costs the executor, and
+`growth-today.ts` the same for today's runtime, as far as it has the counter.
+`rekey-cost.ts` prints what one keystroke in a row that has state costs, and
+what a list that is replaced again and again leaves stored
+(`fixtures/rows-state.tsx`). `sites.ts` estimates the size of the plans with a
+pattern that is compiled in written once, which the crate does not do.
+`times.ts` prints the table of run times. Notes 505 on of `SPEC-NOTES.md` have
+the figures, what the documents' rules make follow the length of a list, and the
+provisional choices.
+
 ## The parser
 
 The crate parses with the [`oxc`](https://oxc.rs) crates and does not tokenize

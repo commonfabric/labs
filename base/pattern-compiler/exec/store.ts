@@ -1449,7 +1449,7 @@ export class Store {
     const named = JSON.stringify(fields);
     const known = this.#states.get(held)?.get(named);
     if (
-      !reentered && known !== undefined && this.#kept &&
+      !reentered && known !== undefined &&
       (known.clock === clock || !this.changedSince(known.clock, known.others))
     ) {
       known.clock = clock;
@@ -1740,8 +1740,12 @@ export class Store {
     return new Ref(ref.doc, path, ref.schema);
   }
 
+  /** How many documents were given another identifier. */
+  moves = 0;
+
   /** Gives a document another identifier, with what it was declared as. */
   move(from: string, to: string): void {
+    this.moves += 1;
     this.onWrite?.(from, []);
     this.onWrite?.(to, []);
     const document = this.docs.get(from);

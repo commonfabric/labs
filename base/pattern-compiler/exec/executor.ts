@@ -827,7 +827,12 @@ export class Handle {
         this.instance.stored(this.instance.returned(member))
       ),
     ) as unknown[];
-    this.instance.store.write(this.target, [...held, ...pushed]);
+    // An array that is stored is changed in place, as a splice.
+    if (Array.isArray(located.value)) {
+      this.instance.store.splice(this.target, held.length, 0, pushed);
+    } else {
+      this.instance.store.write(this.target, [...held, ...pushed]);
+    }
   }
 
   /**
@@ -4000,15 +4005,18 @@ export class Instance {
     removed: readonly string[],
     inserted: readonly string[],
     values: readonly unknown[],
-    forms: readonly unknown[],
+    /** Gives each row that enters in stored form. */
+    formed: () => unknown[],
   ): void {
+    // A row that leaves and enters again in the same splice is stored
+    // anew, with what is in it.
     for (const key of removed) {
-      if (inserted.includes(key)) continue;
       for (const inner of unit.inside.get(key)?.values() ?? []) {
         this.#dispose(inner);
       }
       unit.inside.delete(key);
     }
+    const forms = formed();
     const before = this.#contentOf(unit);
     const laid = this.#laidOfUnit(unit);
     let sum = 0;
@@ -4400,12 +4408,13 @@ export class Instance {
           removed,
           inserted,
           inserted.map((_, offset) => values[start + offset]),
-          inserted.map((key, offset) => {
-            const index = start + offset;
-            return members[index]?.key === key
-              ? this.#formOf(values[index], { unit, key }, [], new Set())
-              : null;
-          }),
+          () =>
+            inserted.map((key, offset) => {
+              const index = start + offset;
+              return members[index]?.key === key
+                ? this.#formOf(values[index], { unit, key }, [], new Set())
+                : null;
+            }),
         );
       }
       const settled = unit.keys.length === members.length;
@@ -4454,9 +4463,10 @@ export class Instance {
         removed,
         inserted,
         values.slice(head, keys.length - tail),
-        inserted.map((key, offset) =>
-          this.#formOf(values[head + offset], { unit, key }, [], new Set())
-        ),
+        () =>
+          inserted.map((key, offset) =>
+            this.#formOf(values[head + offset], { unit, key }, [], new Set())
+          ),
       );
     }
     for (let index = keys.length - tail; index < keys.length; index++) {
@@ -6545,8 +6555,10 @@ export class Instance {
     const queued = root.#queue.length;
     const requested = root.requests.length;
     const sent = root.#outbox.length;
-    const instances = new Set(root.#instances.keys());
-    const bound = new Map(root.#bound);
+    // The instances are held in the order they were made, so those of
+    // an event that does not commit are the ones behind this count.
+    const instances = root.#instances.size;
+    const bound = root.#bound.size === 0 ? undefined : new Map(root.#bound);
     const children = this.#children.length;
     let outcome: Outcome;
     try {
@@ -6578,14 +6590,16 @@ export class Instance {
       for (const { operation } of root.#outbox.splice(sent)) {
         root.#operations.delete(operation);
       }
-      for (const id of [...root.#instances.keys()]) {
-        if (!instances.has(id)) root.#instances.delete(id);
-      }
-      for (const [name, { instance }] of [...root.#made]) {
-        if (!root.#instances.has(instance.id)) root.#made.delete(name);
+      if (root.#instances.size > instances) {
+        for (const id of [...root.#instances.keys()].slice(instances)) {
+          root.#instances.delete(id);
+        }
+        for (const [name, { instance }] of [...root.#made]) {
+          if (!root.#instances.has(instance.id)) root.#made.delete(name);
+        }
       }
       root.#bound.clear();
-      for (const [key, held] of bound) root.#bound.set(key, held);
+      for (const [key, held] of bound ?? []) root.#bound.set(key, held);
       this.#children.length = children;
       this.store.rekeys.length = 0;
     }
@@ -6818,11 +6832,11 @@ export class Instance {
     // the reference by key, and the constructs applied to them.
     const over = new Set<number>();
     for (const table of this.#tables.values()) {
-      const held = table.elements.some(({ source }) =>
+      const source = table.byKey.get(rekey.from)?.source;
+      if (
         source instanceof Ref && source.doc === rekey.doc &&
         isElement(source.path)
-      );
-      if (held) over.add(table.collection);
+      ) over.add(table.collection);
     }
     if (over.size === 0) return;
     for (let grown = true; grown;) {
@@ -6841,15 +6855,37 @@ export class Instance {
     // The key itself, and the key of a member of the segment that a
     // `flatMap` gave the element (ruling Z22).
     const renamed = (key: string) => rekeyed(key, rekey.from, rekey.to);
+    // Whether a key can be the old key or hold it: the key itself, or
+    // the key of a member of a segment.
+    const may = (key: string) => key === rekey.from || key.includes('"source"');
     for (const [name, table] of [...this.#tables]) {
       const { collection, around } = table;
       if (!over.has(collection)) continue;
+      // A table that holds the key itself and no key of a member of a
+      // segment has one element to rename.
+      const one = table.byKey.get(rekey.from);
+      if (
+        one !== undefined &&
+        !table.elements.some(({ key }) => key.includes('"source"'))
+      ) {
+        this.#drop(collection, around, one.key);
+        table.byKey.delete(one.key);
+        one.key = rekey.to;
+        if (one.source instanceof Ref && isElement(one.source.path)) {
+          one.source = new Ref(rekey.doc, [
+            ...rekey.array,
+            keySegment(rekey.to),
+          ]);
+        }
+        table.byKey.set(one.key, one);
+        continue;
+      }
       this.#setTable(
         name,
         collection,
         around,
         table.elements.map((member) => {
-          const key = renamed(member.key);
+          const key = may(member.key) ? renamed(member.key) : member.key;
           if (key === member.key) return member;
           this.#drop(collection, around, member.key);
           return {
@@ -6870,6 +6906,7 @@ export class Instance {
       const steps = (this.plan.children?.[held.child].within ?? []).flatMap((
         step,
       ) => step.element === undefined ? [] : [step.element]);
+      if (!held.keys.some(may)) continue;
       const moved = held.keys.map((key, index) =>
         over.has(steps[index]) ? renamed(key) : key
       );
@@ -6889,6 +6926,7 @@ export class Instance {
     for (const [name, made] of [...this.root.#made]) {
       const { instance, keyed, ordinal } = made;
       if (keyed === undefined || instance.options.parent !== this) continue;
+      if (!keyed.keys.some(([, key]) => may(key))) continue;
       const keys = keyed.keys.map(([collection, key]): [number, string] => [
         collection,
         over.has(collection) ? renamed(key) : key,
@@ -6904,6 +6942,7 @@ export class Instance {
       this.root.#made.set(to, { instance, ordinal, keyed: moved });
     }
     for (const [id, { cell, keys }] of [...this.#cells]) {
+      if (!keys.some(may)) continue;
       const steps = this.plan.stateCells[cell].within.flatMap((step) =>
         step.element === undefined ? [] : [step.element]
       );

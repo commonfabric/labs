@@ -95,6 +95,13 @@ export type ValueComparison = {
    * transactions, the documents they wrote, and the bytes of those
    * documents.
    */
+  /**
+   * The wall time of the executor, in milliseconds: from the artifact
+   * to the settled instance, which includes the evaluation of the
+   * module texts, and for each event it handled, with the derivation
+   * transaction behind it.
+   */
+  times?: { settle: number; events: number[] };
   written?: Record<
     string,
     { transactions: number; documents: number; bytes: number }
@@ -440,6 +447,8 @@ export class ExecutorRun implements StreamRecord {
     });
   }
 
+  readonly #times = { settle: 0, events: [] as number[] };
+
   /** @inheritDoc */
   start(space: string | undefined): void {
     if ((this.#artifact.code.unsupported ?? []).length > 0) {
@@ -451,6 +460,7 @@ export class ExecutorRun implements StreamRecord {
       return;
     }
     try {
+      const began = performance.now();
       this.#instance = new Instance(this.#artifact, this.#argument, {
         space,
         // One secret for every run, so that the keys of plain values in
@@ -458,8 +468,14 @@ export class ExecutorRun implements StreamRecord {
         secret: "the secret of the comparison",
         artifacts: this.#artifacts,
         ...(this.#stubs === undefined ? {} : { now: this.#stubs.now }),
+        // For a run that is timed: the bytes of whole documents are
+        // not counted, which is a pass over each document written.
+        ...(Deno.env.get("PATTERN_COMPILER_MEASURE") === "patches"
+          ? { measure: "patches" as const }
+          : {}),
       });
       this.#answer(this.#instance);
+      this.#times.settle = performance.now() - began;
       this.#settled = this.#snapshot(this.#instance);
     } catch (error) {
       this.#notExecuted = categoryOf(error);
@@ -496,9 +512,11 @@ export class ExecutorRun implements StreamRecord {
     // The seed today's run had for this event (`random.ts`).
     seedRandom(eventSeed(index));
     try {
+      const began = performance.now();
       const handled = drawing(() =>
         instance.send(binding, event, [...elements])
       );
+      this.#times.events.push(performance.now() - began);
       if (!handled.committed) {
         this.#failedEvents.push(`${name}: ${handled.error}`);
       }
@@ -595,6 +613,7 @@ export class ExecutorRun implements StreamRecord {
       comparison.requests = { ...this.#requests };
       comparison.outstanding = instance.outbox.length;
     }
+    comparison.times = this.#times;
     comparison.written = {};
     for (const { cause, written, bytes } of instance.transactions) {
       const sum = comparison.written[cause] ??= {

@@ -14,7 +14,7 @@
  * the instance, with the derivation transaction that follows it.
  */
 import { type Artifact, Instance } from "../exec/executor.ts";
-import { argumentOf } from "../exec/store.ts";
+import { argumentOf, Ref } from "../exec/store.ts";
 
 const ARGUMENT = argumentOf("result");
 
@@ -51,8 +51,17 @@ export type Measured = {
   bytes: number;
   /** The bytes of what the changes put into the documents. */
   patchBytes: number;
+  /**
+   * The time of the change as the first one after the instance
+   * settled, and for a change the mean time of the `LATER` changes of
+   * the same kind that follow it on one instance.
+   */
   milliseconds: number;
+  later?: number;
 };
+
+/** How many further changes of a kind are timed on one instance. */
+const LATER = 40;
 
 const link = (index: number) => ({
   $link: { doc: ARGUMENT, path: ["pool", `${index}`] },
@@ -84,8 +93,11 @@ export const measure = (
   };
   // The time of a change, without the counts: on an instance that
   // does not count the bytes of whole documents.
-  const timed = (change: (instance: Instance) => void): number => {
+  const timed = (
+    change: (instance: Instance, turn: number) => void,
+  ): { first: number; later: number } => {
     const times: number[] = [];
+    let later = 0;
     for (let repeat = 0; repeat < repeats; repeat++) {
       const items = Array.from({ length }, (_, index) => item(index));
       const instance = new Instance(
@@ -101,13 +113,20 @@ export const measure = (
         { ...options, measure: "patches" },
       );
       const at = performance.now();
-      change(instance);
+      change(instance, 0);
       times.push(performance.now() - at);
+      if (repeat < repeats - 1) continue;
+      const began = performance.now();
+      for (let turn = 1; turn <= LATER; turn++) change(instance, turn);
+      later = (performance.now() - began) / LATER;
     }
     times.sort((a, b) => a - b);
-    return times[Math.floor(times.length / 2)];
+    return { first: times[Math.floor(times.length / 2)], later };
   };
-  const run = (operation: string, change: (instance: Instance) => void) => {
+  const run = (
+    operation: string,
+    change: (instance: Instance, turn: number) => void,
+  ) => {
     const began = performance.now();
     const instance = operation === "settle" ? undefined : start();
     const before = instance === undefined
@@ -121,10 +140,12 @@ export const measure = (
       };
     const at = performance.now();
     const after = instance ?? start();
-    if (instance !== undefined) change(instance);
-    const milliseconds = instance === undefined || repeats === 1
-      ? performance.now() - (instance === undefined ? began : at)
+    if (instance !== undefined) change(instance, 0);
+    const once = performance.now() - (instance === undefined ? began : at);
+    const times = instance === undefined || repeats === 1
+      ? undefined
       : timed(change);
+    const milliseconds = times?.first ?? once;
     const transactions = after.transactions.slice(before.transactions);
     measured.push({
       case: name,
@@ -144,45 +165,48 @@ export const measure = (
         0,
       ),
       milliseconds: Math.round(milliseconds * 1000) / 1000,
+      ...(times === undefined
+        ? {}
+        : { later: Math.round(times.later * 1000) / 1000 }),
     });
   };
   const held = (instance: Instance) =>
     (instance.store.docs.get(ARGUMENT)?.value as { items: unknown[] }).items;
-  const added = (instance: Instance) => {
-    if (!references) return item(length);
+  const added = (instance: Instance, turn: number) => {
+    const index = length + turn;
+    if (!references) return item(index);
     instance.store.write(
-      new (Object.getPrototypeOf(
-        instance.store.locate(
-          // deno-lint-ignore no-explicit-any
-          { doc: ARGUMENT, path: [] } as any,
-          false,
-        ).ref,
-      ).constructor)(ARGUMENT, ["pool", `${length}`]),
-      item(length),
+      new Ref(ARGUMENT, ["pool", `${index}`]),
+      item(index),
     );
-    return link(length);
+    return link(index);
   };
   run("settle", () => {});
-  run("append", (instance) => {
-    instance.spliceArgument(["items"], length, 0, [added(instance)]);
+  run("append", (instance, turn) => {
+    instance.spliceArgument(["items"], length + turn, 0, [
+      added(instance, turn),
+    ]);
   });
-  run("append, array written whole", (instance) => {
-    instance.writeArgument(["items"], [...held(instance), added(instance)]);
+  run("append, array written whole", (instance, turn) => {
+    instance.writeArgument(["items"], [
+      ...held(instance),
+      added(instance, turn),
+    ]);
   });
-  run("prepend", (instance) => {
-    instance.spliceArgument(["items"], 0, 0, [added(instance)]);
+  run("prepend", (instance, turn) => {
+    instance.spliceArgument(["items"], 0, 0, [added(instance, turn)]);
   });
-  run("edit one field", (instance) => {
+  run("edit one field", (instance, turn) => {
     instance.writeArgument(
-      references ? ["pool", "0", "title"] : ["items", "0", "title"],
+      references ? ["pool", `${turn}`, "title"] : ["items", `${turn}`, "title"],
       "edited",
     );
   });
   run("remove first", (instance) => {
     instance.spliceArgument(["items"], 0, 1, []);
   });
-  run("remove last", (instance) => {
-    instance.spliceArgument(["items"], length - 1, 1, []);
+  run("remove last", (instance, turn) => {
+    instance.spliceArgument(["items"], length - 1 - turn, 1, []);
   });
   return measured;
 };
