@@ -2726,7 +2726,10 @@ export class Instance {
    * key with the address of the output as its collection, as an
    * element of an array of plain values in place has (ruling Z53). The
    * document is stored again when the array is another one. None for
-   * an output that no function body computes whole.
+   * an output that no function body computes whole. A read that
+   * reaches the document through a link stored elsewhere brings the
+   * output up to date first, inside an element body as outside one
+   * (rulings Z53 and Z56).
    */
   #generated(
     output: number,
@@ -2741,10 +2744,10 @@ export class Instance {
       return undefined;
     }
     const within = this.collectionsOf(record.cone);
-    const id = this.outputDocument(
-      output,
-      within.map((collection) => context.get(collection)?.key ?? "?"),
+    const keys = within.map((collection) =>
+      context.get(collection)?.key ?? "?"
     );
+    const id = this.outputDocument(output, keys);
     this.#documents.add(id);
     const store = (array: readonly unknown[]) => {
       const stored = this.stored(array);
@@ -2753,16 +2756,43 @@ export class Instance {
       }
     };
     store(held);
-    // An output outside every element body is brought up to date by a
-    // read that reaches its document through a link stored elsewhere.
+    // The executor evaluates on demand, and a link stored elsewhere is
+    // no dependency on the output: the read that reaches the document
+    // evaluates the output for the elements that hold the keys now.
     const value = this.valueOfOutput.get(output);
-    if (within.length === 0 && value !== undefined) {
+    if (value !== undefined) {
       this.store.sources.set(id, () => {
-        const now = this.evaluated(value)(new Map()).value;
+        const current = this.#contextOfKeys(within, keys);
+        if (current === undefined) return;
+        const now = this.evaluated(value)(current).value;
         if (Array.isArray(now)) store(now);
       });
     }
     return new Ref(id, []);
+  }
+
+  /**
+   * The context in which each of `collections`, outermost first, has
+   * the element that holds the key of `keys` at its place now, with
+   * the element table of each brought up to date. Nothing where a key
+   * is in no table: the key left its collection.
+   */
+  #contextOfKeys(
+    collections: readonly number[],
+    keys: readonly string[],
+  ): Context | undefined {
+    const context = new Map<number, Element>();
+    for (const [index, collection] of collections.entries()) {
+      this.assembled(collection)(context);
+      const element = this.#tables.get(
+        `a${collection}|${
+          this.#contextKey(this.#outerOf(collection), context)
+        }`,
+      )?.find((member) => member.key === keys[index]);
+      if (element === undefined) return undefined;
+      context.set(collection, element);
+    }
+    return context;
   }
 
   /**

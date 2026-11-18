@@ -5862,3 +5862,100 @@ describe("an element of a plain array generated from scratch that declares no ke
     ).toEqual([{ item: item("ab") }, { item: item("cde") }]);
   });
 });
+
+// Ruling Z56: an output inside an element body gives its elements a
+// reference by key as one outside does. `items` of
+// `fixtures/generated-inner.tsx` is a plain array generated from scratch
+// with a declared key, computed once per group, and the groups are plain
+// values in place.
+describe("an element of a plain array generated from scratch inside an element body", () => {
+  const groups = () => [
+    { name: "g", titles: ["ab", "cde"] },
+    { name: "h", titles: ["f"] },
+  ];
+  const start = async () => {
+    const instance = new Instance(await artifactOf("generated-inner"), {
+      groups: groups(),
+      bonus: 0,
+    });
+    instance.result();
+    return instance;
+  };
+  const bindingOf = (instance: Instance, name: string) =>
+    instance.plan.bindings.findIndex((binding) => binding.name === name);
+  const picked = (instance: Instance) =>
+    instance.store.docs.get(instance.stateCellDocument(0))?.value;
+  /** The document of `items` for the group at a position. */
+  const itemsOf = (instance: Instance, group: number) =>
+    instance.outputDocument(0, [whole(instance, groups()[group])]);
+  type Result = { pickedStars?: number };
+
+  it("is stored by a handler as a reference by key with the document of the output of its group as the collection", async () => {
+    const instance = await start();
+
+    expect(instance.send(bindingOf(instance, "pick"), {}, [0, 1]).committed)
+      .toBe(true);
+
+    expect(instance.store.docs.get(itemsOf(instance, 0))).toEqual({
+      kind: "output",
+      value: [{ title: "ab", stars: 2 }, { title: "cde", stars: 3 }],
+    });
+    expect(picked(instance)).toEqual({
+      $link: {
+        doc: itemsOf(instance, 0),
+        path: [keySegment(byFields(instance, { title: "cde" }))],
+      },
+    });
+    expect((instance.result() as Result).pickedStars).toBe(3);
+  });
+
+  it("reads the current value through a link to it that is stored elsewhere, before anything else demands the output", async () => {
+    const instance = await start();
+    instance.send(bindingOf(instance, "pick"), {}, [0, 1]);
+    const stars = new Ref(instance.stateCellDocument(0), ["stars"]);
+    expect(instance.store.read(stars)).toBe(3);
+
+    // A write that no evaluation followed: the computation of the group
+    // returns another array, and nothing has demanded it.
+    instance.store.write(new Ref(ARGUMENT, ["bonus"]), 4);
+
+    expect(instance.store.read(stars)).toBe(7);
+    expect(instance.store.docs.get(itemsOf(instance, 0))?.value).toEqual([
+      { title: "ab", stars: 6 },
+      { title: "cde", stars: 7 },
+    ]);
+    instance.settle();
+    expect((instance.result() as Result).pickedStars).toBe(7);
+  });
+
+  it("keeps what the link read last once the key of its group left", async () => {
+    const instance = await start();
+    instance.send(bindingOf(instance, "pick"), {}, [0, 1]);
+    const stars = new Ref(instance.stateCellDocument(0), ["stars"]);
+
+    instance.writeArgument(["groups"], [groups()[1]]);
+    instance.store.write(new Ref(ARGUMENT, ["bonus"]), 4);
+
+    // Nothing is cleaned up when a key leaves, and nothing computes the
+    // output of a group that is in the collection no longer.
+    expect(instance.store.read(stars)).toBe(3);
+  });
+
+  it("refuses a write that a handler makes through the stored reference, and commits nothing of the handler", async () => {
+    const instance = await start();
+    instance.send(bindingOf(instance, "pick"), {}, [0, 1]);
+    const before = structuredClone(
+      instance.store.docs.get(itemsOf(instance, 0)),
+    );
+
+    const outcome = instance.send(bindingOf(instance, "edit"), {});
+
+    expect(outcome).toEqual({
+      binding: bindingOf(instance, "edit"),
+      committed: false,
+      error: new ComputedOutput().message,
+    });
+    expect(instance.store.docs.get(itemsOf(instance, 0))).toEqual(before);
+    expect((instance.result() as Result).pickedStars).toBe(3);
+  });
+});
