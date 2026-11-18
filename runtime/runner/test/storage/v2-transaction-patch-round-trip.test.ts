@@ -522,4 +522,305 @@ describe("v2-transaction", () => {
       });
     });
   });
+
+  describe("an array whose elements shift", () => {
+    // An element added to or removed from an array shifts every element after
+    // it. A change to the array's length travels as one splice for each run
+    // of a shortest edit script, carrying the elements that run adds, where
+    // that carries fewer than an index-by-index diff would. A change that
+    // keeps the length travels index by index unless that would replace more
+    // than 64 elements. Each case names the ops its commit sent, and the value
+    // the server made of them.
+
+    /** `count` distinct strings, `e0` on. */
+    const items = (count: number): string[] =>
+      Array.from({ length: count }, (_, index) => `e${index}`);
+
+    /** Like `commit()`, except returns the ops the commit sent, whole. */
+    const commitOps = async (
+      session: Session,
+      doc: string,
+      write: (cell: Cell<FabricValue>) => void,
+    ): Promise<PatchOp[]> => {
+      const alreadySent = sentPatches.length;
+      await commit(session, doc, write);
+      return sentPatches.slice(alreadySent);
+    };
+
+    it("sends one `splice` for an element inserted at the head", async () => {
+      const writer = connect();
+      const list = items(100);
+      await commit(writer, "head", (cell) => cell.set({ list }));
+
+      const sent = await commitOps(
+        writer,
+        "head",
+        (cell) => cell.key("list").set(["x", ...list]),
+      );
+
+      expect(sent).toEqual([{
+        op: "splice",
+        path: "/value/list",
+        index: 0,
+        remove: 0,
+        add: ["x"],
+      }]);
+      expect(await storedValue("head")).toStrictEqual({ list: ["x", ...list] });
+    });
+
+    it("sends one `splice` for an element removed from the middle", async () => {
+      const writer = connect();
+      const list = items(100);
+      await commit(writer, "middle", (cell) => cell.set({ list }));
+
+      const remaining = list.filter((item) => item !== "e50");
+      const sent = await commitOps(
+        writer,
+        "middle",
+        (cell) => cell.key("list").set(remaining),
+      );
+
+      expect(sent).toEqual([{
+        op: "splice",
+        path: "/value/list",
+        index: 50,
+        remove: 1,
+        add: [],
+      }]);
+      expect(await storedValue("middle")).toStrictEqual({ list: remaining });
+    });
+
+    it("sends a `splice` for each of two places elements are inserted at, each at its index once the one before has applied", async () => {
+      const writer = connect();
+      const list = items(100);
+      await commit(writer, "two", (cell) => cell.set({ list }));
+
+      const grown = ["x", ...list.slice(0, 60), "y", ...list.slice(60)];
+      const sent = await commitOps(
+        writer,
+        "two",
+        (cell) => cell.key("list").set(grown),
+      );
+
+      expect(sent).toEqual([
+        { op: "splice", path: "/value/list", index: 0, remove: 0, add: ["x"] },
+        { op: "splice", path: "/value/list", index: 61, remove: 0, add: ["y"] },
+      ]);
+      expect(await storedValue("two")).toStrictEqual({ list: grown });
+    });
+
+    it("sends the tail `splice` alone for elements appended by a write of the whole array", async () => {
+      const writer = connect();
+      const list = items(100);
+      await commit(writer, "tail", (cell) => cell.set({ list }));
+
+      const sent = await commitOps(
+        writer,
+        "tail",
+        (cell) => cell.key("list").set([...list, "x", "y"]),
+      );
+
+      expect(sent).toEqual([{
+        op: "splice",
+        path: "/value/list",
+        index: 100,
+        remove: 0,
+        add: ["x", "y"],
+      }]);
+      expect(await storedValue("tail")).toStrictEqual({
+        list: [...list, "x", "y"],
+      });
+    });
+
+    it("sends a `replace` at the index of an element changed in place", async () => {
+      const writer = connect();
+      const list = items(100);
+      await commit(writer, "in-place", (cell) => cell.set({ list }));
+
+      const changed = list.map((item) => item === "e50" ? "z" : item);
+      const sent = await commit(
+        writer,
+        "in-place",
+        (cell) => cell.key("list").set(changed),
+      );
+
+      expect(sent).toEqual(["replace /value/list/50"]);
+      expect(await storedValue("in-place")).toStrictEqual({ list: changed });
+    });
+
+    it("sends a `replace` at each index an element moving a few places to the head shifts", async () => {
+      const writer = connect();
+      const list = items(10);
+      await commit(writer, "short-move", (cell) => cell.set({ list }));
+
+      const moved = ["e5", ...list.filter((item) => item !== "e5")];
+      const sent = await commit(
+        writer,
+        "short-move",
+        (cell) => cell.key("list").set(moved),
+      );
+
+      expect(sent).toEqual(
+        [0, 1, 2, 3, 4, 5].map((index) => `replace /value/list/${index}`),
+      );
+      expect(await storedValue("short-move")).toStrictEqual({ list: moved });
+    });
+
+    it("sends an insertion and a removal for an element moving more than 64 places to the head", async () => {
+      const writer = connect();
+      const list = items(100);
+      await commit(writer, "long-move", (cell) => cell.set({ list }));
+
+      const moved = ["e90", ...list.filter((item) => item !== "e90")];
+      const sent = await commitOps(
+        writer,
+        "long-move",
+        (cell) => cell.key("list").set(moved),
+      );
+
+      expect(sent).toEqual([
+        {
+          op: "splice",
+          path: "/value/list",
+          index: 0,
+          remove: 0,
+          add: ["e90"],
+        },
+        { op: "splice", path: "/value/list", index: 91, remove: 1, add: [] },
+      ]);
+      expect(await storedValue("long-move")).toStrictEqual({ list: moved });
+    });
+
+    it("sends nothing beneath the shifted elements where an element holding an array changed beside a head insertion", async () => {
+      // Every element at or past the first splice is carried by the splices,
+      // or else is the same in both documents, so the diffs of the arrays
+      // inside the shifted elements are left out.
+
+      const writer = connect();
+      const nested = [["a"], ["b"], ["c"], ["d"], ["e"]];
+      await commit(writer, "nested", (cell) => cell.set({ list: nested }));
+
+      const changed = [["x"], ...nested.slice(0, 4), ["e", "f"]];
+      const sent = await commit(
+        writer,
+        "nested",
+        (cell) => cell.key("list").set(changed),
+      );
+
+      expect(sent).toEqual(["splice /value/list", "splice /value/list"]);
+      expect(await storedValue("nested")).toStrictEqual({ list: changed });
+    });
+
+    it("sends one `splice` for a link inserted at the head of a list of links", async () => {
+      const writer = connect();
+      const seeding = writer.runtime.edit();
+      const rows = Array.from({ length: 101 }, (_, index) => {
+        const row = writer.runtime.getCell<FabricValue>(
+          space,
+          `row-${index}`,
+          undefined,
+          seeding,
+        );
+        row.set({ title: `t${index}` });
+        return row;
+      });
+      writer.runtime.getCell<FabricValue>(space, "board", undefined, seeding)
+        .set({ list: rows.slice(1) });
+      expect((await seeding.commit().settled).error).toBeUndefined();
+
+      const sent = await commitOps(
+        writer,
+        "board",
+        (cell) => cell.key("list").set(rows),
+      );
+
+      expect(sent.map(kindAndPath)).toEqual(["splice /value/list"]);
+      const [splice] = sent;
+      expect(splice?.op === "splice" && [splice.index, splice.add.length])
+        .toEqual([0, 1]);
+      const written = writer.runtime.getCell<FabricValue>(space, "board")
+        .getRaw();
+      expect(await storedValue("board")).toEqual(written);
+    });
+
+    it("keeps both of two sessions' pushes to one list", async () => {
+      const first = connect();
+      const second = connect();
+      await commit(first, "pushes", (cell) => cell.set({ list: items(3) }));
+      await second.runtime.getCell<FabricValue>(space, "pushes").sync();
+
+      // The two commits' ops reach the server interleaved, so they are judged
+      // together.
+      const alreadySent = sentPatches.length;
+      await Promise.all([
+        commit(first, "pushes", (cell) => cell.key("list").push("x")),
+        commit(second, "pushes", (cell) => cell.key("list").push("y")),
+      ]);
+
+      expect(sentPatches.slice(alreadySent).map(kindAndPath)).toEqual([
+        "append /value/list",
+        "append /value/list",
+      ]);
+      const stored = await storedValue("pushes") as { list: string[] };
+      expect([...stored.list].sort()).toEqual([...items(3), "x", "y"].sort());
+      expect(stored.list.slice(0, 3)).toEqual(items(3));
+    });
+
+    it("keeps one session's head insertion and another's push to one list", async () => {
+      const first = connect();
+      const second = connect();
+      const list = items(100);
+      await commit(first, "head-and-push", (cell) => cell.set({ list }));
+      await second.runtime.getCell<FabricValue>(space, "head-and-push").sync();
+
+      // The two commits' ops reach the server interleaved, so they are judged
+      // together.
+      const alreadySent = sentPatches.length;
+      await Promise.all([
+        commit(
+          first,
+          "head-and-push",
+          (cell) => cell.key("list").set(["x", ...list]),
+        ),
+        commit(second, "head-and-push", (cell) => cell.key("list").push("y")),
+      ]);
+
+      expect(sentPatches.slice(alreadySent)).toEqual([
+        { op: "splice", path: "/value/list", index: 0, remove: 0, add: ["x"] },
+        { op: "append", path: "/value/list", values: ["y"] },
+      ]);
+      expect(await storedValue("head-and-push")).toStrictEqual({
+        list: ["x", ...list, "y"],
+      });
+    });
+
+    it("sends the edits a push leaves to the diff index by index, beside the `append`", async () => {
+      // The `append` suppresses every op at the list's own path, so the
+      // existing elements' edits must travel at their indices. Here an edit
+      // script would carry fewer elements as splices, which the suppression
+      // would drop.
+
+      const writer = connect();
+      await commit(
+        writer,
+        "edit-and-push",
+        (cell) => cell.set({ list: ["a", "b"] }),
+      );
+
+      const sent = await commit(writer, "edit-and-push", (cell) => {
+        cell.key("list").key(0).set("b");
+        cell.key("list").key(1).set("a");
+        cell.key("list").push("c");
+      });
+
+      expect([...sent].sort()).toEqual([
+        "append /value/list",
+        "replace /value/list/0",
+        "replace /value/list/1",
+      ]);
+      expect(await storedValue("edit-and-push")).toStrictEqual({
+        list: ["b", "a", "c"],
+      });
+    });
+  });
 });

@@ -83,11 +83,23 @@ This is safe because **the runner never emits an indexed-array
 shapes, all of which both the leaf-only commit matcher and the leaf-only
 reader-dirty index handle conservatively:
 
-- **in-place element change** → `replace` at `arr/i` (leaf-exact; no shift);
-- **tail grow / shrink** → a `splice` whose path **is the array** (`arr`), which
-  prefix-matches every index reader below it; and
-- **messy cases** (mid-array presence change, sparse growth) → a whole-array
-  `replace` at `arr` (same conservative coverage).
+- **in-place element change** → `replace` at `arr/i` (leaf-exact; no shift).
+  A change that keeps the array's length travels this way, a move included,
+  unless it would replace more than 64 elements;
+- **insertion, removal, or a long move anywhere in the array** → a `splice`
+  whose path **is the array** (`arr`) for each run of a shortest edit script
+  between the two arrays, which prefix-matches every index reader below it. A
+  tail grow or shrink is the one-splice case. The splices are sent where they
+  carry fewer elements than the per-index shape would; and
+- **messy cases** (an array with a hole in it) → a whole-array `replace` at
+  `arr` (same conservative coverage).
+
+A length change already puts a splice on the array's path, so sending it as
+splices throughout costs no conflict precision; a change that keeps the length
+gives up the per-element precision of its `replace`s only where they would be
+many. An array a mergeable op's suppression reaches is diffed per index, the
+shape the suppression is written against (see
+[mergeable collection writes](../../features/mergeable-collection-writes.md)).
 
 `move` is never generated at all. So an array index shift always reaches the
 engine as a `splice` or whole-array `replace` on the array path — never as an

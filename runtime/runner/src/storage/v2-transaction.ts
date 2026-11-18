@@ -4,6 +4,7 @@ import {
   cloneWithValueAtPath,
   debugStr,
   deepFreeze,
+  hashStringOf,
   isDeepFrozen,
   isFabricPlainContainer,
   missingContainerIsArray,
@@ -51,6 +52,7 @@ import {
 } from "../../../memory/v2/path.ts";
 import type { CellScope } from "../builder/types.ts";
 import { normalizeCellScope } from "../scope.ts";
+import { type ArrayEditHunk, shortestEditHunks } from "./array-edit-script.ts";
 import { getCommitLocalSeq, getCommitSeq } from "./commit-identity.ts";
 import { createTransactionCommitReceipt } from "./commit-receipt.ts";
 import { diagnosticPrefix, type PendingCommitContext } from "./diagnostics.ts";
@@ -464,10 +466,12 @@ export type PatchDraftCandidate = {
   coversDescendants: boolean;
 
   /**
-   * For a splice that adds or removes an array's tail, the first index it
-   * touches: a candidate at an element index at or past it is subsumed.
+   * For a splice, the index it applies at. The array's splices carry every
+   * element at or past the first of them that differs between the two
+   * documents, so a candidate beneath the array at an element index at or
+   * past it is subsumed.
    */
-  tailSpliceStartIndex?: number;
+  spliceStartIndex?: number;
 };
 
 /**
@@ -602,10 +606,31 @@ const arrayTailIsDense = (
 };
 
 /**
+ * The most removals and additions the diff of an array searches for a
+ * shortest edit script within (`shortestEditHunks()`). The search costs time
+ * proportional to the array's length times this bound.
+ */
+const ARRAY_DIFF_MAX_EDITS = 64;
+
+/**
+ * The most elements a change that keeps an array's length is sent as
+ * per-index replaces of, where a shortest edit script moves elements rather
+ * than changing them. Each replace touches only its own element, so it
+ * conflicts with fewer readers than a splice, which touches the array.
+ */
+const POSITIONAL_REPLACE_LIMIT = 64;
+
+/**
  * Builds the patch candidates that take the value at `path` from `before` to
  * `after`. The caller passes a change: `path` is the array a changed write
  * beneath it is diffed as a change to (`findArrayPatchPath()`), and a value
  * differs wherever a value beneath it does.
+ *
+ * Two arrays without holes are diffed by `arraySpliceHunks()`, and sent as
+ * the splices it returns. Otherwise, and where `positional` is set, they are
+ * diffed index by index (`buildPositionalArrayPatchCandidates()`). The caller
+ * sets `positional` where a mergeable op's suppression reaches the array,
+ * since the suppression is written against the per-index diff.
  */
 const buildArrayPatchCandidates = (
   path: readonly string[],
@@ -613,6 +638,7 @@ const buildArrayPatchCandidates = (
   after: FabricValue | undefined,
   beforePresent: boolean = before !== undefined,
   afterPresent: boolean = after !== undefined,
+  positional = false,
 ): PatchDraftCandidate[] => {
   if (!Array.isArray(before) || !Array.isArray(after)) {
     return [
@@ -626,8 +652,158 @@ const buildArrayPatchCandidates = (
     ];
   }
 
-  // Both sides are arrays from here on, so the array slot itself is present
-  // in both states; fallbacks below replace the whole array.
+  if (
+    positional || !arrayTailIsDense(before, 0) || !arrayTailIsDense(after, 0)
+  ) {
+    return buildPositionalArrayPatchCandidates(path, before, after);
+  }
+  const hunks = arraySpliceHunks(before, after);
+  if (hunks === undefined) {
+    return buildPositionalArrayPatchCandidates(path, before, after);
+  }
+
+  // Each splice applies to the array the ones before it left, so its index is
+  // its run's start shifted by what those splices added and removed.
+  const pointer = encodePointer(path);
+  let shift = 0;
+  return hunks.map((hunk) => {
+    const index = hunk.start + shift;
+    shift += hunk.add - hunk.remove;
+    return {
+      patch: {
+        op: "splice",
+        path: pointer,
+        index,
+        remove: hunk.remove,
+        add: after.slice(hunk.addStart, hunk.addStart + hunk.add),
+      },
+      path,
+      coversDescendants: false,
+      spliceStartIndex: index,
+    };
+  });
+};
+
+/**
+ * Returns the runs a change from `before` to `after`, two arrays without
+ * holes, is sent as, one splice each, or `undefined` where it is sent as a
+ * per-index diff instead.
+ *
+ * The runs are those of a shortest edit script, found within
+ * `ARRAY_DIFF_MAX_EDITS` edits between the arrays' common prefix and suffix,
+ * or, where none is that short, one run spanning everything between them.
+ * Splices carry the elements the runs add, where the per-index diff carries
+ * every element that changed or shifted, and the change is sent as splices
+ * only where they carry fewer.
+ *
+ * A change to the array's length is sent as splices on that condition alone.
+ * The per-index diff of one ends in a splice at the array's path too, so
+ * every reader beneath the array conflicts with it either way.
+ *
+ * A change that keeps the length is sent as splices only where the per-index
+ * diff would also replace more than `POSITIONAL_REPLACE_LIMIT` elements. Its
+ * per-index diff is replaces alone, each touching its own element, which
+ * conflict with fewer readers than a splice, which touches the array.
+ */
+const arraySpliceHunks = (
+  before: readonly FabricValue[],
+  after: readonly FabricValue[],
+): ArrayEditHunk[] | undefined => {
+  let prefix = 0;
+  const shorter = Math.min(before.length, after.length);
+  while (prefix < shorter && valueEqual(before[prefix]!, after[prefix]!)) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    prefix + suffix < shorter &&
+    valueEqual(
+      before[before.length - 1 - suffix]!,
+      after[after.length - 1 - suffix]!,
+    )
+  ) {
+    suffix += 1;
+  }
+  const between: ArrayEditHunk = {
+    start: prefix,
+    remove: before.length - prefix - suffix,
+    addStart: prefix,
+    add: after.length - prefix - suffix,
+  };
+
+  let script: ArrayEditHunk[] | undefined;
+  if (between.remove === 0 || between.add === 0) {
+    script = [between];
+  } else {
+    // Every pair of elements between the prefix and the suffix may be
+    // compared, so each is keyed once by the content hash `valueEqual()`
+    // compares containers by.
+    const beforeKeys = before.slice(prefix, prefix + between.remove)
+      .map((value) => hashStringOf(value));
+    const afterKeys = after.slice(prefix, prefix + between.add)
+      .map((value) => hashStringOf(value));
+    script = shortestEditHunks(
+      between.remove,
+      between.add,
+      (beforeIndex, afterIndex) =>
+        beforeKeys[beforeIndex] === afterKeys[afterIndex],
+      ARRAY_DIFF_MAX_EDITS,
+    )?.map((hunk) => ({
+      ...hunk,
+      start: hunk.start + prefix,
+      addStart: hunk.addStart + prefix,
+    }));
+  }
+  const runs = script ?? [between];
+
+  // Where the length holds, a script of substitutions alone replaces the
+  // elements the per-index diff does, and nothing is gained.
+  const sameLength = before.length === after.length;
+  if (sameLength && runs.every((hunk) => hunk.remove === hunk.add)) {
+    return undefined;
+  }
+  const carried = runs.reduce((total, hunk) => total + hunk.add, 0);
+  const replaced = countChangedIndices(before, after, prefix, shorter) +
+    after.length - shorter;
+  if (sameLength && replaced <= POSITIONAL_REPLACE_LIMIT) {
+    return undefined;
+  }
+  return carried < replaced ? runs : undefined;
+};
+
+/**
+ * Counts the indices from `start` up to `end` at which `before` and `after`
+ * hold different values: the elements a per-index diff replaces there.
+ */
+const countChangedIndices = (
+  before: readonly FabricValue[],
+  after: readonly FabricValue[],
+  start: number,
+  end: number,
+): number => {
+  let changed = 0;
+  for (let index = start; index < end; index += 1) {
+    if (!valueEqual(before[index]!, after[index]!)) {
+      changed += 1;
+    }
+  }
+  return changed;
+};
+
+/**
+ * Builds the patch candidates that take the array `before` to the array
+ * `after` index by index: a `replace` at each index both hold whose value
+ * changed, and a splice that adds or removes the tail. A change to which
+ * indices hold a value, or a tail with a hole in it, is sent as the whole
+ * array instead.
+ */
+const buildPositionalArrayPatchCandidates = (
+  path: readonly string[],
+  before: readonly FabricValue[],
+  after: readonly FabricValue[],
+): PatchDraftCandidate[] => {
+  // Both sides are arrays, so the array slot itself is present in both
+  // states; fallbacks below replace the whole array.
   const overlappingLength = Math.min(before.length, after.length);
   for (let index = 0; index < overlappingLength; index += 1) {
     if ((index in before) !== (index in after)) {
@@ -673,7 +849,7 @@ const buildArrayPatchCandidates = (
       },
       path,
       coversDescendants: false,
-      tailSpliceStartIndex: before.length,
+      spliceStartIndex: before.length,
     });
   } else if (after.length < before.length) {
     candidates.push({
@@ -686,7 +862,7 @@ const buildArrayPatchCandidates = (
       },
       path,
       coversDescendants: false,
-      tailSpliceStartIndex: after.length,
+      spliceStartIndex: after.length,
     });
   }
 
@@ -782,10 +958,10 @@ const isPrefixPath = (
 
 /**
  * The ops a document's commit sends, chosen from its patch candidates. A
- * covering candidate is dropped when a tail splice subsumes it, or when a
+ * covering candidate is dropped when a splice subsumes it, or when a
  * covering candidate already kept sits at or above its path, shorter paths
  * being kept first. A non-covering candidate is dropped when a kept covering
- * candidate or a tail splice covers it. And either kind is dropped when
+ * candidate or a splice covers it. And either kind is dropped when
  * `suppress` names it, since a mergeable op carries that change instead.
  *
  * Every one of those checks asks which of a set of paths prefix a candidate's
@@ -801,26 +977,26 @@ export const selectPatchOps = (
   nonCoverCandidates: readonly PatchDraftCandidate[],
   suppress: readonly OpSuppression[],
 ): PatchOp[] => {
-  // The first index each tail splice touches, by the pointer of its array.
-  const tailSpliceStartsByPointer = new Map<string, number[]>();
-  for (const { path, tailSpliceStartIndex } of nonCoverCandidates) {
-    if (tailSpliceStartIndex === undefined) continue;
+  // The index each splice applies at, by the pointer of its array.
+  const spliceStartsByPointer = new Map<string, number[]>();
+  for (const { path, spliceStartIndex } of nonCoverCandidates) {
+    if (spliceStartIndex === undefined) continue;
     const pointer = encodePointer(path);
-    const starts = tailSpliceStartsByPointer.get(pointer);
+    const starts = spliceStartsByPointer.get(pointer);
     if (starts === undefined) {
-      tailSpliceStartsByPointer.set(pointer, [tailSpliceStartIndex]);
+      spliceStartsByPointer.set(pointer, [spliceStartIndex]);
     } else {
-      starts.push(tailSpliceStartIndex);
+      starts.push(spliceStartIndex);
     }
   }
-  // A tail splice subsumes only what sits strictly beneath it, at an element
-  // index at or past its start, so a candidate's own pointer, the last of its
+  // A splice subsumes only what sits strictly beneath it, at an element index
+  // at or past its start, so a candidate's own pointer, the last of its
   // prefixes, is not looked up.
-  const isSubsumedByAnyTailSplice = (
+  const isSubsumedByAnySplice = (
     candidatePath: readonly string[],
   ): boolean =>
     prefixPointers(candidatePath).slice(0, -1).some((pointer, length) =>
-      tailSpliceStartsByPointer.get(pointer)?.some((start) => {
+      spliceStartsByPointer.get(pointer)?.some((start) => {
         const childSegment = candidatePath[length]!;
         return isArrayIndexPropertyName(childSegment) &&
           Number(childSegment) >= start;
@@ -828,7 +1004,7 @@ export const selectPatchOps = (
     );
 
   const retainedCoverCandidates = fullCoverCandidates
-    .filter((candidate) => !isSubsumedByAnyTailSplice(candidate.path))
+    .filter((candidate) => !isSubsumedByAnySplice(candidate.path))
     .sort((left, right) => left.path.length - right.path.length);
   // Shortest first, so a candidate overlaps one already kept exactly when
   // that one's path is a prefix of its own.
@@ -845,7 +1021,7 @@ export const selectPatchOps = (
   }
 
   const retainedNonCoverCandidates = nonCoverCandidates.filter((detail) =>
-    !isUnderCover(detail.path) && !isSubsumedByAnyTailSplice(detail.path)
+    !isUnderCover(detail.path) && !isSubsumedByAnySplice(detail.path)
   );
 
   // Drop the candidates the append op replaces: the whole-array op at the
@@ -4289,6 +4465,9 @@ export class V2StorageTransaction implements IStorageTransaction {
           hasValueAtPath(patchedValue, arrayPath, {
             allowArrayLength: true,
           }),
+          suppress.some((suppression) =>
+            pathsOverlap(suppression.path, arrayPath)
+          ),
         )
       ) {
         if (candidate.coversDescendants) {
