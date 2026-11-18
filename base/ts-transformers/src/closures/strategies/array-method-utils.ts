@@ -139,8 +139,10 @@ function buildElementBindingPlan(
             factory.createNumericLiteral(index),
           ),
         );
+      // A nested pattern that binds nothing once its computed keys are lifted
+      // leaves a hole, which keeps the positions of the elements after it.
       if (!clonedName && !element.dotDotDotToken) {
-        return element;
+        return factory.createOmittedExpression();
       }
       return factory.createBindingElement(
         element.dotDotDotToken,
