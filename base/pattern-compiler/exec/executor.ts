@@ -4,13 +4,17 @@
  * describes a run: it instantiates the plan, evaluates its cones to a
  * settled state, stores the result in documents held in memory, evaluates
  * the body of an element construct once per element key, and handles
- * events by running the handler's body and evaluating again what read a
- * position the body wrote.
+ * a batch of events, each in a transaction of its own, with one
+ * derivation transaction behind the batch
+ * (`docs/specs/compiled-pattern-language/scheduler-and-serving-loop.md`,
+ * SS, §5).
  *
  * It computes values and nothing else. It instantiates no label, checks
- * no constraint, persists nothing, and answers every effect as pending.
- * `SPEC-NOTES.md` (notes 281 on) lists what it needed that the plan and
- * the documents do not give.
+ * no constraint of a plan, and persists nothing. A request of an effect
+ * leaves for no network: it is held until a test delivers its completion.
+ * `SPEC-NOTES.md` (notes 281 on, and 479 on for transactions, error
+ * states and effects) lists what it needed that the plan and the
+ * documents do not give.
  */
 import {
   debugStr,
@@ -407,7 +411,14 @@ class ReadsFailure extends Error {
  */
 const failsCone = (error: unknown): boolean =>
   !(error instanceof Unsupported) && !(error instanceof ReferenceError) &&
-  !(error instanceof SyntaxError) && !(error instanceof RangeError);
+  !(error instanceof SyntaxError) && !ranOut(error);
+
+/**
+ * Whether an error is the stack of the process running out, and no
+ * `RangeError` that the code of a pattern throws itself.
+ */
+const ranOut = (error: unknown): boolean =>
+  error instanceof RangeError && /call stack|does not end/.test(error.message);
 
 const messageOf = (error: unknown): string =>
   `${(error as Error)?.message ?? error}`.split("\n")[0];
@@ -4661,7 +4672,7 @@ export class Instance {
         () => run(event, state),
       );
     } catch (error) {
-      if (error instanceof RangeError) throw error;
+      if (ranOut(error)) throw error;
       return { binding, committed: false, error: messageOf(error) };
     } finally {
       this.#handling = undefined;
