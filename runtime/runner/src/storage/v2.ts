@@ -3280,9 +3280,6 @@ export class StorageManager implements IStorageManager {
 
   async close(): Promise<void> {
     this.#forgetFollowUps();
-    // A released space's session finishes closing before the factory's
-    // connections do.
-    await Promise.allSettled([...this.#releasingSessions.values()]);
     // A detached-session resume names the session id this close rotates;
     // presenting it afterwards would mount the OLD id under a stale token.
     this.#detachedSessionResumes.clear();
@@ -3310,8 +3307,10 @@ export class StorageManager implements IStorageManager {
       this.#dataURISyncs.clear();
       this.#sessionId = crypto.randomUUID();
     } finally {
-      // The providers have ended their sessions, so whatever connection the
-      // factory kept open for them has nothing left on it.
+      // The providers have ended their sessions, and so have the spaces
+      // released before, so whatever connection the factory kept open for
+      // them has nothing left on it.
+      await Promise.allSettled([...this.#releasingSessions.values()]);
       await this.#sessionFactory.close?.();
       this.#schemaRegistryLease?.();
       this.#schemaRegistryLease = undefined;
@@ -3320,9 +3319,6 @@ export class StorageManager implements IStorageManager {
 
   async closeNow(): Promise<void> {
     this.#forgetFollowUps();
-    // A released space's session finishes closing before the factory's
-    // connections do.
-    await Promise.allSettled([...this.#releasingSessions.values()]);
     this.#detachedSessionResumes.clear();
     this.#releasedSessions.clear();
     try {
@@ -3343,6 +3339,7 @@ export class StorageManager implements IStorageManager {
       this.#dataURISyncs.clear();
       this.#sessionId = crypto.randomUUID();
     } finally {
+      await Promise.allSettled([...this.#releasingSessions.values()]);
       await this.#sessionFactory.close?.();
       this.#schemaRegistryLease?.();
       this.#schemaRegistryLease = undefined;
@@ -3776,8 +3773,16 @@ export class StorageManager implements IStorageManager {
    */
   #releaseUnusedSpaces(): void {
     if (this.#multiSpaceCommitsApplying.size > 0) return;
+    // A hold token still reachable is a cell that may read its document
+    // again, so its space is in use whether or not the document is loaded.
+    const held = new Set<string>();
+    for (const [key, hold] of this.#documentHolds) {
+      if (hold.ref.deref() !== undefined) {
+        held.add(key.slice(0, key.indexOf("\0")));
+      }
+    }
     for (const [space, provider] of [...this.#providers]) {
-      if (!this.#isUnusedSpace(space, provider)) continue;
+      if (held.has(space) || !this.#isUnusedSpace(space, provider)) continue;
       this.#providers.delete(space);
       this.#forgetSpace(space);
       const released = provider.replica.releasedSession();

@@ -209,6 +209,8 @@ A space is in use while any of these holds:
 - Its replica keeps a document, for any of the reasons in "What keeps a
   document", or for a holder of one the server retracted, or still watches
   one.
+- A hold token for one of its documents is still reachable
+  (`IStorageManager.holdDocument()`), whether or not the document is loaded.
 - A write to it is pending: a commit that has not settled, or an event append
   not yet sent.
 - A load in it is pending: a sync, a pull of a link target, or a load a
