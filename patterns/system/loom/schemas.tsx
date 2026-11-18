@@ -18,6 +18,7 @@ import type {
   FileStoreRecord,
   FileStoreRecordCell,
 } from "../fabrifile/store.tsx";
+import type { SpaceMember } from "../social-space/member-set.ts";
 import type { PanelAdderDid, PanelAdderProfile } from "./admission.tsx";
 import type {
   ParticipantProfile,
@@ -317,6 +318,18 @@ export interface LoomOutput {
   duplicatePanel: Stream<PanelAdmission>;
   setPresentation: Stream<Presentation>;
   participants: ParticipantProfile[];
+
+  /**
+   * The members of the Loom's space (`memberSet()`): one for each principal
+   * its access list names, sorted by DID, with the level the list grants
+   * them, and those of the profiles `participants` lists that are their own,
+   * in that order. The list's `"*"` entry adds no member, and a profile that
+   * is no one's, or whose owner the list doesn't name, counts toward no one.
+   * So does a profile the reader can't read, so it is derived for each
+   * reader. Absent while the reader can't read the list.
+   */
+  members?: PerUser<SpaceMember[]>;
+
   addParticipant: Stream<{ profile: ParticipantProfile }>;
   chatRoom?: Writable<LinkedChatRoom>;
   setChatRoom: Stream<ChatRoomChoice>;
