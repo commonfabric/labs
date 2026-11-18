@@ -1573,7 +1573,10 @@ confidential to the pool's own CFC policy (`pool-policy.tsx`). A rule and its
 count become public only once enough distinct contributors hold the same
 canonical rule; each rule's threshold is a sealed, configurable centre (at
 least 5) plus a secret per-rule offset. The one release path is the trusted
-`releaseConsensus` lift, witnessed by the pool's own writer.
+`releaseConsensus` lift, witnessed by the pool's own writer. Not yet working end
+to end: a public store currently refuses even the genuine release (top/3226),
+and the label on what inductors send holds only in part (top/3175); see
+`showcase/inductor/pool/README.md`.
 
 **Keywords:** threshold release, k-anonymity, consensus, pseudonym, declassify,
 exchange rule, TransformedBy, CFC
