@@ -1495,6 +1495,9 @@ const EX_COMP_PIECE = `${EX_COMP} --cell ${EX_PIECE}`;
  */
 const CELL_FLAG = `"--cell" (or "--piece")`;
 
+const NO_INDEX_VERSION_HELP =
+  "Keep no version of this deploy in the pattern index, and do not wait on it.";
+
 const PIECE_OPTION_HELP =
   "The target cell: an id, slug, or reference (/tracker, /of:fid1:.../). A " +
   "space embedded in the reference (//my-space/tracker) supplies --space " +
@@ -2542,6 +2545,7 @@ export const piece = targetOptions(
     "--pattern-index-url <url:string>",
     "Base URL of the pattern index --from-index reads.",
   )
+  .option("--no-index-version", NO_INDEX_VERSION_HELP)
   .option(
     "--request-key <key:string>",
     "Reuse a creation request after an uncertain result without creating another piece.",
@@ -2704,6 +2708,7 @@ export const piece = targetOptions(
     "--origin <origin:string>",
     "Record this origin (a system: ref or fabric URL) with the revision, so the piece follows it from then on. Without it, setsrc detaches the piece.",
   )
+  .option("--no-index-version", NO_INDEX_VERSION_HELP)
   .option(
     "--check",
     "Report whether the source could replace the piece's current one, without issuing storage writes. Exits non-zero when it could not.",
@@ -3604,6 +3609,9 @@ export interface PieceCLIOptions {
 
   /** `setsrc`: the origin the piece follows from then on. */
   origin?: string;
+
+  /** `setsrc` and `new`: `false` under `--no-index-version`. */
+  indexVersion?: boolean;
   json?: boolean;
 }
 
@@ -5303,6 +5311,13 @@ export async function recordVersionInIndex(
 }
 
 /**
+ * Records no version, for `--no-index-version`: a deploy in a tight edit
+ * loop makes no index call and never waits on the index.
+ */
+const skipIndexVersion = (): Promise<VersionOutcome> =>
+  Promise.resolve({ status: "skipped", reason: "--no-index-version" });
+
+/**
  * The version a deploy is recording, started from `onDeployed` once the
  * deploy commits; `settle` waits for it, prints its one line, if any, and
  * answers the outcome (`undefined` when nothing was deployed). The deploy
@@ -5478,7 +5493,7 @@ export async function newPieceFromCommand(
     throw new Error("`--input-file` must contain a JSON object.");
   }
   const version = main === undefined ? undefined : versionRecorder(
-    deps.recordVersion ??
+    options.indexVersion === false ? skipIndexVersion : deps.recordVersion ??
       ((deployed) => recordVersionInIndex(spaceConfig.identity, deployed)),
     absPath(main),
     undefined,
@@ -5871,7 +5886,7 @@ export async function applyPieceSourceCommandAction(
   deps: ApplyPieceSourceCommandDependencies = {},
 ): Promise<void> {
   const version = versionRecorder(
-    deps.recordVersion ??
+    options.indexVersion === false ? skipIndexVersion : deps.recordVersion ??
       ((deployed) =>
         recordVersionInIndex(parseSpaceOptions(options).identity, deployed)),
     absPath(mainPath),

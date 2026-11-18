@@ -3469,11 +3469,17 @@ remix of it. When this machine never joined an index, a deploy makes no index
 call and says so once. The index write never changes a deploy's outcome: a
 failure is reported in one line and the deploy's exit status stands.
 
+`--no-index-version` on `piece new <file>` and `piece setsrc` keeps no version
+of that deploy and makes no index call to record one, so a deploy in a tight
+edit loop never waits on the index (`--json` reports `skipped`). A
+`--from-index` deploy still reads the index for its source, and keeps no version
+either way.
+
 `cf pattern checkpoint <entry> --cell <piece>` keeps what a piece runs now as a
 private version of the entry's lineage, without deploying: the pattern the piece
 points at, with its source, so it is exactly what was deployed. The sharing
 setting never shares it on its own (`keepPrivate`); `cf pattern share` does. It
-pairs with deploys that keep no version, keeping one when a change is done, and
+pairs with `--no-index-version` deploys, keeping one when a change is done, and
 exits 1 with the reason when no version was kept. A checkpoint of a source the
 newest version already has keeps no new one, says so, and exits 0. It refuses an
 entry file whose name is not the one the piece runs; the description and
