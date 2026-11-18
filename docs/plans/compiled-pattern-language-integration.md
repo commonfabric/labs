@@ -235,9 +235,15 @@ cost of one change does not grow with the length of a list.
   makes the figure honest rather than port the mechanism.
 - **What decides whether to continue.** The cost of one change at 1,000
   topics on the integrated path against today's, and how it grows from 100
-  to 2,000. If it is not clearly below today's, or grows with the size of
-  the board, both tracks stop and report before milestone 3. Otherwise the
-  scheduler comes next.
+  to 2,000. Today's runtime is measured in both postures: the client
+  posture of the comparison harness, which milestone 1 used, and
+  server-side execution, which is what a deployment runs and what today's
+  figures for Topics are of. The integrated executor runs in the client
+  posture until milestone 6, so if today's server-side path is much cheaper
+  than its client path, the serving loop moves ahead of the scheduler. If
+  the integrated cost is not clearly below today's, or grows with the size
+  of the board, both tracks stop and report before milestone 3. Otherwise
+  the scheduler comes next.
 
 ## Milestones
 
@@ -355,6 +361,13 @@ from the start of the executor's work to the settlement of every commit it
 made; a time of today's runtime from the send to the runtime idle with
 every kept output read, the reads of labels by the harness included. Both
 use the runtime's emulated storage, with no memory server and no socket.
+Both run in the client posture: a `Runtime` constructed with no serving
+host resolves `serverExecution` off (`getServerExecutionConfig` in
+`runtime/memory/v2.ts`), although the first-party default that deployed
+entry points apply is on. So the comparison is with today's runtime where a
+client derives and commits itself, and not with server-side execution,
+where a client commits only the append of an event and the serving loop
+commits one derived transaction per wave with the stream's watermark in it.
 All runs were made at the prototype's commit `3d33db2e4d` with the code of
 milestone 1 added, which is the corpus and the runtime of the table of run
 times in the design's plan, because the crate does not emit the corpus of
@@ -438,17 +451,28 @@ that is slower than today. Milliseconds; a range is the two pairs of runs.
   two runs.
 - **With the schema of each write recorded, 13 commits are refused, in 5
   modules** (a third pair of runs). 9 are conflicts of the store ("stale
-  confirmed read"), and 1 a "pending dependency not resolved": the
-  executor issues its commits one after another without waiting for one to
-  settle, and a later transaction read a version of a document that an
-  earlier commit of the same executor, not yet confirmed, had replaced.
-  Today's runtime tracks the dependencies between commits that are
-  pending; the adapter does not yet. 2 are "type changed incompatibly", a
-  labeled document whose root changed from an array to a record, and 1 is
-  the writer-fit misfit. The labeled runs then store the values of the run
-  in memory in 191 of 213 modules. Of the other 22, 5 have a refused
-  commit, 6 read the clock, and in 11 an element record that the run in
-  storage holds differs from the run in memory with no commit refused. A
+  confirmed read") and 1 a "pending dependency not resolved". The executor
+  writes its documents and never subscribes to them, so the replica's
+  confirmed view of each stays at seq 0 while the store's moves on: an
+  accepted commit retires its pending entries only once the confirmed view
+  reaches the commit's seq, and that view advances when the store delivers
+  the document to a subscription. A later commit relevant to Contextual Flow
+  Control that reads such a document, the instance's argument document in
+  the two `scoped-group-chat` modules, is refused as stale. With the adapter
+  subscribing to each document it writes, as the runtime syncs the cells it
+  runs, none of these is refused (tried on those two modules and on
+  `examples/map-demo/map-demo.tsx`). 2 are "type changed incompatibly", a
+  defect of the labeled runs' setup: the driver writes each input through
+  `Cell.set`, which stores each record of an array as a document of its own
+  and the array as links to them, and gives the executor the same input
+  with its records held in place, so a handler's write of a member of a
+  record lands, in storage, below a link. Today's runtime accepts a write
+  below an index of an array that holds strings in place, checked
+  directly. 1 is the writer-fit misfit. The labeled runs then store the
+  values of the run in memory in 191 of 213 modules. Of the other 22, 5
+  have a refused commit, 6 read the clock, and in 11 an element record that
+  the run in storage holds differs from the run in memory with no commit
+  refused. A
   run of one of the 11 alone (`apps/project-list/main.tsx`) stores the
   same element records as the run in memory, and the cause was not found.
   The same pair took 4,537 against 60,900 ms to settle and 25,085 against
