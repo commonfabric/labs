@@ -196,6 +196,17 @@ const WRITTEN: Record<string, Written[]> = {
       { binding: 5, event: {} },
     ],
   }],
+  // A `set` on a cell that holds a link: `pick` stores the link, `star`
+  // writes a member below the cell, and `replace` a plain value to the
+  // cell. The values are compared after each event.
+  "set-over-link": [{
+    argument: { first: { title: "a", stars: 1 } },
+    events: [
+      { binding: 0, event: {} },
+      { binding: 1, event: {} },
+      { binding: 2, event: {} },
+    ],
+  }],
   // Rulings Z25 and Z26 over arrays of plain values in place: a card is
   // kept, the piles swap their last cards, and the row of the last card
   // of the first pile discards it.

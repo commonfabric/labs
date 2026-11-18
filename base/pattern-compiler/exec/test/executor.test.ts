@@ -6074,3 +6074,52 @@ describe("an element of a plain array generated from scratch inside an element b
     expect((instance.result() as Result).pickedStars).toBe(3);
   });
 });
+
+// What a `set` does on a cell that holds a link
+// (`fixtures/set-over-link.tsx`). The comparison of values runs the same
+// events on today's runtime, which gives the same value at every point
+// (`compare/values-fixtures.ts`).
+describe("a `set` on a cell that holds a link", () => {
+  type Result = Record<
+    "firstTitle" | "firstStars" | "pickedTitle" | "pickedStars",
+    unknown
+  >;
+  const [PICK, STAR, REPLACE] = [0, 1, 2];
+  const start = async () => {
+    const instance = new Instance(await artifactOf("set-over-link"), {
+      first: { title: "a", stars: 1 },
+    });
+    instance.send(PICK, {});
+    return instance;
+  };
+  const link = { $link: { doc: ARGUMENT, path: ["first"] } };
+  const cell = (instance: Instance) =>
+    instance.store.docs.get(instance.stateCellDocument(0))?.value;
+
+  it("writes a member below the cell into the record that the link names", async () => {
+    const instance = await start();
+    expect(cell(instance)).toEqual(link);
+
+    instance.send(STAR, {});
+
+    expect(cell(instance)).toEqual(link);
+    expect(instance.result()).toMatchObject({ firstStars: 9, pickedStars: 9 });
+  });
+
+  it("writes a plain value over the record that the link names, and the cell keeps the link", async () => {
+    const instance = await start();
+
+    instance.send(REPLACE, {});
+
+    expect(cell(instance)).toEqual(link);
+    expect(instance.store.docs.get(ARGUMENT)?.value).toEqual({
+      first: { title: "plain", stars: 0 },
+    });
+    expect(instance.result() as Result).toMatchObject({
+      firstTitle: "plain",
+      firstStars: 0,
+      pickedTitle: "plain",
+      pickedStars: 0,
+    });
+  });
+});
