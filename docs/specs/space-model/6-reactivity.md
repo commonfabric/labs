@@ -246,7 +246,7 @@ This would eliminate the special-casing for streams.
 - Scheduler state is not persisted (the experimental persisted form was
   deleted by server-execution v2 Phase 1 stage C; the archived account is
   [Persistent Scheduler State](../../history/specs/persistent-scheduler-state.md)).
-  The durable successor is the serving loop's basis index
+  The serving loop keeps no scheduler state in the store either
   ([serving-loop.md §3b](../server-side-execution/serving-loop.md)).
 - How should deliberate debouncing and threshold-based execution be specified?
 

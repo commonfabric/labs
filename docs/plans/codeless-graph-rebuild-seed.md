@@ -18,28 +18,29 @@ running piece's graph durably reconstructible without any keyless loading:
   `cf:module` (CT-1644/CT-1655). The runtime keyless population is therefore
   runtime-built pattern VALUES only — their *producing code* always has a
   durable address.
-- **`scheduler_basis` holds restart-stable action fingerprints and observed
-  read sets.** What ran, keyed stably across restarts, with what it read.
+- **Action identities are restart-stable.** A run is named by the same
+  fingerprint across restarts. The store keeps no record of what a run read
+  (serving-loop.md §3b), so the arc records reads in a form of its own.
 - **Piece materialization durably carries `(pattern identity, argument
   doc)`.** The instantiation inputs of a piece are already in the store.
 - **Outputs are cause-derived.** Result/output doc ids derive from their
   causes, so the output *addresses* are reconstructible from the inputs —
   they do not need to be remembered independently.
-- **The known gap: first-run nodes lack basis rows** (the D3 shape recorded
-  in the register: a dropped first-ever run leaves no basis rows to re-run
-  from). Everything that has run **once** has its `(code, inputs, outputs)`
-  triple durably reconstructible; a node that never ran has only its
-  pattern-side description.
+- **The known gap: what a run read is not durable** (the D3 shape recorded in
+  the register is its first-run case: a dropped first-ever run leaves nothing
+  to re-run from). A node's code and outputs are durably addressable; its
+  inputs are not, until the arc records them.
 
 ## What the arc would build (when unparked)
 
-Rebuild a runnable graph from durable state alone: walk `scheduler_basis` +
-piece materialization records, resolve module-addressed code, re-derive
+Rebuild a runnable graph from durable state alone: walk a durable record of
+what each run read (the arc's own) and piece materialization records, resolve
+module-addressed code, re-derive
 outputs by cause — no session-side artifacts required. That is the recovery
 story for the class the keyless close-out ruled out of contract
 (handler-created state outliving its session must instantiate from
-content-addressed artifacts), and it would also close the D3 first-run gap
-if basis rows gain a written-at-materialization form.
+content-addressed artifacts), and it would also close the D3 first-run gap if
+that record gains a written-at-materialization form.
 
 ## Boundary with the keyless close-out
 

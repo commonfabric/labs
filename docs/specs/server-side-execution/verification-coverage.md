@@ -4148,6 +4148,46 @@ Delta 2026-11-01 — stage L (the lease in memory,
   from another worker's by the holder component its connection names, is
   `runtime/memory/test/v2-explicit-read.test.ts`.
 
+Delta 2026-11-16 — `scheduler_basis` is neither scanned nor written:
+
+- serving-loop §6 step 2's activation: COVERED, superseding the PARTIAL
+  entry under "Delta 2026-08-05 — stage F lands". Activation subscribes
+  from the store's head and reads no basis rows, home or foreign; a fresh
+  runtime starts every computation it materializes as not yet run, so
+  recovery recomputes what demand reaches.
+  `runtime/runner/test/executor-serving-loop.test.ts` pins recovery of an
+  input committed while nothing served the space, across a restart of the
+  memory server over a file store, with and without `scheduler_basis` rows
+  in the store, and that no store file is created for a space a row
+  names. `runtime/runner/test/executor/space-server-tenure.test.ts` pins
+  that a row naming another space opens no engine for it.
+- The foreign re-mark that Phase 5's entry describes, and its unit pin
+  (the review's F5, `selectForeignStaleInstances` in
+  `executor-cross-space.test.ts`), are retired with the scan. Fan-out
+  stage B's "the basis index at activation" no longer holds: the loop
+  runs the demanded writers not current for a demanding pair by B7's
+  clean bit alone.
+- The wave writes no `scheduler_basis` rows and the engine keeps the
+  table empty, deleting any rows a store holds when it opens it
+  (serving-loop.md §3b). Entries above that cite basis rows as an
+  observable are superseded as follows. Q1's "a survivor whose writes
+  were dropped per-doc still lands its basis rows" is now "keeps its
+  logged reads": `runtime/runner/test/scheduler-wave-withdrawal.test.ts`
+  runs a derivation whose write the wave dropped as superseded again
+  when an input it read changes, and commits that run's write. M3's
+  basis-row half is now the sealed commit's read set: the
+  derivation-emitter test in `executor-wave.test.ts` checks that the
+  sealed reads hold the seed and not the stream sidecar. The S4
+  narrowing rule and its pins (the S4 test in
+  `executor-instance-keyed-replica.test.ts`, "S4 clearance in BOTH
+  directions" in `executor-wave.test.ts`) are retired with the rows;
+  the P2-F end-to-end pin in `executor-serving-loop.test.ts` checks the
+  acting annotations alone. `runtime/memory/test/v2-engine-revision.test.ts`
+  pins the delete at open and that an open over a store with no rows
+  commits nothing another connection sees, and
+  `runtime/state-inspector/test/compaction.test.ts` that compaction's
+  verifier accepts a result whose `scheduler_basis` the open emptied.
+
 Delta 2026-08-16 — fan-out stage A (OW17 leg 1: the instance-keyed
 serving replica + wire; the client arrival gate):
 

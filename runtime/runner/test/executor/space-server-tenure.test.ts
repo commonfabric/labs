@@ -6,7 +6,6 @@ import { getLogger } from "@commonfabric/logger";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { executionLeaseHolder } from "@commonfabric/memory/v2/execution-lease";
 import { insertExecutionOutboxRows } from "@commonfabric/memory/v2/execution-outbox";
-import { replaceSchedulerBasisRows } from "@commonfabric/memory/v2/scheduler-basis";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import { EngineWaveCommitSink } from "../../src/executor/engine-wave-sink.ts";
@@ -293,71 +292,34 @@ describe("space-server", () => {
         ).toEqual({ n: 1 });
       });
 
-      describe("over a basis that recorded a read of another space", () => {
-        beforeEach(async () => {
-          // The read is behind the document's head in the other space.
-          const written = await server.writeDocument(
-            foreignSpace,
-            "of:foreign-input",
-            { n: 1 },
-          );
-          replaceSchedulerBasisRows(engine, {
-            branch: "",
-            action: "action-reading-foreign",
-            actionScopeKey: "space",
-            rows: [{
-              entitySpace: foreignSpace,
-              entity: "of:foreign-input",
-              entityScopeKey: "space",
-              seq: written.seq - 1,
-            }],
-          });
+      it("activates over a store holding a scheduler_basis row that names another space, requesting no engine for that space", async () => {
+        // The row is in the shape a handler writing into another space
+        // left, and names a space that has no store.
+        engine.database.prepare(
+          `INSERT INTO scheduler_basis
+             (branch, action, action_scope_key, entity_space, entity,
+              entity_scope_key, seq)
+           VALUES ('', 'handler:cf:module/older-build/main.tsx:1:1',
+                   'space', :entitySpace, 'of:foreign-input', 'space', 0)`,
+        ).run({ entitySpace: foreignSpace });
+        const engineRequests: string[] = [];
+        const facade = new Proxy(server, {
+          get(target, property) {
+            if (property === "engineForSpace") {
+              return (requested: MemorySpace) => {
+                engineRequests.push(requested);
+                return target.engineForSpace(requested);
+              };
+            }
+            const value = Reflect.get(target, property);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
         });
 
-        it("judges the read against the other space's engine", async () => {
-          const engineRequests: string[] = [];
-          const facade = new Proxy(server, {
-            get(target, property) {
-              if (property === "engineForSpace") {
-                return (requested: MemorySpace) => {
-                  engineRequests.push(requested);
-                  return target.engineForSpace(requested);
-                };
-              }
-              const value = Reflect.get(target, property);
-              return typeof value === "function" ? value.bind(target) : value;
-            },
-          });
-          const failed = warned("basis-foreign-remark-failed");
-
-          expect(await newSpaceServer({ serverFacade: facade }).activate())
-            .toBe(true);
-          expect(engineRequests).toContain(foreignSpace);
-          expect(warned("basis-foreign-remark-failed")).toBe(failed);
-        });
-
-        it("activates, and logs the failure, when the other space's engine cannot be opened", async () => {
-          const facade = new Proxy(server, {
-            get(target, property) {
-              if (property === "engineForSpace") {
-                return (requested: MemorySpace) =>
-                  requested === foreignSpace
-                    ? Promise.reject(new Error("foreign engine unavailable"))
-                    : target.engineForSpace(requested);
-              }
-              const value = Reflect.get(target, property);
-              return typeof value === "function" ? value.bind(target) : value;
-            },
-          });
-          const failed = warned("basis-foreign-remark-failed");
-
-          expect(await newSpaceServer({ serverFacade: facade }).activate())
-            .toBe(true);
-          expect(stats.activeSpaces).toBe(1);
-          expect(warned("basis-foreign-remark-failed")).toBe(
-            failed + 1,
-          );
-        });
+        expect(await newSpaceServer({ serverFacade: facade }).activate())
+          .toBe(true);
+        expect(stats.activeSpaces).toBe(1);
+        expect(engineRequests).not.toContain(foreignSpace);
       });
     });
 

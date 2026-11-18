@@ -249,12 +249,11 @@ const instanceHolds = (
     JSON.stringify(value ?? null).includes(needle)
   );
 
-const basisKeys = (engine: Engine.Engine): Set<string> =>
+/** The instance keys the serving runtime's runs were stamped with. */
+const runKeys = (runtime: Runtime): Set<string> =>
   new Set(
-    (engine.database.prepare(
-      `SELECT DISTINCT action_scope_key FROM scheduler_basis`,
-    ).all() as Array<{ action_scope_key: string }>).map((row) =>
-      row.action_scope_key
+    runtime.scheduler.getActionRunTrace().flatMap((entry) =>
+      entry.instanceKey === undefined ? [] : [entry.instanceKey]
     ),
   );
 
@@ -575,11 +574,12 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     expect(instanceHolds(engine, aliceKey, '"echo:B"')).toBe(false);
     expect(instanceHolds(engine, bobKey, '"echo:A"')).toBe(false);
     // (e) The service identity NEVER runs demanded work: no demanded
-    // instance value under its key, no basis row under it.
+    // instance value under its key, and no run stamped with it.
     expect(instanceHolds(engine, setup.serviceUserKey, '"echo:')).toBe(false);
-    expect(basisKeys(engine).has(setup.serviceUserKey)).toBe(false);
-    expect(basisKeys(engine).has(aliceKey)).toBe(true);
-    expect(basisKeys(engine).has(bobKey)).toBe(true);
+    const keys = runKeys(servingRuntime!);
+    expect(keys.has(setup.serviceUserKey)).toBe(false);
+    expect(keys.has(aliceKey)).toBe(true);
+    expect(keys.has(bobKey)).toBe(true);
     // Attribution (design §F, RULED 2026-08-16): a user-scoped instance
     // run acts as the USER — no session on its writes; never the service.
     await awaitAdmitted(
@@ -710,7 +710,7 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     setup.cancel();
   });
 
-  it("(c) RAGGED: a node user-scoped for Alice and session-scoped for Bob — Bob's instance per session, Alice's per user, both correct, no session-keyed rows for Alice (S4)", async () => {
+  it("(c) RAGGED: a node user-scoped for Alice and session-scoped for Bob — Bob's instance per session, Alice's per user, both correct, and Alice never runs per session", async () => {
     const setup = await standUp({
       names: { arg: "fo-c-arg", result: "fo-c-result" },
       userScopedNote: true,
@@ -755,18 +755,10 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     );
     // Neither user's value crossed.
     expect(instanceHolds(engine, bobKey, '"echo:A"')).toBe(false);
-    // Basis rows: Alice's `echo` rows under her USER key; Bob's noteEcho
-    // rows under his SESSION key; the space-only label under `space`;
-    // NO session-keyed basis row for Alice's echo — the ragged S4 pin:
-    // a session-deep sibling never over-keys a user-scoped principal.
-    await awaitAdmitted(
-      server,
-      () =>
-        [...basisKeys(engine)].some((key) =>
-          key.startsWith(`session:${encodeURIComponent(bobSigner.did())}:`)
-        ),
-    );
-    const keys = basisKeys(engine);
+    // Runs: Alice's under her USER key, the space-only label under
+    // `space`, none under the service identity's key. Bob's session runs
+    // and Alice's absence among them are asserted below.
+    const keys = runKeys(servingRuntime!);
     expect(keys.has(aliceKey)).toBe(true);
     expect(keys.has("space")).toBe(true);
     expect(keys.has(setup.serviceUserKey)).toBe(false);
@@ -827,12 +819,9 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     );
     await awaitAdmitted(server, () => bobSessionHolds('"note:N"'));
     expect(instanceHolds(engine, bobKey, '"echo:A"')).toBe(false);
-    await awaitAdmitted(
-      server,
-      () =>
-        [...basisKeys(engine)].some((key) => key.startsWith(bobSessionPrefix)),
-    );
-    const keys = basisKeys(engine);
+    // The run that discovered Bob's session depth was stamped with his
+    // user key; the session instance it served is the store truth above.
+    const keys = runKeys(servingRuntime!);
     expect(keys.has(aliceKey)).toBe(true);
     expect(keys.has("space")).toBe(true);
     expect(keys.has(setup.serviceUserKey)).toBe(false);
@@ -915,8 +904,6 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     // undemanded fallback run carries no instance key).
     expect(labelRuns.length).toBe(1);
     expect(labelRuns[0].instanceKey).toBe("space");
-    // And the label's basis rows key `space` only.
-    expect(basisKeys(engine).has(setup.serviceUserKey)).toBe(false);
     setup.cancel();
   });
 

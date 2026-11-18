@@ -210,7 +210,8 @@ user-scoped state and discovers user narrowing. Later U2's client
 demands the node. S1, S2 subscribe throughout.
 Hops: (1) U1's run discovers narrowing. (2) The discovering wave's
 writes. (3) Push after that wave. (4) U2's demand arrives. (5)
-U2's instance run + wave. (6) Basis-index effects.
+U2's instance run + wave. (6) What the store records of the
+discovering run's reads.
 
 - T6.Q1 — Hop 1 run identity, and what supplied it.
 - T6.Q2 — Hop 2: enumerate EVERY write the discovering wave makes
@@ -223,9 +224,8 @@ U2's instance run + wave. (6) Basis-index effects.
   instance rows?
 - T6.Q5 — Hop 4/5: what identity does U2's instance run assume;
   does W wait for it before U2 demands it?
-- T6.Q6 — Hop 6: the basis rows for the discovering run — keyed
-  how, and what happens to rows recorded under the OLD (broader)
-  instance key?
+- T6.Q6 — Hop 6: what does the store record of the discovering
+  run's reads?
 - T6.Q7 — A later broader-scoped run writes to the narrowed slot:
   what happens to the redirect?
 
@@ -292,23 +292,24 @@ wave advances.
 - T9.Q5 — Does W advance for this wave if the cascade has not
   quiesced within budget? What does the commit carry then?
 
-### T10 — Crash and recovery: the index-guided re-mark
+### T10 — Crash and recovery: recompute on demand
 
-Purpose: recovery is re-marking, never replay.
+Purpose: recovery is recomputation, never replay.
 Setup: the host crashes mid-wave (after some effect requests left,
 before the wave commit). A deploy brings up a new host.
 
 - T10.Q1 — What survives the crash as correctness-bearing state?
   Complete list, each with citation.
-- T10.Q2 — Activation on the new host: the re-mark rule, exactly —
-  what makes a node dirty, and against what head?
-- T10.Q3 — Why can commit replay NOT substitute for the index?
+- T10.Q2 — Activation on the new host: which computations does the
+  fresh runtime hold as current, and from what head does it
+  subscribe?
+- T10.Q3 — Why is recovery NOT commit replay?
 - T10.Q4 — Which effects re-fire and which are suppressed? What
   external duplicate is possible, and what ruling accepted it?
 - T10.Q5 — Undelivered events at boot: detected how, reprocessed
   under what idempotency rule?
 - T10.Q6 — What per-run state is FORBIDDEN to persist for
-  recovery, and what test distinguishes the basis index from it?
+  recovery?
 
 ### T11 — `.inSpace` provisioning: the second sanctioned crossing
 
@@ -471,7 +472,7 @@ these.
   `consequenceOf: [eventId]`. [protocol §1, §4, §7; serving-loop §2, §3]
 - Q7: S2 receives the space-keyed rows (both writes here); any row
   keyed to another principal's instance would be ABSENT (not
-  redacted); basis rows never push to anyone. [protocol §3]
+  redacted). [protocol §3]
 - Q8: settled when `W ≥ seq(the hop-1 append)`. [protocol §4]
 
 ### T2 (FLAGS(1) — resolved by LT8; Q6 carries the resolution)
@@ -613,9 +614,8 @@ these.
 - Q5: U2's run identity = U2 from its own demand; W never waits on
   the UNDEMANDED sibling, and waits on it once demanded, under the
   budget rule. [scopes §2; protocol §4; serving-loop §3]
-- Q6: basis rows keyed with `action_scope_key = user:U1`, overwritten
-  per (action, instance); the stranded `space`-key rows are DELETED
-  in the same wave tx. [serving-loop §3b]
+- Q6: nothing — read sets live in memory only, and the store keeps
+  no record of what a run read. [serving-loop §3b]
 - Q7: the redirect is permanent; later broader runs write THROUGH it;
   widen-back is closed NO. [scopes §2]
 
@@ -690,21 +690,22 @@ these.
 
 ### T10 (COMPLETE)
 - Q1: committed state (incl. `requestHash` memo keys), W,
-  `eventWatermark`, the basis index — and nothing else. [serving-loop
-  §3b, §6; protocol §4; events §4; README §2]
-- Q2: dirty iff a recorded input seq is behind that doc's current
-  head; subscribe from the scan head. [serving-loop §3, §6]
-- Q3: own derived commits are echo-skipped live, so replay cannot
-  re-mark the frontier. [serving-loop §3, §3b, §6]
+  `eventWatermark` — and nothing else. [serving-loop §3b, §6;
+  protocol §4; events §4; README §2]
+- Q2: none — a fresh runtime starts every computation it materializes
+  as not yet run, so the first wave runs each one demand reaches;
+  subscribe from the store's head at activation. [serving-loop §3, §6]
+- Q3: own derived commits are echo-skipped live, so the loop never
+  replays them; recovery recomputes what demand reaches instead.
+  [serving-loop §3, §6]
 - Q4: memo hits suppress; misses re-fire; the external call may
   duplicate — at-least-once RULED, fired-marker REJECTED.
   [serving-loop §4, §6]
 - Q5: stream head past `eventWatermark` at boot ⇒ reprocess; at-or-
   below skips as `skippedIdempotent`. [serving-loop §1, §6; events §4]
 - Q6: the evidence log (payloads, per-run history, certificates,
-  replay) is FORBIDDEN; the test: payloads/history ⇒ evidence,
-  ids+seqs overwritten per (action, instance) ⇒ basis.
-  [serving-loop §3b, §6, §8]
+  replay) is FORBIDDEN, and nothing else of a run is persisted
+  either. [serving-loop §3b, §6, §8]
 
 ### T11 (FLAGS(1) CONTRADICTIONS(2) → both fixed)
 - Q1: `authored`, under the event's acting identity, metadata =
@@ -775,9 +776,8 @@ these.
   write into a lease-less space stays parked until its first session
   or event. [serving-loop §1 planes (b)/(d); T11.Q7]
 - Q2: activation acquires the lease (else parks), builds the serving
-  runtime (flag ON, §3e posture), reads W, re-marks the dirty
-  frontier from the basis index, and subscribes from the head the
-  index scan ran against; graph structure loads PER DEMANDED ROOT
+  runtime (flag ON, §3e posture), reads W, and subscribes from the
+  store's head; graph structure loads PER DEMANDED ROOT
   through the auto-load prior art (`ensurePieceRunning` — result-
   metadata chain to the owning result cell, pattern loaded by
   identity, `runtime.start`). There is NO piece-start step, no root

@@ -211,9 +211,6 @@ resolving `scope` against its identity. The vocabulary:
   dirtiness across the name-keyed fan-in is stage B's B7 (O(N) re-runs
   per input change, equality cutoffs absorbing siblings — recorded, not
   a correctness need).
-- **Basis rows** — keyed by the run's FULL instance address (S4 as
-  amended, serving-loop.md §3b): the discovered scope resolved against
-  the run identity, with the stamped and broader-chain keys cleared.
 
 The seed-memo site (§1 site 4) keys under the RUN's identity
 (`tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity`). The result-pattern

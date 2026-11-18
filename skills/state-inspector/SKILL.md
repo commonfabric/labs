@@ -48,10 +48,10 @@ of it all (`entities`/`piece`/`graph`).
   durations.
 - _What was rejected_ — the engine rejects stale reads _before_ they persist, so
   they are not here. Zero anomalies means consistent, not "no concurrency."
-- _The live reactive graph_ — the dependency graph lives in runtime memory only;
-  the sole durable scheduler state is the `scheduler_basis` index (doc-granular
-  ids + seqs — no paths, no payloads), empty until the serving loop writes it.
-  Entity/commit history always works.
+- _The live reactive graph_ — the dependency graph lives in runtime memory only,
+  and the store keeps no scheduler state besides the watermark machinery:
+  `scheduler_basis` is an empty table, and opening a store through the engine
+  clears it. Entity/commit history always works.
 - _Change anything_ — it is read-only; it explains, it never reproduces or
   fixes.
 
@@ -215,12 +215,14 @@ fixed recipe. The recurring debugging questions and where they resolve:
 
 ## Gotchas that will mislead you if unflagged
 
-- **`scheduler_basis` is the only durable scheduler state** (besides the
-  watermark machinery; serving-loop.md §3b). The retired
-  `persistentSchedulerState` observation tables were deleted in server-execution
-  v2 stage C.2, and the tool no longer reads them even from an old snapshot that
-  still contains them. The entity-history surface always works; the basis table
-  absent (pre-migration store) or empty is normal, not a broken DB.
+- **The store keeps no scheduler state** besides the watermark machinery
+  (serving-loop.md §3b). `scheduler_basis` is an empty table, and opening a
+  store through the engine clears it; rows there mean a store an earlier build
+  wrote that the engine has not opened since. The retired
+  `persistentSchedulerState` observation tables are gone, and the tool does not
+  read them even from an old snapshot that still contains them. The
+  entity-history surface always works; the basis table absent (pre-migration
+  store) or empty is normal, not a broken DB.
 - **A capped result announces itself — and the caps that don't are the ones to
   watch.** The space-wide scans (`entities`, `graph`, `html`) print a cap notice
   on stderr in _both_ modes, so silence there means you hold the whole set; a

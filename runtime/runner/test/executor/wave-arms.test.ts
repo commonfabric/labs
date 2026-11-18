@@ -1062,47 +1062,54 @@ describe("WaveAccumulator", () => {
       });
     });
 
-    describe("basis rows", () => {
-      it("keys a run that discovered an instance its identity cannot name by its stamped key, and clears the space key it narrowed from", async () => {
-        const wave = handBuiltWave();
-        const tx = new ExtendedStorageTransaction(
-          new SealingTransaction([{
-            operations: [setOf("of:b")],
-            confirmed: [{ id: "of:read", path: ROOT, seq: 3 }],
-          }]),
-        );
-        stampWaveRunContext(tx, {
-          actionId: "derive/sessionless",
-          kind: "derivation",
-          actionScopeKey: "user:sessionless",
-          scopeKeyIdentity: {},
-        });
-        tx.noteReadScope("session");
-        expect((await wave.seal(tx)).error).toBeUndefined();
-        const { sink, batches } = recordingSink();
+    describe("a confirmed read whose scope the run identity cannot name", () => {
+      // When none of the docs the run wrote conflicted at one of the loop's
+      // own commits, nothing in the wave's commit resolves the scope of a
+      // derivation's confirmed read in a space the run wrote, so the run's
+      // write commits whatever identity the run was stamped with. The
+      // own-commit conflict path (`observedOwnCommit` in `#commitHeld`)
+      // still resolves every confirmed home read's scope.
 
-        await wave.commitWave(sink);
-
-        expect(batches[0].basisInstances).toEqual([
-          {
-            action: "derive/sessionless",
-            actionScopeKey: "user:sessionless",
-            rows: [{
-              action: "derive/sessionless",
-              actionScopeKey: "user:sessionless",
-              entitySpace: space,
-              entity: "of:read",
-              entityScopeKey: "space",
-              seq: 3,
-            }],
-          },
-          {
-            action: "derive/sessionless",
+      for (
+        const [description, scopeKeyIdentity] of [
+          [
+            "commits a derivation whose confirmed read names a session instance its run identity cannot name",
+            {},
+          ],
+          [
+            "commits a derivation whose confirmed read names a session instance under a principal with no session",
+            { principal: "did:key:z6Mk-wave-arms-sessionless" },
+          ],
+        ] as const
+      ) {
+        it(description, async () => {
+          const wave = handBuiltWave();
+          const { result } = await sealRun(wave, {
+            actionId: "derive/sessionless",
+            kind: "derivation",
             actionScopeKey: "space",
-            rows: [],
-          },
-        ]);
-      });
+            scopeKeyIdentity,
+          }, [{
+            operations: [setOf("of:b")],
+            confirmed: [{
+              id: "of:read",
+              path: ROOT,
+              seq: 3,
+              scope: "session",
+            }],
+          }]);
+          expect(result.error).toBeUndefined();
+          const { sink, batches } = recordingSink();
+
+          const outcome = await wave.commitWave(sink);
+
+          expect(outcome.aborted).toBeUndefined();
+          expect(batches.map((batch) => [batch.space, batch.home])).toEqual([
+            [space, true],
+          ]);
+          expect(batches[0].operations).toEqual([setOf("of:b")]);
+        });
+      }
     });
   });
 });

@@ -25,10 +25,11 @@ function newRuntime(storageManager: ReturnType<typeof StorageManager.emulate>) {
 
 /**
  * The durable identity of every registered scheduler action for this
- * pattern, read from the live scheduler graph. Restart-stable action
- * identity stays load-bearing for server-execution v2 (the basis index's
- * `action` column — serving-loop.md §3b), so this invariant keeps its
- * guard even with the persisted-observation instrument deleted.
+ * pattern, read from the live scheduler graph. Durable action identity
+ * stays load-bearing for server-execution v2: it names each run in the
+ * wave's refusals and diagnostics (`WaveRunContext.actionId`,
+ * serving-loop.md §3d), so this invariant keeps its guard even with the
+ * persisted-observation instrument deleted.
  */
 function collectIdentities(
   runtime: Runtime,

@@ -44,7 +44,7 @@ Audit-specific rules on top:
      load-bearing-elsewhere);
    - **Unsanctioned carriage** — the field rides a hop that
      protocol.md §7's closed metadata list (or its named
-     sanctions: basis rows, write-level event fields) does not
+     sanctions: write-level event fields, the durable outbox rows) does not
      cover.
 4. **Output format**: per field — the chain table, then the
    closure verdict lines, then structural-check results — followed
@@ -67,8 +67,8 @@ declaring `N/A` requires a reason.
 - **P4 effect completion** — memo miss → outbox → external call →
   completion commit (the derived commit that never passes
   sealing).
-- **P5 recovery / activation** — crash, lease handover, index
-  re-mark, event reprocessing, park/activate.
+- **P5 recovery / activation** — crash, lease handover,
+  recompute on demand, event reprocessing, park/activate.
 - **P6 client lifecycle** — speculation overlay, offline queue,
   reload, push filtering, enact/ack.
 
@@ -149,7 +149,7 @@ field's chain):
   builtins §4 and protocol §5 FIXED (§5 normative). `requestHash`:
   CLOSED P2/P4; the client-side "memo key differs" mechanism is
   uncited (→ FP16). Outbox identity carriage: CLOSED P2/P4; its
-  missing §7 sanction FIXED (now named beside the basis rows).
+  missing §7 sanction FIXED (now named in §7).
 - **F — client-side state.** `sessionId`: CLOSED P1/P3/P6; minting
   + uniqueness unstated — elevated by LT2's cross-space trust
   (→ FP9); TTL × durable-offline-queue interaction unstated

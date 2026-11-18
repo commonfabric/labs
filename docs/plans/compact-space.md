@@ -257,8 +257,7 @@ measurement after compaction.
 Each is something a reader relies on today, with the code that relies on it.
 
 - **I1 — every head keeps its `(seq, op_index)`.** Clients hold entity seqs in
-  their holdings and confirm reads against them; the scheduler basis index
-  records input seqs and decides dirtiness by comparing them with heads; the
+  their holdings and confirm reads against them; the
   commit-class annotation of a frame resolves through the head's seq. Moving
   a head to a new seq would make every one of those stale at once and hand the
   serving loop a full re-derivation on activation — a storm to end a storm.
@@ -351,7 +350,9 @@ Each is something a reader relies on today, with the code that relies on it.
 - **I7 — everything that is not revision history is untouched**: `head`
   addresses, `op_*` tables, `scheduler_basis`, `execution_outbox`,
   `blob_store`, `branch`, `execution_lease`, and every table a pattern created
-  through the SQLite builtin.
+  through the SQLite builtin. The one exception is that `scheduler_basis` may
+  come back empty: the run opens its copy through the engine, and the engine
+  deletes that table's rows when it opens a store.
 - **I8 — the default branch is the only branch.** A forked branch reads its
   parent's rows at `min(seq, forkSeq)`; a base materialized at a head past the
   fork would be invisible to it, and the parent rows it read would be gone.

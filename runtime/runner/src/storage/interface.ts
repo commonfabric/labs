@@ -4334,9 +4334,9 @@ export interface SealedNativeCommit {
   localSeq: number;
 
   /** The built commit — operations plus the read set (confirmed reads carry
-   * the store versions the wave's per-doc CAS and basis rows are computed
-   * from; pending reads name earlier sealed commits by localSeq, the
-   * in-wave read edges). */
+   * the store versions the wave's per-doc CAS is computed from; pending
+   * reads name earlier sealed commits by localSeq, the in-wave read
+   * edges). */
   commit: ClientCommit;
 
   /** Resolves when the verdict has been applied locally (promotion or

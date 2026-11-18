@@ -59,8 +59,8 @@ access list names is read the same way, through `resolveSpaceOwnerOf` on the
 worker's engine.
 
 **Wave commits cross to the main thread.** `EngineWaveCommitSink` applies a
-wave's one derived commit inside the engine transaction that also writes its
-basis rows, re-verifies its documents, attaches the wave's sqlite cell databases
+wave's one derived commit inside one engine transaction, re-verifies its
+documents, attaches the wave's sqlite cell databases
 through the memory server, and reports the commit to the server
 (`noteExecutorCommit`) for dirtiness and fan-out. On the main thread the sink
 reports the commit itself, as it applies it, and the worker's loop reports
@@ -69,7 +69,7 @@ let the server's fan-out of the wave's rows fall behind the loop's next step,
 which in-process follows the apply synchronously. Every commit the server fans
 out is applied on the main thread, where the server sees each one land: the
 worker sends the `WaveSpaceCommit` (data throughout: operations, preconditions,
-confirmed reads, annotations, basis rows, consequence ids, delegated carriage,
+confirmed reads, annotations, consequence ids, delegated carriage,
 outbox appends) in the memory boundary's encoding, and the main thread applies
 it through a sink of its own under the sending session, returning the result.
 The counter that keys the session's commits stays with the worker, because the

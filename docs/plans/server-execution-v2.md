@@ -842,9 +842,8 @@ ordered gates (Phase 7 task 1), which no longer gate landing.
   the serving loop marks the WRITERS of demanded instances as demand
   roots (a new `isDemandRoot` disjunct, bracketed per serving-loop.md
   §8) and runs the ones NOT CURRENT for a demanding pair (B7's
-  per-instance clean bit; the basis index is the same predicate at
-  activation); those runs' own reads pull upstream and dirty downstream
-  — the client-side scheduler's model; structure changes ride the
+  per-instance clean bit); those runs' own reads pull upstream and dirty
+  downstream — the client-side scheduler's model; structure changes ride the
   tracker's push-time re-traversal and a run's own read of a newly
   linked doc; NO structural-versus-value distinction anywhere. The
   former (d) — the STRUCTURAL WALK (one walk node per (scope-name, root
@@ -1301,11 +1300,9 @@ Tasks:
       batch-4 fan-out closure was CORRECTED: the discovering wave
       writes the redirect AND its own run's instance, and W waits on
       demanded siblings (scopes.md §2). The residual open that
-      remains is session-data GC — the basis-index DDL is authored
-      in serving-loop.md §3b — and that GC must cover non-session
-      keys too. **Owner modeling ruling 2026-08-03 — the transaction
-      identity model (protocol.md §1) — closed the two remaining
-      ledger items:** LD5 (the read row is RATIFIED as the read half
+      remains is session-data GC. **Owner modeling ruling 2026-08-03 —
+      the transaction identity model (protocol.md §1) — closed the two
+      remaining ledger items:** LD5 (the read row is RATIFIED as the read half
       of the server-driven commit variant — a protocol change, and
       the intended one) and LD3 (the `scope_key` format is PROTOCOL
       vocabulary, defined once in the wire-shape module
@@ -1563,8 +1560,8 @@ Stages, one PR each except C, which is a three-PR train (below):
 - [x] **G — effectful + outbox**: serve `fetch*`, `generate*`,
       `sqlite*` behind request-hash memoization; the outbox; egress
       performed only here (effect authority per README §3.8; quota
-      attribution deferred); recovery = basis-index re-marking,
-      recompute pure nodes, reuse memoized effect results, no replay
+      attribution deferred); recovery = recompute what demand
+      reaches, reuse memoized effect results, no replay
       (serving-loop.md §4–§6). LANDED 2026-08-06: sealed post-commit
       effects defer to the per-space outbox and fire POST-wave-commit;
       the builtins' writebacks — marked with their effect key — commit
@@ -1709,7 +1706,7 @@ after this phase's, the way stage C's train was cut):**
       consumes the SpaceServer's demanded-identity registry through
       the widened seam and runs a demanded action once per instance,
       each run stamped with its instance's identity and ACTING pair —
-      instances live in keys/basis rows/stamps, never as extra graph
+      instances live in keys/stamps, never as extra graph
       nodes, C11b), the LT6 acting inheritance at the event-dispatch
       choke point, and the F1 piece-start surfacing (§3d's
       piece-start site, RULED 2026-08-13). The demand-cycle terminal
@@ -1723,8 +1720,8 @@ after this phase's, the way stage C's train was cut):**
       LOCAL read-set/dirtiness precision remain owed together —
       they are one leg (a scoped doc's local state still collapses
       per scope name at cardinality > 1), tracked as the narrowed
-      OW17 residue; engine-side instancing (keys, basis rows,
-      annotations, carriages) is exact at any cardinality.
+      OW17 residue; engine-side instancing (keys, annotations,
+      carriages) is exact at any cardinality.
 
 Success criteria (the old Phase-1 ON gates land here, merged):
 
@@ -1886,10 +1883,8 @@ Tasks:
       runtime's own foreign loopback session, the scheduler re-runs
       autonomously off storage notifications, and the re-run's seal
       wakes the loop (the §3b server-internal wake — never home
-      input; W stays per home space); activation's basis re-mark
-      judges foreign rows against their own co-hosted engines
-      (serving-loop.md §6 step 2, pinned at the helper —
-      `selectForeignStaleInstances`).
+      input; W stays per home space); activation reads no basis rows,
+      foreign or home (serving-loop.md §6 step 2).
       Foreign SCOPED reads are admitted on the reading actor's own READ
       grant in the target space's access list, the actor's entry or an
       `ANYONE` entry granting READ or more, and refused otherwise —

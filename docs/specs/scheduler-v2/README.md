@@ -17,8 +17,8 @@
 > [the per-doc persisted-form record](../../history/specs/scheduler-v2/per-doc-rehydration-persisted-form.md),
 > [incremental observation adoption](../../history/specs/scheduler-v2/incremental-observation-adoption.md)).
 > The live remainder — the per-doc identity invariant and the resume hold —
-> is [per-document rehydration](per-doc-rehydration.md); the durable
-> successor is the basis index
+> is [per-document rehydration](per-doc-rehydration.md); the serving loop
+> keeps no scheduler state in the store either
 > ([serving-loop.md §3b](../server-side-execution/serving-loop.md)).
 
 This document re-derives the scheduler from first principles. It specifies the
@@ -88,9 +88,9 @@ observation form was deleted (server-execution v2 Phase 1 stage C; the
 archived account is
 [persistent scheduler state](../../history/specs/persistent-scheduler-state.md)):
 a resumed piece re-runs its actions fresh, held until the space syncs. The
-durable successor is the serving loop's basis index — ids + seqs only,
-re-marking the dirty frontier on activation
-([serving-loop.md §3b](../server-side-execution/serving-loop.md)) — so
+serving loop persists no scheduler state that recovery reads either: a fresh
+serving runtime starts every computation it materializes as not yet run
+([serving-loop.md §6](../server-side-execution/serving-loop.md)) — so
 "initial run" stays a degenerate case, now of "nothing marks this node
 current".
 
@@ -1308,9 +1308,9 @@ What remains live here:
   piece id (result-cell `scope:id`), action id with implementation hash
   preferred. Nothing persists it per run anymore, but everything that keys
   scheduler state per instance still constructs it the same way
-  ([per-document rehydration](per-doc-rehydration.md)), and the
-  server-execution basis index keys its rows by the same durable action
-  identity ([serving-loop.md §3b](../server-side-execution/serving-loop.md)).
+  ([per-document rehydration](per-doc-rehydration.md)), and server
+  execution names each run by the same durable action identity
+  ([serving-loop.md §3d](../server-side-execution/serving-loop.md)).
 - **Start modes** collapse to `fresh`: a resumed piece registers every
   action `never-ran`; resume intent holds each initial run until the space
   finishes syncing (`awaitSyncBeforeInitialRun`), a bounded anti-churn

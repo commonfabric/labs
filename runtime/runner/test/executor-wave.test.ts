@@ -24,8 +24,7 @@
 //   commuting consequence REBASES and commits;
 // - sealing order: the wave commit preserves seal order, never reorders;
 // - identity annotations attach at seal time and ride the wave commit
-//   (protocol.md §1), and basis rows land per (action, instance) in the
-//   same store transaction (serving-loop.md §3b);
+//   (protocol.md §1);
 // - DR1/§2: a lease lost mid-wave aborts the wave commit — work sealed
 //   under an ended tenure never commits;
 // - protocol.md §2b: multi-space seals commit foreign-first, and a
@@ -45,7 +44,6 @@ import {
   ExecutionLeaseCycle,
   executionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
-import { selectSchedulerBasisRows } from "@commonfabric/memory/v2/scheduler-basis";
 import {
   commitPreconditionValueHash,
   decodeMemoryBoundary,
@@ -580,7 +578,6 @@ describe("stage D seal-into-wave", () => {
         preconditions: [],
         annotations: [],
         consequenceOf: [],
-        basisInstances: [],
         holder: lease.holder,
       });
 
@@ -615,7 +612,6 @@ describe("stage D seal-into-wave", () => {
         preconditions: [],
         annotations: [],
         consequenceOf: [],
-        basisInstances: [],
         holder: undefined,
         delegated: {
           actingPrincipal: "did:key:alice",
@@ -1653,7 +1649,6 @@ describe("stage D seal-into-wave", () => {
           preconditions: [...sealed.sealed.commit.preconditions ?? []],
           annotations: [],
           consequenceOf: [],
-          basisInstances: [],
           holder,
         });
         if (outcome.error) {
@@ -1722,7 +1717,7 @@ describe("stage D seal-into-wave", () => {
     await lease.release();
   });
 
-  it("requeues a raced consequence (C8b) — never lost, never doubled across waves — and annotates + records its basis when it lands", async () => {
+  it("requeues a raced consequence (C8b) — never lost, never doubled across waves — and annotates it when it lands", async () => {
     const lease = await liveLease();
 
     const y = runtime.getCell<{ value: number }>(space, "wave-y", undefined);
@@ -1732,11 +1727,10 @@ describe("stage D seal-into-wave", () => {
       undefined,
     );
 
-    // Seed a doc the handler reads, so basis rows have a confirmed read.
+    // Seed a doc the handler reads.
     const seedTx = runtime.edit();
     seed.withTx(seedTx).set({ value: 7 });
     expect((await seedTx.commit().settled).error).toBeUndefined();
-    const seedSeq = Engine.serverSeq(engine);
 
     const wave1 = newWave({ lease });
     runtime.installSealDestination(wave1);
@@ -1800,10 +1794,8 @@ describe("stage D seal-into-wave", () => {
     expect(outcome2.committedEventIds).toEqual(["e1"]);
     expect(outcome2.requeuedEventIds).toEqual([]);
 
-    // consequenceOf carries e1 exactly once across both waves, the
-    // acting identity annotations rode the write (protocol.md §1), and
-    // the handler's basis rows landed per (action, instance) in the same
-    // store transaction (serving-loop.md §3b).
+    // consequenceOf carries e1 exactly once across both waves, and the
+    // acting identity annotations rode the write (protocol.md §1).
     const rows = engine.database.prepare(
       `SELECT seq, consequence_of, annotations FROM "commit"
        WHERE consequence_of IS NOT NULL`,
@@ -1817,19 +1809,6 @@ describe("stage D seal-into-wave", () => {
     expect(annotations).toEqual([
       { op: 0, actingUser: "did:key:alice", actingSession: "sess-1" },
     ]);
-    const basis = selectSchedulerBasisRows(engine, {
-      branch: "",
-      action: "handle-vote",
-      actionScopeKey: "space",
-    });
-    const seedLink = seed.getAsNormalizedFullLink();
-    const seedRow = basis.find((row) => row.entity === seedLink.id);
-    expect(seedRow).toEqual({
-      entitySpace: space,
-      entity: seedLink.id,
-      entityScopeKey: "space",
-      seq: seedSeq,
-    });
   });
 
   it("folds ALL of an event's contributions into its requeue — the served intent tx rolls back with its handler (Phase 4; events.md §4)", async () => {
@@ -3017,7 +2996,6 @@ describe("stage D seal-into-wave", () => {
     doc.withTx(seedTx).set({ a: 1, b: 1 });
     input.withTx(seedTx).set({ value: 5 });
     expect((await seedTx.commit().settled).error).toBeUndefined();
-    const inputSeq = Engine.serverSeq(engine);
 
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
@@ -3073,22 +3051,6 @@ describe("stage D seal-into-wave", () => {
     // derivation clobbered nothing.
     const stored = Engine.readState(engine, { id: link.id });
     expect(stored?.document).toEqual({ value: { a: 2, b: 50 } });
-    // The Q1 corollary (§3d, RULED 2026-08-05): the dropped-write
-    // SURVIVOR still lands its basis rows — its reads are true, and no
-    // recompute-owed mark exists.
-    const derivationBasis = selectSchedulerBasisRows(engine, {
-      branch: "",
-      action: "derive-mixed",
-      actionScopeKey: "space",
-    });
-    const inputLink = input.getAsNormalizedFullLink();
-    expect(derivationBasis.find((row) => row.entity === inputLink.id))
-      .toEqual({
-        entitySpace: space,
-        entity: inputLink.id,
-        entityScopeKey: "space",
-        seq: inputSeq,
-      });
   });
 
   it("requeues a second handler whose patch overlaps the concurrent write, while the first handler's disjoint patch rebases", async () => {
@@ -3247,10 +3209,10 @@ describe("stage D seal-into-wave", () => {
     expect(outcome.requeuedEventIds).toEqual(["e-parent"]);
   });
 
-  it("the emit-path tail read is append mechanics, not a dependency (review 2026-08-11 M3, RULED let-stand 2026-08-13): a derivation emitter neither logs nor bases on the target sidecar", async () => {
+  it("the emit-path tail read is append mechanics, not a dependency (review 2026-08-11 M3, RULED let-stand 2026-08-13): a derivation emitter does not log the target sidecar", async () => {
     // LT6's case: a demanded DERIVATION that emits. Pre-fix, cell.ts's
     // LT1 emission read the sidecar tail UNMARKED, so the emitting
-    // run's dependency log and basis rows contained the target stream
+    // run's dependency log and sealed read set contained the target stream
     // doc — a neighbor's append to the same stream RE-RAN the emitter
     // (which re-emitted under a fresh eventId). The adjudication: a
     // sender does not re-send because someone else sent — the read is
@@ -3283,7 +3245,6 @@ describe("stage D seal-into-wave", () => {
         seed.withTx(tx).set({ value: 7 });
         expect((await tx.commit().settled).error).toBeUndefined();
       }
-      const seedSeq = Engine.serverSeq(engine);
 
       const wave = new WaveAccumulator({
         space,
@@ -3296,6 +3257,25 @@ describe("stage D seal-into-wave", () => {
         lease,
       });
       servingRuntime.installSealDestination(wave);
+      // What the home replica seals is the contribution's read set, the
+      // one the wave checks its own commit's conflicts against.
+      const homeReplica = servingManager.open(space).replica;
+      const sealNative = homeReplica.sealNative!.bind(homeReplica);
+      const sealedReads: Array<{ id: string }> = [];
+      using _sealNative = stub(
+        homeReplica as { sealNative: typeof sealNative },
+        "sealNative",
+        (...args: Parameters<typeof sealNative>) => {
+          const sealed = sealNative(...args);
+          for (const read of sealed.commit.reads.confirmed) {
+            sealedReads.push(read);
+          }
+          for (const read of sealed.commit.reads.pending) {
+            sealedReads.push(read);
+          }
+          return sealed;
+        },
+      );
 
       // The demanded-derivation emitter: reads the seed (its one
       // genuine dependency), then emits on the stream — the LT1
@@ -3336,18 +3316,11 @@ describe("stage D seal-into-wave", () => {
       expect(outcome.aborted).toBeUndefined();
       expect(outcome.seq).toBeDefined();
 
-      // The BASIS-ROW half (§3b): the emitter's rows carry the seed —
-      // and never the sidecar (pre-fix the tail read put it there, so
-      // a restart-time basis check re-coupled emitter to stream too).
-      const rows = selectSchedulerBasisRows(engine, {
-        branch: "",
-        action: "m3-emitter",
-        actionScopeKey: "space",
-      });
-      expect(rows.some((row) => row.entity === seedId)).toBe(true);
-      expect(rows.some((row) => row.entity === sidecarId)).toBe(false);
-      const seedRow = rows.find((row) => row.entity === seedId);
-      expect(seedRow?.seq).toBe(seedSeq);
+      // The CONFLICT-READ-SET half (`mergeableOpRead`): the sealed commit
+      // read the seed and not the sidecar, so a neighbor's append to the
+      // same stream cannot make the wave treat the emitter as conflicted.
+      expect(sealedReads.some((read) => read.id === seedId)).toBe(true);
+      expect(sealedReads.some((read) => read.id === sidecarId)).toBe(false);
 
       // Sanity: the emission itself LANDED (the exclusion removed the
       // dependency, not the append) — stamped seq, inherited actor.
@@ -3853,66 +3826,6 @@ describe("stage D seal-into-wave", () => {
     expect(revision.scope_key).toBe(expectedKey);
   });
 
-  it("replaces a same-instance action's basis rows with the LAST run's set within one wave", async () => {
-    const lease = await liveLease();
-
-    const seedA = runtime.getCell<{ value: number }>(
-      space,
-      "wave-seed-a",
-      undefined,
-    );
-    const seedB = runtime.getCell<{ value: number }>(
-      space,
-      "wave-seed-b",
-      undefined,
-    );
-    const outA = runtime.getCell<{ value: number }>(
-      space,
-      "wave-out-a",
-      undefined,
-    );
-    const outB = runtime.getCell<{ value: number }>(
-      space,
-      "wave-out-b",
-      undefined,
-    );
-    for (const [cell, value] of [[seedA, 1], [seedB, 2]] as const) {
-      const tx = runtime.edit();
-      cell.withTx(tx).set({ value });
-      expect((await tx.commit().settled).error).toBeUndefined();
-    }
-
-    const wave = newWave({ lease });
-    runtime.installSealDestination(wave);
-    // The same action instance runs twice in one wave (re-dirtied by a
-    // later input); §3b's overwrite unit: the LAST run's rows replace
-    // the first run's as a set — never a union.
-    const run1 = runtime.edit();
-    stampWaveRunContext(run1, { actionId: "recompute", kind: "derivation" });
-    outA.withTx(run1).set({ value: seedA.withTx(run1).get()!.value + 1 });
-    expect((await run1.commit().settled).error).toBeUndefined();
-    const run2 = runtime.edit();
-    stampWaveRunContext(run2, { actionId: "recompute", kind: "derivation" });
-    outB.withTx(run2).set({ value: seedB.withTx(run2).get()!.value + 1 });
-    expect((await run2.commit().settled).error).toBeUndefined();
-    runtime.clearSealDestination();
-
-    const outcome = await wave.commitWave(newSink());
-    await wave.settled();
-    expect(outcome.aborted).toBeUndefined();
-
-    const basis = selectSchedulerBasisRows(engine, {
-      branch: "",
-      action: "recompute",
-      actionScopeKey: "space",
-    });
-    const entities = basis.map((row) => row.entity);
-    const seedALink = seedA.getAsNormalizedFullLink();
-    const seedBLink = seedB.getAsNormalizedFullLink();
-    expect(entities).toContain(seedBLink.id);
-    expect(entities).not.toContain(seedALink.id);
-  });
-
   it("isolates a failed seal to its own action (an aborted tx discards only its own writes)", async () => {
     const lease = await liveLease();
     const wave = newWave({ lease });
@@ -4108,7 +4021,6 @@ describe("stage D seal-into-wave", () => {
       preconditions: [],
       annotations: [],
       consequenceOf: [],
-      basisInstances: [],
       holder: undefined,
       // no delegated carriage
     });
@@ -4141,7 +4053,6 @@ describe("stage D seal-into-wave", () => {
       preconditions: [],
       annotations: [],
       consequenceOf: [],
-      basisInstances: [],
       holder: undefined,
       delegated: {
         actingPrincipal: acting,
@@ -4793,7 +4704,6 @@ describe("stage D seal-into-wave", () => {
         { op: 1, scopeKey: bobKey },
       ],
       consequenceOf: [],
-      basisInstances: [],
       holder: lease.holder,
     });
     expect(outcome.error).toBeUndefined();
@@ -4806,11 +4716,10 @@ describe("stage D seal-into-wave", () => {
     await lease.release();
   });
 
-  it("stage F+2: two stamped runs with two demanded identities fold into one wave — per-run keys on writes and basis rows (M1 at cardinality 2)", async () => {
+  it("stage F+2: two stamped runs with two demanded identities fold into one wave — per-run keys on writes (M1 at cardinality 2)", async () => {
     const lease = await liveLease();
 
-    // A shared space-scoped doc BOTH runs read, so each run's basis
-    // rows have real content to pin per (action, instance).
+    // A shared space-scoped doc BOTH runs read.
     const seed = runtime.getCell<{ value: number }>(
       space,
       "wave-m1-fanout-seed",
@@ -4878,25 +4787,12 @@ describe("stage D seal-into-wave", () => {
         resolveScopeKey("user", identity),
       ]);
     }
-    // ONE wave commit carried both runs; basis rows keyed per
-    // (action, instance) — §3b's overwrite unit at cardinality 2. Each
-    // instance's rows carry the run's REAL read of the shared seed.
-    const seedId = seed.getAsNormalizedFullLink().id;
-    for (const identity of identities) {
-      const basis = selectSchedulerBasisRows(engine, {
-        branch: "",
-        action: "derive-fanout",
-        actionScopeKey: resolveScopeKey("user", identity),
-      });
-      expect(basis.length).toBeGreaterThanOrEqual(1);
-      expect(basis.some((row) => row.entity === seedId)).toBe(true);
-    }
   });
 
-  it("stage F: M1 — a run's per-run scopeKeyIdentity keys its scoped writes and basis rows (the demand-supplied instance)", async () => {
+  it("stage F: M1 — a run's per-run scopeKeyIdentity keys its scoped writes (the demand-supplied instance)", async () => {
     const lease = await liveLease();
 
-    // Seed a doc the run READS, so its basis rows have content to pin.
+    // Seed a doc the run READS.
     const seed = runtime.getCell<{ value: number }>(
       space,
       "wave-m1-seed",
@@ -4905,7 +4801,6 @@ describe("stage D seal-into-wave", () => {
     const seedTx = runtime.edit();
     seed.withTx(seedTx).set({ value: 2 });
     expect((await seedTx.commit().settled).error).toBeUndefined();
-    const seedSeq = Engine.serverSeq(engine);
 
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
@@ -4941,158 +4836,6 @@ describe("stage D seal-into-wave", () => {
       `SELECT scope_key FROM revision WHERE id = :id`,
     ).all({ id: link.id }) as { scope_key: string }[];
     expect(rows.map((r) => r.scope_key)).toEqual(["user:did%3Akey%3Abob"]);
-    // The basis rows land UNDER BOB'S instance key (never the wave-level
-    // identity's), and carry the run's actual read.
-    const basis = selectSchedulerBasisRows(engine, {
-      branch: "",
-      action: "derive-for-bob",
-      actionScopeKey: "user:did%3Akey%3Abob",
-    });
-    const seedLink = seed.getAsNormalizedFullLink();
-    const seedRow = basis.find((row) => row.entity === seedLink.id);
-    expect(seedRow).toEqual({
-      entitySpace: space,
-      entity: seedLink.id,
-      entityScopeKey: "space",
-      seq: seedSeq,
-    });
-    // And NOT under the wave-level identity.
-    const misKeyed = selectSchedulerBasisRows(engine, {
-      branch: "",
-      action: "derive-for-bob",
-      actionScopeKey: "space",
-    });
-    expect(misKeyed).toEqual([]);
-  });
-
-  it("stage A: S4 clearance in BOTH directions — an action whose TRUE key changes across waves has its stranded rows cleared (user→space clears the stamped user key; space→user clears the broader `space` key), and a real row set in the same wave under a stranded key is never overwritten by a clearance (mutations: no clearance / no guard → red)", async () => {
-    // The independent review's finding 3: the shipped S4 pins asserted
-    // only that rows are not WRITTEN under a stranded key; none had a
-    // previously-stranded row to CLEAR. Here the same action (one
-    // actionId, one demand stamp `user:bob`) discovers a different scope
-    // in successive waves, and each wave must clear the rows the previous
-    // one left under the key that is now stranded.
-    const lease = await liveLease();
-    // One sink for the whole test: the engine's replay guard keys on the
-    // sink's (session, localSeq), so per-wave sinks would collide.
-    const sink = newSink();
-    const bobIdentity = { principal: "did:key:s4-bob", sessionId: "bob-s1" };
-    const bobKey = resolveScopeKey("user", bobIdentity);
-    const spaceDoc = runtime.getCell<{ value: number }>(
-      space,
-      "wave-s4-clear-space-input",
-      undefined,
-    );
-    const userDoc = runtime.getCell<{ value: number }>(
-      space,
-      "wave-s4-clear-user-input",
-      undefined,
-      undefined,
-      "user",
-    );
-    const output = runtime.getCell<{ value: number }>(
-      space,
-      "wave-s4-clear-output",
-      undefined,
-    );
-    {
-      const seedTx = runtime.edit();
-      spaceDoc.withTx(seedTx).set({ value: 1 });
-      expect((await seedTx.commit().settled).error).toBeUndefined();
-    }
-    const runOnce = async (
-      actionId: string,
-      reads: "space" | "user",
-      valueOut: number,
-    ) => {
-      const wave = newWave({ lease });
-      runtime.installSealDestination(wave);
-      const tx = runtime.edit();
-      stampWaveRunContext(tx, {
-        actionId,
-        kind: "derivation",
-        scopeKeyIdentity: bobIdentity,
-        // Bob's demand stamps his USER instance in every wave.
-        actionScopeKey: bobKey,
-      });
-      if (reads === "space") {
-        spaceDoc.withTx(tx).get();
-      } else {
-        userDoc.withTx(tx).get(); // discovers `user` (Bob's instance)
-      }
-      // The write stays space-scoped so only the READS decide the
-      // discovered scope (the tx ratchet is read-driven).
-      output.withTx(tx).set({ value: valueOut });
-      expect((await tx.commit().settled).error).toBeUndefined();
-      runtime.clearSealDestination();
-      const outcome = await wave.commitWave(sink);
-      await wave.settled();
-      expect(outcome.aborted).toBeUndefined();
-    };
-    const rowsUnder = (actionId: string, key: string) =>
-      selectSchedulerBasisRows(engine, {
-        branch: "",
-        action: actionId,
-        actionScopeKey: key,
-      });
-
-    // Direction 1 (user → space): wave 1 discovers Bob's user instance →
-    // rows under `user:bob`; wave 2 reads only space → true key `space`,
-    // and the stamped `user:bob` is now stranded → its rows are CLEARED.
-    await runOnce("s4-clear-broaden", "user", 1);
-    expect(rowsUnder("s4-clear-broaden", bobKey).length).toBeGreaterThan(0);
-    await runOnce("s4-clear-broaden", "space", 2);
-    expect(rowsUnder("s4-clear-broaden", "space").length).toBeGreaterThan(0);
-    expect(rowsUnder("s4-clear-broaden", bobKey)).toEqual([]);
-
-    // Direction 2 (space → user): wave 1 reads only space → rows under
-    // `space`; wave 2 discovers Bob's user instance → true key `user:bob`,
-    // and the broader `space` key on his chain is stranded → CLEARED.
-    await runOnce("s4-clear-narrow", "space", 1);
-    expect(rowsUnder("s4-clear-narrow", "space").length).toBeGreaterThan(0);
-    await runOnce("s4-clear-narrow", "user", 2);
-    expect(rowsUnder("s4-clear-narrow", bobKey).length).toBeGreaterThan(0);
-    expect(rowsUnder("s4-clear-narrow", "space")).toEqual([]);
-
-    // The guard: two contributions of ONE action in ONE wave — a
-    // space-discovering run (real rows under `space`) sealed FIRST, then
-    // Bob's user-discovering run whose stranded set names `space`. The
-    // clearance must not overwrite the real row set already recorded in
-    // this wave under that key.
-    {
-      const wave = newWave({ lease });
-      runtime.installSealDestination(wave);
-      const spaceRun = runtime.edit();
-      stampWaveRunContext(spaceRun, {
-        actionId: "s4-clear-guard",
-        kind: "derivation",
-        // The wave-level identity, no per-run stamp: true key `space`.
-      });
-      spaceDoc.withTx(spaceRun).get();
-      output.withTx(spaceRun).set({ value: 10 });
-      expect((await spaceRun.commit().settled).error).toBeUndefined();
-      const bobRun = runtime.edit();
-      stampWaveRunContext(bobRun, {
-        actionId: "s4-clear-guard",
-        kind: "derivation",
-        scopeKeyIdentity: bobIdentity,
-        actionScopeKey: bobKey,
-      });
-      userDoc.withTx(bobRun).get();
-      const bobOut = runtime.getCell<{ value: number }>(
-        space,
-        "wave-s4-clear-guard-bob-output",
-        undefined,
-      );
-      bobOut.withTx(bobRun).set({ value: 11 });
-      expect((await bobRun.commit().settled).error).toBeUndefined();
-      runtime.clearSealDestination();
-      const outcome = await wave.commitWave(sink);
-      await wave.settled();
-      expect(outcome.aborted).toBeUndefined();
-      expect(rowsUnder("s4-clear-guard", "space").length).toBeGreaterThan(0);
-      expect(rowsUnder("s4-clear-guard", bobKey).length).toBeGreaterThan(0);
-    }
   });
 
   it("stage F: M1 — the run context survives sample()/sink() transaction wrappers (r3739139477: the stamp is on the ORIGINAL tx; a wrapped scoped read must not fall back to the service identity)", async () => {

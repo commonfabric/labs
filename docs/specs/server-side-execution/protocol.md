@@ -229,10 +229,9 @@ envelope principal is the SpaceServer's service identity, exactly
 the lease holder §2 checks. The identity the envelope can no longer
 express moves INSIDE the transaction, as ANNOTATIONS on the changes
 themselves — at the grouping the commit already tracks per action
-run, the same granularity as scheduling basis rows and CFC
-provenance (serving-loop.md §3b–§3c). `derived` is therefore the
-ONE sanctioned commit variant that carries explicit user/session
-keys inside; §2's read row is the same variant's read half (ledger
+run, the same granularity as CFC provenance (serving-loop.md §3c).
+`derived` is therefore the ONE sanctioned commit variant that carries
+explicit user/session keys inside; §2's read row is the same variant's read half (ledger
 LD5), and the shared key vocabulary the annotations force is ledger
 LD3 (key-vocabulary.md §3).
 
@@ -720,8 +719,8 @@ Visible roots contribute execution demand. The additional complete documents
 selected for local previews contribute delivery only, under the same READ and
 instance-scoping rules. The optional plan includes eligible graph positions,
 source identities, admitted inputs, observed write surfaces, and fingerprints of
-settled producer inputs/outputs. These are compact eligibility evidence, not the
-durable scheduler-basis table. See the
+settled producer inputs/outputs. These are compact eligibility evidence, and the
+store keeps no record of what a run read (serving-loop.md §3b). See the
 [feature contract](../../features/view-scoped-client-replication.md) for guarded
 execution and downgrade behavior.
 
@@ -776,9 +775,9 @@ deadline cut.
   session's, not the lease's, so a release or a handover of the lease
   changes nothing on its wire, and a resumed session's catch-up carries
   them keyed as well.)*
-- **Basis-index rows are NOT part of the pushed commit** (T2). They
+- **Durable outbox rows are NOT part of the pushed commit** (T2). They
   ride the loopback store TRANSACTION only (serving-loop.md §1 plane
-  (a), §3b); nothing about them crosses the wire to a subscriber,
+  (a), §5); nothing about them crosses the wire to a subscriber,
   and admission never reads them.
 - **Push priority** (Phase 6 hardening, but the contract is fixed now):
   when flushing a batch to a client socket, `derived` commits touching
@@ -1008,7 +1007,8 @@ disabled (README §3.5).
   claim. For server-emitted SAME-SPACE events (events.md §2's
   same-space carriage — LT1) the pair rides instead as WRITE-LEVEL
   fields on the stream entry inside the derived commit — sanctioned
-  carriage like the basis rows: admission never reads them there
+  carriage like the durable outbox rows below: admission never reads
+  them there
   (the lease check admits the commit), and the closed metadata list
   is not breached.
 - **A read may name an `entity_scope_key`** (S1, §2's read row;
@@ -1018,12 +1018,6 @@ disabled (README §3.5).
   a lease holder on the co-hosted memory server — its own
   space's lease (FP2, ruled 2026-08-03). Reads that name nothing
   are unchanged.
-- Basis-index rows (serving-loop.md §3b) ride INSIDE the derived
-  commit's store TRANSACTION as engine table rows — sanctioned
-  carriage, NOT metadata and NOT part of the commit representation:
-  nothing about them crosses the wire (§3 excludes them from push),
-  admission never reads them, and the closed list above is not
-  breached by them.
 - The OUTBOX's identity carriage (serving-loop.md §4–§5: the
   result-cell address with its `scope_key`, the acting
   identity, AND — FP6, ruled 2026-08-03 — the run's CFC label
@@ -1040,8 +1034,9 @@ disabled (README §3.5).
   breach the closed list. The DURABLE exception (FP1, ruled
   2026-08-03): cross-space APPEND entries are engine-table rows
   inside the emitting wave's store transaction, deleted on
-  delivery-ack — the basis-row carriage pattern; still never wire,
-  never metadata, never read at admission.
+  delivery-ack — engine table rows, NOT part of the commit
+  representation: never wire (§3 excludes them from push), never
+  metadata, never read at admission.
 - All metadata is small and fixed-shape, with one bounded carve-out:
   `consequenceOf` scales with the wave's INPUT (the events drained that
   wave), never with graph size. The v1 failure mode — 130 KB of

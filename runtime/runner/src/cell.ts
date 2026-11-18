@@ -2832,7 +2832,7 @@ export class CellImpl<T extends FabricValue>
             // (adjudicated coordinator 2026-08-11, VETOABLE — review
             // M3): a sender does not re-send because someone else
             // sent. Unmarked, this read put the target sidecar in the
-            // EMITTING run's dependency log and basis rows, so a
+            // EMITTING run's dependency log, so a
             // demanded derivation emitter RE-RAN (and re-emitted,
             // fresh eventId) on any neighbor's append to the same
             // stream. Classified with the existing machinery-read
@@ -2840,8 +2840,7 @@ export class CellImpl<T extends FabricValue>
             // reactivity log (no re-run subscription), and
             // `mergeableOpRead` — the Cell.push precedent, paired
             // with the recorded mergeable append below — keeps it out
-            // of the commit's conflict read set, and with it out of
-            // the sealed reads that feed wave basis rows (§3b).
+            // of the commit's conflict read set.
             // `writeDestinationRead` keeps it out of the run's CFC flow
             // join as well, as `Cell.pushAll()`'s snapshot is: the entries
             // already there stay where they are and only this run's entry

@@ -129,7 +129,7 @@ Status legend:
 
 | # | behavior | today (anchor) | v2 doc § | status |
 | --- | --- | --- | --- | --- |
-| 59 | Persisted scheduler basis index: ids and seqs per (action instance, input instance), overwritten in place inside a wave's derived store transaction | table `runtime/memory/v2/engine.ts` (`scheduler_basis`); writer `runtime/memory/v2/scheduler-basis.ts` (`replaceSchedulerBasisRows`, from `applyWaveCommit`); rows assembled in `executor/wave.ts` (`basisInstances`) | serving-loop §3b | CHANGED |
+| 59 | Persisted scheduler state: none — read sets live in memory only; the engine keeps an empty `scheduler_basis` table and clears it at open | `runtime/memory/v2/engine.ts` (`INIT`, `migrateSchedulerObservationTablesToBasis`) | serving-loop §3b, §6 | CHANGED |
 | 60 | Rehydration eligibility by execution-context rank (space/user/session) against `completeActionScopeSummary` | not present on main (deleted with the observation tables; N59/N60/N61) | serving-loop §8 (tripwire identifiers) | GAP |
 | 61 | `completeSchedulerScopeSummary` / `completeActionScopeSummary` emission (transformer marker; runner fills addresses) — two identifiers, one surface | `scheduler/types.ts` (`TelemetryAnnotations.completeSchedulerScopeSummary`), `runner.ts` (`Runner.#instantiateJavaScriptActionNode()`), ts-transformers (4 files); `completeActionScopeSummary` has no occurrence on main | README §5 (delete list), serving-loop §8 | CHANGED |
 | 62 | Incremental observation adoption (adopt another client's committed run instead of re-running) | not present on main (deleted; N62); the sync-path note survives in `scheduler/invalidation.ts` above `shapableWakeGroupKey` | none | GAP |
@@ -188,8 +188,7 @@ concretely re-routes: `startReactiveActionCommit` (`scheduler/run.ts`)
 stops committing to the store and seals into the wave accumulator;
 `watchReactiveActionCommit`'s conflict paths (row 15) mostly dissolve
 because a sealed action cannot hit a server CAS reject — the wave
-commit does, per doc (§3d drop rule). The basis-row capture is
-`basisInstances` in `executor/wave.ts`.
+commit does, per doc (§3d drop rule).
 
 **N7 (self-echo).** Today's suppression is in-process:
 `tx.sourceAction` marks the writer (`dispatchQueuedEvent` in
@@ -552,8 +551,7 @@ of main's scope machinery that a SpaceServer breaks (M1–M5:
 per-identity scope discovery; scope-NAME in-memory keying; no
 all-principals write path; scope-NAME wake keys; no session-data GC);
 scopes.md §8 lists what the review still owes — the session-data GC
-design, the basis-index DDL having been authored in serving-loop.md
-§3b; row 57's identity remainder is RESOLVED (N57, R-Q6b).
+design; row 57's identity remainder is RESOLVED (N57, R-Q6b).
 
 **N57 (identity/authority) — RESOLVED 2026-08-02 (R-Q6b).** Today one
 runtime = one `userIdentityDID` (`Runtime.userIdentityDID`) and all
@@ -578,19 +576,14 @@ commits only; derived admission stays the lease check. Effects still
 run under the capability handle's grant (README §3.8); only quota
 attribution stays open (README §6).
 
-**N59/N60/N61 (persisted observations vs the basis index).** Main
-carries no payload-carrying observation rows, snapshot table, or
-replay table: `runtime/memory/v2/engine.ts` drops any it finds (its
-migration comment holds that history) and creates `scheduler_basis` —
-ids and seqs only, overwritten in place, written by
-`replaceSchedulerBasisRows` (`runtime/memory/v2/scheduler-basis.ts`)
-from inside `applyWaveCommit`, with the rows assembled as
-`basisInstances` in `executor/wave.ts`. That is serving-loop §3b's
-shape: ids and seqs are the basis index, and payloads or per-run
-history would be the evidence log it forbids. What v2 keeps from the
-pre-arc feature is the DECISION it made — warm start from recorded
-reads — not any of its tables; serving-loop §3b holds the drop list,
-the DDL, and the no-backfill rule. The context-rank machinery (row 60)
+**N59/N60/N61 (persisted observations).** Main carries no
+payload-carrying observation rows, snapshot table, or replay table:
+`runtime/memory/v2/engine.ts` drops any it finds when a store opens,
+and deletes the rows of the empty `scheduler_basis` table it keeps.
+Read sets live in memory only, and recovery recomputes what demand
+reaches (serving-loop §6); payloads or per-run history would be the
+evidence log serving-loop §8 forbids. Serving-loop §3b holds the drop
+list. The context-rank machinery (row 60)
 is gone from `scheduler/facade.ts`. `completeSchedulerScopeSummary`
 emission (row 61) is on main — `scheduler/types.ts`,
 `Runner.#instantiateJavaScriptActionNode()`, and the four

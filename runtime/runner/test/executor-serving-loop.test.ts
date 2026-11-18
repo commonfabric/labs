@@ -20,10 +20,13 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
+import { toFileUrl } from "@std/path";
+import { Database } from "@db/sqlite";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { executionLeaseHolder } from "@commonfabric/memory/v2/execution-lease";
+import { resolveSpaceStoreUrl } from "@commonfabric/memory/v2/storage-path";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { markEffectCompletion } from "../src/executor/effect-completion.ts";
 import { decodeMemoryBoundary, resolveScopeKey } from "@commonfabric/memory/v2";
@@ -59,6 +62,21 @@ const space = spaceSigner.did() as MemorySpace;
 const serviceSigner = await Identity.fromPassphrase("serving loop service");
 const aliceSigner = await Identity.fromPassphrase("serving loop alice");
 const bobSigner = await Identity.fromPassphrase("serving loop bob");
+
+/** Whether a file exists at `url`. */
+const fileExists = async (url: URL): Promise<boolean> => {
+  try {
+    await Deno.stat(url);
+    return true;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return false;
+    throw error;
+  }
+};
+
+/** A space nothing in this file opens, so no store for it exists. */
+const foreignSpace = (await Identity.fromPassphrase("serving loop foreign"))
+  .did() as MemorySpace;
 
 /**
  * The `{ total }` result schema of the patterns served below. A client that
@@ -170,6 +188,9 @@ describe("stage F serving loop", () => {
   const parked = (): Promise<unknown> =>
     parks.matching((entry) => entry.space === space);
 
+  /** File stores a test made, removed once its server has closed. */
+  const storeDirectories: string[] = [];
+
   beforeEach(() => {
     server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     servingRuntime = undefined;
@@ -197,6 +218,9 @@ describe("stage F serving loop", () => {
     await clientRuntime?.dispose();
     await clientManager?.close();
     await server.close();
+    for (const directory of storeDirectories.splice(0)) {
+      await Deno.remove(directory, { recursive: true });
+    }
   });
 
   /**
@@ -457,6 +481,191 @@ describe("stage F serving loop", () => {
     } finally {
       cancel();
     }
+  });
+
+  /**
+   * Serves the row pattern over a file store, closes the memory server,
+   * leaves the store's `scheduler_basis` table holding what `seedBasis`
+   * writes, reopens the store, which deletes those rows, writes them again
+   * through the reopened engine, commits an input while nothing serves the
+   * space, and checks that a fresh host serving a viewer recovers it. The
+   * rows play no part in that recovery: a fresh serving runtime starts
+   * every computation it materializes as not yet run (serving-loop.md §6).
+   * Returns the store.
+   */
+  const recoverAfterRestart = async (
+    seedBasis: (raw: Database, inputId: string) => void,
+  ): Promise<URL> => {
+    const rowSchema = {
+      type: "object",
+      properties: {
+        rows: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              key: { type: "string" },
+              value: { type: "number" },
+            },
+            required: ["key", "value"],
+          },
+        },
+      },
+      required: ["rows"],
+    } as const satisfies JSONSchema;
+    const directory = await Deno.makeTempDir({ prefix: "serving-restart-" });
+    storeDirectories.push(directory);
+    const store = toFileUrl(`${directory}/`);
+    await server.close();
+    server = newSharedServer({ subscriptionRefreshDelayMs: 0, store });
+    const { ready, cancel } = serveRowPattern();
+    try {
+      host = newHost({ idleParkMs: 600_000, parkedRuntimeRetentionMs: 0 });
+      openClient();
+      const clientResult = clientRuntime.getCell<{ rows: Row[] }>(
+        space,
+        "row-result",
+        rowSchema,
+      );
+      await clientResult.sync();
+      await ready;
+      let engine = await server.engineForSpace(space);
+      const storeFile = engine.url;
+      const first = host.spaceServer(space)!;
+      await awaitEach(cycles, () => first.suspendedOnInput);
+      await settleServing(engine, clientRuntime, space);
+      expect(clientResult.get().rows).toEqual([
+        { key: "0", value: 2 },
+        { key: "1", value: 4 },
+      ]);
+      const input = clientRuntime.getCell<Row>(space, "row-input-0");
+      await input.sync();
+      const live = clientRuntime.edit();
+      input.withTx(live).key("value").set(5);
+      expect((await live.commit().settled).error).toBeUndefined();
+      await settleServing(engine, clientRuntime, space);
+      expect(clientResult.get().rows).toEqual([
+        { key: "0", value: 10 },
+        { key: "1", value: 4 },
+      ]);
+      const inputId = input.getAsNormalizedFullLink().id;
+
+      // Everything that held the store open goes, the memory server
+      // included, so the next open of the store is a real one.
+      await host.close();
+      host = undefined;
+      await clientRuntime.dispose();
+      await clientManager.close();
+      await server.close();
+      const raw = new Database(storeFile);
+      try {
+        seedBasis(raw, inputId);
+      } finally {
+        raw.close();
+      }
+
+      // The input lands while no host serves the space, so no wave has
+      // run over it when the next tenure activates.
+      server = newSharedServer({ subscriptionRefreshDelayMs: 0, store });
+      openClient();
+      engine = await server.engineForSpace(space);
+      // Opening the store deleted whatever rows it held. The same rows go
+      // back in through the engine's own connection, so the next tenure
+      // activates over them.
+      expect(
+        engine.database.prepare(`SELECT count(*) AS n FROM scheduler_basis`)
+          .get(),
+      ).toEqual({ n: 0 });
+      seedBasis(engine.database, inputId);
+      const reopened = clientRuntime.getCell<Row>(space, "row-input-0");
+      await reopened.sync();
+      const offline = clientRuntime.edit();
+      reopened.withTx(offline).key("value").set(10);
+      expect((await offline.commit().settled).error).toBeUndefined();
+      await clientRuntime.storageManager.synced();
+      const inputSeq = Engine.serverSeq(engine);
+      const derivedAfterInput = () =>
+        (engine.database.prepare(
+          `SELECT count(*) AS n FROM "commit"
+           WHERE class = 'derived' AND seq > :seq`,
+        ).get({ seq: inputSeq }) as { n: number }).n;
+      expect(derivedAfterInput()).toBe(0);
+
+      const settledBefore = activations.entries.length;
+      host = newHost({ idleParkMs: 600_000, parkedRuntimeRetentionMs: 0 });
+      const viewerManager = EmulatedStorageManager.connectTo(server, {
+        as: bobSigner,
+      });
+      const viewer = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: viewerManager,
+      });
+      try {
+        const viewerResult = viewer.getCell<{ rows: Row[] }>(
+          space,
+          "row-result",
+          rowSchema,
+        );
+        await viewerResult.sync();
+        await activations.reached(settledBefore + 1);
+        expect(activations.entries[settledBefore]).toEqual({
+          space,
+          outcome: "active",
+        });
+        const second = host.spaceServer(space)!;
+        await awaitEach(cycles, () => second.suspendedOnInput);
+        await settleServing(engine, viewer, space);
+        expect(viewerResult.get().rows).toEqual([
+          { key: "0", value: 20 },
+          { key: "1", value: 4 },
+        ]);
+        expect(derivedAfterInput()).toBeGreaterThan(0);
+      } finally {
+        await viewer.dispose();
+        await viewerManager.close();
+      }
+      return store;
+    } finally {
+      cancel();
+    }
+  };
+
+  it("recovers an input committed while nothing served the space after the memory server restarts, over a store holding the scheduler_basis rows an older build wrote", async () => {
+    // Whatever rows the serving above wrote stay, and two are added in the
+    // shape an older build writes: one names the edited input at a seq
+    // behind its head, and one names a document in a space that has no
+    // store, as a handler writing into another space left.
+    const store = await recoverAfterRestart((raw, inputId) => {
+      const insert = raw.prepare(
+        `INSERT INTO scheduler_basis
+           (branch, action, action_scope_key, entity_space, entity,
+            entity_scope_key, seq)
+         VALUES ('', :action, 'space', :entitySpace, :entity, 'space', :seq)`,
+      );
+      insert.run({
+        action: "older-build/row-value",
+        entitySpace: space,
+        entity: inputId,
+        seq: 1,
+      });
+      insert.run({
+        action: "handler:cf:module/older-build/main.tsx:1:1",
+        entitySpace: foreignSpace,
+        entity: "of:older-build-foreign-read",
+        seq: 0,
+      });
+    });
+
+    // Nothing opened the other space, so no store for it was created.
+    expect(await fileExists(resolveSpaceStoreUrl(store, space))).toBe(true);
+    expect(await fileExists(resolveSpaceStoreUrl(store, foreignSpace)))
+      .toBe(false);
+  });
+
+  it("recovers an input committed while nothing served the space after the memory server restarts, over a store holding no scheduler_basis rows", async () => {
+    await recoverAfterRestart((raw) => {
+      raw.exec("DELETE FROM scheduler_basis");
+    });
   });
 
   it("serves a demanded derivation: authored commit → wave → ONE derived commit with watermark; the client settles via waitForSettled", async () => {
@@ -3297,19 +3506,6 @@ describe("stage F serving loop", () => {
       expect(keys).toEqual([expectedKey]);
       expect(keys.includes(waveKey)).toBe(false);
     }
-    // Basis rows keyed per (action, instance) — serving-loop.md §3b's
-    // action_scope_key from each run's demanded identity.
-    const basisKeys = new Set(
-      (engine.database.prepare(
-        `SELECT DISTINCT action_scope_key FROM scheduler_basis
-         WHERE action = :action`,
-      ).all({ action: "test/fanout-node" }) as Array<
-        { action_scope_key: string }
-      >).map((row) => row.action_scope_key),
-    );
-    for (const { identity } of identities) {
-      expect(basisKeys.has(resolveScopeKey("user", identity))).toBe(true);
-    }
   });
 
   it("carries the demanding session's identity into the SpaceServer's demand registry (M1 demand carriage at cardinality 2)", async () => {
@@ -3389,7 +3585,7 @@ describe("stage F serving loop", () => {
     }
   });
 
-  it("supplies the demanded (user, session) identity to the piece's derivation runs END TO END: the demand registry stamps the runs, and the derived commit's annotations + basis rows carry the demanding actor (stage P2-F; protocol.md §1, LT6's acting half)", async () => {
+  it("supplies the demanded (user, session) identity to the piece's derivation runs END TO END: the demand registry stamps the runs, and the derived commit's annotations carry the demanding actor (stage P2-F; protocol.md §1, LT6's acting half)", async () => {
     host = newHost({ flushDeadlineMs: 5_000, idleParkMs: 600_000 });
 
     // A real pattern served at activation (the first test's shape): the
@@ -3471,10 +3667,6 @@ describe("stage F serving loop", () => {
         (host!.spaceServer(space)?.demandedIdentitiesOf(rootDocId) ?? [])
           .some((identity) => identity.principal === aliceSigner.did()),
     );
-    const demanded = host!.spaceServer(space)!.demandedIdentitiesOf(
-      rootDocId,
-    ).find((identity) => identity.principal === aliceSigner.did())!;
-    const expectedInstanceKey = resolveScopeKey("user", demanded as never);
 
     // The authored input: wakes the loop; the piece's derivation run
     // serves alice's demand. Alice's per-user `mine` is written THROUGH
@@ -3543,25 +3735,6 @@ describe("stage F serving loop", () => {
     // demanded node ran as its demander, never as the service.
     expect(
       actingRows().some((a) => a.actingUser === serviceSigner.did()),
-    ).toBe(false);
-
-    // Basis rows key per (action, INSTANCE) — the run's TRUE instance
-    // (S4, server-execution v2 stage A): the demanded run's DISCOVERED
-    // scope resolved against its identity. This derivation reads alice's
-    // per-user input, so its rows land under alice's user instance; a
-    // demanded run that reads only space keys `space` (the stage-A pins).
-    const basisKeys = new Set(
-      (engine.database.prepare(
-        `SELECT DISTINCT action_scope_key FROM scheduler_basis`,
-      ).all() as Array<{ action_scope_key: string }>).map((row) =>
-        row.action_scope_key
-      ),
-    );
-    expect(basisKeys.has(expectedInstanceKey)).toBe(true);
-    expect(
-      basisKeys.has(
-        resolveScopeKey("user", { principal: serviceSigner.did() }),
-      ),
     ).toBe(false);
   });
 });

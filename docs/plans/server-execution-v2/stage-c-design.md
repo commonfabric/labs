@@ -108,7 +108,7 @@ RULED text added on 2026-08-18: B7 :423 → :450, §7 :1147 → :1174, §8
   session) pair. The serving loop marks the WRITERS of demanded
   instances as demand roots (a new `isDemandRoot` disjunct, §8-bracketed)
   and runs the ones NOT CURRENT for a demanding pair (B7's per-instance
-  clean bit; the basis index is the same predicate at activation);
+  clean bit);
   those runs' own logged reads pull upstream and dirty downstream — the
   client-side scheduler's model. Structure changes ride the two
   mechanisms that already exist (the tracker's push-time re-traversal;
@@ -557,13 +557,11 @@ runs K's writer for P's instance. Precisely:
      memory the clean bit (maintained by the trigger index on every
      change; `dirtyFanOutForCause`, `fan-out.ts:220`, dirties exactly
      the instances whose identity chain contains a keyed cause, every
-     instance for a space cause); durably the basis rows (§3b: "output
-     current iff these inputs unchanged since these seqs" —
-     `selectStaleBasisInstances`, `scheduler-basis.ts:117`, is the SAME
-     predicate evaluated at activation, §6 step 2, index-guided). The
-     two agree by construction; no per-pair "current through seq X"
+     instance for a space cause). Nothing durable records it: a fresh
+     runtime starts every computation it materializes as not yet run
+     (serving-loop.md §6 step 2). No per-pair "current through seq X"
      bookkeeping is introduced (scopes.md §9's tripwire) — B7's bit is
-     the only steady-state state, the basis index the only durable one.
+     the only state.
 4. **What runs:** the writer action, for P's instance, through the
    ordinary run supply — `instances(ratchet, demanders)` and
    `fanOutInstancesToRun` (= not clean, `fan-out.ts:250`); the
@@ -580,8 +578,8 @@ applies steps 2–3 to the DELTA: (key, pair) rows that entered (mark the
 writers roots; not-current-for-pair re-arm) and rows that left (release
 the roots when their refcount hits zero). It runs on the input cycle
 as today, on `demandChanged` (watch changes AND, new, push-time growth),
-and on activation (where the basis scan re-marks the stale frontier
-first, §6). The root-level arrival re-arm
+and on activation, where a fresh runtime starts every computation it
+materializes as not yet run (§6). The root-level arrival re-arm
 (`invalidateActionsForDemandRoots`, `facade.ts:857` — every narrowed
 node under an arrived pair's roots) is kept as is: a superset of the
 per-key check for root arrivals, harmless, RULED semantics; the per-key
@@ -708,7 +706,7 @@ read. Under (d′) liveness must come from demand DIRECTLY:
 - **The vocabulary is already shared.** The registry key
   (`keyOf`), the dirty key (`toDirtyKey`), the query doc key's middle
   segment (`QueryDocKey`, `query.ts:48`), the notification address's
-  `scopeKey`, the basis rows' `entity_scope_key`, and the fan-out
+  `scopeKey`, and the fan-out
   instance keys (`fanOutInstances`) all speak scope-INSTANCE keys
   (key-vocabulary.md §2; scopes.md §7 M2/M4). Nothing translates.
 - **The fan-out B semantics stand.** `instances(ratchet, demanders)`,
@@ -779,7 +777,6 @@ becomes the currency check's substrate); the ratchet; the discovery
 and arrival re-arms; the event actor's transient demand and preflight;
 the structure load per watch ROOT (`#attemptStructureLoad`, the OW19
 terminal state, the commit-triggered re-arm — unchanged input; flag 4);
-the basis index (activation's currency check — the same predicate);
 the honest deadline, the wave, the commit classes, the push path;
 `stats.demandArrivals`.
 
@@ -928,8 +925,8 @@ accumulated across its overlapping watches, space-scoped instances
 included. Demand is that union over the space's client sessions; there
 is no demand walk. The serving loop runs the STALE writers of demanded
 instances — a writer whose instance for a demanding pair never ran at
-its ratchet, or was dirtied since (§3b's per-instance clean bit; the
-basis index is the same predicate at activation) — and those runs' own
+its ratchet, or was dirtied since (§3b's per-instance clean bit) — and
+those runs' own
 logged reads make their inputs live and current in turn (§3b,
 one-run-late); a demanded instance's writers hold demand (a demand
 root, §8's liveness bracket) while any session tracks the instance and
@@ -1985,8 +1982,8 @@ so the register's coverage row for each lands with the sentence
     the walk has no output, and activation re-walks demanded roots by
     construction. *Recommend no basis rows*; say so in §3b so recovery
     never re-marks a zombie. *(Under (d′) there is no walk and no
-    question: activation's re-mark is the basis scan over the demanded
-    writers' own rows — §2.2 step 3.)*
+    question: activation recomputes the demanded writers, which start
+    as not yet run — §2.2 step 3.)*
 12. **MOOT under (d′) (fallback-only) — the walk-node key.** (W R5.)
     Per (scope-name, id) as recommended, vs one node per id reading all
     demanded scope names (needs a re-arm when a new scope name arrives
@@ -2402,7 +2399,6 @@ acceptance changed no code.)*
 | `scheduler/fan-out.ts` `FanOutNodeState` (`instances`, `clean`, `dirtyGen`); `fanOutInstances`; `keyAtRatchet`; `keysOnChain` / `dirtyFanOutForCause`; `fanOutInstancesToRun`; `pruneFanOutInstances` | :55; :109; :187; :200 / :220; :250; :262 |
 | `scheduler/scheduling-writes.ts` `writersByEntity` (name-keyed); `forEachOverlappingWriter`; `scheduler/keys.ts` `entityNameKey` | :58; :218; :59 |
 | `scheduler/work-oracle.ts` `isInvalidOrNeverRan`; `isRunnableSchedulingSeed` | :80; :93 |
-| `memory/v2/scheduler-basis.ts` `replaceSchedulerBasisRows`; `selectStaleBasisInstances` (activation's currency predicate) | :68; :117 |
 | `runtime.ts` `serverRunDemandersFor` → `#serverRunDemanderResolver` | :2032–2035 |
 
 ## Appendix B — evidence

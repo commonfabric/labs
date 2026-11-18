@@ -7,7 +7,7 @@
 // for THAT principal's instance of every node that narrows beneath it.
 //
 // The node stays SINGULAR (the spec-model's C11b): instances live in
-// keys, basis rows, stamps — and, here, in one per-node record that
+// keys, stamps — and, here, in one per-node record that
 // remembers what running has DISCOVERED (never what a schema or a body
 // declares — D11's no-static-analysis rule; the ratchet's only writers
 // are run outcomes). Nothing here is reached off the serving posture:

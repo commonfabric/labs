@@ -1858,7 +1858,6 @@ export default pattern<
     preconditions: [],
     annotations: [],
     consequenceOf: [],
-    basisInstances: [],
     holder: undefined,
   });
 

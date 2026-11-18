@@ -1076,7 +1076,6 @@ describe("serving-worker-recovery", () => {
             holder,
             annotations: [],
             consequenceOf: [],
-            basisInstances: [],
           } as unknown as FabricValue),
         });
       // A process's own claim on the flag, which outlasts the pool, so that

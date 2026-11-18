@@ -662,8 +662,8 @@ export async function runSchedulerAction(
   // nothing scoped was ever read (a space node runs ONCE regardless of
   // demander count), one run per demanding principal once it narrowed
   // to user, one per demanding session for principals it narrowed to
-  // session — ragged per principal. Instances live in keys, basis rows,
-  // stamps and the per-node fan-out record — never as extra
+  // session — ragged per principal. Instances live in keys, stamps and
+  // the per-node fan-out record — never as extra
   // dependency-graph nodes (C11b): the node, its status, and its ONE
   // subscription (the union of the instance logs) stay singular.
   // Everywhere else (`serverRunDemandersFor` undefined or empty) this is
@@ -736,7 +736,7 @@ export async function runSchedulerAction(
     // the reactive-action choke point — so every scheduler-driven
     // derivation seals stamped. Stage P2-F/B: a demanded instance's run
     // carries the demand-supplied RESOLUTION identity and its instance
-    // key, so its scoped addressing and basis rows classify under the
+    // key, so its scoped addressing classifies under the
     // demanding principal's instance — and its ATTRIBUTION derives from
     // the scope the run discovers (protocol.md §1 as amended; design
     // §F), never eagerly from the pair. A no-op everywhere else (one

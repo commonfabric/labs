@@ -12476,8 +12476,8 @@ export class Server {
   /**
    * The co-hosted direct-engine access of server-execution v2
    * (serving-loop.md §1): the wave commit step's sink runs its store
-   * transaction (per-doc re-verification + derived-class apply + basis rows)
-   * against this engine. Server-internal machinery and tests only — nothing
+   * transaction (per-doc re-verification + derived-class apply) against
+   * this engine. Server-internal machinery and tests only — nothing
    * session-facing reaches an engine directly.
    */
   engineForSpace(space: string): Promise<Engine.Engine> {

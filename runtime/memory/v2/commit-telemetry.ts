@@ -30,9 +30,9 @@ export const classifyCommitTelemetry = (
   const entityCount =
     commit.operations.filter((operation) => operation.op !== "sqlite").length;
   const sqliteOperationCount = commit.operations.length - entityCount;
-  // Server-execution v2 stage C.2 removed the persisted scheduler-observation
-  // wire fields (the v2 basis index replaced them), so a commit can no longer
-  // carry any. Kept as a dimension so dashboards keep their shape.
+  // A commit carries no persisted scheduler-observation wire fields, so the
+  // count is always zero. Kept as a dimension so dashboards keep their
+  // shape.
   const schedulerObservationCount = 0;
   const componentCount = Number(entityCount > 0) +
     Number(sqliteOperationCount > 0) +

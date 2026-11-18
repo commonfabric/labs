@@ -447,7 +447,7 @@ intent, the following have no decision left to make:
 - shadow/authoritative action-transaction routing
 - the observation evidence log (observation / snapshot / replay tables
   at derived-run frequency; `persistentSchedulerState`'s persisted form
-  reduces to the v2 basis index — see below)
+  is dropped — see below)
 - unserved markers, demand-shrink compensation, the legacy-background
   exclusion protocol, `resume-republish`-style compensations
 - the arc's write-firewall-as-admission (write bounding moves to handle
@@ -459,8 +459,7 @@ and its consumers, and `persistentSchedulerState`'s observation tables
 (full-JSON payloads, OFF by default). For those two, "delete" was live
 Phase 1 stage C deletion work on main, not merely "do not rebuild":
 the certificate surface deleted at its transformer source and every
-consumer, and the observation tables reduced to the v2 basis index
-(serving-loop.md §3b).
+consumer, and the observation tables dropped (serving-loop.md §3b).
 
 Anything on this list that seems needed during the rebuild triggers the
 survival test before it triggers implementation.
@@ -493,11 +492,9 @@ read clearance (Phase 5 builds it by construction). Still open:
    run cardinality; the one deferred question is whose quota a served
    effect's run is charged against.
 2. **Session-data GC (scopes.md §8 item 2).** The mechanism that
-   retires a retired session's scoped instances, which must also
-   cover the basis rows narrowing strands at `space` and `user:<p>`
-   keys. A deferred design, not a gap in the built mechanism
-   (verification-coverage.md §1); the mechanism's own flagged
-   residuals are OW17's, in the register.
+   retires a retired session's scoped instances. A deferred design, not a
+   gap in the built mechanism (verification-coverage.md §1); the mechanism's
+   own flagged residuals are OW17's, in the register.
 
 ## 7. Relationship to prior documents
 
@@ -515,9 +512,9 @@ read clearance (Phase 5 builds it by construction). Still open:
   did NOT return to its pre-arc scope, as an earlier draft of this
   section claimed. Phase 1 stage C dropped the entire PERSISTED form it
   specified — the observation, snapshot, replay, read-index,
-  write-index, action-state and context-floor tables — and REPLACED
-  it with the v2 basis index (serving-loop.md §3b). What the feature
-  decided (warm start from recorded reads) survives in a new schema
-  under a new owner; the spec describing the old form is archived, along
+  write-index, action-state and context-floor tables (serving-loop.md
+  §3b): the store keeps no record of what a run read, and recovery
+  recomputes what demand reaches. The spec describing the old form is
+  archived, along
   with the persisted-form account extracted from
   [`scheduler-v2/per-doc-rehydration.md`](../scheduler-v2/per-doc-rehydration.md).

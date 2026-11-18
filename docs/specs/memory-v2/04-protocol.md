@@ -261,8 +261,8 @@ initial challenge from `hello.ok` across session opens, and asks for a fresh
 challenge with `connection.challenge` when a key must sign again.
 
 `persistentSchedulerState` was RETIRED 2026-08-04 (server-execution v2
-Phase 1 stage C: the persisted observation form was deleted and reduced
-to the `scheduler_basis` index — see
+Phase 1 stage C: the persisted observation form was deleted, and the
+store keeps no scheduler state — see
 [the archived spec](../../history/specs/persistent-scheduler-state.md)).
 The server no longer advertises or reads it; an old client that still
 advertises it connects normally (optional-capability flags tolerate

@@ -2579,13 +2579,11 @@ export async function dispatchQueuedEvent(state: {
     // choke point — a serving runtime's installed stamper attaches the wave
     // run context (kind event-handler, the durable event id) before the
     // handler runs. A no-op everywhere else. The action identity is the
-    // HANDLER's durable id (`handlerId`, computed above): the queued
-    // `action` is a per-event wrapper closure, and stamping IT hands the
-    // basis index a non-durable identity — the wrapper's inferred name
-    // collapses every handler onto one constant id (rows overwrite across
-    // handlers), while the requeue paths' anonymous wrappers split rows
-    // per event; scheduler_basis requires "durable ... restart-stable"
-    // (serving-loop.md §3b).
+    // HANDLER's durable id (`handlerId`, computed above), which names the
+    // run wherever the wave reports it: the queued `action` is a per-event
+    // wrapper closure, and stamping IT would collapse every handler onto
+    // the wrapper's inferred name, while the requeue paths' anonymous
+    // wrappers would split one handler's runs per event.
     //
     // Stage P2-F — the LT6 inheritance rule (events.md §2, RULED
     // 2026-08-03: "an event emitted by ANY run carries that run's acting
