@@ -3852,6 +3852,18 @@ export class Server {
         delegatingDids?: readonly string[];
 
         /**
+         * Whether `principal` is in the delegating class without being
+         * listed in `delegatingDids`: the part of the class that changes
+         * while the server runs. It is asked on each decision, so its
+         * answer applies from the next one. A toolshed behind the memory
+         * router answers from its directory, which lists the identity of
+         * each toolshed of the deployment: a crossing reaches a space's
+         * owner as a session of the toolshed that sent it
+         * (04-protocol.md §4.3.12).
+         */
+        isDelegatingPeer?: (principal: string) => boolean;
+
+        /**
          * Whether a `session.open` may present a UCAN proof chain
          * (04-protocol.md §4.5.1). When it may, the server verifies the
          * chain and resolves the session's capability, READ, WRITE and
@@ -4111,7 +4123,9 @@ export class Server {
   }
 
   #isDelegatingPrincipal(principal: string): boolean {
-    return this.options.acl?.delegatingDids?.includes(principal) ?? false;
+    const acl = this.options.acl;
+    return acl?.delegatingDids?.includes(principal) === true ||
+      acl?.isDelegatingPeer?.(principal) === true;
   }
 
   /**

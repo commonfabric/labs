@@ -34,6 +34,16 @@ const SHARED_IDENTITY: PassphraseOf = () => "owner routing integration service";
 const IDENTITY_PER_TOOLSHED: PassphraseOf = (name) =>
   `owner routing integration service ${name}`;
 
+/** The certificate and key a toolshed's private router endpoint listens with. */
+const ROUTED_TLS = new URL(
+  "../../memory/test/fixtures/routed-tls/",
+  import.meta.url,
+);
+
+/** The characters an Ed25519 `did:key` can end with (base58btc). */
+const BASE58_ALPHABET =
+  "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
 const TOOLSHED_ENTRY = fromFileUrl(
   new URL("../../toolshed/index.ts", import.meta.url),
 );
@@ -72,6 +82,7 @@ async function startToolshed(
   memoryDir: URL,
   memoryUrl: URL,
   passphrase: string,
+  environment: Record<string, string> = {},
 ): Promise<Toolshed> {
   // The process's own address is in its environment before it starts, as
   // the first-party authority its signed routes check against, so its port
@@ -91,6 +102,7 @@ async function startToolshed(
       SERVER_EXECUTION_OWNER_ROUTING: "true",
       SERVER_EXECUTION_ENSURE_SPACE_ROOTS: "false",
       LOG_LEVEL: "warn",
+      ...environment,
     },
     stdin: "null",
     stdout: "piped",
@@ -328,29 +340,103 @@ async function healthStats(toolshed: URL): Promise<{
 
 /** Two toolsheds over one memory store, and the proxy routing between them. */
 type Deployment = {
-  memoryDir: string;
+  /** The directory holding the store and the router's configuration. */
+  root: string;
   proxy: ReturnType<typeof startProxy>;
   toolsheds: Record<ToolshedName, Toolshed>;
 };
 
-/** Start both toolsheds behind a proxy, each under the identity `passphraseOf` gives it. */
+/**
+ * Write the memory router's configuration for both toolsheds under `root`:
+ * one directory that lists each toolshed's identity and places a space by
+ * its DID's last character as `ownerOf` does, and a configuration file per
+ * toolshed naming a private endpoint of its own. Returns the environment
+ * each toolshed starts with. No router runs: the proxy stands in for the
+ * public route, and what the toolsheds take from the configuration is the
+ * directory.
+ */
+async function writeRouterConfiguration(
+  root: string,
+  passphraseOf: PassphraseOf,
+): Promise<Record<ToolshedName, Record<string, string>>> {
+  const names: ToolshedName[] = ["A", "B"];
+  const deployment = "owner-routing";
+  const router = await Identity.fromPassphrase(
+    `owner-routing-router-${crypto.randomUUID()}`,
+  );
+  const directory = `${root}/directory.json`;
+  await Deno.writeTextFile(
+    directory,
+    JSON.stringify({
+      version: 1,
+      deployment,
+      toolsheds: await Promise.all(names.map(async (name) => ({
+        did: (await Identity.fromPassphrase(passphraseOf(name))).did(),
+      }))),
+      spaces: {},
+      unlisted: {
+        epoch: 1,
+        last_character: Object.fromEntries(
+          [...BASE58_ALPHABET].map((
+            character,
+          ) => [character, names.indexOf(ownerOf(character))]),
+        ),
+      },
+    }),
+  );
+  const environment = {} as Record<ToolshedName, Record<string, string>>;
+  for (const name of names) {
+    const path = `${root}/router-${name}.json`;
+    await Deno.writeTextFile(
+      path,
+      JSON.stringify({
+        version: 1,
+        deployment,
+        hostname: "127.0.0.1",
+        port: freePort(),
+        certificate: fromFileUrl(new URL("localhost.crt", ROUTED_TLS)),
+        key: fromFileUrl(new URL("localhost.key", ROUTED_TLS)),
+        directory,
+        epochLedger: `${root}/epochs-${name}`,
+        routers: { [router.did()]: ["127.0.0.1"] },
+      }),
+    );
+    environment[name] = {
+      MEMORY_ROUTER_CONFIG_FILE: path,
+      MEMORY_ACL_MODE: "enforce",
+    };
+  }
+  return environment;
+}
+
+/**
+ * Start both toolsheds behind a proxy, each under the identity
+ * `passphraseOf` gives it. With `routed`, each also takes the memory
+ * router's configuration, whose directory lists both identities.
+ */
 async function startDeployment(
   passphraseOf: PassphraseOf,
+  options: { routed?: boolean } = {},
 ): Promise<Deployment> {
-  const memoryDir = await Deno.makeTempDir({ prefix: "owner-routing-memory-" });
+  const root = await Deno.makeTempDir({ prefix: "owner-routing-" });
+  const memoryDir = `${root}/memory`;
+  await Deno.mkdir(memoryDir);
   const store = toFileUrl(`${memoryDir}/`);
+  const environment = options.routed === true
+    ? await writeRouterConfiguration(root, passphraseOf)
+    : undefined;
   // The proxy's address is what each toolshed routes through, and the
   // proxy learns the toolsheds' addresses as they start: it consults
   // them per request, so neither has to come first.
   const addresses = {} as Record<ToolshedName, URL>;
   const proxy = startProxy(addresses);
   const [a, b] = await Promise.all([
-    startToolshed("A", store, proxy.url, passphraseOf("A")),
-    startToolshed("B", store, proxy.url, passphraseOf("B")),
+    startToolshed("A", store, proxy.url, passphraseOf("A"), environment?.A),
+    startToolshed("B", store, proxy.url, passphraseOf("B"), environment?.B),
   ]);
   addresses.A = a.url;
   addresses.B = b.url;
-  return { memoryDir, proxy, toolsheds: { A: a, B: b } };
+  return { root, proxy, toolsheds: { A: a, B: b } };
 }
 
 /** Stop both toolsheds and the proxy, and remove the store. */
@@ -362,7 +448,7 @@ async function stopDeployment(deployment: Deployment): Promise<void> {
     Object.values(deployment.toolsheds).map((toolshed) => toolshed.exited),
   );
   await deployment.proxy.close();
-  await Deno.remove(deployment.memoryDir, { recursive: true });
+  await Deno.remove(deployment.root, { recursive: true });
 }
 
 /**
@@ -508,7 +594,9 @@ describe("owner-routing", () => {
     let deployment: Deployment;
 
     beforeAll(async () => {
-      deployment = await startDeployment(IDENTITY_PER_TOOLSHED);
+      deployment = await startDeployment(IDENTITY_PER_TOOLSHED, {
+        routed: true,
+      });
     });
 
     afterAll(async () => {

@@ -120,6 +120,12 @@ export async function openMemory(
       .filter((did) => did.length > 0),
     processIdentityDid: identity.did(),
     serverExecution: serverExecutionOn,
+    // Behind the memory router each toolshed has an identity of its own, and
+    // the directory lists them: a crossing from another toolshed arrives as
+    // a session of that toolshed's identity.
+    ...(routerPolicy !== undefined
+      ? { listsPeer: (did: string) => routerPolicy.listsToolshed(did) }
+      : {}),
   });
   if (serverExecutionOn) {
     console.log(
@@ -190,6 +196,9 @@ export async function openMemory(
       mode: environment.MEMORY_ACL_MODE,
       serviceDids: memoryAclPrincipals.serviceDids,
       delegatingDids: memoryAclPrincipals.delegatingDids,
+      ...(memoryAclPrincipals.isDelegatingPeer !== undefined
+        ? { isDelegatingPeer: memoryAclPrincipals.isDelegatingPeer }
+        : {}),
       delegations: environment.MEMORY_ACL_DELEGATIONS,
     },
     ...(routerPolicy !== undefined
