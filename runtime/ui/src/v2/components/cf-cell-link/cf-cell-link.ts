@@ -476,12 +476,10 @@ export class CFCellLink extends BaseElement {
 
     // A labelled link's press may still be resolving its target; the drag
     // starts on the first move after it lands.
-    if (
-      !this._isDragging && this._resolvedCell &&
-      Math.sqrt(dx * dx + dy * dy) > 5
-    ) {
+    const target = this._resolvedCell;
+    if (!this._isDragging && target && Math.sqrt(dx * dx + dy * dy) > 5) {
       this._isDragging = true;
-      this._beginDrag(e);
+      this._beginDrag(e, target);
     }
 
     if (this._isDragging && this._preview) {
@@ -496,12 +494,11 @@ export class CFCellLink extends BaseElement {
     this._endDrag();
   }
 
-  private _beginDrag(e: PointerEvent) {
-    if (!this._resolvedCell) return;
-
+  /** Starts dragging `target`, the cell the link resolved to. */
+  private _beginDrag(e: PointerEvent, target: CellHandle) {
     this.classList.add("dragging");
 
-    const { preview, cleanup } = createDragPreview(this._resolvedCell);
+    const { preview, cleanup } = createDragPreview(target);
     document.body.appendChild(preview);
 
     preview.style.left = `${e.clientX + 10}px`;
@@ -509,7 +506,7 @@ export class CFCellLink extends BaseElement {
     this._preview = preview;
 
     startDrag({
-      cell: this._resolvedCell,
+      cell: target,
       type: "cell-link",
       sourceElement: this,
       preview,

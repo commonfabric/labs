@@ -955,6 +955,14 @@ describe("CFCellLink in a document", () => {
       expect(await shownText(element)).toBe("Inbox #abcdef");
     });
 
+    it("hands back the target an unlabelled link already follows", async () => {
+      const cell = pieceCell("of:fid1:piece-abcdef", "Inbox");
+      const element = await cellLink({ cell });
+      await shownText(element);
+
+      expect(await element.resolveTarget()).toBe(cell);
+    });
+
     it("shows only the end of the id of a resolved cell with no name", async () => {
       const element = await cellLink({
         cell: pieceCell("of:fid1:piece-abcdef"),
@@ -1227,6 +1235,56 @@ describe("CFCellLink in a document", () => {
           },
         },
       ]]);
+    });
+
+    it("resolves nothing, and opens nothing, with neither a cell nor a link", async () => {
+      const element = await cellLink({ label: "Open" });
+      await shownText(element);
+
+      expect(await element.resolveTarget()).toBeUndefined();
+    });
+
+    it("logs a link given as a string with no space to resolve it in, and resolves nothing", async () => {
+      const target = pieceCell("of:fid1:topic-111111");
+      const element = await cellLink({
+        label: "Open",
+        link: "/of:fid1:abcdefghijklmnopqrstuvwxyz",
+        runtime: Object.assign(target.runtime(), {
+          getCellFromRef: () => target,
+        }),
+      });
+      await shownText(element);
+
+      let resolved: CellHandle | undefined = target;
+      const logged = await errorsLogged(async () => {
+        resolved = await element.resolveTarget();
+      });
+
+      expect(resolved).toBeUndefined();
+      expect(logged).toEqual([[
+        "Failed to resolve link:",
+        new Error("Link missing space."),
+      ]]);
+    });
+
+    it("logs nothing when a resolution fails after it is detached", async () => {
+      const pending = deferred<CellHandle>();
+      const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+        resolveAsCell: () => pending.promise,
+      });
+      const element = await cellLink({ label: "Open", cell });
+      await shownText(element);
+
+      let resolved: CellHandle | undefined = cell;
+      const logged = await errorsLogged(async () => {
+        const resolving = element.resolveTarget();
+        element.remove();
+        pending.reject(new Error("boom"));
+        resolved = await resolving;
+      });
+
+      expect(resolved).toBeUndefined();
+      expect(logged).toEqual([]);
     });
 
     it("opens nothing for a click that resolves after it is detached", async () => {
