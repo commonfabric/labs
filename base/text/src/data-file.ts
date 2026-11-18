@@ -138,8 +138,9 @@ export function isAssetName(name: string): boolean {
  * Returns the assets the directory `directory` holds, among the root-relative
  * file names `names`: each name directly inside `directory` whose extension
  * the table has, keyed by its file name without the extension, so
- * `/donuts/glaze.png` is `glaze` in `/donuts`. Names in subdirectories, and
- * files the table has no media type for, are left out.
+ * `/donuts/glaze.png` is `glaze` in `/donuts`. Names in subdirectories, hidden
+ * files (a name starting with `.`, such as macOS's `._glaze.png`), and files
+ * the table has no media type for are left out.
  *
  * Throws for a file whose name without its extension is not an asset name
  * (letters, digits, `_`, and `-`), and for two files that would share a name,
@@ -154,8 +155,9 @@ export function dataFileAssets(
   for (const name of names) {
     const slash = name.lastIndexOf("/");
     if (name.slice(0, slash) !== parent) continue;
-    if (mediaTypeEntry(name) === undefined) continue;
     const base = name.slice(slash + 1);
+    if (base.startsWith(".")) continue;
+    if (mediaTypeEntry(name) === undefined) continue;
     const asset = base.slice(0, base.lastIndexOf("."));
     if (!isAssetName(asset)) {
       throw new Error(

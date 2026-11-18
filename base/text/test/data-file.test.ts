@@ -47,6 +47,12 @@ describe("data-file", () => {
       ]);
     });
 
+    it("leaves out a hidden file", () => {
+      expect([
+        ...dataFileAssets("/a", ["/a/._glaze.png", "/a/.png", "/a/glaze.png"]),
+      ]).toEqual([["glaze", "/a/glaze.png"]]);
+    });
+
     it("throws for a file whose name is not an asset name", () => {
       expect(() => dataFileAssets("/a", ["/a/glaze.small.png"])).toThrow(
         "Data file `/a/glaze.small.png` has no asset name: `glaze.small` " +

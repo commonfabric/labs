@@ -322,6 +322,7 @@ export class CFIframe extends BaseElement {
     this.#contextSetup = undefined;
     if (this._errorDetails?.source === "cf-iframe context") {
       this._errorDetails = null;
+      this.#reportHeldAssets();
     }
     if (this.bridge || !this.context) {
       this._contextBridge = { resources: {} };
@@ -407,7 +408,16 @@ export class CFIframe extends BaseElement {
     const source = this._errorDetails?.source;
     this._errorDetails = null;
     if (source === "cf-iframe context") this.prepareContextBridge();
-    if (source !== ASSETS_ERROR_SOURCE && this.#checkedAssets === undefined) {
+    if (source !== ASSETS_ERROR_SOURCE) this.#reportHeldAssets();
+  }
+
+  /**
+   * Helper for the members above that clear an error from another source,
+   * which reports the refusal of assets `#checkAssets()` held back while that
+   * error showed.
+   */
+  #reportHeldAssets() {
+    if (this._errorDetails === null && this.#checkedAssets === undefined) {
       this.#checkAssets();
     }
   }
