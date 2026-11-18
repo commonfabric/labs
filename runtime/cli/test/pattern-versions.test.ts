@@ -21,7 +21,9 @@ import {
 import {
   type DeployedSource,
   entrySlot,
+  gitCheckoutOf,
   recordDeployedVersion,
+  recordVersionInIndex as recordVersionInIndexLib,
   type VersionDeps,
   versionLine,
   type VersionOutcome,
@@ -334,6 +336,42 @@ describe("pattern-versions", () => {
     });
   });
 
+  describe("gitCheckoutOf()", () => {
+    it("finds this checkout, and throws rather than answer none when it may not run git", async () => {
+      const here = new URL(".", import.meta.url).pathname;
+      expect(await gitCheckoutOf(here)).toMatchObject({
+        root: expect.any(String),
+      });
+
+      // A process without --allow-run, as a daemon might be started.
+      const module = new URL("../lib/pattern-versions.ts", import.meta.url)
+        .href;
+      const script = join(dir, "probe.ts");
+      await Deno.writeTextFile(
+        script,
+        `const { gitCheckoutOf } = await import(${JSON.stringify(module)});
+await gitCheckoutOf(${JSON.stringify(here)});`,
+      );
+      const { code, stderr } = await new Deno.Command(Deno.execPath(), {
+        args: [
+          "run",
+          "--no-lock",
+          "--config",
+          new URL("../deno.jsonc", import.meta.url).pathname,
+          "--allow-read",
+          "--allow-env",
+          script,
+        ],
+        stdout: "null",
+        stderr: "piped",
+      }).output();
+      expect(code).not.toBe(0);
+      expect(new TextDecoder().decode(stderr)).toMatch(
+        /NotCapable|--allow-run/,
+      );
+    });
+  });
+
   describe("entrySlot()", () => {
     it("answers one slot for the same file in two checkouts of one repository, whatever the remote's spelling", async () => {
       const a = join(dir, "a");
@@ -440,12 +478,11 @@ describe("pattern-versions", () => {
       const before = Deno.env.get("CF_PATTERN_INDEX_URL");
       Deno.env.set("CF_PATTERN_INDEX_URL", "https://index.test/?x=1");
       try {
-        const outcome = await recordVersionInIndex(
-          "/unused/test.key",
-          deployed(),
-        );
+        for (const record of [recordVersionInIndex, recordVersionInIndexLib]) {
+          const outcome = await record("/unused/test.key", deployed());
 
-        expect(outcome.status).toBe("failed");
+          expect(outcome.status).toBe("failed");
+        }
       } finally {
         if (before === undefined) Deno.env.delete("CF_PATTERN_INDEX_URL");
         else Deno.env.set("CF_PATTERN_INDEX_URL", before);
