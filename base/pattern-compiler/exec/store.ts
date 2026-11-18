@@ -748,6 +748,18 @@ export class Store {
   }
 
   /**
+   * Removes a document, with what the place was declared as and the
+   * record of its stream links. A link to it reads as nothing.
+   */
+  remove(id: string): void {
+    this.docs.delete(id);
+    this.declared.delete(id);
+    this.streams.delete(id);
+    this.clock += 1;
+    this.log.push({ doc: id, path: [], at: this.clock });
+  }
+
+  /**
    * The value at a reference, with every link in it replaced by the value
    * at its target. A link whose target is being read already gives
    * `undefined`. The stream of a binding reads as `{ $stream: true }`,

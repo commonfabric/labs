@@ -3214,6 +3214,32 @@ export class Instance {
     }
   }
 
+  /**
+   * Removes an instance that a function body of this instance made,
+   * which an instance that was moved to its name replaced (ruling Z41):
+   * its documents, the instances and the bindings that its own function
+   * bodies made, and the names that lead to them. An event for one of
+   * its streams finds no instance.
+   */
+  #remove(replaced: Instance): void {
+    const { root, store } = this;
+    const within = (id: string) => id.startsWith(replaced.prefix);
+    for (const id of [...store.docs.keys(), ...store.declared.keys()]) {
+      if (within(id)) store.remove(id);
+    }
+    for (const prefix of [...root.#instances.keys()]) {
+      if (within(prefix)) root.#instances.delete(prefix);
+    }
+    for (const [name, { instance }] of [...root.#made]) {
+      if (within(instance.prefix)) root.#made.delete(name);
+    }
+    for (const key of [...root.#bound.keys()]) {
+      if (within(key)) root.#bound.delete(key);
+    }
+    const at = this.#children.indexOf(replaced);
+    if (at >= 0) this.#children.splice(at, 1);
+  }
+
   #moveKey(
     rekey: { doc: string; array: readonly string[]; from: string; to: string },
   ): void {
@@ -3301,11 +3327,13 @@ export class Instance {
       ]);
       if (canonical(keys) === canonical(keyed.keys)) continue;
       const moved = { body: keyed.body, keys };
+      const to = `${this.prefix}instance:${runName(moved)}/${ordinal}`;
       this.root.#made.delete(name);
-      this.root.#made.set(
-        `${this.prefix}instance:${runName(moved)}/${ordinal}`,
-        { instance, ordinal, keyed: moved },
-      );
+      const replaced = this.root.#made.get(to)?.instance;
+      if (replaced !== undefined && replaced !== instance) {
+        this.#remove(replaced);
+      }
+      this.root.#made.set(to, { instance, ordinal, keyed: moved });
     }
     for (const [id, { cell, keys }] of [...this.#cells]) {
       const steps = this.plan.stateCells[cell].within.flatMap((step) =>

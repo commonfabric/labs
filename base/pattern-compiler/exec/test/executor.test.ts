@@ -2547,6 +2547,39 @@ describe("what a function body of an element body made, on a re-key", () => {
     expect(result(instance).rows[0].row.count).toBe(3);
   });
 
+  it("removes the instance that the moved one replaced, with its documents", async () => {
+    const instance = await start(inPlace());
+    const settled = instance.documents();
+    // The key of `a` with `done` is made, with an instance of its own,
+    // and the key leaves.
+    instance.writeArgument(["tasks"], [task("a", true), task("b")]);
+    streamAt(instance, ["rows", "0", "row", "bump"]).send({ by: 9 });
+    instance.dispatch();
+    const replaced = rowDocument(instance, 0);
+    const prefix = replaced.slice(0, -"result".length);
+    instance.writeArgument(["tasks"], [task("a"), task("b")]);
+    const moved = rowDocument(instance, 0);
+    expect(moved).not.toBe(replaced);
+    // The instance of the key that left is kept (ruling Z18).
+    expect(instance.store.docs.has(replaced)).toBe(true);
+
+    // The element that is not done is re-keyed to the key that left.
+    instance.send(FINISH(instance), {}, [0]);
+
+    expect(rowDocument(instance, 0)).toBe(moved);
+    expect(
+      [...instance.store.docs.keys(), ...instance.store.declared.keys()]
+        .filter((id) => id.startsWith(prefix)),
+    ).toEqual([]);
+    expect(instance.store.streams.has(replaced)).toBe(false);
+    // The store holds the documents of two rows, as after it settled.
+    expect(instance.documents()).toEqual(settled);
+    // The instance that moved handles an event for its stream.
+    streamAt(instance, ["rows", "0", "row", "bump"]).send({ by: 1 });
+    instance.dispatch();
+    expect(result(instance).rows[0].row.count).toBe(1);
+  });
+
   it("moves nothing for the binding that a function body made", async () => {
     const instance = await start(inPlace());
     const press = () =>
