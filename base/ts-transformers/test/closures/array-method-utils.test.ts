@@ -1,8 +1,24 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import ts from "typescript";
+
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+import { parseModule } from "../transformed-ast.ts";
 import { validateSource } from "../utils.ts";
+
+/** The names the variable declarations in `output` declare. */
+function declaredNames(output: string): string[] {
+  const names: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+      names.push(node.name.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parseModule(output));
+  return names;
+}
 
 describe("array-method-utils", () => {
   describe("a computed key in a collection callback's element parameter", () => {
@@ -41,6 +57,45 @@ export default pattern<{
       expect(
         await computationErrors("records.map(({ [k]: chosen = 0 }) => chosen)"),
       ).toEqual([expect.stringContaining("computed key")]);
+    });
+
+    it("binds the names a pattern under a computed key destructures beside a key it lifts", async () => {
+      // `[j]: y` is lifted into an alias, and `[k]: { x }` is left to the
+      // destructure, which reads `x` by key as it does with no alias beside it.
+
+      const { diagnostics, output } = await validateSource(
+        `/// <cts-enable />
+import { pattern } from "commonfabric";
+const k = "a", j = "b";
+export default pattern<{ rows: Record<string, { x: number }>[] }>(({ rows }) => ({
+  out: rows.map(({ [k]: { x }, [j]: y }) => x + y.x),
+}));`,
+        { types: COMMONFABRIC_TYPES },
+      );
+
+      expect(diagnostics.filter(({ severity }) => severity === "error"))
+        .toEqual([]);
+      expect(declaredNames(output)).toContain("x");
+    });
+
+    it("reports a default on a pattern a computed key binds beside a key it lifts", async () => {
+      const { diagnostics } = await validateSource(
+        `/// <cts-enable />
+import { pattern } from "commonfabric";
+const k = "a", j = "b";
+export default pattern<{ rows: Record<string, { x: number }>[] }>(({ rows }) => ({
+  out: rows.map(({ [k]: { x } = { x: 2 }, [j]: y }) => x + y.x),
+}));`,
+        { types: COMMONFABRIC_TYPES },
+      );
+
+      expect(
+        diagnostics
+          .filter(({ severity }) => severity === "error")
+          .map(({ message }) => message),
+      ).toEqual([
+        expect.stringContaining("Defaults on dynamic destructuring keys"),
+      ]);
     });
 
     it("reports nothing for a computed key with no default", async () => {

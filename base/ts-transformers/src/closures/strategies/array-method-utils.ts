@@ -79,33 +79,45 @@ function buildElementBindingPlan(
         let nextTemplate = template;
 
         if (propertyName && ts.isComputedPropertyName(propertyName)) {
-          if (ts.isIdentifier(element.name)) {
-            if (writesDefaultAround(element)) {
-              context.reportDiagnosticOnce({
-                severity: "error",
-                type: "pattern-context:computation",
-                message:
-                  "A destructuring default on or around a computed key is not lowerable in a collection callback parameter; destructure without the default and apply it in the callback body.",
-                node: element,
-              });
-            }
-            const symbol = checker.getSymbolAtLocation(element.name);
-            if (symbol) {
-              const aliasName = element.name.text;
-              const keyBase = `__cf_${aliasName}_key`;
-              const unique = getUniqueIdentifier(keyBase, keyNames, {
-                fallback: keyBase,
-              });
-              keyNames.add(unique);
-              aliasBucket.push({
-                symbol,
-                aliasName,
-                keyExpression: propertyName.expression,
-                keyIdentifier: factory.createIdentifier(unique),
-                path,
-                baseTemplate: template,
-              });
-            }
+          // A pattern under a computed key is left to the destructure, which
+          // reads the names it binds by key, as it does where no key beside
+          // it is lifted.
+          if (!ts.isIdentifier(element.name)) {
+            elements.push(
+              factory.createBindingElement(
+                element.dotDotDotToken,
+                element.propertyName,
+                element.name,
+                element.initializer,
+              ),
+            );
+            continue;
+          }
+          if (writesDefaultAround(element)) {
+            context.reportDiagnosticOnce({
+              severity: "error",
+              type: "pattern-context:computation",
+              message:
+                "A destructuring default on or around a computed key is not lowerable in a collection callback parameter; destructure without the default and apply it in the callback body.",
+              node: element,
+            });
+          }
+          const symbol = checker.getSymbolAtLocation(element.name);
+          if (symbol) {
+            const aliasName = element.name.text;
+            const keyBase = `__cf_${aliasName}_key`;
+            const unique = getUniqueIdentifier(keyBase, keyNames, {
+              fallback: keyBase,
+            });
+            keyNames.add(unique);
+            aliasBucket.push({
+              symbol,
+              aliasName,
+              keyExpression: propertyName.expression,
+              keyIdentifier: factory.createIdentifier(unique),
+              path,
+              baseTemplate: template,
+            });
           }
           continue;
         }
