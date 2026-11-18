@@ -948,3 +948,85 @@ export const P = pattern<{ index: number }>(({ index }) => {
     assert!(text.contains("JSON.parse($rt.dataFile(0))"), "{text}");
     assert!(text.contains("const NOTE = $rt.dataFile(1);"), "{text}");
 }
+
+/// The outputs that the code reads through `$h.output` and that no value
+/// function, no element construct and no path below a value computes.
+fn outputs_without_a_function(code: &Value) -> Vec<u64> {
+    let text = source(code);
+    let computed: Vec<u64> = code["values"]
+        .as_array()
+        .expect("values")
+        .iter()
+        .filter(|value| value["function"] == json!(true) || !value["collection"].is_null())
+        .filter_map(|value| value["output"].as_u64())
+        .chain(
+            code["outputsBelow"]
+                .as_array()
+                .expect("outputs below")
+                .iter()
+                .filter_map(|below| below["output"].as_u64()),
+        )
+        .collect();
+    let mut missing: Vec<u64> = text
+        .split("$h.output(")
+        .skip(1)
+        .filter_map(|rest| rest.split(')').next()?.parse().ok())
+        .filter(|output| !computed.contains(output))
+        .collect();
+    missing.sort_unstable();
+    missing.dedup();
+    missing
+}
+
+#[test]
+fn a_const_of_a_promoted_block_that_another_cone_reads_has_a_value_function() {
+    let (_, code) = emitted(
+        r#"import { computed, pattern, Writable } from "commonfabric";
+interface Item { text: string; done: boolean }
+interface Fleet { ships?: Item[] }
+export const P = pattern<{
+  items: Writable<Item[]>; fleet: Fleet; spare: Fleet; second: boolean; skip: string;
+}>(({ items, fleet, spare, second, skip }) => {
+  const summary = computed(() => {
+    const list = items.get() || [];
+    const total = list.length;
+    if (total === 0) return "Empty";
+    const done = list.filter((item) => item.done).length;
+    return `${done}/${total}`;
+  });
+  const others = computed(() => {
+    const hidden = skip.trim();
+    if (hidden === "") return [];
+    return (items.get() || []).filter((item) => item.text !== hidden);
+  });
+  const afloat = computed(() => {
+    const mine = second ? spare : fleet;
+    if (!mine) return 0;
+    const ships = (mine.ships || []).filter((ship) => !ship.done);
+    return ships.length;
+  });
+  return { summary, others, afloat };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    // The receiver `list`, and `hidden`, which the callback reads, are
+    // read as outputs by the cones of the constructs.
+    assert_eq!(
+        outputs_without_a_function(&code),
+        Vec::<u64>::new(),
+        "{text}"
+    );
+    // A function that is registered outside the block names no `const`
+    // of the block: the receiver `mine.ships || []` reads `mine` as the
+    // output it is.
+    let hoisted: Vec<&str> = text
+        .lines()
+        .filter(|line| line.starts_with("$rt.value(") && !line.contains("(() => {"))
+        .collect();
+    assert!(
+        hoisted.iter().all(|line| !line.contains("(mine,")),
+        "{hoisted:?}"
+    );
+}

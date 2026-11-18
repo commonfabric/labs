@@ -319,6 +319,15 @@ fn entities(text: &str) -> String {
     decoded
 }
 
+/// The initializer of a `const` of a block body of the reactive tier, and
+/// where it is written.
+#[derive(Clone, Copy)]
+struct Local<'a> {
+    init: &'a Expression<'a>,
+    module: usize,
+    context: Option<usize>,
+}
+
 struct Generator<'r, 'm, 'a> {
     resolver: &'r Resolver<'m, 'a>,
     plan: &'r Value,
@@ -331,6 +340,8 @@ struct Generator<'r, 'm, 'a> {
     /// The setup function of each context that has one.
     setups: HashSet<usize>,
     functions: HashMap<usize, HashMap<u32, FunctionLike<'a, 'a>>>,
+    /// The variable declarators of each module, by where they begin.
+    declarators: HashMap<usize, HashMap<u32, &'a VariableDeclarator<'a>>>,
     unsupported: Vec<(String, usize, u32)>,
     /// The reads the code makes of a place no slot of its cone names:
     /// the cone in `Plan.cones`, the root, and the path.
@@ -347,6 +358,11 @@ struct Generator<'r, 'm, 'a> {
     registered_reduces: Vec<usize>,
     /// The children whose argument function is registered.
     registered_children: Vec<usize>,
+    /// The `const` declarations of the block bodies of promoted
+    /// `computed` calls, by the value each initializer computes: a cone
+    /// other than the block's reads such a value as an output, which
+    /// needs a value function of its own.
+    locals: HashMap<usize, Local<'a>>,
     /// The path of each file that a `dataFile` call of the program names,
     /// in the order the calls are written.
     data_files: Vec<String>,
@@ -366,6 +382,9 @@ struct Rewriter<'g, 'r, 'm, 'a> {
     /// body: the runtime places the callee's default from `Body.reads`,
     /// and value code passes nothing for it (ruling Z16).
     to_body: bool,
+    /// Whether the code being written is registered outside the block
+    /// it is written in, where no `const` of that block is in scope.
+    outside_block: bool,
     edits: Vec<(u32, u32, String)>,
 }
 
@@ -399,6 +418,22 @@ impl<'r, 'm, 'a> Generator<'r, 'm, 'a> {
             entry.insert(found);
         }
         self.functions.get(&module)?.get(&start).copied()
+    }
+
+    /// The initializer of the variable declarator that begins at `start`.
+    fn initializer_at(&mut self, module: usize, start: u32) -> Option<&'a Expression<'a>> {
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.declarators.entry(module) {
+            let mut found = HashMap::new();
+            if let Some(parsed) = self.resolver.parsed(module) {
+                for node in parsed.semantic.nodes().iter() {
+                    if let AstKind::VariableDeclarator(declarator) = node.kind() {
+                        found.insert(declarator.span.start, declarator);
+                    }
+                }
+            }
+            entry.insert(found);
+        }
+        self.declarators.get(&module)?.get(&start)?.init.as_ref()
     }
 
     fn hoist(&mut self, statement: String) {
@@ -622,6 +657,61 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         })
     }
 
+    /// Writes code that is registered outside the block it is written
+    /// in: a `const` of the block is read there as the output it is.
+    fn outside_block<T>(&mut self, write: impl FnOnce(&mut Self) -> T) -> T {
+        let saved = std::mem::replace(&mut self.outside_block, true);
+        let written = write(self);
+        self.outside_block = saved;
+        written
+    }
+
+    /// The value that an initializer denotes or reads a member of, with
+    /// the expression that computes the value: the initializer itself, or
+    /// the object of its member reads, as `(a ?? {})` is of
+    /// `(a ?? {}).name`.
+    fn value_written_in(&self, init: &'a Expression<'a>) -> Option<(usize, &'a Expression<'a>)> {
+        let Some(Place::Value(value, _)) = self.place_of(init) else {
+            return None;
+        };
+        let mut written = unwrap(init);
+        loop {
+            match self.place_of(written) {
+                Some(Place::Value(of, path)) if of == value && path.is_empty() => {
+                    return Some((value, written));
+                }
+                Some(Place::Value(of, _)) if of == value => {}
+                _ => return None,
+            }
+            written = match written {
+                Expression::StaticMemberExpression(member) => unwrap(&member.object),
+                Expression::ComputedMemberExpression(member) => unwrap(&member.object),
+                _ => return None,
+            };
+        }
+    }
+
+    /// Registers the value function of a `const` of a block body, where
+    /// `value` is one and has no function: the initializer, which reads
+    /// the other names of the block as outputs.
+    fn register_local(&mut self, value: usize) {
+        if self.generator.registered_values.contains(&value) {
+            return;
+        }
+        let Some(local) = self.generator.locals.get(&value).copied() else {
+            return;
+        };
+        self.generator.registered_values.push(value);
+        let cone = Some(self.generator.cone_of(value));
+        let code = self.in_module(local.module, local.context, |rewriter| {
+            rewriter.in_cone(cone, |rewriter| {
+                rewriter.outside_block(|rewriter| rewriter.render(local.init, Want::Pass))
+            })
+        });
+        self.generator
+            .hoist(format!("$rt.value({value}, ($h) => ({code}));"));
+    }
+
     fn in_cone<T>(&mut self, cone: Option<usize>, write: impl FnOnce(&mut Self) -> T) -> T {
         let saved = std::mem::replace(&mut self.cone, cone);
         let written = write(self);
@@ -698,11 +788,20 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         if let Expression::Identifier(identifier) = inner {
             let fact = fact?;
             return match &fact.place {
-                Place::Value(value, _)
+                Place::Value(value, path)
                     if self.cone.is_some() && Some(self.generator.cone_of(*value)) == self.cone =>
                 {
+                    if self.outside_block && self.generator.locals.contains_key(value) {
+                        self.register_local(*value);
+                        let code = self.output_code(*value, path);
+                        return Some(Self::wanted(want, code));
+                    }
                     // A value of this cone is held in a local variable.
                     Some(Self::wanted(want, identifier.name.to_string()))
+                }
+                Place::Value(value, _) => {
+                    self.register_local(*value);
+                    self.place_code(&fact.place, want)
                 }
                 Place::Record(_) => Some(Self::wanted(
                     want,
@@ -771,14 +870,18 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                     if Some(cone) == self.cone {
                         return self.compute(inner, value, want);
                     }
-                    let code = self.in_cone(Some(cone), |rewriter| {
-                        rewriter
-                            .compute(inner, value, Want::Pass)
-                            .unwrap_or_else(|| rewriter.generic(inner))
-                    });
-                    self.generator
-                        .hoist(format!("$rt.value({value}, ($h) => ({code}));"));
-                    self.generator.registered_values.push(value);
+                    if !self.generator.registered_values.contains(&value) {
+                        self.generator.registered_values.push(value);
+                        let code = self.in_cone(Some(cone), |rewriter| {
+                            rewriter.outside_block(|rewriter| {
+                                rewriter
+                                    .compute(inner, value, Want::Pass)
+                                    .unwrap_or_else(|| rewriter.generic(inner))
+                            })
+                        });
+                        self.generator
+                            .hoist(format!("$rt.value({value}, ($h) => ({code}));"));
+                    }
                     let code = self.output_code(value, &[]);
                     return Some(Self::wanted(want, code));
                 }
@@ -1067,12 +1170,19 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         match source {
             Some(value) if written => {
                 let cone = Some(self.generator.cone_of(value));
-                let code = self.in_cone(cone, |rewriter| rewriter.render(object, Want::Pass));
+                let code = self.in_cone(cone, |rewriter| {
+                    rewriter.outside_block(|rewriter| rewriter.render(object, Want::Pass))
+                });
                 self.generator
                     .hoist(format!("$rt.value({value}, ($h) => ({code}));"));
                 self.generator.registered_values.push(value);
             }
             _ => {
+                // A receiver that is a `const` of a block body is read
+                // as the output it is.
+                if let Some(Place::Value(value, _)) = self.place_of(object) {
+                    self.register_local(value);
+                }
                 self.in_cone(None, |rewriter| rewriter.render(object, Want::Pass));
             }
         }
@@ -1087,6 +1197,9 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         let Some(function) = call.arguments.first().and_then(FunctionLike::of_argument) else {
             return;
         };
+        if self.generator.registered_elements.contains(&collection) {
+            return;
+        }
         self.source_of_construct(&member.object, collection);
         let cone = self
             .generator
@@ -2175,6 +2288,38 @@ impl<'a> Visit<'a> for Rewriter<'_, '_, '_, 'a> {
         walk::walk_formal_parameter(self, it);
     }
 
+    fn visit_variable_declarator(&mut self, it: &VariableDeclarator<'a>) {
+        // A `const` of a block body of the reactive tier: the value its
+        // initializer computes, for a cone outside the block that reads
+        // it.
+        let init = match (self.context, &it.id) {
+            (Some(_), BindingPattern::BindingIdentifier(_)) => {
+                self.generator.initializer_at(self.module, it.span.start)
+            }
+            _ => None,
+        };
+        if let Some(init) = init {
+            if let Some((value, written)) = self.value_written_in(init) {
+                let local = Local {
+                    init: written,
+                    module: self.module,
+                    context: self.context,
+                };
+                self.generator.locals.entry(value).or_insert(local);
+                if self
+                    .generator
+                    .finished
+                    .output_of
+                    .keys()
+                    .any(|(of, _)| *of == value)
+                {
+                    self.register_local(value);
+                }
+            }
+        }
+        walk::walk_variable_declarator(self, it);
+    }
+
     fn visit_statement(&mut self, it: &Statement<'a>) {
         match it {
             Statement::TSTypeAliasDeclaration(_)
@@ -2431,6 +2576,7 @@ pub(crate) fn generate(
         buffers: Vec::new(),
         setups: HashSet::new(),
         functions: HashMap::new(),
+        declarators: HashMap::new(),
         unsupported: Vec::new(),
         unlisted: Vec::new(),
         interim: Vec::new(),
@@ -2439,6 +2585,7 @@ pub(crate) fn generate(
         registered_states: Vec::new(),
         registered_reduces: Vec::new(),
         registered_children: Vec::new(),
+        locals: HashMap::new(),
         data_files: Vec::new(),
         counter: 0,
     };
@@ -2448,6 +2595,7 @@ pub(crate) fn generate(
         context: None,
         cone: None,
         to_body: false,
+        outside_block: false,
         edits: Vec::new(),
     };
     rewriter.generator.setups.insert(0);

@@ -207,6 +207,23 @@ const WRITTEN: Record<string, Written[]> = {
       { binding: 2, event: {} },
     ],
   }],
+  // A `const` of the block body of a promoted `computed` that a
+  // per-element construct names, over arrays of plain values in place.
+  "block-const": [false, true].map((second) => ({
+    argument: {
+      items: [
+        { text: "a", done: true },
+        { text: "b", done: false },
+        { text: "c", done: true },
+      ],
+      fleet: { ships: [{ text: "x", done: false }, { text: "y", done: true }] },
+      spare: {
+        ships: [{ text: "z", done: false }, { text: "w", done: false }],
+      },
+      second,
+      skip: second ? "" : " b ",
+    },
+  })),
   // Rulings Z25 and Z26 over arrays of plain values in place: a card is
   // kept, the piles swap their last cards, and the row of the last card
   // of the first pile discards it.

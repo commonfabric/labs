@@ -6147,3 +6147,46 @@ describe("a data file", () => {
     );
   });
 });
+
+// A per-element construct inside the block body of a promoted `computed`
+// that names a `const` of the block (`fixtures/block-const.tsx`). The
+// arrays are arrays of plain values in place.
+describe("a `const` of the block body of a promoted `computed`", () => {
+  const argument = (second: boolean, skip: string) => ({
+    items: [
+      { text: "a", done: true },
+      { text: "b", done: false },
+      { text: "c", done: true },
+    ],
+    fleet: { ships: [{ text: "x", done: false }, { text: "y", done: true }] },
+    spare: { ships: [{ text: "z", done: false }, { text: "w", done: false }] },
+    second,
+    skip,
+  });
+
+  it("is the receiver of a construct, is read in its callback, and is named in its receiver", async () => {
+    const instance = new Instance(
+      await artifactOf("block-const"),
+      argument(false, " b "),
+    );
+
+    expect(instance.result()).toEqual({
+      summary: "2/3",
+      others: [{ text: "a", done: true }, { text: "c", done: true }],
+      afloat: 1,
+    });
+  });
+
+  it("selects the receiver of the construct by the `const`", async () => {
+    const instance = new Instance(
+      await artifactOf("block-const"),
+      argument(true, ""),
+    );
+
+    expect(instance.result()).toEqual({
+      summary: "2/3",
+      others: [],
+      afloat: 2,
+    });
+  });
+});
