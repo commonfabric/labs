@@ -45,7 +45,8 @@
  * each such file out and lists it by name, media type, and size, and a
  * revision carries every one over from the current source unchanged. So
  * those bytes never reach the model's context, and a revision cannot drop or
- * corrupt one.
+ * corrupt one. A revision sends only the entry's source, so it carries a text
+ * data file over unchanged too.
  */
 
 import type { JSONSchema } from "@commonfabric/api";
@@ -241,7 +242,7 @@ export const readPieceSourceToolDescriptor: HarnessToolDescriptor = {
   toolId: "read_piece_source",
   title: "Read Piece Source",
   description:
-    "Read the current authored source of a piece behind a handle token, so you can revise a piece that already exists rather than write a replacement blind. Returns the source files, their revision, an inputRef to the piece's bound arguments, where the source came from, and its CFC labels. Binary media files (images, fonts, sounds) are listed under omittedFiles by name, media type, and size rather than returned; revise_piece keeps them unchanged. Wire inputRef into run_pattern for a before/after check against the actual inputs; it is a reference, not their contents. Reading source puts this context under its labels. Pass sourceRevisionId back to revise_piece so a piece that moved in the meantime refuses the write. To run a revised copy as a new piece instead, pass this token as run_pattern's revises.",
+    "Read the current authored source of a piece behind a handle token, so you can revise a piece that already exists rather than write a replacement blind. Returns the source files, their revision, an inputRef to the piece's bound arguments, where the source came from, and its CFC labels. Binary media files (images, fonts, sounds) are listed under omittedFiles by name, media type, and size rather than returned. revise_piece keeps every data file, binary or text, unchanged. Wire inputRef into run_pattern for a before/after check against the actual inputs; it is a reference, not their contents. Reading source puts this context under its labels. Pass sourceRevisionId back to revise_piece so a piece that moved in the meantime refuses the write. To run a revised copy as a new piece instead, pass this token as run_pattern's revises.",
   effectClass: "read",
   inputSchema: {
     type: "object",
@@ -318,7 +319,7 @@ export const revisePieceToolDescriptor: HarnessToolDescriptor = {
   toolId: "revise_piece",
   title: "Revise Piece",
   description:
-    "Replace the source of a piece behind a handle token with a revised program, keeping the piece's data. The piece's binary media files (the omittedFiles read_piece_source lists) are carried over unchanged at the same paths, so the revised source reads them as the current one does; a piece whose source the space does not hold is refused. The candidate is checked against what the piece holds before it is applied — its argument and result schemas, the links it retains, and the CFC envelope on its argument — and a candidate that does not fit is refused with every reason at once rather than applied and left broken. Returns the new revision's id and a reference to the refreshed result, never source. Use it after read_piece_source when someone asks for a piece they already have to work differently; use run_pattern when there is no such piece. A change that needs a rehearsal against a copy of the space is refused, because that is a person's judgment to make and not this tool's.",
+    "Replace the source of a piece behind a handle token with a revised program, keeping the piece's data. The piece's data files, the binary ones read_piece_source lists under omittedFiles included, are carried over unchanged at the same paths, so the revised source reads them as the current one does; a piece whose source the space does not hold is refused. The candidate is checked against what the piece holds before it is applied — its argument and result schemas, the links it retains, and the CFC envelope on its argument — and a candidate that does not fit is refused with every reason at once rather than applied and left broken. Returns the new revision's id and a reference to the refreshed result, never source. Use it after read_piece_source when someone asks for a piece they already have to work differently; use run_pattern when there is no such piece. A change that needs a rehearsal against a copy of the space is refused, because that is a person's judgment to make and not this tool's.",
   effectClass: "side-effect",
   inputSchema: {
     type: "object",
@@ -433,13 +434,14 @@ const withoutBinaryMedia = (
 
 /**
  * The program a revision writes: `sourceText` as `main.tsx`, beside every
- * binary media file of `current`, the piece's current source, carried over
- * unchanged.
+ * data file of `current`, the piece's current source, carried over unchanged.
  *
- * Those are the files `read_piece_source` leaves out, so no caller holds
- * them to send back. A data file is read by a path relative to the module
+ * A revision sends only its source, so no caller can send a data file back:
+ * not a binary media file, which `read_piece_source` leaves out, and not a
+ * text one either. A data file is read by a path relative to the module
  * reading it, so `sourceText` is placed in the directory of the entry it
  * replaces, where each path the current source reads names the same file.
+ * Code modules other than the entry are not carried over.
  */
 const revisedProgram = (
   sourceText: string,
@@ -451,7 +453,11 @@ const revisedProgram = (
 } => {
   const entry = current.entry ?? "/main.tsx";
   const main = `${entry.slice(0, entry.lastIndexOf("/"))}/main.tsx`;
-  const carried = current.files.filter((file) => isStoredAsDataUrl(file.name));
+  // A binary media file is always data, whether or not the source lists it.
+  const data = new Set(current.dataFiles);
+  const carried = current.files.filter((file) =>
+    file.name !== main && (data.has(file.name) || isStoredAsDataUrl(file.name))
+  );
   return {
     main,
     files: [

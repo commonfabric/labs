@@ -126,15 +126,17 @@ Takes a piece handle and a revised `sourceText`, runs
 `checkPattern` and then `setPattern`, and returns the revision id and a
 handle to the refreshed result. It never returns source.
 
-The program it writes is `sourceText` plus every binary media file of the
-piece's current source, carried over unchanged at its own path: those are
-the files the read leaves out, so the child never holds them to send back,
-and a revision cannot drop or corrupt one. `sourceText` is written as
-`main.tsx` in the directory of the entry it replaces, because a data file is
-read by a path relative to the module reading it. Text files other than the
-entry, data or code, are not carried over. A piece whose authored source the
-space does not hold is refused, as the read refuses it: which files a
-revision would have to carry over is then unknown.
+The program it writes is `sourceText` plus every data file of the piece's
+current source, carried over unchanged at its own path. A revision sends
+only its source, so the child cannot send a data file back: not a binary
+media file, which the read leaves out, and not a text one either. A
+revision therefore cannot drop or corrupt one, and cannot change one.
+`sourceText` is written as `main.tsx` in the directory of the entry it
+replaces, because a data file is read by a path relative to the module
+reading it. Code modules other than the entry are not carried over. A piece
+whose authored source the space does not hold is refused, as the read
+refuses it: which files a revision would have to carry over is then
+unknown.
 
 The piece's current source is read before anything is compiled, for those
 files and for the revision it is at. `expectedRevisionId` is optional.

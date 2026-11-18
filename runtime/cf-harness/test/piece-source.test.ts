@@ -510,6 +510,28 @@ describe("piece-source", () => {
       expect(after.dataFiles).toEqual(["/glaze.png"]);
     });
 
+    it("carries the piece's text data files over unchanged too, since a revision sends only its source", async () => {
+      const engine = createEngine();
+      const { cell, token } = await createGlazePiece("/main.tsx", [
+        { name: "/note.txt", contents: "glaze before frying" },
+      ]);
+
+      const result = await engine.invokeBuiltinTool("revise_piece", {
+        token,
+        sourceText: glazePatternSource(3),
+      });
+      const output = result.output as RevisePieceToolSuccessOutput;
+      expect(output.status).toBe("ok");
+
+      const after = await readPieceSourceState(runtime, cell);
+      expect(after.files).toEqual([
+        { name: "/main.tsx", contents: glazePatternSource(3) },
+        { name: "/glaze.png", contents: GLAZE_DATA_URL },
+        { name: "/note.txt", contents: "glaze before frying" },
+      ]);
+      expect(after.dataFiles).toEqual(["/glaze.png", "/note.txt"]);
+    });
+
     it("writes the revision in the directory of the entry it replaces, where the paths the source reads resolve as they did", async () => {
       const engine = createEngine();
       const { cell, token } = await createGlazePiece("/donuts/main.tsx");

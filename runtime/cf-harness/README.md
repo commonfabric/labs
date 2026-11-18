@@ -3461,12 +3461,13 @@ A binary media file in a piece's source, an image, a font or a sound, is stored
 as a base64 `data:` URL, and neither tool passes one through the model. The read
 leaves each out of `files` and lists it under `omittedFiles` by name, media type
 and size in bytes, with the reason. A revision sends only its `sourceText`, and
-`revise_piece` carries every such file over from the current source unchanged,
-at its own path. It writes `sourceText` as `main.tsx` in the directory of the
-entry it replaces, so a path the source reads relative to itself names the file
-it named before. The read refuses a source whose binary file does not hold a
-`data:` URL of its media type, as `cf piece getsrc` does, and both tools refuse
-a piece whose authored source the space does not hold.
+`revise_piece` carries every data file, binary or text, over from the current
+source unchanged, at its own path; code modules other than the entry are not
+carried. It writes `sourceText` as `main.tsx` in the directory of the entry it
+replaces, so a path the source reads relative to itself names the file it named
+before. The read refuses a source whose binary file does not hold a `data:` URL
+of its media type, as `cf piece getsrc` does, and both tools refuse a piece
+whose authored source the space does not hold.
 
 For a classifier or filter change, the child is instructed to evaluate the old
 and new predicates over the same bounded sample before applying the revision.
