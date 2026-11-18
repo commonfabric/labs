@@ -86,7 +86,11 @@ function show(value: IframeStateData | undefined): void {
   );
 }
 
-state.sink(show);
+// The sink hears nothing useful before the state has loaded, and the pull
+// below draws the first value.
+state.sink((value) => {
+  if (value !== undefined) show(value);
+});
 state.pull().then(
   (value) => {
     show(value);
