@@ -1092,8 +1092,17 @@ export const inspect = new Command()
                     : ""),
               );
             }
-          } else {
+          } else if (c.readSetsNotKept === 0) {
             console.log("\n(no anomalous stale reads — store is consistent)");
+          } else {
+            console.log("\n(no anomalous stale reads among the reads kept)");
+          }
+          if (c.readSetsNotKept > 0) {
+            console.log(
+              `\n? ${c.readSetsNotKept} later commit(s) keep only a digest ` +
+                `of their reads, so whether they read this entity stale was ` +
+                `not checked.`,
+            );
           }
         });
         return;

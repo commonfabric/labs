@@ -29,11 +29,13 @@ where those properties are stated once.
 
 Checkers referenced below:
 
-- the **durable-history oracle**: `staleReadAnomalies` in
+- the **durable-history oracle**: `readCoherence` in
   `runtime/state-inspector/oracle.ts`, which replays the engine's own
   admission predicate over a space DB's commit history
   (`runtime/state-inspector/test/engine-oracle.test.ts` proves it detects
-  seeded corruption);
+  seeded corruption). It also counts the commits stored with a digest in
+  place of their reads (02-storage.md §3.3), which it cannot replay, so it
+  certifies a store only when that count is 0;
 - the **differential harness**:
   `runtime/memory/test/v2-differential-consistency.test.ts`, which runs
   seeded random commit schedules against the engine and a naive reference

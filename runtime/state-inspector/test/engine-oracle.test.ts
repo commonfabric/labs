@@ -5,7 +5,10 @@
 //      read-modify-write, and a rejected stale commit — yields ZERO
 //      anomalies (the engine validated every persisted read); and
 //   2. a forged commit inserted behind the engine's back, claiming a read
-//      the engine would have rejected, IS flagged.
+//      the engine would have rejected, IS flagged; and
+//   3. a store whose commits keep only a digest of their reads is reported
+//      as unchecked rather than coherent, since the oracle cannot replay
+//      those reads.
 //
 // See docs/specs/memory-v2/09-invariants.md, INV-1.
 
@@ -18,9 +21,14 @@ import {
   ConflictError,
   open,
 } from "@commonfabric/memory/v2/engine";
-import { type EntityDocument, toDocumentPath } from "@commonfabric/memory/v2";
+import {
+  type ClientCommit,
+  type EntityDocument,
+  toDocumentPath,
+} from "@commonfabric/memory/v2";
+import { encodeStoredCommit } from "@commonfabric/memory/v2/stored-commit";
 import { openSpace } from "../db.ts";
-import { staleReadAnomalies } from "../oracle.ts";
+import { readCoherence } from "../oracle.ts";
 
 const doc = (value: unknown): EntityDocument => ({ value } as EntityDocument);
 
@@ -29,9 +37,9 @@ const BOB = { sessionId: "s-bob", principal: "did:key:zBob" };
 const CAROL = { sessionId: "s-carol", principal: "did:key:zCarol" };
 
 // Seq 1: seed doc. Seq 2: Bob's valid read-modify-write of the title.
-const seedContendedStore = async () => {
+const seedContendedStore = async (storeReadsDigest = false) => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
-  const engine = await open({ url: toFileUrl(path) });
+  const engine = await open({ url: toFileUrl(path), storeReadsDigest });
 
   applyCommit(engine, {
     ...ALICE,
@@ -143,19 +151,34 @@ Deno.test("oracle: a contended engine run yields zero anomalies", async () => {
 
   const space = openSpace(path);
   try {
-    assertEquals(staleReadAnomalies(space), []);
+    assertEquals(readCoherence(space), { anomalies: [], readSetsNotKept: 0 });
   } finally {
     space.close();
     await Deno.remove(path).catch(() => {});
   }
 });
 
-Deno.test("oracle: flags a forged commit that bypassed validation", async () => {
-  const { engine, path } = await seedContendedStore();
-  close(engine);
+// A commit claiming it read the title at seq 1 — Bob's accepted seq-2 write
+// overlaps that read, so the engine would have rejected it.
+const forgedCommit: ClientCommit = {
+  localSeq: 99,
+  reads: {
+    confirmed: [{
+      id: "entity:doc",
+      path: toDocumentPath(["value", "title"]),
+      seq: 1,
+    }],
+    pending: [],
+  },
+  operations: [{
+    op: "set",
+    id: "entity:derived",
+    value: doc("built from t0"),
+  }],
+};
 
-  // Forge a commit claiming it read the title at seq 1 — Bob's accepted
-  // seq-2 write overlaps that read, so the engine would have rejected it.
+/** Inserts `original` at seq 10 behind the engine's back. */
+const forge = (path: string, original: string) => {
   const db = new Database(path);
   try {
     db.prepare(
@@ -167,36 +190,59 @@ Deno.test("oracle: flags a forged commit that bypassed validation", async () => 
       10,
       "session:forged",
       99,
-      JSON.stringify({
-        localSeq: 99,
-        reads: {
-          confirmed: [{
-            id: "entity:doc",
-            path: ["value", "title"],
-            seq: 1,
-          }],
-          pending: [],
-        },
-        operations: [{
-          op: "set",
-          id: "entity:derived",
-          value: { value: "built from t0" },
-        }],
-      }),
+      original,
       JSON.stringify({ seq: 10 }),
       new Date().toISOString(),
     );
   } finally {
     db.close();
   }
+};
+
+Deno.test("oracle: flags a forged commit that bypassed validation", async () => {
+  const { engine, path } = await seedContendedStore();
+  close(engine);
+  forge(path, JSON.stringify(forgedCommit));
 
   const space = openSpace(path);
   try {
-    const anomalies = staleReadAnomalies(space);
+    const { anomalies, readSetsNotKept } = readCoherence(space);
+    assertEquals(readSetsNotKept, 0);
     assertEquals(anomalies.length, 1);
     assertEquals(anomalies[0].readerCommitSeq, 10);
     assertEquals(anomalies[0].readAtSeq, 1);
     assertEquals(anomalies[0].missedWriteSeq, 2);
+  } finally {
+    space.close();
+    await Deno.remove(path).catch(() => {});
+  }
+});
+
+Deno.test("oracle: reports a store whose commits keep only a digest of their reads as unchecked", async () => {
+  // Bob's seq-2 commit reads the title, so an engine storing digests keeps
+  // only its digest.
+  const { engine, path } = await seedContendedStore(true);
+  close(engine);
+
+  const space = openSpace(path);
+  try {
+    assertEquals(readCoherence(space), { anomalies: [], readSetsNotKept: 1 });
+  } finally {
+    space.close();
+    await Deno.remove(path).catch(() => {});
+  }
+});
+
+Deno.test("oracle: does not certify a store when a forged commit's reads are stored as a digest", async () => {
+  const { engine, path } = await seedContendedStore();
+  close(engine);
+  forge(path, encodeStoredCommit(forgedCommit, false));
+
+  const space = openSpace(path);
+  try {
+    // The forged read cannot be replayed, so it goes uncounted as an anomaly
+    // and is counted as unchecked instead.
+    assertEquals(readCoherence(space), { anomalies: [], readSetsNotKept: 1 });
   } finally {
     space.close();
     await Deno.remove(path).catch(() => {});

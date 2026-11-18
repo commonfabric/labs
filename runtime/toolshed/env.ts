@@ -347,6 +347,14 @@ export const EnvSchema = z.object({
   MEMORY_SYNC_CID_REFERENCES: z.enum(["true", "1", "false", "0"]).default(
     "true",
   ).transform((v) => v === "true" || v === "1"),
+  // Whether this deployment's memory server stores an admitted commit's reads
+  // as a digest where nothing reads them afterward
+  // (docs/specs/memory-v2/02-storage.md §3.3); off unless set to "true" or
+  // "1", and any other spelling refuses startup. Enable it only once no
+  // version this deployment may roll back to predates digest-form rows.
+  MEMORY_STORE_READS_DIGEST: z.enum(["true", "1", "false", "0"]).default(
+    "false",
+  ).transform((v) => v === "true" || v === "1"),
   // Client retirement is disabled; reject settings that would enable it.
   MEMORY_MINIMUM_CLIENT_GENERATION: z.literal("0", {
     error:

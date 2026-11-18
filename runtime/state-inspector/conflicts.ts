@@ -31,6 +31,7 @@ import {
   patchOverlapsNonRecursiveRead,
   patchOverlapsRead,
 } from "@commonfabric/memory/v2/engine";
+import { storedReadCounts } from "@commonfabric/memory/v2/stored-commit";
 import { utf8Compare } from "@commonfabric/text/utf8";
 
 import { rowLimit } from "./model.ts";
@@ -79,6 +80,10 @@ export interface ContendedEntity {
 
   /** Lost-update reads (attached by the explorer bundle for multi-user cells). */
   staleReads?: StaleRead[];
+
+  /** Attached with {@link staleReads}: commits the analysis could not check,
+   * see {@link EntityConflicts.readSetsNotKept}. */
+  readSetsNotKept?: number;
 
   /** True once stale-read analysis ran for this cell. `false`/absent on a
    * multi-user cell means analysis was SKIPPED (a cap), not that it's clean —
@@ -231,6 +236,14 @@ export interface EntityConflicts {
 
   /** Stale reads: the reader committed without seeing a prior concurrent write. */
   staleReads: StaleRead[];
+
+  /**
+   * Commits after this entity's first write that the log holds with a digest
+   * in place of their reads (02-storage.md §3.3). Any of them may have read
+   * the entity, and the scan cannot check what they read, so an empty
+   * {@link staleReads} shows the entity coherent only when this is 0.
+   */
+  readSetsNotKept: number;
 }
 
 interface ConfirmedReadRef {
@@ -389,7 +402,37 @@ export function entityConflicts(
     multiUser: writerPrincipals >= 2,
     interleaved: sessionSwitches(writers) >= 2,
     staleReads,
+    // Writers are seq-ordered, so the first is the entity's first write.
+    readSetsNotKept: readSetsNotKept(space, writers[0]?.commitSeq ?? 0),
   };
+}
+
+/**
+ * Returns how many commits after seq `afterSeq`, on any branch, the log holds
+ * with a digest in place of their reads (02-storage.md §3.3). A read set
+ * stored that way cannot be checked for stale reads, so a check that finds
+ * none among the rest has not shown the store coherent unless this is 0.
+ */
+export function readSetsNotKept(space: SpaceDb, afterSeq = 0): number {
+  // The prefilter is a substring of every digest-form row; decoding what it
+  // finds decides, since a commit's operations may hold the same text.
+  const candidates = space.db
+    .prepare(
+      `SELECT original FROM "commit"
+       WHERE seq > ? AND original LIKE '%"digest"%'`,
+    )
+    .all<{ original: string }>(afterSeq);
+  let count = 0;
+  for (const { original } of candidates) {
+    let decoded: unknown;
+    try {
+      decoded = decodeStored(original);
+    } catch {
+      continue;
+    }
+    if (storedReadCounts(decoded)?.kept === false) count++;
+  }
+  return count;
 }
 
 /**

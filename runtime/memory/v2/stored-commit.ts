@@ -1,9 +1,10 @@
 /**
  * What a space's commit log holds in `original` for an admitted client commit,
  * and how a resubmission is matched against it (03-commit-model.md §3.7.4).
- * The log holds a commit as submitted, except that a read set nothing consults
- * after admission is replaced by its digest. The reads decide the commit's own
- * admission; afterward a resubmission's identity check is the one reader
+ * The log holds a commit as submitted, except that an engine opened to store
+ * digests replaces a read set nothing consults after admission with a digest
+ * of the whole submission (02-storage.md §3.3). The reads decide the commit's
+ * own admission; afterward a resubmission's identity check is the one reader
  * left, and the digest serves it.
  */
 
@@ -13,9 +14,15 @@ import { sha256 } from "@commonfabric/content-hash";
 import { type ClientCommit, encodeMemoryBoundary } from "../v2.ts";
 
 /** What stands in a stored commit for a read set the log does not keep. */
-export type ReadsDigest = {
-  /** SHA-256 of the read set's boundary encoding, as unpadded base64url. */
-  hash: string;
+export type CommitDigest = {
+  /**
+   * SHA-256 of the whole submitted commit's boundary encoding, reads and
+   * every other member included, as unpadded base64url.
+   */
+  sha256: string;
+
+  /** The UTF-8 byte length of that encoding. */
+  bytes: number;
 
   /** How many confirmed reads the commit carried. */
   confirmed: number;
@@ -25,29 +32,47 @@ export type ReadsDigest = {
 };
 
 /**
- * A client commit as the log holds it: with its `reads`, or with a
- * `readsDigest` in their place.
+ * A client commit as the log holds it: with its `reads`, or with a `digest` in
+ * their place.
  */
 export type StoredClientCommit = Omit<ClientCommit, "reads"> & {
   reads?: ClientCommit["reads"];
-  readsDigest?: ReadsDigest;
+  digest?: CommitDigest;
 };
 
 const utf8 = new TextEncoder();
 
-/** Returns the digest that stands for `reads` in a stored commit. */
-export const readsDigestOf = (reads: ClientCommit["reads"]): ReadsDigest => ({
-  hash: toUnpaddedBase64url(sha256(utf8.encode(encodeMemoryBoundary(reads)))),
-  confirmed: reads.confirmed.length,
-  pending: reads.pending.length,
-});
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** Whether `commit` carries a read set of the shape admission requires. */
+const hasReadSet = (commit: ClientCommit): boolean =>
+  isObject(commit.reads) && Array.isArray(commit.reads.confirmed) &&
+  Array.isArray(commit.reads.pending);
 
 const carriesReads = (commit: ClientCommit): boolean =>
   commit.reads.confirmed.length > 0 || commit.reads.pending.length > 0;
 
 /**
- * Returns the text the log stores for `commit`. Unless `keepReads` is true, a
- * commit that carries reads is stored with a `readsDigest` in their place. A
+ * The digest form of `commit`, whose whole encoding is `whole`: every member
+ * but `reads`, and a `digest` of the whole submission. A `digest` member the
+ * client submitted is replaced here, but the digest covers it.
+ */
+const digestForm = (commit: ClientCommit, whole: string): string => {
+  const { reads, ...rest } = commit;
+  const bytes = utf8.encode(whole);
+  const digest: CommitDigest = {
+    sha256: toUnpaddedBase64url(sha256(bytes)),
+    bytes: bytes.length,
+    confirmed: reads.confirmed.length,
+    pending: reads.pending.length,
+  };
+  return encodeMemoryBoundary({ ...rest, digest });
+};
+
+/**
+ * Returns the text the log stores for `commit`, an admitted commit. Unless
+ * `keepReads` is true, a commit that carries reads is stored in digest form. A
  * commit that carries none is stored as submitted either way, since a digest
  * would save nothing.
  */
@@ -55,19 +80,64 @@ export const encodeStoredCommit = (
   commit: ClientCommit,
   keepReads: boolean,
 ): string => {
-  if (keepReads || !carriesReads(commit)) return encodeMemoryBoundary(commit);
-  const { reads, ...rest } = commit;
-  return encodeMemoryBoundary({ ...rest, readsDigest: readsDigestOf(reads) });
+  const whole = encodeMemoryBoundary(commit);
+  return keepReads || !carriesReads(commit) ? whole : digestForm(commit, whole);
 };
 
 /**
  * Returns whether `stored`, a commit row's `original`, holds `incoming` in
- * either of the forms {@link encodeStoredCommit} writes. Every member but the
- * reads compares byte for byte; reads the log does not keep compare by digest.
+ * either of the forms {@link encodeStoredCommit} writes. Both forms determine
+ * the whole submission: the first is its encoding, and the second carries
+ * that encoding's SHA-256. A resubmission without a well-formed read set
+ * matches neither, since no admitted commit lacked one.
  */
 export const storesCommit = (
   stored: string,
   incoming: ClientCommit,
-): boolean =>
-  stored === encodeStoredCommit(incoming, true) ||
-  (carriesReads(incoming) && stored === encodeStoredCommit(incoming, false));
+): boolean => {
+  if (!hasReadSet(incoming)) return false;
+  const whole = encodeMemoryBoundary(incoming);
+  return stored === whole ||
+    (carriesReads(incoming) && stored === digestForm(incoming, whole));
+};
+
+/** How many reads a stored commit records, and whether it keeps them. */
+export type StoredReadCounts = {
+  confirmed: number;
+  pending: number;
+
+  /** False for a commit whose reads the log holds only as a digest. */
+  kept: boolean;
+};
+
+/**
+ * Returns the read counts `stored`, a decoded commit row's `original`, records:
+ * from its read set when it keeps one, from its digest when it holds that in
+ * place of its reads, and `undefined` for any other payload, such as a
+ * compaction marker.
+ */
+export const storedReadCounts = (
+  stored: unknown,
+): StoredReadCounts | undefined => {
+  if (!isObject(stored)) return undefined;
+  const { reads, digest } = stored;
+  if (isObject(reads)) {
+    return {
+      confirmed: Array.isArray(reads.confirmed) ? reads.confirmed.length : 0,
+      pending: Array.isArray(reads.pending) ? reads.pending.length : 0,
+      kept: true,
+    };
+  }
+  if (
+    reads === undefined && isObject(digest) &&
+    typeof digest.sha256 === "string" &&
+    typeof digest.confirmed === "number" && typeof digest.pending === "number"
+  ) {
+    return {
+      confirmed: digest.confirmed,
+      pending: digest.pending,
+      kept: false,
+    };
+  }
+  return undefined;
+};

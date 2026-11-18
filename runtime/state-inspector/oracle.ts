@@ -12,18 +12,35 @@
 // (i.e. it is not vacuous).
 
 import type { SpaceDb } from "./db.ts";
-import { entityConflicts, type StaleRead } from "./conflicts.ts";
+import {
+  entityConflicts,
+  readSetsNotKept,
+  type StaleRead,
+} from "./conflicts.ts";
+
+/** What {@link readCoherence} found, and how much of the space it checked. */
+export interface ReadCoherence {
+  /** Every anomalous stale read; each is an INV-1 violation. */
+  anomalies: StaleRead[];
+
+  /**
+   * Commits the log holds with a digest in place of their reads
+   * (02-storage.md §3.3), which the check cannot replay. Empty
+   * {@link anomalies} show the store coherent only when this is 0.
+   */
+  readSetsNotKept: number;
+}
 
 /**
  * Replays the engine's confirmed-read admission check over every entity in
- * the space and returns all anomalous stale reads. A healthy store returns
- * `[]`; any entry is an INV-1 violation (a committed read that the engine's
- * own conflict check would have rejected).
+ * the space. A healthy store whose commits all keep their reads gives no
+ * anomalies and no unchecked read sets; any anomaly is an INV-1 violation (a
+ * committed read that the engine's own conflict check would have rejected).
  */
-export function staleReadAnomalies(
+export function readCoherence(
   space: SpaceDb,
   opts: { branch?: string } = {},
-): StaleRead[] {
+): ReadCoherence {
   const ids = space.db
     .prepare(`SELECT DISTINCT id FROM revision ORDER BY id ASC`)
     .all<{ id: string }>();
@@ -33,5 +50,5 @@ export function staleReadAnomalies(
       anomalies.push(staleRead);
     }
   }
-  return anomalies;
+  return { anomalies, readSetsNotKept: readSetsNotKept(space) };
 }

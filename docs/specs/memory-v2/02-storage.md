@@ -140,20 +140,32 @@ CREATE INDEX idx_commit_invocation_ref ON commit (invocation_ref);
 - normalized branch lifecycle payloads for `/memory/branch/create` and
   `/memory/branch/delete`
 
-A `ClientCommit`'s read set decides its own admission, and the log keeps it
-only where something reads it afterward. That is the genesis receipt at seq 1,
-and a commit whose `patch` the server accepted as an identity
+A `ClientCommit`'s read set decides its own admission. A server opened to
+store digests (`MEMORY_STORE_READS_DIGEST`, off by default) keeps it only
+where something reads it afterward. That is the genesis receipt at seq 1, and
+a commit whose `patch` the server accepted as an identity
 ([03-commit-model.md](./03-commit-model.md) §3.6.1), whose reads a later
 pending read through that layer consults (§3.6.3). Any other commit that
-carries reads is stored with a `readsDigest` member in place of `reads`:
+carries reads is stored in digest form: every member but `reads`, and a
+`digest` member of the whole submission in their place. A `digest` member
+the client submitted is replaced, and the digest covers it.
 
 ```json
-{ "hash": "<SHA-256 of the encoded read set, unpadded base64url>",
-  "confirmed": 55570, "pending": 0 }
+{ "sha256": "<SHA-256 of the whole submitted commit's encoding, unpadded base64url>",
+  "bytes": 7417893, "confirmed": 55570, "pending": 0 }
 ```
 
-A replay is matched against either form (§3.7.4 of the commit model). The
+A replay is matched against either form (§3.7.4 of the commit model). Both
+determine the whole submission, up to a SHA-256 collision. The byte length and
 counts are for the reader of the log; nothing in admission reads them.
+Offline readers cannot replay a read set stored this way: the stale-read
+check (`cf inspect conflicts`, the INV-1 oracle) reports how many it could not
+check rather than calling the store consistent.
+
+Every server reads both forms whether or not it stores digests. A server from
+before digest-form rows refuses a retry of a commit stored with a digest as a
+replay mismatch, so a deployment stores digests only once no version it may
+roll back to predates them.
 
 `resolution` stores server-side decisions:
 

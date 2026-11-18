@@ -3731,6 +3731,11 @@ export class Server {
       documentCacheBudgetBytes?: number;
       documentCacheMaxEntries?: number;
 
+      /** Whether each space's engine stores admitted commits' reads as a
+       * digest where nothing reads them afterward; handed to Engine.open
+       * (see `OpenOptions.storeReadsDigest` there). Off by default. */
+      storeReadsDigest?: boolean;
+
       /** Bound on decoded documents retained across every space this
        * server serves (default DOCUMENT_CACHE_TOTAL_BUDGET_BYTES; per
        * instance, see there), held least-recently-used space first. */
@@ -12777,6 +12782,7 @@ export class Server {
         operationCheckpointInterval: this.options.operationCheckpointInterval,
         documentCacheBudgetBytes: this.options.documentCacheBudgetBytes,
         documentCacheMaxEntries: this.options.documentCacheMaxEntries,
+        storeReadsDigest: this.options.storeReadsDigest,
         documentCacheCoordinator: this.#documentCacheCoordinator,
         executionLeases: this.#executionLeases,
         // Every commit this engine decides, on whichever path, counts

@@ -1159,6 +1159,11 @@ export type Engine = {
   operationCheckpointInterval: number;
   legacyCommitMetadataRefsRequired: boolean;
   operationCodecs: OperationCodecRegistry;
+
+  /** Whether admission stores a commit's reads as a digest where nothing
+   * reads them afterward ({@link OpenOptions.storeReadsDigest}). */
+  storeReadsDigest: boolean;
+
   /** Returns the statement {@link STATEMENTS} names, from `prepare()`. */
   statement: (name: StatementName) => PreparedStatement;
 
@@ -1389,6 +1394,16 @@ export type OpenOptions = {
   snapshotRetention?: number;
   operationCheckpointInterval?: number;
   operationCodecs?: OperationCodecRegistry;
+
+  /**
+   * Whether admission stores an admitted commit's reads as a digest of the
+   * whole submission where nothing reads them afterward (02-storage.md §3.3).
+   * Off by default. Every engine reads both forms whatever this says, so an
+   * operator enables it only once no version the deployment may roll back to
+   * predates digest-form rows: a version that does refuses a retry of a
+   * commit stored with a digest as a replay mismatch.
+   */
+  storeReadsDigest?: boolean;
 
   /** Byte budget for the decoded-document cache, in encoded UTF-8 bytes of
    * the documents as stored (default DEFAULT_DOCUMENT_CACHE_BUDGET_BYTES;
@@ -2335,6 +2350,7 @@ export const open = async (
     snapshotRetention = DEFAULT_SNAPSHOT_RETENTION,
     operationCheckpointInterval = DEFAULT_OPERATION_CHECKPOINT_INTERVAL,
     operationCodecs = createDefaultOperationCodecRegistry(),
+    storeReadsDigest = false,
     documentCacheBudgetBytes = DEFAULT_DOCUMENT_CACHE_BUDGET_BYTES,
     documentCacheMaxEntries = DEFAULT_DOCUMENT_CACHE_MAX_ENTRIES,
     documentCacheCoordinator,
@@ -2378,6 +2394,7 @@ export const open = async (
     operationCheckpointInterval,
     legacyCommitMetadataRefsRequired: commitMetadataRefsRequired(database),
     operationCodecs,
+    storeReadsDigest,
     statement: (name) => prepared(STATEMENTS[name]),
     prepare: prepared,
     executionLeases,
@@ -7721,13 +7738,13 @@ const applyCommitTransaction = (
   const authorizationRef = engine.legacyCommitMetadataRefsRequired
     ? LEGACY_EMPTY_AUTHORIZATION_REF
     : null;
-  // The log keeps the reads only where something reads them after this
-  // admission. `identityLayerBasis()` reads a layer's reads of a document
-  // whose operations in it went unwritten, and needs them only when the
-  // first of those is a `patch`; only an identity commit leaves a `patch`
-  // unwritten. The genesis receipt keeps its reads because
+  // An engine opened to store digests keeps the reads only where something
+  // reads them after this admission. `identityLayerBasis()` reads a layer's
+  // reads of a document whose operations in it went unwritten, and needs them
+  // only when the first of those is a `patch`; only an identity commit leaves
+  // a `patch` unwritten. The genesis receipt keeps its reads because
   // `readGenesisReceipt()` requires them.
-  const keepsReads = seq === 1 ||
+  const keepsReads = !engine.storeReadsDigest || seq === 1 ||
     [...elidedOpIndexes].some((opIndex) =>
       commit.operations[opIndex].op === "patch"
     );

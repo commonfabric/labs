@@ -30,6 +30,7 @@ export type MemoryEnvironment = Pick<
   | "MEMORY_MINIMUM_CLIENT_GENERATION"
   | "API_URL"
   | "MEMORY_SYNC_CID_REFERENCES"
+  | "MEMORY_STORE_READS_DIGEST"
   | "MEMORY_ACL_DELEGATIONS"
   | "MEMORY_DOCUMENT_CACHE_BUDGET_BYTES"
   | "MEMORY_DOCUMENT_CACHE_MAX_ENTRIES"
@@ -201,6 +202,9 @@ export async function openMemory(
       : {}),
     documentCacheBudgetBytes: environment.MEMORY_DOCUMENT_CACHE_BUDGET_BYTES,
     documentCacheMaxEntries: environment.MEMORY_DOCUMENT_CACHE_MAX_ENTRIES,
+    // Off unless the deployment turns it on, once no version it may roll back
+    // to predates digest-form rows.
+    storeReadsDigest: environment.MEMORY_STORE_READS_DIGEST,
     documentCacheTotalBudgetBytes:
       environment.MEMORY_DOCUMENT_CACHE_TOTAL_BUDGET_BYTES,
   });

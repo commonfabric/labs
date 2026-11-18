@@ -9,8 +9,17 @@ import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
+import { toFileUrl } from "@std/path";
+import {
+  applyCommit,
+  close,
+  open as openEngine,
+} from "@commonfabric/memory/v2/engine";
+import { type ClientCommit, toDocumentPath } from "@commonfabric/memory/v2";
+
 import { openSpace } from "../db.ts";
 import { contendedEntities, entityConflicts } from "../conflicts.ts";
+import { listCommits } from "../queries.ts";
 
 const SCHEMA = `
 CREATE TABLE "commit" (
@@ -345,4 +354,65 @@ Deno.test("conflicts: engine-faithful checks do NOT over-report", async (t) => {
   );
 
   await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("conflicts: counts the later commits whose reads it could not check", async () => {
+  // An engine storing digests: a read before of:x is first written, and one
+  // after. Only the later one could have read of:x stale.
+  const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+  const engine = await openEngine({
+    url: toFileUrl(path),
+    storeReadsDigest: true,
+  });
+  const reading = (
+    localSeq: number,
+    id: string,
+    seq: number,
+    write: string,
+  ): ClientCommit => ({
+    localSeq,
+    reads: {
+      confirmed: [{ id, path: toDocumentPath(["value"]), seq }],
+      pending: [],
+    },
+    operations: [{ op: "set", id: write, value: { value: localSeq } }],
+  });
+  const setting = (localSeq: number, id: string): ClientCommit => ({
+    localSeq,
+    reads: { confirmed: [], pending: [] },
+    operations: [{ op: "set", id, value: { value: localSeq } }],
+  });
+  try {
+    applyCommit(engine, { sessionId: "s:a", commit: setting(1, "of:y") });
+    applyCommit(engine, {
+      sessionId: "s:a",
+      commit: reading(2, "of:y", 1, "of:z"),
+    });
+    applyCommit(engine, { sessionId: "s:b", commit: setting(1, "of:x") });
+    applyCommit(engine, {
+      sessionId: "s:a",
+      commit: reading(3, "of:x", 3, "of:w"),
+    });
+  } finally {
+    close(engine);
+  }
+
+  const space = openSpace(path);
+  try {
+    const x = entityConflicts(space, "of:x");
+    expect(x.staleReads).toEqual([]);
+    expect(x.readSetsNotKept).toBe(1);
+    // `cf inspect commits` reads the counts from the digest.
+    expect(
+      listCommits(space).map(({ seq, reads }) => ({ seq, reads })),
+    ).toEqual([
+      { seq: 4, reads: 1 },
+      { seq: 3, reads: 0 },
+      { seq: 2, reads: 1 },
+      { seq: 1, reads: 0 },
+    ]);
+  } finally {
+    space.close();
+    await Deno.remove(path);
+  }
 });
