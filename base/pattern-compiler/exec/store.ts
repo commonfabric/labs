@@ -102,22 +102,6 @@ export const canonical = (value: unknown): string =>
         : member,
   ) ?? "undefined";
 
-const KEY = "$key:";
-
-/**
- * The segment of a path that names an element of an array by its key and
- * not by its position (`plan-and-label-templates.md` §1.3, "A plain value
- * in place has an identity"). A reference whose path holds one is a
- * reference by key: the path up to the segment is the address of the
- * collection, the segment holds the key, and the rest is the path below
- * the element. A read or a write through it finds the position that
- * holds the key at that time.
- */
-export const keySegment = (key: string): string => `${KEY}${key}`;
-
-export const isKeySegment = (segment: string): boolean =>
-  segment.startsWith(KEY);
-
 /** Whether a value can be the value of a key field: a string or a number. */
 const isKeyValue = (value: unknown): value is string | number =>
   typeof value === "string" || typeof value === "number";
@@ -258,6 +242,53 @@ export const fieldsOfKey = (key: string): string[] => {
   if (!isValueRecord(element) || !Array.isArray(element.fields)) return [];
   return element.fields.filter((field) => typeof field === "string");
 };
+
+/**
+ * The segment of a path that names an element of an array by its key and
+ * not by its position (`plan-and-label-templates.md` §1.3, "A plain value
+ * in place has an identity"): the text of the key, as the codec writes
+ * the record (its §1.2, "Written forms"). A reference whose path holds
+ * one is a reference by key: the path up to the segment is the address
+ * of the collection, the segment holds the key, and the rest is the path
+ * below the element. A read or a write through it finds the position
+ * that holds the key at that time.
+ */
+export const keySegment = (key: string): string => key;
+
+/** What the text of the codec for a fabric value begins with. */
+const CODEC_TEXT = "fvj1:";
+
+/**
+ * The key that a segment of a path holds, as its record, and nothing
+ * for a segment that is a property name or a position. A segment is a
+ * key where it decodes to the record of a key: one with `element` and
+ * `occurrence`, or one with `source` and `member`. So a property whose
+ * name is the text of such a record cannot be named by a path.
+ */
+export const keyOfSegment = (
+  segment: string,
+): Record<string, FabricValue> | undefined => {
+  if (!segment.startsWith(CODEC_TEXT)) return undefined;
+  let decoded: FabricValue;
+  try {
+    decoded = fabricFromJsonValue(segment);
+  } catch {
+    // A text that the codec does not read is a property name.
+    return undefined;
+  }
+  if (!isValueRecord(decoded)) return undefined;
+  const isKey = ("element" in decoded && "occurrence" in decoded) ||
+    ("source" in decoded && "member" in decoded);
+  return isKey ? decoded : undefined;
+};
+
+/** Whether a segment of a path names an element by its key. */
+export const isKeySegment = (segment: string): boolean =>
+  keyOfSegment(segment) !== undefined;
+
+/** Whether two paths have the same segments. */
+const samePath = (a: readonly string[], b: readonly string[]): boolean =>
+  a.length === b.length && a.every((segment, index) => segment === b[index]);
 
 /**
  * The key fields that the schema of an array declares, beside `items`
@@ -668,7 +699,7 @@ export class Store {
       collection: this.addressOf(
         new Ref(named.doc, named.path.slice(0, at)),
       ),
-      key: recordOfKey(named.path[at].slice(KEY.length)),
+      key: recordOfKey(named.path[at]),
       path: named.path.slice(at + 1),
     };
   }
@@ -692,7 +723,7 @@ export class Store {
     copies?: readonly unknown[],
     fields: readonly string[] = [],
   ): string[] {
-    const id = `${at.doc}:${canonical(at.path)}`;
+    const id = this.addressText(at);
     // An element that holds a reference by key into its own array is
     // keyed by its position while the keys of that array are formed.
     const reentered = this.#keying.has(id);
@@ -822,7 +853,7 @@ export class Store {
         }
         // A key that a write of the transaction in progress changed is
         // found under the key the element has now (ruling Z24).
-        let key = segment.slice(KEY.length);
+        let key = segment;
         const held = value;
         const here = new Ref(doc, at);
         const indexOf = (key: string) =>
@@ -891,9 +922,8 @@ export class Store {
     array: readonly string[],
     key: string,
   ): string | undefined {
-    const id = canonical(array);
     return this.rekeys.findLast((rekey) =>
-      rekey.doc === doc && rekey.from === key && canonical(rekey.array) === id
+      rekey.doc === doc && rekey.from === key && samePath(rekey.array, array)
     )?.to;
   }
 
@@ -908,7 +938,7 @@ export class Store {
     const path = ref.path.map((segment) => {
       let now = segment;
       if (isKeySegment(segment)) {
-        let key = segment.slice(KEY.length);
+        let key = segment;
         for (let hops = 0; hops < MAX_LINKS; hops++) {
           const next = this.#rekeyed(ref.doc, held, key);
           if (next === undefined) break;
@@ -981,7 +1011,7 @@ export class Store {
     copies: boolean,
   ): unknown {
     const located = this.locate(ref, true, reads);
-    const id = `${located.ref.doc}\u0000${located.ref.path.join("\u0000")}`;
+    const id = this.addressText(located.ref);
     if (open.has(id)) return undefined;
     if (located.value === undefined && isStreamSchema(located.ref.schema)) {
       return { $stream: true };

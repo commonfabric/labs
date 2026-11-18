@@ -1145,8 +1145,16 @@ export class Instance {
   >();
   /** The memo entries kept under one key of one collection. */
   readonly #underKey = new Map<string, Set<string>>();
-  /** The element table of each collection, by the keys around it. */
-  readonly #tables = new Map<string, Element[]>();
+  /**
+   * The element table of each collection, by the name of its assembly:
+   * the collection, the element keys around it, and the elements.
+   */
+  readonly #tables = new Map<
+    string,
+    { collection: number; around: readonly string[]; elements: Element[] }
+  >();
+  /** The record of each key that a name of the memo holds, by its text. */
+  readonly #keyRecords = new Map<string, FabricValue>();
   /** The state cells that exist, by the identifier of their document. */
   readonly #cells = new Map<string, { cell: number; keys: string[] }>();
   readonly #queue: { stream: StreamRef; event: unknown }[] = [];
@@ -1288,8 +1296,7 @@ export class Instance {
     for (const collection of this.collectionsOf(cone)) {
       found = found.flatMap((known) => {
         if (known.has(collection)) return [known];
-        const around = this.#contextKey(this.#outerOf(collection), known);
-        const table = this.#tables.get(`a${collection}|${around}`) ?? [];
+        const table = this.#tableOf(collection, known) ?? [];
         return table.map((element) =>
           new Map([...known, [collection, element]])
         );
@@ -1596,12 +1603,14 @@ export class Instance {
         // of the collection by the key, whichever context the entry is
         // later checked under.
         const collection = root.collection ?? -1;
-        const table = `a${collection}|${
-          this.#contextKey(this.#outerOf(collection), host.context)
-        }`;
+        const table = this.#name(
+          "assembly",
+          collection,
+          this.#keysIn(this.#outerOf(collection), host.context),
+        );
         const held = () => {
           const now =
-            this.#tables.get(table)?.find((member) =>
+            this.#tables.get(table)?.elements.find((member) =>
               member.key === element.key
             )?.source ?? source;
           return now instanceof Ref || !("value" in now)
@@ -1723,7 +1732,7 @@ export class Instance {
     const cone = found < 0 ? undefined : found;
     return (context) =>
       this.#ensure(
-        `c${child}|${this.#contextKey(within, context)}`,
+        this.#name("child", child, this.#keysIn(within, context)),
         context,
         cone,
         within.length > 0
@@ -2151,9 +2160,50 @@ export class Instance {
     return [...context].map(([collection, { key }]) => [collection, key]);
   }
 
-  #contextKey(collections: readonly number[], context: Context): string {
-    return collections.map((collection) => context.get(collection)?.key ?? "?")
-      .join("\u0001");
+  /** The key that a context has for each of `collections`, in order. */
+  #keysIn(collections: readonly number[], context: Context): string[] {
+    return collections.map((collection) => context.get(collection)?.key ?? "?");
+  }
+
+  /**
+   * The name of a memo entry, of an element table, or of what is kept
+   * under an element key: the text that the codec writes for the record
+   * of the kind, its index in the plan, the element keys around it, and
+   * for an element its own key (PL §1.2, "Written forms"). A key is in
+   * the record as the record it is, and a step whose collection the
+   * context has no element for as `null`.
+   */
+  #name(
+    kind: "value" | "child" | "reduce" | "assembly" | "element" | "under",
+    index: number,
+    around: readonly string[],
+    key?: string,
+  ): string {
+    const record = (text: string): FabricValue => {
+      if (text === "?") return null;
+      let found = this.#keyRecords.get(text);
+      if (found === undefined) {
+        found = recordOfKey(text);
+        this.#keyRecords.set(text, found);
+      }
+      return found;
+    };
+    return textOf({
+      [kind]: index,
+      around: around.map(record),
+      ...(key === undefined ? {} : { key: record(key) }),
+    });
+  }
+
+  /** The element table of a collection for the keys of a context. */
+  #tableOf(collection: number, context: Context): Element[] | undefined {
+    return this.#tables.get(
+      this.#name(
+        "assembly",
+        collection,
+        this.#keysIn(this.#outerOf(collection), context),
+      ),
+    )?.elements;
   }
 
   /** The entry of a computation that has not been evaluated. */
@@ -2274,9 +2324,10 @@ export class Instance {
       keys: within.map((collection) => context.get(collection)?.key ?? "?"),
     });
     for (const collection of within) {
-      const id = this.#keyId(
+      const id = this.#name(
+        "under",
         collection,
-        this.#contextKey(this.#outerOf(collection), context),
+        this.#keysIn(this.#outerOf(collection), context),
         context.get(collection)?.key ?? "?",
       );
       const under = this.#underKey.get(id) ?? new Set();
@@ -2285,18 +2336,14 @@ export class Instance {
     }
   }
 
-  #keyId(collection: number, around: string, key: string): string {
-    return `${collection}|${around}|${key}`;
-  }
-
   /**
    * Drops what is kept under an element key that left its collection:
    * the instances of every cone whose `within` names the collection, and
    * the element tables and assemblies of the collections inside it
    * (ES §2.5, "Which cones are the body's").
    */
-  #drop(collection: number, around: string, key: string): void {
-    const id = this.#keyId(collection, around, key);
+  #drop(collection: number, around: readonly string[], key: string): void {
+    const id = this.#name("under", collection, around, key);
     for (const entry of this.#underKey.get(id) ?? []) {
       this.#memo.delete(entry);
       this.#kept.delete(entry);
@@ -2322,7 +2369,7 @@ export class Instance {
   coneInstances(cone: number): string[][] {
     const found = new Map<string, string[]>();
     for (const kept of this.#kept.values()) {
-      if (kept.cone === cone) found.set(canonical(kept.keys), kept.keys);
+      if (kept.cone === cone) found.set(textOf(kept.keys), kept.keys);
     }
     return [...found.values()];
   }
@@ -2352,7 +2399,7 @@ export class Instance {
     const within = this.collectionsOf(cone);
     const materializer = this.plan.cones[cone].sideWrites === "materializer";
     return (context) => {
-      const key = `v${value}|${this.#contextKey(within, context)}`;
+      const key = this.#name("value", value, this.#keysIn(within, context));
       // A materializer is evaluated after the rest of a wave, and a
       // reader of its value in the wave gets what it last returned.
       if (materializer && !this.#afterWave) {
@@ -2390,7 +2437,11 @@ export class Instance {
     const collection = within[within.length - 1];
     const outer = within.slice(0, -1);
     return (context) => {
-      const key = `r${operation}|${this.#contextKey(outer, context)}`;
+      const key = this.#name(
+        "reduce",
+        operation,
+        this.#keysIn(outer, context),
+      );
       // The fold is the runtime's step over the collection, as the
       // assembly of an element construct is, and belongs to no cone.
       return this.#ensure(key, context, undefined, "assembly", (host) => {
@@ -2443,11 +2494,11 @@ export class Instance {
       value.collection === collection
     )?.cone;
     return (context) => {
-      const around = this.#contextKey(outer, context);
-      const name = `e${collection}|${around}|${key}`;
-      const element = this.#tables.get(`a${collection}|${around}`)?.find((
-        member,
-      ) => member.key === key);
+      const around = this.#keysIn(outer, context);
+      const name = this.#name("element", collection, around, key);
+      const element = this.#tables.get(
+        this.#name("assembly", collection, around),
+      )?.elements.find((member) => member.key === key);
       const run = this.#elements.get(collection);
       if (element === undefined || run === undefined) {
         return this.#memo.get(name) ?? this.#none();
@@ -2478,19 +2529,19 @@ export class Instance {
     const record = this.plan.collections[collection];
     const outer = this.#outerOf(collection);
     return (context) => {
-      const key = `a${collection}|${this.#contextKey(outer, context)}`;
-      const around = this.#contextKey(outer, context);
+      const around = this.#keysIn(outer, context);
+      const key = this.#name("assembly", collection, around);
       return this.#ensure(key, context, undefined, "assembly", (host) => {
         const elements = this.#table(collection, host);
         // The instances of a key that left the collection are dropped,
         // and those of a key that entered are made when they are first
         // evaluated (ruling Z10).
-        for (const { key: left } of this.#tables.get(key) ?? []) {
+        for (const { key: left } of this.#tables.get(key)?.elements ?? []) {
           if (!elements.some((element) => element.key === left)) {
             this.#drop(collection, around, left);
           }
         }
-        this.#tables.set(key, elements);
+        this.#tables.set(key, { collection, around, elements });
         if (!this.#elements.has(collection)) {
           throw new Unsupported("an element construct that has no function");
         }
@@ -2830,11 +2881,9 @@ export class Instance {
     const context = new Map<number, Element>();
     for (const [index, collection] of collections.entries()) {
       this.assembled(collection)(context);
-      const element = this.#tables.get(
-        `a${collection}|${
-          this.#contextKey(this.#outerOf(collection), context)
-        }`,
-      )?.find((member) => member.key === keys[index]);
+      const element = this.#tableOf(collection, context)?.find((member) =>
+        member.key === keys[index]
+      );
       if (element === undefined) return undefined;
       context.set(collection, element);
     }
@@ -3063,9 +3112,7 @@ export class Instance {
     const positions: number[] = [];
     for (const { element } of record.within) {
       if (element === undefined) continue;
-      const table = this.#tables.get(
-        `a${element}|${this.#contextKey(this.#outerOf(element), context)}`,
-      ) ?? [];
+      const table = this.#tableOf(element, context) ?? [];
       const position = table.findIndex((member) =>
         member.key === keys[positions.length]
       );
@@ -3228,12 +3275,7 @@ export class Instance {
     let step = 0;
     for (const { element } of record.within) {
       if (element === undefined) continue;
-      const outer = this.plan.collections[element].within.flatMap((within) =>
-        within.element === undefined ? [] : [within.element]
-      );
-      const table = this.#tables.get(
-        `a${element}|${this.#contextKey(outer, context)}`,
-      ) ?? [];
+      const table = this.#tableOf(element, context) ?? [];
       const chosen = table[positions[step] ?? table.length - 1];
       step += 1;
       if (chosen === undefined) {
@@ -3304,9 +3346,9 @@ export class Instance {
       if (element === undefined) continue;
       const key = stream.keys[step];
       step += 1;
-      for (const [name, table] of this.#tables) {
-        if (!name.startsWith(`a${element}|`)) continue;
-        const found = table.find((member) => member.key === key);
+      for (const table of this.#tables.values()) {
+        if (table.collection !== element) continue;
+        const found = table.elements.find((member) => member.key === key);
         if (found !== undefined) context.set(element, found);
       }
     }
@@ -3537,16 +3579,19 @@ export class Instance {
   #moveKey(
     rekey: { doc: string; array: readonly string[]; from: string; to: string },
   ): void {
-    const element = canonical([...rekey.array, keySegment(rekey.from)]);
+    const element = [...rekey.array, keySegment(rekey.from)];
+    const isElement = (path: readonly string[]) =>
+      path.length === element.length &&
+      path.every((segment, index) => segment === element[index]);
     // The collections over the array: those whose element table holds
     // the reference by key, and the constructs applied to them.
     const over = new Set<number>();
-    for (const [name, table] of this.#tables) {
-      const held = table.some(({ source }) =>
+    for (const table of this.#tables.values()) {
+      const held = table.elements.some(({ source }) =>
         source instanceof Ref && source.doc === rekey.doc &&
-        canonical(source.path) === element
+        isElement(source.path)
       );
-      if (held) over.add(Number(name.slice(1, name.indexOf("|"))));
+      if (held) over.add(table.collection);
     }
     if (over.size === 0) return;
     for (let grown = true; grown;) {
@@ -3565,26 +3610,26 @@ export class Instance {
     // The key itself, and the key of a member of the segment that a
     // `flatMap` gave the element (ruling Z22).
     const renamed = (key: string) => rekeyed(key, rekey.from, rekey.to);
-    for (const [name, table] of this.#tables) {
-      const bar = name.indexOf("|");
-      const collection = Number(name.slice(1, bar));
+    for (const [name, table] of [...this.#tables]) {
+      const { collection, around } = table;
       if (!over.has(collection)) continue;
-      this.#tables.set(
-        name,
-        table.map((member) => {
+      this.#tables.set(name, {
+        collection,
+        around,
+        elements: table.elements.map((member) => {
           const key = renamed(member.key);
           if (key === member.key) return member;
-          this.#drop(collection, name.slice(bar + 1), member.key);
+          this.#drop(collection, around, member.key);
           return {
             ...member,
             key,
             source: member.source instanceof Ref &&
-                canonical(member.source.path) === element
+                isElement(member.source.path)
               ? new Ref(rekey.doc, [...rekey.array, keySegment(rekey.to)])
               : member.source,
           };
         }),
-      );
+      });
     }
     // An instance called through `asInstance()` is re-keyed with the
     // element, as the rest of what the old key holds is (PL §3.15,

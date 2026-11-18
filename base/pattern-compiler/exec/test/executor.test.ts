@@ -4205,6 +4205,32 @@ describe("the key of a plain value", () => {
     }
   });
 
+  it("stands in a stored path as the text of its record, which a reader tells from a property name by decoding it", () => {
+    const store = start();
+    const key = keyOfFields(["id"], [7]);
+
+    // The segment is the text that the codec writes for the key, with
+    // nothing before it.
+    expect(keySegment(key)).toBe(key);
+    expect(fabricFromJsonValue(keySegment(key))).toEqual({
+      element: { fields: ["id"], hash: salted([7]) },
+      occurrence: 0,
+    });
+    expect(store.read(new Ref("d", ["saved", key, "name"]))).toBe("s");
+    // A property whose name is no text of a key is a property, also
+    // where it begins as the earlier form of a key segment did, or is
+    // the text of another fabric value.
+    const other = jsonFromFabricValue({ element: 1 });
+    store.create("names", "argument", {
+      "$key:x": 1,
+      [other]: 2,
+      "fvj1:": 3,
+    });
+    expect(store.read(new Ref("names", ["$key:x"]))).toBe(1);
+    expect(store.read(new Ref("names", [other]))).toBe(2);
+    expect(store.read(new Ref("names", ["fvj1:"]))).toBe(3);
+  });
+
   it("holds the space in the element part of a position that holds a link", () => {
     const store = new Store({ secret: SECRET, space: "did:key:space" });
     store.create("d", "argument", { saved: [repo(7, "s")] });
