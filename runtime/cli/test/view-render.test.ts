@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 
-import { stripAnsi, visibleWidth } from "../lib/view/ansi.ts";
+import { stripAnsi } from "../lib/view/ansi.ts";
+import { visibleWidth } from "../lib/view/width.ts";
 import { renderLineColored } from "../lib/view/highlight.ts";
 import {
   _internal,

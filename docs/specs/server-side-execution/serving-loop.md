@@ -388,6 +388,14 @@ pattern's index entry goes with the release, and so do the watches of the
 documents only the stopped pieces read: the release asks for the pass a stop
 asks for (`docs/features/document-release.md`).
 
+**A nested piece a demand reaches.** A demand that reaches a nested instance's
+values starts the instances that enclose it first, whether or not it reaches
+any of theirs (runtime-mapping.md, N22): the documents of an enclosing
+instance's that a demand reaches may all be ones the demand pass starts nothing
+from, such as its argument and a `computed:` document holding a link to the
+nested instance. The walk does not reach past a piece a handler made to the
+piece whose handler made it.
+
 **Parking.** A park releases the lease and stops the loop. A park for a
 failed loop, a failed initialization or a closing host disposes the runtime. An IDLE park (§3's "on idle") that abandoned no
 open wave and left no effect unretired in its outbox (§4: an effect
@@ -1588,10 +1596,16 @@ or dropped meanwhile; that refusal is retried like a stale read.
   landing, runs it again.
 - A derivation run that read, through a link, an absent user- or
   session-scoped instance of a document another derivation registered in
-  this runtime declares as a write (a builtin's stores included) aborts its
-  tx the same way: the serving loop has not produced that instance yet, so
-  the absence is not its state (speculation.md §2's serving-runtime
-  corollary to the scoped first-write carve-out). Its read of the instance
+  this runtime declares as a write (a builtin's stores included), and that
+  writer has not yet run for that instance, aborts its tx the same way: the
+  serving loop has not produced that instance yet, so the absence is not
+  its state (speculation.md §2's serving-runtime corollary to the scoped
+  first-write carve-out). A JavaScript derivation whose run for the
+  instance finished without being withdrawn and left it absent, as a run
+  whose result is `undefined` does, has produced it, and the read commits.
+  "For the instance" is per instance key on a fanned-out writer and any
+  run on one that is not; a withdrawn run produced nothing, and a builtin
+  writer is owed until it writes. Its read of the instance
   stays subscribed, so it runs again once the instance is produced. A run
   that threw after such a read is withdrawn the same way and its error is
   not reported: the throw came from the same absence its writes did. A
@@ -2057,7 +2071,9 @@ started, its demand key stays pending and its served event defers, and the
 loop runs the follow BESIDE its cycles rather than inside one. The pieces
 an event's piece takes its inputs from, which its auto-start starts first
 (runtime-mapping.md), are answered the same way, and a follow still owed
-for one of them defers the event as the piece's own would. The
+for one of them defers the event as the piece's own would. So are the
+pieces enclosing a piece the demand pass starts, which it starts first, and
+a follow still owed for one of them leaves the demanded root pending. The
 reconciler's compile seals the candidate's closure into whatever wave is
 open when it finishes, and its adopting write is a direct commit (below)
 that would read that closure, so the reconciler waits for every wave open
@@ -2390,8 +2406,9 @@ structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, settle:
 drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
 visibilityDeferrals, deferredRescansArmed, deferredRescansFired,
 lt1LeftoversPurged, lt1LateSealsRefused, orphanDeliveriesRefused,
-handlerNotRunDeferrals, staleReadRequeues, arrivalHeldDeferrals,
-originPendingDeferrals, programWaitDeferrals, loadParkDeferrals,
+handlerNotRunDeferrals, handlerNotRunWaits, staleReadRequeues,
+arrivalHeldDeferrals, originPendingDeferrals, programWaitDeferrals,
+loadParkDeferrals,
 loadParkFailures, deliveryDeferralsActive, deliveryFailuresActive,
 maxAccumulatedDeliveryFailureMs, deliveryFailureWakesArmed,
 deliveryFailureWakesFired, needsAttention: {total, byPhase},

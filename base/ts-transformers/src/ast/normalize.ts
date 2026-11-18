@@ -33,8 +33,7 @@ function originatesFromIgnoredParameter(
   );
   if (!scope) return false;
 
-  const isIgnoredSymbol = (symbol: ts.Symbol | undefined): boolean => {
-    if (!symbol) return false;
+  const isIgnoredSymbol = (symbol: ts.Symbol): boolean => {
     const symbolName = symbol.getName();
     return scope.parameters.some((parameter) => {
       if (parameter.symbol === symbol || parameter.name === symbolName) {
@@ -134,7 +133,9 @@ function filterRelevantDataFlows(
   checker: ts.TypeChecker,
   lookup?: ReactiveContextLookup,
 ): readonly NormalizedDataFlow[] {
-  const hasSyntheticRoot = (expr: ts.Expression): boolean => {
+  // The name of an expression's root identifier when the checker resolves no
+  // symbol for it, as for the parameters of a synthesized callback.
+  const syntheticRootName = (expr: ts.Expression): string | undefined => {
     let current = expr;
     while (
       ts.isPropertyAccessExpression(current) ||
@@ -142,11 +143,12 @@ function filterRelevantDataFlows(
     ) {
       current = current.expression;
     }
-    if (ts.isIdentifier(current)) {
-      return !checker.getSymbolAtLocation(current);
-    }
-    return false;
+    return ts.isIdentifier(current) && !checker.getSymbolAtLocation(current)
+      ? current.text
+      : undefined;
   };
+  const hasSyntheticRoot = (expr: ts.Expression): boolean =>
+    syntheticRootName(expr) !== undefined;
 
   const filterIgnoredParams = (
     candidateFlows: readonly NormalizedDataFlow[],
@@ -161,55 +163,39 @@ function filterRelevantDataFlows(
       )
     );
 
-  const syntheticDataFlows = dataFlows.filter((df) =>
-    hasSyntheticRoot(df.expression)
-  );
+  const hasSyntheticMapParams = dataFlows.some((df) => {
+    const name = syntheticRootName(df.expression);
+    return name === "element" || name === "index" || name === "array";
+  });
 
-  if (syntheticDataFlows.length > 0) {
-    const hasSyntheticMapParams = syntheticDataFlows.some((df) => {
-      let rootExpr: ts.Expression = df.expression;
-      while (
-        ts.isPropertyAccessExpression(rootExpr) ||
-        ts.isElementAccessExpression(rootExpr)
-      ) {
-        rootExpr = rootExpr.expression;
-      }
-      if (ts.isIdentifier(rootExpr)) {
-        const name = rootExpr.text;
-        return name === "element" || name === "index" || name === "array";
-      }
-      return false;
-    });
+  if (hasSyntheticMapParams) {
+    const nonSyntheticDataFlows = dataFlows.filter((df) =>
+      !hasSyntheticRoot(df.expression)
+    );
 
-    if (hasSyntheticMapParams) {
-      const nonSyntheticDataFlows = dataFlows.filter((df) =>
-        !hasSyntheticRoot(df.expression)
-      );
+    const isInMarkedCallback = !!lookup?.isArrayMethodCallback &&
+      dataFlows.some((df) => {
+        const scope = analysis.graph.scopes.find((s) => s.id === df.scopeId);
+        if (!scope || scope.parameters.length === 0) return false;
 
-      const isInMarkedCallback = !!lookup?.isArrayMethodCallback &&
-        dataFlows.some((df) => {
-          const scope = analysis.graph.scopes.find((s) => s.id === df.scopeId);
-          if (!scope || scope.parameters.length === 0) return false;
+        const firstParam = scope.parameters[0];
+        if (!firstParam?.declaration) return false;
 
-          const firstParam = scope.parameters[0];
-          if (!firstParam?.declaration) return false;
-
-          let node: ts.Node | undefined = firstParam.declaration.parent;
-          while (node) {
-            if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
-              return lookup.isArrayMethodCallback(node);
-            }
-            node = node.parent;
+        let node: ts.Node | undefined = firstParam.declaration.parent;
+        while (node) {
+          if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
+            return lookup.isArrayMethodCallback(node);
           }
-          return false;
-        });
+          node = node.parent;
+        }
+        return false;
+      });
 
-      return filterIgnoredParams(
-        nonSyntheticDataFlows.length === 0 || isInMarkedCallback
-          ? dataFlows
-          : nonSyntheticDataFlows,
-      );
-    }
+    return filterIgnoredParams(
+      nonSyntheticDataFlows.length === 0 || isInMarkedCallback
+        ? dataFlows
+        : nonSyntheticDataFlows,
+    );
   }
 
   return filterIgnoredParams(dataFlows);

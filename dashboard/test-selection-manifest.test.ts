@@ -20,6 +20,7 @@ import {
   laneBudgetOf,
   ManifestSchemaError,
   newestManifest,
+  selectedCount,
   selectedSeconds,
   selectedShare,
   shareLabel,
@@ -405,7 +406,7 @@ Deno.test("the flake tile counts what selection held back, and points at them", 
   assertEquals(view.hint, "flakes ↗");
 });
 
-Deno.test("the selection tile says what share of the corpus's test time would run", async () => {
+Deno.test("the selection tile says what share of the corpus's tests and test time would run", async () => {
   // One test of two, and a quarter of the time.
   const entry = sampleEntry({ k: "unit", s: "memory", n: "a" }, { cost: 1800 });
   const other = sampleEntry({ k: "unit", s: "memory", n: "b" }, { cost: 5400 });
@@ -425,8 +426,9 @@ Deno.test("the selection tile says what share of the corpus's test time would ru
     now: () => Date.parse("2026-08-20T05:00:00.000Z"),
   }).collect(CTX);
   assertEquals(view.status, "good");
-  assertEquals(view.value, "25%");
-  assertEquals(view.sub, "30m 00s of 2h 00m test time");
+  assertEquals(view.value, "50%<small> tests · </small>25%<small> time</small>");
+  assertEquals(view.valueLabel, "50% of tests, 25% of test time");
+  assertEquals(view.sub, "1 of 2 · 30m of 2h");
   assertEquals(view.href, "/test-selection");
   assertEquals(view.hint, "lanes ↗");
 });
@@ -447,6 +449,7 @@ Deno.test("the selected time counts each identity a lane names at its own cost",
   });
   assertEquals(corpusSeconds(manifest), 10);
   assertEquals(selectedSeconds(manifest), 7);
+  assertEquals(selectedCount(manifest), 2);
   assertEquals(selectedShare(7, 10), 70);
 
   const stray = JSON.stringify({ k: "unit", s: "x", n: "y" });
@@ -468,15 +471,35 @@ Deno.test("a share under ten percent keeps a decimal place", () => {
   assertEquals(shareLabel(0, 0), "—");
 });
 
-Deno.test("the selection tile is unknown for a corpus with no test time", async () => {
+Deno.test("the selection tile counts a test measured at no cost", async () => {
   const free = sampleEntry({ k: "unit", s: "memory", n: "a" }, { cost: 0 });
+  const other = sampleEntry({ k: "unit", s: "memory", n: "b" }, { cost: 0 });
+  const manifest = sampleManifest({
+    entries: [free, other],
+    lanes: [{
+      lane: 1,
+      projectedSeconds: 0,
+      batches: [{ suite: free.suite, identities: [JSON.stringify(free.test)] }],
+    }],
+  });
   const view = await makeTestSelection({
-    source: reading(sampleManifest({ entries: [free] })),
+    source: reading(manifest),
+    now: () => Date.parse("2026-08-20T05:00:00.000Z"),
+  }).collect(CTX);
+  assertEquals(view.status, "good");
+  // With no test time to take a share of, the share of time is a dash.
+  assertEquals(view.value, "50%<small> tests · </small>—<small> time</small>");
+  assertEquals(view.sub, "1 of 2 · 0m of 0m");
+});
+
+Deno.test("the selection tile is unknown for a manifest with no tests", async () => {
+  const view = await makeTestSelection({
+    source: reading(sampleManifest({ entries: [] })),
     now: () => Date.parse("2026-08-20T05:00:00.000Z"),
   }).collect(CTX);
   assertEquals(view.status, "unknown");
   assertEquals(view.value, "—");
-  assertEquals(view.sub, "selection manifest has no test time");
+  assertEquals(view.sub, "selection manifest has no tests");
 });
 
 Deno.test("the selection tile goes amber once the manifest has gone stale", async () => {
@@ -487,8 +510,8 @@ Deno.test("the selection tile goes amber once the manifest has gone stale", asyn
   assertEquals(view.status, "warn");
   assertEquals(view.aside, '<span class="hfacet" title="28h old">28h old</span>');
   // Staleness reports itself in the badge, so it leaves the sub line to
-  // the test time rather than taking it.
-  assertEquals(view.sub, "0s of 0s test time");
+  // the counts of tests and test time rather than taking it.
+  assertEquals(view.sub, "0 of 1 · 0m of 0m");
 });
 
 Deno.test("the lane budget comes from the manifest that named it", () => {
@@ -542,7 +565,7 @@ Deno.test("the selection tile goes amber while a test is too long for any lane",
   assertEquals(view.status, "warn");
   // The share is still the headline; what the tile turned amber for takes
   // the line under it.
-  assertEquals(view.value, "0.1%");
+  assertEquals(view.value, "50%<small> tests · </small>0.1%<small> time</small>");
   assertEquals(view.sub, "1 test too long for any lane");
   assertEquals(view.href, TEST_SELECTION_PATH);
   assertEquals(view.hint, "lanes ↗");

@@ -118,31 +118,10 @@ export class TransformationContext {
     while (current) {
       // Try the original node first — synthetic nodes created by transformers
       // often have originals with real source positions.
-      const original: ts.Node = ts.getOriginalNode(current);
-      if (original && original !== current) {
-        const origPos = original.pos;
-        const origEnd = original.end;
-        if (origPos >= 0 && origEnd >= origPos) {
-          try {
-            const start = original.getStart(this.sourceFile);
-            return { start, length: Math.max(0, origEnd - start) };
-          } catch (_e: unknown) {
-            // Original may still lack parent links; fall through.
-          }
-        }
-      }
-
-      const pos = current.pos;
-      const end = current.end;
-      if (pos >= 0 && end >= pos) {
-        try {
-          const start = current.getStart(this.sourceFile);
-          return {
-            start,
-            length: Math.max(0, end - start),
-          };
-        } catch (_e: unknown) {
-          // Some synthetic nodes still throw here; continue walking to a real parent.
+      for (const candidate of [ts.getOriginalNode(current), current]) {
+        if (candidate.pos >= 0 && candidate.end >= candidate.pos) {
+          const start = candidate.getStart(this.sourceFile);
+          return { start, length: Math.max(0, candidate.end - start) };
         }
       }
       current = current.parent;
@@ -295,23 +274,18 @@ export class TransformationContext {
       return false;
     }
 
-    // Walk up to the enclosing function-like.
-    let cursor: ts.Node | undefined = declaration.parent;
-    while (cursor && !ts.isFunctionLike(cursor)) {
-      cursor = cursor.parent;
-    }
-    if (!cursor) return false;
+    const fn = ts.findAncestor(declaration.parent, ts.isFunctionLike);
+    if (!fn) return false;
 
     // Only the FIRST parameter of an array-method callback counts as the
     // element binding. Index/array params and non-first decls are not.
-    const fn = cursor as ts.SignatureDeclarationBase;
-    const firstParam = fn.parameters?.[0];
+    const firstParam = fn.parameters[0];
     if (!firstParam) return false;
     if (!declarationBelongsToFirstParam(declaration, firstParam)) {
       return false;
     }
 
-    return this.isArrayMethodCallback(cursor);
+    return this.isArrayMethodCallback(fn);
   }
 
   getDataFlowAnalyzer(): ReturnType<typeof createDataFlowAnalyzer> {
@@ -384,16 +358,13 @@ function declarationBelongsToFirstParam(
   decl: ts.Declaration,
   firstParam: ts.ParameterDeclaration,
 ): boolean {
-  // Identifier-form: the declaration itself is the parameter.
-  if (decl === firstParam) return true;
-  // Destructured: the declaration is a binding element nested under the
-  // parameter's binding pattern. Walk parents until we hit firstParam (or
-  // exit the function-like).
-  let cursor: ts.Node | undefined = decl.parent;
-  while (cursor) {
-    if (cursor === firstParam) return true;
+  // The declaration is the parameter itself, or a binding element nested
+  // under the parameter's binding pattern. The caller found a function-like
+  // above `decl`, so the walk stops there at the latest.
+  let cursor: ts.Node = decl;
+  while (cursor !== firstParam) {
     if (ts.isFunctionLike(cursor)) return false;
     cursor = cursor.parent;
   }
-  return false;
+  return true;
 }

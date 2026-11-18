@@ -205,6 +205,7 @@ describe("fabrichat-four-writer-room-update", () => {
   let releasedIdentity: string;
   let storedBefore: { writer: string; module: unknown }[];
   let windowsBefore: unknown;
+  let argumentClaimsBefore: unknown;
   let failuresBefore: Record<string, number>;
   let failuresAfter: Record<string, number>;
 
@@ -235,6 +236,22 @@ describe("fabrichat-four-writer-room-update", () => {
   const reactionsOn = async (message: Cell<unknown>) =>
     ((await message.key("reactions").pull()) as { emoji?: string }[] ?? [])
       .map((reaction) => reaction?.emoji);
+
+  /**
+   * What the room's argument stores under its two lone writer claims: the
+   * participants `addParticipant` added, and the `about` the room was
+   * created with.
+   */
+  const argumentClaims = () => {
+    const stored = room.getArgumentCell<unknown>()!.getRaw() as {
+      participants?: { items?: unknown[] };
+      about?: unknown;
+    };
+    return {
+      participants: stored.participants?.items?.length,
+      about: stored.about,
+    };
+  };
 
   /** The document the room's result links for the session's windows. */
   const windowsDocument = () => {
@@ -383,6 +400,42 @@ describe("fabrichat-four-writer-room-update", () => {
         "ChatReact",
       ),
     );
+    // A member who joined, through the earlier program's own
+    // `addParticipant`, and an `about`, so that the room holds a value under
+    // each of its two lone writer claims, as rooms people use do. The `about`
+    // is planted where a manager's `commitStart` writes it as it creates the
+    // room, since this test runs no manager.
+    {
+      const tx = runtime.edit();
+      runtime.getCell(owner.did(), "joined profile", undefined, tx).set({
+        name: "Joined",
+      });
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    await send("addParticipant", {
+      profile: runtime.getCell(owner.did(), "joined profile"),
+    });
+    {
+      const { id } = room.getArgumentCell<unknown>()!.getAsNormalizedFullLink();
+      const address = {
+        space: roomSpace,
+        scope: "space" as const,
+        id,
+        path: [],
+      };
+      const plant = runtime.edit();
+      const stored = storedFields(plant, address);
+      seedStoredEnvelope(plant, address, {
+        ...stored,
+        value: {
+          ...(stored.value as FabricPlainObject),
+          about: { kind: "group", title: "Four writers" },
+        },
+      });
+      expect((await plant.commit().settled).error).toBeUndefined();
+      await runtime.idle();
+    }
     await room.key("messages").key("openWindow").pull();
     // Two windows: `main`, which a case opens again, and `old`, which a case
     // closes.
@@ -412,6 +465,7 @@ describe("fabrichat-four-writer-room-update", () => {
       "messages/*",
     );
     windowsBefore = windowsDocument();
+    argumentClaimsBefore = argumentClaims();
 
     // The release: the room opens as a person opening it would, follows its
     // origin to this tree's room, and waits for the running room to swap.
@@ -497,6 +551,14 @@ describe("fabrichat-four-writer-room-update", () => {
     expect(proposed).toBeDefined();
     expect(sorted(proposed!)).toEqual(sorted(prepared.delegations));
     expect(prepared.delegations.size).toBeGreaterThan(0);
+  });
+
+  it("keeps the participant and the `about` its argument stores under their writers' claims", () => {
+    expect(argumentClaimsBefore).toEqual({
+      participants: 1,
+      about: { kind: "group", title: "Four writers" },
+    });
+    expect(argumentClaims()).toEqual(argumentClaimsBefore);
   });
 
   it("keeps the session's windows where the room's result linked them", () => {

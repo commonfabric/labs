@@ -123,20 +123,24 @@ describe("view-diffedit-source", () => {
         const source = sourceFor(SHOW, ws, git);
         const outside: DiffWorkspace = { ...ws, resolve: () => null };
         const blamed = sourceFor(SHOW, outside, git);
-        expect(source.blameTargets!(SHOW)[12]).toEqual({
+        expect(source.blameTargets!(SHOW, SHOW)[12]).toEqual({
           request: { cwd: root, path: "m.ts", rev: SHA },
           line: 1,
           text: "const y = 2;",
         });
-        const targets = blamed.blameTargets!(SHOW);
+        const targets = blamed.blameTargets!(SHOW, SHOW);
         expect(targets[12]).toEqual({
           request: { cwd: "/repo", path: "m.ts", rev: SHA },
           line: 1,
           text: "const y = 2;",
         });
         expect(targets[11]).toBeNull();
-        blamed.blameTargets!(SHOW);
-        expect(asked).toBe(1);
+        // Each source asks for the repository root once, however often it
+        // finds blame targets.
+        const askedBefore = asked;
+        blamed.blameTargets!(SHOW, SHOW);
+        expect(askedBefore).toBe(2);
+        expect(asked).toBe(askedBefore);
       } finally {
         done();
       }
@@ -146,7 +150,7 @@ describe("view-diffedit-source", () => {
       const { ws, done } = workspace({});
       try {
         const outside: DiffWorkspace = { ...ws, resolve: () => null };
-        const targets = sourceFor(SHOW, outside).blameTargets!(SHOW);
+        const targets = sourceFor(SHOW, outside).blameTargets!(SHOW, SHOW);
         expect(targets.every((target) => target === null)).toBe(true);
       } finally {
         done();
@@ -164,7 +168,7 @@ deleted file mode 100644
 -const gone = 1;
 ${DIFF}`;
         const source = sourceFor(deleted, ws);
-        const targets = source.blameTargets!(deleted);
+        const targets = source.blameTargets!(deleted, deleted);
         expect(targets.slice(0, 6)).toEqual([
           null,
           null,
@@ -174,7 +178,10 @@ ${DIFF}`;
           null,
         ]);
         expect(targets[12]?.text).toBe("const y = 2;");
-        expect(source.blameTargets!("plain\ntext")).toEqual([null, null]);
+        expect(source.blameTargets!("plain\ntext", "plain\ntext")).toEqual([
+          null,
+          null,
+        ]);
       } finally {
         done();
       }

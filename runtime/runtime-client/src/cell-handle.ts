@@ -179,7 +179,8 @@ export type CellDelivery = {
    * with the value (`writtenPrincipalAt()` in the runner), for a handle a
    * subscriber asked for it on (`includeWrittenPrincipal`). It is
    * `undefined` whenever `cfcLabelCurrent` is not set, when the value is not
-   * the whole of the cell a write to it lands in, and when that cell's label
+   * the whole of the cell a write to it lands in, when that cell is not in
+   * the space of the document holding the field, and when that cell's label
    * names no single principal.
    */
   readonly writtenPrincipal?: DID;
