@@ -72,6 +72,14 @@ describe("keys", () => {
         ]);
       });
 
+      it("returns Ctrl with Shift as Ctrl with the character the key types with Shift", () => {
+        expect(decoded("\x1b[47:63;6u\x1b[99:67;6u\x1b[50:64;6u")).toEqual([
+          { name: "backspace" },
+          { name: "ctrl-c", ctrl: true },
+          { name: "ctrl-`", ctrl: true },
+        ]);
+      });
+
       it("names a key that types an ASCII letter by that letter, wherever it is on the keyboard", () => {
         expect(
           decoded(

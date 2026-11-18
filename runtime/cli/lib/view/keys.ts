@@ -301,7 +301,7 @@ function isModifier(code: number): boolean {
  * points of the key with Shift and of the key in the same place on a US
  * keyboard, the modifier bits plus one, and the code points of the text it
  * typed. Each part but the first may be left out. Escape, Enter, Tab,
- * Backspace, and Ctrl with Space or a character from `@` to `~` decode as
+ * Backspace, and Ctrl with Space, `?`, or a character from `@` to `~` decode as
  * the byte a terminal otherwise sends for them does. Returns null for a key
  * pressed with Command, Super, Hyper, or
  * Meta, none of which the viewer binds, and for a modifier pressed on its
@@ -333,10 +333,18 @@ function reportedKey(params: string): Key | null {
     return { name: "unknown" };
   }
   if (c === 0x09 && mods.shift) return { name: "shift-tab" };
+  // Ctrl turns the character the key types, with Shift if it is down, into
+  // a control byte as a terminal does: `?` into Delete, and Space and `@` to
+  // `~` into the byte of their low five bits.
+  const typed = mods.shift && !byBase && shifted !== undefined ? shifted : c;
   const byte = c < 0x20 || c === 0x7f
     ? c
-    : mods.ctrl && (c === 0x20 || (c >= 0x40 && c < 0x7f))
-    ? c & 0x1f
+    : !mods.ctrl
+    ? -1
+    : typed === 0x3f
+    ? 0x7f
+    : typed === 0x20 || (typed >= 0x40 && typed < 0x7f)
+    ? typed & 0x1f
     : -1;
   if (byte >= 0) {
     return mods.alt ? { ...byteKey(byte), alt: true } : byteKey(byte);
