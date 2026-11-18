@@ -8793,6 +8793,68 @@ export class Server {
     return selected;
   }
 
+  /**
+   * Replaces the watches and views of a session that already holds view
+   * graphs, by moving its demand graphs to the replacement's ordinary and
+   * rendered roots and its support graphs to the planner's selections for
+   * the replacement's views (`#moveWatchGraphs()`). What it returns is what
+   * `#evaluateViewWatchSet()` returns for the same request, and only the
+   * roots the replacement adds are walked.
+   */
+  async #replaceViewWatchSet(
+    session: SessionState,
+    watches: readonly WatchSpec[],
+    views: readonly ViewInterest[],
+    engine?: Engine.Engine,
+  ) {
+    this.#assertRoutedAuthority(session);
+    engine ??= await this.#openEngine(session.space);
+    this.#assertRoutedAuthority(session);
+    const startedAt = performance.now();
+    const renderWatches = [...watches, ...viewWatches(views)];
+    const selected = this.#viewSupportWatches(session, views);
+    const previousSupport = new Map<string, TrackedGraphState>();
+    for (const [key, graph] of session.graphs) {
+      if (key.startsWith("view-support:")) {
+        previousSupport.set(key.slice("view-support:".length), graph);
+      }
+    }
+    const attribution = createRootAttribution();
+    const demandGraphs = this.#moveWatchGraphs(
+      session,
+      engine,
+      renderWatches,
+      session.viewDemandGraphs,
+      attribution,
+    );
+    const supportGraphs = this.#moveWatchGraphs(
+      session,
+      engine,
+      selected,
+      previousSupport,
+      attribution,
+    );
+    recordSlowQueryDuration("session.watch.set", session.space, startedAt, {
+      watches: renderWatches.length + selected.length,
+      ...attribution,
+    });
+    const graphs = new Map<string, TrackedGraphState>();
+    for (const [branch, graph] of demandGraphs) {
+      graphs.set(`view-demand:${branch}`, graph);
+    }
+    for (const [branch, graph] of supportGraphs) {
+      graphs.set(`view-support:${branch}`, graph);
+    }
+    const identity = { principal: session.principal, sessionId: session.id };
+    return {
+      serverSeq: Engine.serverSeq(engine),
+      graphs,
+      entities: this.#entriesFromGraphs(graphs.values(), identity),
+      demandGraphs,
+      demandEntities: this.#entriesFromGraphs(demandGraphs.values(), identity),
+    };
+  }
+
   /** Extends ordinary demand while retaining the view's rendered and support graphs. */
   async #extendViewWatchSet(
     session: SessionState,
@@ -9266,6 +9328,10 @@ export class Server {
       // other watch set evaluates them whole.
       const extended = views.length > 0 && incremental &&
         !session.forceFullResync;
+      // A session that already holds view graphs keeps them across a
+      // replacement or a removal, and walks only the roots it adds.
+      const moved = views.length > 0 && !incremental &&
+        session.views.length > 0 && !session.forceFullResync;
       const evaluated: Awaited<ReturnType<Server["evaluateWatchSet"]>> & {
         demandGraphs?: typeof session.graphs;
         demandEntities?: typeof session.entities;
@@ -9281,6 +9347,13 @@ export class Server {
         )
         : extended
         ? await this.#extendViewWatchSet(session, message.watches, aclEngine)
+        : moved
+        ? await this.#replaceViewWatchSet(
+          session,
+          message.watches,
+          views,
+          aclEngine,
+        )
         : await this.#evaluateViewWatchSet(
           session,
           message.watches,
@@ -9532,6 +9605,73 @@ export class Server {
     }
 
     return { graphs, updates, attribution };
+  }
+
+  /**
+   * Moves `previous`, a session's graphs by branch, to the roots of
+   * `watches`. Each branch's graph releases the roots `watches` no longer
+   * name (`releaseTrackedRoots()`) and walks only the roots it adds
+   * (`extendTrackedGraph()`), so a root both sets name keeps what it covers
+   * without being walked again. A branch `watches` adds is evaluated whole, a
+   * branch it leaves drops its graph, and a graph whose roots stay the same
+   * is returned as it stands. A moved graph is a clone, so `previous` is
+   * untouched until the caller installs the result.
+   */
+  #moveWatchGraphs(
+    session: SessionState,
+    engine: Engine.Engine,
+    watches: readonly WatchSpec[],
+    previous: ReadonlyMap<string, TrackedGraphState>,
+    attribution: RootAttribution,
+  ): Map<string, TrackedGraphState> {
+    const graphs = new Map<string, TrackedGraphState>();
+    const identity = this.#sessionScopeIdentity(session);
+    for (const [branch, group] of graphWatchesByBranch(watches)) {
+      const query = unionQuery(branch, group);
+      const existing = previous.get(branch);
+      if (existing === undefined) {
+        const tracked = trackGraph(session.space, engine, query, undefined, {
+          principal: session.principal,
+          sessionId: session.id,
+          evaluationCache: this.#evaluationCacheFor(session.space),
+        });
+        foldRootAttribution(attribution, tracked.stats);
+        this.#enforceEvaluationCacheBudget();
+        graphs.set(branch, tracked.state);
+        continue;
+      }
+      const referrers = rootReferrersOf(session.space, query.roots, identity);
+      const wanted = new Set(referrers);
+      const released = [...existing.roots.keys()].filter((referrer) =>
+        !wanted.has(referrer)
+      );
+      const added = query.roots.filter((_, index) =>
+        !existing.roots.has(referrers[index])
+      );
+      if (released.length === 0 && added.length === 0) {
+        graphs.set(branch, existing);
+        continue;
+      }
+      const moved = cloneTrackedGraphState(engine, existing);
+      if (released.length > 0) {
+        const result = releaseTrackedRoots(
+          session.space,
+          engine,
+          moved,
+          released,
+        );
+        foldRootAttribution(attribution, result.stats);
+      }
+      if (added.length > 0) {
+        const result = extendTrackedGraph(session.space, engine, moved, {
+          branch,
+          roots: added,
+        });
+        foldRootAttribution(attribution, result.stats);
+      }
+      graphs.set(branch, moved);
+    }
+    return graphs;
   }
 
   /**
