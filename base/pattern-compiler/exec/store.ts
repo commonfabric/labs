@@ -650,6 +650,18 @@ export class Store {
   /** The arrays whose keys are being formed. */
   readonly #keying = new Set<string>();
 
+  /** How many times the keys of an array were formed. */
+  keyings = 0;
+
+  /**
+   * The keys last formed for a stored array, by its address and the key
+   * fields: the array they were formed for, and the clock then.
+   */
+  readonly #keys = new Map<
+    string,
+    { clock: number; held: readonly unknown[]; keys: string[] }
+  >();
+
   /**
    * The element part of the key of a plain value
    * (`plan-and-label-templates.md` §1.3). With `fields`, the key fields
@@ -742,9 +754,21 @@ export class Store {
     // An element that holds a reference by key into its own array is
     // keyed by its position while the keys of that array are formed.
     const reentered = this.#keying.has(id);
+    // The keys of a stored array are a function of what is stored, so
+    // they stand while the clock does.
+    const clock = this.clock;
+    const formed = `${id} ${JSON.stringify(fields)}`;
+    const known = this.#keys.get(formed);
+    if (
+      !reentered && copies === undefined && known?.clock === clock &&
+      known.held === held
+    ) {
+      return known.keys;
+    }
     this.#keying.add(id);
+    this.keyings += 1;
     try {
-      return keysOfParts(held.map((member, index): ElementPart => {
+      const keys = keysOfParts(held.map((member, index): ElementPart => {
         if (isLink(member)) {
           // What the link names, with no key resolved: a link to an
           // element by key is keyed by that reference.
@@ -762,6 +786,10 @@ export class Store {
           fields,
         );
       }));
+      if (!reentered && copies === undefined && this.clock === clock) {
+        this.#keys.set(formed, { clock, held, keys });
+      }
+      return keys;
     } finally {
       if (!reentered) this.#keying.delete(id);
     }

@@ -3935,6 +3935,22 @@ describe("the key of a plain value", () => {
     expect(store.read(at.key(keySegment(single), "cell"))).toBe(5);
   });
 
+  it("forms the keys of a stored array once for the reads by key that follow no write", () => {
+    const store = start();
+    const before = store.keyings;
+
+    expect(store.read(new Ref("d", ["saved", SEVEN, "name"]))).toBe("s");
+    expect(store.read(new Ref("d", ["saved", SEVEN, "id"]))).toBe(7);
+    expect(store.read(new Ref("d", ["saved", SEVEN, "name"]))).toBe("s");
+
+    expect(store.keyings - before).toBe(1);
+
+    // The keys that are kept are those of what is stored: after a write
+    // that moves the elements, a key names the element where it stands.
+    store.write(new Ref("d", ["saved"]), [repo(8, "t"), repo(7, "moved")]);
+    expect(store.read(new Ref("d", ["saved", SEVEN, "name"]))).toBe("moved");
+  });
+
   it("names the field, so the key of a field that holds 7 is not the key of a whole value 7", () => {
     const store = start();
 
@@ -6188,5 +6204,34 @@ describe("a `const` of the block body of a promoted `computed`", () => {
       others: [],
       afloat: 2,
     });
+  });
+});
+
+// A memo entry that many entries depend on (`fixtures/shared-values.tsx`:
+// eleven values in a chain, each of which reads the two before it).
+describe("a memo entry that other entries share", () => {
+  it("is checked once in a pass that follows no write", async () => {
+    const instance = new Instance(await artifactOf("shared-values"), {
+      seed: 1,
+    });
+    expect(instance.result()).toEqual({ v10: 233 });
+    const evaluations = instance.counts.evaluations;
+    const before = instance.checks;
+
+    instance.settle();
+
+    // The result and the eleven values.
+    expect(instance.checks - before).toBeLessThanOrEqual(12);
+    expect(instance.counts.evaluations).toBe(evaluations);
+  });
+
+  it("is evaluated again after a write to what it read", async () => {
+    const instance = new Instance(await artifactOf("shared-values"), {
+      seed: 1,
+    });
+
+    instance.writeArgument(["seed"], 2);
+
+    expect(instance.result()).toEqual({ v10: 322 });
   });
 });

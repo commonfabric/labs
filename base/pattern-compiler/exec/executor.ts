@@ -296,6 +296,12 @@ type Entry = {
   pending?: boolean;
   evaluatedAt: number;
   changedAt: number;
+  /**
+   * The clock of the store when the entry was last found current. An
+   * entry is stale by a write alone, so it stays current while the clock
+   * stands.
+   */
+  checkedAt?: number;
 };
 
 /** Brings the instances of a side-writing cone up to date. */
@@ -1177,6 +1183,13 @@ export class Instance {
    * `result` for the result, in the order the evaluations ended.
    */
   readonly trace: string[] = [];
+
+  /**
+   * How many times the reads and the dependencies of a memo entry were
+   * compared with what the entry saw of them.
+   */
+  checks = 0;
+
   constructor(
     readonly artifact: Artifact,
     argument: unknown,
@@ -2387,15 +2400,22 @@ export class Instance {
     for (const [collection, index] of entry.indexes) {
       if (context.get(collection)?.index !== index) return false;
     }
+    const clock = this.store.clock;
+    if (entry.checkedAt === clock) return true;
     // The cones whose write target the entry read or passed on are
     // brought up to date first, as an upstream output is (ES §2.3).
     for (const writer of entry.writers) writer(context);
+    this.checks += 1;
     // A key that moved keeps its entries: nothing of an element is
     // evaluated on a move but what read the index (ES §2.6).
     if (this.store.changedSince(entry.evaluatedAt, entry.reads)) return false;
-    return entry.dependencies.every((dependency) =>
+    const current = entry.dependencies.every((dependency) =>
       dependency.stamp(context) === dependency.seen
     );
+    // A check that evaluated something that wrote is no check at the
+    // clock it ended at.
+    if (current && this.store.clock === clock) entry.checkedAt = clock;
+    return current;
   }
 
   /** The entry of a value function, for the element keys of a context. */
