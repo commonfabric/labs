@@ -351,6 +351,12 @@ type Unit = {
   sum: number;
   part: boolean;
   partForced: boolean;
+  /**
+   * Every row that can be a part is one: nothing entered the array, and
+   * no row was stored in place again, since the rule on the size of a
+   * document last passed over the rows.
+   */
+  swept: boolean;
 };
 
 /** A document of the layout: the result document, or a part. */
@@ -1494,8 +1500,8 @@ export type Transaction = {
   written: string[];
   /**
    * The bytes of the documents written, each as the JSON text of what
-   * it holds when the transaction ends: the executor writes a document
-   * whole, and has no patch.
+   * it holds when the transaction ends, whatever part of it the
+   * transaction changed. It is not counted under `measure: "patches"`.
    */
   bytes: number;
   /**
@@ -3878,6 +3884,7 @@ export class Instance {
         sum: 0,
         part: false,
         partForced: false,
+        swept: false,
       };
       inside.set(id, unit);
       const units = this.#units.get(unit.name) ?? new Set();
@@ -3909,6 +3916,7 @@ export class Instance {
     unit.parted = forms.map(() => false);
     unit.splits = forms.map(splits);
     unit.forced.clear();
+    unit.swept = false;
     unit.sum = unit.sizes.reduce((sum, size) => sum + size, 0);
     this.#touched.add(unit);
     this.#touchedRows.set(unit, new Set(unit.keys));
@@ -4046,6 +4054,7 @@ export class Instance {
       unit.positions = undefined;
     }
     unit.sum += sum;
+    if (inserted.length > 0) unit.swept = false;
     this.#touched.add(unit);
     const rows = this.#touchedRows.get(unit) ?? new Set();
     for (const key of inserted) rows.add(key);
@@ -4091,6 +4100,7 @@ export class Instance {
     const index = this.#positionIn(unit, key);
     this.#wroteLaid({ unit, key }, 0, -1);
     unit.parted[index] = false;
+    unit.swept = false;
     unit.forced.delete(key);
     this.#growUnit(unit, unit.sizes[index] - link);
     this.#wroteLaid(this.#laidOfUnit(unit), unit.sizes[index]);
@@ -4149,23 +4159,29 @@ export class Instance {
         }
         // A part that holds more than a document may: each row that is
         // stored in place becomes a part, whatever its size.
-        if (unit.part && this.#contentOf(unit) > DOCUMENT_MAX_BYTES) {
+        if (
+          unit.part && !unit.swept &&
+          this.#contentOf(unit) > DOCUMENT_MAX_BYTES
+        ) {
           unit.keys.forEach((key, index) => {
             if (!unit.parted[index] && unit.splits[index]) {
               this.#toPart(unit, key, true);
             }
           });
+          unit.swept = true;
         }
         // A row that is a part and holds more than a document may: the
         // arrays in it become parts.
-        unit.keys.forEach((key, index) => {
-          if (!unit.parted[index] || unit.sizes[index] <= DOCUMENT_MAX_BYTES) {
-            return;
-          }
+        for (const key of rowsOf.get(unit) ?? []) {
+          const index = this.#positionIn(unit, key);
+          if (
+            index < 0 || !unit.parted[index] ||
+            unit.sizes[index] <= DOCUMENT_MAX_BYTES
+          ) continue;
           for (const inner of unit.inside.get(key)?.values() ?? []) {
             if (!inner.part) this.#toPart(inner, undefined, true);
           }
-        });
+        }
       }
       if (this.#rootSize > DOCUMENT_MAX_BYTES) {
         for (const unit of this.#rootUnits.values()) {
@@ -4353,6 +4369,7 @@ export class Instance {
           owner.unit.splits[this.#positionIn(owner.unit, owner.key)] = splits(
             now,
           );
+          owner.unit.swept = false;
         }
       }
     };
@@ -5365,6 +5382,10 @@ export class Instance {
     const { results, members, flags } = rows;
     const left = new Set<string>();
     let low = elements.length;
+    // The positions that hold another element than before: those of
+    // the splices where each put in as many members as it removed,
+    // and otherwise every position from the first splice on.
+    let high = 0;
     for (const op of ops) {
       const fresh = op.inserted.map((key): Element => ({
         key,
@@ -5413,10 +5434,14 @@ export class Instance {
         changed.add(element.key);
       }
       low = Math.min(low, op.start);
+      high = op.removed.length === op.inserted.length && high >= 0
+        ? Math.max(high, op.start + op.inserted.length)
+        : -1;
     }
     if (elements.length !== length) return undefined;
     const indexed = this.#indexReaders.size > 0;
-    for (let index = low; index < elements.length; index++) {
+    const end = high < 0 ? elements.length : Math.min(high, elements.length);
+    for (let index = low; index < end; index++) {
       const element = elements[index];
       if (element.source === PENDING) {
         if (keyAt(index) !== element.key) return undefined;
