@@ -229,12 +229,26 @@ export async function runPager(
     realFileGateway(),
   );
 
+  // While a dialog is up, the terminal reports every key in full, so that
+  // Alt with a letter reaches the dialog as Alt even from iTerm2 with Option
+  // set to type characters. A request to report every key counts as made as
+  // soon as it is written, and one to stop only once the write is done, so
+  // that a failed write leaves the closing viewer still asking to stop.
+  let reportingAllKeys = false;
+
   const paint = (doc: Document, view: ViewState) => {
     const rows = renderFrame(doc, view);
+    const allKeys = view.dialog != null;
     // Re-assert the padding background every frame. Some terminals drop the
     // OSC 11 default set at startup after the first repaint, so setting it once
     // is not enough; re-sending the same value is a no-op where it already holds.
-    let out = (padBg ? term.setDefaultBg(padBg) : "") +
+    let out =
+      (allKeys === reportingAllKeys
+        ? ""
+        : allKeys
+        ? term.reportAllKeys
+        : term.reportKeysAsBefore) +
+      (padBg ? term.setDefaultBg(padBg) : "") +
       `${CSI}?7l${term.hideCursor}`; // disable autowrap while drawing
     for (let i = 0; i < rows.length; i++) {
       out += term.moveTo(i + 1, 1) + term.clearLine + rows[i];
@@ -244,7 +258,9 @@ export async function runPager(
     // terminal cursor stays hidden.
     const cur = cursorScreenPos(doc, view);
     if (cur) out += term.moveTo(cur.row, cur.col) + term.showCursor;
+    reportingAllKeys ||= allKeys;
     deps.write(out);
+    reportingAllKeys = allKeys;
   };
 
   // Drawing the blame column can ask for files' blame. Each load runs while
@@ -391,7 +407,9 @@ export async function runPager(
     } catch { /* ignore */ }
     try {
       deps.write(
-        `${term.disableMouse}${CSI}?7h${term.showCursor}` +
+        (reportingAllKeys ? term.reportKeysAsBefore : "") +
+          `${term.disableMouse}${CSI}?7h` +
+          term.showCursor +
           (padBg ? term.resetDefaultBg : "") + term.leaveAltScreen +
           (session.exitMessage === null ? "" : `${session.exitMessage}\n`),
       );

@@ -290,6 +290,14 @@ Deno.test("pager: draws the document and quits on q", async () => {
     writes.some((w) => w.includes(term.disableMouse)),
     "disabled the mouse",
   );
+  // Keys are reported as the terminal reports them by default, with no dialog
+  // up to need anything else.
+  assert(
+    !writes.some((w) =>
+      w.includes(term.reportAllKeys) || w.includes(term.reportKeysAsBefore)
+    ),
+    "left the way keys are reported alone",
+  );
 });
 
 Deno.test("pager: restores the terminal when the initial write fails", async () => {
@@ -990,6 +998,97 @@ Deno.test("pager: a committing button plays its press before the pager quits", a
     // the quit would tear the screen down after the single opening frame.
     const dialogFrames = writes.filter((w) => w.includes("Save changes to"));
     assertEquals(dialogFrames.length, 2, "the press was drawn before quitting");
+  } finally {
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
+
+Deno.test("pager: has every key reported in full while a dialog is up, and as before once it closes", async () => {
+  const { doc, source, dir } = editableDoc();
+  try {
+    const { deps, writes } = makeFake({
+      steps: [
+        { bytes: enc("e") }, // edit mode
+        { bytes: enc("X") }, // dirty the buffer
+        { bytes: enc("\x03") }, // Ctrl-C: raise the save-and-quit prompt
+        // Alt+C, as the kitty keyboard protocol reports it: Cancel.
+        { bytes: enc("\x1b[99;3u") },
+        { fireTimers: true }, // the press animation ends
+        { eof: true },
+      ],
+    });
+    await runPager(doc, OPTS, undefined, source, deps);
+    const opened = writes.findIndex((w) => w.includes("Save changes to"));
+    const closed = writes.findIndex((w) => w.includes("Cancelled"));
+    assert(opened >= 0 && closed > opened, "the prompt opened, then closed");
+    assertEquals(
+      writes.flatMap((w, i) => w.includes(term.reportAllKeys) ? [i] : []),
+      [opened],
+    );
+    assertEquals(
+      writes.flatMap((w, i) => w.includes(term.reportKeysAsBefore) ? [i] : []),
+      [closed],
+    );
+  } finally {
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
+
+Deno.test("pager: has keys reported as before when the write asking for every key fails", async () => {
+  const { doc, source, dir } = editableDoc();
+  try {
+    const fake = makeFake({
+      steps: [
+        { bytes: enc("e") },
+        { bytes: enc("X") },
+        { bytes: enc("\x03") }, // Ctrl-C: raise the save-and-quit prompt
+      ],
+    });
+    const write = fake.deps.write;
+    let failed = false;
+    fake.deps.write = (text) => {
+      write(text);
+      if (!failed && text.includes(term.reportAllKeys)) {
+        failed = true;
+        throw new Error("write failed");
+      }
+    };
+    await assertRejects(
+      () => runPager(doc, OPTS, undefined, source, fake.deps),
+      Error,
+      "write failed",
+    );
+    const asked = fake.writes.findIndex((w) => w.includes(term.reportAllKeys));
+    const restored = fake.writes.findIndex((w) =>
+      w.includes(term.reportKeysAsBefore)
+    );
+    assert(asked >= 0 && restored > asked, "asked to stop after the failure");
+  } finally {
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
+
+Deno.test("pager: has keys reported as before when it closes with a dialog up", async () => {
+  const { doc, source, dir } = editableDoc();
+  try {
+    const { deps, writes } = makeFake({
+      steps: [
+        { bytes: enc("e") },
+        { bytes: enc("X") },
+        { bytes: enc("\x03") }, // Ctrl-C: raise the save-and-quit prompt
+        { eof: true },
+      ],
+    });
+    await runPager(doc, OPTS, undefined, source, deps);
+    const restored = writes.findIndex((w) =>
+      w.includes(term.reportKeysAsBefore)
+    );
+    assert(restored >= 0, "keys were reported as before");
+    assert(
+      writes[restored].indexOf(term.reportKeysAsBefore) <
+        writes[restored].indexOf(term.leaveAltScreen),
+      "before leaving the alternate screen",
+    );
   } finally {
     Deno.removeSync(dir, { recursive: true });
   }
