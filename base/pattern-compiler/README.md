@@ -555,10 +555,17 @@ where the second argument is not a string literal type or a union of them, or
 where a field is not a required top-level property of type `string` or `number`,
 and `array-by-key:mismatch` where an array whose type declares one key is given
 where the type declares another key. A type that declares no key, on either
-side, is no mismatch. `language-subset.md` in this tree has neither identifier,
-and it does not have `element-body:result-stored-outside`, which the crate does
-not report. The three are in `PROVISIONAL` of `src/catalog.rs`, in the order of
-the catalog that has them.
+side, is no mismatch. It reports the warning `array-by-key:state-without-key`
+(provisional decision P21) at a `map`, a `filter` or a `flatMap` whose body
+holds a state cell, a handler binding, an operation or a child instance for each
+element, where the body reads a member of the element and neither the array nor
+the array that a chain of constructs starts at declares a key. The type does not
+say whether an array holds plain values in place or references, so the warning
+is reported for both: 168 times in 80 modules of the corpus.
+`language-subset.md` in this tree has neither identifier, and it does not have
+`element-body:result-stored-outside`, which the crate does not report, and it
+does not have the warning. The four are in `PROVISIONAL` of `src/catalog.rs`, in
+the order of the catalog that has them.
 
 A key is a fabric value, the record of `element`, the element part, and
 `occurrence`, the occurrence count, and its written form is the text that the
@@ -804,6 +811,21 @@ document that holds it whole, and `Instance.laidOut()` gives the result document
 and the part documents of the layout, formed from it. A node of the rendered
 tree that is no row is no split point here.
 
+Beside that accounting the store keeps part documents as documents
+(`exec/parts.ts`, provisional decisions P20, P25 and P26): for every document,
+the argument and a state cell included, a holder, a part document for each row
+of an array from 1,024 bytes on, and for an array over 65,536 bytes chunk
+documents under lists of links that hold the count of rows below each link.
+`Store` applies each change of a document to them, `Transaction.parted` has the
+part documents that a transaction wrote and their bytes, and
+`PartedDocuments.read()` reads a path through the holder, the lists, the chunk
+and the part and counts them. The executor's own reads go to the value that the
+store holds for each document, and a test compares what the part documents give
+with that value after each change. One change of a list writes at most 6
+documents and 149,137 bytes at 100,000 rows, and one row is read through at most
+3 documents. An edit of one row of 23 bytes writes its chunk whole, 122,242
+bytes at 10,000 rows for a patch of 24.
+
 ```sh
 deno run -A --no-check base/pattern-compiler/compare/growth.ts 100 1000 10000
 deno run -A --no-check base/pattern-compiler/compare/growth.ts --formed 100 1000
@@ -812,6 +834,8 @@ deno run -A --no-check base/pattern-compiler/compare/rekey-cost.ts keystrokes 10
 deno run -A --no-check base/pattern-compiler/compare/rekey-cost.ts polled 100 100
 deno run -A --no-check base/pattern-compiler/compare/growth-today.ts keystrokes 100
 deno run -A base/pattern-compiler/compare/sites.ts
+deno run -A --no-check base/pattern-compiler/compare/parts-growth.ts 100 1000 10000
+deno run -A --no-check base/pattern-compiler/compare/parts-growth.ts --wide --max=4096 10000
 deno run -A base/pattern-compiler/compare/times.ts again.jsonl run.jsonl compile.jsonl crate-time.jsonl
 ```
 
@@ -821,9 +845,17 @@ deno run -A base/pattern-compiler/compare/times.ts again.jsonl run.jsonl compile
 what a list that is replaced again and again leaves stored
 (`fixtures/rows-state.tsx`). `sites.ts` estimates the size of the plans with a
 pattern that is compiled in written once, which the crate does not do.
-`times.ts` prints the table of run times. Notes 505 on of `SPEC-NOTES.md` have
-the figures, what the documents' rules make follow the length of a list, and the
-provisional choices.
+`times.ts` prints the table of run times. `parts-growth.ts` prints what one
+change of a list writes and reads in part documents, with rows of 23 bytes and,
+with `--wide`, of 2,000; `--max` and `--min` give the two sizes of the layout,
+`--counts=none` leaves the counts out of the lists, and `--identity=minted`
+names the part of a row by an ordinal. The crate still writes a pattern that is
+compiled in out at each call site: plans of 2,261 to 103,508 bytes for 1 to 6
+levels of two sites, which an ignored test of `tests/plan.rs` states. Notes 523
+on have the figures of the part documents, where the decision is incomplete, and
+what the copies of one callee in the plans of the corpus differ in. Notes 505 on
+of `SPEC-NOTES.md` have the figures, what the documents' rules make follow the
+length of a list, and the provisional choices.
 
 ## The parser
 

@@ -8897,3 +8897,458 @@ from scratch, and none of a `flatMap`.
      marking is exact for every plan beyond what the fixtures, the executor's
      tests and the corpus exercise; the times, each of which is of one run or
      the median of 7; that today's figures are free of the harness.
+
+## Part documents as documents, and a pattern compiled in written once
+
+Notes 523 to 535 are about provisional decisions P20, P25 and P26 built as
+documents, the decision P18 examined on the plans of the corpus and not built,
+and the warning of P21. `ES` is `execution-and-storage.md` and `PL` is
+`plan-and-label-templates.md`. A number after "question" is that of the plan
+(`docs/plans/compiled-pattern-language.md`). Note 533 lists the provisional
+choices. The lists of notes 523 to 528 are a `map` over an array of references,
+a `map` over an array of plain values in place with no declared key, the same
+with a key field declared with `ArrayByKey`, and a `map` over the result of a
+`filter` of plain values in place. No figure of them is of a plain array
+generated from scratch, and none of a `flatMap`.
+
+523. **Part documents are documents now (P20, P25, P26): what was built.**
+     `exec/parts.ts` (`PartedDocuments`) holds, for every document of the store,
+     the documents that it is stored in. `Store` applies each change of a
+     document to them as it is made (`#changed`), a transaction asks when it
+     ends which of them it wrote (`PartedDocuments.seal()`,
+     `Transaction.parted`), and a read (`read()`, `rows()`, `materialize()`)
+     starts at the holder and passes through each list, chunk and part, and
+     counts them. The accounting of note 511 (`#arrange`, `laidOut()`) stands
+     beside it unchanged, for rule 3 as written.
+     - **The layout.** An array that no other array holds is a split point, and
+       so is each of its rows. A row is a part document from `PART_MIN_BYTES`,
+       1,024, on, and is stored in place again under 512. An array whose content
+       is over `DOCUMENT_MAX_BYTES`, 65,536, is chunk documents, each a
+       contiguous run of rows or of links to parts, under a list of links to the
+       chunks that is in the holder, and that is chunked the same way when it
+       passes the maximum. A list holds the number of rows below each link (P25;
+       the option `counts: "none"` leaves them out, as P20 first had it). A
+       chunk over the maximum is cut into equal shares, two for one more row.
+       Two neighbors that together fall under half the maximum merge. This is
+       the same for the argument document, a state cell, the document of an
+       element cell and a result (P26): the layer does not know which kind a
+       document is.
+     - **What it is not.** The executor's own reads still go to the one value
+       that the store holds for each document; the part documents are kept
+       beside it, change by change, and a test reads every document of an
+       instance back from them after each change and compares
+       (`exec/test/parts-executor.test.ts`). So "every resolution passes through
+       a storage link" is tested for a reader outside the executor and not for
+       value code. A row that is a record is held by reference, as the store
+       holds it, and not as a copy. An array inside a row is stored with the
+       row. A part over the maximum is not split. A record with many members is
+       no split point. Label entries and provenance are in no size.
+       `PART_MIN_BYTES` is a placeholder.
+524. **One change of a list in part documents** (`compare/parts-growth.ts`,
+     `exec/test/parts-executor.test.ts`). Rows of 23 bytes are those of
+     `fixtures/lists.tsx` (45 bytes as JSON); rows of 2,000 bytes have a title
+     of 1,960 characters, so each row of the argument and of the result is a
+     part. "Bytes" is what the documents written hold when the change is stored,
+     each whole; "patch" is what the writer and the derivation put into them,
+     which is what a store that takes a patch below a path would be sent
+     (question 290 a). With `ArrayByKey`, the first of each kind of change on a
+     settled instance; time is the mean of 20 further changes:
+
+     | Rows of     |  Length | Change         | Documents |   Bytes | Patch | Read for one row | For 20 rows | Documents in all | ms   |
+     | ----------- | ------: | -------------- | --------: | ------: | ----: | ---------------: | ----------: | ---------------: | ---- |
+     | 23 bytes    |     100 | append         |         2 |   6,256 |    65 |                1 |           1 |                2 | 0.06 |
+     | 23 bytes    |     100 | edit one field |         2 |   6,199 |    24 |                1 |           1 |                2 | 0.06 |
+     | 23 bytes    |   1,000 | append         |         2 |  64,759 |    65 |                1 |           1 |                2 |      |
+     | 23 bytes    |   1,000 | edit one field |         2 |  64,697 |    24 |                1 |           1 |                2 |      |
+     | 23 bytes    |  10,000 | append         |         4 | 123,166 |    71 |                2 |           2 |               13 | 0.14 |
+     | 23 bytes    |  10,000 | prepend        |         4 | 123,208 |    71 |                2 |           2 |               13 | 0.71 |
+     | 23 bytes    |  10,000 | edit one field |         2 | 122,242 |    24 |                2 |           2 |               13 | 0.06 |
+     | 23 bytes    |  10,000 | remove first   |         4 | 123,078 |     2 |                2 |           2 |               13 | 0.10 |
+     | 23 bytes    |  10,000 | remove last    |         4 | 123,027 |     2 |                2 |           2 |               13 | 0.02 |
+     | 23 bytes    | 100,000 | append         |         4 | 139,217 |    74 |                2 |           2 |              112 | 0.57 |
+     | 23 bytes    | 100,000 | prepend        |         4 | 139,203 |    74 |                2 |           2 |              112 | 8.22 |
+     | 23 bytes    | 100,000 | edit one field |         2 | 130,916 |    24 |                2 |           2 |              110 | 0.37 |
+     | 23 bytes    | 100,000 | remove first   |         4 | 139,070 |     2 |                2 |           2 |              110 | 1.43 |
+     | 23 bytes    | 100,000 | remove last    |         4 | 139,072 |     2 |                2 |           2 |              110 | 0.18 |
+     | 2,000 bytes |     100 | append         |         4 |  16,520 | 3,977 |                2 |          21 |              244 | 0.11 |
+     | 2,000 bytes |     100 | edit one field |         3 |  10,185 | 3,930 |                2 |          21 |              202 | 0.08 |
+     | 2,000 bytes |  10,000 | append         |         6 | 129,644 | 3,979 |                3 |          22 |           20,064 | 0.11 |
+     | 2,000 bytes |  10,000 | prepend        |         6 | 129,644 | 3,979 |                3 |          22 |           20,064 | 0.85 |
+     | 2,000 bytes |  10,000 | edit one field |         3 |  65,977 | 3,930 |                3 |          22 |           20,022 | 0.16 |
+     | 2,000 bytes |  10,000 | remove first   |         4 | 125,417 |     2 |                3 |          22 |           19,980 | 0.24 |
+     | 2,000 bytes | 100,000 | append         |         6 | 149,137 | 3,980 |                3 |          22 |          200,236 | 0.35 |
+     | 2,000 bytes | 100,000 | prepend        |         6 | 149,137 | 3,980 |                3 |          22 |          200,236 | 8.15 |
+     | 2,000 bytes | 100,000 | edit one field |         3 |  69,202 | 3,930 |                3 |          22 |          200,192 | 0.22 |
+     | 2,000 bytes | 100,000 | remove first   |         4 | 144,911 |     2 |                3 |          22 |          200,150 | 1.57 |
+     | 2,000 bytes | 100,000 | remove last    |         4 | 144,911 |     2 |                3 |          22 |          200,150 | 0.14 |
+
+     - The edit of a row of 2,000 bytes writes 3 documents because the part of
+       the argument's row is renamed (note 526).
+     - **The bytes of the documents that one change writes are bounded at every
+       length**: at most 139,217 for rows of 23 bytes and 149,137 for rows of
+       2,000, in at most 6 documents, at 100,000 rows. A test bounds them at two
+       lengths for each case and each size. Under rule 3 as written an append at
+       10,000 rows wrote 610,081 bytes (note 513). One row is read through 2 or
+       3 documents, and the first 20 rows through 2, or through 22 where each
+       row is a part.
+     - **The other cases.** Over plain values with no declared key, and over the
+       result of a `filter` of them, an edit writes one document more, the
+       holder of the result, because the row leaves and enters under another
+       key: 3 documents and 122,556 bytes at 10,000 rows of 23 bytes, 5
+       documents and 128,748 bytes with rows of 2,000 bytes, of which 2 parts
+       are deleted and 2 created. Over references the element is a document of
+       its own, so an edit writes it and the chunk of the result: 2 documents,
+       48,048 bytes at 10,000 rows of 23 bytes and 3,976 bytes with rows of
+       2,000, where the row of the result is a part. An append over references
+       creates the cell, 5 documents and 106,046 bytes.
+     - **The time** of a prepend and of a removal of the first row follows the
+       length, 8 ms at 100,000 where an append takes 0.6 ms: the executor
+       renumbers the positions behind the change (question 260), which is no
+       cost of the layout.
+     - **With no count in a list** (`--counts=none`), an insertion writes 2
+       documents where it writes 4, and the row at position 50,000 of 100,000 is
+       read through 20 documents where it is read through 2: every chunk before
+       it. P25 is the better rule, at the price of one list per level for each
+       insertion and removal. The list of the first level is in the holder, so
+       each insertion writes the holder.
+525. **What a chunk of the maximum size costs where storage takes no patch, and
+     the size that balances it** (question 290 a). With chunks and no patch an
+     edit of one row of 23 bytes writes its chunk whole: 122,242 bytes at 10,000
+     rows, for a patch of 24, where the rows as parts of rule 3 wrote 24 bytes
+     for the edit and 610,081 for an append. The same list, with `ArrayByKey`,
+     at 10,000 rows of 23 bytes, by the maximum (`--max`), and with every row a
+     part (`--min=16`):
+
+     | Maximum | Rows are     | Edit: documents, bytes | Append: documents, bytes | Read for one row, for 20 | Documents in all |
+     | ------: | ------------ | ---------------------: | -----------------------: | -----------------------: | ---------------: |
+     |  65,536 | in the chunk |             2, 122,242 |               4, 123,166 |                     2, 2 |               13 |
+     |  16,384 | in the chunk |              2, 32,134 |                4, 35,372 |                     2, 2 |               44 |
+     |   4,096 | in the chunk |               2, 8,130 |                7, 14,794 |                     3, 3 |              173 |
+     |   1,024 | in the chunk |               2, 2,026 |                12, 6,222 |                     4, 4 |              721 |
+     |  65,536 | parts        |              3, 62,071 |               6, 125,736 |                    3, 22 |           20,022 |
+     |   4,096 | parts        |               3, 4,163 |               10, 16,556 |                    4, 23 |           20,312 |
+
+     With rows of 2,000 bytes, which are parts at each maximum, an edit writes
+     65,977, 20,283, 8,069 and 7,043 bytes at a maximum of 65,536, 16,384, 4,096
+     and 1,024, and an append 129,644, 42,436, 20,464 and 10,740. The edit with
+     rows as parts writes a chunk of links because the first edit after a reader
+     declared the key renames the part (note 526). A second edit of the same row
+     was not measured.
+     - **The balance.** An edit writes one chunk of the argument and one of the
+       result, so it costs about twice the maximum, at any length. An insertion
+       writes those and one list per level, and a list of the first level holds
+       `N * s / C` links of about 75 bytes for `N` rows of `s` bytes in chunks
+       of `C`. The chunk and its list are of one size at `C = sqrt(75 * N * s)`:
+       about 5,900 bytes for 10,000 rows of 45 bytes, 18,600 for 100,000 and
+       59,000 for a million. So 65,536 is balanced for a million small rows and
+       is ten times what a list of 10,000 needs. A maximum of 4,096 writes 8,130
+       bytes for an edit and 14,794 for an append at 10,000 rows, with 173
+       documents where 13 stand and 3 reads for a row where 2 are made. A
+       smaller chunk than that pays for itself in splits: at 1,024 an append
+       writes 12 documents.
+     - **If storage takes a patch below a path**, every row of the tables costs
+       its patch, 2 to 74 bytes for a row of 23 bytes and the row for a row of
+       2,000, and the larger chunk is the better one, since it is fewer
+       documents and fewer reads. The two answers to question 290 (a) want
+       opposite sizes. What the measurement cannot give is which of the two a
+       store charges for: the bytes sent, or the bytes of the revision that it
+       keeps.
+     - **A size of chunk that follows the array** is not what P20 states: a
+       chunk maximum per array near `sqrt(75 * N * s)` would bound an insertion
+       at about three chunks of that size at every length. It is not built.
+526. **Where P20 as stated is wrong, incomplete or still grows.**
+     - **A record with many members is no array, and its document follows the
+       number of members.** `fixtures/rows-state.tsx` over references holds the
+       elements in a record `pool` of the argument. One keystroke writes 68,456
+       bytes of part documents at 100 rows, 109,141 at 1,000 and 572,774 at
+       10,000, for a patch of 25: the holder of the argument is written whole.
+       P20 and P26 chunk arrays and say nothing of a record, a map keyed by an
+       identifier included. Not fixed: the decision gives no split point there.
+       This is the one measured size that still follows the data.
+     - **The key in the identifier of a row's part (ES §4.10) is not defined for
+       a source array (P26).** A row of the argument has a key only for a
+       reader, and by the reader's declared key fields (ruling Z52): the store
+       holds one list of keys for each set of fields that a reader formed keys
+       with, and none before the first reader. So the part of a row of 2,000
+       bytes is made under no key when the argument is written, and is renamed
+       at the first edit after a reader with `ArrayByKey` formed keys (3
+       documents and 65,977 bytes for that edit; 2 documents and 3,976 bytes
+       with a minted identifier, `--identity=minted`). With no declared key
+       every edit renames it: one part deleted, one created, and the chunk of
+       links written, 5 documents and 128,748 bytes at 10,000 rows, against 4
+       and 66,747 with a minted identifier, where the 2 that remain are the row
+       of the result, which leaves and enters under its new key. The executor
+       takes the key of the reader that declares the most fields
+       (`Store.#rowKey`). Provisional choice, not the default: an identifier
+       that the array mints, since a reference by key is resolved through the
+       chunks and not through the identifier of a part.
+     - **A reference by key has no way to its chunk.** P20 has a reference by
+       key "resolved through chunks". A chunk is found by position. To find the
+       position of a key the store forms the keys of the array, which it keeps
+       in memory (`Store.#states`); from the documents alone that is a read of
+       every chunk and a salted hash of every row, once per set of key fields.
+       An index from a key to its chunk would be a second tree that every
+       insertion writes, and one per set of key fields. Not built; it is a
+       question (note 527).
+     - **A chunk is written whole for one row** (note 525).
+     - **Rows that are appended or prepended one at a time leave every chunk
+       half full.** 40,000 rows of 23 bytes, one insertion per transaction:
+       appended, or prepended, they stand in 55 chunks where 28 would hold them;
+       inserted at random positions, in 32. Each split leaves two halves, and at
+       the ends only one of them is filled again. After nine tenths of them are
+       removed at random, 8 or 9 chunks stand where 3 would hold the rows, the
+       smallest of 12,867 bytes. So the count of chunks stays within about three
+       times the fewest, and the merge rule leaves no run of small chunks. A
+       split that leaves the full chunk at the end of an array that grows there
+       would halve the documents of a log; not built.
+     - **An empty chunk.** By the merge rule as stated, a chunk whose last row
+       is removed stays, beside a neighbor over half the maximum. The executor
+       deletes it.
+     - **When an array returns to its holder** is not stated. Here: when one
+       chunk is left and holds at most half the maximum.
+     - **A document that holds several arrays** is over the maximum with each
+       array under it. Here: the largest arrays of it become documents of their
+       own until it is under the maximum, by rule 3 with the minimum of P20.
+     - **An array that is written whole**, as a `set` of a new array does,
+       writes every chunk unless the store compares it with what is stored. The
+       executor keeps the rows that are equal at the start and at the end and
+       splices the rest, which reads the whole array.
+     - **The first write of a long array** creates all its chunks and parts in
+       one transaction: 200,236 documents for 100,000 rows of 2,000 bytes and
+       their results. No rule can avoid it.
+527. **P26 against `push`, `set`, a splice and a reference by key.** A `push`
+     through a handle and a splice are a change of one chunk and of the lists
+     above it, and nothing of how a handler addresses the array changes. A `set`
+     of the whole array is the case of note 526. A write through a reference by
+     key, and a read through one, need the position of the key, which is the
+     conflict: storage by position in chunks, addressing by a key that only a
+     reader's schema defines. The question for the documents: where the keys of
+     a chunked source array are kept, per set of key fields, so that a reference
+     by key is resolved without a read of every chunk, and whether an insertion
+     writes that index.
+528. **A keystroke in a row that has state, and a polled list, in part
+     documents** (`compare/rekey-cost.ts`; `fixtures/rows-state.tsx`). Per
+     keystroke, the mean of 20, part documents written and their bytes: over
+     plain values in place with no declared key 5 and 57,491 at 100 rows, 6 and
+     101,950 at 1,000, 6.1 and 106,995 at 10,000, with one part created per
+     keystroke and a patch of 610 bytes; with `ArrayByKey` 5 and 64,243, 5 and
+     102,143, 5 and 128,349, a patch of 81; over references 4 and 68,456, 4 and
+     109,141, 4 and 572,774, a patch of 25, the last by the record of note 526.
+     A row of this fixture's result is about 600 bytes and stays in its chunk,
+     so 100 rows are one document of 60,000 bytes that each keystroke writes. A
+     list of 100 records that is replaced 100 times holds as many part documents
+     as the store holds documents: 202 at the start and 20,202 at the end with
+     no declared key, 202 throughout with `ArrayByKey` and over references. The
+     layout adds nothing to question 255 and removes nothing.
+529. **A pattern that is compiled in, written once (provisional decision P18):
+     not built. What the copies of one callee differ in, record by record, and
+     whether one callee record can hold them.** The crate still writes a callee
+     out at every call (`inline_pattern` and `inline_argument` in
+     `src/plan.rs`). `tests/plan.rs` has a test of the size,
+     `the_plan_of_a_pattern_called_at_two_sites_per_level_is_linear_in_the_depth`,
+     which is ignored and fails when it is run: the plans are 2,261, 5,118,
+     11,134, 23,637, 49,512 and 103,508 bytes for 1 to 6 levels of two call
+     sites. What was done in the place of the build is the comparison that
+     question 289, point (j), leaves open, on the plans that the crate emits for
+     the corpus (`emit --corpus`), with scripts that are not in the tree
+     (`copies.py` and `classify.py` of the round's scratch directory). Two
+     chains of `site` steps of one plan are taken as copies of one callee where
+     their cones are written at the same places of the source. Each copy is
+     compared with the first one of its callee, cone by cone in the order of the
+     plan: the slots of `Cone.slots` by root kind, path and class, the edges
+     into the cone by kind, the write edges by target and path, the outputs by
+     path, and each template with its `shared` nodes written in place and its
+     indexes left out. That is 53 pairs. 16 are the same but for indexes. The 37
+     others differ in five ways, and each pair in one of four combinations of
+     them.
+     - **Another path of the caller's argument (2 pairs).** In
+       `dev/experimental/folksonomy-demo.tsx`, `tagsA` binds `tags` to the
+       caller's `itemATags` and `tagsB` to `itemBTags`. The slots have another
+       path and nothing else differs. A callee record has a slot of root
+       `argument` and path `tags`, and the entry of `CallSite.argument` has the
+       caller's slot.
+     - **A slot at one site and an output at the other (1 pair).** In the same
+       module `tagsA` binds `scope` to `sharedScope`, a value that the caller
+       computes, and `tagsC` binds it to `isolatedScope`, a state cell of the
+       caller. The cone `communitySuggestions` of the callee has, at `tagsA`, an
+       edge from the caller's cone and an `output` node in its template, and no
+       slot for `scope`; at `tagsC` it lists the slot of the state cell in
+       `Cone.slots`, has no such edge, and has a `slot` node. One callee record
+       holds this: its cone lists the slot of root `argument` and path `scope`,
+       and PL §1.1, "What an argument slot stands for in a rule", gives the edge
+       and the `output` node at a site that binds the path to an output. So
+       which of `Cone.slots` and the incoming edges a cone instance has is
+       decided when it is bound, and the lists of a callee record are an upper
+       bound of the slots and a lower bound of the edges of a site.
+     - **Paths below a path that the callee passes on (19 pairs: 18 in the
+       outputs, 1 in the write edges).** In
+       `examples/suggestion-test/suggestion-test.tsx` the callee `Suggestion`
+       gives its argument `context` to a request. The call `suggestion` writes
+       `context: {}`, and the written-out form has one write edge with target
+       path `context` and template `const`. The call `suggestion2` writes
+       `context: { content: "...", value: new Writable(0) }`, and the
+       written-out form has two write edges, at `context/content` with `const`
+       and at `context/value` with the slot of the caller's state cell, and the
+       cone lists that slot. In `dev/catalog/stories/kitchen-sink-story.tsx` the
+       callee `Controls` places its `children` in its tree, and the outputs of
+       each copy are at the paths of the children that its call wrote, 5 at one
+       site and 1 at another. A callee record has one write edge at `context`,
+       or one output at the place of `children`, with the template `slot` of the
+       argument slot. PL §1.1 has, for a slot whose path is a proper prefix of
+       several entries of `CallSite.argument`, "the slot observes a constructed
+       value whose entries are those entries". It does not say that a write edge
+       or an output whose template is that slot stands, at such a site, for one
+       edge or one output per entry, with the entry's path behind its own. With
+       that rule added the labels per path are those of the written-out form;
+       without it the request has one label at `context` where the written-out
+       form has two below it. This is the one assumption that the comparison
+       adds (note 530, point c).
+     - **The number of cones (16 pairs), which is no difference of the callee.**
+       A body with three tags `<SelectControl>` has three sites, and the crate
+       gives each the step `{ site: "SelectControl" }` with no ordinal, so the
+       three are one chain here, and two bodies with another number of such tags
+       compare as copies with another number of cones. 17 of the 382 plans of
+       the corpus have two sites with one name under one `within`. That is a
+       defect of the crate against PL §1.3 (a name of several declarations is
+       `{ name, ordinal }`): a state cell of the callee has the same identifier
+       at both sites. No value of the comparison shows it, because no such
+       callee in the runs holds a state cell that a value compared reads.
+
+     So on the corpus a single callee record with the binding of each site gives
+     the records of the written-out form, with the one rule above added, and "A
+     callee record depends on nothing of its call sites" holds. The 82 pairs of
+     note 517 were every pair of copies; the 53 here are each copy against the
+     first. What this does not show: that values, identifiers and stored
+     documents are preserved, which needs the build.
+530. **The assumed points of question 289 (PL §8, question 170, b to j), from
+     the written-out plans of the corpus alone.** None is tested by a build.
+     - **(b) What a site binds a path to.** Confirmed for the stream of a
+       binding: of the state paths of the bindings of callee copies, 1,443 are
+       bound to a slot, 282 to a constant, 49 to an output, 140 to the stream of
+       a binding of the same copy, and 8 to the stream of a binding of the
+       caller (the first in `apps/lunch-poll/main.tsx`), which a callee record
+       can name through `CallSite.argument` alone. No state path is the result
+       of the instance, so that form has no case in the corpus.
+     - **(c) A literal above the paths that the callee reads.** Needs another
+       assumption: the rule of note 529 for a write edge and an output whose
+       template is the argument slot.
+     - **(d) Where the callee's result is held.** Not determined here. 100 of
+       the 3,867 outputs of callee copies in the corpus plans are kept; whether
+       each stands at a place that `CallSite.result` would list, or is kept
+       through a value, was not examined.
+     - **(e) A construct of the callee over an argument that is a collection.**
+       Not determined: of the collections of callee copies, 133 have
+       `source: { output }`, 32 `source: { slot }` and 10
+       `source: { collection }`, and whether one of the 10 is the caller's
+       construct seen through the argument was not examined.
+     - **(f)** an order over the cones, **(g)** type parameters, **(h)** whether
+       a callee record is the plan of its pattern, and **(i)** what `Cone.code`
+       keys: nothing in the written-out plans bears on them.
+     - **(j) Whether the binding decides which records a callee has.** Answered
+       by note 529: it decides which slots and edges a cone instance has and at
+       which paths an edge or an output that passes an argument on stands, and a
+       callee record with the rule of (c) expresses each case found.
+531. **The compile-time label checks under P19: what the corpus can say without
+     the build.** `src/flow.rs` is not changed. Over the corpus the written-out
+     form reports one label-flow diagnostic, `cfc-flow:ui-contract` in
+     `system/fabrichat/room.tsx`, and none of the four that P19 makes modular
+     (`cfc-flow:writer-fit`, `cfc-flow:write-floor`,
+     `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity`). So P19 can
+     lose no report of the corpus. Whether it adds one, at the binding of a
+     site, is not known without the check per site.
+532. **`array-by-key:state-without-key` (provisional decision P21, as
+     revised).** The crate reports the warning from the plan
+     (`state_without_key` in `src/plan.rs`): for a `map`, a `filter` or a
+     `flatMap` whose body holds a state cell, a handler binding, an operation or
+     a child instance, where neither the construct's array nor the array that a
+     chain of constructs starts at declares a key, and where the body reads a
+     member of the element, which is how the crate takes the element as a
+     record. A `lift` or a `computed` in the body is not counted. It is reported
+     over a stored array and over a plain array generated from scratch alike.
+     The type does not say whether a stored array holds plain values in place or
+     references, so the warning is reported for both, which the decision does
+     not intend. Over the corpus: 168 reports in 80 of the 286 modules that are
+     accepted with a pattern, each at a `map`; 163 of the bodies hold a handler
+     binding, 10 an operation, 4 a state cell and 2 a child instance. With a
+     `lift` or a `computed` counted, as the decision first had it, there were
+     222 reports in 95 modules. Most lists of the corpus are filled by `push` of
+     a record through a handle, which stores a reference (README, "A record that
+     a function body puts into an array through a handle"), so most of the 168
+     are of arrays that hold references at run time. A warning that is right
+     needs the compiler to know that an array holds plain values in place, which
+     no type of the language says.
+533. **Provisional choices.** Each is what the executor or the crate does where
+     the documents do not decide, with the alternative and what changes if it is
+     decided otherwise. None is decided.
+     1. _`PART_MIN_BYTES` is 1,024, and a part is stored in place again under
+        512._ A placeholder. Otherwise: the two numbers of `exec/parts.ts`.
+     2. _The identifier of a row's part holds the key of the reader that
+        declares the most key fields, and no key before a reader formed one_
+        (note 526). Alternative, recommended: an identifier that the array mints
+        (`identity: "minted"`), which an edit never renames. Otherwise: the
+        option becomes the default, and ES §4.10 names a part by an ordinal.
+     3. _An empty chunk is deleted; an array returns to its holder when one
+        chunk of at most half the maximum is left; the largest arrays of a
+        holder over the maximum become documents of their own; a chunk over the
+        maximum is cut into equal shares, more than two where many rows are
+        written at once_ (note 526). Otherwise: `#balance`, `#rootLayout`,
+        `#holderLayout` and `#pieces` of `exec/parts.ts`.
+     4. _An array that is written whole is compared with what is stored, and the
+        rows that differ are spliced._ Alternative: every chunk is written.
+     5. _The split points are the arrays that no other array holds, and their
+        rows._ A record, an array inside a row and a node of the rendered tree
+        that is no row are none. Otherwise: sizes are kept for those as well.
+     6. _The part documents are kept beside the value that the store holds for
+        each document, and value code reads that value_ (note 523). Otherwise:
+        `Store.locate`, the key state and the journal read and write through
+        `PartedDocuments`, which is a change of every array access of
+        `exec/store.ts`.
+     7. _For the warning of P21 an element is a record where the body reads a
+        member of it, any child instance counts as state, and the warning is
+        reported whether the array holds plain values in place or references_
+        (note 532).
+     8. _For P18: a write edge or an output of a callee whose template is an
+        argument slot stands, at a site that binds the path by a literal, for
+        one entry per entry of the literal_ (note 529). Proposed, not built.
+534. **The fixtures, the corpus and the labels after this round.** The runs are
+     at commit `90b5ce25fc`, the last that changes a source file, and were
+     repeated on the commit that holds these notes. `values-fixtures.ts`: 59 of
+     59 runs executed, 1,004 of 1,013 values equal, as in note 521. The seeded
+     run over the 272 modules (`values-corpus.ts run`): 215 run by today's
+     runtime, 214 executed, 193 with every value equal and every event handled,
+     6,013 of 6,107 values equal, 94 that differ in 21 modules, 3 of 541
+     committed events not handled, 6,673 evaluations; its report is the text of
+     note 521's, line for line. The modules that need `wish` or request an
+     effect (`stubbed`): 45 run, 42 executed, 16 with every value equal, 1,484
+     of 1,584 values equal, 4 of 94 events not handled; the same text as before.
+     On the executor alone (`alone`): the same text but for one figure, the
+     bytes that the derivation transactions wrote, 1,198,803 where it was
+     1,198,808; the cause was not looked for. The comparison of labels
+     (`compare/corpus.ts`): 1,462 outputs and 148 bounds, 1,332 tighter, 130
+     whose atom names the pattern, none looser or incomparable, 249 write edges,
+     237 equal and 12 tighter; the same text as before. No module has another
+     outcome. The part documents change no value: they are written beside the
+     documents. `cargo test`: 497 tests pass and 1 is ignored (note 529).
+535. **Rules of the task not kept, and what is not verified.** The tests of
+     `exec/test/parts.test.ts` were seen to fail on their assertions against a
+     class with no behavior, before `PartedDocuments` was written, and passed at
+     its first run. The tests of the executor through part documents
+     (`exec/test/parts-executor.test.ts`, the first two) were written after the
+     line of `Store.#changed` that they test, and were seen to fail with that
+     line removed. The test of an even split, those of the keystroke and the
+     polled list in part documents, the test of the warning and the test of the
+     size of a plan each failed on its assertion first. Not done: P18 and P19 as
+     a build (the callee compiled alone, the records `Callee` and `CallSite`,
+     value code once per callee, cone instances by the chain of sites,
+     `src/flow.rs` per site), so the exact preservation of values, identifiers
+     and stored documents under P18 is not tested, and no diagnostic was
+     compared under P19; the reads of value code through the part documents; a
+     split point for a record; an index from a key to its chunk; the marking
+     over a plain array generated from scratch; the kept list of a `filter`;
+     `#moveKey`; the event time of `showcase/battleship/pass-and-play/main.tsx`;
+     the `identity` entries of a whole read; questions 249, 251 and 253. Not
+     verified: the times, each the mean of 20 changes on one instance in one
+     run; the layout under a failed transaction, whose changes are applied and
+     undone in the part documents as in the store, with no test of its own; a
+     part document or a chunk under concurrent writers, which the executor does
+     not have.
