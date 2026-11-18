@@ -295,8 +295,8 @@
               "construct": "flatMap",
               "membership": {
                 "body": {
-                  "op": "slot",
-                  "slot": 1
+                  "op": "output",
+                  "output": 0
                 },
                 "collection": 0,
                 "op": "fold"
@@ -330,8 +330,8 @@
               "construct": "flatMap",
               "membership": {
                 "body": {
-                  "op": "slot",
-                  "slot": 9
+                  "op": "output",
+                  "output": 5
                 },
                 "collection": 2,
                 "op": "fold"
@@ -556,8 +556,8 @@
               "path": [],
               "template": {
                 "body": {
-                  "op": "slot",
-                  "slot": 1
+                  "op": "output",
+                  "output": 0
                 },
                 "collection": 0,
                 "op": "fold"
@@ -572,8 +572,8 @@
                 "*"
               ],
               "template": {
-                "op": "slot",
-                "slot": 1
+                "op": "output",
+                "output": 0
               }
             },
             {
@@ -624,8 +624,8 @@
               "path": [],
               "template": {
                 "body": {
-                  "op": "slot",
-                  "slot": 9
+                  "op": "output",
+                  "output": 5
                 },
                 "collection": 2,
                 "op": "fold"
@@ -640,8 +640,8 @@
                 "*"
               ],
               "template": {
-                "op": "slot",
-                "slot": 9
+                "op": "output",
+                "output": 5
               }
             },
             {
@@ -667,12 +667,8 @@
                 "0"
               ],
               "template": {
-                "body": {
-                  "op": "slot",
-                  "slot": 1
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "output",
+                "output": 3
               }
             },
             {
@@ -687,12 +683,8 @@
                 "0"
               ],
               "template": {
-                "body": {
-                  "op": "slot",
-                  "slot": 9
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "output",
+                "output": 8
               }
             },
             {

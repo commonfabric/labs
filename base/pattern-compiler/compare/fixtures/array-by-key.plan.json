@@ -810,24 +810,8 @@
                 "id"
               ],
               "membership": {
-                "by": {
-                  "body": 0
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 0
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 1
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 2
-                  }
-                ],
-                "op": "derive"
+                "op": "output",
+                "output": 0
               },
               "name": {
                 "name": "map",
@@ -875,24 +859,8 @@
             {
               "construct": "map",
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 8
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 9
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 1,
-                "op": "fold"
+                "op": "output",
+                "output": 7
               },
               "name": {
                 "name": "map",
@@ -955,23 +923,8 @@
             {
               "construct": "map",
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 23
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 4,
-                "op": "fold"
+                "op": "output",
+                "output": 15
               },
               "name": {
                 "name": "map",
@@ -1020,24 +973,8 @@
             {
               "construct": "map",
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 27
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 9
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 6,
-                "op": "fold"
+                "op": "output",
+                "output": 21
               },
               "name": {
                 "name": "map",
@@ -1391,24 +1328,8 @@
                 "rows"
               ],
               "template": {
-                "by": {
-                  "body": 0
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 0
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 1
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 2
-                  }
-                ],
-                "op": "derive"
+                "op": "output",
+                "output": 0
               }
             },
             {
@@ -1521,24 +1442,8 @@
                 "starred"
               ],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 8
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 9
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 1,
-                "op": "fold"
+                "op": "output",
+                "output": 7
               }
             },
             {
@@ -1659,23 +1564,8 @@
                 "tallies"
               ],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 23
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 4,
-                "op": "fold"
+                "op": "output",
+                "output": 15
               }
             },
             {
@@ -1774,24 +1664,8 @@
                 "found"
               ],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 27
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 9
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 6,
-                "op": "fold"
+                "op": "output",
+                "output": 21
               }
             },
             {

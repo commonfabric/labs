@@ -113,12 +113,8 @@
             {
               "construct": "map",
               "membership": {
-                "body": {
-                  "op": "slot",
-                  "slot": 2
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "output",
+                "output": 0
               },
               "name": "loudNames",
               "source": {
@@ -146,12 +142,8 @@
             {
               "construct": "map",
               "membership": {
-                "body": {
-                  "op": "slot",
-                  "slot": 5
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "output",
+                "output": 4
               },
               "name": "loudPeople",
               "source": {
@@ -171,11 +163,34 @@
                       },
                       "inputs": [
                         {
-                          "op": "slot",
-                          "slot": 9
+                          "by": {
+                            "expression": true
+                          },
+                          "inputs": [
+                            {
+                              "op": "slot",
+                              "slot": 9
+                            },
+                            {
+                              "op": "const"
+                            }
+                          ],
+                          "op": "derive"
                         },
                         {
-                          "op": "const"
+                          "by": {
+                            "expression": true
+                          },
+                          "inputs": [
+                            {
+                              "op": "slot",
+                              "slot": 9
+                            },
+                            {
+                              "op": "const"
+                            }
+                          ],
+                          "op": "derive"
                         }
                       ],
                       "op": "derive"
@@ -186,11 +201,34 @@
                       },
                       "inputs": [
                         {
-                          "op": "slot",
-                          "slot": 9
+                          "by": {
+                            "expression": true
+                          },
+                          "inputs": [
+                            {
+                              "op": "slot",
+                              "slot": 9
+                            },
+                            {
+                              "op": "const"
+                            }
+                          ],
+                          "op": "derive"
                         },
                         {
-                          "op": "const"
+                          "by": {
+                            "expression": true
+                          },
+                          "inputs": [
+                            {
+                              "op": "slot",
+                              "slot": 9
+                            },
+                            {
+                              "op": "const"
+                            }
+                          ],
+                          "op": "derive"
                         }
                       ],
                       "op": "derive"
@@ -215,48 +253,8 @@
             {
               "construct": "map",
               "membership": {
-                "body": {
-                  "branches": [
-                    {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "op": "slot",
-                          "slot": 9
-                        },
-                        {
-                          "op": "const"
-                        }
-                      ],
-                      "op": "derive"
-                    },
-                    {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "op": "slot",
-                          "slot": 9
-                        },
-                        {
-                          "op": "const"
-                        }
-                      ],
-                      "op": "derive"
-                    }
-                  ],
-                  "condition": {
-                    "op": "slot",
-                    "slot": 8
-                  },
-                  "op": "select",
-                  "selector": 0
-                },
-                "collection": 4,
-                "op": "fold"
+                "op": "output",
+                "output": 8
               },
               "name": "loudHalves",
               "source": {
@@ -431,12 +429,8 @@
                 "loudNames"
               ],
               "template": {
-                "body": {
-                  "op": "slot",
-                  "slot": 2
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "output",
+                "output": 0
               }
             },
             {
@@ -502,12 +496,8 @@
                 "loudPeople"
               ],
               "template": {
-                "body": {
-                  "op": "slot",
-                  "slot": 5
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "output",
+                "output": 4
               }
             },
             {
@@ -551,11 +541,34 @@
                       },
                       "inputs": [
                         {
-                          "op": "slot",
-                          "slot": 9
+                          "by": {
+                            "expression": true
+                          },
+                          "inputs": [
+                            {
+                              "op": "slot",
+                              "slot": 9
+                            },
+                            {
+                              "op": "const"
+                            }
+                          ],
+                          "op": "derive"
                         },
                         {
-                          "op": "const"
+                          "by": {
+                            "expression": true
+                          },
+                          "inputs": [
+                            {
+                              "op": "slot",
+                              "slot": 9
+                            },
+                            {
+                              "op": "const"
+                            }
+                          ],
+                          "op": "derive"
                         }
                       ],
                       "op": "derive"
@@ -566,11 +579,34 @@
                       },
                       "inputs": [
                         {
-                          "op": "slot",
-                          "slot": 9
+                          "by": {
+                            "expression": true
+                          },
+                          "inputs": [
+                            {
+                              "op": "slot",
+                              "slot": 9
+                            },
+                            {
+                              "op": "const"
+                            }
+                          ],
+                          "op": "derive"
                         },
                         {
-                          "op": "const"
+                          "by": {
+                            "expression": true
+                          },
+                          "inputs": [
+                            {
+                              "op": "slot",
+                              "slot": 9
+                            },
+                            {
+                              "op": "const"
+                            }
+                          ],
+                          "op": "derive"
                         }
                       ],
                       "op": "derive"
@@ -621,48 +657,8 @@
                 "loudHalves"
               ],
               "template": {
-                "body": {
-                  "branches": [
-                    {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "op": "slot",
-                          "slot": 9
-                        },
-                        {
-                          "op": "const"
-                        }
-                      ],
-                      "op": "derive"
-                    },
-                    {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "op": "slot",
-                          "slot": 9
-                        },
-                        {
-                          "op": "const"
-                        }
-                      ],
-                      "op": "derive"
-                    }
-                  ],
-                  "condition": {
-                    "op": "slot",
-                    "slot": 8
-                  },
-                  "op": "select",
-                  "selector": 0
-                },
-                "collection": 4,
-                "op": "fold"
+                "op": "output",
+                "output": 8
               }
             },
             {

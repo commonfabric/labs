@@ -361,8 +361,8 @@
                 "rows"
               ],
               "template": {
-                "op": "slot",
-                "slot": 4
+                "op": "output",
+                "output": 0
               }
             },
             {
@@ -374,8 +374,8 @@
                 "*"
               ],
               "template": {
-                "op": "slot",
-                "slot": 4
+                "op": "output",
+                "output": 0
               }
             },
             {
@@ -424,8 +424,8 @@
                 "words"
               ],
               "template": {
-                "op": "slot",
-                "slot": 6
+                "op": "output",
+                "output": 5
               }
             },
             {
@@ -437,8 +437,8 @@
                 "*"
               ],
               "template": {
-                "op": "slot",
-                "slot": 6
+                "op": "output",
+                "output": 5
               }
             },
             {
@@ -515,8 +515,8 @@
                 "2"
               ],
               "template": {
-                "op": "slot",
-                "slot": 4
+                "op": "output",
+                "output": 10
               }
             },
             {

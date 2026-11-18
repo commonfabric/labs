@@ -6251,20 +6251,20 @@ describe("a `const` of the block body of a promoted `computed`", () => {
 });
 
 // A memo entry that many entries depend on (`fixtures/shared-values.tsx`:
-// eleven values in a chain, each of which reads the two before it).
+// twenty-five values in a chain, each of which reads the two before it).
 describe("a memo entry that other entries share", () => {
   it("is checked once in a pass that follows no write", async () => {
     const instance = new Instance(await artifactOf("shared-values"), {
       seed: 1,
     });
-    expect(instance.result()).toEqual({ v10: 233 });
+    expect(instance.result()).toEqual({ v24: 196418 });
     const evaluations = instance.counts.evaluations;
     const before = instance.checks;
 
     instance.settle();
 
-    // The result and the eleven values.
-    expect(instance.checks - before).toBeLessThanOrEqual(12);
+    // The result and the twenty-five values.
+    expect(instance.checks - before).toBeLessThanOrEqual(26);
     expect(instance.counts.evaluations).toBe(evaluations);
   });
 
@@ -6275,7 +6275,7 @@ describe("a memo entry that other entries share", () => {
 
     instance.writeArgument(["seed"], 2);
 
-    expect(instance.result()).toEqual({ v10: 322 });
+    expect(instance.result()).toEqual({ v24: 271443 });
   });
 });
 

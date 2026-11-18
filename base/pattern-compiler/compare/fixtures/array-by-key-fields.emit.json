@@ -544,24 +544,8 @@
             {
               "construct": "map",
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 4
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 5
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "output",
+                "output": 1
               },
               "name": {
                 "name": "map",
@@ -804,24 +788,8 @@
                 "starred"
               ],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 4
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 5
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "output",
+                "output": 1
               }
             },
             {

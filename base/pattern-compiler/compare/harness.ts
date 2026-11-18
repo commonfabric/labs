@@ -37,6 +37,7 @@ import {
   type Evaluated,
   evaluateTemplate,
   type Label,
+  namedTemplate,
   type Template,
   type TemplateInputs,
   TRANSFORMED_BY,
@@ -1490,6 +1491,10 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             );
           case "pick":
             return computedReference(template.body);
+          case "output": {
+            const named = plan.outputs[template.output]?.template;
+            return named === undefined ? undefined : computedReference(named);
+          }
           default:
             return undefined;
         }
@@ -1557,7 +1562,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
                 entry.template,
                 inputsFor(dereference && (passed ?? false), {}),
                 elements,
-                { patterns: plan.patterns },
+                { patterns: plan.patterns, outputs: plan.outputs },
               );
               if (evaluated.unsupported.length > 0) {
                 throw new Unsupported(
@@ -1686,7 +1691,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           },
           membership: (collection, elements) => {
             const record = plan.collections[collection];
-            const { membership } = record;
+            const membership = namedTemplate(record.membership, plan.outputs);
             // The membership a record iterates (PL §3.2). For a `map` it
             // is the record's own, and otherwise that of its source.
             if (
@@ -1696,6 +1701,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             ) {
               const evaluated = evaluateTemplate(membership, inputs, elements, {
                 patterns: plan.patterns,
+                outputs: plan.outputs,
               });
               if (evaluated.unsupported.length > 0) {
                 throw new Unsupported(
@@ -1857,7 +1863,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             event: context.event,
           }),
           context.elements,
-          { patterns: plan.patterns, kept },
+          { patterns: plan.patterns, outputs: plan.outputs, kept },
         );
         if (evaluated.unsupported.length > 0) {
           throw new Unsupported(`a \`${evaluated.unsupported[0]}\` node`);
@@ -1961,7 +1967,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
                 }
                 missing.push({
                   path,
-                  root: template.op,
+                  root: namedTemplate(template, plan.outputs)?.op ?? "",
                   absentFrom: absentFrom + 1,
                   above: Array.isArray(above)
                     ? "array"

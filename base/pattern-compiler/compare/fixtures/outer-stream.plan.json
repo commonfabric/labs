@@ -269,8 +269,8 @@
                 "0"
               ],
               "template": {
-                "op": "slot",
-                "slot": 5
+                "op": "output",
+                "output": 0
               }
             },
             {

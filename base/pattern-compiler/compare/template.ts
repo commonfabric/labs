@@ -40,7 +40,12 @@ export type Template =
   }
   | { op: "pick"; pick: number; choice: Template; body: Template }
   | { op: "fold"; collection: number; body: Template; pattern?: number }
-  | { op: "dynamic"; reads: unknown };
+  | { op: "dynamic"; reads: unknown }
+  /**
+   * The template of entry `output` of `Plan.outputs`, by reference
+   * (ruling Z58): it denotes what that template denotes in its place.
+   */
+  | { op: "output"; output: number };
 
 /**
  * One element of a collection: the collection, and the element's key. For
@@ -120,6 +125,10 @@ export type EvaluationOptions = {
    * of the entry their `pattern` names.
    */
   patterns?: readonly string[];
+  /**
+   * `Plan.outputs`: the template that a node of `op` `output` names.
+   */
+  outputs?: readonly { template?: Template }[];
   /**
    * Whether the template is that of a kept output. Its label then has the
    * atom of entry 0 of `patterns` added, with no condition (§3.2, "Every
@@ -227,6 +236,23 @@ export const keptOutputLabel = (
 
 const NEUTRAL: Label = { confidentiality: [], integrity: "neutral" };
 
+/**
+ * The template that `template` denotes at its root: a reference to the
+ * template of an output is followed to that template (ruling Z58).
+ */
+export const namedTemplate = (
+  template: Template | undefined,
+  outputs: readonly { template?: Template }[],
+): Template | undefined => {
+  let found = template;
+  const seen = new Set<number>();
+  while (found?.op === "output" && !seen.has(found.output)) {
+    seen.add(found.output);
+    found = outputs[found.output]?.template;
+  }
+  return found;
+};
+
 /** Evaluates `template` by §3.2. */
 export const evaluateTemplate = (
   template: Template,
@@ -256,6 +282,45 @@ export const evaluateTemplate = (
       : { confidentiality, integrity };
   };
 
+  // The label of each output that a reference names, for the element
+  // bindings and the position it was read at: an output that several
+  // templates name is evaluated once (ruling Z58).
+  const named = new Map<
+    string,
+    { label: Label; bound: boolean; unsupported: string[] }
+  >();
+  const reference = (
+    output: number,
+    at: readonly ElementBinding[],
+    passed: boolean,
+  ): Label => {
+    const key = JSON.stringify([output, at, passed]);
+    let known = named.get(key);
+    if (known === undefined) {
+      const template = options.outputs?.[output]?.template;
+      const outer = { bound, unsupported: unsupported.length };
+      bound = false;
+      let label: Label;
+      if (template === undefined) {
+        unsupported.push("output");
+        label = NEUTRAL;
+      } else {
+        label = walk(template, at, passed);
+      }
+      known = {
+        label,
+        bound,
+        unsupported: unsupported.slice(outer.unsupported),
+      };
+      named.set(key, known);
+      bound = outer.bound || known.bound;
+      return label;
+    }
+    bound ||= known.bound;
+    for (const op of known.unsupported) unsupported.push(op);
+    return known.label;
+  };
+
   const walk = (
     node: Template,
     at: readonly ElementBinding[],
@@ -264,6 +329,8 @@ export const evaluateTemplate = (
     switch (node.op) {
       case "const":
         return NEUTRAL;
+      case "output":
+        return reference(node.output, at, passed);
       case "slot": {
         const collection = inputs.indexOf?.(node.slot);
         if (collection === undefined) return inputs.slot(node.slot, at, passed);

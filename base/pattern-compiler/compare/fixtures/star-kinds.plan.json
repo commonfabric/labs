@@ -756,8 +756,8 @@
             {
               "construct": "map",
               "membership": {
-                "op": "slot",
-                "slot": 6
+                "op": "output",
+                "output": 2
               },
               "name": {
                 "name": "map",
@@ -1435,8 +1435,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "op": "slot",
-                "slot": 6
+                "op": "output",
+                "output": 2
               }
             },
             {
@@ -1504,8 +1504,8 @@
                 "0"
               ],
               "template": {
-                "op": "slot",
-                "slot": 11
+                "op": "output",
+                "output": 5
               }
             },
             {
@@ -1520,8 +1520,8 @@
                 "0"
               ],
               "template": {
-                "op": "slot",
-                "slot": 6
+                "op": "output",
+                "output": 8
               }
             },
             {
@@ -1536,8 +1536,8 @@
                 "1"
               ],
               "template": {
-                "op": "slot",
-                "slot": 11
+                "op": "output",
+                "output": 11
               }
             },
             {
@@ -1552,8 +1552,8 @@
                 "0"
               ],
               "template": {
-                "op": "slot",
-                "slot": 11
+                "op": "output",
+                "output": 14
               }
             },
             {
@@ -1568,8 +1568,8 @@
                 "1"
               ],
               "template": {
-                "op": "slot",
-                "slot": 6
+                "op": "output",
+                "output": 17
               }
             },
             {
@@ -1584,8 +1584,8 @@
                 "0"
               ],
               "template": {
-                "op": "slot",
-                "slot": 6
+                "op": "output",
+                "output": 24
               }
             },
             {

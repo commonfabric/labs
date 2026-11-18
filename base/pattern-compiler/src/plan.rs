@@ -1342,7 +1342,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                         }
                         json!({ "$value": value, "$path": path })
                     };
-                    let body = emitter.values[*value].template.clone()?;
+                    let body = emitter.template_by_reference(*value)?;
                     Some(json!({
                         "op": "pick",
                         "pick": pick,
@@ -1465,7 +1465,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             return Some(node);
         }
         let Some(entries) = &self.values[value].entries else {
-            return self.values[value].template.clone();
+            return self.template_by_reference(value);
         };
         if path.is_empty() && class == "value" {
             return self.values[value].template.clone();
@@ -1483,6 +1483,22 @@ impl<'a> Emitter<'_, '_, 'a> {
             Some((_, template)) => template.clone(),
             None => Some(json!({ "op": "const" })),
         }
+    }
+
+    /// The template of a value the instance computed, as the template of
+    /// what reads it holds it: the reference to the output of the value,
+    /// and no copy of its template (ruling Z58). The reference is written
+    /// with the index of the value, and `resolve_templates` gives it the
+    /// index of the output when the outputs are listed. A constant is
+    /// written as the constant it is. A constructed value has a template
+    /// per path and no output whose template is the join of them, so its
+    /// template is given as it is.
+    fn template_by_reference(&self, value: usize) -> Option<Value> {
+        let template = self.values[value].template.as_ref()?;
+        if template["op"] == "const" || self.values[value].entries.is_some() {
+            return Some(template.clone());
+        }
+        Some(json!({ "op": "output", "$template": value }))
     }
 
     /// The child slot of a `pick` over a container slot that a read of
@@ -3351,7 +3367,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
             Place::Value(value, path) => {
                 self.values[*value].referred = true;
-                iterated = self.values[*value].template.clone();
+                iterated = self.template_by_reference(*value);
                 match self.values[*value].collection {
                     Some(collection) if !scan && !self.values[*value].scan => {
                         json!({ "collection": collection, "via": via })
@@ -3385,7 +3401,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 // `enumeration` of each spread operand.
                 let membership = match &receiver {
                     Place::Record(fields) => match fields.get("*") {
-                        Some(Place::Value(value, _)) => self.values[*value].template.clone(),
+                        Some(Place::Value(value, _)) => self.template_by_reference(*value),
                         _ => Some(json!({ "op": "const" })),
                     },
                     _ => Some(json!({ "op": "const" })),
@@ -3558,7 +3574,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                         self.cones[cone].slots.insert(slot);
                         Some(json!({ "op": "slot", "slot": slot }))
                     }
-                    Place::Value(value, _) => self.values[*value].template.clone(),
+                    Place::Value(value, _) => self.template_by_reference(*value),
                     Place::Record(_) | Place::Const => Some(json!({ "op": "const" })),
                     _ => None,
                 };
@@ -6629,6 +6645,14 @@ impl<'a> Emitter<'_, '_, 'a> {
             "closures": [],
             "bindings": self.bindings,
         });
+        // A template that holds the template of a value names its output
+        // (ruling Z58).
+        let templates: Vec<Option<Value>> = self
+            .values
+            .iter()
+            .map(|value| value.template.clone())
+            .collect();
+        resolve_templates(&mut plan, &output_of, &templates);
         // A record that refers to a value names its output.
         let mut missing = false;
         resolve_values(&mut plan, &output_of, &mut missing);
@@ -7503,6 +7527,46 @@ fn request_paths(place: &Place, path: &mut Vec<String>, found: &mut Vec<(Vec<Str
             }
         }
         _ => found.push((path.clone(), place.clone())),
+    }
+}
+
+/// Replaces each reference to the template of a value, which
+/// `template_by_reference` wrote with the index of the value, by the
+/// reference to the output of the value, `{ "op": "output", "output": n }`
+/// (ruling Z58). A value that has no entry of `Plan.outputs` has its
+/// template in place.
+fn resolve_templates(
+    value: &mut Value,
+    output_of: &HashMap<(usize, Vec<String>), usize>,
+    templates: &[Option<Value>],
+) {
+    match value {
+        Value::Object(members) => {
+            if let Some(Value::Number(number)) = members.get("$template") {
+                let index = number.as_u64().unwrap_or(0) as usize;
+                match output_of.get(&(index, Vec::new())) {
+                    Some(output) => *value = json!({ "op": "output", "output": output }),
+                    None => {
+                        *value = templates
+                            .get(index)
+                            .cloned()
+                            .flatten()
+                            .unwrap_or_else(|| json!({ "op": "const" }));
+                        resolve_templates(value, output_of, templates);
+                    }
+                }
+                return;
+            }
+            for member in members.values_mut() {
+                resolve_templates(member, output_of, templates);
+            }
+        }
+        Value::Array(elements) => {
+            for element in elements {
+                resolve_templates(element, output_of, templates);
+            }
+        }
+        _ => {}
     }
 }
 

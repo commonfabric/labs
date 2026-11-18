@@ -35,6 +35,7 @@ import { argumentOf, ExecutorRun } from "./values.ts";
 import {
   type Category,
   categoryOf,
+  namedTemplate,
   type Relation,
   type Template,
 } from "./template.ts";
@@ -420,14 +421,21 @@ export const runModule = async (
     ...base,
     rows: [
       ...run.rows.map((row) =>
-        resultRow("output", row, plan.outputs[row.output].template)
+        resultRow(
+          "output",
+          row,
+          namedTemplate(plan.outputs[row.output].template, plan.outputs),
+        )
       ),
       ...run.writes.map((row) =>
         resultRow(
           "write",
           row,
-          plan.bodies?.[plan.bindings?.[row.binding]?.handler?.body ?? -1]
-            ?.writes?.[row.write]?.template,
+          namedTemplate(
+            plan.bodies?.[plan.bindings?.[row.binding]?.handler?.body ?? -1]
+              ?.writes?.[row.write]?.template,
+            plan.outputs,
+          ),
           withinOf(plan.bindings?.[row.binding]?.within),
         )
       ),

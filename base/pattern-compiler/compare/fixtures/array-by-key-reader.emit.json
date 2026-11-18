@@ -796,24 +796,8 @@
                 "id"
               ],
               "membership": {
-                "by": {
-                  "body": 0
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 0
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 1
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 2
-                  }
-                ],
-                "op": "derive"
+                "op": "output",
+                "output": 0
               },
               "name": {
                 "name": "map",
@@ -864,23 +848,8 @@
             {
               "construct": "map",
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 12
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "output",
+                "output": 11
               },
               "name": {
                 "name": "map",
@@ -1170,24 +1139,8 @@
                     ]
                   },
                   "template": {
-                    "by": {
-                      "body": 0
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 0
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 1
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 2
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "output",
+                    "output": 0
                   }
                 }
               ]
@@ -1234,23 +1187,8 @@
                     ]
                   },
                   "template": {
-                    "body": {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "op": "slot",
-                          "slot": 22
-                        },
-                        {
-                          "op": "const"
-                        }
-                      ],
-                      "op": "derive"
-                    },
-                    "collection": 5,
-                    "op": "fold"
+                    "op": "output",
+                    "output": 23
                   }
                 }
               ]
@@ -1297,23 +1235,8 @@
                     ]
                   },
                   "template": {
-                    "body": {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "op": "slot",
-                          "slot": 24
-                        },
-                        {
-                          "op": "const"
-                        }
-                      ],
-                      "op": "derive"
-                    },
-                    "collection": 6,
-                    "op": "fold"
+                    "op": "output",
+                    "output": 25
                   }
                 }
               ]
@@ -1521,24 +1444,8 @@
                 "rows"
               ],
               "template": {
-                "by": {
-                  "body": 0
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 0
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 1
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 2
-                  }
-                ],
-                "op": "derive"
+                "op": "output",
+                "output": 0
               }
             },
             {
@@ -1652,23 +1559,8 @@
                 "rows"
               ],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 12
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "output",
+                "output": 11
               }
             },
             {

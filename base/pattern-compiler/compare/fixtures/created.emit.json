@@ -88,11 +88,8 @@
                   ],
                   "observes": "identity",
                   "template": {
-                    "by": {
-                      "body": 0
-                    },
-                    "inputs": [],
-                    "op": "derive"
+                    "op": "output",
+                    "output": 0
                   }
                 }
               ],
@@ -210,11 +207,8 @@
                 "$value"
               ],
               "template": {
-                "by": {
-                  "body": 0
-                },
-                "inputs": [],
-                "op": "derive"
+                "op": "output",
+                "output": 0
               }
             },
             {
@@ -232,11 +226,8 @@
                 },
                 "inputs": [
                   {
-                    "by": {
-                      "body": 0
-                    },
-                    "inputs": [],
-                    "op": "derive"
+                    "op": "output",
+                    "output": 0
                   }
                 ],
                 "op": "derive"

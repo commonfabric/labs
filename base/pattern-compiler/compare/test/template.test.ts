@@ -378,3 +378,79 @@ describe("compareLabels", () => {
     });
   });
 });
+
+// Ruling Z58: a template names the template of another output by
+// reference.
+describe("a reference to the template of an output", () => {
+  const derive = (...of: Template[]): Template => ({
+    op: "derive",
+    inputs: of,
+    by: EXPRESSION,
+  });
+  const reference = (output: number): Template => ({ op: "output", output });
+
+  it("has the label of the template it names, written in its place", () => {
+    const outputs = [{ template: derive(slot(0), slot(1)) }];
+    const options = { patterns: PATTERNS, outputs };
+
+    expect(
+      evaluateTemplate(derive(reference(0), slot(2)), inputs(), [], options),
+    ).toEqual(
+      evaluateTemplate(
+        derive(derive(slot(0), slot(1)), slot(2)),
+        inputs(),
+        [],
+        options,
+      ),
+    );
+  });
+
+  it("evaluates each output once, however many templates name it", () => {
+    // A chain in which each output names the two before it: the last
+    // depends on the first by more than a hundred thousand ways.
+    const outputs: { template: Template }[] = [
+      { template: derive(slot(0)) },
+      { template: derive(slot(1)) },
+    ];
+    for (let index = 2; index < 25; index++) {
+      outputs.push({
+        template: derive(reference(index - 1), reference(index - 2)),
+      });
+    }
+    let reads = 0;
+    const counting: TemplateInputs = {
+      ...inputs(),
+      slot: (index) => {
+        reads += 1;
+        return SLOTS[index];
+      },
+    };
+
+    const evaluated = evaluateTemplate(reference(24), counting, [], {
+      patterns: PATTERNS,
+      outputs,
+    });
+
+    expect(reads).toBe(2);
+    expect([...evaluated.label.confidentiality].sort()).toEqual(["a", "b"]);
+  });
+
+  it("carries a selector that was not observed to every template that names it", () => {
+    const select: Template = {
+      op: "select",
+      selector: 0,
+      condition: slot(2),
+      branches: [slot(0), slot(1)],
+    };
+    const options = { patterns: PATTERNS, outputs: [{ template: select }] };
+
+    const evaluated = evaluateTemplate(
+      derive(reference(0), reference(0)),
+      inputs(),
+      [],
+      options,
+    );
+
+    expect(evaluated.bound).toBe(true);
+  });
+});

@@ -222,7 +222,7 @@ fn a_value_another_cone_uses_is_an_output_and_an_edge_names_it() {
         })
     );
     // `text` is `label(total)`: a `derive` by the body `label` over the
-    // template of `total`.
+    // template of `total`, which it names by reference (ruling Z58).
     assert_eq!(
         plan["outputs"][1],
         json!({
@@ -233,7 +233,7 @@ fn a_value_another_cone_uses_is_an_output_and_an_edge_names_it() {
             "constraints": [],
             "template": {
                 "op": "derive",
-                "inputs": [plan["outputs"][0]["template"].clone()],
+                "inputs": [{ "op": "output", "output": 0 }],
                 "by": { "body": 1 },
             },
         })
@@ -246,7 +246,7 @@ fn a_value_another_cone_uses_is_an_output_and_an_edge_names_it() {
         json!([{
             "at": [],
             "observes": "value",
-            "template": plan["outputs"][0]["template"].clone(),
+            "template": { "op": "output", "output": 0 },
         }])
     );
     assert!(plan["edges"]
@@ -1382,6 +1382,12 @@ fn template_line(plan: &Value, template: &Value) -> String {
                 template_line(plan, &template["body"])
             )
         }
+        // A reference to the template of another output denotes what
+        // that template denotes (ruling Z58).
+        Some("output") => template_line(
+            plan,
+            &plan["outputs"][template["output"].as_u64().unwrap() as usize]["template"],
+        ),
         other => panic!("an unexpected template {other:?} in {template}"),
     }
 }
@@ -2157,9 +2163,14 @@ fn the_templates_of_the_room_are_those_of_pl_section_6_2() {
         .iter()
         .find(|collection| collection["source"] == json!({ "output": main }))
         .expect("c1");
-    assert_eq!(c1["membership"], plan["outputs"][main]["template"]);
+    // The membership names the template of the output of `facts` by
+    // reference (ruling Z58), which is the template of `facts.main`.
+    assert_eq!(c1["membership"]["op"], json!("output"));
+    let named = &plan["outputs"][c1["membership"]["output"].as_u64().expect("an output") as usize]
+        ["template"];
+    assert_eq!(named, &plan["outputs"][main]["template"]);
     assert_eq!(
-        c1["membership"]["by"],
+        named["by"],
         json!({ "body": body_index(&plan, "messageFacts") })
     );
 }
@@ -4358,4 +4369,65 @@ export const P = pattern<{ score: Writable<number> }>(({ score }) => {
     assert_eq!(place("label"), json!({ "constant": "Score" }));
     assert_eq!(place("min"), json!({ "constant": null }));
     assert!(place("value")["slot"].is_number());
+}
+
+/// A pattern whose values are a chain in which each reads the two before
+/// it, so the last depends on the first by a number of ways that follows
+/// the Fibonacci numbers.
+fn chain_with_sharing(length: usize) -> String {
+    let mut text = String::from(
+        "import { pattern } from \"commonfabric\";\n\
+         export const P = pattern<{ seed: number }>(({ seed }) => {\n\
+         const v0 = seed + 1;\nconst v1 = seed + 2;\n",
+    );
+    for index in 2..length {
+        text.push_str(&format!(
+            "const v{index} = v{} + v{};\n",
+            index - 1,
+            index - 2
+        ));
+    }
+    text.push_str(&format!("return {{ last: v{} }};\n}});\n", length - 1));
+    text
+}
+
+#[test]
+fn a_template_names_the_template_of_another_output_by_reference() {
+    let plan = plan_of(&program(&chain_with_sharing(4)), "P");
+    let outputs = plan["outputs"].as_array().expect("outputs");
+    let of = |name: &str| {
+        outputs
+            .iter()
+            .position(|output| output["interim"] == json!(name) || output["path"] == json!([name]))
+            .unwrap_or_else(|| panic!("no output {name}"))
+    };
+    // `v3 = v2 + v1`: each input that is an output of the plan is the
+    // reference to it, and no copy of its template (ruling Z58).
+    assert_eq!(
+        outputs[of("last")]["template"]["inputs"],
+        json!([
+            { "op": "output", "output": of("v2") },
+            { "op": "output", "output": of("v1") },
+        ])
+    );
+    assert_eq!(
+        outputs[of("v2")]["template"]["inputs"],
+        json!([
+            { "op": "output", "output": of("v1") },
+            { "op": "output", "output": of("v0") },
+        ])
+    );
+}
+
+#[test]
+fn the_size_of_a_plan_follows_its_outputs_and_not_the_ways_between_them() {
+    let size = |length: usize| {
+        plan_of(&program(&chain_with_sharing(length)), "P")
+            .to_string()
+            .len()
+    };
+    let (short, long) = (size(12), size(25));
+    // The chain of 25 has a little more than twice the outputs of the
+    // chain of 12, and 500 times the ways from the last to the first.
+    assert!(long < 3 * short, "12: {short} bytes, 25: {long} bytes");
 }

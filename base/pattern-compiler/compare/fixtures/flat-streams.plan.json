@@ -351,11 +351,8 @@
                 "0"
               ],
               "template": {
-                "body": {
-                  "op": "const"
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "output",
+                "output": 0
               }
             },
             {
@@ -370,11 +367,8 @@
                 "0"
               ],
               "template": {
-                "body": {
-                  "op": "const"
-                },
-                "collection": 1,
-                "op": "fold"
+                "op": "output",
+                "output": 2
               }
             },
             {

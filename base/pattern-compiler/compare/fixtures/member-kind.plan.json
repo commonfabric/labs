@@ -305,8 +305,8 @@
                 "*"
               ],
               "template": {
-                "op": "slot",
-                "slot": 4
+                "op": "output",
+                "output": 0
               }
             },
             {
@@ -356,8 +356,8 @@
                 "*"
               ],
               "template": {
-                "op": "slot",
-                "slot": 6
+                "op": "output",
+                "output": 4
               }
             },
             {

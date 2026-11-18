@@ -145,16 +145,8 @@
                       "slot": 5
                     },
                     {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "op": "slot",
-                          "slot": 4
-                        }
-                      ],
-                      "op": "derive"
+                      "op": "output",
+                      "output": 4
                     }
                   ],
                   "op": "derive"
@@ -427,12 +419,8 @@
                     },
                     "inputs": [
                       {
-                        "body": {
-                          "op": "slot",
-                          "slot": 2
-                        },
-                        "collection": 0,
-                        "op": "fold"
+                        "op": "output",
+                        "output": 0
                       },
                       {
                         "branches": [
@@ -543,32 +531,8 @@
                     "op": "const"
                   },
                   {
-                    "body": {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "op": "slot",
-                          "slot": 5
-                        },
-                        {
-                          "by": {
-                            "expression": true
-                          },
-                          "inputs": [
-                            {
-                              "op": "slot",
-                              "slot": 4
-                            }
-                          ],
-                          "op": "derive"
-                        }
-                      ],
-                      "op": "derive"
-                    },
-                    "collection": 1,
-                    "op": "fold"
+                    "op": "output",
+                    "output": 7
                   }
                 ],
                 "condition": {
@@ -577,16 +541,8 @@
                   },
                   "inputs": [
                     {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "op": "slot",
-                          "slot": 4
-                        }
-                      ],
-                      "op": "derive"
+                      "op": "output",
+                      "output": 4
                     },
                     {
                       "op": "const"
@@ -616,16 +572,8 @@
                       "slot": 5
                     },
                     {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "op": "slot",
-                          "slot": 4
-                        }
-                      ],
-                      "op": "derive"
+                      "op": "output",
+                      "output": 4
                     }
                   ],
                   "op": "derive"
@@ -749,20 +697,8 @@
                     "op": "const"
                   },
                   {
-                    "body": {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "op": "slot",
-                          "slot": 10
-                        }
-                      ],
-                      "op": "derive"
-                    },
-                    "collection": 2,
-                    "op": "fold"
+                    "op": "output",
+                    "output": 9
                   }
                 ],
                 "condition": {

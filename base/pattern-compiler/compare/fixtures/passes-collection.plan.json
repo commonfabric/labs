@@ -66,20 +66,8 @@
             {
               "construct": "map",
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 1
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "output",
+                "output": 2
               },
               "name": {
                 "name": "map",
@@ -93,23 +81,8 @@
             {
               "construct": "map",
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 4
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 1,
-                "op": "fold"
+                "op": "output",
+                "output": 5
               },
               "name": {
                 "name": "map",
@@ -294,20 +267,8 @@
               "passesCollection": 0,
               "path": [],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 1
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "output",
+                "output": 0
               }
             },
             {
@@ -358,23 +319,8 @@
               "passesCollection": 1,
               "path": [],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 4
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 1,
-                "op": "fold"
+                "op": "output",
+                "output": 3
               }
             },
             {
@@ -386,20 +332,8 @@
                 "rows"
               ],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 1
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "output",
+                "output": 2
               }
             },
             {
@@ -435,23 +369,8 @@
                 "words"
               ],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 4
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 1,
-                "op": "fold"
+                "op": "output",
+                "output": 5
               }
             },
             {

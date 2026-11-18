@@ -116,16 +116,8 @@
                   "at": [],
                   "observes": "value",
                   "template": {
-                    "by": {
-                      "expression": true
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 0
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "output",
+                    "output": 0
                   }
                 }
               ],
@@ -324,16 +316,8 @@
                     ]
                   },
                   "template": {
-                    "by": {
-                      "expression": true
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 0
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "output",
+                    "output": 0
                   }
                 }
               ]
@@ -362,16 +346,8 @@
                     ]
                   },
                   "template": {
-                    "by": {
-                      "expression": true
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 0
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "output",
+                    "output": 0
                   }
                 }
               ]
@@ -481,16 +457,8 @@
                     },
                     "inputs": [
                       {
-                        "by": {
-                          "expression": true
-                        },
-                        "inputs": [
-                          {
-                            "op": "slot",
-                            "slot": 0
-                          }
-                        ],
-                        "op": "derive"
+                        "op": "output",
+                        "output": 0
                       }
                     ],
                     "op": "derive"
@@ -574,16 +542,8 @@
                     "slot": 1
                   },
                   {
-                    "by": {
-                      "expression": true
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 0
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "output",
+                    "output": 0
                   }
                 ],
                 "op": "derive"
@@ -597,16 +557,8 @@
                 "builtin": "fetchJson"
               },
               "input": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 0
-                  }
-                ],
-                "op": "derive"
+                "op": "output",
+                "output": 0
               },
               "kind": "effect",
               "name": "_unread",
@@ -622,16 +574,8 @@
                 },
                 "inputs": [
                   {
-                    "by": {
-                      "expression": true
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 0
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "output",
+                    "output": 0
                   }
                 ],
                 "op": "derive"

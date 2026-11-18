@@ -374,24 +374,8 @@
             {
               "construct": "map",
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 1
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 2
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "output",
+                "output": 0
               },
               "name": {
                 "name": "map",
@@ -437,24 +421,8 @@
             {
               "construct": "map",
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 9
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 2
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "output",
+                "output": 6
               },
               "name": {
                 "name": "map",
@@ -636,24 +604,8 @@
                 "rows"
               ],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 1
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 2
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "output",
+                "output": 0
               }
             },
             {
@@ -746,24 +698,8 @@
                 "labels"
               ],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 9
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 2
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "output",
+                "output": 6
               }
             },
             {

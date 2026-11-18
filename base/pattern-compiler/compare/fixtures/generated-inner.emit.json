@@ -307,24 +307,8 @@
                 "title"
               ],
               "membership": {
-                "by": {
-                  "body": 1
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 3
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 4
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 5
-                  }
-                ],
-                "op": "derive"
+                "op": "output",
+                "output": 0
               },
               "name": "map",
               "source": {
@@ -488,24 +472,8 @@
               ],
               "path": [],
               "template": {
-                "by": {
-                  "body": 1
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 3
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 4
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 5
-                  }
-                ],
-                "op": "derive"
+                "op": "output",
+                "output": 0
               }
             },
             {
@@ -583,24 +551,8 @@
                 "rows"
               ],
               "template": {
-                "by": {
-                  "body": 1
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 3
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 4
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 5
-                  }
-                ],
-                "op": "derive"
+                "op": "output",
+                "output": 1
               }
             },
             {
