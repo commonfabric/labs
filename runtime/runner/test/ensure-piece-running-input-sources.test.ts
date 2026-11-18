@@ -14,7 +14,7 @@ import {
 } from "../src/ensure-piece-running.ts";
 import { PatternsRoute } from "../src/harness/patterns-route.deno.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
-import { getMetaLink } from "../src/link-utils.ts";
+import { getMetaLink, parseLink } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { systemPatternSource } from "../src/pattern-source-scheme.ts";
 import { getPatternIdentityRef, setPatternSource } from "../src/runner.ts";
@@ -680,7 +680,12 @@ describe("ensure-piece-running", () => {
       return { first, producers };
     };
 
-    it("starts the creator of a nested child opened on its own, and not the creator of a child a handler made", async () => {
+    /**
+     * Runs a piece of `CREATOR_PROGRAM`, has its handler make a child, and
+     * stops it, and returns the creator, the child its graph sets up, and the
+     * child its handler made.
+     */
+    const stoppedCreator = async () => {
       const first = newRuntime();
       const compiled = await first.patternManager.compilePattern(
         CREATOR_PROGRAM,
@@ -717,6 +722,33 @@ describe("ensure-piece-running", () => {
       first.runner.stop(creator);
       await first.idle();
       await first.storageManager.synced();
+      return { creator, nestedLink, spawnedLink };
+    };
+
+    /**
+     * The most loads of the documents `ids` names that were under way at
+     * once while `run` ran.
+     */
+    const mostLoadsAtOnce = async (
+      ids: readonly string[],
+      run: () => Promise<unknown>,
+    ) => {
+      let loading = 0;
+      let most = 0;
+      const sync = storageManager.syncCell.bind(storageManager);
+      storageManager.syncCell = ((cell, options) => {
+        if (!ids.includes(cell.getAsNormalizedFullLink().id)) {
+          return sync(cell, options);
+        }
+        most = Math.max(most, ++loading);
+        return sync(cell, options).finally(() => loading--);
+      }) as typeof storageManager.syncCell;
+      await run();
+      return most;
+    };
+
+    it("starts the creator of a nested child opened on its own, and not the creator of a child a handler made", async () => {
+      const { creator, nestedLink, spawnedLink } = await stoppedCreator();
 
       for (
         const [child, startsCreator] of [[spawnedLink, false], [
@@ -737,6 +769,40 @@ describe("ensure-piece-running", () => {
           ),
         ).toBe(startsCreator);
       }
+    });
+
+    it("loads every internal document of a piece the opened piece's inputs come from at once, finding it encloses nothing", async () => {
+      // A piece's internal documents hold whatever its graph derives, so a
+      // walk that loaded them one after another would wait for each in turn
+      // before finding that none of them records the opened piece.
+      const { creator, spawnedLink } = await stoppedCreator();
+      const manifest = creator.getMetaRaw("internal");
+      const internal = (Array.isArray(manifest) ? manifest : []).flatMap(
+        (entry) => {
+          const link = parseLink(
+            (entry as { link?: unknown }).link,
+            creator,
+          );
+          return link === undefined ? [] : [link.id];
+        },
+      );
+      expect(internal.length).toBeGreaterThan(1);
+      const opener = newRuntime();
+      const opened = opener.getCellFromLink({ ...spawnedLink, path: [] });
+      await opened.sync();
+
+      const most = await mostLoadsAtOnce(
+        internal,
+        () =>
+          startWithInputSources(opener, opened, () => Promise.resolve(true)),
+      );
+
+      expect(most).toBe(internal.length);
+      expect(
+        opener.runner.isRunning(
+          opener.getCellFromLink(creator.getAsNormalizedFullLink()),
+        ),
+      ).toBe(false);
     });
 
     /**
@@ -839,9 +905,14 @@ describe("ensure-piece-running", () => {
         .toBe(true);
     });
 
-    it("starts none of the pieces whose results a hub's argument links to", async () => {
-      const names = ["hub", ...[0, 1, 2, 3, 4, 5, 6, 7].map((n) => `p${n}`)];
-      const { first, producers } = await stoppedProducers(names);
+    /**
+     * Runs a hub piece and `count` more of `PROGRAM`, links the others from
+     * the hub's argument, and stops them all, and returns the hub, the
+     * others, and all of them.
+     */
+    const stoppedHub = async (count: number) => {
+      const others = Array.from({ length: count }, (_, n) => `p${n}`);
+      const { first, producers } = await stoppedProducers(["hub", ...others]);
       const [hub, ...linked] = producers;
       {
         const tx = first.edit();
@@ -852,6 +923,11 @@ describe("ensure-piece-running", () => {
       for (const producer of producers) first.runner.stop(producer);
       await first.idle();
       await first.storageManager.synced();
+      return { hub, linked, producers };
+    };
+
+    it("starts none of the pieces whose results a hub's argument links to", async () => {
+      const { producers } = await stoppedHub(8);
 
       const opener = newRuntime();
       const [openedHub, ...openedLinked] = producers.map((producer) =>
@@ -867,6 +943,54 @@ describe("ensure-piece-running", () => {
       expect(opener.runner.isRunning(openedHub)).toBe(true);
       expect(openedLinked.map((piece) => opener.runner.isRunning(piece)))
         .toEqual(openedLinked.map(() => false));
+    });
+
+    it("loads every document a hub's argument links to at once", async () => {
+      // Each linked document is a load, so a walk that loaded them one after
+      // another would wait for each in turn.
+      const { hub, linked } = await stoppedHub(4);
+      const opener = newRuntime();
+      const openedHub = opener.getCellFromLink(hub.getAsNormalizedFullLink());
+      await openedHub.sync();
+
+      const most = await mostLoadsAtOnce(
+        linked.map((producer) => producer.getAsNormalizedFullLink().id),
+        () =>
+          startWithInputSources(opener, openedHub, () => Promise.resolve(true)),
+      );
+
+      expect(most).toBe(linked.length);
+    });
+
+    it("reports the failed load of the document a hub's argument names first, even when a later one fails sooner", async () => {
+      // The first document's refusal lands a few steps after the second's,
+      // so a search that reported whichever failed first would name the
+      // second.
+
+      const { hub, linked } = await stoppedHub(2);
+      const [first, second] = linked.map((producer) =>
+        producer.getAsNormalizedFullLink().id
+      );
+      const sync = storageManager.syncCell.bind(storageManager);
+      storageManager.syncCell = ((cell, options) => {
+        const id = cell.getAsNormalizedFullLink().id;
+        if (id === second) return Promise.reject(new Error("second refused"));
+        if (id !== first) return sync(cell, options);
+        let later = Promise.resolve();
+        for (let step = 0; step < 10; step++) later = later.then(() => {});
+        return later.then(() => {
+          throw new Error("first refused");
+        });
+      }) as typeof storageManager.syncCell;
+
+      const opener = newRuntime();
+      const verdict = ensurePieceRunningVerdict(
+        opener,
+        hub.getAsNormalizedFullLink(),
+        { startInputSources: true, propagateErrors: true },
+      );
+
+      await expect(verdict).rejects.toThrow("first refused");
     });
 
     for (const recordsOrigin of [false, true]) {
