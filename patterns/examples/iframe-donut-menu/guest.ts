@@ -52,24 +52,31 @@ async function choose(id: string): Promise<void> {
   await state.key("favorite").set(id);
 }
 
+/** How many times `show()` has run; each call's number is its generation. */
+let shows = 0;
+
 /**
- * Draws the favorite's picture onto the canvas, or clears it. A picture
- * decoded after another favorite was chosen is not drawn, so the canvas shows
- * the latest choice whichever decode finishes first.
+ * Draws the favorite's picture onto the canvas, or clears it, for the `show()`
+ * call numbered `generation`. A picture decoded after a later call is not
+ * drawn, so the canvas shows the latest value whichever decode finishes first.
  */
-async function draw(favorite: string | null): Promise<boolean> {
+async function draw(
+  favorite: string | null,
+  generation: number,
+): Promise<boolean> {
   const context = canvas.getContext("2d")!;
   context.clearRect(0, 0, canvas.width, canvas.height);
   const donut = MENU.find((candidate) => candidate.id === favorite);
   if (donut === undefined) return true;
   const image = await fabric.asset(donut.picture).image();
-  if (canvas.dataset.favorite !== donut.id) return false;
+  if (generation !== shows) return false;
   context.drawImage(image, 0, 0, canvas.width, canvas.height);
   return true;
 }
 
 /** Shows `value`, the stored state or its default. */
 function show(value: IframeStateData | undefined): void {
+  const generation = ++shows;
   const favorite = value?.favorite ?? DEFAULT_STATE.favorite;
   const donut = MENU.find((candidate) => candidate.id === favorite);
   status.textContent = donut === undefined
@@ -78,16 +85,16 @@ function show(value: IframeStateData | undefined): void {
   for (const [id, button] of buttons) {
     button.setAttribute("aria-pressed", String(id === favorite));
   }
-  canvas.dataset.favorite = favorite ?? "";
-  draw(favorite).then(
+  draw(favorite, generation).then(
     (drawn) => {
       if (!drawn) return;
       canvas.dataset.drawn = favorite ?? "";
       error.textContent = "";
     },
     (failure) => {
-      // A failure for a favorite since replaced is no longer news.
-      if (canvas.dataset.favorite !== (favorite ?? "")) return;
+      // A failure for a value since replaced is no longer news, even when the
+      // later value names the same favorite.
+      if (generation !== shows) return;
       error.textContent = describeFailure(failure);
     },
   );
