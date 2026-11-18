@@ -315,6 +315,35 @@ const WRITTEN: Record<string, Written[]> = {
     },
   })),
   "passed": [{ argument: { secret: "s3cret", items: ["a", "b"] } }],
+  // The bindings of `batch.tsx` in the order of its plan: `adding`,
+  // `note`, `copy`, `overwrite`, `relay`, `fail`. Each event is a batch
+  // of its own on both sides.
+  "batch": [{
+    argument: {},
+    events: [
+      { binding: 0, event: { text: "a" } },
+      { binding: 0, event: { text: "b" } },
+      { binding: 1, event: {} },
+      { binding: 2, event: {} },
+      { binding: 4, event: { text: "c" } },
+      { binding: 3, event: {} },
+      { binding: 5, event: {} },
+    ],
+  }],
+  // `setN` to a negative number, `keep`, `mark`, and `setN` back.
+  "failing": [{
+    argument: { rows: [2, -2, 6] },
+    events: [
+      { binding: 2, event: { to: -4 } },
+      { binding: 0, event: {} },
+      { binding: 1, event: {} },
+      { binding: 2, event: { to: 6 } },
+      { binding: 0, event: {} },
+    ],
+  }],
+  // `bound.tsx` is not here: today's runtime tries a cycle that does not
+  // settle again behind a backoff gate, so its run does not become idle
+  // and the comparison does not end.
   "side-writes": [{
     argument: { flavor: "mint" },
     events: [{ binding: 0, event: { to: "b" } }],

@@ -26,6 +26,10 @@
             "5": {
               "captures": [],
               "named": true
+            },
+            "6": {
+              "captures": [],
+              "named": true
             }
           },
           "main": 0,
@@ -33,7 +37,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/batch.tsx",
-              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst add = handler(\n  (event, { items }) => {\n    items.push(event.text);\n  },\n);\nconst note = handler(\n  (_event, { count, seen }) => {\n    seen.push(count);\n  },\n);\nconst copy = handler((_event, { joined, copied }) => {\n  copied.set(joined.get());\n});\nconst relay = handler((event, { to }) => {\n  to.send({ text: event.text + \"!\" });\n});\nconst fail = handler(\n  (_event, { items }) => {\n    items.push(\"lost\");\n    throw new Error(\"the handler fails\");\n  },\n);\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/batch.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { items, joined } = $a; return (() => {\n    joined.set(items.get().join(\",\"));\n  })(); });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.v($h.slot(0)).length));\n$rt.value(2, ($h) => ((`${$h.v($h.output(0))} in all`)));\n$rt.value(3, ($h) => ($h.invoke(0, {  })));\nreturn $rt.thunk(($h) => (({ items: $h.slot(1), count: $h.output(0), total: $h.output(1), seen: $h.slot(8), copied: $h.slot(12), add: $h.stream(0), note: $h.stream(1), copy: $h.stream(2), relay: $h.stream(3), fail: $h.stream(4) })));\n});\n$rt.body(1, ($e, $s) => ((event, { items }) => {\n    items.push(event.text);\n  })($e, $s));\n$rt.body(2, ($e, $s) => ((_event, { count, seen }) => {\n    seen.push(count);\n  })($e, $s));\n$rt.body(3, ($e, $s) => ((_event, { joined, copied }) => {\n  copied.set(joined.get());\n})($e, $s));\n$rt.body(4, ($e, $s) => ((event, { to }) => {\n  to.send({ text: event.text + \"!\" });\n})($e, $s));\n$rt.body(5, ($e, $s) => ((_event, { items }) => {\n    items.push(\"lost\");\n    throw new Error(\"the handler fails\");\n  })($e, $s));"
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst add = handler(\n  (event, { items }) => {\n    items.push(event.text);\n  },\n);\nconst note = handler(\n  (_event, { count, seen }) => {\n    seen.push(count);\n  },\n);\nconst copy = handler((_event, { joined, copied }) => {\n  copied.set(joined.get());\n});\nconst overwrite = handler(\n  (_event, { joined }) => {\n    joined.set(\"written by the handler\");\n  },\n);\nconst relay = handler((event, { to }) => {\n  to.send({ text: event.text + \"!\" });\n});\nconst fail = handler(\n  (_event, { items }) => {\n    items.push(\"lost\");\n    throw new Error(\"the handler fails\");\n  },\n);\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/batch.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { items, joined } = $a; return (() => {\n    joined.set(items.get().join(\",\"));\n  })(); });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.v($h.slot(0)).length));\n$rt.value(2, ($h) => ((`${$h.v($h.output(0))} in all`)));\n$rt.value(3, ($h) => ($h.invoke(0, {  })));\nreturn $rt.thunk(($h) => (({ items: $h.slot(1), count: $h.output(0), total: $h.output(1), seen: $h.slot(8), copied: $h.slot(12), add: $h.stream(0), note: $h.stream(1), copy: $h.stream(2), joined: $h.slot(3), overwrite: $h.stream(3), relay: $h.stream(4), fail: $h.stream(5) })));\n});\n$rt.body(1, ($e, $s) => ((event, { items }) => {\n    items.push(event.text);\n  })($e, $s));\n$rt.body(2, ($e, $s) => ((_event, { count, seen }) => {\n    seen.push(count);\n  })($e, $s));\n$rt.body(3, ($e, $s) => ((_event, { joined, copied }) => {\n  copied.set(joined.get());\n})($e, $s));\n$rt.body(4, ($e, $s) => ((_event, { joined }) => {\n    joined.set(\"written by the handler\");\n  })($e, $s));\n$rt.body(5, ($e, $s) => ((event, { to }) => {\n  to.send({ text: event.text + \"!\" });\n})($e, $s));\n$rt.body(6, ($e, $s) => ((_event, { items }) => {\n    items.push(\"lost\");\n    throw new Error(\"the handler fails\");\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -64,7 +68,7 @@
             3
           ]
         },
-        "line": 52,
+        "line": 60,
         "name": "default",
         "plan": {
           "bindings": [
@@ -164,9 +168,32 @@
               "within": []
             },
             {
-              "eventSchema": "unhashed:schema/6",
+              "eventSchema": "unhashed:schema/7",
               "handler": {
                 "body": 4
+              },
+              "name": "overwrite",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "joined"
+                  ],
+                  "place": {
+                    "slot": 3
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 3
+                  }
+                }
+              ],
+              "within": []
+            },
+            {
+              "eventSchema": "unhashed:schema/6",
+              "handler": {
+                "body": 5
               },
               "name": "relay",
               "state": [
@@ -188,7 +215,7 @@
             {
               "eventSchema": "unhashed:schema/7",
               "handler": {
-                "body": 5
+                "body": 6
               },
               "name": "fail",
               "state": [
@@ -462,22 +489,15 @@
               "envelopes": [],
               "handles": [],
               "kind": "handler",
-              "name": "relay",
+              "name": "overwrite",
               "outputs": [],
               "reads": [
                 {
                   "at": [
-                    "event",
-                    "text"
+                    "binding",
+                    "joined"
                   ],
                   "slot": 13
-                },
-                {
-                  "at": [
-                    "binding",
-                    "to"
-                  ],
-                  "slot": 14
                 }
               ],
               "widenings": [],
@@ -488,7 +508,7 @@
                   "target": {
                     "kind": "handle",
                     "path": [],
-                    "slot": 14
+                    "slot": 13
                   },
                   "template": {
                     "by": {
@@ -498,10 +518,59 @@
                       {
                         "op": "slot",
                         "slot": 13
-                      },
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "relay",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "event",
+                    "text"
+                  ],
+                  "slot": 14
+                },
+                {
+                  "at": [
+                    "binding",
+                    "to"
+                  ],
+                  "slot": 15
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 15
+                  },
+                  "template": {
+                    "by": {
+                      "body": 5
+                    },
+                    "inputs": [
                       {
                         "op": "slot",
                         "slot": 14
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 15
                       }
                     ],
                     "op": "derive"
@@ -523,7 +592,7 @@
                     "binding",
                     "items"
                   ],
-                  "slot": 15
+                  "slot": 16
                 }
               ],
               "widenings": [],
@@ -536,16 +605,16 @@
                     "path": [
                       "*"
                     ],
-                    "slot": 15
+                    "slot": 16
                   },
                   "template": {
                     "by": {
-                      "body": 5
+                      "body": 6
                     },
                     "inputs": [
                       {
                         "op": "slot",
-                        "slot": 15
+                        "slot": 16
                       }
                     ],
                     "op": "derive"
@@ -561,7 +630,7 @@
             {
               "at": {
                 "file": "compare/fixtures/batch.tsx",
-                "start": 1575
+                "start": 1807
               },
               "bodies": [],
               "entry": "count",
@@ -576,7 +645,7 @@
             {
               "at": {
                 "file": "compare/fixtures/batch.tsx",
-                "start": 1627
+                "start": 1859
               },
               "bodies": [],
               "entry": "total",
@@ -589,7 +658,7 @@
             {
               "at": {
                 "file": "compare/fixtures/batch.tsx",
-                "start": 1678
+                "start": 1910
               },
               "bodies": [
                 0
@@ -633,6 +702,21 @@
               "selectors": [],
               "slots": [
                 1
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/batch.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3
               ],
               "within": [],
               "writes": []
@@ -700,7 +784,7 @@
               }
             },
             {
-              "cone": 5,
+              "cone": 6,
               "constraints": [],
               "kept": true,
               "path": [
@@ -712,7 +796,7 @@
               }
             },
             {
-              "cone": 5,
+              "cone": 6,
               "constraints": [],
               "kept": true,
               "path": [
@@ -724,7 +808,19 @@
               }
             },
             {
-              "cone": 5,
+              "cone": 6,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "joined"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 3
+              }
+            },
+            {
+              "cone": 6,
               "constraints": [],
               "kept": true,
               "path": [
@@ -870,12 +966,23 @@
               }
             },
             {
+              "observes": "identity",
+              "path": [
+                "joined"
+              ],
+              "root": {
+                "handler": 4,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
               "observes": "value",
               "path": [
                 "text"
               ],
               "root": {
-                "handler": 4,
+                "handler": 5,
                 "kind": "event"
               },
               "schema": "unhashed:schema/0"
@@ -886,7 +993,7 @@
                 "to"
               ],
               "root": {
-                "handler": 4,
+                "handler": 5,
                 "kind": "binding"
               },
               "schema": "unhashed:schema/5"
@@ -897,7 +1004,7 @@
                 "items"
               ],
               "root": {
-                "handler": 5,
+                "handler": 6,
                 "kind": "binding"
               },
               "schema": "unhashed:schema/1"

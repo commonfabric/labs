@@ -28,6 +28,14 @@ const copy = handler<
   copied.set(joined.get());
 });
 
+// Writes `joined`, the cell that the cone `_join` writes, and reads
+// nothing of it.
+const overwrite = handler<unknown, { joined: Writable<string> }>(
+  (_event, { joined }) => {
+    joined.set("written by the handler");
+  },
+);
+
 // Sends an event to the stream of `add`.
 const relay = handler<
   { text: string },
@@ -69,6 +77,8 @@ export default pattern<Record<string, never>>(() => {
     add: adding,
     note: note({ count, seen }),
     copy: copy({ joined, copied }),
+    joined,
+    overwrite: overwrite({ joined }),
     relay: relay({ to: adding }),
     fail: fail({ items }),
   };

@@ -3,7 +3,7 @@
     "module": "compare/fixtures/batch.tsx",
     "patterns": [
       {
-        "line": 52,
+        "line": 60,
         "name": "default",
         "plan": {
           "bindings": [
@@ -103,9 +103,32 @@
               "within": []
             },
             {
-              "eventSchema": "unhashed:schema/6",
+              "eventSchema": "unhashed:schema/7",
               "handler": {
                 "body": 4
+              },
+              "name": "overwrite",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "joined"
+                  ],
+                  "place": {
+                    "slot": 3
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 3
+                  }
+                }
+              ],
+              "within": []
+            },
+            {
+              "eventSchema": "unhashed:schema/6",
+              "handler": {
+                "body": 5
               },
               "name": "relay",
               "state": [
@@ -127,7 +150,7 @@
             {
               "eventSchema": "unhashed:schema/7",
               "handler": {
-                "body": 5
+                "body": 6
               },
               "name": "fail",
               "state": [
@@ -401,22 +424,15 @@
               "envelopes": [],
               "handles": [],
               "kind": "handler",
-              "name": "relay",
+              "name": "overwrite",
               "outputs": [],
               "reads": [
                 {
                   "at": [
-                    "event",
-                    "text"
+                    "binding",
+                    "joined"
                   ],
                   "slot": 13
-                },
-                {
-                  "at": [
-                    "binding",
-                    "to"
-                  ],
-                  "slot": 14
                 }
               ],
               "widenings": [],
@@ -427,7 +443,7 @@
                   "target": {
                     "kind": "handle",
                     "path": [],
-                    "slot": 14
+                    "slot": 13
                   },
                   "template": {
                     "by": {
@@ -437,10 +453,59 @@
                       {
                         "op": "slot",
                         "slot": 13
-                      },
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "relay",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "event",
+                    "text"
+                  ],
+                  "slot": 14
+                },
+                {
+                  "at": [
+                    "binding",
+                    "to"
+                  ],
+                  "slot": 15
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 15
+                  },
+                  "template": {
+                    "by": {
+                      "body": 5
+                    },
+                    "inputs": [
                       {
                         "op": "slot",
                         "slot": 14
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 15
                       }
                     ],
                     "op": "derive"
@@ -462,7 +527,7 @@
                     "binding",
                     "items"
                   ],
-                  "slot": 15
+                  "slot": 16
                 }
               ],
               "widenings": [],
@@ -475,16 +540,16 @@
                     "path": [
                       "*"
                     ],
-                    "slot": 15
+                    "slot": 16
                   },
                   "template": {
                     "by": {
-                      "body": 5
+                      "body": 6
                     },
                     "inputs": [
                       {
                         "op": "slot",
-                        "slot": 15
+                        "slot": 16
                       }
                     ],
                     "op": "derive"
@@ -500,7 +565,7 @@
             {
               "at": {
                 "file": "compare/fixtures/batch.tsx",
-                "start": 1575
+                "start": 1807
               },
               "bodies": [],
               "entry": "count",
@@ -515,7 +580,7 @@
             {
               "at": {
                 "file": "compare/fixtures/batch.tsx",
-                "start": 1627
+                "start": 1859
               },
               "bodies": [],
               "entry": "total",
@@ -528,7 +593,7 @@
             {
               "at": {
                 "file": "compare/fixtures/batch.tsx",
-                "start": 1678
+                "start": 1910
               },
               "bodies": [
                 0
@@ -572,6 +637,21 @@
               "selectors": [],
               "slots": [
                 1
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/batch.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3
               ],
               "within": [],
               "writes": []
@@ -639,7 +719,7 @@
               }
             },
             {
-              "cone": 5,
+              "cone": 6,
               "constraints": [],
               "kept": true,
               "path": [
@@ -651,7 +731,7 @@
               }
             },
             {
-              "cone": 5,
+              "cone": 6,
               "constraints": [],
               "kept": true,
               "path": [
@@ -663,7 +743,19 @@
               }
             },
             {
-              "cone": 5,
+              "cone": 6,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "joined"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 3
+              }
+            },
+            {
+              "cone": 6,
               "constraints": [],
               "kept": true,
               "path": [
@@ -809,12 +901,23 @@
               }
             },
             {
+              "observes": "identity",
+              "path": [
+                "joined"
+              ],
+              "root": {
+                "handler": 4,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
               "observes": "value",
               "path": [
                 "text"
               ],
               "root": {
-                "handler": 4,
+                "handler": 5,
                 "kind": "event"
               },
               "schema": "unhashed:schema/0"
@@ -825,7 +928,7 @@
                 "to"
               ],
               "root": {
-                "handler": 4,
+                "handler": 5,
                 "kind": "binding"
               },
               "schema": "unhashed:schema/5"
@@ -836,7 +939,7 @@
                 "items"
               ],
               "root": {
-                "handler": 5,
+                "handler": 6,
                 "kind": "binding"
               },
               "schema": "unhashed:schema/1"

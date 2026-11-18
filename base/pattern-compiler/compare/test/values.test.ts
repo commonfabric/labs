@@ -74,6 +74,16 @@ describe("normalize", () => {
     expect(normalize({ add: { $stream: true } })).toEqual({ add: {} });
   });
 
+  it("compares an error state as nothing, which is what today's runtime stores", () => {
+    expect(
+      normalize({ a: 1, b: { $error: { message: "negative" } } }),
+    ).toEqual({ a: 1 });
+    expect(normalize([1, { $error: { message: "negative" } }])).toEqual([
+      1,
+      undefined,
+    ]);
+  });
+
   it("leaves out a member that holds nothing", () => {
     expect(normalize({ a: 1, b: undefined })).toEqual({ a: 1 });
   });

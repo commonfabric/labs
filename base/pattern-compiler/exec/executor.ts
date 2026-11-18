@@ -778,13 +778,21 @@ export class Host {
       // stream that is an input of the pattern").
       return found instanceof Ref ? found.withSchema(schema) : found;
     }
-    const read = this.v(found);
-    // A slot that is itself in an error state fails the cone that reads
-    // it (PL §5.2).
-    if (this.cone !== undefined && isErrorState(read)) {
-      throw new ReadsFailure(read);
+    return withDefaults(this.v(found), schema);
+  }
+
+  /**
+   * Fails the cone of the code being evaluated where it reads a value in
+   * an error state (PL §5.2, "What fails a cone"). Code that places such
+   * a value and reads nothing of it passes the error state on at the
+   * position: a member of a record, a child of a view node, an element
+   * of the result of a `map` (PL §5.3).
+   */
+  #reading<T>(value: T): T {
+    if (this.cone !== undefined && isErrorState(value)) {
+      throw new ReadsFailure(value);
     }
-    return withDefaults(read, schema);
+    return value;
   }
 
   /** A read of a place that the value code names no slot for. */
@@ -865,16 +873,6 @@ export class Host {
 
   dependEntry(entry: Lazy, path?: readonly string[]): Entry {
     const used = entry(this.context);
-    // A cone that reads a value in an error state fails in turn. What
-    // belongs to no cone, as the assembly of a collection and the record
-    // of the result, passes the error state on at its position (PL §5.3).
-    if (this.cone !== undefined && isErrorState(used.value)) {
-      this.dependencies.push({
-        stamp: (context) => entry(context).changedAt,
-        seen: used.changedAt,
-      });
-      throw new ReadsFailure(used.value);
-    }
     if (path === undefined) {
       this.dependencies.push({
         stamp: (context) => entry(context).changedAt,
@@ -928,8 +926,9 @@ export class Host {
   /** A value with every reference in it replaced by what it refers to. */
   v(value: unknown): unknown {
     if (value instanceof Ref) {
-      return this.instance.store.read(value, this.reads);
+      return this.#reading(this.instance.store.read(value, this.reads));
     }
+    this.#reading(value);
     if (value instanceof StreamRef) return { $stream: true };
     // A marker is read through by nothing: it stays the marker.
     if (value instanceof StreamMarker) return value;
@@ -947,6 +946,7 @@ export class Host {
   at(value: unknown, path: readonly unknown[]): unknown {
     let found = value;
     for (const segment of path) {
+      this.#reading(found);
       if (found instanceof Ref) {
         found = found.key(`${segment}`);
       } else if (found instanceof Handle) {
@@ -1085,6 +1085,8 @@ export class Host {
     if (value instanceof Ref || value instanceof StreamRef) {
       return this.v(value);
     }
+    // A body that would be handed a value in an error state is not run.
+    this.#reading(value);
     if (value instanceof StreamMarker) {
       return this.instance.handleOf(value, this);
     }
@@ -1402,6 +1404,16 @@ export class Instance {
        * `stored`.
        */
       afterBound?: "stored" | "reads";
+      /**
+       * Which cones with static side-writes are evaluated before a
+       * handler body where they are stale (ES §1.3, "A cell that a cone
+       * writes statically"). `read`: those that write a cell that a slot
+       * of the handler reads. `bound`: those that write a cell that any
+       * slot of the handler is bound to, a slot that observes the
+       * reference alone included, as the slot of a handle that the body
+       * only writes through. The default is `read`.
+       */
+      beforeBody?: "read" | "bound";
       /**
        * A stand-in for the constraints on what a handler itself writes
        * (PL §4.4): called when a handler body returned, with each write
@@ -3978,8 +3990,15 @@ export class Instance {
       if (place.slot !== undefined) {
         const bound = this.plan.slots[place.slot];
         // A cell that a cone writes statically: the writing cone
-        // instance is evaluated first where it is stale (ES §1.3).
-        host.demand(bound.root, [...bound.path, ...rest]);
+        // instance is evaluated first where it is stale (ES §1.3). A
+        // slot that observes the reference alone reads nothing that the
+        // cone computes.
+        if (
+          read.observes !== "identity" ||
+          this.root.options.beforeBody === "bound"
+        ) {
+          host.demand(bound.root, [...bound.path, ...rest]);
+        }
         found = host.at(this.rootOf(bound.root, host), [
           ...bound.path,
           ...rest,

@@ -10,7 +10,7 @@ import { parseLink } from "../../../runtime/runner/src/link-utils.ts";
 import type { NormalizedFullLink } from "../../../runtime/runner/src/link-types.ts";
 
 import { type Artifact, Instance, Unsupported } from "../exec/executor.ts";
-import { nameText } from "../exec/store.ts";
+import { isErrorState, nameText } from "../exec/store.ts";
 import { drawing, eventSeed, restoreRandom, seedRandom } from "./random.ts";
 import {
   type EventOutcome,
@@ -135,6 +135,10 @@ export const normalize = (value: unknown): unknown => {
     ).replace(/\b\d{1,2}:\d\d:\d\d\b( [AP]M)?/g, "<time>");
   }
   if (!isRecord(value)) return value;
+  // An output whose cone instance failed holds the error state in the
+  // executor, and nothing in today's runtime, where a node that throws
+  // stores nothing (PL §5.2, "Storage").
+  if (isErrorState(value)) return undefined;
   const members: Record<string, unknown> = {};
   for (const [name, member] of Object.entries(value)) {
     const kept = normalize(member);
