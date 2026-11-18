@@ -1189,3 +1189,40 @@ export const P = pattern<{ selected: Writable<{ room: Room }>; rooms: Room[] }>(
     assert!(text.contains("on: $h.equals($h.slot("), "{text}");
     assert!(!text.contains(".equals($h.v("), "{text}");
 }
+
+#[test]
+fn an_effect_and_a_wish_register_the_function_of_their_request() {
+    let (plan, code) = emitted(
+        r##"import { fetchJson, pattern, wish, Writable } from "commonfabric";
+export const P = pattern<{ id: string }>(({ id }) => {
+  const url = Writable.of("https://example.test/a");
+  const fetched = fetchJson<{ title: string }>({ url });
+  const profile = wish<{ name: string }>({ query: "#profile" });
+  const unread = fetchJson<{ title: string }>({ url, options: { method: id } });
+  return { title: fetched.result, pending: fetched.pending, who: profile.result };
+});
+"##,
+        "P",
+    );
+    let text = source(&code);
+    assert_eq!(plan["operations"][0]["kind"], json!("effect"));
+    assert_eq!(plan["operations"][1]["kind"], json!("wish"));
+    // The request is the arguments of the call, each passed on as the
+    // call binds it: the cell `url` stays a reference (PL §3.14).
+    assert!(
+        text.contains("$rt.request(0, ($h) => ([({ url: $h.slot("),
+        "{text}"
+    );
+    assert!(
+        text.contains("$rt.request(1, ($h) => ([({ query: (\"#profile\") })]));"),
+        "{text}"
+    );
+    // The function of an effect whose result nothing reads is registered
+    // as well. Whether the request is made is the runtime's: it is made
+    // when something demands a path of the result (SS §6.2, "When an
+    // operation of a plan is demanded").
+    assert!(
+        text.contains("$rt.request(2, ($h) => ([({ url: $h.slot("),
+        "{text}"
+    );
+}

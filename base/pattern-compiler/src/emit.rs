@@ -363,6 +363,9 @@ struct Generator<'r, 'm, 'a> {
     registered_reduces: Vec<usize>,
     /// The children whose argument function is registered.
     registered_children: Vec<usize>,
+    /// The effects and the `wish` operations whose request function is
+    /// registered.
+    registered_requests: Vec<usize>,
     /// The `const` declarations of the block bodies of promoted
     /// `computed` calls, by the value each initializer computes: a cone
     /// other than the block's reads such a value as an output, which
@@ -863,9 +866,11 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
             }
             Place::Slot(Root::Operation(operation), path) => {
                 // A `reduce` registers the functions of its initial value
-                // and of its step where it is written.
+                // and of its step where it is written, and an effect and
+                // a `wish` the function of the request.
                 if let (true, Expression::CallExpression(call)) = (path.is_empty(), inner) {
                     self.reduce_construct(call, *operation);
+                    self.request_function(call, *operation);
                 }
                 self.place_code(&fact.place, want)
             }
@@ -1102,6 +1107,54 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         };
         self.generator
             .hoist(format!("$rt.child({child}, ($h) => ({code}));"));
+    }
+
+    /// The function of the request of an effect, and of the operands of
+    /// a `wish`, written in the reactive tier (PL §3.14, §3.19): the
+    /// runtime evaluates it in the cone that holds the write edges with
+    /// target `request` and stores what it returns in the state document
+    /// of the operation. The function returns the arguments of the call
+    /// in the order they are written, each passed on as the call binds
+    /// it, so a reference stays one.
+    fn request_function(&mut self, call: &CallExpression<'a>, operation: usize) {
+        let kind = self.generator.plan["operations"][operation]["kind"].clone();
+        if (kind != json!("effect") && kind != json!("wish"))
+            || self.generator.registered_requests.contains(&operation)
+        {
+            return;
+        }
+        self.generator.registered_requests.push(operation);
+        let cone = self.generator.plan["cones"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .position(|cone| {
+                cone["writes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|write| {
+                        write["target"]["kind"] == json!("request")
+                            && write["target"]["of"] == json!({ "operation": operation })
+                    })
+            })
+            .and_then(|cone| {
+                self.generator
+                    .finished
+                    .position
+                    .iter()
+                    .position(|index| *index == cone)
+            });
+        let arguments: Vec<String> = call
+            .arguments
+            .iter()
+            .filter_map(Argument::as_expression)
+            .map(|argument| self.in_cone(cone, |rewriter| rewriter.render(argument, Want::Pass)))
+            .collect();
+        self.generator.hoist(format!(
+            "$rt.request({operation}, ($h) => ([{}]));",
+            arguments.join(", ")
+        ));
     }
 
     fn reduce_construct(&mut self, call: &CallExpression<'a>, operation: usize) {
@@ -2676,6 +2729,7 @@ pub(crate) fn generate(
         registered_states: Vec::new(),
         registered_reduces: Vec::new(),
         registered_children: Vec::new(),
+        registered_requests: Vec::new(),
         locals: HashMap::new(),
         data_files: Vec::new(),
         counter: 0,

@@ -173,10 +173,11 @@ export type Plan = {
   }[];
   operations: {
     kind: string;
-    name: string;
+    name: Name;
     within?: Step[];
-    /** For a `reduce`: the cone of its step. */
-    implementation?: { cone?: number };
+    /** For a `reduce`: the cone of its step. For an effect and a `wish`:
+     * the built-in. */
+    implementation?: { cone?: number; builtin?: string };
   }[];
   bindings: {
     name?: Name;
@@ -1174,7 +1175,7 @@ export type Transaction = {
    * transaction of one event, and `derivation` the one behind a batch or
    * for a set of changes.
    */
-  cause: "creation" | "event" | "derivation";
+  cause: "creation" | "event" | "derivation" | "request" | "completion";
   /** For an event: the binding of its stream. */
   binding?: number;
   evaluated: string[];
@@ -1186,6 +1187,54 @@ export type Transaction = {
   /** Whether what the transaction staged is stored. */
   committed: boolean;
   error?: string;
+};
+
+/**
+ * A request of an effect that left the executor and has no completion
+ * yet (SS §6.2, step 6): what a test answers in place of the network.
+ */
+export type Outstanding = {
+  id: number;
+  /** The built-in of the operation, as `fetchJson`. */
+  builtin: string;
+  /**
+   * The request as it left: the stored request with every reference in
+   * it followed.
+   */
+  request: unknown;
+  hash: string;
+  /** The identifier of the state document of the operation. */
+  operation: string;
+};
+
+/** How a request ended: its result, or its error. */
+export type Completion = { result?: unknown; error?: unknown };
+
+/**
+ * The member of the state document of an operation that holds the error
+ * state that is the operation's result, where its request was not made
+ * (SS §6.2, step 1).
+ */
+const FAILED = "failed";
+
+/** The identifier of the document of the clock (BI, `wish`). */
+const CLOCK = "clock";
+
+/** Whether a value holds an error state at some position. */
+const holdsErrorState = (value: unknown): ErrorState | undefined => {
+  if (isErrorState(value)) return value;
+  if (Array.isArray(value)) {
+    for (const member of value) {
+      const found = holdsErrorState(member);
+      if (found !== undefined) return found;
+    }
+  } else if (isRecord(value)) {
+    for (const member of Object.values(value)) {
+      const found = holdsErrorState(member);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
 };
 
 /** The name that the writes of a handler body are kept under. */
@@ -1308,6 +1357,23 @@ export class Instance {
     string,
     { child: number; keys: string[]; instance: Instance }
   >();
+  /**
+   * The function of the request of each effect, and of the operands of
+   * each `wish`, by the operation.
+   */
+  readonly #requestFunctions = new Map<number, (host: Host) => unknown>();
+  /**
+   * On the root: the effect operations whose result something demanded,
+   * by the identifier of their state document. `read` is the request,
+   * with its references followed, as the last request transaction of
+   * the operation read it.
+   */
+  readonly #operations = new Map<
+    string,
+    { instance: Instance; builtin: string; read?: string }
+  >();
+  /** On the root: how many requests left the executor. */
+  #sent = 0;
   /** The function of a handler written in place, by its binding. */
   readonly #handlers = new Map<number, (...given: unknown[]) => unknown>();
   readonly #setups: ((given: unknown, host: Host) => unknown)[] = [];
@@ -1424,6 +1490,16 @@ export class Instance {
       refuses?: (
         write: { binding: number; doc: string; path: readonly string[] },
       ) => string | undefined;
+      /**
+       * What each `wish` resolves to, by its operands: a test's stand-in
+       * for the targets of a space. `result` is stored in a document of
+       * its own, and the result of the `wish` is a reference to it.
+       */
+      wishes?: (
+        operands: Record<string, unknown>,
+      ) => { result?: unknown; error?: unknown } | undefined;
+      /** What the clock holds when the executor starts. */
+      now?: number;
     } = {},
   ) {
     this.store = options.parent?.store ??
@@ -1462,13 +1538,14 @@ export class Instance {
     // (ES §1.1, "From the creation of an instance to its settled
     // result").
     if (this.root.#tx?.record.cause === "event") return;
-    this.root.#within("derivation", () => {
-      // A state cell of the pattern's own body exists from the start,
-      // and one of an element body from when its key enters the element
-      // table.
+    // A state cell of the pattern's own body exists from the start, and
+    // one of an element body from when its key enters the element table.
+    const first = () => {
       this.#declare(new Map());
       this.#settle();
-    });
+    };
+    if (this.root.#tx !== undefined) first();
+    else this.root.#cycle(first);
   }
 
   // ----- transactions -----
@@ -1729,6 +1806,9 @@ export class Instance {
       },
       child: (child: number, run: (host: Host) => unknown) => {
         this.#childArguments.set(child, run);
+      },
+      request: (operation: number, run: (host: Host) => unknown) => {
+        this.#requestFunctions.set(operation, run);
       },
       reduce: (
         operation: number,
@@ -2019,7 +2099,19 @@ export class Instance {
             ? host.accumulator.value
             : host.depend(this.reduced(operation));
         }
-        // No effect runs: the result of an operation is pending.
+        if (this.#requestFunctions.has(operation)) {
+          // The result of an effect or of a `wish`: the reader demands
+          // the operation, and depends on the evaluation that stages its
+          // request (SS §6.2, "When an operation of a plan is
+          // demanded"). It reads the result through the reference to the
+          // state document. An operation whose request holds an error
+          // state has that error state as its result.
+          const state = host.depend(this.#operationState(operation)) as Ref;
+          const failed = this.store.read(state.key(FAILED), host.reads);
+          return isErrorState(failed) ? failed : state;
+        }
+        // An operation with no function of its request: its result is
+        // pending.
         this.counts.pendingOperations += 1;
         return { pending: true };
       }
@@ -2213,6 +2305,180 @@ export class Instance {
     return place.withSchema(
       keyFields === undefined ? undefined : { type: "array", keyFields },
     );
+  }
+
+  /**
+   * The state document of an effect or of a `wish` for the element keys
+   * of a context, as the reference to it (ES §6.4). The evaluation is
+   * that of the cone that holds the write edges with target `request`:
+   * it computes the request and stores it at `request` of the document,
+   * a reference in it as a link. A request whose cone failed holds the
+   * error state. The document is named from the instance, the element
+   * keys and the name of the operation, so every evaluation names the
+   * same one.
+   *
+   * The request of an effect is made by a request transaction of the
+   * operation, behind the derivation transaction (`#requestTransactions`).
+   * A `wish` is no effect (BI, `wish`): the same evaluation resolves it,
+   * and stores a reference to what it resolved to at `result`.
+   */
+  #operationState(operation: number): Lazy {
+    const record = this.plan.operations[operation];
+    const within = (record.within ?? []).flatMap((step) =>
+      step.element === undefined ? [] : [step.element]
+    );
+    const found = this.plan.cones.findIndex((cone) =>
+      (cone as {
+        writes?: { target: { kind: string; of?: { operation?: number } } }[];
+      }).writes?.some(({ target }) =>
+        target.kind === "request" && target.of?.operation === operation
+      )
+    );
+    const cone = found < 0 ? undefined : found;
+    const builtin = record.implementation?.builtin ?? record.kind;
+    return (context) =>
+      this.#ensure(
+        this.#name("operation", operation, this.#keysIn(within, context)),
+        context,
+        cone,
+        within.length > 0
+          ? "element"
+          : cone === undefined
+          ? "assembly"
+          : "value",
+        (host) => {
+          const keys = within.map((collection) =>
+            context.get(collection)?.key ?? "?"
+          );
+          const id = this.#identifier(
+            "operation",
+            record.within ?? [],
+            keys,
+            record.name,
+          );
+          if (!this.#documents.has(id)) {
+            this.#documents.add(id);
+            this.store.declare(id, "operation state", undefined);
+          }
+          const run = this.#requestFunctions.get(operation);
+          let request: unknown;
+          try {
+            // The request is the one argument of the call, and the
+            // arguments in their order where the call has several.
+            const given = run?.(host) as unknown[];
+            request = given.length === 1 ? given[0] : given;
+          } catch (error) {
+            if (!failsCone(error)) throw error;
+            request = error instanceof ReadsFailure
+              ? error.state
+              : errorState(messageOf(error));
+          }
+          const state = new Ref(id, []);
+          this.store.write(state.key("request"), this.stored(request));
+          if (record.kind === "wish") {
+            this.#resolveWish(state, host.v(request));
+          } else if (!this.root.#operations.has(id)) {
+            this.root.#operations.set(id, { instance: this, builtin });
+          }
+          return state;
+        },
+        within,
+      );
+  }
+
+  /**
+   * Resolves a `wish` and stores the outcome in its state document. The
+   * clock is a document that the runtime writes: `#now` reads it once,
+   * into the state document, where that holds no time yet, and `#now/N`
+   * resolves to a reference to it. Any other target is what the table of
+   * the executor gives for the operands, stored in a document of its
+   * own, which the result is a reference to.
+   */
+  #resolveWish(state: Ref, operands: unknown): void {
+    const { store } = this;
+    const query = isRecord(operands) ? operands.query : operands;
+    if (typeof query === "string" && /^#now(\/|$)/.test(query)) {
+      if (!store.docs.has(CLOCK)) {
+        store.create(CLOCK, "clock", this.root.options.now ?? 0);
+      }
+      if (query === "#now") {
+        if (store.read(state.key("result")) === undefined) {
+          store.write(state.key("result"), store.read(new Ref(CLOCK, [])));
+        }
+      } else {
+        store.write(state.key("result"), this.stored(new Ref(CLOCK, [])));
+      }
+      return;
+    }
+    const answer = this.root.options.wishes?.(
+      isRecord(operands) ? operands : { query: operands },
+    );
+    if (answer?.result === undefined) {
+      store.write(
+        state.key("error"),
+        this.stored(answer?.error ?? `no target for \`${query}\``),
+      );
+      return;
+    }
+    const target = identifierOf({ wish: this.id, target: `${query}` });
+    if (!store.docs.has(target)) {
+      store.create(target, "wish target", this.stored(answer.result));
+    }
+    store.write(state.key("result"), this.stored(new Ref(target, [])));
+  }
+
+  /**
+   * On the root: runs the request transaction of each demanded effect
+   * whose request is stale (SS §6.2): the stored request changed, or
+   * something behind a reference that it holds did. Each is a
+   * transaction of its own. Returns whether one of them wrote.
+   */
+  #requestTransactions(): boolean {
+    let wrote = false;
+    for (const [doc, operation] of this.#operations) {
+      const held = this.store.docs.get(doc)?.value;
+      if (!isRecord(held) || !("request" in held)) continue;
+      const state = new Ref(doc, []);
+      // The references that the request holds are followed. The executor
+      // follows every one, where BI gives each built-in the operands it
+      // reads by value and how deep.
+      const request = this.store.read(state.key("request"));
+      const read = canonical(request);
+      if (operation.read === read) continue;
+      operation.read = read;
+      const open = this.#begin("request");
+      const failed = holdsErrorState(request);
+      if (failed !== undefined) {
+        // A request that holds an error state is not made, and the
+        // operation's result is that error state.
+        this.store.write(state.key(FAILED), failed);
+        this.store.write(state.key("pending"), false);
+      } else {
+        const hash = identifierOf({
+          builtin: operation.builtin,
+          request: JSON.parse(read) as FabricValue,
+        });
+        this.store.write(state.key(FAILED), undefined);
+        if (held.requestHash !== hash) {
+          // Neither a settled result of this request nor this request
+          // outstanding: the hash and the pending mark are written, and
+          // the request leaves.
+          this.store.write(state.key("requestHash"), hash);
+          this.store.write(state.key("pending"), true);
+          this.#sent += 1;
+          this.#outbox.push({
+            id: this.#sent,
+            builtin: operation.builtin,
+            request,
+            hash,
+            operation: doc,
+          });
+        }
+      }
+      wrote ||= open.record.written.length > 0;
+      this.#end(open, true);
+    }
+    return wrote;
   }
 
   /**
@@ -2566,7 +2832,14 @@ export class Instance {
    * context has no element for as `null`.
    */
   #name(
-    kind: "value" | "child" | "reduce" | "assembly" | "element" | "under",
+    kind:
+      | "value"
+      | "child"
+      | "operation"
+      | "reduce"
+      | "assembly"
+      | "element"
+      | "under",
     index: number,
     around: readonly string[],
     key?: string,
@@ -3414,7 +3687,27 @@ export class Instance {
    * cone instance is evaluated in one transaction (ES §2.7).
    */
   settle(): void {
-    this.root.#within("derivation", () => this.#settle());
+    const { root } = this;
+    if (root.#tx !== undefined) {
+      this.#settle();
+      return;
+    }
+    root.#cycle(() => this.#settle());
+  }
+
+  /**
+   * On the root: one derivation transaction, and behind it the request
+   * transactions of the effects whose request is stale. What a request
+   * transaction writes is a change like any other, so a further
+   * derivation transaction follows it (SS §6.2). An operation has at
+   * most ten request transactions in one call (SS §8.3).
+   */
+  #cycle(first: () => void): void {
+    this.#within("derivation", first);
+    for (let round = 0; round < MAX_EVALUATIONS; round++) {
+      if (!this.#requestTransactions()) return;
+      this.#within("derivation", () => this.#settle());
+    }
   }
 
   /**
@@ -3627,6 +3920,80 @@ export class Instance {
   }
 
   // ----- events -----
+
+  /**
+   * The requests of effects that left the executor and have no
+   * completion yet, in the order they left.
+   */
+  get outbox(): readonly Outstanding[] {
+    return this.root.#outbox;
+  }
+
+  readonly #outbox: Outstanding[] = [];
+
+  /**
+   * Delivers the completion of a request: the completion transaction of
+   * its operation (SS §6.5), which commits by itself. Returns whether it
+   * wrote. What reads the result is evaluated by the derivation
+   * transaction of the next `settle()` or `batch()`.
+   */
+  complete(id: number, completion: Completion): boolean {
+    const { root, store } = this;
+    const at = root.#outbox.findIndex((request) => request.id === id);
+    if (at < 0) throw new Error(`no outstanding request ${id}`);
+    const [request] = root.#outbox.splice(at, 1);
+    const state = new Ref(request.operation, []);
+    const held = store.docs.get(request.operation)?.value;
+    const operation = root.#operations.get(request.operation);
+    const open = root.#begin("completion");
+    // A completion writes nothing where its hash is no longer the
+    // request that the operation selects, or the instance of the
+    // operation is gone (SS §6.5).
+    const selected = isRecord(held) && held.requestHash === request.hash &&
+      operation !== undefined &&
+      (operation.instance === root ||
+        root.#instances.has(operation.instance.id));
+    if (selected) {
+      store.write(state.key("result"), this.stored(completion.result));
+      store.write(state.key("error"), this.stored(completion.error));
+      store.write(state.key("pending"), false);
+    }
+    root.#end(open, true);
+    return selected;
+  }
+
+  /**
+   * Answers the outstanding requests from a table, as a test's stand-in
+   * for the network: each request the table has a completion for is
+   * completed in a transaction of its own, one derivation transaction
+   * follows, and the requests that this made are answered in turn.
+   * Returns how many requests were answered.
+   */
+  answer(table: (request: Outstanding) => Completion | undefined): number {
+    let answered = 0;
+    for (;;) {
+      let now = 0;
+      for (const request of [...this.root.#outbox]) {
+        const completion = table(request);
+        if (completion === undefined) continue;
+        this.complete(request.id, completion);
+        now += 1;
+      }
+      if (now === 0) return answered;
+      answered += now;
+      this.root.settle();
+    }
+  }
+
+  /**
+   * Writes the clock that the ticking `wish` targets resolve to, as the
+   * runtime does on a tick (BI, `wish`), and evaluates what read it.
+   */
+  tick(to: number): void {
+    if (!this.store.docs.has(CLOCK)) this.store.create(CLOCK, "clock", to);
+    else this.store.write(new Ref(CLOCK, []), to);
+    this.root.settle();
+  }
 
   /**
    * The transactions of the executor that this instance was started
