@@ -194,9 +194,10 @@ cut short in the row. A session whose tab closes before the field loses focus is
 not reported. Resolving, reopening and deleting a comment, and opening or
 discarding a draft, report nothing.
 
-The handlers that may write a row are fixed once a row is stored: a later
-version of the note can neither add a writer to the row type's policy nor drop
-one.
+Name every handler that will ever write a row now. Once a row is stored, a later
+version of the note can only re-bind a writer it already lists, to the same
+handler in a module the space attests succeeds this one; it cannot add a new
+writer, and a writer it leaves out is kept as stored.
 
 ## Editing failures
 
@@ -222,6 +223,6 @@ The pattern test covers initial text, the filesystem projection, compact views,
 profile setup, editor bindings, error display, recovery, the live-cursor notice,
 the verbs, and comments: posting from a selection, anchors moving through the
 verbs' edits, an anchor whose text is deleted, replies, resolving, and deleting.
-`activity.test.tsx` covers the activity rows, and `multi-user.test.tsx` that
-each row is labeled with the person who acted. Browser integration covers
+`activity.test.tsx` covers the activity rows, and `multi-user.test.tsx` checks
+that each row is labeled with the person who acted. Browser integration covers
 multiple identities and the actual editor protocol.

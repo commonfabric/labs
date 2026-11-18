@@ -411,7 +411,8 @@ export interface NoteActivity {
 /**
  * A stored activity row: written only by the handlers that report an edit or
  * a comment, labeled with its author. The list is fixed once a row is
- * stored: a later schema can neither add a writer nor drop one.
+ * stored: a later schema can re-bind a listed writer to its successor, but
+ * cannot add a new one, and one it leaves out is kept.
  */
 export type ActivityRow = AuthoredByCurrentUser<
   WritePolicyAnyOf<NoteActivity, [

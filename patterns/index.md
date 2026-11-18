@@ -1103,8 +1103,10 @@ moves through every edit, which the pattern reads and writes as a cell through
 a highlight. Comments and replies are labeled `authored-by` their writer through
 `AuthoredByCurrentUser`, and shown through `cf-cfc-authorship`. Verbs let an
 agent comment on text it quotes, reply, resolve, reopen, and delete. The note
-reports what its members did under `"[ACTIVITY]"`: one row per editing session,
-edit verb call, comment or reply, labeled `authored-by` the person who acted.
+reports what its members did under `"[ACTIVITY]"`: one row per editing session
+that changed the note, edit verb call, comment or reply (an unchanged session,
+resolving, reopening, deleting and drafts write none), labeled `authored-by` the
+person who acted.
 
 **Keywords:** multiplayer, collaborative editor, note, Markdown, profile, wish,
 co-presence, CodeMirror, comments, annotations, anchors, anchorsOf,
