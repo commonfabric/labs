@@ -4,6 +4,7 @@
     "patterns": [
       {
         "code": {
+          "dataFiles": [],
           "elements": [
             0
           ],
@@ -423,6 +424,7 @@
       },
       {
         "code": {
+          "dataFiles": [],
           "elements": [
             0,
             1,

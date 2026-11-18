@@ -6123,3 +6123,27 @@ describe("a `set` on a cell that holds a link", () => {
     });
   });
 });
+
+// `dataFile(path)` gives the text of a file of the program, which the
+// artifact holds as a constant (BI, "Pure API functions";
+// `fixtures/data-file.tsx`).
+describe("a data file", () => {
+  it("is the text that the artifact holds, at module scope and in a function body", async () => {
+    const instance = new Instance(await artifactOf("data-file"), { index: 2 });
+
+    expect(instance.result()).toEqual({
+      first: "alfa",
+      count: 3,
+      picked: "charlie",
+    });
+  });
+
+  it("fails the start of the instance where the artifact holds no text for it", async () => {
+    const artifact = structuredClone(await artifactOf("data-file"));
+    artifact.code.dataFiles = [{ file: "compare/fixtures/data/words.json" }];
+
+    expect(() => new Instance(artifact, { index: 0 })).toThrow(
+      "a data file whose text the artifact does not hold",
+    );
+  });
+});

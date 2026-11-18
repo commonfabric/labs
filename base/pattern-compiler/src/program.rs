@@ -171,6 +171,12 @@ impl<'m, 'a> Resolver<'m, 'a> {
         self.paths.get(&path).copied()
     }
 
+    /// The path that a relative specifier written in module `from` names,
+    /// whether or not the program holds a module there.
+    pub fn path_of(&self, from: usize, specifier: &str) -> String {
+        join(&self.files[from].path, specifier)
+    }
+
     /// The definition that the name `name` imported by `import` in module
     /// `from` denotes, following re-exports.
     pub fn resolve_import(

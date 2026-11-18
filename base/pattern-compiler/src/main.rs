@@ -238,7 +238,11 @@ fn emit(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
     pattern_compiler::emit::request(true);
     let analysis = analyze(&files);
     pattern_compiler::emit::request(false);
-    let modules = plans_json(&analysis, corpus);
+    let mut modules = plans_json(&analysis, corpus);
+    let root = if corpus { paths[0] } else { "" };
+    for module in &mut modules {
+        read_data_files(module, root)?;
+    }
     if corpus {
         for module in &modules {
             println!("{}", serde_json::to_string(module).unwrap_or_default());
@@ -250,6 +254,30 @@ fn emit(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
         );
     }
     Ok(parsed(&analysis))
+}
+
+/// Puts the text of each file that a `dataFile` call names into the value
+/// code of the patterns of `module`. A path is written as the path of a
+/// module is, so it is read from `root` as the modules were.
+fn read_data_files(module: &mut serde_json::Value, root: &str) -> std::io::Result<()> {
+    let Some(patterns) = module["patterns"].as_array_mut() else {
+        return Ok(());
+    };
+    for pattern in patterns {
+        let Some(files) = pattern["code"]["dataFiles"].as_array_mut() else {
+            continue;
+        };
+        for entry in files {
+            let Some(file) = entry["file"].as_str() else {
+                continue;
+            };
+            let path = format!("{root}{file}");
+            let text = std::fs::read_to_string(&path)
+                .map_err(|error| std::io::Error::new(error.kind(), format!("{path}: {error}")))?;
+            entry["text"] = serde_json::Value::String(text);
+        }
+    }
+    Ok(())
 }
 
 /// The plans of an analysis as the `plan` command prints them: one record

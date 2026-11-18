@@ -219,6 +219,11 @@ export type Code = {
   /** The interim outputs at a path below a value. */
   outputsBelow: { output: number; value: number; path: string[] }[];
   handlers: Record<string, { named: boolean; captures: string[] }>;
+  /**
+   * The files that the `dataFile` calls of the program name, each with
+   * its text: constants of the program (BI, "Pure API functions").
+   */
+  dataFiles?: { file: string; text?: string }[];
   unlistedReads: unknown[];
   valuesWithoutOutput: number[];
   unsupported: { kind: string; file: string; start: number }[];
@@ -1332,6 +1337,15 @@ export class Instance {
       self: new Ref(this.id, []),
       setups: this.#setups,
       external: (specifier: string) => instance.#external(specifier),
+      dataFile: (index: number): string => {
+        const text = instance.code.dataFiles?.[index]?.text;
+        if (text === undefined) {
+          throw new Unsupported(
+            "a data file whose text the artifact does not hold",
+          );
+        }
+        return text;
+      },
       module: (index: number) => instance.#module(index),
       reexport: (exports: object, from: object) => {
         for (const name of Object.keys(from)) {

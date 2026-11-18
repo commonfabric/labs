@@ -912,3 +912,39 @@ export const P = pattern<{ a: string; b: string; rows: { title: string }[] }>(({
     assert!(paths.contains(&"$UI/children/1".to_string()), "{paths:?}");
     assert!(paths.contains(&"$UI/children/4".to_string()), "{paths:?}");
 }
+
+#[test]
+fn a_data_file_is_a_constant_that_the_artifact_names_by_its_path() {
+    pattern_compiler::emit::request(true);
+    let analysis = analyze(&[SourceFile {
+        path: "/words/speller.tsx".to_string(),
+        text: r#"import { dataFile, pattern } from "commonfabric";
+const WORDS = JSON.parse(dataFile("./data/words.json")) as string[];
+const NOTE = dataFile("../note.txt");
+export const P = pattern<{ index: number }>(({ index }) => {
+  return { word: WORDS[0], note: NOTE, index };
+});
+"#
+        .to_string(),
+    }]);
+    pattern_compiler::emit::request(false);
+    let found = analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.plans)
+        .find(|plan| plan.name.as_deref() == Some("P"))
+        .expect("the pattern");
+    let code = found.code.clone().expect("the value code");
+    let text = source(&code);
+    // The file is resolved against the module, as an import is (BI,
+    // "Pure API functions", `dataFile`).
+    assert_eq!(
+        code["dataFiles"],
+        json!([
+            { "file": "/words/data/words.json" },
+            { "file": "/note.txt" },
+        ])
+    );
+    assert!(text.contains("JSON.parse($rt.dataFile(0))"), "{text}");
+    assert!(text.contains("const NOTE = $rt.dataFile(1);"), "{text}");
+}

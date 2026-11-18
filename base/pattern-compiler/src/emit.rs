@@ -347,6 +347,9 @@ struct Generator<'r, 'm, 'a> {
     registered_reduces: Vec<usize>,
     /// The children whose argument function is registered.
     registered_children: Vec<usize>,
+    /// The path of each file that a `dataFile` call of the program names,
+    /// in the order the calls are written.
+    data_files: Vec<String>,
     counter: usize,
 }
 
@@ -2020,6 +2023,37 @@ impl<'a> Visit<'a> for Rewriter<'_, '_, '_, 'a> {
     }
 
     fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
+        // `dataFile(path)` is a constant of the program (BI, "Pure API
+        // functions"): the artifact names the file, resolved against the
+        // module as an import is, and the code reads it by its index.
+        if self
+            .generator
+            .resolver
+            .api_callee(self.module, it)
+            .as_deref()
+            == Some("dataFile")
+        {
+            if let Some(Argument::StringLiteral(path)) = it.arguments.first() {
+                let file = self
+                    .generator
+                    .resolver
+                    .path_of(self.module, path.value.as_str());
+                let index = match self
+                    .generator
+                    .data_files
+                    .iter()
+                    .position(|known| *known == file)
+                {
+                    Some(index) => index,
+                    None => {
+                        self.generator.data_files.push(file);
+                        self.generator.data_files.len() - 1
+                    }
+                };
+                self.edit(it.span.start, it.span.end, format!("$rt.dataFile({index})"));
+                return;
+            }
+        }
         // The function of a pattern is no code of the function tier: the
         // setup function of its context replaces it.
         if self.context.is_none()
@@ -2405,6 +2439,7 @@ pub(crate) fn generate(
         registered_states: Vec::new(),
         registered_reduces: Vec::new(),
         registered_children: Vec::new(),
+        data_files: Vec::new(),
         counter: 0,
     };
     let mut rewriter = Rewriter {
@@ -2530,6 +2565,11 @@ pub(crate) fn generate(
         .map(|((value, path), output)| json!({ "output": output, "value": value, "path": path }))
         .collect();
     below.sort_by_key(|entry| entry["output"].as_u64());
+    let data_files: Vec<Value> = generator
+        .data_files
+        .iter()
+        .map(|file| json!({ "file": file }))
+        .collect();
     json!({
         "modules": texts,
         "main": module,
@@ -2539,6 +2579,7 @@ pub(crate) fn generate(
         "elements": generator.registered_elements,
         "states": generator.registered_states,
         "reduces": generator.registered_reduces,
+        "dataFiles": data_files,
         "unlistedReads": generator.unlisted,
         "valuesWithoutOutput": generator.interim,
         "unsupported": unsupported,

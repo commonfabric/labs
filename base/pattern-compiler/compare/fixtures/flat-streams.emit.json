@@ -4,6 +4,7 @@
     "patterns": [
       {
         "code": {
+          "dataFiles": [],
           "elements": [
             0,
             1

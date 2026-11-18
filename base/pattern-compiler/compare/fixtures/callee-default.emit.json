@@ -4,6 +4,7 @@
     "patterns": [
       {
         "code": {
+          "dataFiles": [],
           "elements": [],
           "handlers": {},
           "main": 0,
@@ -219,6 +220,7 @@
       },
       {
         "code": {
+          "dataFiles": [],
           "elements": [],
           "handlers": {
             "0": {
@@ -449,6 +451,7 @@
       },
       {
         "code": {
+          "dataFiles": [],
           "elements": [
             0,
             1,
