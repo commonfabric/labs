@@ -29,3 +29,6 @@ patterns/system/notes/note-test-fixtures.tsx test
 # Configuration that the browser test runner reads, beside each package's
 # sources.
 **/deno-web-test.config.ts test
+
+# Tile views the dashboard tests lay out, beside the source they exercise.
+dashboard/tile-layout-fixtures.ts test
