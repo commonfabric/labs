@@ -218,15 +218,19 @@ export default pattern(() => {
     listed(comments.get()).length === 1 &&
     listed(comments.get())[0]?.status === "draft" &&
     styleOf(findNodeById(note[UI], "shared-note-composer"), "display") ===
-      "flex"
+      "flex" &&
+    activity.get().length === 0
   );
   const assert_posted = assert(() =>
     named(comments.get(), "Friday")?.status === "posted" &&
     styleOf(findNodeById(note[UI], "shared-note-composer"), "display") ===
-      "none"
+      "none" &&
+    activity.get().length === 1 &&
+    activity.get()[0]?.body === 'commented on "Plan"'
   );
   const assert_reply_to_deleted_refused = assert(() =>
     named(comments.get(), "Friday") === undefined &&
+    activity.get().length === 1 &&
     hasText(
       findNodeById(note[UI], "shared-note-comment-notice"),
       "This comment is no longer posted.",
@@ -271,7 +275,8 @@ export default pattern(() => {
     )
   );
   const assert_empty_quote_refused = assert(() =>
-    named(comments.get(), "Nowhere") === undefined
+    named(comments.get(), "Nowhere") === undefined &&
+    activity.get().length === 0
   );
 
   return {
