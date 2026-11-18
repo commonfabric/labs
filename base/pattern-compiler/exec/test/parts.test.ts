@@ -207,6 +207,18 @@ describe("part documents (P20)", () => {
     expect(minted.written.length).toBe(1);
   });
 
+  it("splits a chunk in two halves, for rows prepended one at a time", () => {
+    const doc = new Logical(list(10, small));
+    for (let index = 0; index < 6_000; index++) {
+      doc.splice(["items"], 0, 0, [small(100 + index)]);
+    }
+    const { chunkBytes } = doc.parts.describe("d", ["items"]);
+    expect(chunkBytes.length).toBeGreaterThan(1);
+    for (const bytes of chunkBytes) {
+      expect(bytes).toBeGreaterThan(DOCUMENT_MAX_BYTES / 4);
+    }
+  });
+
   it("holds what the document holds after a run of changes", () => {
     let seed = 7;
     const random = (below: number) => {

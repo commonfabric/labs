@@ -545,12 +545,20 @@ export class PartedDocuments {
   /** Cuts the members of a node over the maximum into nodes under it. */
   #pieces(node: Node): Node[] {
     const count = Math.ceil(node.bytes / this.#max);
-    const target = node.bytes / count;
     const pieces: Node[] = [];
+    // The members are cut where the bytes before them pass each of the
+    // `count - 1` equal shares of the whole.
+    let before = 0;
+    const cut = (bytes: number) => {
+      const due = pieces.length < count - 1 &&
+        before + bytes / 2 >= (node.bytes * (pieces.length + 1)) / count;
+      before += bytes;
+      return due;
+    };
     if (node.kind === "leaf") {
       let piece = new Leaf(node.tree);
       for (const slot of node.slots) {
-        if (piece.slots.length > 0 && piece.bytes + slot.bytes > target) {
+        if (cut(slot.bytes + 1) && piece.slots.length > 0) {
           pieces.push(piece);
           piece = new Leaf(node.tree);
         }
@@ -561,18 +569,16 @@ export class PartedDocuments {
       pieces.push(piece);
     } else {
       let piece = new Inner(node.tree);
-      let bytes = 2;
       for (const child of node.children) {
-        const entry = node.tree.entryBytes(child) + 1;
-        if (piece.children.length > 0 && bytes + entry > target) {
+        if (
+          cut(node.tree.entryBytes(child) + 1) && piece.children.length > 0
+        ) {
           pieces.push(piece);
           piece = new Inner(node.tree);
-          bytes = 2;
         }
         piece.children.push(child);
         piece.count += child.count;
         child.parent = piece;
-        bytes += entry;
       }
       pieces.push(piece);
     }
