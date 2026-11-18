@@ -160,20 +160,16 @@ export class RuntimeTransactions implements TransactionHooks {
   }
 
   /**
-   * Waits until every commit so far has settled, and throws for the first
-   * one the storage refused.
+   * Waits until every commit so far has settled, and returns the reason
+   * of each commit the storage refused.
    */
-  async settled(): Promise<void> {
-    const receipts = this.#receipts.splice(0);
-    for (const receipt of receipts) {
+  async settled(): Promise<string[]> {
+    const refused: string[] = [];
+    for (const receipt of this.#receipts.splice(0)) {
       const { error } = await receipt.settled;
-      if (error !== undefined) {
-        throw new Error(
-          debugStr`A commit was refused: ${error.name}: ${error.message}`,
-          { cause: error },
-        );
-      }
+      if (error !== undefined) refused.push(`${error.name}: ${error.message}`);
     }
+    return refused;
   }
 
   /**
