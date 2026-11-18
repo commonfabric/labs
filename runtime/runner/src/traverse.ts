@@ -1478,6 +1478,13 @@ export const coveringSelector = (
  * This will not work correctly if the key is modified after being
  * added.
  */
+/**
+ * A span of a traversal (`CompoundCycleTracker.openSpan()`): how many pairs
+ * the tracker had admitted when it began, and the lowest cut of the span
+ * enclosing it.
+ */
+export type CutSpan = { readonly admitted: number; readonly enclosing: number };
+
 export class CompoundCycleTracker<
   EqualKey,
   ExtraKey extends JSONSchema | undefined,
@@ -1487,6 +1494,26 @@ export class CompoundCycleTracker<
   readonly #partial = new Map<EqualKey, Map<string, Value | undefined>>();
 
   /**
+   * For a tracker that numbers the pairs it admits, the number of each pair
+   * included, in `#partial`'s shape; `#admitted` numbers the next.
+   */
+  readonly #numbers: Map<EqualKey, Map<string, number>> | undefined;
+  #admitted = 0;
+
+  /** The lowest number of a pair a failed `include()` found included since
+   * the latest span began (`openSpan()`), or `Infinity`. */
+  #lowestCut = Infinity;
+
+  /**
+   * A tracker that numbers the pairs it admits tells a span of a traversal
+   * whether it was cut short at a traversal that began outside the span
+   * (`openSpan()`).
+   */
+  constructor(options: { numbered?: boolean } = {}) {
+    this.#numbers = options.numbered ? new Map() : undefined;
+  }
+
+  /**
    * The partial-key table, which a test drives directly to watch entries
    * come and go.
    */
@@ -1494,6 +1521,35 @@ export class CompoundCycleTracker<
     readonly partial: Map<EqualKey, Map<string, Value | undefined>>;
   } {
     return { partial: this.#partial };
+  }
+
+  /**
+   * Begins a span of the traversal, which `closeSpan()` ends; spans nest. A
+   * span keeps the lowest number of a pair a cut found within it, which
+   * `cutOutside()` compares with the pairs admitted before it began.
+   */
+  openSpan(): CutSpan {
+    const span = { admitted: this.#admitted, enclosing: this.#lowestCut };
+    this.#lowestCut = Infinity;
+    return span;
+  }
+
+  /** The lowest number of a pair a cut found within the current span so
+   * far, or `Infinity`; below the span's `admitted`, the pair began outside
+   * the span. */
+  get lowestCut(): number {
+    return this.#lowestCut;
+  }
+
+  /** Counts a cut at the pair numbered `number` within the current span, as
+   * one made within a span the traversal stands for. */
+  noteCut(number: number): void {
+    this.#lowestCut = Math.min(this.#lowestCut, number);
+  }
+
+  /** Ends `span`, so that the span enclosing it holds its cuts too. */
+  closeSpan(span: CutSpan): void {
+    this.#lowestCut = Math.min(span.enclosing, this.#lowestCut);
   }
 
   include(
@@ -1509,9 +1565,19 @@ export class CompoundCycleTracker<
     }
     const hash = internSchemaAsTaggedHashString(extraKey ?? true);
     if (existing.has(hash)) {
+      const number = this.#numbers?.get(partialKey)?.get(hash);
+      if (number !== undefined) this.noteCut(number);
       return null;
     }
     existing.set(hash, value);
+    if (this.#numbers !== undefined) {
+      let numbers = this.#numbers.get(partialKey);
+      if (numbers === undefined) {
+        numbers = new Map();
+        this.#numbers.set(partialKey, numbers);
+      }
+      numbers.set(hash, this.#admitted++);
+    }
     return {
       [Symbol.dispose]: () => {
         const entries = this.#partial.get(partialKey);
@@ -1520,6 +1586,12 @@ export class CompoundCycleTracker<
           if (entries.size === 0) {
             this.#partial.delete(partialKey);
           }
+        }
+        const numbers = this.#numbers;
+        const pairNumbers = numbers?.get(partialKey);
+        if (numbers !== undefined && pairNumbers !== undefined) {
+          pairNumbers.delete(hash);
+          if (pairNumbers.size === 0) numbers.delete(partialKey);
         }
       },
     };
@@ -1584,6 +1656,242 @@ export interface LinkCrossingRoute {
   memoKey(): string;
 }
 
+/**
+ * What a traversal shares with a walk that attributes what it reaches by
+ * record (`TraversalContext.records`).
+ */
+export type RecordWalk = {
+  /**
+   * One token per position being traversed, outermost first: a traversal
+   * pushes one as it begins a position and removes it as it finishes
+   * (`atPosition`). A record the walk enters while a position is being
+   * traversed is walked for as long as that position's token stays in
+   * place, so a link is followed inside a position that ends when the walk
+   * of its target does: a schema position, a DAG position, or an array
+   * element.
+   */
+  readonly positions: object[];
+
+  /**
+   * What the walk keeps of a position of `source`'s document: the instance of
+   * the document the record walking it walks, where a visit names one rather
+   * than the acting identity resolving it, and what positions of the
+   * document have attributed in this visit to that record, in order: each
+   * attribution made, and each memoized position a memo hit stood for. The
+   * list only grows during the visit, so what a position stands for is the
+   * range the list gained while the position was traversed. The position's
+   * memoized result keeps that range, so that a record of the document
+   * meeting the position later is attributed the same reach without
+   * traversing it again (`replay()`), unless it is not `replayable`: the
+   * first position of a record whose entry made attributions before the
+   * position began, which the range therefore lacks. A memo key names a
+   * document by its scope, so a position of a named instance is memoized
+   * under its instance as well.
+   */
+  positionOf(source: { id: string; scope?: CellScope }): {
+    made: readonly AttributionEntry[];
+    instance: string | undefined;
+    replayable: boolean;
+  };
+
+  /**
+   * Stands for the position `memoized` keeps in the record now traversing
+   * `source`'s document: adds it to that record's `positionOf()` list, and,
+   * unless that record made it or stood for it in this visit, makes again
+   * every attribution the position stands for that the record does not hold.
+   * Makes none and returns `false` when one of them names a record the
+   * tracker no longer holds, whose own reach went with it, so that the
+   * position is traversed again.
+   */
+  replay(
+    memoized: MemoizedAttributions,
+    source: { id: string; scope?: CellScope },
+  ): boolean;
+};
+
+/**
+ * One attribution a position made (`RecordWalk.positionOf()`): a record
+ * it reached, as `TraversalContext.onTrackedDoc` reported it, or a link whose
+ * target was absent, as `TraversalContext.onMissingLinkTarget` reported it.
+ */
+export type RecordAttribution = TrackedAttribution | MissingAttribution;
+
+/** A record a position reached (`RecordAttribution`). */
+export type TrackedAttribution = {
+  readonly kind: "walked" | "covered";
+  readonly key: string;
+  readonly selector: SchemaPathSelector;
+};
+
+/**
+ * What a memoized position stands for (`RecordWalk.positionOf()`): the
+ * entries `made` held from `start` to `end`, the memoized positions among
+ * them included.
+ */
+export type MemoizedAttributions = {
+  readonly kind: "memoized";
+  readonly made: readonly AttributionEntry[];
+  readonly start: number;
+  readonly end: number;
+
+  /**
+   * The lowest number of a pair the cycle tracker found in progress within
+   * the position's traversal (`CompoundCycleTracker.lowestCut`), or
+   * `-Infinity` for a position its record attributed to from outside it.
+   */
+  readonly cut: number;
+
+  /** Whether the range holds all the position stands for, so another
+   * record can replay it: nothing cut it short from outside. */
+  readonly replayable: boolean;
+};
+
+/** One entry of `RecordWalk.positionOf()`. */
+export type AttributionEntry = RecordAttribution | MemoizedAttributions;
+
+/** A link whose target a position found absent (`RecordAttribution`). */
+export type MissingAttribution = {
+  readonly kind: "missing";
+  readonly link: NormalizedFullLink;
+  readonly sourceSpace: MemorySpace;
+};
+
+/**
+ * Runs `fn` as a position of its own in a walk that attributes by record
+ * (`RecordWalk.positions`), so that a record a link followed inside `fn`
+ * enters is walked for as long as `fn` runs and no longer.
+ */
+function atPosition<T>(context: TraversalContext, fn: () => T): T {
+  const positions = context.records?.positions;
+  positions?.push({});
+  try {
+    return fn();
+  } finally {
+    positions?.pop();
+  }
+}
+
+/**
+ * What each memoized position attributed, by memo and memo key, for a walk
+ * that attributes by record (`TraversalContext.records`). It is a side table
+ * so that a memo stays a plain Map.
+ */
+const memoAttributionTables = new WeakMap<
+  object,
+  Map<string, MemoizedAttributions>
+>();
+
+/**
+ * One memoizable position of `source`'s document, in a walk that attributes
+ * by record: the walk, the attributions it has made to the record walking
+ * the document, how many there were when the position began, and the table
+ * of what the memo's positions attributed.
+ */
+type AttributingPosition = {
+  records: RecordWalk;
+  source: IMemorySpaceValueAddress;
+  made: readonly AttributionEntry[];
+  start: number;
+  instance: string | undefined;
+  replayable: boolean;
+  table: Map<string, MemoizedAttributions>;
+
+  /** The traversal's cycle tracker, and the span of it the position is. */
+  tracker: PointerCycleTracker;
+  span: CutSpan;
+};
+
+/**
+ * Begins the position of `doc` memoized in `memo`, in a walk that attributes
+ * by record; nothing otherwise.
+ */
+function attributingPosition(
+  context: TraversalContext,
+  memo: object,
+  doc: IMemorySpaceValueAttestation,
+): AttributingPosition | undefined {
+  const records = context.records;
+  if (records === undefined) return undefined;
+  let table = memoAttributionTables.get(memo);
+  if (table === undefined) {
+    table = new Map();
+    memoAttributionTables.set(memo, table);
+  }
+  const { made, instance, replayable } = records.positionOf(doc.address);
+  const { tracker } = context;
+  return {
+    records,
+    source: doc.address,
+    made,
+    start: made.length,
+    instance,
+    replayable,
+    table,
+    tracker,
+    span: tracker.openSpan(),
+  };
+}
+
+/** Ends `position`'s span of the traversal (`attributingPosition()`). */
+function closePosition(position: AttributingPosition | undefined): void {
+  position?.tracker.closeSpan(position.span);
+}
+
+/**
+ * Whether the result memoized under `key` stands for traversing `position`:
+ * always, in a walk that attributes nothing, and otherwise once the record
+ * walking it stands for what the position attributed when it was memoized
+ * (`RecordWalk.replay()`). The record that memoized it, in the same visit,
+ * stands for it whatever cut it short, and the position's cuts count as
+ * this one's; another record stands for it only where nothing did.
+ */
+function replayed(
+  position: AttributingPosition | undefined,
+  key: string,
+): boolean {
+  if (position === undefined) return true;
+  const memoizedAttributions = position.table.get(key);
+  if (memoizedAttributions === undefined) return false;
+  if (memoizedAttributions.made === position.made) {
+    position.tracker.noteCut(memoizedAttributions.cut);
+  } else if (!memoizedAttributions.replayable) {
+    return false;
+  }
+  return position.records.replay(memoizedAttributions, position.source);
+}
+
+/**
+ * Keeps what `position` stands for with its result memoized under `key`.
+ * Its range holds all of that, so another record can replay it, unless the
+ * position is not `replayable` (`RecordWalk.positionOf()`) or the cycle
+ * tracker cut its traversal short at a traversal that began outside it,
+ * which another record's traversal of the position may not meet.
+ */
+function memoized(
+  position: AttributingPosition | undefined,
+  key: string,
+): void {
+  if (position === undefined) return;
+  const { made, start, span, tracker } = position;
+  const cut = position.replayable ? tracker.lowestCut : -Infinity;
+  position.table.set(key, {
+    kind: "memoized",
+    made,
+    start,
+    end: made.length,
+    cut,
+    replayable: cut >= span.admitted,
+  });
+}
+
+/**
+ * The part of a memo key naming the scope instance `position` walks, where
+ * a visit names one (`RecordWalk.positionOf()`); empty otherwise.
+ */
+function memoInstanceKey(position: AttributingPosition | undefined): string {
+  return position?.instance === undefined ? "" : "|" + position.instance;
+}
+
 export type TraversalContext = {
   /** Probe terminal payload only while constructing a held cell reference. */
   referenceOnly?: boolean;
@@ -1646,11 +1954,13 @@ export type TraversalContext = {
    * needed it: the document holding the link that was followed, the
    * document whose schema or `cfc` envelope named a schema document, or
    * the traversal's own root (`trackedReferrer`). `walked` means the
-   * selector was recorded for the referrer's walk; `covered` means the
-   * referrer's own selector was skipped because the reported one, already
-   * in the tracker, covers it. Optional: a server-side graph walk
-   * attributes the tracker with it so a referrer re-walked without the
-   * link, or a watch removed, retires what nothing else reaches.
+   * selector was recorded for the referrer's walk, or that the tracker
+   * already holds a record under the very selector the referrer needs
+   * (`coverageKind`); `covered` means the referrer's own selector was
+   * skipped because the reported one, already in the tracker and wider,
+   * covers it. Optional: a server-side graph walk attributes the tracker
+   * with it so a referrer re-walked without the link, or a watch removed,
+   * retires what nothing else reaches.
    */
   onTrackedDoc?: (
     key: string,
@@ -1667,12 +1977,13 @@ export type TraversalContext = {
   trackedReferrer?: { id: string; scope?: CellScope };
 
   /**
-   * Set by a walk that visits a document again to record what its links
-   * reach: no position inside that document is answered from the schema
-   * memo, which would skip its links and report nothing, while the
-   * documents its links reach still are.
+   * Set by a walk that attributes what it reaches to the record — one
+   * document under one selector — whose walk reached it (see
+   * `GraphQueryWalk`). The traversal tells it which positions are being
+   * traversed, and keeps with each memoized result what the position
+   * attributed, which a memo hit makes again.
    */
-  traverseUnmemoized?: { id: string; scope?: CellScope };
+  records?: RecordWalk;
 
   /**
    * How many missing link targets this traversal has reported. A site that
@@ -2201,6 +2512,48 @@ export abstract class BaseObjectTraverser {
     defaultValue?: FabricValue,
     itemLink?: NormalizedFullLink,
   ): FabricValue {
+    return this.context.records === undefined
+      ? this.#traverseDAGPosition(doc, defaultValue, itemLink)
+      : atPosition(
+        this.context,
+        () => this.#traverseDAGPosition(doc, defaultValue, itemLink),
+      );
+  }
+
+  /** The DAG memo's key for `doc` reached through `itemLink`. */
+  #dagMemoKey(
+    doc: IMemorySpaceValueAttestation,
+    itemLink: NormalizedFullLink | undefined,
+    position: AttributingPosition | undefined,
+  ): string {
+    return (itemLink
+      ? addressKey(scopedAddressForKey(doc.address)) + "|" +
+        addressKey(itemLink)
+      : addressKey(scopedAddressForKey(doc.address))) +
+      memoInstanceKey(position);
+  }
+
+  /** `traverseDAG()`'s work at one position. */
+  #traverseDAGPosition(
+    doc: IMemorySpaceValueAttestation,
+    defaultValue?: FabricValue,
+    itemLink?: NormalizedFullLink,
+  ): FabricValue {
+    const position = attributingPosition(this.context, this.dagMemo, doc);
+    try {
+      return this.#traverseDAGAt(doc, defaultValue, itemLink, position);
+    } finally {
+      closePosition(position);
+    }
+  }
+
+  /** `#traverseDAGPosition()`'s work, as the position `position`. */
+  #traverseDAGAt(
+    doc: IMemorySpaceValueAttestation,
+    defaultValue: FabricValue | undefined,
+    itemLink: NormalizedFullLink | undefined,
+    position: AttributingPosition | undefined,
+  ): FabricValue {
     this.traverseDAGCalls++;
     // Memoize by cell address + itemLink to avoid exponential path explosion
     // in DAGs. When multiple parents share children, every unique path triggers
@@ -2208,13 +2561,10 @@ export abstract class BaseObjectTraverser {
     // itemLink must be part of the key because the same data reached through
     // different links produces different query result proxies / cell identities.
     // Skip when defaultValue is provided since it can alter the result.
+    const key = this.#dagMemoKey(doc, itemLink, position);
     if (defaultValue === undefined) {
-      const memoKey = itemLink
-        ? addressKey(scopedAddressForKey(doc.address)) + "|" +
-          addressKey(itemLink)
-        : addressKey(scopedAddressForKey(doc.address));
-      const cached = this.dagMemo.get(memoKey);
-      if (cached !== undefined) {
+      const cached = this.dagMemo.get(key);
+      if (cached !== undefined && replayed(position, key)) {
         return cached;
       }
     }
@@ -2235,65 +2585,67 @@ export abstract class BaseObjectTraverser {
       if (t === null) {
         return this.tracker.getExisting(doc.value, true);
       }
-      doc.value.forEach((item, index) => {
-        const itemDefault =
-          isObjectOrArray(defaultValue) && Array.isArray(defaultValue) &&
-            index < defaultValue.length
-            ? defaultValue[index]
-            : undefined;
-        let docItem: IMemorySpaceValueAttestation = {
-          address: {
-            ...doc.address,
-            path: appendToPath(doc.address.path, index.toString()),
-          },
-          value: item,
-        };
-        // We follow the first link in array elements so we don't have
-        // strangeness with setting item at 0 to item at 1
-        let arrayElementLink = itemLink;
-        if (isSigilLink(item)) {
-          const [redirDoc, redirSelector] = this.getDocAtPath(
-            docItem,
-            [],
-            DEFAULT_SELECTOR,
-            "writeRedirect",
-          );
-          const [linkDoc, _selector] = this.nextLink(redirDoc, redirSelector);
-          // our item link should point one past the last redirect, but it may
-          // be invalid (in which case, we should base the link on redirDoc).
-          arrayElementLink = getNormalizedLink(
-            linkDoc.value !== undefined ? linkDoc.address : redirDoc.address,
-          );
-          // We can follow all the links, since we don't need to track cells
-          const [valueDoc, _] = this.getDocAtPath(
-            linkDoc,
-            [],
-            DEFAULT_SELECTOR,
-          );
-          docItem = valueDoc;
-          this.tx.read(docItem.address, READ_FOR_SCHEDULING);
-          if (docItem.value === undefined) {
-            logger.debug(
-              "traverse",
-              () => ["getAtPath returned undefined value for array entry", doc],
+      doc.value.forEach((item, index) =>
+        atPosition(this.context, () => {
+          const itemDefault =
+            isObjectOrArray(defaultValue) && Array.isArray(defaultValue) &&
+              index < defaultValue.length
+              ? defaultValue[index]
+              : undefined;
+          let docItem: IMemorySpaceValueAttestation = {
+            address: {
+              ...doc.address,
+              path: appendToPath(doc.address.path, index.toString()),
+            },
+            value: item,
+          };
+          // We follow the first link in array elements so we don't have
+          // strangeness with setting item at 0 to item at 1
+          let arrayElementLink = itemLink;
+          if (isSigilLink(item)) {
+            const [redirDoc, redirSelector] = this.getDocAtPath(
+              docItem,
+              [],
+              DEFAULT_SELECTOR,
+              "writeRedirect",
             );
+            const [linkDoc, _selector] = this.nextLink(redirDoc, redirSelector);
+            // our item link should point one past the last redirect, but it may
+            // be invalid (in which case, we should base the link on redirDoc).
+            arrayElementLink = getNormalizedLink(
+              linkDoc.value !== undefined ? linkDoc.address : redirDoc.address,
+            );
+            // We can follow all the links, since we don't need to track cells
+            const [valueDoc, _] = this.getDocAtPath(
+              linkDoc,
+              [],
+              DEFAULT_SELECTOR,
+            );
+            docItem = valueDoc;
+            this.tx.read(docItem.address, READ_FOR_SCHEDULING);
+            if (docItem.value === undefined) {
+              logger.debug(
+                "traverse",
+                () => [
+                  "getAtPath returned undefined value for array entry",
+                  doc,
+                ],
+              );
+            }
           }
-        }
-        const v = this.traverseDAG(docItem, itemDefault, arrayElementLink);
-        // Use null for missing/undefined elements (consistent with other value
-        // transforms in this system, e.g. toJSON and
-        // shallowFabricFromConvertibleJsValue)
-        newValue[index] = v === undefined ? null : v;
-      });
+          const v = this.traverseDAG(docItem, itemDefault, arrayElementLink);
+          // Use null for missing/undefined elements (consistent with other value
+          // transforms in this system, e.g. toJSON and
+          // shallowFabricFromConvertibleJsValue)
+          newValue[index] = v === undefined ? null : v;
+        })
+      );
       // Our link is based on the last link in the chain and not the first.
       const newLink = getNormalizedLink(doc.address, true);
       const arrayResult = this.objectCreator.createObject(newLink, newValue);
       if (defaultValue === undefined) {
-        const memoKey = itemLink
-          ? addressKey(scopedAddressForKey(doc.address)) + "|" +
-            addressKey(itemLink)
-          : addressKey(scopedAddressForKey(doc.address));
-        this.dagMemo.set(memoKey, arrayResult);
+        this.dagMemo.set(key, arrayResult);
+        memoized(position, key);
       }
       return arrayResult;
     } else if (doc.value instanceof FabricPrimitive) {
@@ -2399,11 +2751,8 @@ export abstract class BaseObjectTraverser {
       const newLink = itemLink ?? getNormalizedLink(doc.address, true);
       const recordResult = this.objectCreator.createObject(newLink, newValue);
       if (defaultValue === undefined) {
-        const memoKey = itemLink
-          ? addressKey(scopedAddressForKey(doc.address)) + "|" +
-            addressKey(itemLink)
-          : addressKey(scopedAddressForKey(doc.address));
-        this.dagMemo.set(memoKey, recordResult);
+        this.dagMemo.set(key, recordResult);
+        memoized(position, key);
       }
       return recordResult;
     }
@@ -2481,13 +2830,15 @@ export abstract class BaseObjectTraverser {
     // 5): coverage proven for one scope instance is not coverage of
     // another.
     const key = getTrackerKey(link, this.context.scopeKeyIdentity);
-    const covering = coveringSelector(
-      this.schemaTracker,
-      key,
-      this.#internCoverageSelector(targetSelector),
-    );
+    const internedTarget = this.#internCoverageSelector(targetSelector);
+    const covering = coveringSelector(this.schemaTracker, key, internedTarget);
     if (covering === undefined) return false;
-    this.context.onTrackedDoc?.(key, covering, address, "covered");
+    this.context.onTrackedDoc?.(
+      key,
+      covering,
+      address,
+      coverageKind(covering, internedTarget),
+    );
     return true;
   }
 
@@ -2801,6 +3152,22 @@ function reportMissingLinkTarget(
     sourceSpace,
     source,
   );
+}
+
+/**
+ * How a referrer that skipped walking a document under `needed`, because the
+ * tracker's record under `covering` already covers it, is attributed to that
+ * record. A record under the selector the referrer needs is the one its own
+ * walk would have made, so the referrer keeps it as a walker does. A wider
+ * record only covers it: when that record's walkers let go, the referrer is
+ * walked again to make the record it needs. Selectors are interned, so equal
+ * ones are the same object.
+ */
+export function coverageKind(
+  covering: SchemaPathSelector,
+  needed: SchemaPathSelector,
+): "walked" | "covered" {
+  return covering === needed ? "walked" : "covered";
 }
 
 /**
@@ -4518,6 +4885,9 @@ export class SchemaObjectTraverser<V extends FabricValue>
       this.#docVisits.set(docId, (this.#docVisits.get(docId) ?? 0) + 1);
       this.#uniquePaths.add(docId + "/" + doc.address.path.join("/"));
     }
+    const records = this.context.records;
+    records?.positions.push({});
+    let position: AttributingPosition | undefined;
     try {
       // Both paths memoize by doc address + schema. The read path adds the
       // link and what the route of link crossings contributes, the inputs its
@@ -4534,17 +4904,17 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // recorded its reads, under a `TransformObjectCreator` whose base link
       // and CFC label view belong to a different materialization.
       const memo = this.traverseCells ? this.#activeMemo : this.#schemaMemo;
-      const memoKey = this.traverseCells
+      // A walk that attributes by record keeps with each result what the
+      // position attributed, and a hit makes it again for the record now
+      // traversing the position, or traverses it when it cannot.
+      position = attributingPosition(this.context, memo, doc);
+      const memoKey = (this.traverseCells
         ? schemaMemoAddressKey(doc.address) + "|" + hashSchema(schema)
         : schemaMemoAddressKey(doc.address) + "|" + hashSchema(schema) + "|" +
-          schemaMemoLinkKey(link) + "|" + linkCrossingsMemoKey(this.context);
-      const unmemoized = this.context.traverseUnmemoized;
-      const cached = unmemoized !== undefined &&
-          unmemoized.id === doc.address.id &&
-          (unmemoized.scope ?? "space") === (doc.address.scope ?? "space")
-        ? undefined
-        : memo.get(memoKey);
-      if (cached !== undefined) {
+          schemaMemoLinkKey(link) + "|" + linkCrossingsMemoKey(this.context)) +
+        memoInstanceKey(position);
+      const cached = memo.get(memoKey);
+      if (cached !== undefined && replayed(position, memoKey)) {
         this.schemaMemoHits++;
         return cached;
       }
@@ -4592,6 +4962,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
           this.#rounds!.results.set(memoKey, result);
         } else {
           memo.set(memoKey, result);
+          memoized(position, memoKey);
         }
         return result;
       } finally {
@@ -4603,6 +4974,8 @@ export class SchemaObjectTraverser<V extends FabricValue>
         this.#provisional ||= outerProvisional;
       }
     } finally {
+      closePosition(position);
+      records?.positions.pop();
       this.#currentDepth--;
       restoreLinkCrossings(this.context, crossingsMark);
     }
@@ -5543,160 +5916,148 @@ export class SchemaObjectTraverser<V extends FabricValue>
     // Each element is a position of its own, reached by whatever link its
     // slot holds, so the crossings an element records go when it is done.
     const crossingsMark = markLinkCrossings(this.context);
-    docArray.forEach((item, index) => {
-      restoreLinkCrossings(this.context, crossingsMark);
-      const itemSchema = directItems ??
-        schemaAtPathCanonical(settledSchema, [index.toString()]);
-      const batchIndex = preparedPlainLinkIndex++;
-      const preparedSourceAddress = preparedPlainLinks
-        ?.sourceAddresses[batchIndex];
-      let curDoc: IMemorySpaceValueAttestation = {
-        address: preparedSourceAddress ?? {
-          ...doc.address,
-          path: appendToPath(doc.address.path, index.toString()),
-        },
-        value: item,
-      };
-      let curSelector: SchemaPathSelector = {
-        path: curDoc.address.path,
-        schema: itemSchema,
-      };
-      const missesBefore = this.context.missingLinkTargets;
-      if (preparedPlainLinks === undefined) {
-        this.tx.read(curDoc.address, READ_NON_RECURSIVE_FOR_SCHEDULING);
-      }
-      // We follow the first link in array elements so we don't have
-      // strangeness with setting item at 0 to item at 1. If the element on
-      // the array is a link, we follow that link so the returned object is
-      // the current item at that location (otherwise the link would refer to
-      // "Nth element"). This is important when turning returned objects back
-      // into cells: We want to then refer to the actual object by default,
-      // not the array location.
-      //
-      // If the element is an object, but not a link, we create an immutable
-      // cell to hold the object, except when it is requested as Cell. While
-      // this means updates aren't propagated, it seems like the right trade-off
-      // for stability of links and the ability to mutate them without creating
-      // loops (see below). A traversal whose context sets
-      // `inlineArrayItemsInPlace` traverses the element where it is stored
-      // instead.
-      //
-      // This makes
-      // ```ts
-      // const array = [...cell.get()];
-      // array.splice(index, 1);
-      // cell.set(array);
-      // ```
-      // work as expected. Handle boolean items values for element schema
-      // const maybeLink = parseLink(item, arrayLink);
-      if (isSigilLink(item)) {
-        const elementLink = parseLink(item, curDoc.address);
-        // An unknown-valued handle carries only an address. A consumer
-        // reading through it needs the target.
-        if (
-          isUnknownCellSchema(curSelector.schema) &&
-          !isWriteRedirectLink(item)
-        ) {
-          this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
-          const cellLink = getNextCellLink(
-            this.tx,
-            this.context,
-            curDoc,
-            curSelector.schema!,
-          );
-          arrayObj[index] = this.objectCreator.createObject(
-            cellLink,
-            undefined,
-          );
-          return;
+    docArray.forEach((item, index) =>
+      atPosition(this.context, () => {
+        restoreLinkCrossings(this.context, crossingsMark);
+        const itemSchema = directItems ??
+          schemaAtPathCanonical(settledSchema, [index.toString()]);
+        const batchIndex = preparedPlainLinkIndex++;
+        const preparedSourceAddress = preparedPlainLinks
+          ?.sourceAddresses[batchIndex];
+        let curDoc: IMemorySpaceValueAttestation = {
+          address: preparedSourceAddress ?? {
+            ...doc.address,
+            path: appendToPath(doc.address.path, index.toString()),
+          },
+          value: item,
+        };
+        let curSelector: SchemaPathSelector = {
+          path: curDoc.address.path,
+          schema: itemSchema,
+        };
+        const missesBefore = this.context.missingLinkTargets;
+        if (preparedPlainLinks === undefined) {
+          this.tx.read(curDoc.address, READ_NON_RECURSIVE_FOR_SCHEDULING);
         }
-        // The element hop is a crossing whichever machinery dereferences
-        // it — including the prepared fast path below, which bypasses
-        // followPointer — so the seam runs here.
-        markIfcBearingLinkCrossing(
-          this.tx,
-          curDoc.address.space,
-          elementLink.schema,
-          elementLink.id,
-        );
-        if (this.traverseCells) {
-          const alreadyTracked = this.isLinkedDocumentCovered(
-            curDoc.address,
-            elementLink,
-            curSelector,
-          );
-          if (alreadyTracked && elementLink.id !== doc.address.id) {
+        // We follow the first link in array elements so we don't have
+        // strangeness with setting item at 0 to item at 1. If the element on
+        // the array is a link, we follow that link so the returned object is
+        // the current item at that location (otherwise the link would refer to
+        // "Nth element"). This is important when turning returned objects back
+        // into cells: We want to then refer to the actual object by default,
+        // not the array location.
+        //
+        // If the element is an object, but not a link, we create an immutable
+        // cell to hold the object, except when it is requested as Cell. While
+        // this means updates aren't propagated, it seems like the right trade-off
+        // for stability of links and the ability to mutate them without creating
+        // loops (see below). A traversal whose context sets
+        // `inlineArrayItemsInPlace` traverses the element where it is stored
+        // instead.
+        //
+        // This makes
+        // ```ts
+        // const array = [...cell.get()];
+        // array.splice(index, 1);
+        // cell.set(array);
+        // ```
+        // work as expected. Handle boolean items values for element schema
+        // const maybeLink = parseLink(item, arrayLink);
+        if (isSigilLink(item)) {
+          const elementLink = parseLink(item, curDoc.address);
+          // An unknown-valued handle carries only an address. A consumer
+          // reading through it needs the target.
+          if (
+            isUnknownCellSchema(curSelector.schema) &&
+            !isWriteRedirectLink(item)
+          ) {
             this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
-            arrayObj[index] = null;
+            const cellLink = getNextCellLink(
+              this.tx,
+              this.context,
+              curDoc,
+              curSelector.schema!,
+            );
+            arrayObj[index] = this.objectCreator.createObject(
+              cellLink,
+              undefined,
+            );
             return;
           }
-        }
-        let linkDoc: IMemorySpaceValueAttestation;
-        let linkSelector: SchemaPathSelector | undefined;
-        if (isWriteRedirectLink(curDoc.value)) {
-          const [redirDoc, selector] = this.getDocAtPath(
-            curDoc,
-            [],
-            curSelector,
-            "writeRedirect",
+          // The element hop is a crossing whichever machinery dereferences
+          // it — including the prepared fast path below, which bypasses
+          // followPointer — so the seam runs here.
+          markIfcBearingLinkCrossing(
+            this.tx,
+            curDoc.address.space,
+            elementLink.schema,
+            elementLink.id,
           );
-          curDoc = redirDoc;
-          curSelector = selector!;
-          // redirDoc has only followed redirects. Arrays dereference one more
-          // ordinary link so returned objects refer to the linked document.
-          [linkDoc, linkSelector] = this.nextLink(redirDoc, curSelector);
-        } else {
-          // getDocAtPath(..., "writeRedirect") immediately returns an
-          // ordinary link after promoting the source read, and nextLink then
-          // promotes that same read again. Do the equivalent single link hop
-          // directly for the overwhelmingly common cell.set(array) shape.
-          if (preparedPlainLinks === undefined) {
-            this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
-          }
-          const preparedTarget = preparedPlainLinks?.targets[batchIndex];
-          if (readStatsActive && preparedTarget !== undefined) {
-            recordLinkResolution(this.tx);
-          }
-          const preparedResult = preparedTarget === undefined
-            ? undefined
-            : this.tx.read(preparedTarget, READ_NON_RECURSIVE);
-          const preparedMissing = preparedResult?.error?.name ===
-              "NotFoundError" && preparedResult.error.path.length === 0;
-          if (
-            preparedTarget !== undefined &&
-            (preparedResult?.ok?.value !== undefined || preparedMissing)
-          ) {
-            if (preparedMissing) {
-              this.#reportMissingPlainArrayItemLink(
-                curDoc,
-                curSelector,
-                preparedTarget,
-              );
+          if (this.traverseCells) {
+            const alreadyTracked = this.isLinkedDocumentCovered(
+              curDoc.address,
+              elementLink,
+              curSelector,
+            );
+            if (alreadyTracked && elementLink.id !== doc.address.id) {
+              this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
+              arrayObj[index] = null;
+              return;
             }
-            noteAddressCrossing(this.context, curDoc.address, preparedTarget);
-            linkDoc = {
-              address: preparedTarget,
-              value: preparedResult?.ok?.value,
-            };
-            linkSelector = {
-              path: preparedTarget.path,
-              schema: curSelector.schema,
-            };
-          } else if (preparedTarget !== undefined) {
-            [linkDoc, linkSelector] = followPointer(
-              this.tx,
+          }
+          let linkDoc: IMemorySpaceValueAttestation;
+          let linkSelector: SchemaPathSelector | undefined;
+          if (isWriteRedirectLink(curDoc.value)) {
+            const [redirDoc, selector] = this.getDocAtPath(
               curDoc,
               [],
-              this.context,
               curSelector,
-              "top",
+              "writeRedirect",
             );
+            curDoc = redirDoc;
+            curSelector = selector!;
+            // redirDoc has only followed redirects. Arrays dereference one more
+            // ordinary link so returned objects refer to the linked document.
+            [linkDoc, linkSelector] = this.nextLink(redirDoc, curSelector);
           } else {
-            [linkDoc, linkSelector] = this.#followPlainArrayItemLink(
-              curDoc,
-              curSelector,
-            ) ??
-              followPointer(
+            // getDocAtPath(..., "writeRedirect") immediately returns an
+            // ordinary link after promoting the source read, and nextLink then
+            // promotes that same read again. Do the equivalent single link hop
+            // directly for the overwhelmingly common cell.set(array) shape.
+            if (preparedPlainLinks === undefined) {
+              this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
+            }
+            const preparedTarget = preparedPlainLinks?.targets[batchIndex];
+            if (readStatsActive && preparedTarget !== undefined) {
+              recordLinkResolution(this.tx);
+            }
+            const preparedResult = preparedTarget === undefined
+              ? undefined
+              : this.tx.read(preparedTarget, READ_NON_RECURSIVE);
+            const preparedMissing = preparedResult?.error?.name ===
+                "NotFoundError" && preparedResult.error.path.length === 0;
+            if (
+              preparedTarget !== undefined &&
+              (preparedResult?.ok?.value !== undefined || preparedMissing)
+            ) {
+              if (preparedMissing) {
+                this.#reportMissingPlainArrayItemLink(
+                  curDoc,
+                  curSelector,
+                  preparedTarget,
+                );
+              }
+              noteAddressCrossing(this.context, curDoc.address, preparedTarget);
+              linkDoc = {
+                address: preparedTarget,
+                value: preparedResult?.ok?.value,
+              };
+              linkSelector = {
+                path: preparedTarget.path,
+                schema: curSelector.schema,
+              };
+            } else if (preparedTarget !== undefined) {
+              [linkDoc, linkSelector] = followPointer(
                 this.tx,
                 curDoc,
                 [],
@@ -5704,137 +6065,159 @@ export class SchemaObjectTraverser<V extends FabricValue>
                 curSelector,
                 "top",
               );
-          }
-        }
-        curDoc = linkDoc;
-        curSelector = linkSelector!;
-        this.tx.read(curDoc.address, READ_NON_RECURSIVE_FOR_SCHEDULING);
-        if (curDoc.value === undefined) {
-          logger.info(
-            "traverse",
-            () => ["Value is undefined following array element link", curDoc],
-          );
-        }
-      } else if (
-        !this.context.inlineArrayItemsInPlace &&
-        arrayItemUsesValueIdentity(item, curSelector.schema)
-      ) {
-        // An inline object or array gets a `snapshot:` address naming its
-        // frozen value, so that the object a read returns copies
-        // the data when written elsewhere; a link to this slot would name
-        // whatever the slot holds next.
-        //
-        // A context that sets `inlineArrayItemsInPlace` does not take this
-        // branch. Its traversal goes through the element at its address in
-        // the document that stores it, like any other nested value, so it
-        // mints no id and issues no read at a snapshot address.
-        //
-        // The element link exists to give the snapshot an id for the links
-        // inside the element that name no document.
-        const elementLink = getNormalizedLink(
-          curDoc.address,
-          curSelector.schema,
-        );
-        // Keep the source dependency and the space that owns schema refs.
-        // The whole element is read recursively, then shared by the snapshot
-        // with its relative-link origin, without a link-rewriting walk.
-        this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
-        const snapshot = immutableCellsFor(this.tx).createElement(
-          curDoc.value,
-          elementLink,
-        );
-        const elementAddress = curDoc.address;
-        curDoc = {
-          ...curDoc,
-          address: { ...curDoc.address, id: snapshot.id, path: ["value"] },
-          value: snapshot.value,
-        };
-        // Our selector's path needs to be updated to match the new doc
-        curSelector.path = curDoc.address.path;
-        this.context.linkCrossingRoute?.copy(
-          getNormalizedLink(elementAddress),
-          getNormalizedLink(curDoc.address),
-        );
-      }
-      // If we've asked for cells in the array and we don't need to traverse cells,
-      // add the created cell instead. We check asCellOrStream regardless of
-      // whether the value is a link — inline objects should also become cells
-      // when the schema declares the handle at its root, to avoid reading
-      // nested data on the parent's reactive transaction. A union whose options
-      // declare the handles declares none there: it is traversed below, and the
-      // merge of its branches mints the handle.
-      if (
-        !this.traverseCells && declaresHandleAtRoot(curSelector.schema)
-      ) {
-        // For my cell link, curDoc currently points to the last
-        // redirect target, but we want cell properties to be based on the
-        // link value at that location, so we effectively follow one more
-        // link if available.
-        // If we have a value instead of a link, create a link to the element
-        // We don't traverse and validate, since this is an asCell boundary.
-        // If the target is not written yet, still return a cell for it instead
-        // of invalidating the parent array; downstream consumers can subscribe
-        // to the child cell and observe it when the target materializes.
-        const isLink = isSigilLink(curDoc.value);
-        if (isLink) this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
-        const cellLink = isLink
-          ? getNextCellLink(this.tx, this.context, curDoc, curSelector.schema!)
-          : getNormalizedLink(curDoc.address, curSelector.schema);
-        arrayObj[index] = this.objectCreator.createObject(cellLink, undefined);
-      } else {
-        // We want those links to point directly at the linked cells, instead
-        // of using our path (e.g. ["items", "0"]), so don't pass in a
-        // modified link.
-        const plan = !this.traverseCells && curSelector.schema !== undefined
-          ? preparePlainSchemaPlan(curSelector.schema)
-          : undefined;
-        const traverseElement = () =>
-          (plan === undefined
-            ? undefined
-            : this.#traversePlainSchema(curDoc, plan)) ??
-            this.traverseWithSelector(curDoc, curSelector);
-        // An element reaching here as a handle is a union of handles, whose
-        // branches are traversed to mint it; as for a property, those reads
-        // resolve the reference and are not conflict dependencies.
-        const { ok: val, error } = !this.traverseCells &&
-            SchemaObjectTraverser.hasAsCell(curSelector.schema)
-          ? this.tx.runWithAmbientReadMeta(
-            excludeReadFromConflict,
-            traverseElement,
-          )
-          : traverseElement();
-        if (error !== undefined) {
-          // If our item doesn't match our schema, we may be able to use
-          // undefined or null if those are valid according to our schema.
-          const fallbackType = arrayItemFallbackType(curSelector.schema!);
-          if (fallbackType !== undefined) {
-            arrayObj[index] = fallbackType === "null" ? null : undefined;
-            // The substitute answers for an item known to be invalid, not
-            // for one whose rejection crossed a link target the replica lacks.
-            if (this.context.missingLinkTargets > missesBefore) {
-              this.context.substituteCoveredMissingTarget = true;
+            } else {
+              [linkDoc, linkSelector] = this.#followPlainArrayItemLink(
+                curDoc,
+                curSelector,
+              ) ??
+                followPointer(
+                  this.tx,
+                  curDoc,
+                  [],
+                  this.context,
+                  curSelector,
+                  "top",
+                );
             }
-          } else {
-            // This array is invalid; one or more items do not match the
-            // schema — the ENTIRE array reads as invalid for this caller.
-            // Name the failing index + doc so the mismatch is diagnosable
-            // without probe archaeology (2026-07-10 board outage: a blanked
-            // array with a bare mismatch log hid WHICH element was at fault).
+          }
+          curDoc = linkDoc;
+          curSelector = linkSelector!;
+          this.tx.read(curDoc.address, READ_NON_RECURSIVE_FOR_SCHEDULING);
+          if (curDoc.value === undefined) {
             logger.info(
               "traverse",
-              () => [
-                "Array element does not match the item schema — voiding the whole array read",
-                `index=${index}`,
-                curDoc.address,
-              ],
+              () => ["Value is undefined following array element link", curDoc],
             );
-            valid = false;
           }
-        } else {
-          arrayObj[index] = val;
+        } else if (
+          !this.context.inlineArrayItemsInPlace &&
+          arrayItemUsesValueIdentity(item, curSelector.schema)
+        ) {
+          // An inline object or array gets a `snapshot:` address naming its
+          // frozen value, so that the object a read returns copies
+          // the data when written elsewhere; a link to this slot would name
+          // whatever the slot holds next.
+          //
+          // A context that sets `inlineArrayItemsInPlace` does not take this
+          // branch. Its traversal goes through the element at its address in
+          // the document that stores it, like any other nested value, so it
+          // mints no id and issues no read at a snapshot address.
+          //
+          // The element link exists to give the snapshot an id for the links
+          // inside the element that name no document.
+          const elementLink = getNormalizedLink(
+            curDoc.address,
+            curSelector.schema,
+          );
+          // Keep the source dependency and the space that owns schema refs.
+          // The whole element is read recursively, then shared by the snapshot
+          // with its relative-link origin, without a link-rewriting walk.
+          this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
+          const snapshot = immutableCellsFor(this.tx).createElement(
+            curDoc.value,
+            elementLink,
+          );
+          const elementAddress = curDoc.address;
+          curDoc = {
+            ...curDoc,
+            address: { ...curDoc.address, id: snapshot.id, path: ["value"] },
+            value: snapshot.value,
+          };
+          // Our selector's path needs to be updated to match the new doc
+          curSelector.path = curDoc.address.path;
+          this.context.linkCrossingRoute?.copy(
+            getNormalizedLink(elementAddress),
+            getNormalizedLink(curDoc.address),
+          );
         }
-      }
-    });
+        // If we've asked for cells in the array and we don't need to traverse cells,
+        // add the created cell instead. We check asCellOrStream regardless of
+        // whether the value is a link — inline objects should also become cells
+        // when the schema declares the handle at its root, to avoid reading
+        // nested data on the parent's reactive transaction. A union whose options
+        // declare the handles declares none there: it is traversed below, and the
+        // merge of its branches mints the handle.
+        if (
+          !this.traverseCells && declaresHandleAtRoot(curSelector.schema)
+        ) {
+          // For my cell link, curDoc currently points to the last
+          // redirect target, but we want cell properties to be based on the
+          // link value at that location, so we effectively follow one more
+          // link if available.
+          // If we have a value instead of a link, create a link to the element
+          // We don't traverse and validate, since this is an asCell boundary.
+          // If the target is not written yet, still return a cell for it instead
+          // of invalidating the parent array; downstream consumers can subscribe
+          // to the child cell and observe it when the target materializes.
+          const isLink = isSigilLink(curDoc.value);
+          if (isLink) this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
+          const cellLink = isLink
+            ? getNextCellLink(
+              this.tx,
+              this.context,
+              curDoc,
+              curSelector.schema!,
+            )
+            : getNormalizedLink(curDoc.address, curSelector.schema);
+          arrayObj[index] = this.objectCreator.createObject(
+            cellLink,
+            undefined,
+          );
+        } else {
+          // We want those links to point directly at the linked cells, instead
+          // of using our path (e.g. ["items", "0"]), so don't pass in a
+          // modified link.
+          const plan = !this.traverseCells && curSelector.schema !== undefined
+            ? preparePlainSchemaPlan(curSelector.schema)
+            : undefined;
+          const traverseElement = () =>
+            (plan === undefined
+              ? undefined
+              : this.#traversePlainSchema(curDoc, plan)) ??
+              this.traverseWithSelector(curDoc, curSelector);
+          // An element reaching here as a handle is a union of handles, whose
+          // branches are traversed to mint it; as for a property, those reads
+          // resolve the reference and are not conflict dependencies.
+          const { ok: val, error } = !this.traverseCells &&
+              SchemaObjectTraverser.hasAsCell(curSelector.schema)
+            ? this.tx.runWithAmbientReadMeta(
+              excludeReadFromConflict,
+              traverseElement,
+            )
+            : traverseElement();
+          if (error !== undefined) {
+            // If our item doesn't match our schema, we may be able to use
+            // undefined or null if those are valid according to our schema.
+            const fallbackType = arrayItemFallbackType(curSelector.schema!);
+            if (fallbackType !== undefined) {
+              arrayObj[index] = fallbackType === "null" ? null : undefined;
+              // The substitute answers for an item known to be invalid, not
+              // for one whose rejection crossed a link target the replica lacks.
+              if (this.context.missingLinkTargets > missesBefore) {
+                this.context.substituteCoveredMissingTarget = true;
+              }
+            } else {
+              // This array is invalid; one or more items do not match the
+              // schema — the ENTIRE array reads as invalid for this caller.
+              // Name the failing index + doc so the mismatch is diagnosable
+              // without probe archaeology (2026-07-10 board outage: a blanked
+              // array with a bare mismatch log hid WHICH element was at fault).
+              logger.info(
+                "traverse",
+                () => [
+                  "Array element does not match the item schema — voiding the whole array read",
+                  `index=${index}`,
+                  curDoc.address,
+                ],
+              );
+              valid = false;
+            }
+          } else {
+            arrayObj[index] = val;
+          }
+        }
+      })
+    );
     restoreLinkCrossings(this.context, crossingsMark);
     return valid ? arrayObj : undefined;
   }
