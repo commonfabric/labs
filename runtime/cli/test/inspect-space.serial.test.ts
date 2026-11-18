@@ -253,7 +253,7 @@ describe("inspect-space", () => {
       expect((await lines(["conflicts", space, "of:x"])).slice(-3)).toEqual([
         "(no anomalous stale reads among the reads kept)",
         "",
-        "? 1 later commit(s) hold no reads this check can read (a digest, a compaction marker, or an unreadable payload), so whether they read this entity stale was not checked.",
+        "? 1 later commit(s) hold reads this check cannot replay (a digest, compacted history, or an unreadable payload), so whether they read this entity stale was not checked.",
       ]);
     });
 

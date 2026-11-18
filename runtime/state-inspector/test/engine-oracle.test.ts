@@ -26,7 +26,9 @@ import {
   type EntityDocument,
   toDocumentPath,
 } from "@commonfabric/memory/v2";
+import { compactStore } from "@commonfabric/memory/v2/compact";
 import { encodeStoredCommit } from "@commonfabric/memory/v2/stored-commit";
+import { entityConflicts } from "../conflicts.ts";
 import { openSpace } from "../db.ts";
 import { readCoherence } from "../oracle.ts";
 
@@ -192,7 +194,8 @@ const forge = (path: string, original: string) => {
       99,
       original,
       JSON.stringify({ seq: 10 }),
-      new Date().toISOString(),
+      // SQLite's `datetime()` form, as the engine writes it.
+      new Date().toISOString().slice(0, 19).replace("T", " "),
     );
   } finally {
     db.close();
@@ -270,5 +273,111 @@ Deno.test("oracle: scans the log for unchecked commits once per report", async (
   } finally {
     space.close();
     await Deno.remove(path).catch(() => {});
+  }
+});
+
+Deno.test("oracle: does not certify a store whose write history compaction squashed", async () => {
+  // The forged seq-10 read missed Bob's seq-2 write. Compaction keeps every
+  // payload (its default window) but squashes entity:doc's history into its
+  // own commit, so write 2 is gone.
+  const { engine, path } = await seedContendedStore();
+  close(engine);
+  forge(path, JSON.stringify(forgedCommit));
+  const out = `${path}.compacted.sqlite`;
+  await compactStore({
+    store: path,
+    out,
+    selection: { prefixes: ["entity:"] },
+    runId: "squash",
+  });
+
+  const space = openSpace(out);
+  try {
+    // Bob's seq-2 read and the forged seq-10 read predate the squash.
+    assertEquals(readCoherence(space), { anomalies: [], readSetsNotKept: 2 });
+  } finally {
+    space.close();
+    await Deno.remove(path).catch(() => {});
+    await Deno.remove(out).catch(() => {});
+  }
+});
+
+Deno.test("oracle: counts a commit whose payload breaks off before it names the entity", async () => {
+  const { engine, path } = await seedContendedStore();
+  close(engine);
+  const whole = JSON.stringify(forgedCommit);
+  forge(path, whole.slice(0, whole.indexOf("entity:doc")));
+
+  const space = openSpace(path);
+  try {
+    assertEquals(readCoherence(space), { anomalies: [], readSetsNotKept: 1 });
+    assertEquals(entityConflicts(space, "entity:doc").readSetsNotKept, 1);
+  } finally {
+    space.close();
+    await Deno.remove(path).catch(() => {});
+  }
+});
+
+Deno.test("oracle: does not count a digest of pending reads only", async () => {
+  // The audit replays confirmed reads, and the digest records none.
+  const { engine, path } = await seedContendedStore();
+  close(engine);
+  forge(
+    path,
+    encodeStoredCommit({
+      ...forgedCommit,
+      reads: {
+        confirmed: [],
+        pending: [{
+          id: "entity:doc",
+          path: toDocumentPath(["value", "title"]),
+          localSeq: [1],
+          basisSeq: 0,
+        }],
+      },
+    }, false),
+  );
+
+  const space = openSpace(path);
+  try {
+    assertEquals(readCoherence(space), { anomalies: [], readSetsNotKept: 0 });
+  } finally {
+    space.close();
+    await Deno.remove(path).catch(() => {});
+  }
+});
+
+Deno.test("oracle: looks up first writes only when some reads go unchecked, and then once", async () => {
+  /** Counts the first-write queries one report prepares. */
+  const firstWriteQueries = (space: ReturnType<typeof openSpace>) => {
+    let queries = 0;
+    const prepare = space.db.prepare.bind(space.db);
+    space.db.prepare = ((sql: string) => {
+      if (sql.includes("min(commit_seq)")) queries++;
+      return prepare(sql);
+    }) as typeof space.db.prepare;
+    readCoherence(space);
+    return queries;
+  };
+
+  for (const storeReadsDigest of [false, true]) {
+    const { engine, path } = await seedContendedStore(storeReadsDigest);
+    // A second entity, so a lookup per entity would show.
+    applyCommit(engine, {
+      ...CAROL,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id: "entity:other", value: doc(1) }],
+      },
+    });
+    close(engine);
+    const space = openSpace(path);
+    try {
+      assertEquals(firstWriteQueries(space), storeReadsDigest ? 1 : 0);
+    } finally {
+      space.close();
+      await Deno.remove(path).catch(() => {});
+    }
   }
 });

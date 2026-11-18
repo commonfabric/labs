@@ -509,6 +509,9 @@ Deno.test("conflicts: counts commits compaction hollowed as unchecked", async ()
       sessionId: "s:a",
       commit: reading(3, "of:x", 3, "of:w"),
     });
+    // A second write to of:x, so compaction squashes its history into the
+    // compaction commit.
+    applyCommit(engine, { sessionId: "s:b", commit: setting(2, "of:x") });
   } finally {
     close(engine);
   }
@@ -527,9 +530,11 @@ Deno.test("conflicts: counts commits compaction hollowed as unchecked", async ()
       ).all<{ seq: number; original: string }>()
         .filter(({ original }) => isHollowedPayload(original))
         .map(({ seq }) => seq);
-      expect(hollowed).toEqual([2, 3, 4]);
-      expect(entityConflicts(space, "of:x").readSetsNotKept).toBe(1);
-      expect(readCoherence(space).readSetsNotKept).toBe(3);
+      expect(hollowed).toEqual([2, 3, 4, 5]);
+      // Compaction left of:x's history no first write before its own
+      // commit, so every hollowed commit may have read it.
+      expect(entityConflicts(space, "of:x").readSetsNotKept).toBe(4);
+      expect(readCoherence(space).readSetsNotKept).toBe(4);
     } finally {
       space.close();
     }

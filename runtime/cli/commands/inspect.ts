@@ -1099,8 +1099,8 @@ export const inspect = new Command()
           }
           if (c.readSetsNotKept > 0) {
             console.log(
-              `\n? ${c.readSetsNotKept} later commit(s) hold no reads this ` +
-                `check can read (a digest, a compaction marker, or an ` +
+              `\n? ${c.readSetsNotKept} later commit(s) hold reads this ` +
+                `check cannot replay (a digest, compacted history, or an ` +
                 `unreadable payload), so whether they read this entity stale ` +
                 `was not checked.`,
             );

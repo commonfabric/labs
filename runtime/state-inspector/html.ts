@@ -474,7 +474,7 @@ function renderDetail(id){
     }
     // Analyzed, but over reads a later commit kept only as a digest: not clean.
     if(cf.readSetsNotKept){
-      body.push(el("div",{class:"muted",style:"margin-top:6px;font-size:12px",text:"? "+cf.readSetsNotKept+" later commit(s) hold no reads this check can read (a digest, a compaction marker, or an unreadable payload) — whether they read this cell stale was not checked"}));
+      body.push(el("div",{class:"muted",style:"margin-top:6px;font-size:12px",text:"? "+cf.readSetsNotKept+" later commit(s) hold reads this check cannot replay (a digest, compacted history, or an unreadable payload) — whether they read this cell stale was not checked"}));
     }
     const cfTag = (cf.staleReads&&cf.staleReads.length)?" · ⚠ anomaly":((cf.multiUser&&!cf.staleReadsAnalyzed)?" · ? not analyzed":(cf.readSetsNotKept?" · ? "+cf.readSetsNotKept+" unchecked":""));
     host.append(section("Contention"+(cf.multiUser?" ⚔ MULTI-USER":"")+cfTag, cf.multiUser, body));

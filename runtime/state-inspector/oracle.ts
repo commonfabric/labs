@@ -26,9 +26,10 @@ export interface ReadCoherence {
 
   /**
    * Commits whose reads the check could not replay: stored with a digest in
-   * their place (02-storage.md §3.3), hollowed by compaction, or holding a
-   * payload or read it could not decode or resolve. Empty {@link anomalies}
-   * show the store coherent only when this is 0.
+   * place of confirmed reads (02-storage.md §3.3), hollowed by compaction,
+   * held in an unreadable payload, holding a read it could not resolve, or
+   * reading an entity before compaction squashed its writes. Empty
+   * {@link anomalies} show the store coherent only when this is 0.
    */
   readSetsNotKept: number;
 }
@@ -47,7 +48,7 @@ export function readCoherence(
     .prepare(`SELECT DISTINCT id FROM revision ORDER BY id ASC`)
     .all<{ id: string }>();
   // One pass over the log for the whole report, shared by every entity.
-  const coverage = readCoverage(space);
+  const coverage = readCoverage(space, { everyEntity: true });
   const anomalies: StaleRead[] = [];
   for (const { id } of ids) {
     const { staleReads } = entityConflicts(space, id, { ...opts, coverage });
