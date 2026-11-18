@@ -67,6 +67,11 @@ import { ExecutionLeases } from "./execution-lease.ts";
 import { HeldDocuments } from "./held-documents.ts";
 import { prepare, type PreparedStatement } from "./prepared-statement.ts";
 import {
+  encodeStoredCommit,
+  type StoredClientCommit,
+  storesCommit,
+} from "./stored-commit.ts";
+import {
   insertExecutionOutboxRows,
   type OutboxAppendRow,
 } from "./execution-outbox.ts";
@@ -6428,7 +6433,7 @@ const applyCommitTransaction = (
   // NEW derived commits, and a network retry of an already-ACCEPTED one must
   // keep its stored answer after the producing lease was released or
   // succeeded by a new holder. The stored
-  // identity spans the payload bytes (sameStoredOriginal) AND the admission
+  // identity spans the payload (`storesCommit()`) AND the admission
   // envelope (class; for derived, the producing holder): a same-key
   // resubmission differing in either is a DIFFERENT submission and is
   // refused, never answered.
@@ -6437,7 +6442,7 @@ const applyCommitTransaction = (
     local_seq: commit.localSeq,
   }) as CommitRow | undefined;
   if (existing) {
-    if (!sameStoredOriginal(existing.original, commit)) {
+    if (!storesCommit(existing.original, commit)) {
       throw new ProtocolError(
         `commit replay mismatch for session ${sessionId} localSeq ${commit.localSeq}`,
       );
@@ -7464,7 +7469,9 @@ const applyCommitTransaction = (
         if (row === undefined || (row.branch || DEFAULT_BRANCH) !== branch) {
           return { known: false };
         }
-        const layer = decodeTrustedMemoryBoundary(row.original) as ClientCommit;
+        const layer = decodeTrustedMemoryBoundary(
+          row.original,
+        ) as StoredClientCommit;
         for (const operation of layer.operations) {
           if (operation.op === "sqlite" || !sameDocument(operation)) continue;
           // An op-field operation on the document is not replayable here.
@@ -7714,7 +7721,17 @@ const applyCommitTransaction = (
   const authorizationRef = engine.legacyCommitMetadataRefsRequired
     ? LEGACY_EMPTY_AUTHORIZATION_REF
     : null;
-  const original = encodeMemoryBoundary(commit);
+  // The log keeps the reads only where something reads them after this
+  // admission. `identityLayerBasis()` reads a layer's reads of a document
+  // whose operations in it went unwritten, and needs them only when the
+  // first of those is a `patch`; only an identity commit leaves a `patch`
+  // unwritten. The genesis receipt keeps its reads because
+  // `readGenesisReceipt()` requires them.
+  const keepsReads = seq === 1 ||
+    [...elidedOpIndexes].some((opIndex) =>
+      commit.operations[opIndex].op === "patch"
+    );
+  const original = encodeStoredCommit(commit, keepsReads);
   const resolution = encodeMemoryBoundary(
     resolvedPendingReads.length > 0 ? { seq, resolvedPendingReads } : { seq },
   );
@@ -8662,7 +8679,9 @@ const identityLayerBasis = (
     }) as CommitRow | undefined;
     if (row === undefined || row.seq <= identityBasis) continue;
     if ((row.branch || DEFAULT_BRANCH) !== branch) continue;
-    const layer = decodeTrustedMemoryBoundary(row.original) as ClientCommit;
+    const layer = decodeTrustedMemoryBoundary(
+      row.original,
+    ) as StoredClientCommit;
     const opIndexes: number[] = [];
     let replayable = true;
     for (const [opIndex, operation] of layer.operations.entries()) {
@@ -8683,10 +8702,14 @@ const identityLayerBasis = (
     // The read the identity proof reconstructed the layer's view from, chosen
     // as `applyCommitTransaction()`'s `basisOf()` chooses it: the first
     // pending read of the document, else its first confirmed read on the
-    // branch. Another read of the document beside it proved nothing.
-    const provedPending = layer.reads.pending.find(sameDocument);
+    // branch. Another read of the document beside it proved nothing. A layer
+    // whose reads the log holds only as a digest elided no `patch`
+    // (`applyCommitTransaction()` keeps the reads of every one that did), so
+    // its first operation on the document is a `set`, which proves the view
+    // without them.
+    const provedPending = layer.reads?.pending.find(sameDocument);
     const provedConfirmed = provedPending === undefined
-      ? layer.reads.confirmed.find((candidate) =>
+      ? layer.reads?.confirmed.find((candidate) =>
         sameDocument(candidate) && (candidate.branch ?? branch) === branch
       )
       : undefined;
@@ -10053,13 +10076,6 @@ const decodeStoredDocument = (data: string | null): EntityDocument =>
 
 const decodeStoredPatchList = (data: string | null): PatchOp[] =>
   decodeStoredPatchListPayload(decodeTrustedMemoryBoundary, data);
-
-const sameStoredOriginal = (
-  stored: string,
-  incoming: ClientCommit,
-): boolean => {
-  return stored === encodeMemoryBoundary(incoming);
-};
 
 const revisionKey = (
   branch: BranchName,

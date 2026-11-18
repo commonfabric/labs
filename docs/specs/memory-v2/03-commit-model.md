@@ -721,6 +721,8 @@ interface CommitLogEntry {
 
 The semantic JSON write path is keyed by `seq`, not by commit hash. The
 content-addressed UCAN envelope is reserved for a later signed-write pass.
+A stored `ClientCommit` may hold a `readsDigest` in place of its `reads`
+(02-storage.md §3.3).
 
 ### 3.7.3 Seq Assignment
 
@@ -750,7 +752,10 @@ Each committed write-class operation has identifiers with different roles:
 On replay after reconnect:
 
 1. the server deduplicates by `(sessionId, localSeq)`
-2. it compares the replayed `original` payload with the stored `original`
+2. it compares the replayed `original` payload with the stored `original`:
+   byte for byte, except that where the log keeps a commit's reads only as
+   their digest (02-storage.md §3.3), the replayed reads are compared by that
+   digest
 3. if they match, it returns the existing commit result
 4. if they differ, the replay is a protocol error
 

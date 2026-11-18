@@ -529,7 +529,8 @@ operation_index
 
 The encoded payload is retained directly for efficient submitted-view queries.
 The row also joins to the canonical `commit` record, whose `original` field
-preserves the complete accepted request.
+preserves the accepted request, its read set as a digest where the log does
+not keep the reads (02-storage.md §3.3).
 
 ### `op_integrated`
 

@@ -140,6 +140,21 @@ CREATE INDEX idx_commit_invocation_ref ON commit (invocation_ref);
 - normalized branch lifecycle payloads for `/memory/branch/create` and
   `/memory/branch/delete`
 
+A `ClientCommit`'s read set decides its own admission, and the log keeps it
+only where something reads it afterward. That is the genesis receipt at seq 1,
+and a commit whose `patch` the server accepted as an identity
+([03-commit-model.md](./03-commit-model.md) §3.6.1), whose reads a later
+pending read through that layer consults (§3.6.3). Any other commit that
+carries reads is stored with a `readsDigest` member in place of `reads`:
+
+```json
+{ "hash": "<SHA-256 of the encoded read set, unpadded base64url>",
+  "confirmed": 55570, "pending": 0 }
+```
+
+A replay is matched against either form (§3.7.4 of the commit model). The
+counts are for the reader of the log; nothing in admission reads them.
+
 `resolution` stores server-side decisions:
 
 ```json
