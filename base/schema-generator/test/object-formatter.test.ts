@@ -455,4 +455,75 @@ type SchemaRoot = typeof result;
         .toBeUndefined();
     });
   });
+
+  describe("a member a mapped type maps", () => {
+    // A mapped type keeps the declaration of the member it maps, and a
+    // template can change the member's type. The member is read as the
+    // mapped type has it, never as its declaration writes it.
+
+    /** The schema of `v.w`, with `SchemaRoot` declaring `v: <mapped>`. */
+    async function mappedMemberSchema(
+      declarations: string,
+      mapped: string,
+    ): Promise<unknown> {
+      const schema = await schemaFor(`
+${declarations}
+interface SchemaRoot { v: ${mapped} }
+`);
+      const v = schema.properties?.v as {
+        properties?: Record<string, unknown>;
+      };
+      return v.properties?.w;
+    }
+
+    const LOOSE = "type Loose<T> = { [K in keyof T]: T[K] | string };";
+    const UNWRAP =
+      "type Unwrap<T> = { [K in keyof T]: T[K] extends Cell<infer U> ? U : T[K] };";
+    const WIDENED_CELL = {
+      anyOf: [{ type: "string" }, { type: "number", asCell: ["cell"] }],
+    };
+
+    it("emits both members of a union the template widens a cell member to", async () => {
+      expect(await mappedMemberSchema(LOOSE, "Loose<{ w: Cell<number> }>"))
+        .toEqual(WIDENED_CELL);
+    });
+
+    it("emits the value type the template unwraps a cell member to", async () => {
+      expect(await mappedMemberSchema(UNWRAP, "Unwrap<{ w: Cell<number> }>"))
+        .toEqual({ type: "number" });
+    });
+
+    it("emits the widened union for a cell member a generic declares", async () => {
+      expect(
+        await mappedMemberSchema(
+          `${LOOSE} interface Src<T> { w: Cell<T> }`,
+          "Loose<Src<number>>",
+        ),
+      ).toEqual(WIDENED_CELL);
+    });
+
+    it("emits the unwrapped value type for a cell member a generic declares", async () => {
+      expect(
+        await mappedMemberSchema(
+          `${UNWRAP} interface Src<T> { w: Cell<T> }`,
+          "Unwrap<Src<number>>",
+        ),
+      ).toEqual({ type: "number" });
+    });
+
+    it("emits the cell a `Pick` leaves as it is", async () => {
+      expect(
+        await mappedMemberSchema(
+          "",
+          'Pick<{ w: Cell<number>; x: string }, "w">',
+        ),
+      )
+        .toEqual({ type: "number", asCell: ["cell"] });
+    });
+
+    it("emits the cell a `Partial` makes optional", async () => {
+      expect(await mappedMemberSchema("", "Partial<{ w: Cell<number> }>"))
+        .toEqual({ type: "number", asCell: ["cell"] });
+    });
+  });
 });

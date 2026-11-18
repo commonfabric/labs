@@ -236,6 +236,32 @@ export function resolvePropertyType(
 }
 
 /**
+ * Whether `type`'s members keep the types their declarations write. A mapped
+ * type keeps the declaration of each member it maps. Where its template reads
+ * the member as it is (`T[K]`, as `Partial`, `Required`, `Readonly` and `Pick`
+ * do), that declaration still describes the member, and the mapping's
+ * modifiers change only its optionality and mutability. A template that
+ * changes the member's type, as `T[K] | string` or
+ * `T[K] extends Cell<infer U> ? U : T[K]` does, leaves each member a type its
+ * declaration does not write.
+ */
+export function keepsDeclaredMemberTypes(type: ts.Type): boolean {
+  if (
+    !(type.flags & ts.TypeFlags.Object) ||
+    !((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped)
+  ) {
+    return true;
+  }
+  const mapped = type.getSymbol()?.declarations?.find(ts.isMappedTypeNode);
+  if (!mapped?.type) return true;
+  const template = unwrapTypeParentheses(mapped.type);
+  return ts.isIndexedAccessTypeNode(template) &&
+    ts.isTypeReferenceNode(template.indexType) &&
+    ts.isIdentifier(template.indexType.typeName) &&
+    template.indexType.typeName.text === mapped.typeParameter.name.text;
+}
+
+/**
  * The one member of `type` that is neither `undefined` nor `null`, or `type`
  * itself where it is no union; `undefined` where no one member remains.
  */

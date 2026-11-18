@@ -23,6 +23,7 @@ import {
   instantiatedPropertyType,
   instantiatedValueType,
   isFunctionLike,
+  keepsDeclaredMemberTypes,
   resolvePropertyType,
 } from "../type-utils.ts";
 import { getCellWrapperInfo } from "../typescript/cell-brand.ts";
@@ -242,8 +243,10 @@ export class ObjectFormatter implements TypeFormatter {
         if (
           ts.isPropertySignature(propDecl) || ts.isPropertyDeclaration(propDecl)
         ) {
-          if (!propTypeNode && propDecl.type) {
-            propTypeNode = propDecl.type as ts.TypeNode;
+          if (
+            !propTypeNode && propDecl.type && keepsDeclaredMemberTypes(type)
+          ) {
+            propTypeNode = propDecl.type;
           }
         } else if (
           !propTypeNode &&
