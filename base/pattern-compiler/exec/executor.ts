@@ -4046,7 +4046,13 @@ export class Instance {
     spliceIn(unit.parted, start, removed.length, forms.map(() => false));
     spliceIn(unit.splits, start, removed.length, forms.map(splits));
     for (const key of removed) unit.forced.delete(key);
-    if (appended && unit.positions !== undefined) {
+    // The positions of the other rows stand where as many rows entered
+    // as left.
+    if (
+      unit.positions !== undefined &&
+      (appended || removed.length === inserted.length)
+    ) {
+      for (const key of removed) unit.positions.delete(key);
       inserted.forEach((key, offset) =>
         unit.positions?.set(key, start + offset)
       );
@@ -4054,7 +4060,6 @@ export class Instance {
       unit.positions = undefined;
     }
     unit.sum += sum;
-    if (inserted.length > 0) unit.swept = false;
     this.#touched.add(unit);
     const rows = this.#touchedRows.get(unit) ?? new Set();
     for (const key of inserted) rows.add(key);
@@ -4137,6 +4142,13 @@ export class Instance {
           const size = unit.sizes[index];
           if (!unit.parted[index] && size >= PART_SPLIT_BYTES) {
             this.#toPart(unit, key, false);
+          } else if (
+            !unit.parted[index] && unit.swept && unit.part &&
+            this.#contentOf(unit) > DOCUMENT_MAX_BYTES
+          ) {
+            // A row that entered an array which holds more than a
+            // document may, and whose other rows are parts.
+            this.#toPart(unit, key, true);
           } else if (
             unit.parted[index] && size <= PART_MERGE_BYTES &&
             (!unit.forced.has(key) ||
