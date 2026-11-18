@@ -6593,3 +6593,314 @@ pin.
      are keyed with no declared field, as in note 399; and the limits that notes
      434, 435 and 443 name rest on a reading of the code where they name no
      test.
+
+## Rulings Z54 to Z57, and the keys, identifiers and names brought in line with the documents
+
+Notes 446 to 460 are about the owner's rulings Z54 to Z57 of 2026-11-17 and
+about the differences between the prototype and the documents that notes 437 to
+440 listed. Each note says what the crate and the executor do, which statement
+of an earlier note it replaces, and what is left. A note that ends with **Needs
+a ruling** names something the owner has to decide. Every statement about a
+per-element construct says which case it is about: an array of references, an
+array of plain values in place (or a plain array generated from scratch), or the
+result of another per-element construct.
+
+446. **Z57 and PL question 144: the record forms of a key** (replaces the forms
+     of notes 436 and 439 and the second difference of note 437). A key is the
+     record `{ element, occurrence }`, written by `jsonFromFabricValue()`
+     (`keysOfParts` in `exec/store.ts`). The salted hash is `hashOf()` of the
+     record `{ salt, value }` (`Store.#salted`). By case:
+     - **An array of plain values in place, a plain array generated from scratch
+       included.** With no declared key the element part is the salted hash of
+       the value. With declared key fields it is `{ fields, hash }`, the names
+       in the order of their names and the salted hash of the array of the
+       values of those fields in that order.
+     - **An array of references.** The element part is the record of the address
+       that the link names (note 448).
+     - **The result of another per-element construct.** An element has the
+       upstream key unchanged. The key of a member of a `flatMap` segment is
+       `{ source, member }`, two key records (`memberKey`), and `rekeyed` reads
+       `source` to replace an upstream key at any depth.
+
+     An element that holds a reference by key into its own array still has the
+     element part `{ position }` while the keys of that array are formed, which
+     the documents do not have. The tests of the store form each expected key
+     with `hashOf()` and `jsonFromFabricValue()`. They were rewritten first, and
+     35 steps failed on an assertion before the store changed.
+447. **A whole value is hashed as the fabric value it is** (replaces the first
+     difference of note 438). `Store.#salted` gives the value to `hashOf()` as
+     it is, after `isValidFabricValue()` of `base/data-model`, and throws for a
+     value that is none. So a member that is `undefined` and a member that is
+     absent give two keys, and so do a hole of an array and a `null`, which one
+     test of the store pins. This is about a plain value: an array of plain
+     values in place, a plain array generated from scratch, and a member of a
+     `flatMap` segment that the callback computed. For an element that has no
+     place, as one of an array at a path below a value, the executor hashes the
+     stored form of the value, in which a marker of a stream is the link to the
+     stream and a function is left out (`Instance.#table`).
+448. **The element part of a position that holds a link holds the space**
+     (replaces the second difference of note 438; an array of references).
+     `Store.addressOf` gives `{ space, document, path }`, with `space` the
+     option that `Store` and `Instance` are given and no such member in a store
+     that was given none. For a link to an element by key it gives the record of
+     that reference, `{ collection, key, path }`, where `collection` is the
+     address of the array and `key` the key record, taken at the last key of the
+     path, so a reference into a nested array is a record inside a record. The
+     names of these members are the prototype's: PL §1.3 says "one member for
+     each part" and names none. The two documents differ on one part: PL §1.3,
+     "Element keys", lists the scope among the parts of the identity of a cell,
+     and ES §5.3 says the element part is "without the link's scope". The
+     prototype has no scope and holds none. **Needs a ruling**, for an array of
+     references: whether the scope of the link is a part of the element part.
+449. **The codec writes the members of a record in one order.** One test of the
+     store gives `jsonFromFabricValue()` a key record, an element part and the
+     key of a `flatMap` member with their members written in two orders, and the
+     texts are the same; and each key that the store forms is the text of the
+     record that is read back from it. The test passed when it was written: it
+     pins what the codec does. The codec does not write that order for a member
+     whose name reads as an integer (`{"9":…,"10":…}` in that order), as PL §1.2
+     says, and no record of a key has such a member.
+450. **An identifier is the hash of the cause of the thing** (replaces the third
+     difference of note 438 and the executor's identifiers of note 440).
+     `identifierOf` in `exec/store.ts` returns `taggedHashStringOf()` of the
+     record `{ ...source, causal: cause }`, the record that ES §5.1 says
+     `createRef` hashes. A key in a cause is the record of the key, so no
+     identifier holds the text of a key, and an identifier is 48 characters
+     whatever the key holds. The causes:
+     - the argument document: `{ type: "argument", parent }`, with `parent` the
+       identifier of the result document (ES §5.1);
+     - a state cell: `{ parent, type: "internal", cause: name }` where it is
+       declared directly in the pattern body under a name of one part, and
+       otherwise `{ parent, type: "state", within, cause: name }`, where a step
+       of `within` is `{ site }` or `{ element, key }` with the name of the
+       collection and the key record (ES §5.2);
+     - an instance called through `asInstance()`: the same with the type
+       `child`, the identifier of its result document;
+     - the document of an output that a function body returned whole (note 443):
+       the same with the type `output`, and as the name the name of an interim
+       output or `{ output: index }`;
+     - an instance and a binding that a function body makes: the cause of the
+       run and `{ instance: ordinal }` or `{ bound: ordinal }` as the source;
+     - a cell, a record that a body writes into a list and a constant held for a
+       handle: `{ parent }` and `{ cell: n }`, `{ record: n }` or
+       `{ constant: n }`;
+     - the record of a key of a list: `{ list: address }` and `{ key }`.
+
+     Three tests form the expected identifier with `identifierOf` in the test
+     and were seen to fail against a joined form. Where the documents' form is
+     not followed, by a reading of the code and with no test: the identifier is
+     the tagged hash and has no scheme `of:` (`createRef` is in
+     `runtime/runner`, which the executor does not import); the instance that
+     the executor is started with has the identifier `result` unless it is given
+     one; the document of an output has a type that the documents do not have;
+     an instance that takes the cause of one that was re-keyed away has `again`
+     and a number in its cause; the run of a `lift` or a `computed` is
+     `{ parent, site: <body name>, within }` with every element key of the
+     context and no name of the child, and the run of a handler is
+     `{ handling: { parent, event: n } }` with the count of the events and no
+     receipt (ES §5.4 and §5.5); the ordinal counts everything a run makes and
+     not the instantiations of one site; and a binding that a function body
+     makes is named by its run and ordinal, where ES §5.5 has the handler and
+     the bound keys. The case of an `element` step is every case of a source:
+     the key is the cell's address over an array of references, the salted hash
+     or the record with `fields` over plain values, and the upstream key over
+     the result of another per-element construct.
+451. **Z56: an output inside an element body is brought up to date on a read**
+     (replaces the first limit of note 443). `Instance.#generated` gives the
+     document of every such output a function (`Store.sources`), outside an
+     element body and inside one. For the keys that the document is named by,
+     the function brings the element table of each enclosing collection up to
+     date, outermost first, finds the element that holds the key now
+     (`Instance.#contextOfKeys`), and evaluates the output for it. Where a key
+     is in no table, the key left its collection, nothing is computed, and the
+     link reads what the document held. On `fixtures/generated-inner.tsx`, where
+     `items` is a plain array generated from scratch with a declared key that is
+     computed once per group, the groups being plain values in place: a handler
+     of an inner row stores a link with the document of the output of its group
+     and the key; after a write that no evaluation followed, a read through the
+     link reads the new value, which failed before the change; and after the
+     group left, the link reads the last value. A handler that writes through
+     the stored reference fails with the message of `ComputedOutput` and commits
+     nothing, which the third limit of note 443 had on a direct write to the
+     store alone. That test and the two others passed when they were written.
+     Cost: a read that enters the document checks the assembly of each enclosing
+     collection and the cone of the output for being current, once per read. The
+     second limit of note 443 stays, as ruled: an array at a path below a value
+     that a function body returns, and an array that the reactive tier writes,
+     have no document.
+452. **Z54: a plain array generated from scratch given whole to an
+     `asInstance()` instance** (replaces the second case of note 435 and the
+     third case of note 443 for a whole array). The argument of the instance
+     holds a link to the document of the output, with the path empty and the
+     schema `{ type: "array", keyFields }`, and no value of the array
+     (`Instance.#linkToOutput`). The executor knows the array by its identity:
+     `Host.output` records, for the array that a value function returned for an
+     output, the output and the element keys. The plan holds no schema of an
+     output, so the crate writes `Output.keyFields`, a copy of the key fields
+     that the type of the output's value declares, as `Collection.keyFields` is
+     a copy, and the executor forms the schema from it. An output with no
+     declared key gives a link with no schema. On
+     `fixtures/array-by-key-reader.tsx`, `Rows.asInstance()({ repos })`: the
+     rows are keyed by `id`, and a row keeps its state cell when `bonus` gives
+     its element another `stars`. The test of the plan and the test of the
+     executor failed first. The documents do not have `Output.keyFields`; PL
+     question 149 says "no plan holds a schema of an output". **The result of
+     another per-element construct given whole to an instance of its own** was
+     run (`madeDerived` over a `filter` of the plain array generated from
+     scratch, `madeKept` over a `filter` of plain values in place, both with the
+     declared key `id` upstream). The argument holds the values of the elements
+     that the `filter` passes on, and no link, so the instance keys its rows by
+     the whole value: a row loses its state cell when a member that is no key
+     field changes. That is what PL question 149 assumes, and one test pins it.
+     Over an array of references the argument holds the links, as before.
+     **Needs a ruling**, for the result of another per-element construct over
+     plain values with a declared key: whether the instance is to learn the key
+     fields, and from what, since no stored array holds the result.
+453. **Z55: the type of a `map` result keeps the key fields** (replaces the
+     request of note 433). `Resolver::with_key_fields_of` is applied to the
+     result type of a `map` as to that of a `filter` (`src/infer.rs`), and
+     `array-by-key:mismatch` is reported at a `map` call that is given where
+     another key is declared (`src/assign.rs`, where the check of the callback
+     returned before the keys were compared). The type of a `flatMap` result
+     declares no key. The test in `tests/rules.rs`, which failed first: the
+     result of a `map` over a pattern input, over a plain array generated from
+     scratch, and over the result of a `filter` is reported where `name` is
+     declared and not where `id` or no key is; a `flatMap` result is not
+     reported. One consequence is in the test:
+     `saved.map((repo) => ({ label:
+     repo.name }))`, over an array that
+     declares `id`, is reported where `ArrayByKey<Label, "label">` is declared,
+     though `id` is no property of the result's elements. The record of the
+     output of such a `map` has `keyFields: ["id"]` as well. **Needs a ruling**,
+     for the result of a `map` whose callback computes a value of another type:
+     whether giving it where a key of that other type is declared is an error,
+     as the prototype reports.
+454. **Z51 in the store and the executor** (replaces the store's and the
+     executor's part of note 440). The segment of a path that holds a key is the
+     text of the key, with nothing before it, and a segment is a key where it
+     decodes to a record with `element` and `occurrence` or with `source` and
+     `member` (`keyOfSegment`). A property whose name is such a text cannot be
+     named by a path; a property named `$key:x`, or named as the text of another
+     fabric value, is a property, which one test pins. The name of an array
+     while its keys are formed, and of a position in `Store.#deep`, is the text
+     of the address record. An address in the executor is that text too
+     (`Store.addressText`). The names of the memo, of what is kept under an
+     element key, and of the element tables are the text of a record of the
+     kind, the index in the plan, the keys around it as records, and for an
+     element its key (`Instance.#name`), and an element table holds its
+     collection and the keys around it as members, so no name is taken apart.
+     These names are in memory alone and show in no result, so no new test is
+     for them. What is left: `canonical`, a JSON text with sorted members, is
+     used to compare two stored values and two lists, and names nothing; the
+     string `?` stands for the key of a step whose collection the context has no
+     element for; and a cell that a body makes with `.for(cause)` is found by
+     the JSON text of the cause. **Needs a ruling**, for every case of a source,
+     since it is about a stored path: whether a property whose name is the text
+     of a key record is to be reachable, which the documents' form of a key in a
+     path does not allow.
+455. **Z51 in the crate** (replaces the crate's part of note 440). A name of
+     several parts in a plan is a record (`name_ordinals` in `src/plan.rs`):
+     `{ name, ordinal }` where it was the name, `#` and the ordinal;
+     `{ body, site }` where it was the body's name, `/n` and the index of the
+     site; and `{ operation, sidecar }` where it was the operation's name, `/`
+     and the sidecar's. The shape of the plan JSON changed in the member `name`
+     of a state cell, an operation, a child, a collection, a body and a binding,
+     and the readers were changed: the executor takes a name as a fabric value
+     into a cause, and `compare/values.ts`, `compare/harness.ts` and
+     `compare/corpus.ts` write a name of several parts into a report as the text
+     of the codec (`nameText` in `exec/store.ts`). Not converted:
+     `unhashed:schema/` and a number and `unhashed:pattern/` with the path, `#`
+     and the binding stand where the documents have a hash, which the crate
+     cannot form, since the value hasher has no implementation in Rust in this
+     tree; a record in their place would change every reader for a form the
+     documents do not have either. Inside the second, the steps of a binding are
+     joined with `/` and a line and a column with `:`. A state cell that a site
+     of a body creates under a constant cause is named `{ body, site }`, where
+     PL §1.1 has `{ body, cause }`: the crate records the site and not the
+     cause. The `site` step of a `within` holds the name of its call as a
+     string, and whether two calls of one name in one body get an ordinal there
+     was not examined.
+456. **The key fields reach a reader that is compiled in by every way**
+     (replaces the limit of note 434). The crate notes the key fields of a
+     computed value wherever an expression of a type that declares them denotes
+     the value (`Emitter::eval`), and no longer at the property of an object
+     literal and the attribute of a tag alone. The test in `tests/plan.rs`: a
+     plain array generated from scratch reaches `Rows` through a record held in
+     a variable, a spread of it, and a second pattern compiled in between, and
+     each collection has `["id"]`; an array of plain values in place reaches it
+     through the second pattern and has them from the type of the slot. The
+     first two failed before the change, and the last two passed.
+457. **A `set` of a plain value on a cell that holds a link.** On
+     `fixtures/set-over-link.tsx` a handler stores a link to a record of the
+     argument in a state cell, a second writes a member below the cell, and a
+     third writes a plain value to the cell. In the executor the third write
+     replaces the record that the link names, and the cell keeps the link. The
+     comparison of values runs the same three events on today's runtime, and 32
+     of 32 values are equal, `firstTitle` and `firstStars` after the third event
+     among them. So today's runtime does the same, and the executor was not
+     changed. The record is one of the argument, stored in place and named by a
+     path; the element of a per-element construct was not tried.
+458. **The diagnostic catalog.** `tests/catalog.rs` reads `language-subset.md`
+     in this tree, which does not have the three rows that the document has on
+     the branch of the documents, so `CATALOG` and `catalog-ids.txt` cannot hold
+     them here without two failing tests. `PROVISIONAL` of `src/catalog.rs` now
+     holds the three, in the order of that table and with the entry each follows
+     named in its doc comment: `element-body:result-stored-outside`, an error
+     that the crate does not report and that needs footprint analysis, and
+     `array-by-key:declaration` and `array-by-key:mismatch`, both errors
+     implemented in part. One test pins the three with their severities and
+     statuses. When the document reaches this tree, the existing test fails for
+     each, and the three move into `CATALOG` and the copy.
+459. **The fixtures and the corpus.**
+     `deno run -A --no-check base/pattern-compiler/compare/values-fixtures.ts`
+     runs 49 runs, the 48 of note 444 and `set-over-link`, and 799 of 800
+     compared values are equal; the one that differs is that of note 360. Of 58
+     fixtures, 16 are run by the executor's tests alone, `generated-inner` among
+     them. A fresh seeded run of today's runtime over all 272 modules
+     (`values-corpus.ts run`) has the report of the run at commit `a4b4612b3b`
+     (note 444) in every line: 215 modules run by today's runtime, 196 executed,
+     171 with every value equal and every event handled, 5,498 values compared
+     and 5,414 equal, 84 that differ in 22 modules, 10 of 486 committed events
+     not handled, 4,202 evaluations, 546 assemblies, 34 evaluations counted as
+     stale by their own write, 726 positions that hold a stream, and 814
+     documents. Read module by module against the results file of that run, 264
+     of the 272 records are the same in every member. Eight differ, in what
+     today's runtime recorded alone, at a value that holds the time of the run,
+     and the comparison of each is the same: `apps/contacts/contact-book.tsx`,
+     `apps/topic-workbench/main.tsx`, `dev/gideon-tests/test-cell-equals.tsx`,
+     `dev/gideon-tests/test-cross-piece-server.tsx`,
+     `dev/nested-map-ifelse-test/nested-map-ifelse-test.tsx`,
+     `dev/test/autosave-test.tsx`,
+     `examples/scoped-group-chat/main-plain-inputs.tsx` and
+     `system/self/self.tsx`, the eight of note 444. Where the executor is run
+     alone on the results file of that run's `again` form
+     (`values-corpus.ts again`), 272 of 272 records are the same. Two records
+     hold a name of several parts, in `dev/scope-bug-ct1597-reduce/main.tsx` and
+     `examples/group-chat-room/group-chat-room.tsx`, written as the text of the
+     codec where the earlier file has the name, `#` and the ordinal; the
+     comparison of the two files read both as one form. No key and no identifier
+     is in a results file. No type of the corpus uses `ArrayByKey`, and no
+     module calls a pattern through `asInstance()`, so rulings Z54 to Z56 change
+     no record. The comparison of labels and the cost measurement were not run
+     again.
+460. **Rules of the task not kept, and what is not verified.** The tests of the
+     key forms, of ruling Z56 (one of four), of ruling Z54, of ruling Z55, of
+     the key fields carried to a reader, of the segment of a key and of the
+     catalog failed first on an assertion. The mass rewrite of the executor's
+     tests for the hashed identifiers was made after the executor changed; the
+     three tests of an identifier were then seen to fail against an executor
+     that was changed back to a joined form for the run. The tests of the plan
+     for the record names were rewritten before the crate changed and were not
+     run before it. The test of the record name in the identifier of an
+     `asInstance()` instance, the two tests on `fixtures/set-over-link.tsx`, the
+     test of the order of the members, three of the four tests of ruling Z56 and
+     the test of the result of another per-element construct given to an
+     instance passed when they were written and pin what existed. The names of
+     the memo have no test of their own. Not done: the secret is still a string
+     that the store holds and not a labeled document; the `unhashed:`
+     identifiers of the crate; and the cost measurement and the comparison of
+     labels over the corpus. Not verified: nothing of rulings Z54 to Z57 is
+     compared with today's runtime, which has neither `ArrayByKey` nor
+     `asInstance()`; the statements of note 450 on where the documents' form of
+     an identifier is not followed rest on a reading of the code; and the cost
+     of the reads of note 451 was not measured.
