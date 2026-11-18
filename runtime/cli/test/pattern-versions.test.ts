@@ -179,6 +179,27 @@ describe("pattern-versions", () => {
       );
     });
 
+    it("asks the index to keep a checkpoint private, and does not say the sharing setting will share it", async () => {
+      await joinIndex();
+      const { client, published } = stubClient({
+        publish: () =>
+          Promise.resolve({ ...RECORDED, autoShare: "when_used" as const }),
+      });
+      const { deps } = depsWith(client);
+
+      const kept = await recordDeployedVersion(
+        deployed({ keepPrivate: true }),
+        deps,
+      );
+      const shared = await recordDeployedVersion(deployed(), deps);
+
+      expect(published.map((r) => r.keepPrivate)).toEqual([true, undefined]);
+      expect(versionLine(kept)).toBe(
+        "Kept as private version 3; cf pattern history lists them.",
+      );
+      expect(versionLine(shared)).toMatch(/shares it anonymously/);
+    });
+
     it("makes no index call and reads no pattern id on a machine that never joined, and says so only the first time", async () => {
       const { client, published } = stubClient();
       const { deps, opened } = depsWith(client);
@@ -536,6 +557,58 @@ describe("pattern-versions", () => {
         [entry, "system:x.tsx"],
       ]);
     });
+
+    it("keeps no version with --index-version none, a private one with private, and refuses anything else", async () => {
+      const recorded: (boolean | undefined)[] = [];
+      const lines: string[] = [];
+      const run = (indexVersion: string | undefined) =>
+        applyPieceSourceCommandAction(
+          {
+            identity: "/unused/test.key",
+            space: "s",
+            apiUrl: "https://cf.dev",
+            ...(indexVersion === undefined ? {} : { indexVersion }),
+          },
+          entry,
+          {
+            setPieceSourceFromCommand: (_options, _main, deps) => {
+              deps?.onDeployed?.({
+                program: PROGRAM,
+                patternId: () => Promise.resolve("pat-1"),
+                piece: { space: "did:key:z6Mkspace", id: "fid1:p" },
+              });
+              return Promise.resolve({
+                config: { piece: "fid1:p" },
+                update: {
+                  ref: { identity: "pat-1", symbol: "default" },
+                  revisionId: "rev-1",
+                  seq: 7,
+                  refresh: { status: "completed" },
+                },
+              } as never);
+            },
+            recordVersion: (deployed) => {
+              recorded.push(deployed.keepPrivate);
+              return Promise.resolve({ status: "failed", reason: "index down" });
+            },
+            render: () => {},
+            warn: (line) => lines.push(line),
+            hint: () => {},
+          },
+        );
+
+      await run("none");
+      expect(recorded).toEqual([]);
+      expect(lines).toEqual([]);
+
+      await run("private");
+      await run("auto");
+      await run(undefined);
+      expect(recorded).toEqual([true, undefined, undefined]);
+
+      await expect(run("off")).rejects.toThrow(/--index-version takes/);
+      expect(recorded).toHaveLength(3);
+    });
   });
 
   describe("piece new", () => {
@@ -637,6 +710,25 @@ describe("pattern-versions", () => {
       );
 
       expect(recorded.map((d) => d.entry)).toEqual([entry]);
+
+      await captureStderr(() =>
+        newPieceFromCommand(
+          { ...config, indexVersion: "none" },
+          entry,
+          deps as never,
+        )
+      );
+      await captureStderr(() =>
+        newPieceFromCommand(
+          { ...config, indexVersion: "private" },
+          entry,
+          deps as never,
+        )
+      );
+      expect(recorded.map((d) => [d.entry, d.keepPrivate])).toEqual([
+        [entry, undefined],
+        [entry, true],
+      ]);
     });
   });
 });

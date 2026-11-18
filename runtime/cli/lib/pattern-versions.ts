@@ -181,6 +181,12 @@ export interface DeployedSource {
    * repository pattern, which is not the person's own work.
    */
   origin?: string;
+
+  /**
+   * Keep the version private whatever the person's sharing setting says:
+   * a checkpoint, which only an explicit share hands to anyone.
+   */
+  keepPrivate?: boolean;
 }
 
 /** What recording a deploy as a version came to. */
@@ -192,6 +198,9 @@ export type VersionOutcome =
     created: boolean;
 
     response: PatternIndexPublishResponse;
+
+    /** The deploy asked for the version to stay private. */
+    keptPrivate?: boolean;
   }
   | {
     status: "not-joined";
@@ -302,8 +311,14 @@ export async function recordDeployedVersion(
         deployed.piece.space,
         deployed.piece.id,
       ),
+      ...(deployed.keepPrivate === true ? { keepPrivate: true } : {}),
     });
-    return { status: "recorded", created: response.created, response };
+    return {
+      status: "recorded",
+      created: response.created,
+      response,
+      ...(deployed.keepPrivate === true ? { keptPrivate: true } : {}),
+    };
   } catch (error) {
     return { status: "failed", reason: failureReason(error) };
   }
@@ -364,7 +379,7 @@ export function versionLine(outcome: VersionOutcome): string | undefined {
           response.seq ?? "?"
         }; cf pattern history lists them.`
         : "No new version: your newest one already has this source.";
-      return response.autoShare === "when_used"
+      return response.autoShare === "when_used" && outcome.keptPrivate !== true
         ? `${kept} Your sharing setting shares it anonymously once you open it in a loom.`
         : kept;
     }

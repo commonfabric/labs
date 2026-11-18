@@ -2543,6 +2543,10 @@ export const piece = targetOptions(
     "Base URL of the pattern index --from-index reads.",
   )
   .option(
+    "--index-version <mode:string>",
+    "How the deploy is kept in the pattern index: auto (a version, shared as your sharing setting says), private (a version kept private whatever the setting says), or none (no version, and no wait on the index).",
+  )
+  .option(
     "--request-key <key:string>",
     "Reuse a creation request after an uncertain result without creating another piece.",
   )
@@ -2703,6 +2707,10 @@ export const piece = targetOptions(
   .option(
     "--origin <origin:string>",
     "Record this origin (a system: ref or fabric URL) with the revision, so the piece follows it from then on. Without it, setsrc detaches the piece.",
+  )
+  .option(
+    "--index-version <mode:string>",
+    "How the deploy is kept in the pattern index: auto (a version, shared as your sharing setting says), private (a version kept private whatever the setting says), or none (no version, and no wait on the index).",
   )
   .option(
     "--check",
@@ -3604,6 +3612,9 @@ export interface PieceCLIOptions {
 
   /** `setsrc`: the origin the piece follows from then on. */
   origin?: string;
+
+  /** `setsrc` and `new`: how the deploy is kept in the pattern index. */
+  indexVersion?: string;
   json?: boolean;
 }
 
@@ -5303,6 +5314,30 @@ export async function recordVersionInIndex(
 }
 
 /**
+ * How `--index-version` keeps a deploy: `auto` records a version the
+ * sharing setting may share, `private` records one it never shares on its
+ * own, and `none` records nothing, so a deploy in a tight edit loop never
+ * waits on the index.
+ */
+export type IndexVersionMode = "auto" | "private" | "none";
+
+/**
+ * Parses `--index-version`; `auto` when it is not given.
+ *
+ * @throws ValidationError for any other value.
+ */
+export function parseIndexVersionMode(
+  value: string | undefined,
+): IndexVersionMode {
+  if (value === undefined || value === "auto") return "auto";
+  if (value === "private" || value === "none") return value;
+  throw new ValidationError(
+    `--index-version takes auto, private or none, not ${JSON.stringify(value)}.`,
+    { exitCode: 1 },
+  );
+}
+
+/**
  * The version a deploy is recording, started from `onDeployed` once the
  * deploy commits; `settle` waits for it, prints its one line, if any, and
  * answers the outcome (`undefined` when nothing was deployed). The deploy
@@ -5315,6 +5350,7 @@ function versionRecorder(
   entry: string,
   origin: string | undefined,
   print: (line: string) => void,
+  mode: IndexVersionMode = "auto",
 ): {
   onDeployed: (deployed: DeployedProgram) => void;
   settle: () => Promise<VersionOutcome | undefined>;
@@ -5322,10 +5358,12 @@ function versionRecorder(
   let pending: Promise<VersionOutcome> | undefined;
   return {
     onDeployed: (deployed) => {
+      if (mode === "none") return;
       pending = record({
         entry,
         ...deployed,
         ...(origin === undefined ? {} : { origin }),
+        ...(mode === "private" ? { keepPrivate: true } : {}),
       });
     },
     settle: async () => {
@@ -5477,12 +5515,14 @@ export async function newPieceFromCommand(
   ) {
     throw new Error("`--input-file` must contain a JSON object.");
   }
+  const versionMode = parseIndexVersionMode(options.indexVersion);
   const version = main === undefined ? undefined : versionRecorder(
     deps.recordVersion ??
       ((deployed) => recordVersionInIndex(spaceConfig.identity, deployed)),
     absPath(main),
     undefined,
     deps.note ?? note,
+    versionMode,
   );
   const { pieceId, name } = await (deps.newPiece ?? newPieceWithReceipt)(
     spaceConfig,
@@ -5877,6 +5917,7 @@ export async function applyPieceSourceCommandAction(
     absPath(mainPath),
     options.origin,
     deps.warn ?? note,
+    parseIndexVersionMode(options.indexVersion),
   );
   const { config, update } = await (
     deps.setPieceSourceFromCommand ?? setPieceSourceFromCommand
