@@ -111,6 +111,16 @@ describe("the values of a fixture", () => {
     expect(comparison.compared).toBe(18);
   });
 
+  it("lists the identifier of each document that the executor stored, in order", async () => {
+    const [{ comparison }] = await compareFixtures("handler");
+    const identifiers = comparison.documentIds ?? [];
+
+    // The result, the argument, and the cells that the event wrote.
+    expect(identifiers).toContain("result");
+    expect(identifiers.length).toBeGreaterThan(2);
+    expect(identifiers).toEqual([...new Set(identifiers)].sort());
+  });
+
   it("are equal for a handler that sets a cell and pushes onto a list", async () => {
     const [{ comparison }] = await compareFixtures("handler");
 

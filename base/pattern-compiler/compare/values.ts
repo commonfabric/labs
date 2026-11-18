@@ -73,6 +73,11 @@ export type ValueComparison = {
   differences: Difference[];
   /** The documents the executor stored at the end, by kind. */
   documents?: Record<string, number>;
+  /**
+   * The identifier of each document the executor stored at the end, in
+   * the order of their text, without the constants held for a handle.
+   */
+  documentIds?: string[];
   /** The documents today's run stored at the end (`Values.documents`). */
   runtimeDocuments?: number;
   counts?: Instance["counts"];
@@ -635,6 +640,9 @@ export class ExecutorRun implements StreamRecord {
     comparison.storedStreams = instance.streams().length;
     comparison.runtimeDocuments = runtime.documents?.end;
     comparison.documents = instance.documents();
+    comparison.documentIds = [...instance.store.docs].flatMap((
+      [id, { kind }],
+    ) => kind === "held constant" ? [] : [id]).sort();
     comparison.counts = instance.counts;
     return comparison;
   }
