@@ -262,14 +262,19 @@ comparing it against that definition on every mutation, so drift throws at the
 mutation that caused it.
 
 The trigger index checks itself, under `ENV=test`, which the runner's own test
-task sets. On every registration and removal it asserts that the path trie in
-`runtime/runner/src/scheduler/entity-triggers.ts` holds what the per-action
-record beside it holds, under `arraysOverlap()`, and throws naming the write
-path and the paths the two disagree on. Mutations moving a few paths use full
-scans of the record. Broad mutations use a sorted reference of the recorded
-paths, finding proper prefixes by binary search and extensions by a contiguous
-range. The root probe still compares the whole readership on every mutation,
-while probing each path of a broad mutation uses the matching reads alone.
+task sets. On every registration and removal it asserts that the sorted rows in
+`runtime/runner/src/scheduler/entity-triggers.ts` keep their order and bounds,
+and that they hand over, for the root write and each path the mutation moved,
+exactly the (action, path) pairs that an independent per-action record finds
+under `arraysOverlap()`, each once. That record is kept only while the check
+runs and is written by registration and removal, never derived from the rows,
+so a removal that took the wrong reader shows as a pair missing and a pair
+invented. Drift throws naming the write path and each pair the two disagree
+on. Mutations moving a few paths use full scans of the record. Broad mutations
+use a sorted reference of the recorded pairs, finding proper prefixes by
+binary search and extensions by a contiguous range. The root probe still
+compares the whole readership on every mutation, while probing each path of a
+broad mutation uses the matching reads alone.
 Nothing needs turning on to get that, and nothing turns it off: a lane that
 does not set `ENV=test`, which is every lane outside the runner, `cf-harness`,
 `llm`, and `toolshed` suites, does not carry the check. The profile scripts run
