@@ -134,19 +134,21 @@ next.
   272, notes 281 to 302, notes 307 to 320, notes 325 to 341, notes 344
   to 363, notes 367 to 382, notes 387 to 402, notes 406 to 414,
   notes 419 to 426, notes 432 to 443, notes 446 to 458, notes
-  461 to 474 and 478, notes 479 to 497, 499 and 502, and notes 506 to
-  509, 511, 513, 517 and 520 are written into the documents.
+  461 to 474 and 478, notes 479 to 497, 499 and 502, notes 506 to
+  509, 511, 513, 517 and 520, and notes 523, 526, 527, 529, 530, 532
+  and 533 are written into the documents.
   Notes 273 to 280, which measure cost, are written into
   [What compiling, running, and storing cost](#what-compiling-running-and-storing-cost)
   below, and notes 303 to 306, 321 to 324, 342 and 343, 364 to 366,
   383 to 386, 403 to 405, 415 to 418, 427 to 431, 444 and 445, 459
-  and 460, 475 to 477, 498, 500, 501, 503 and 504, and 505, 510, 512,
-  514 to 516, 518, 519, 521 and 522, the results of
+  and 460, 475 to 477, 498, 500, 501, 503 and 504, 505, 510, 512,
+  514 to 516, 518, 519, 521 and 522, and 524, 525, 528, 531, 534 and
+  535, the results of
   the value comparison, the measurements of growth and the
   later runs of the
   label comparison and the cost measurement, into
   [What the prototype's executor computes](#what-the-prototypes-executor-computes).
-  The latest prototype commit read is `e63851c1ee`. From commit
+  The latest prototype commit read is `3d33db2e4d`. From commit
   `3e518147df` on the crate also emits value code and an executor runs
   a plan with it. At `3e518147df`, in the fixtures 122 of 122 compared
   values equal those of today's runtime, and in the corpus 4,472 of
@@ -250,7 +252,21 @@ next.
   lists on today's runtime, the part documents, a keystroke in a row that has
   state, a list that is replaced again and again, and run times beside
   today's runtime, is in [The corpus at commit
-  `e63851c1ee`](#the-corpus-at-commit-e63851c1ee). No
+  `e63851c1ee`](#the-corpus-at-commit-e63851c1ee). At `3d33db2e4d` the
+  executor keeps the part documents of provisional decisions P20, P25
+  and P26 as documents beside the value that its store holds for each
+  document, and its value code does not read through them. The fixtures
+  are 1,004 of 1,013 and the corpus 6,013 of 6,107 over 214 modules, as
+  before, and no output or write edge is looser than today's. One change
+  of one row writes at most 139,217 bytes in 4 documents for rows of 23
+  bytes and 149,137 bytes in 6 documents for rows of 2,000 bytes, at
+  100,000 rows, where an append to a list of 10,000 wrote 610,081 bytes
+  under the rule that P20 replaces. P18 and P19 are not built; the
+  copies of each callee in the plans of the corpus were compared record
+  by record in their place. The crate reports the warning of P21, which
+  is withdrawn for what the count over the corpus showed. The
+  structural findings of the round are first in [The corpus at commit
+  `3d33db2e4d`](#the-corpus-at-commit-3d33db2e4d). No
   compared row of the
   corpus evaluates the label of an
   index: the 54 index slots of the corpus plans are read by outputs
@@ -3703,6 +3719,356 @@ the executor's tests and the corpus exercise; the times; and that today's
 figures are free of the harness.
 
 
+### The corpus at commit `3d33db2e4d`
+
+The figures of this section are from the prototype author's runs, as the
+prototype's notes 523 to 535 and the author's report of the round give them.
+The coordinator of this work ran, at that commit, the tests of the crate (497
+pass and 1 is ignored, the test of the size of a plan under P18), the tests
+under Deno (119 tests with 509 steps pass) and the fixtures (59 of 59 runs,
+1,004 of 1,013 values equal), and not the corpus, the measurements of the
+part documents or the times. Each time is the mean of 20 changes on one
+instance in one run, on one machine: the counts are exact and the times are
+not.
+
+Four cases are measured, and each figure below names its case: a `map` over
+an array of references; a `map` over an array of plain values in place with
+no declared key; the same with a key declared by `ArrayByKey`; and a `map`
+over the result of a `filter` of plain values in place. Nothing in this
+section was measured over a plain array generated from scratch, over a
+`flatMap`, or over the result of a `filter` of an array of references.
+
+The round built provisional decisions P20, P25 and P26 as documents
+(`exec/parts.ts`): for every document of the executor's store, the documents
+that it is stored in, kept change by change beside the one value that the
+store holds, with a reader outside the executor that reads every document of
+an instance back from them after each change and compares. Value code does
+not read through them. It did not build P18 and P19. It built the warning of
+P21 in the crate.
+
+#### First: the structural findings
+
+Nine, in the order of the round's report. "Bytes" are those of the documents
+that one change writes, each whole. "Patch" is what the writer and the
+derivation put into them.
+
+1. **A record with many members is not stored in chunks, and its document
+   follows the data.** A gap in P20 and P26, which speak of arrays alone; not
+   fixed in the prototype. `fixtures/rows-state.tsx`, as a `map` over an
+   array of references, holds its elements in a record `pool` of the
+   argument. One keystroke in one row writes 68,456 bytes of part documents
+   at 100 rows, 109,141 at 1,000 and 572,774 at 10,000, for a patch of 25
+   bytes: the document that holds the record is written whole. Every map
+   that is keyed by an identifier has this shape. It is the one measured
+   size that still follows the length. Provisional decision P27 stores such
+   a record in chunks (question 297).
+2. **With chunks, an edit of one row of 23 bytes writes its chunk whole.** A
+   consequence of P20 where a document is written whole; measured, not
+   fixed. Over an array of plain values in place with `ArrayByKey`, at
+   10,000 rows, an edit writes 2 documents and 122,242 bytes for a patch of
+   24 bytes, and an append 4 documents and 123,166 bytes for a patch of 71.
+   The rule that P20 replaces wrote 24 bytes for that edit and 610,081 for
+   the append. The table by the size of a chunk and the balance are below.
+   What today's storage does with such a write was read in source after the
+   round, and is in question 290, point (a): the writer sends the patch, the
+   server stores the patch and every tenth time the document, and each
+   subscriber receives the document.
+3. **The key in the identifier of a part is not defined for a source
+   array.** A conflict between P26 and `execution-and-storage.md` §4.10 as
+   it was; worked around, with the alternative measured. A row of an
+   argument array has a key only for a reader, by the reader's declared key
+   fields (by ruling); the store has one list of keys for each set of key
+   fields and none before the first reader. With rows of 2,000 bytes at
+   10,000 rows: with `ArrayByKey`, the first edit after a reader formed keys
+   renames the part, 3 documents and 65,977 bytes, against 2 documents and
+   3,976 bytes with an identifier that the array mints; with no declared
+   key every edit renames it, 5 documents and 128,748 bytes with 2 parts
+   deleted and 2 created, against 4 documents and 66,747 bytes minted, where
+   the 2 that remain are the row of the result, which leaves and enters
+   under its new key. Provisional decision P28 takes the minted identifier
+   (question 298).
+4. **A reference by key has no way to its chunk.** A gap in P20, which has a
+   reference by key "resolved through chunks"; not built. A chunk is found
+   by position, and the position of a key needs the keys of the array,
+   which the executor keeps in memory. From the documents alone it is a
+   read of every chunk and a salted hash of every row, once for each set of
+   key fields. `push`, `set` and a `splice` do not conflict with P26: a
+   `push` and a `splice` write one chunk and the lists above it, and a
+   `set` of the whole array is compared with what is stored. Provisional
+   decision P29 adds an index for an array that declares key fields
+   (question 299).
+5. **A position with no number in the chunk lists.** P20 as it was first
+   stated; resolved by P25, which is what the prototype builds by default.
+   With no numbers the row at position 50,000 of 100,000 is read through 20
+   documents; with them, through 2. The price is that every insertion and
+   removal writes one list for each level, and the list of the first level
+   is in the document that holds the array, so an insertion writes 4
+   documents where it would write 2.
+6. **Rows that are inserted one at a time at one end leave every chunk half
+   full.** A consequence of the split in two; measured, not fixed. 40,000
+   rows of 23 bytes, one insertion in each transaction: appended, or
+   prepended, they stand in 55 chunks where 28 would hold them; inserted at
+   random positions, in 32. After nine tenths are removed at random, 8 or 9
+   chunks stand where 3 would hold the rows, the smallest of 12,867 bytes.
+   The number of chunks stays within about three times the least, and no
+   run of small chunks is left.
+7. **Under P18 the plan still doubles with each level.** Not built. Two call
+   sites for each level, at a depth of 1 to 6: plans of 2,261, 5,118,
+   11,134, 23,637, 49,512 and 103,508 bytes. That is the fixture of the
+   ignored test.
+8. **Two call sites with one name in one body have the same `site` step.** A
+   defect of the crate against `plan-and-label-templates.md` §1.3; found,
+   not fixed. Three tags `<SelectControl>` in one body each get the step
+   `{ site: "SelectControl" }` with no ordinal. 17 of the 382 plans of the
+   corpus have two such sites. A state cell of such a callee has one
+   identifier at both sites. No compared value shows it, because no such
+   callee of the runs holds a state cell that a compared value reads.
+9. **The time of a prepend and of a removal of the first row follows the
+   length:** 8 ms at 100,000 rows against 0.6 ms for an append. It is the
+   executor's renumbering of positions (question 260), as in the round
+   before, and no cost of the layout.
+
+Bounded at this commit, with tests: the bytes of the documents that one
+change writes. At 100,000 rows they are at most 139,217 bytes in 4 documents
+for rows of 23 bytes and 149,137 bytes in 6 documents for rows of 2,000
+bytes. One row is read through 2 or 3 documents, and the first 20 rows
+through 2, or through 22 where each row is a part.
+
+#### One change of a list in part documents
+
+The layout is the default of the round: `PART_MIN_BYTES` 1,024, with a part
+stored in place again under 512; `DOCUMENT_MAX_BYTES` 65,536; the numbers in
+the chunk lists (P25); and the identifier of a part by the key of the reader
+that declares the most key fields. Rows of 23 bytes are those of
+`fixtures/lists.tsx`, 45 bytes as JSON. Rows of 2,000 bytes have a title of
+1,960 characters, so each row of the argument and of the result is a part.
+The case is a `map` over an array of plain values in place with
+`ArrayByKey`. Each line is the first change of its kind on a settled
+instance, and the time is the mean of 20 further changes
+(`compare/parts-growth.ts`).
+
+| Rows of | Length | Change | Documents | Bytes | Patch | Documents read for one row | For 20 rows | Documents in all | ms |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 23 bytes | 100 | append | 2 | 6,256 | 65 | 1 | 1 | 2 | 0.06 |
+| 23 bytes | 100 | edit one field | 2 | 6,199 | 24 | 1 | 1 | 2 | 0.06 |
+| 23 bytes | 1,000 | append | 2 | 64,759 | 65 | 1 | 1 | 2 | |
+| 23 bytes | 1,000 | edit one field | 2 | 64,697 | 24 | 1 | 1 | 2 | |
+| 23 bytes | 10,000 | append | 4 | 123,166 | 71 | 2 | 2 | 13 | 0.14 |
+| 23 bytes | 10,000 | prepend | 4 | 123,208 | 71 | 2 | 2 | 13 | 0.71 |
+| 23 bytes | 10,000 | edit one field | 2 | 122,242 | 24 | 2 | 2 | 13 | 0.06 |
+| 23 bytes | 10,000 | remove first | 4 | 123,078 | 2 | 2 | 2 | 13 | 0.10 |
+| 23 bytes | 10,000 | remove last | 4 | 123,027 | 2 | 2 | 2 | 13 | 0.02 |
+| 23 bytes | 100,000 | append | 4 | 139,217 | 74 | 2 | 2 | 112 | 0.57 |
+| 23 bytes | 100,000 | prepend | 4 | 139,203 | 74 | 2 | 2 | 112 | 8.22 |
+| 23 bytes | 100,000 | edit one field | 2 | 130,916 | 24 | 2 | 2 | 110 | 0.37 |
+| 23 bytes | 100,000 | remove first | 4 | 139,070 | 2 | 2 | 2 | 110 | 1.43 |
+| 23 bytes | 100,000 | remove last | 4 | 139,072 | 2 | 2 | 2 | 110 | 0.18 |
+| 2,000 bytes | 100 | append | 4 | 16,520 | 3,977 | 2 | 21 | 244 | 0.11 |
+| 2,000 bytes | 100 | edit one field | 3 | 10,185 | 3,930 | 2 | 21 | 202 | 0.08 |
+| 2,000 bytes | 10,000 | append | 6 | 129,644 | 3,979 | 3 | 22 | 20,064 | 0.11 |
+| 2,000 bytes | 10,000 | prepend | 6 | 129,644 | 3,979 | 3 | 22 | 20,064 | 0.85 |
+| 2,000 bytes | 10,000 | edit one field | 3 | 65,977 | 3,930 | 3 | 22 | 20,022 | 0.16 |
+| 2,000 bytes | 10,000 | remove first | 4 | 125,417 | 2 | 3 | 22 | 19,980 | 0.24 |
+| 2,000 bytes | 100,000 | append | 6 | 149,137 | 3,980 | 3 | 22 | 200,236 | 0.35 |
+| 2,000 bytes | 100,000 | prepend | 6 | 149,137 | 3,980 | 3 | 22 | 200,236 | 8.15 |
+| 2,000 bytes | 100,000 | edit one field | 3 | 69,202 | 3,930 | 3 | 22 | 200,192 | 0.22 |
+| 2,000 bytes | 100,000 | remove first | 4 | 144,911 | 2 | 3 | 22 | 200,150 | 1.57 |
+| 2,000 bytes | 100,000 | remove last | 4 | 144,911 | 2 | 3 | 22 | 200,150 | 0.14 |
+
+The edit of a row of 2,000 bytes writes 3 documents because the part of the
+argument's row is renamed (finding 3). The other cases differ from this one
+in the edit alone:
+
+| Case | Rows of | Edit at 10,000: documents, bytes | Edit at 100,000: documents, bytes | Why |
+| --- | --- | ---: | ---: | --- |
+| Plain values in place, no declared key; and the result of a `filter` of them | 23 bytes | 3, 122,556 | 3, 133,814 | One document more, the one that holds the result's list: the row leaves and enters under another key |
+| The same | 2,000 bytes | 5, 128,748 | 5, 141,657 | 2 parts deleted and 2 created |
+| Array of references | 23 bytes | 2, 48,048 | 2, 51,048 | The element is a document of its own; the edit writes it and the chunk of the result |
+| Array of references | 2,000 bytes | 2, 3,976 | | The row of the result is a part |
+
+An append over an array of references creates the cell: 5 documents, 106,046
+bytes at 10,000 rows and 124,578 at 100,000, with 10,014 and 100,114
+documents in all. Over the result of a `filter` a change takes 3 to 14 ms at
+100,000 rows, which is the kept list of the `filter` that the executor forms
+again, as in the round before.
+
+**A keystroke in a row that has state, and a polled list, in part
+documents** (note 528; `compare/rekey-cost.ts`, `fixtures/rows-state.tsx`).
+Part documents written for each keystroke and their bytes, the mean of 20:
+
+| Case | At 100 rows | At 1,000 | At 10,000 | Patch |
+| --- | ---: | ---: | ---: | ---: |
+| Plain values in place, no declared key | 5, 57,491 | 6, 101,950 | 6.1, 106,995 | 610; one part created for each keystroke |
+| Plain values in place, `ArrayByKey` | 5, 64,243 | 5, 102,143 | 5, 128,349 | 81 |
+| Array of references | 4, 68,456 | 4, 109,141 | 4, 572,774 | 25; the last by the record of finding 1 |
+
+A row of this fixture's result is about 600 bytes, under `PART_MIN_BYTES`,
+and stays in its chunk, so 100 rows are one document of 60,000 bytes that
+each keystroke writes. A list of 100 records that is replaced 100 times
+holds as many part documents as the store holds documents: 202 at the start
+and 20,202 at the end with no declared key, and 202 throughout with
+`ArrayByKey` and over an array of references. The layout adds nothing to
+question 255 and removes nothing.
+
+#### The size of a chunk, and the balance
+
+Over an array of plain values in place with `ArrayByKey`, 10,000 rows of 23
+bytes, by `DOCUMENT_MAX_BYTES` (`--max`), and with every row a part
+(`--min=16`):
+
+| Maximum | Rows are | Edit: documents, bytes | Append: documents, bytes | Documents read for one row, for 20 | Documents in all |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 65,536 | in the chunk | 2, 122,242 | 4, 123,166 | 2, 2 | 13 |
+| 16,384 | in the chunk | 2, 32,134 | 4, 35,372 | 2, 2 | 44 |
+| 4,096 | in the chunk | 2, 8,130 | 7, 14,794 | 3, 3 | 173 |
+| 1,024 | in the chunk | 2, 2,026 | 12, 6,222 | 4, 4 | 721 |
+| 65,536 | parts | 3, 62,071 | 6, 125,736 | 3, 22 | 20,022 |
+| 4,096 | parts | 3, 4,163 | 10, 16,556 | 4, 23 | 20,312 |
+
+With rows of 2,000 bytes, which are parts at each maximum, an edit writes
+65,977, 20,283, 8,069 and 7,043 bytes at a maximum of 65,536, 16,384, 4,096
+and 1,024, and an append 129,644, 42,436, 20,464 and 10,740.
+
+**The balance.** An edit writes one chunk of the argument and one of the
+result, so it costs about twice the maximum, at any length. An insertion
+writes those and one list for each level, and the list of the first level
+holds `N * s / C` links of about 75 bytes for `N` rows of `s` bytes in
+chunks of `C` bytes. A chunk and its list are of one size at
+
+```text
+C = sqrt(75 * N * s)
+```
+
+which is about 5,900 bytes for 10,000 rows of 45 bytes of JSON, 18,600 for
+100,000 and 59,000 for a million. So 65,536 is balanced for a million small
+rows and is about ten times what a list of 10,000 needs. A maximum of 4,096
+writes 8,130 bytes for an edit and 14,794 for an append at 10,000 rows, with
+173 documents where 13 stand and 3 reads for a row where 2 are made. A
+smaller chunk pays for itself in splits: at 1,024 an append writes 12
+documents. Where every figure is its patch, 2 to 74 bytes for a row of 23
+bytes, the larger chunk is the better one, since it is fewer documents and
+fewer reads. A maximum that follows the size of the array, near the balance,
+would bound an insertion at about three chunks of that size at every length;
+it is not what P20 states and is not built. Which of the two a store charges
+for is question 290, point (a), with what the source shows.
+
+#### A pattern compiled in, written once: the copies of one callee compared
+
+P18 is not built: the crate writes a callee out at every call
+(`inline_pattern` and `inline_argument` in `src/plan.rs`). In its place the
+round made the comparison that question 289 left open, on the plans that the
+crate emits for the corpus (`emit --corpus`): 382 plans, 124 with a call
+site, 324 chains of sites, 263 of depth 1 and 61 of depth 2. Two chains of
+one plan are taken as copies of one callee where their cones are written at
+the same places of the source. Each copy is compared with the first copy of
+its callee, cone by cone in the order of the plan: the slots of `Cone.slots`
+by root kind, path and class, the edges into the cone by kind, the write
+edges by target and path, the outputs by path, and each template with its
+`shared` nodes written in place and its indexes left out. That is 53 pairs;
+the 82 pairs of the round before were every pair of copies. The scripts are
+not in the tree.
+
+| Pairs | What differs | Whether one callee record holds it |
+| ---: | --- | --- |
+| 16 | Indexes alone | Yes |
+| 2 | Another path of the caller's argument (`dev/experimental/folksonomy-demo.tsx`: `tags` bound to `itemATags` at one site and to `itemBTags` at another) | Yes: an argument slot, and the binding of the site |
+| 1 | A slot at one site and an output at the other (the same module: `scope` bound to a computed value at `tagsA` and to a state cell at `tagsC`, so the cone has an edge and an `output` node at one site and a slot at the other) | Yes, by "What an argument slot stands for in a rule" of `plan-and-label-templates.md` §1.1. Which of `Cone.slots` and the incoming edges an instance has is decided at binding |
+| 19 | Paths below a path that the callee passes on, 18 in the outputs and 1 in the write edges (`examples/suggestion-test/suggestion-test.tsx`: `context: {}` gives one write edge at `context`, and `context: { content, value }` two, at `context/content` and `context/value`; `dev/catalog/stories/kitchen-sink-story.tsx`: a callee that places its `children` has an output for each child that the call wrote, 5 at one site and 1 at another) | Only with a rule that the document did not state: a write edge or an output of a callee whose template is an argument slot stands, at a site that binds the path by a literal, for one entry for each entry of the literal |
+| 16 | The number of cones | No difference of the callee: the defect of finding 8 makes one chain of several sites |
+
+So on the corpus one callee record with the binding of each site gives the
+records of the written-out form, with that one rule added, and "A callee
+record depends on nothing of its call sites" holds. P18 is amended by the
+rule. What the comparison does not show is that values, identifiers and
+stored documents are preserved, which needs the build.
+
+The points of question 289 from the written-out plans alone (note 530): the
+stream of a binding as what a site binds a path to is confirmed (of the
+state paths of the bindings of callee copies, 1,443 are bound to a slot, 282
+to a constant, 49 to an output, 140 to the stream of a binding of the same
+copy, and 8 to the stream of a binding of the caller, the first in
+`apps/lunch-poll/main.tsx`; none is the result of the instance). Where the
+callee's result is held is not determined: 100 of the 3,867 outputs of
+callee copies are kept, and whether each stands at a place that
+`CallSite.result` would list was not examined. A construct of the callee
+over an argument that is a collection is not determined: the collections of
+callee copies have as their source an output 133 times, a slot 32 times and
+a collection 10 times, and the 10 were not examined. On the order of the
+cones, type parameters, whether a callee record is the plan of its pattern,
+and what `Cone.code` keys, the written-out plans say nothing.
+
+**P19.** `src/flow.rs` is not changed. Over the corpus the written-out form
+reports one label-flow diagnostic, `cfc-flow:ui-contract` in
+`system/fabrichat/room.tsx`, and none of the four that P19 makes modular.
+So P19 can lose no report of the corpus. Whether the check of a site's
+binding adds one is not known.
+
+#### The warning of P21, counted
+
+The crate reports `array-by-key:state-without-key` from the plan
+(`state_without_key` in `src/plan.rs`), by the decision as revised: for a
+`map`, a `filter` or a `flatMap` whose body holds a state cell, a handler
+binding, an operation or a child instance, where neither the construct's
+array nor the array that a chain of constructs starts at declares a key, and
+where the body reads a member of the element. Over the corpus: 168 reports
+in 80 of the 286 modules that are accepted with a pattern, each at a `map`;
+163 of the bodies hold a handler binding, 10 an operation, 4 a state cell
+and 2 a child instance. With a `lift` or a `computed` counted, as the
+decision first had it, 222 reports in 95 modules. The type of an array does
+not say whether it holds plain values in place or references, so the warning
+is reported for both, and most lists of the corpus are filled by `push` of a
+record through a handle, which stores a reference. Most of the 168 are
+therefore of arrays that hold references at run time, where the cost that
+the warning names does not arise. P21 is withdrawn as a warning of the
+compiler and replaced by a report of the runtime (question 291).
+
+#### The comparison of values and of labels
+
+`values-fixtures.ts`: 59 of 59 runs, 1,004 of 1,013 values equal, as before.
+The seeded run of today's runtime over the 272 modules (`values-corpus.ts
+run`): 215 run by today's runtime, 214 executed, 193 with every value equal
+and every event handled, 6,013 of 6,107 values equal, 94 that differ in 21
+modules, 3 of 541 committed events not handled, and 6,673 evaluations. Its
+report is the text of the round before, line for line. On the executor alone
+(`alone`) the text is the same but for one figure: the derivation
+transactions wrote 1,198,803 bytes where they wrote 1,198,808; the cause was
+not looked for. The comparison of labels (`compare/corpus.ts`): 1,462
+outputs and 148 bounds, 1,332 tighter, 130 whose atom names the pattern,
+none looser or incomparable; 249 write edges, 237 equal and 12 tighter; the
+same text as before. The part documents change no value: they are written
+beside the documents.
+
+**The comparison with stubbed effects is not deterministic.** For the 47
+modules that need `wish` or request an effect (`stubbed`), the run at commit
+`90b5ce25fc`, the last that changes a source file, gives the figures of the
+round before: 45 run, 42 executed, 16 with every value equal, 1,484 of 1,584
+values equal, and 4 of 94 events not handled. The run at `3d33db2e4d`, which
+changes two Markdown files alone, gives 15 with every value equal, 1,482 of
+1,584, and 26 modules with a difference where 25 had one. The module that
+changed is `examples/reactive-now/reactive-now.tsx`: "0s ago" in the
+executor against "1s ago" in today's runtime at one event. That value
+depends on the wall clock between the two sides of the comparison, so two
+runs of this comparison on one source can differ, and a difference in that
+module is no finding.
+
+**What the round's author did not keep or verify** (note 535). The tests of
+`exec/test/parts.test.ts` were seen to fail against a class with no
+behavior before the layout was written. The first two tests of the executor
+through part documents were written after the line they test and were seen
+to fail with that line removed. Not done: P18 and P19 as a build; the reads
+of value code through the part documents; a split point for a record; an
+index from a key to its chunk; the marking over a plain array generated
+from scratch; the kept list of a `filter`; the event time of
+`showcase/battleship/pass-and-play/main.tsx`; the `identity` entries of a
+whole read; and questions 249, 251 and 253. Not verified: the times; the
+layout under a failed transaction, whose changes are applied and undone in
+the part documents as in the store, with no test of its own; and a part
+document or a chunk under concurrent writers, which the executor does not
+have. The author stopped a measurement run three times to change it, once
+by the name of the script and not by its process number, and every figure
+here is from the last run on the final source.
+
+
 ### What the run conformed to
 
 The executor counted where its run kept to the plan.
@@ -5862,34 +6228,65 @@ pointer to its entry.
    at a time can store different values, and today's runtime, which runs the
    writer again, stores the same value in both. The coordinator adopted it only
    so that the work continues.
-2. **Questions 254 and 255,** on keys that are formed from plain values. Over
-   an array of plain values in place with no declared key, each keystroke in a
-   row that has state re-keys the row, moves its state, stores the row again
-   and leaves one new stream document, and a list of 100 records that is
+2. **Questions 254, 255 and 295,** on keys that are formed from plain values.
+   Over an array of plain values in place with no declared key, each keystroke
+   in a row that has state re-keys the row, moves its state, stores the row
+   again and leaves one new stream document, and a list of 100 records that is
    replaced 100 times leaves 20,202 documents where the same list with
    `ArrayByKey` or as an array of references holds 202. Both costs follow from
    owner rulings, that a plain value edited in place is a new element and that
    nothing stored under a key is deleted, and only the owner can change them.
-   P21 adds a warning and changes neither.
-3. **P20,** which replaces the rule on part documents of
-   `execution-and-storage.md` §4.10: a row is a part only from a minimum size
-   on, and a long array is stored in chunks. The rule it replaces turned 2,600
-   small rows into 2,800 documents in one transaction and wrote 610,081 bytes
-   of documents for an append to a list of 10,000. The trade-off of P20: an
-   edit of one small row writes its chunk, a document of up to 65,536 bytes,
-   where storage takes no patch below a path of a document, and under the
-   rule it replaces an edit of a small row with a declared key wrote one
-   part document of 24 bytes. Whether storage takes such a patch is open
-   (question 290, point a). P25 and P26 complete P20: a chunk list holds the
-   number of entries of each chunk, and the arrays of argument documents and
-   state cells are stored in chunks as well, which conflicts with a mergeable
-   `push` unless storage applies the layout (question 296).
+   Question 295 is what a re-key does with the stream document of the old
+   key, on which nothing is assumed. P21 changes none of the three: it was a
+   warning of the compiler, is withdrawn, because the type of an array does
+   not say whether it holds plain values in place or references and 168
+   reports in 80 of 286 corpus modules were mostly for lists of references,
+   and is replaced by a report of the runtime at the first such edit.
+3. **Question 290, point (a),** on what storage does with a write below a path
+   of a document, which decides the size of a chunk. Read in source after
+   prototype round 5: a writer sends a patch of the paths it wrote; the
+   server stores the patch as one row and, after every tenth patch of a
+   document, the whole document as a snapshot; and every subscriber receives
+   the whole document for every change. So an edit of one small row costs
+   the writer its patch, the store the patch and a tenth of the chunk, and
+   each subscriber the chunk. The first favors a large chunk and the last a
+   small one: measured with the chunk written whole, an edit is 122,242
+   bytes in 2 documents at a maximum of 65,536 and 8,130 bytes at 4,096.
+   Not decided. The author of the documents recommends that the design
+   require of storage a sync that carries the patch of a document, after
+   which a chunk is sized for reads alone. With it goes question 296: a
+   mergeable `push` is applied by today's server as an operation on one
+   array of one document, so an array in chunks keeps merging only if
+   storage maintains the layout, which today's does not.
 4. **P18 with P19.** P18 changes the records of a plan and is written in full
-   into `plan-and-label-templates.md` §1.1. It is designed and not built. P19
-   makes the compile-time checks on declared labels modular under it, which is
-   the one point at which the written-out form is not preserved outside the
-   result (question 288).
-5. **P22,** which resolves a conflict of the documents with themselves: a cone
+   into `plan-and-label-templates.md` §1.1. Its status: designed; amended
+   after round 5 by one rule, for a callee that passes an argument on at a
+   site that binds it by a literal; sound on the evidence of the corpus,
+   where each of 53 pairs of copies of one callee is given by one callee
+   record with the binding of its site under that rule; and not built, so
+   that values, identifiers and stored documents are not tested under it.
+   P19 makes the compile-time checks on declared labels modular under it,
+   which is the one point at which the written-out form is not preserved
+   outside the result (question 288). The corpus has no report that P19
+   could lose.
+5. **P20 with P25 to P29,** the rule on part documents of
+   `execution-and-storage.md` §4.10. P20: a row is a part only from a minimum
+   size on, and a long array is stored in chunks. The rule it replaces turned
+   2,600 small rows into 2,800 documents in one transaction and wrote 610,081
+   bytes of documents for an append to a list of 10,000. Built as documents
+   in round 5, one change of one row writes at most 139,217 bytes in 4
+   documents for small rows at 100,000 rows. P25: a chunk list holds the
+   number of entries of each chunk. P26: the arrays of argument documents
+   and state cells are stored in chunks as well. P27: a record with many
+   members is stored in chunks as an array is, which the measurement showed
+   missing (572,774 bytes for one keystroke at 10,000 members). P28: the
+   part of a row is named by a number that the runtime mints and not by the
+   element's key, which a source array does not have and which an edit
+   changes. P29: an array that declares key fields has an index from a key
+   to its chunk. Of the three, P29 is the least settled: as stated, a split
+   of a chunk writes an index entry for each row it moves, and those are
+   spread over the whole index (question 299).
+6. **P22,** which resolves a conflict of the documents with themselves: a cone
    that places the result of a per-element construct holds a reference to the
    collection, so one row's change evaluates no enclosing cone.
 
@@ -6296,8 +6693,31 @@ today.
   of them in how many records they have, so the binding decides which records
   the written-out form has, against the design's sentence that a callee record
   depends on nothing of its call sites; that is the ninth point of question
-  289. *Alternative:* the
-  written-out form as the format. *If decided otherwise:* those records and
+  289. *Amended after round 5* (prototype notes 529 and 530, at commit
+  `3d33db2e4d`). The round compared each copy of a callee in the plans of the
+  corpus with the first copy of that callee, record by record, 53 pairs: 16
+  are equal but for indexes; 2 have another path of the caller's argument; 1
+  has a slot at one site and an output at another; 19 differ in the paths
+  below a path that the callee passes on; and 16 differ for the defect of
+  the crate that follows. *The added rule:* a write edge or an output of a
+  callee whose template is an argument slot stands, at a site that binds
+  that path by a literal, for one entry for each entry of the literal, at
+  the entry's path. With it one callee record with the binding of each site
+  gives the records of the written-out form on the whole corpus, and "a
+  callee record depends on nothing of its call sites" holds. Which of
+  `Cone.slots` and the incoming edges a cone instance has is decided at
+  binding. Both are in `plan-and-label-templates.md` §1.1 ("A callee that
+  passes an argument on, at a site that binds it by a literal" and "What is
+  decided when a cone instance is bound") and its question 170, points (c)
+  and (j). *A defect of the crate to correct first:* two call sites with
+  one name in one body get the same `site` step with no ordinal, in 17 of
+  the 382 plans of the corpus, against `plan-and-label-templates.md` §1.3,
+  which states the case; a state cell of such a callee has one
+  identifier at both sites. *Status after round 5:* designed, amended, sound
+  on the evidence of the corpus, and not built. The plans of two sites per
+  level are 2,261 to 103,508 bytes for 1 to 6 levels, and an ignored test
+  of the crate holds the bound that the build has to meet. *Alternative:*
+  the written-out form as the format. *If decided otherwise:* those records and
   members leave `plan-and-label-templates.md` §1.1, with the provisional
   sentences of its §1.4, §3.2 and §4.4, of `execution-and-storage.md` §2.1 and
   §4.5, of `scheduler-and-serving-loop.md` §10.2 and of the overview, and plans
@@ -6398,45 +6818,85 @@ today.
   document of many small split points that are not the entries of one array.
   Two further points of that question are decided provisionally: whether a
   chunk list holds the number of entries below each link (P25), and which
-  arrays are stored in chunks (P26). *Alternative:* the rule as it was, with the
-  measured cost. *Tests:* none. The prototype has the old rule as an
-  accounting, and its reads do not go through part documents. *If decided
+  arrays are stored in chunks (P26). *Built in round 5* (prototype notes 523
+  to 528, at commit `3d33db2e4d`), as documents beside the value that the
+  executor's store holds, with value code not reading through them. Measured
+  over an array of plain values in place with `ArrayByKey`: one change of
+  one row writes at most 139,217 bytes in 4 documents for rows of 23 bytes
+  and 149,137 bytes in 6 documents for rows of 2,000 bytes, at 100,000
+  rows; one row is read through 2 or 3 documents. *Where the decision was
+  incomplete,* each with what the prototype chose, which
+  `execution-and-storage.md` §4.10 has as assumed (question 300): by the
+  merge rule a chunk whose last row is removed stays beside a neighbor over
+  half the maximum, and is deleted; when an array is stored in place again
+  was not stated, and is when one chunk of at most half the maximum is
+  left; a document of several arrays exceeds the maximum with each array
+  under it, and its largest arrays become documents of their own; an array
+  that is written whole would write every chunk, and is compared with what
+  is stored, which reads the whole array; the first write of a long array
+  creates all its chunks and parts in one transaction, 200,236 documents
+  for 100,000 rows of 2,000 bytes, which no rule avoids; a chunk over the
+  maximum is cut into equal shares, more than two where many rows are
+  written at once; and rows inserted one at a time at one end leave every
+  chunk half full, 55 chunks for 40,000 small rows where 28 would hold
+  them, which is measured and not changed. *What the build showed missing*
+  is decided provisionally as P27, P28 and P29. *Alternative:* the rule as
+  it was, with the measured cost. *Tests:* the executor's tests bound the
+  bytes of one change at two lengths for each case and each size of row.
+  *If decided
   otherwise:* those paragraphs and the sentences that name a chunk are
   removed. The rule is the same for the rows of a kept collection over an array
   of references, over an array of plain values in place, over a plain array
   generated from scratch, and over the result of another per-element
   construct.
-- **P21. A diagnostic for per-element state under a key formed from the
-  value** (question 291; it bears on questions 254 and 255 and decides neither).
-  The coordinator's decision. *Measured* (prototype notes 515 and 516): over an
-  array of plain values in place with no declared key, each keystroke-sized
-  edit of a row that has state re-keys the row, moves its state, stores the row
-  again and leaves one new stream document, 20 stream documents for 20
-  keystrokes; and a polled list of 100 records replaced 100 times leaves 20,202
-  documents, where it holds 202 with `ArrayByKey` or as an array of references.
-  These follow from owner rulings, that a plain value edited in place is a new
-  element and that nothing under a key is deleted, and are not changed.
-  *Decision:* the compiler reports a warning,
-  `array-by-key:state-without-key`, the name assumed, where the body of a
-  per-element construct over an array of plain record values whose array type
-  declares no key holds per-element state: a handler binding, a state cell, an
-  operation, or a child called through `asInstance()`. It covers an array of
-  plain record values in place, a plain array generated from scratch, and a
-  chain of per-element constructs whose first source is one of these. The
-  message names `ArrayByKey` and an array of references as the corrections.
-  *Revised* on the objection of the documents' author: the list of per-element
-  state does not hold an instance of a `lift` or a `computed`, which stores no
-  document under the key, so the warning is not reported for a body that
-  holds nothing else. *Alternative:* no diagnostic. *Reason:* the
-  cost is invisible in the source and a declared key removes it. *How it is
-  written:* `language-subset.md` §4.4.1 ("Per-element state with no declared
-  key"), its catalog of diagnostics and its question 47, and a sentence each in
-  `plan-and-label-templates.md` §1.3 and in `builtin-inventory.md` ("Element
-  keys"). *Assumed in the writing:* it is not reported over an array of
-  references, over an array with a declared key, or over an array of
-  scalars. *Tests:* none; the crate does not report
-  it. *If decided otherwise:* those sentences and the row of the catalog are
-  removed.
+- **P21. A report for per-element state under a key formed from the value:
+  withdrawn as a warning of the compiler, and replaced by a report of the
+  runtime** (questions 291 and 301; it bears on questions 254 and 255 and
+  decides neither). The coordinator's decision. *Measured* (prototype notes
+  515 and 516): over an array of plain values in place with no declared key,
+  each keystroke-sized edit of a row that has state re-keys the row, moves
+  its state, stores the row again and leaves one new stream document, 20
+  stream documents for 20 keystrokes; and a polled list of 100 records
+  replaced 100 times leaves 20,202 documents, where it holds 202 with
+  `ArrayByKey` or as an array of references. These follow from owner
+  rulings, that a plain value edited in place is a new element and that
+  nothing under a key is deleted, and are not changed. *As first decided:*
+  the compiler reports a warning, `array-by-key:state-without-key`, where the
+  body of a per-element construct over an array of plain record values whose
+  array type declares no key holds per-element state: a handler binding, a
+  state cell, an operation, or a child called through `asInstance()`, and,
+  as revised on the objection of the documents' author, not an instance of
+  a `lift` or a `computed`, which stores no document under the key.
+  *Withdrawn* after round 5 (prototype note 532, at commit `3d33db2e4d`):
+  the crate reports the warning 168 times in 80 of the 286 modules of the
+  corpus that are accepted with a pattern, each at a `map`, 163 for a
+  handler binding, 10 for an operation, 4 for a state cell and 2 for a
+  child instance. Most are over lists that are filled by `push` of a record
+  through a handle, which stores references. The type of an array does not
+  say whether it holds plain values in place or references, so the compiler
+  cannot tell the case that costs from the one that does not. *Replacement:*
+  the runtime reports `array-by-key:state-under-value-key`, the name
+  assumed, once for each collection in a session, at the first re-key that
+  moves stored state, or leaves it stored, under a key formed from a whole
+  value. It covers an array of plain values in place, a plain array
+  generated from scratch, and a chain of per-element constructs whose first
+  source is one of these, each with no declared key; over an array of
+  references and with `ArrayByKey` it is never made. *Alternatives:* the
+  warning of the compiler with its reports over lists of references; a type
+  or an annotation that says that an array holds plain values in place,
+  which the subset does not have; and no report. *How it is written:*
+  `execution-and-storage.md` §2.5 ("The runtime reports state under a key
+  formed from a whole value") and its question 112; `language-subset.md`
+  §4.4.1, whose catalog has no row for it, and its question 47; and a
+  sentence each in `plan-and-label-templates.md` §1.3 and in
+  `builtin-inventory.md` ("Element keys"). *Assumed in the writing:* the
+  report is made for a change by which one transaction removes a key at a
+  position and enters another there, and not for a removal alone; it is a
+  warning of the runtime that evaluated the transaction; and a session is
+  the lifetime of that runtime's loaded instance. *Tests:* none for the
+  report. The crate has the withdrawn warning and a test of it. *If decided
+  otherwise:* that paragraph and those sentences are removed or replaced.
+  Questions 254 and 255 keep the coordinator's recommendation.
 - **P22. A cone that places the result of a per-element construct and observes
   nothing of it holds a reference to the collection** (question 259, with
   question 292 for what stays open). The choice of the prototype's author, its
@@ -6521,8 +6981,14 @@ today.
   must not follow the length of the list. *How it is written:*
   `execution-and-storage.md` §4.10, the paragraphs "The chunk list", "How a
   position is derived" and "What one change of an array writes" with its
-  table and the bound, and its question 103, point (b). *Tests:* none; the
-  prototype has no chunk. *If decided otherwise:* the numbers leave those
+  table and the bound, and its question 103, point (b). *Built in round 5,*
+  as the prototype's default, with the list of links alone as an option.
+  Measured at 100,000 rows of 23 bytes: with the numbers the row at position
+  50,000 is read through 2 documents and an insertion writes 4; with no
+  numbers it is read through 20 documents, every chunk before it, and an
+  insertion writes 2. The list of the first level is in the document that
+  holds the array, so each insertion writes that document. *If decided
+  otherwise:* the numbers leave those
   paragraphs, and an insertion writes its chunk alone. The rule is the same
   for an array over an array of references, over an array of plain values in
   place, over a plain array generated from scratch, and over the result of
@@ -6550,12 +7016,124 @@ today.
   of the last chunk, so two concurrent pushes write the same number unless
   storage applies the layout below the operation that the writer sent. And a
   writer that is not the compiled runtime finds a chunk list at the place of
-  the array. Both are question 296. *Tests:* none. *If decided otherwise:*
+  the array. Both are question 296. *Read in source after round 5:* today a
+  `push` is sent as the operation `append` with the path of the array and
+  the values, and the server applies it to the array of the one document
+  that the operation names; no part of today's storage applies an
+  operation to an array that is stored across several documents. So the
+  assumption that storage applies the layout is a requirement on storage
+  that today's does not meet (question 296). *Tests:* the prototype stores
+  a source array in chunks and measured `push`, `set` and a `splice` on it
+  with one writer; two concurrent pushes were not tried, since the
+  executor has no concurrent writers. *If decided otherwise:*
   that paragraph is removed and a source array is one document. The case is
   an array of plain values in place and an array of references in an argument
   document or a state cell; the result of another per-element construct is an
   array of a result.
-
+- **P27. A record with many members is stored in chunks as an array is**
+  (question 297, with question 290, point e, which it answers). The
+  coordinator's decision, after prototype round 5. *The case:* a gap in P20
+  and P26, which speak of arrays. A record `pool` of an argument that holds
+  one member for each element under an identifier, as an array of references
+  keeps its elements, is one document. One keystroke writes 68,456 bytes of
+  documents at 100 members, 109,141 at 1,000 and 572,774 at 10,000, for a
+  patch of 25 bytes (prototype note 526). *Decision:* a stored record whose
+  content in place would exceed `DOCUMENT_MAX_BYTES` is stored in chunk
+  documents, each holding the members of a contiguous range of member names
+  in the order that P1 gives, the order of the `base/data-model` codec,
+  under a list of links that names the first member name of each chunk. The
+  split, the merge and the tree are those of an array. A read of one member
+  loads one document for each level and one chunk. No meaning changes.
+  *Alternative:* a record is never divided, with the measured cost. *How it
+  is written:* rule 5 and the paragraph "A record with many members is
+  stored in chunks" of `execution-and-storage.md` §4.10, with its question
+  108, and a sentence each in `plan-and-label-templates.md` §2.3,
+  `scheduler-and-serving-loop.md` §3.1 and the overview. *Assumed in the
+  writing,* each part of question 297: the name beside a link is a bound
+  that is fixed when the chunk is created, so an insertion of a member
+  writes no list; the bounds are read under the label of the record's set
+  of names; where a record exceeds the maximum and holds arrays that are
+  each under it, the largest arrays become chunk documents first, as the
+  prototype built it for a document of several arrays, and the rule takes
+  what is left; a member is no part for being a member; and a `FabricMap`
+  is not divided. *Tests:* none; the prototype has no split point for a
+  record. *If decided otherwise:* rule 5 and that paragraph are removed,
+  and the key index of P29 has no stored form.
+- **P28. The part document of a row is identified by a number that is minted,
+  and not by the element's key** (question 298). The coordinator's decision,
+  on the recommendation of the prototype's author. *The case:*
+  `execution-and-storage.md` §4.10 named the part of a row by the key of
+  its element. With the key in the identifier, an edit of a row of an array
+  of plain values in place with no declared key renames its part: measured
+  at 10,000 rows of 2,000 bytes, 5 documents and 128,748 bytes with 2 parts
+  deleted and 2 created, against 4 documents and 66,747 bytes with a minted
+  identifier. And a source array has no key before a reader forms one, by
+  the reader's declared key fields (by ruling), so under P26 the part of a
+  row has no name when it is written: with `ArrayByKey` the first edit
+  after a reader formed keys renamed it, 3 documents and 65,977 bytes
+  against 2 and 3,976 (prototype note 526). *Decision:* the identifier is
+  minted when the row first becomes a part and stays with the entry of the
+  row's position across edits and re-keys. It is derived from no content.
+  *Alternative:* the key, hashed under the secret of the space. *How it is
+  written:* the paragraphs "How a part document is identified", "A re-key of
+  an element of an array of plain values in place" and "An array of an
+  argument document or of a state cell" of `execution-and-storage.md`
+  §4.10, its sections 5.2 and 5.3 and its question 109;
+  `plan-and-label-templates.md` §2.3 ("A storage link reveals no element
+  key"); and the table of `scheduler-and-serving-loop.md` §11.1. *What was
+  looked for and found,* against a rule that finds a part from a key. A
+  client that loads one row from a reference by key is not affected: it
+  could not derive the identifier before, since it cannot read the salt,
+  and it reaches the part through the storage link. A server could form
+  the identifier of the part of a key and read it with no chunk, and that
+  is lost: it reads the chunk of the key first (P29). What the scheduler
+  maps a watch on a part to was the key steps in the identifier's record,
+  and is assumed held in the part as data. *Assumed in the writing,* each
+  part of question 298: the number comes from one counter at the root of
+  the result cell or of the source document, so each creation of such a
+  part writes that root and two creations conflict; a part that lies below
+  a row is minted as a row's is; a row of a result whose key changes at
+  its position keeps its part, where the prototype deletes and creates
+  one; and an element of a source array is a part from `PART_MIN_BYTES`
+  on, as the prototype built it, where the section had no element of a
+  source array as a part. *Tests:* the prototype has the minted identifier
+  as an option, measured and not the default. *If decided otherwise:* those
+  paragraphs return to the key.
+- **P29. Finding the chunk of a key: an index for an array that declares key
+  fields** (question 299). The coordinator's decision. *The case:* a gap in
+  P20, which has a reference by key "resolved through chunks". A chunk is
+  found by position, and the position of a key needs the keys of the array.
+  From the documents alone that is a read of every chunk and a salted hash
+  of every row (prototype notes 526 and 527). *Decision:* where the stored
+  schema of an array declares key fields (`keyFields`, by ruling), the
+  array's storage holds an index from a key to its chunk, stored in chunks
+  as P27 stores a record, in the order of the hashes, and written by every
+  insertion, removal and edit that changes a key field. Where the array
+  declares no key, a key formed from the whole value or by the fields that
+  a reader declares, no index is stored: a runtime that holds the array's
+  keys in memory resolves from them, and one that does not reads the
+  chunks. *The cost, stated:* one more document for each level for each
+  insertion with a declared key, and a read of the whole array for an
+  array with none on a runtime that has just started. *Alternative:* no
+  index. *How it is written:* the paragraph "Finding the chunk of a key" of
+  `execution-and-storage.md` §4.10 and its question 110, and a sentence in
+  `scheduler-and-serving-loop.md` §3.1. *Where the text did not determine
+  the behavior,* each assumed there and part of question 299: what the
+  stored schema is, since by ruling no record of a stored schema is kept,
+  assumed the schema that the owning instance's plan has for the place,
+  with the names of the key fields written into the chunk list; what an
+  entry names, assumed the chunk, with which a split or a merge writes the
+  entry of every row it moves, spread over the whole index, a cost that
+  the bound of P20 does not cover; two rows with equal key fields; a
+  client, which holds the hash of a stored reference and cannot tell which
+  row of the chunk has the key; the label of the index documents, assumed
+  that of the membership; an array of references, assumed to have no
+  index; the result of a `map`, a `filter` or a `flatMap` over an array of
+  plain values in place with a declared key and over the result of another
+  per-element construct, assumed to have an index of its own under the
+  keys of its rows; and a collection that P22 has a cone place at two
+  paths, which has two indexes. *Tests:* none; the prototype builds no
+  index. *If decided otherwise:* that paragraph is removed.
 
 ## Open, and needing the owner
 
@@ -9492,8 +10070,9 @@ rule of meaning.
      which keeps its two documents, where the assumption of PL question 112
      writes them under the identifiers of the new key. The cost follows from
      owner rulings, and only the owner can change it:
-     the coordinator recommends to keep the rulings, to adopt the warning of
-     provisional decision P21, and to decide a retention rule for the
+     the coordinator recommends to keep the rulings, to adopt the report of
+     provisional decision P21, which is the runtime's since the warning of
+     the compiler was withdrawn, and to decide a retention rule for the
      documents under a key that no stored array holds any longer. Recommended
      for that rule: they are deleted by the transaction that removes the last
      element with that key, except where a reference by key to the element is
@@ -9534,8 +10113,9 @@ rule of meaning.
      A plain array generated from scratch was not measured. The finding is
      confirmed. The cost follows from an owner ruling, and only the owner can
      change it:
-     the coordinator recommends to keep the rulings, to adopt the warning of
-     provisional decision P21, and to decide a retention rule for the
+     the coordinator recommends to keep the rulings, to adopt the report of
+     provisional decision P21, which is the runtime's since the warning of
+     the compiler was withdrawn, and to decide a retention rule for the
      documents under a key that no stored array holds any longer. Recommended
      for that rule: they are deleted by the transaction that removes the last
      element with that key, except where a reference by key to the element is
@@ -10410,26 +10990,45 @@ over the result of another per-element construct.
      another per-element construct.
 289. **Nine further points of the record of a compiled-in pattern** (PL
      question 170, points b to j; SS question 59; ES question 102). P18 is
-     designed and not built: at prototype commit `e63851c1ee` the crate writes
-     a callee out at every site, so no point below is tested. Each is
+     designed and not built: at prototype commit `3d33db2e4d` the crate writes
+     a callee out at every site, so no point below is tested by a build.
+     Round 5 examined the written-out plans of the corpus in the place of
+     the build, and what it found is at each point. Each is
      assumed in `plan-and-label-templates.md` §1.1 as stated here. (a) What a
      call site binds a path of the argument to: a slot, an output or a constant
      by the text, and *assumed* also the stream of a binding and the result of
-     the instance. (b) A literal that the call writes above the paths that the
+     the instance. *From the corpus plans:* confirmed for the stream of a
+     binding. Of the state paths of the bindings of callee copies, 1,443 are
+     bound to a slot, 282 to a constant, 49 to an output, 140 to the stream
+     of a binding of the same copy and 8 to the stream of a binding of the
+     caller; none is the result of the instance, so that form has no case.
+     (b) A literal that the call writes above the paths that the
      callee reads: *assumed* built by the runtime from the entries of the
-     binding. (c) Where the callee's result is held: the call-site record lists
-     the places that the source writes; an output that the written-out form
-     keeps because the result reaches it through a value, as through the
+     binding. *From the corpus plans:* this needs one more rule, which amends
+     P18: a write edge or an output of a callee whose template is an
+     argument slot stands, at a site that binds that path by a literal, for
+     one entry for each entry of the literal, at the entry's path. 19 of 53
+     pairs of copies differ in exactly this. *Assumed,* provisional (P18 as
+     amended), proposed by the prototype's author and not built. (c) Where the
+     callee's result is held: the call-site record lists the places that the
+     source writes; an output that the written-out form keeps because the
+     result reaches it through a value, as through the
      elements of a collection that hold the results of several calls, a branch
      of a `select`, or what a body returns, is *assumed* kept where that value
-     is. (d) A construct of the callee over a path of its argument that the call
+     is. *From the corpus plans:* not determined; 100 of the 3,867 outputs
+     of callee copies are kept, and whether each stands at a place that the
+     call-site record would list was not examined.
+     (d) A construct of the callee over a path of its argument that the call
      binds to the result of a per-element construct of the caller: *assumed* to
      have the upstream keys and membership through the binding, as an output
      that passes a collection on has, with no difference from the record that
      the written-out form has when the compiler sees the caller's construct at
      the call. The other two cases, over an array of references and over an
      array of plain values in place, are a binding to a slot and have no
-     question. (e) The order of the demanded outputs "by instance identifier and
+     question. *From the corpus plans:* not determined; the collections of
+     callee copies have as their source an output 133 times, a slot 32
+     times and a collection 10 times, and the 10 were not examined.
+     (e) The order of the demanded outputs "by instance identifier and
      output index" (`scheduler-and-serving-loop.md` §10.2): *assumed* by the
      chain of call sites and then the index. (f) A pattern with type parameters:
      *assumed* one record for each set of type arguments. (g) Whether a plan
@@ -10448,9 +11047,21 @@ over the result of another per-element construct.
      (prototype note 517). So in the written-out form the binding decides which
      records exist. The count is from a script that was not kept, which pairs
      records by their place in the lists, and it was not checked record by
-     record. Not determined: whether a callee record that holds what any site
-     needs gives at each site what the written-out form has there, or whether
-     some records have to be per site. Beside these,
+     record. *Answered on the corpus in round 5* (prototype note 529), by a
+     comparison of each copy with the first copy of its callee, record by
+     record, 53 pairs: 16 equal but for indexes; 2 with another path of the
+     caller's argument; 1 with a slot at one site and an output at another;
+     19 with the paths below a path that the callee passes on; and 16 that
+     differ in the number of cones for a defect of the crate, which gives
+     two call sites of one name in one body the same `site` step (17 of 382
+     plans; against `plan-and-label-templates.md` §1.3). One callee record
+     with the binding of each site gives the records of the written-out
+     form in every pair, with the rule of point (b) added, and the
+     design's sentence holds. The binding decides which of `Cone.slots`
+     and the incoming edges a cone instance has, and at which paths an
+     edge or an output that passes an argument on stands. Not shown: that
+     values, identifiers and stored documents are preserved, which needs
+     the build. Beside these,
      `Cone.code` of a callee's cone is one hash for every site, which changes
      the keys of the cache documents and the basis rows and no result. One
      fact on what the decision is worth: over the corpus the estimate of the
@@ -10470,16 +11081,79 @@ a plain array generated from scratch or with a `flatMap`.
 
 290. **What the rule on chunks leaves open** (ES question 103). Provisional
      decision P20 stores a long array in chunk documents. Five points under
-     it. (a) Whether storage takes a patch below a path of a document.
+     it. (a) Whether storage takes a patch below a path of a document, and
+     the size of a chunk that follows from it.
      `execution-and-storage.md` §4.2 has the write of a kept collection as a
-     `splice` of the stored array, and no document says that a write of one
-     member below a path is sent and stored as that change. With it, one
-     change of one small row sends the bytes of the change; without it, the
-     unit sent is the chunk, at most 65,536 bytes. Not decided, and nothing is
-     assumed. That is the trade-off of P20: an edit of a small row with a
-     declared key wrote one part document of 24 bytes under the rule that P20
-     replaces, and writes its chunk under P20. The prototype is to measure
-     both, the bytes of the documents written whole and the bytes of a patch.
+     `splice` of the stored array. That is the trade-off of P20: an edit of
+     a small row with a declared key wrote one part document of 24 bytes
+     under the rule that P20 replaces, and writes its chunk under P20.
+
+     *What today's storage does,* read in the source of this repository
+     after prototype round 5. Verified by reading:
+     - A commit carries one operation for each document it writes
+       (`ClientCommit.operations` in `runtime/memory/v2.ts`): a `set` with
+       the whole document, a `patch` with a list of operations that each
+       name a path of the document (`PatchOp`), or a `delete`.
+     - A writer sends a `patch` of the paths it wrote for a document that
+       its transaction read before writing (`getNativeCommit` and
+       `#buildPatchOperation` in
+       `runtime/runner/src/storage/v2-transaction.ts`). It sends a `set`
+       for a document that had no value, for a write of the document's
+       root, and for a transaction marked to write whole documents, which
+       by a comment there the write-back of an effect's completion is.
+     - The server stores one row for each operation, and for a `patch` the
+       row holds the operations and not the document (`writeOperation` in
+       `runtime/memory/v2/engine.ts`). After every tenth patch of one
+       document it stores the whole document as a snapshot and keeps the
+       last two (`maybeMaterializeSnapshot`, `DEFAULT_SNAPSHOT_INTERVAL`,
+       `DEFAULT_SNAPSHOT_RETENTION`). A read replays the patches on the
+       latest `set` or snapshot (`reconstructPatchedDocument`).
+     - A subscriber receives the whole document for each document that
+       changed: a `SessionSyncUpsert` has a member `doc` and no patch
+       (`runtime/memory/v2.ts`; `toCacheEntry` and `toWireUpsert` in
+       `runtime/memory/v2/server-sync.ts`).
+
+     Inferred, and not verified by a test or a measurement: that the
+     writer's own replica applies its operations again when the server
+     accepts them and is not sent the document, which a comment of
+     `engine.ts` says; and that no path through `server.ts` sends a
+     subscriber less than the document, since its sends were not all read.
+     Not read: the cost of the engine's in-memory copy of a document that
+     a patch changes.
+
+     *What follows.* The answer to "does storage take a patch" is yes for
+     what a writer sends and for what a commit stores, and no for what a
+     subscriber receives. One edit of one small row of a chunk of `C` bytes
+     costs the writer the patch (24 bytes measured), the store the patch
+     and, for every tenth edit, `C`, and each subscriber of the chunk `C`
+     for every edit. So the larger chunk is not simply better: it is
+     better for the writer, for the number of documents and for the reads
+     of one row, and worse by its size for every subscriber and by a tenth
+     of its size for the store. For P20: the bound "the bytes of the
+     documents written for one change are bounded by the size of a chunk"
+     is the bound of what each subscriber receives, and stands as the
+     figure that matters. For P25: a list of the first level is written by
+     every insertion, and every subscriber of the array's place receives
+     it whole, so the balance `C = sqrt(75 * N * s)` between a chunk and
+     its list (5,900 bytes for 10,000 small rows, 59,000 for a million) is
+     the balance of what a subscriber receives. For P26: an edit of one
+     element of a source array of 10,000 records in one document already
+     costs the writer its patch today; what chunks remove is the 676,691
+     bytes that each subscriber receives and the snapshot of that size at
+     every tenth edit.
+
+     *Recommended* by the author of the documents, and not adopted: that
+     the design state a requirement on storage, that a sync carry the
+     patch of a document to a subscriber that holds the version before
+     it. With it every figure of the tables is its patch, the snapshot
+     interval is the one remaining cost of a large chunk, and
+     `DOCUMENT_MAX_BYTES` is chosen for the number of documents and reads.
+     Without it, a maximum near the balance for the lengths that are
+     common, such as 4,096 to 16,384, costs a subscriber 8,130 to 32,134
+     bytes for an edit at 10,000 rows where 65,536 costs 122,242, at the
+     price of 44 to 173 documents where 13 stand. Not decided: the
+     requirement, and the number. `DOCUMENT_MAX_BYTES` stays 65,536, a
+     placeholder.
      (b) Whether a chunk list holds, beside each link, the number of
      entries below it. *Assumed,* provisional (P25): it does. A position is
      found in one document for each level of the tree and one chunk, and each
@@ -10498,23 +11172,31 @@ a plain array generated from scratch or with a `flatMap`.
      keeps. (e) A document can still exceed `DOCUMENT_MAX_BYTES` where it holds
      many split points that are each under `PART_MIN_BYTES` and are not the
      entries of one array, as a record of many small members; the number of
-     such members is bounded by the source where they are declared. *Assumed:*
-     nothing is done for it. The same for the rows of a kept collection over
-     an array of references, over an array of plain values in place, over a
-     plain array generated from scratch, and over the result of another
+     such members is bounded by the source where they are declared. *Assumed,*
+     provisional (P27): such a record is stored in chunks (question 297).
+     The measured case is a record with one member for each element, whose
+     number of members is not bounded by the source. The same for the rows of a
+     kept collection over an array of references, over an array of plain values
+     in place, over a plain array generated from scratch, and over the result
+     of another
      per-element construct.
 291. **The warning for per-element state under a key formed from the value**
-     (LS question 47). Provisional decision P21. *Assumed:* the name
-     `array-by-key:state-without-key` and the severity of a warning. By the
-     decision as revised, per-element state is a handler binding, a state
-     cell, an operation, and a child called through `asInstance()`, and not
-     an instance of a `lift` or a `computed`, which stores no document under
-     the key; and the warning covers an array of plain record values in
-     place, a plain array generated from scratch, and a chain of per-element
-     constructs whose first source is one of these. *Assumed:* it is not
-     reported where the state is in a child called through a factory value,
-     which the compiler does not see. It is
-     never reported over an array of references.
+     (LS question 47). Provisional decision P21, which is withdrawn as a
+     warning of the compiler. The crate reports
+     `array-by-key:state-without-key` by the decision as revised, for a
+     handler binding, a state cell, an operation and a child instance, and
+     not for an instance of a `lift` or a `computed`: 168 reports in 80 of
+     the 286 corpus modules that are accepted with a pattern. The type of
+     an array does not say whether it holds plain values in place or
+     references, most lists of the corpus are filled by `push` of a record
+     through a handle, which stores references, and so most of the reports
+     are for arrays over which the cost does not arise. *Assumed,*
+     provisional (P21 as replaced): the compiler reports nothing, and the
+     runtime reports at the first such edit (question 301). Open for the
+     owner beside it: whether the subset should have a type or an
+     annotation that says that an array holds plain values in place, with
+     which a warning of the compiler would be right. Nothing is assumed on
+     that.
 292. **What a reference to a placed collection leaves open** (ES question
      104; PL question 175). Provisional decision P22. (a) One collection that
      is placed at two kept paths of a result. *Assumed:* its rows are stored
@@ -10569,9 +11251,75 @@ a plain array generated from scratch or with a `flatMap`.
      each list, so two concurrent pushes write the same number, and a push
      that fills a chunk splits it. *Assumed:* the writer sends the operation on
      the array at its path, and storage applies the layout where it applies
-     the operation, so that the pushes merge as today. That today's storage
-     can do so was not verified against source; if it cannot, either P25 or
-     P26 gives way for an array that is pushed to. (b) A writer that is not
+     the operation, so that the pushes merge as today.
+
+     *What today's storage does,* read in source after prototype round 5.
+     Verified by reading:
+     - `Cell.push` records that it appended (`pushAll` in
+       `runtime/runner/src/cell.ts`, which calls `recordMergeableOp`), and
+       the commit carries the operation `append` with the path of the
+       array and the values pushed, read back from the end of the writer's
+       array (`buildMergeableIntent` in
+       `runtime/runner/src/storage/mergeable-ops.ts`). The writer does not
+       send the resulting array. `addUnique`, `removeByValue` and
+       `increment` are sent the same way, as `add-unique`,
+       `remove-by-value` and `increment`.
+     - The server applies the operation to the array that it holds at
+       that path of that document (`appendAtPath` in
+       `runtime/memory/v2/patch.ts`, through `applyPatchToDocument`), with
+       no position from the writer, so two pushes from two sessions both
+       land.
+     - An operation names one path of one document. Nothing in the server
+       applies an operation to an array that is stored across several
+       documents, and no table of `runtime/memory/v2/engine.ts` and no
+       kind of operation divides the value of a document by a rule about
+       size.
+     - Two things store one logical value in more than one place, and
+       neither is such a layout. A record that is pushed through a handle
+       is stored in a document of its own, with a link in the array
+       (`diffAndAppend` in `runtime/runner/src/data-updating.ts`); the
+       writer makes that layout, and a reader sees the links. A field that
+       takes collaborative text edits is kept by the server as a baseline,
+       the operations integrated since and checkpoints, in tables of their
+       own (`op_field_epoch`, `op_integrated`, `op_checkpoint`), which is
+       a representation of one field that storage maintains, in rows and
+       not in documents.
+
+     Inferred, and not verified by a test: everything under "what
+     follows". Not searched exhaustively: the runner outside
+     `runtime/runner/src/storage/` and `cell.ts`; a search of the runner
+     and the memory package for a layout in chunks found the compile
+     cache alone, which writes the modules of one program as documents of
+     their own in several transactions (`planCompileCacheWriteChunks` in
+     `runtime/runner/src/compilation-cache/cell-cache.ts`), again a layout
+     of the writer.
+
+     *What follows.* A chunked source array keeps merging pushes in one of
+     two ways. Either storage maintains the layout: the server resolves
+     the path of an operation through the chunk list, applies `append`,
+     `add-unique` and `remove-by-value` to the chunks, and writes the
+     lists, the numbers of P25 and the key index of P29 in the commit.
+     That is a change of storage, and nothing of it exists. Or the
+     runtime that writes maintains the layout with the operations that
+     exist: it sends `append` to the document of the last chunk and
+     `increment` for the number in each list, both of which the server
+     applies against what it holds, so two pushes merge, provided that a
+     split never changes which document is the last chunk. Then a split,
+     a merge and an entry of a key index are ordinary writes that
+     conflict with a concurrent push; the server applies an `append` to a
+     chunk that is over the maximum, since it knows none; and
+     `add-unique` and `remove-by-value`, which compare with every entry
+     of the array, cannot be sent to one chunk and stop merging. For P26
+     and P27 the same holds for a member of a record and a mergeable
+     `increment` below it. For P25: the numbers do not prevent merging
+     where they are written by `increment`.
+
+     *Recommended* by the author of the documents, and not adopted: that
+     storage maintain the layout, so that every writer names the path of
+     the array as today, all four operations merge as today, and one
+     party writes the lists and the index. Until that is decided the
+     assumption above stands, and it is a requirement that today's
+     storage does not meet. (b) A writer that is not
      the compiled runtime, as a client, the command line and a runtime of the
      validation period of a migration, finds a chunk list at the place of the
      array. *Assumed:* each reads and writes through the list, and a write at
@@ -10582,6 +11330,158 @@ a plain array generated from scratch or with a `flatMap`.
      scheme of that document. A `set` of the whole array, a `splice` and a
      reference by key into the array were looked at and have no conflict that
      was found.
+
+**From the prototype's notes 523 to 535.** At commit `3d33db2e4d` the
+prototype's executor keeps part documents as documents, and the copies of each
+callee in the plans of the corpus are compared. Questions 297 to 301 are what
+the provisional decisions P27 to P29, the replacement of P21 and the points
+that P20 left incomplete leave undecided. The lists of these notes are a `map`
+over an array of references, over an array of plain values in place with a
+declared key and with none, and over the result of a `filter` of plain values
+in place; nothing was tried over a plain array generated from scratch or with
+a `flatMap`.
+
+297. **A record that is stored in chunks** (ES question 108). Provisional
+     decision P27. Not determined by the decision, each *assumed* in
+     `execution-and-storage.md` §4.10. (a) What the list holds beside each
+     link. The decision has "the first member name of each chunk". *Assumed:*
+     a bound that is fixed when the chunk is created and is not written when
+     that member is removed or a lesser name is inserted, so that an
+     insertion or a removal of a member writes one chunk and no list. (b)
+     The label under which the bounds are read: they are member names of the
+     record, and a reader of the document that holds the list sees them.
+     *Assumed:* the label of the record's set of names. (c) A record that
+     exceeds the maximum and holds arrays that are each under it. *Assumed:*
+     the largest arrays become chunk documents first, which is what the
+     prototype built for a document of several arrays, and the record is
+     divided if it still exceeds the maximum. The alternative is the
+     division of the record alone. (d) Whether a member of a record is a
+     part from `PART_MIN_BYTES` on, as a row is. *Assumed:* not; a member is
+     a split point only where it is the root of a kept output, a row or a
+     node. (e) A value that the codec stores as an instance, such as a
+     `FabricMap`: *assumed* not divided. (f) The order of the names is that
+     of P1, and the place of a name that reads as an integer is part of
+     question 218. (g) A mergeable `increment` below a member, and two
+     writers that add two members, merge today by path; in chunks they meet
+     the conflict of question 296. (h) The labels of a chunk: *assumed*
+     complete for its paths, with an entry that covers every member
+     repeated in each chunk. The prototype builds none of it.
+298. **The identifier that the part of a row is minted with** (ES question
+     109). Provisional decision P28. Not determined by the decision. (a)
+     Where the number comes from. *Assumed:* one counter at the root of the
+     result cell or of the source document, which each creation of a part
+     at or below a row writes; two transactions that each create one
+     conflict on it. A counter for each array has no place while the array
+     is stored in place and is not unique for an array inside a row of
+     another array. An identifier derived from the cause of the creating
+     transaction and an ordinal needs no counter, and requires an
+     identifier of every transaction that a retry repeats, which the
+     documents have for a handling and not for every cause. (b) What a
+     reader of a storage link learns: with a counter, the order in which
+     the parts of one document were created, beside which entries hold the
+     same part before and after a change of membership, as before. (c) A
+     row of the result of a per-element construct over an array of plain
+     values in place with no declared key, whose key changes at its
+     position. *Assumed,* by the decision's words that the identifier stays
+     with the entry of the position across re-keys: the entry keeps its
+     part and the transaction writes the part's content. The prototype
+     deletes the part and creates one, 2 documents more. (d) A part that
+     lies below a row and is no row. *Assumed:* minted as a row's is, so
+     that no part's identifier holds a key. (e) What gives the scheduler
+     the kept paths of a watch on such a part, which the key steps of the
+     identifier's record gave. *Assumed:* the same steps, held in the part
+     as data and written when the key changes. (f) Whether an element of a
+     source array is a part at all. *Assumed:* yes, from `PART_MIN_BYTES`
+     on, as the prototype built it. (g) What is lost: a server could form
+     the identifier of the part of a key from the path and the key and
+     read it with no chunk. A client could not, and is not affected. Over
+     an array of references, over a plain array generated from scratch and
+     over the result of another per-element construct the rule is the
+     same; the case that the decision was measured on is an array of plain
+     values in place.
+299. **The index from a key to its chunk** (ES question 110; SS §3.1).
+     Provisional decision P29. Not determined by the decision. (a) What
+     "the stored schema of an array" is: by ruling no record of a stored
+     schema is kept, and a reader learns the key fields from the schema
+     traversed at its link. *Assumed:* the schema that the plan of the
+     owning instance has for the place, with the names of the key fields
+     written into the chunk list by the runtime that creates the index. An
+     array that a writer without that schema stored in chunks gets its
+     index later, by one read of the whole array. (b) What an entry names.
+     *Assumed,* by the decision's words: the chunk. Then a split or a merge
+     of chunks writes the entry of every row that moves to another chunk,
+     about half the rows of a chunk, and those entries are spread over the
+     whole index by the order of the hashes: one split can write every
+     chunk of the index. For 10,000 small rows that is an index of about
+     a megabyte, larger than the rows, written for one insertion in about
+     700; the figure is derived from the sizes of a hash and of a storage
+     link and is not measured. The bound of P20
+     on the bytes of one change does not hold for that insertion. The
+     author of the documents recommends an entry that a split does not
+     write, which is not designed: a number minted for the row, with a
+     second record from that number to the chunk, or a record in the chunk
+     list of which chunk each chunk was divided from. (c) Two rows with
+     equal key fields, which differ in the occurrence count. *Assumed:* the
+     entry of a hash lists the chunks of its occurrences in order. (d) A
+     client that holds a stored reference by key holds the hash and can
+     find the chunk, and cannot tell which row of the chunk has the key,
+     since it cannot read the salt. Not determined; nothing is assumed
+     beyond PL question 113. (e) The label of the index documents.
+     *Assumed:* that of the array's membership, with resolution passing
+     through them as through a chunk list. (f) An array of references,
+     whose key is the identity of a cell, and an array with no declared
+     key. *Assumed:* no index, and a read of every chunk on a runtime that
+     holds no keys; for references the links are compared with no hash.
+     (g) The array of the result of a `map`, a `filter` or a `flatMap`
+     over an array of plain values in place with a declared key, and over
+     the result of another per-element construct, whose rows have the
+     upstream keys. *Assumed:* an index of its own under those keys,
+     whatever key fields the schema of the result names (question 213).
+     (h) A collection that a cone places at two kept paths (P22; question
+     292, point a) has two chunk lists and two indexes, and each change
+     writes both. (i) Demand: *assumed* that a lookup demands nothing,
+     and that a reader through a key demands the kept paths of the row it
+     resolved to, as before. The prototype builds no index.
+300. **Points that P20 left incomplete, as the prototype built them** (ES
+     question 111). Each is *assumed* in `execution-and-storage.md` §4.10
+     as the prototype chose it (its note 533, choices 1, 3 and 4). (a) A
+     chunk whose last row is removed: deleted, also beside a neighbor over
+     half the maximum. (b) When an array is stored in place again: when
+     one chunk of at most half the maximum is left. (c) A document that
+     holds several arrays and exceeds the maximum with each array under
+     it: the largest arrays become documents of their own. (d) An array
+     that is written whole: compared with what is stored, with the rows
+     that differ written as a `splice`, which reads the whole array; the
+     alternative writes every chunk. (e) The first write of a long array
+     creates every chunk and part in one transaction, 200,236 documents
+     for 100,000 rows of 2,000 bytes with their results; no rule avoids
+     it, and whether one transaction may hold that many documents is not
+     determined. (f) A chunk over the maximum: cut into equal shares,
+     more than two where many rows are written at once. (g) Rows inserted
+     one at a time at one end leave every chunk half full: 55 chunks for
+     40,000 small rows where 28 would hold them, 32 for insertions at
+     random positions, and 8 or 9 where 3 would do after nine tenths are
+     removed. Measured and not changed. Open: a split that leaves the
+     full chunk behind at the end where an array grows. (h)
+     `PART_MIN_BYTES` is 1,024 with a return in place under 512, a
+     placeholder. The lists are over an array of plain values in place;
+     the rule is the same over an array of references and over the result
+     of another per-element construct.
+301. **The runtime's report of state under a key formed from a whole value**
+     (ES question 112; LS question 47). Provisional decision P21 as
+     replaced. Not determined by the decision, each *assumed* in
+     `execution-and-storage.md` §2.5: the name
+     `array-by-key:state-under-value-key`; that the report is a warning of
+     the runtime that evaluated the transaction, in the channel of a
+     failed cone; what a session is for a transaction that a server
+     evaluates, *assumed* the lifetime of that runtime's loaded instance;
+     and what "strands" covers, *assumed* a change by which one
+     transaction removes a key at a position and enters another there,
+     and not a removal alone, which leaves state stored as well and is
+     what an author's handler does on purpose. The case is an array of
+     plain values in place, a plain array generated from scratch, and a
+     chain of per-element constructs whose first source is one of these,
+     each with no declared key.
 
 
 ## Open, and not needing the owner
@@ -11137,11 +12037,21 @@ The open questions each document ends with stay where they are.
   and the comparison of labels, the template evaluator and the label-flow
   checks taken through `CallSite.argument`. That is a rework of plan emission,
   of the emitter, of the executor's instancing and of the comparison harness,
-  and it was not begun. So none of the points of question 289 is tested, no
-  diagnostic of the corpus was compared under P19, the test of two sites per
-  level bounded as linear does not exist, and the sizes of plans are
-  unchanged. The estimate of what P18 gives takes 200 bytes for a call-site
-  record and is no measurement.
+  and it was not begun, at commit `3d33db2e4d` either. So none of the points
+  of question 289 is tested by a build, no diagnostic of the corpus was
+  compared under P19, and the sizes of plans are unchanged. The test of two
+  sites per level bounded as linear exists in the crate, is ignored, and
+  fails when it is run. What stands in the place of the build is a
+  comparison of the copies of each callee in the written-out plans of the
+  corpus, by scripts that are not in the tree: it shows that one callee
+  record with the binding of each site can give the records of the
+  written-out form, with the rule that amends P18, and it shows nothing on
+  values, identifiers or stored documents. The crate gives two call sites
+  of one name in one body the same `site` step, with no ordinal, in 17 of
+  the 382 plans of the corpus, so a state cell of such a callee has one
+  identifier at both sites; no compared value shows it. The estimate of
+  what P18 gives takes 200 bytes for a call-site record and is no
+  measurement.
   The record design of `plan-and-label-templates.md` §1.1 was
   checked by reading the rules of that document against it, and by no test. Its
   worked example (§6.2) and the examples of the other documents show the
@@ -11174,19 +12084,45 @@ The open questions each document ends with stay where they are.
   of a whole new array is compared entry by entry. A keystroke in a row with no
   declared key passes over every state cell and instance. The first change
   after a settle builds an index that follows the length.
-- **The prototype does not have the part documents of the design, and reads do
-  not go through any.** The executor keeps the result of an instance in one
-  logical document, written by path, and keeps the layout of
-  `execution-and-storage.md` §4.10 beside it as an accounting: which split
-  points are parts, the bytes of each, and the documents that each transaction
-  wrote. A test forms the documents and reads the result back through the
-  storage links. So the rule that every resolution of a path passes through a
-  storage link is not tested. The accounting follows the rule that the section
-  had before provisional decision P20: it has no chunk, and the sizes that the
-  section gives for P20 are derived from the measured row and link sizes and
-  not measured. No label entry and no provenance record is in any size. Nodes
-  of the rendered tree that are no rows, and a record that an opaque call
-  returns, are no split points in it.
+- **The prototype has the part documents of P20, P25 and P26 beside its store,
+  and its value code does not read through them.** At commit `3d33db2e4d` the
+  executor's own reads go to the one value that the store holds for each
+  document. The part documents are kept beside it, change by change
+  (`exec/parts.ts`), and a test reads every document of an instance back from
+  them after each change and compares. So the rule that every resolution of
+  a path passes through a storage link is tested for a reader outside the
+  executor and not for value code. Not in the layout: a split point for a
+  record (P27), for an array inside a row, and for a node of the rendered
+  tree that is no row; an index from a key to its chunk (P29); a part over
+  the maximum that is divided; and any label entry or provenance record in
+  a size. The identifier of a part is by the key of the reader that
+  declares the most key fields, and the minted identifier of P28 is an
+  option that is not the default. The layout was not run under a failed
+  transaction with a test of its own, and not under concurrent writers,
+  which the executor does not have. The accounting of the rule that P20
+  replaces stands beside it unchanged.
+- **Three choices of the prototype's author in round 5 are prototype matters
+  and have no provisional decision** (its note 533, choices 5 to 7): the
+  split points are the arrays that no other array holds, and their rows;
+  the part documents are kept beside the value that the store holds; and
+  for the withdrawn warning of P21 an element is taken as a record where
+  the body reads a member of it, and any child instance counts as state.
+  Its choices 1, 3 and 4 are assumed in `execution-and-storage.md` §4.10
+  (question 300), its choice 2 is superseded by P28, and its choice 8 is
+  the amendment of P18.
+- **What today's storage does with a patch and with a `push` was read in
+  source and not tested** (questions 290, point a, and 296). The statements
+  there are from a reading of `runtime/memory/v2.ts`,
+  `runtime/memory/v2/engine.ts`, `runtime/memory/v2/patch.ts`,
+  `runtime/memory/v2/server-sync.ts`,
+  `runtime/runner/src/storage/v2-transaction.ts`,
+  `runtime/runner/src/storage/mergeable-ops.ts` and `Cell.push` in
+  `runtime/runner/src/cell.ts`. No commit was sent and no frame was
+  captured. What a subscriber receives was read from the type of a sync and
+  from the two functions that fill it, and not from every path of
+  `runtime/memory/v2/server.ts` that sends one. The costs that the plan
+  derives from it, a tenth of a chunk for the store and the chunk for each
+  subscriber, are derived and not measured.
 - **Four choices of the prototype's author in that round are prototype matters
   and have no provisional decision** (its note 520, choices 4 to 7). The bytes
   of a split point are kept in memory and not measured from the documents at
@@ -11201,9 +12137,14 @@ The open questions each document ends with stay where they are.
   holds, `equals`, a cone with a static side-write, or a read by key into the
   document of a computed output, is compared at every pull; question 294 has
   what the documents do not say for it.
-- **The provisional decisions P20 to P26 and their tests.** P20, P21, P25 and
-  P26 have no test: the prototype has neither the chunks nor the warning.
-  P22, P23 and P24
+- **The provisional decisions P20 to P29 and their tests.** P20, P25 and P26
+  are built as documents beside the store, with tests that bound the bytes
+  of the documents that one change writes at two lengths for each case and
+  each size of row; the points that P20 left incomplete are tested as the
+  prototype chose them. P21 as replaced, the report of the runtime, has no
+  test; the crate has the withdrawn warning. P27 and P29 have no test and
+  no build. P28 has the minted identifier as an option, measured, with the
+  key as the default. P22, P23 and P24
   are what the executor does, with tests of the executor that bound the
   evaluations, the hashes, the checks and the bytes of one change at 100 and
   1,000 elements; those tests were written after the measurements. For P23 the
@@ -11233,6 +12174,13 @@ The open questions each document ends with stay where they are.
   except for a fetch of JSON from an address outside `/api/` (its note 498), and
   the 100 values that differ there were classed by a reading of the two values
   and not verified one by one; 17 are not determined.
+- **The stubbed comparison is not deterministic.** One value of
+  `examples/reactive-now/reactive-now.tsx` depends on the wall clock between
+  the run of the executor and the run of today's runtime: "0s ago" against
+  "1s ago". Two runs at commits that differ in two Markdown files gave 1,484
+  and 1,482 of 1,584 values equal. A difference in that module between two
+  runs is no finding, and the comparison needs a clock that both sides
+  share before its count can be held to a number.
 - **Fifteen questions come from a reading of the documents, and no test
   of the prototype bears on them** (questions 224 to 238). They are
   about what the prototype's executor does not have: the bound of ten
@@ -11397,45 +12345,64 @@ The open questions each document ends with stay where they are.
    238 are about parts that the prototype's executor does not have,
    and each has to be ruled before a test of its part means anything.
 
-6. **In the prototype, after commit `e63851c1ee`.** In this order.
-   1. Build provisional decisions P18 and P19: one record for each pattern that
+6. **In the prototype, after commit `3d33db2e4d`.** In this order.
+   1. Correct the crate's `site` step: two call sites of one name in one body
+      take the name with its ordinal (`plan-and-label-templates.md` §1.3),
+      with a test of a state cell of the callee at two such sites. It is a
+      defect today, in 17 plans of the corpus, and P18 rests on it.
+   2. Build provisional decisions P18 and P19: one record for each pattern that
       is compiled in, the call-site records, value code registered once per
       callee, the label-flow checks once per callee and once per site for the
-      binding, and the test of two sites per level bounded as linear. Test
-      each point of question 289, the ninth first: whether a callee record
-      that holds what any site needs gives each site what the written-out
-      form has there. Compare the diagnostics of the corpus under P19 with
-      those of the written-out form.
-   2. Build provisional decision P20: `PART_MIN_BYTES`, the chunk documents and
-      the chunk lists of `execution-and-storage.md` §4.10, with every read
-      going through the storage links, and with a stand-in for label entries
-      and provenance records in the sizes. Measure the list of note 513 again,
-      and a list that shrinks, a list built by appends, rows over
-      `PART_MIN_BYTES`, and a read of one row by position with and without the
-      numbers of entries in the chunk lists (P25). Report for each change both
-      the bytes of the documents written whole and the bytes of a patch
-      (question 290, point a). Store an array of an argument document and of a
-      state cell in chunks (P26), with `set`, `push`, a `splice` and a
-      reference by key into it, and try two concurrent pushes (question
-      296).
-   3. Report the warning of P21 in the crate, and count how often it is
-      reported over the corpus.
-   4. Measure what the round did not: a construct over a plain array generated
+      binding, and the ignored test of two sites per level made to pass. Build
+      the rule that amends P18, for a callee that passes an argument on at a
+      site that binds it by a literal, and compare the records, the values,
+      the identifiers and the stored documents of the corpus with those of
+      the written-out form. Examine the two points of question 289 that the
+      corpus plans left undetermined: the 100 kept outputs of callee copies,
+      and the 10 collections of callee copies whose source is a collection.
+      Compare the diagnostics of the corpus under P19 with those of the
+      written-out form.
+   3. Complete the part documents. Make the minted identifier of P28 the
+      default, with a row of a result whose key changes at its position
+      keeping its part (question 298). Build P27, a record stored in chunks,
+      and measure the keystroke of `fixtures/rows-state.tsx` over an array of
+      references again, which wrote 572,774 bytes at 10,000 rows. Build the
+      index of P29 and measure what a split writes into it (question 299,
+      point b), with an entry that names the chunk and with one that a split
+      does not write. Have value code read through the part documents. Put a
+      stand-in for label entries and provenance records into the sizes. Run
+      the layout under a failed transaction with a test of its own.
+   4. Measure for question 290, point (a), with the cost that the source
+      shows: for each change the bytes of the patch, the bytes of each
+      document written whole, which is what each subscriber receives, and a
+      tenth of those, which is what the store adds for a snapshot; at
+      maxima of 4,096, 16,384 and 65,536. For question 296, try two
+      concurrent pushes on a source array in chunks in both ways that the
+      question names: with the layout applied where the operation is
+      applied, and with `append` to the last chunk and `increment` for the
+      numbers. That needs two writers, which the executor does not have.
+   5. Report `array-by-key:state-under-value-key` from the executor at the
+      first such edit of a collection (P21 as replaced), and count over the
+      corpus runs how often it is made. Remove the warning of the crate or
+      keep it behind an option.
+   6. Give both sides of the stubbed comparison one clock, so that its count
+      is the same in two runs.
+   7. Measure what the rounds did not: a construct over a plain array generated
       from scratch, a `flatMap`, a `filter` over an array of references, two
       levels of enclosing JSX around a `map`, and a collection that is placed
       at two paths (question 292). Give the three dependencies of question 294
       a place in the marking, form a `filter` result from the change, and keep
       an index from a key to what is stored under it.
-   5. Write the `identity` entries of `footprint-analysis.md` §2.2 in the
+   8. Write the `identity` entries of `footprint-analysis.md` §2.2 in the
       crate, and then measure question 252.
-   6. Emit the constructs that keep `system/home/home.tsx` and the modules of
+   9. Emit the constructs that keep `system/home/home.tsx` and the modules of
       `system/fabrichat/` from executing, and add them to the table of run
       times. Find why the executor is slower per event than today's runtime
       on `showcase/battleship/pass-and-play/main.tsx`.
-   7. What stays from the round before: bring the two provisional choices that
-      differ from the documents in line once they are ruled, the request of an
-      effect by path (P16) and the depth to which each built-in follows its
-      references (P14); try every statement of the notes 479 to 497 over an
+   10. What stays from the rounds before: bring the two provisional choices
+      that differ from the documents in line once they are ruled, the request
+      of an effect by path (P16) and the depth to which each built-in follows
+      its references (P14); try every statement of the notes 479 to 497 over an
       array of references and over the result of another per-element
       construct; compare two orders of evaluation on the cycle of
       `fixtures/bound.tsx` (question 286); make an error state of a stack that
@@ -11456,6 +12423,10 @@ The open questions each document ends with stay where they are.
    cases, with tests that bound the evaluations, the hashes, the checks
    and the bytes of one change; the first and the third part of the
    fourth; and fixtures of two sizes for questions 248, 250 and 252.
+   Commit `3d33db2e4d` ran the third and the fourth in part documents,
+   to 100,000 rows, with tests that bound the bytes of the documents
+   that one change writes, and has the test of the second fixture, which
+   is ignored until P18 is built.
    The fixtures, in
    the order of the audit's ranking:
    1. The fixture of twenty-five values that each read the two before

@@ -1787,6 +1787,42 @@ has it for a handle named by `computed`. At a site that binds it to a constant,
 the slot has the template `const`. The label of a `slot` node of root `argument`
 is in each case the label that the written-out form has at that position.
 
+*A callee that passes an argument on, at a site that binds it by a literal.*
+Provisional (P18, as amended; section 8, question 170, point c). A write edge
+or an output of a callee whose template is one `slot` node of root `argument`
+with path `p` passes that path of the argument on: to the request of an
+operation, to an argument of a child, or to a place of the callee's result,
+as a callee that places its `children` in its tree does. At a site whose
+`CallSite.argument` has several entries below `p`, because the call wrote a
+literal there, that one write edge or output stands for one write edge or one
+output for each of those entries: its target path, or its `Output.path`, is
+the path of the callee's record followed by the rest of the entry's path
+below `p`, and its template is what the entry's place gives by the rules
+above, a slot, an `output` node or `const`. At a site with one entry at or
+above `p` it stands for itself. So the labels are per path of the literal, as
+the written-out form has them, and not one label at `p`. Two examples of the
+corpus: a callee that gives its argument `context` to a request has, at a call
+that writes `context: {}`, one write edge at `context` with the template
+`const`, and at a call that writes `context: { content, value }` two, at
+`context/content` and at `context/value`, the second with the slot of the
+caller's state cell; and a callee that places its `children` has one output
+for each child that its call wrote, 5 at one site and 1 at another. With this
+rule the sentence "A callee record depends on nothing of its call sites"
+holds: the record has the one edge or the one output, and the number of
+entries is the site's.
+
+*What is decided when a cone instance is bound.* Which slots a cone instance
+of a callee has, and which edges come into it, is decided by the binding of
+its site and not by the callee record. A path of the argument that one site
+binds to a slot of the holding record and another to an output is, at the
+first, a slot of the instance and no edge, and at the second an edge from the
+caller's cone and no slot. `Cone.slots` of a callee record lists the argument
+slot in both cases. So the slots that `Cone.slots` lists are the most that an
+instance of the cone has, and the edges that the record lists into the cone
+are the least: an instance has, beside them, one edge for each argument slot
+that its site binds to an output, and for each entry of a literal that the
+paragraph above gives it.
+
 *`within`, names and identifiers.* The `within` of an entry of a callee, for one
 chain of sites, is the list that the written-out form holds: for each site of
 the chain, outermost first, the `within` of the site and then the step `{ site:
@@ -2486,6 +2522,18 @@ adding or removing a declaration does not rename another one's stored state.
   the member `body` of the name of a thing the body makes (next rule).
   Such a name is a record with that member, which no other name is, so
   the two sets of names cannot collide.
+- The rule on two declarations of one name holds for the calls of a
+  pattern that is compiled in. Three tags `<SelectControl>` in one
+  pattern body are three call sites with the base name
+  `SelectControl`, and their names are
+  `{ name: "SelectControl", ordinal: 1 }` to
+  `{ name: "SelectControl", ordinal: 3 }`, so the `site` steps of the
+  three differ and a state cell of the callee has three identifiers.
+  Without the ordinal the three sites would have one step, and what the
+  callee declares would have one identifier at all of them. The
+  ordinal is counted among the calls of that name in the one body,
+  under one `within`. 17 of the 382 plans that the prototype emits for
+  the corpus have two such sites in one body.
 - A thing a site of a function body makes, where the plan has a record
   for it, is named from the body. The name of a `Child` that a site of
   `Body.calls` instantiates is the record of the body's `name` and the
@@ -2840,14 +2888,17 @@ question of section 8.
   fields. That is about forming a key. Resolving one reads no schema,
   as ruled. Over an array of references nothing of it arises.
 - **Per-element state with no declared key.** Provisional (P21 of the
-  continuation plan). Where the body of a per-element construct over an
-  array of plain record values in place, whose type declares no key,
-  holds per-element state, the compiler reports the warning
-  `array-by-key:state-without-key` (`language-subset.md` §4.4.1 and its
-  §13, question 47). Each edit of such a row is a new key, which moves
-  what the old key holds and leaves its documents stored. The warning
-  changes no rule of this section. Over an array of references and over
-  an array with a declared key it is not reported.
+  continuation plan, as replaced). Where the body of a per-element
+  construct over an array of plain values in place with no declared
+  key, or over a plain array generated from scratch with none, holds
+  per-element state, each edit of a row is a new key, which moves what
+  the old key holds or leaves its documents stored. The runtime reports
+  `array-by-key:state-under-value-key` at the first such edit of a
+  collection (`execution-and-storage.md` §2.5). The compiler reports
+  nothing: no type says whether an array holds plain values in place
+  or references (`language-subset.md` §4.4.1 and its §13, question
+  47). The report changes no rule of this section. Over an array of
+  references and over an array with a declared key it is not made.
 - **Two declared keys for one array** (question 141). *Assumed:* the
   compiler reports an error where an array whose type declares one key
   is passed to a parameter whose type declares another key, where it
@@ -4932,7 +4983,14 @@ stored as chunk documents, each a contiguous run of its entries, with a
 list of storage links to the chunks at the place of the array. A chunk
 list and a link to a chunk are storage links, a chunk's envelope is
 complete for its paths as a part's is, and what follows holds for them as
-for a part. A split changes neither a value nor a label when the following
+for a part. Provisional (P27 and P29): a record with many members is stored
+in chunks the same way, by ranges of member names, and an array that is
+stored in chunks and declares key fields has an index from the key of a row
+to its chunk; the lists and the documents of both are storage structure as
+a chunk list is. *Assumed* there: a bound in the chunk list of a record is
+a member name and is read under the label of the record's set of names,
+and the documents of a key index carry the label of the array's
+membership. A split changes neither a value nor a label when the following
 hold.
 
 - **The link is not a reference of the language.** The link from the result,
@@ -4989,15 +5047,17 @@ hold.
 - **A storage link reveals no element key.** A storage link is part of what
   is stored, and a reader who may read the document that holds it can see
   it. For a row, that is a reader of the collection's membership. The
-  identifier the link names is derived from the keys of the elements on the
-  part's path (`execution-and-storage.md` §4.10), and an identifier derived
-  from a cell's identity can be compared with one derived from a guessed
-  cell. *Assumed:* the identifier of a part document is derived under the
-  secret of the space for every key, a cell's identity included, as a
-  value-derived key is (section 1.3). It then tells such a reader which
-  positions hold the same row before and after a change of membership,
-  which the membership label covers, and nothing of the cell or the value
-  a row was computed from. No client needs to derive the identifier: a
+  identifier the link names must therefore tell that reader nothing of
+  the element: an identifier derived from a cell's identity could be
+  compared with one derived from a guessed cell. Provisional (P28 of the
+  continuation plan): the identifier of a part that is a row or lies below
+  a row is a number that the runtime mints and holds no key of an element,
+  hashed or not (`execution-and-storage.md` §4.10). It then tells such a
+  reader which entries hold the same part before and after a change of
+  membership, which the membership label covers, and nothing of the cell
+  or the value a row was computed from. Where the number is drawn from a
+  counter it also tells the order in which parts were created, which that
+  document lists as open. No client needs to derive the identifier: a
   reader names the result cell and a path.
 - **One transaction writes them.** An evaluation writes the result document
   and every part document it changed in one transaction, so no reader sees
@@ -12491,8 +12551,8 @@ this document made.
     reads by address is instantiated ahead of the handler's write edges
     and not again (section 4.5); and everything an element cone stores
     is per key and carries the label of the one position that holds the
-    key (section 2.6). Its §4.10 derives the identifier of a
-    part document under the secret of the space for every key, its §1.6
+    key (section 2.6). Its §4.10 gives a part document at or below a
+    row an identifier that holds no key (provisional, P28), its §1.6
     has the early instantiation, and its §6 stores the state of an
     operation in an element body in one document per key. Its §2.8
     stages the result document and the argument of an instance a
@@ -15236,7 +15296,16 @@ this document made.
        corpus.
      - **(c) A literal that the call writes above the paths that the callee
        reads.** *Assumed:* the runtime builds the value from the entries of
-       `CallSite.argument`, and no cone computes it.
+       `CallSite.argument`, and no cone computes it. *Assumed* as well,
+       provisional (P18 as amended): a write edge or an output of the
+       callee whose template is the argument slot stands, at such a site,
+       for one edge or one output for each entry of the literal, at the
+       entry's path (section 1.1, "A callee that passes an argument on, at
+       a site that binds it by a literal"). The prototype's author proposed
+       the rule from the copies of the corpus, where 19 of 53 pairs of
+       copies of one callee differ in exactly this; it is not built.
+       Without it the request of such a callee has one label at the path
+       where the written-out form has one for each path below it.
      - **(d) Where the callee's result is held.** `CallSite.result` lists the
        places that the source writes. Not determined: an output of a callee that
        the written-out form keeps because the result reaches it through a value
@@ -15268,24 +15337,44 @@ this document made.
        written-out form. It changes no result.
      - **(j) Whether the binding decides which records a callee has.** Section
        1.1 has "A callee record depends on nothing of its call sites". The
-       prototype, which writes a callee out at each site, compared the copies
-       of one callee in the plans of the corpus: of 82 pairs of copies, 44 are
-       equal but for the numbers in them, and 38 differ, 33 of those in how
-       many records they have. In `dev/experimental/folksonomy-demo.tsx` a
-       cone lists a slot at one site and none at the other, and in
-       `examples/suggestion-test/suggestion-test.tsx` the write edges of a
-       request have the path `context` at one site and `context/content` at
-       the other. So in the written-out form what a call binds decides which
-       records exist. The count is from a script that paired records by their
-       place in the lists and was not checked record by record. Not
-       determined: whether a callee record that holds what any site needs,
-       with the binding resolved when a cone instance is bound, gives at each
-       site the slots, the edges and the paths that the written-out form
-       has there, or whether some of those records have to be per site.
-       Nothing is assumed beyond the sentence of section 1.1.
+       prototype, which writes a callee out at each site, compared each copy
+       of a callee in the plans of the corpus with the first copy of that
+       callee, cone by cone: the slots of `Cone.slots`, the edges into the
+       cone, the write edges, the outputs, and each template with its
+       `shared` nodes written in place and its indexes left out. Of 53
+       pairs, 16 are equal but for indexes. In 2 a slot has another path of
+       the caller's argument, which the binding of a site gives. In 1,
+       `dev/experimental/folksonomy-demo.tsx`, a path is bound to a
+       computed value at one site and to a state cell at the other, so the
+       cone has an edge and an `output` node at the first and a slot at
+       the second, which "What an argument slot stands for in a rule"
+       gives. In 19 the copies differ in the paths below a path that the
+       callee passes on, as in
+       `examples/suggestion-test/suggestion-test.tsx` and
+       `dev/catalog/stories/kitchen-sink-story.tsx`, which the rule of
+       point (c) gives. 16 differ in the number of cones, and that is no
+       difference of the callee: the crate gives two call sites of one
+       name in one body the same `site` step, against section 1.3, so
+       copies of two sites are compared as one. So on the corpus one
+       callee record with the binding of each site gives the records of
+       the written-out form, with the rule of point (c) added, and the
+       sentence of section 1.1 holds; which slots and which incoming edges
+       a cone instance has is decided at binding (section 1.1, "What is
+       decided when a cone instance is bound"). The comparison is of the
+       records of the plans. It does not show that values, identifiers
+       and stored documents are preserved, which needs the build.
 
      The decision is designed and not built: the prototype writes the callee
-     out at every site, so no point of this question is tested. Over the plans
+     out at every site, so no point of this question is tested by a build.
+     From the written-out plans of the corpus alone: point (b) is confirmed
+     for the stream of a binding (of the state paths of the bindings in
+     copies of callees, 1,443 are bound to a slot, 282 to a constant, 49 to
+     an output, 140 to the stream of a binding of the same copy and 8 to
+     the stream of a binding of the caller, and none to the result of the
+     instance); points (d) and (e) are not determined (100 of the 3,867
+     outputs of copies are kept, and 10 of 175 collections of copies have
+     a collection as their source, and neither set was examined); and the
+     plans say nothing on points (f) to (i). Over the plans
      of the corpus the prototype's author estimates that the decision makes
      them 1.4% smaller, 5,870,726 bytes for 5,956,178, because a pattern is
      seldom compiled in at more than one site there. The decision bounds the

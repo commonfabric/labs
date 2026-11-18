@@ -645,7 +645,11 @@ subtrees are split off by a rule about size. Provisional (P20 of the
 continuation plan): a subtree is a part only from a minimum size on, and
 an array that is too large for one document is stored in chunk documents,
 each a contiguous run of its entries, so that one change of one row
-writes one chunk at any length of the list. A reader names the result cell
+writes one chunk at any length of the list. Provisional (P27 to P29): a
+record with many members is stored in chunks the same way, the part of a
+row is named by a number that the runtime mints and by no key, and an
+array that declares key fields has an index from a key to its chunk. A
+reader names the result cell
 and a path, whichever document stores the path, and a split changes no value
 and no label. One evaluation writes every document it changed in one
 transaction. [Execution and storage](execution-and-storage.md) §4.10 owns the

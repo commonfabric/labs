@@ -856,7 +856,14 @@ Three kinds of read have no entry.
   provisional, P20 of the continuation plan): an entry for a path of a
   row is registered at the chunk that stores the row, and a split or a
   merge of chunks registers it at the chunk that stores the row
-  afterwards.
+  afterwards. Provisional (P27 and P29 of the continuation plan): the
+  same for the chunk list and the chunks of a record that is stored in
+  chunks, where an entry for a path below a member is registered at the
+  chunk that stores the member, and for the key index of an array,
+  which is read by the resolution of a reference by key and has no
+  entry of its own: a reader through a key is registered at the
+  collection's membership and at the path it resolved to, as section
+  3.2 has it, and is marked by the keys that a write touched.
 
 ### 3.2 Entries from the plan and the bindings
 
@@ -3925,7 +3932,7 @@ document. Three kinds of thing are affected.
 | What | Why a client cannot name it | What the client does until a stored link arrives |
 | --- | --- | --- |
 | A state cell declared in an element body over plain values; the state of an operation declared in such a body; a child instantiated there; and the stream of a handler bound there (`execution-and-storage.md` §2.5) | The `element` step of its cause holds a salted value hash | The `state` or `operation` slot has no bound address. The cone instances that read it are pending, and what they feed renders its committed value or its loading state |
-| A part document at or below a row of a kept collection | Its identifier is derived under the secret of the space for every key, a cell's identity included (`plan-and-label-templates.md` §2.3) | Nothing: a client names a kept path by the result cell and the path, never a part document, and its overlay entries are per kept path (section 11.6) |
+| A part document at or below a row of a kept collection | Its identifier is a number that the runtime mints, derived from nothing that a client holds (`execution-and-storage.md` §4.10; provisional, P28 of the continuation plan) | Nothing: a client names a kept path by the result cell and the path, never a part document, and its overlay entries are per kept path (section 11.6) |
 | A binding made in a function body that has a copied path | The stream's identifier holds the salted hash of the copy | The stream is pending. A control the speculative run rendered for it sends nothing until the server's link to the stream arrives. A speculative handler that makes such a binding stores no link to it in its overlay entry |
 
 A reference by key, to an element that is a plain value in place,
