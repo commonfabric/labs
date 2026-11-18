@@ -1,5 +1,6 @@
 import ts from "typescript";
 import { MERGEABLE_OP_METHODS } from "@commonfabric/api";
+import { getComputedPropertyKeyInfo } from "@commonfabric/schema-generator/property-name";
 import {
   getLiftAppliedInnerCall,
   getLiftAppliedInputAndCallback,
@@ -150,6 +151,23 @@ function registerReplacement(
   if (originalType) {
     typeRegistry.set(replacement, originalType);
   }
+}
+
+/**
+ * The name of the method a member access in callee position calls: the last
+ * segment of its path, or, for a key the path keeps as written, the string a
+ * key of a literal type names, as `K` does in `const K = "push"; x[K]()`.
+ */
+function calledMethodName(
+  access: ts.Node,
+  path: readonly (string | ts.Expression)[],
+  checker: ts.TypeChecker,
+): string | undefined {
+  const last = path[path.length - 1];
+  if (typeof last === "string") return last;
+  if (!ts.isElementAccessExpression(access)) return undefined;
+  const key = getComputedPropertyKeyInfo(access.argumentExpression, checker);
+  return key?.kind === "literal" ? key.text : undefined;
 }
 
 export function reportComputationError(
@@ -747,7 +765,9 @@ function rewriteTrackedOpaquePatternBody(
         return wrappedCellGet;
       }
 
-      callTargetParents.set(node.expression, node);
+      // A transparent wrapper around the callee keeps the reference, so
+      // `(x.tags["push"])(v)` calls the method `x.tags.push(v)` calls.
+      callTargetParents.set(unwrapExpression(node.expression), node);
     }
 
     // Pre-visit dynamic-wrap: wraps `obj[dynamicKey]` accesses where the
@@ -851,8 +871,8 @@ function rewriteTrackedOpaquePatternBody(
       // A member access in callee position is a method call, whether the
       // method is named with a property access or a static element key.
       const parentCall = callTargetParents.get(node);
-      const methodName = info.path[info.path.length - 1];
-      if (parentCall && typeof methodName === "string") {
+      const methodName = calledMethodName(node, info.path, context.checker);
+      if (parentCall && methodName !== undefined) {
         if (KNOWN_PATH_TERMINAL_METHODS.has(methodName)) {
           if (info.path.length <= 1) {
             return visited;
