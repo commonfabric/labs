@@ -106,14 +106,28 @@ Read from the code at `c15a766611`; the browser end is verified by the bisect.
 
 ### 1. Is resolving a link demand?
 
-The watch `kickDocPull` registers exists so the replica can see where a link
-lands. Three ways to stop it starting the piece:
+A link is followed into documents the replica lacks along two paths, and
+both acquire ordinary watches:
+- **`kickDocPull`**, the implicit pull a resolution starts when it reaches a
+  missing document;
+- **the explicit `loadDocument()`** (`runtime/runner/src/document-readiness.ts`).
+  An event send loads each document its links pass through with it, and so
+  does `resolveAsCell({ loaded: true })` (labs #9993). In the cold-relay
+  fixture, a `loaded` resolution reached the final address with implicit
+  pulls turned off, and the memory server counted all four documents as
+  demand roots.
+
+The watch exists so the replica can see where a link lands. Three ways to
+stop it starting the piece:
 
 - **(a) A resolution watch that is not demand.** The protocol already has a
   watch the server delivers but does not count: `operation` watches, which
   `#buildSessionDemand` skips.
-  - `kickDocPull`'s sync would register the same graph query marked as
-    resolution only.
+  - A sync made only to follow a link would register the same graph query
+    marked as resolution only. That applies on both paths: `kickDocPull`, and
+    a `loadDocument()` whose caller is resolving rather than reading. An
+    event send keeps its ordinary demand, because its handler reads what it
+    loaded.
   - The server would leave its roots and its delivered entries out of the
     session's demand rows, while still delivering updates.
   - A document another watch demands stays demanded.
@@ -124,7 +138,15 @@ lands. Three ways to stop it starting the piece:
     - the caller's intent has to travel through watch acquisition;
     - coverage a passive watch holds is promoted to demand when a demanding
       owner arrives;
-    - the promotion survives a reconnect.
+    - the promotion survives a reconnect;
+    - **the promotion ends with its last demanding owner.** When that reader
+      leaves, the next supported reevaluation (or reconnect) clears the
+      execution demand, and the passive owner keeps receiving updates. A
+      promotion that outlived its readers would keep the writers running for
+      the rest of the session. The view watches behave this way today:
+      adding and then removing an ordinary owner takes server demand from
+      absent to present and back to absent, while the passive owner still
+      gets the next update.
 
     The delivery-only view watches are the reference, including how they
     handle traversal misses.
@@ -220,15 +242,24 @@ only resolves.
    none of its session-scoped documents. A client that then reads one of the
    piece's computed values, under a schema that reaches it, gets it computed
    and current.
-2. **Shared selectors.** Read the same selector passive then active, and
+2. **Both resolution paths, cold.** On a cold multi-hop chain (the
+   cold-relay fixture), both `resolveAsCell()` and `resolveAsCell({ loaded:
+   true })` reach their answers without demanding the pieces behind the
+   documents they load. An event send through the same chain still demands
+   what its handler reads.
+3. **Shared selectors.** Read the same selector passive then active, and
    active then passive. In both orders the computed value becomes current,
    and the passive read alone causes nothing.
-3. **Two viewers.** Structure starts, seeds and per-node instances are each
+4. **The last reader leaves.** With a passive and an active owner on one
+   selector, remove the active one and trigger the supported reevaluation
+   or a reconnect. Execution demand clears, and the passive owner still
+   receives the next update.
+5. **Two viewers.** Structure starts, seeds and per-node instances are each
    counted, and each comes out as the design intends.
-4. **A first blind field write**, as in `executor-fan-out.test.ts` case (n).
+6. **A first blind field write**, as in `executor-fan-out.test.ts` case (n).
    The late viewer's draft still reads the full set of defaults beside the
    field it wrote.
-5. **Name and profile freshness.** An unlabelled link's name and a profile
+7. **Name and profile freshness.** An unlabelled link's name and a profile
    badge's fields stay current, separately from the saving measured with a
    reference-only consumer.
 
