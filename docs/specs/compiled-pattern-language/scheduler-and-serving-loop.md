@@ -2284,7 +2284,9 @@ constraint never rejects a derivation transaction.
   (`plan-and-label-templates.md` §4.1, step 2). Where the template names
   another output, the key holds the identifier of the label of that
   output's template in place of the slots that template reaches
-  (provisional, P2; question 163 there). A constraint on a write,
+  (provisional, P2; question 163 there), and the same for an entry of
+  the plan's template table that the template names (provisional, P6;
+  question 168 there). A constraint on a write,
   such as writer-fit or a write floor, lists no slot of its own, and its
   verdict is a function of that key.
 - It does not advance the basis rows of the cone instance.

@@ -4946,6 +4946,100 @@ pointer to its entry.
   same for a record of an element body over an array of references,
   over an array of plain values in place, and over the result of another
   per-element construct.
+- **P6. No plan holds the same template twice: a table of templates**
+  (question 245). The coordinator's decision. The ruling on question 222
+  and P5 remove a copy of the template of an *output*. They do not reach
+  a template that is repeated and is no output: an operand of `&&`, `||`
+  and `??`, which is in the condition and in a branch, so that a chain
+  of `n` operands computed in one cone has about 2 to the power `n`
+  nodes (`plan-and-label-templates.md` §3.5); the condition of a
+  `select` or the choice of a `pick` at every path of a constructed
+  value (its §3.4); the template of a body, the `derive` over its
+  footprint, at each write edge and each path of its result (its §3.9);
+  the membership of a `map`, which copies its source's (its §3.2 and
+  §3.17); and a constructed value observed whole, at each place that
+  consumes it (its §3.4). The plan has a table `Plan.templates`, and a
+  node `{ op: "shared"; template }` that denotes the template at that
+  index, instantiated with the inputs of the place that holds the node.
+  The compiler writes every template that is larger than one leaf node
+  and stands at more than one position of a plan once in the table and a
+  `shared` node at each position. An entry may hold `shared` and
+  `output` nodes, and the references form no cycle. The label of an
+  entry is formed at most once for one set of inputs in a transaction.
+  No label changes: a template with each `shared` node replaced by its
+  entry denotes the same label. *How it is written against P2 and P3,*
+  which the decision asked the author to check: the decision's words are
+  that the hash, the keys and "the same input of a join" are over the
+  template with `shared` nodes expanded by the identity of the entry.
+  The documents have it so: equality in a join is decided on the
+  templates as written before the table is formed, and two `shared`
+  nodes are one input where they name one entry, which is the same test
+  because no two entries are equal, so P3 is unchanged; and the
+  slot-free hash, the instantiation key and the memo key treat a
+  `shared` node as P2 has them treat a node that names an output, with
+  the index replaced by a position in the hash and the identifier of the
+  label of the entry in the two keys, because a key over the replaced
+  form has the size that the table removes. The author added three
+  points that the decision does not state, each part of question 245:
+  sharing is part of the canonical form and the largest repeated
+  templates are taken first; the entries are in the order of first
+  occurrence in a walk of the plan; and the selections of an entry are
+  those of the place that holds the node. One consequence is new:
+  whether a template is an entry depends on what else its plan holds, so
+  the slot-free hash of one template can differ between two plans, which
+  costs a miss of the memo across plans and changes no label.
+  *Alternative:* every template is written in place, and the size of a
+  plan follows the five rules above. *Reason:* it is the reasoning of
+  the ruling on question 222 applied inside a cone and to the records
+  that are no output; a representation changes and no label does. *If
+  decided otherwise:* the node and the table leave
+  `plan-and-label-templates.md` §1.1, and the paragraphs that name them
+  leave its §1.2, §3.2 ("A template written once", and the last column
+  of the table of "A rule over a template"), §3.4, §3.5, §3.17, §4.1 to
+  §4.4 and §6.2, `footprint-analysis.md` §6.5 and
+  `execution-and-storage.md` §7.2. The prototype's crate writes every
+  template in place. Not covered: the records of a plan other than its
+  templates, and the copies of a pattern that is compiled in at several
+  sites, whose slots differ (questions 247 to 250). The table is formed
+  alike for a template of an element body over an array of references,
+  over an array of plain values in place, and over the result of another
+  per-element construct; the membership of a `map` is an entry in the
+  third case alone, since in the first two it is one `slot` node.
+- **P7. A schema of a plan writes a repeated subschema once** (question
+  246). The coordinator's decision, as revised on the author's objection
+  that the hash of a schema must not depend on which types the author
+  named. `plan-and-label-templates.md` §1.5 gave a member of `$defs` to
+  the recursive types alone and wrote every other type in place at each
+  occurrence, so `D` aliases that each use the next one twice gave a
+  schema of 2 to the power `D` copies. Sharing in a schema is
+  structural, as P6's is for templates, and independent of what the
+  author declared: a subschema that is equal as written at more than one
+  position of one schema, and larger than a leaf (one primitive type
+  alone, or one `$ref` alone), is written once under `$defs` and named
+  by `$ref` at each position. It is part of the canonical form: it is
+  mandatory, and the largest repeated subschemas are taken first. The
+  recursive types stay as they are, and the sentence of §1.5 that a
+  schema does not depend on which of its types the author named holds.
+  No schema changes its meaning. *Assumed by the author,* each part of
+  question 246: the name of such a member is its ordinal among them, in
+  decimal digits, in the order of first occurrence in the walk by which
+  §1.5 orders the recursive types of one declared name, so it uses no
+  name of the author's and equals no declared name; a member that stands
+  alone is a document of its own by the split of `decomposeSchema`
+  (`runtime/runner/src/schema-decompose.ts`), so its ordinal is in no
+  emitted document; and equality counts the default, the scope, the
+  handle marker and the label annotations of a subschema. *Alternative:*
+  a type that is not recursive is written in place at each occurrence.
+  *Reason:* a representation changes and no meaning does, and the size
+  of a schema no longer follows the paths through its types. *If decided
+  otherwise:* the provisional paragraph of `plan-and-label-templates.md`
+  §1.5 and the sentences on such a member in "The documents" there are
+  removed. The prototype writes such a type in place. Not covered:
+  `Slot.schema`, where a subschema that stands once in each of two
+  schemas of a plan is written in each, for which question 246 names an
+  option that is not adopted; and the entries of a footprint, which are
+  per position of the type written out (question 252). Not about a
+  per-element construct.
 
 ## Open, and needing the owner
 
@@ -6748,6 +6842,21 @@ ruling.
      The result of a `filter` over an array of references holds the
      links, and the instance keys each position by its cell under
      either answer.
+     *Growth, from the read-only audit:* under the assumption the
+     argument document holds a second copy of the `N` values, a change
+     of one element writes all `N` again, and the upstream keys are
+     formed again by a hash of each whole value. Where each of `N` rows
+     is an instance that takes the list whole, that is `N` times `N`
+     stored values and `N` document writes for one change: 1,000 rows
+     hold 1,000,000 values. With a link, as recommended, the argument is
+     one link. It depends on the choice this question leaves open, and
+     the choice changes a representation and which key a position has,
+     so the state a row keeps. *Measurement:* `N` rows that are each
+     given the result of a `filter` whole, over an array of plain values
+     in place and over a plain array generated from scratch; one element
+     changed; the values stored in argument documents and the documents
+     written. *Today:* an argument is a link to a cell (the audit's
+     statement).
 213. **The key fields of the result of a `map` whose callback computes
      a value of another type** (PL question 155; note 453). By ruling
      the type of a `map` result keeps the key fields of its receiver
@@ -7311,6 +7420,14 @@ that analysis that are no question are named after question 238.
      can assign otherwise. Nothing is assumed. The same over an array of
      references, over an array of plain values in place, and over the
      result of another per-element construct.
+     *Growth, from the read-only audit:* as the collection, one entry
+     holds `N` rows, so `E` pending insertions hold `E` times `N`: ten
+     unconfirmed sends into a list of 2,000 rows hold 20,000 rows in the
+     overlay. It depends on the choice this question leaves open, and a
+     fix changes a representation only. *Measurement:* `E` speculative
+     insertions into a kept collection of `N` rows before any is
+     confirmed; the bytes that the overlay holds. *Today:* not
+     established by the audit.
 238. **The batches for another space behind a derivation transaction
      that evaluates for several scope keys** (SS question 53).
      `scheduler-and-serving-loop.md` §9.3 carries an `inSpace`
@@ -7378,6 +7495,20 @@ the measurement that the prototype should run.
      interim output nowhere. The same for a kept output of an element
      body over an array of references, over an array of plain values in
      place, and over the result of another per-element construct.
+     *Growth, from the read-only audit:* `execution-and-storage.md` §7.2
+     has it that a "row with dynamic addresses has a record of its own".
+     Where each of `N` rows reaches, through the outputs its template
+     names, a body that read `N` addresses through a handle, the records
+     hold about `N` times `N` addresses, and one more address read
+     rewrites the record of every row: 1,000 rows over one value read
+     from 1,000 cells is 1,000,000 stored addresses. Under the
+     alternative the addresses are stored once, with the output whose
+     template has the `dynamic` node. A fix changes a representation,
+     and with it what the record of one output means. *Measurement:* `N`
+     rows that each read one interim value computed over `N` cells
+     through a handle; the addresses in the provenance records, and the
+     part documents written for one append. *Today:* no provenance
+     record exists.
 242. **The records other than `Output` that hold a template** (PL
      question 165). The ruling on question 222 is on the templates of
      outputs. `WriteEdge.template`, `ComputedInput.template`,
@@ -7460,6 +7591,828 @@ assumption of ES question 83, in which transaction a first value that is not a
 constant is written, the prototype does the alternative: it computes
 the value when the cell is created, which for a cell of an element body
 is when the key enters the element table, in all three cases.
+
+**From the provisional decisions P6 and P7.** Each is written into
+`plan-and-label-templates.md` as an assumption, and the assumption is a
+provisional decision ([Provisional
+decisions](#provisional-decisions-awaiting-the-owners-ratification)).
+
+245. **A template that is no output and stands at more than one position
+     of a plan** (PL question 168). The ruling on question 222 removes a
+     copy of the template of an output, and five rules of
+     `plan-and-label-templates.md` write a template that is no output at
+     several positions: an operand of `&&`, `||` and `??` (its §3.5),
+     the condition or the choice of a node over a constructed value at
+     every path (its §3.4), the template of a body at each write edge
+     and each path of its result (its §3.9), the membership of a `map`
+     over the result of a `filter` or a `flatMap` and the parts of an
+     index (its §3.2 and §3.17), and a constructed value observed whole
+     at each place that consumes it (its §3.4). *Assumed,* provisional
+     (P6): a table `Plan.templates` holds each such template once, and
+     each position holds a `shared` node that names the entry. Part of
+     the question is how the author wrote the decision in: sharing is
+     part of the canonical form; the entries are in the order of first
+     occurrence; the slot-free hash and the two keys treat a `shared`
+     node as P2 has them treat a node that names an output; two `shared`
+     nodes are one input of a join where they name one entry, as P3 has
+     it; and the selections of an entry are those of the place that
+     holds the node. The alternative writes every template in place. No
+     label differs. The table is formed alike over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct, and the membership of a
+     `map` is an entry in the third case alone.
+246. **A subschema that stands at more than one position of a schema**
+     (PL question 169). `plan-and-label-templates.md` §1.5 wrote a type
+     that is not recursive in place at each occurrence, which for `D`
+     aliases that each use the next one twice is 2 to the power `D`
+     copies in the schema documents emitted beside the plan. *Assumed,*
+     provisional (P7): a subschema that is equal as written at more than
+     one position of one schema, and larger than one primitive type or
+     one `$ref` alone, is a member of `$defs`, named by `$ref` at each
+     position, whatever the author declared; the largest are taken
+     first, and it is part of the canonical form. Part of the question
+     is what the author assumed: the member is named by its ordinal in
+     the order of first occurrence, which is in no emitted document for
+     a member that stands alone, and equality counts the default, the
+     scope, the handle marker and the label annotations. The alternative
+     writes every type that is not recursive in place. No schema changes
+     its meaning. What it does not reach: `Slot.schema` is one schema
+     for each distinct type and path of a reader, and a subschema that
+     stands once in each of two schemas of a plan is written in each. An
+     option, not adopted: form the members over all the schemas that one
+     plan names together. It changes no meaning, and the hash of a
+     schema would then depend on which other schemas its plan names, so
+     two plans would not name one type by one hash. The entries of a
+     footprint are not reached either (question 252). Not about a
+     per-element construct.
+
+**Sizes and costs that may grow faster than linearly.** Questions 247 to
+275 are the findings of two read-only lists of sizes and costs in the
+design that may grow faster than linearly in the size of the source or
+of the data, or that follow the number of paths: an audit of all seven
+documents, and a list made from `plan-and-label-templates.md` while the
+ruling on question 222 was written in. Each was found by reading and
+none was measured. They are in the order of the audit's ranking, in its
+four groups, with the findings of the second list placed in the first
+group. Each entry quotes the rule with its section, says what grows and
+in what with a small example, gives the class (certain from the text, or
+depending on a choice the text leaves open), says whether a fix would
+change a representation or an algorithm only or the meaning of a rule,
+names the measurement that the prototype should run, and says what
+today's runtime does where the lists establish it. Nothing is assumed
+for any of them beyond the text as it stands, none has a recommendation,
+and none has a provisional decision. "The audit's statement" marks a
+claim about today's runtime that the audit made from source and that
+this pass did not check again; a function named with its file was found
+there.
+
+*The size or the work follows paths and not nodes.*
+
+247. **A pattern that is compiled in is written out at every call
+     site.** `plan-and-label-templates.md` §1.1: "A pattern compiled
+     into another has no plan of its own", and "Its slots, bodies and
+     cones are entries of the enclosing plan". *What grows:* the size of
+     a plan, in the number of call paths. A pattern used at `k` sites is
+     `k` sets of slots, bodies, cones, outputs, bindings and templates,
+     and where the callee uses another pattern at `k` sites in turn, `D`
+     levels deep, the innermost is written `k` to the power `D` times.
+     With A calling B at two sites and B calling C at two sites the plan
+     holds four copies of C, and eight such levels hold 256 copies of
+     the innermost. Each copy of a `ReadInput` holds the callee's
+     default by value. The table of templates of P6 shares nothing
+     between the copies, because their slots differ. The text bounds the
+     depth only by refusing a pattern on a cycle of calls (question
+     102). A call site in an element body multiplies nothing further in
+     the plan, over an array of references, over an array of plain
+     values in place, and over the result of another per-element
+     construct alike: the copies are per site and the cone instances per
+     key. *Class:* certain from the text for the plan; for the size of
+     the value code and for compile time it depends on a choice the text
+     leaves open. *A fix would change* a representation, the records of
+     a callee written once and bound to the slots of each site, and no
+     meaning of a rule; it changes what the record of a compiled-in
+     pattern is. *Measurement:* a pattern `P_d` that uses `P_(d-1)` at
+     two JSX tags, for `d` from 1 to 8; the bytes of the plan, the
+     counts of its slots, cones, outputs and bodies, the bytes of the
+     value code, and the compile time. *Today:* a sub-pattern is one
+     module, instantiated at run time (the audit's statement).
+248. **A `Body` record is written per use, with the whole footprint.**
+     `plan-and-label-templates.md` §1.1 describes `Body` as "One use of
+     a sandboxed function body and the result of footprint analysis",
+     and two calls of one function in the reactive tier are two records
+     with one `code`. *What grows:* `reads`, `computed`, `handles`,
+     `writes`, `envelopes`, `outputs`, `calls` and `widenings` are
+     written again for each use, so the size is uses times footprint. A
+     function with 40 entries of its footprint that the pattern body
+     calls at 30 places is 1,200 entries, where the shape of the
+     footprint is one and the slots alone differ by use. The copies of
+     question 247 multiply it. A use in an element body is one record
+     whatever the number of elements, over an array of references, over
+     an array of plain values in place, and over the result of another
+     per-element construct. *Class:* certain from the text. *A fix would
+     change* a representation only. *Measurement:* one authored function
+     with `R` reads called at `U` places, with `R` and `U` varied; the
+     bytes of `Plan.bodies`. *Today:* no plan exists.
+249. **`Output.constraints` lists the input constraints of every body
+     upstream.** `plan-and-label-templates.md` §1.5 ("At an input")
+     lists the constraint of a body in the `constraints` "of every
+     output whose template has a `derive` by that body", and "The
+     `derive` can be anywhere in the output's template", through the
+     outputs it names included. *What grows:* the lists of a plan
+     together. In a chain of `n` outputs in which each adds one body
+     with an annotated input, output `i` lists `i` constraints, so the
+     lists hold `n` times `n + 1` over two entries, and each constraint
+     is checked at each output that lists it: 100 outputs give 5,050
+     entries. Finding the lists is linear by the ruling on question 222;
+     the lists themselves are not. *Class:* certain from the text for
+     the size of the lists; whether a constraint is evaluated once and
+     used at each output depends on a choice the text leaves open. *A
+     fix would change* a representation, where an output lists its own
+     constraints and names the outputs upstream, and no meaning;
+     checking a constraint at fewer outputs than the rule lists would
+     change the meaning of the rule. *Measurement:* a chain of `n`
+     `lift` calls that each declare an annotated input, for `n` of 10
+     and 100; the entries of `Output.constraints` over the plan, and the
+     constraint checks for one change of the first input. The chain is
+     the same in an element body over an array of references, over an
+     array of plain values in place, and over the result of another
+     per-element construct. *Today:* no plan exists.
+250. **`within` and `Name` repeat the enclosing chain on every record.**
+     `plan-and-label-templates.md` §1.1: a `WithinStep` is "One step of
+     where a declaration sits", every `Collection`, `Body`, `Cone`,
+     `StateCell`, `Operation`, `Child` and `Binding` holds the list of
+     its steps, a `site` step holds a `Name`, and a `Name` of the form
+     `{ body: Name, site }` holds the whole name of its body. *What
+     grows:* records times the depth of nesting, with names nested in
+     names. A declaration inside five compiled-in calls and two element
+     bodies holds seven steps, and `R` records at that depth hold 7
+     times `R` steps. *Class:* certain from the text. *A fix would
+     change* a representation only: a step that names its enclosing step
+     by index. The cause that an identifier derives from holds the steps
+     as a value either way. *Measurement:* the fixture of question 247,
+     with the bytes of the `within` and `name` members counted apart.
+     The steps of an element body are the same over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct. *Today:* no plan exists.
+251. **The reads of a unit are the reads of every cone upstream.**
+     `execution-and-storage.md` §1.9: "What a derived write read from
+     storage is the reads of the cone instance that computed it and of
+     the cone instances it pulled from through `output` edges", and
+     "Each derived write is a unit of its own".
+     `plan-and-label-templates.md` §4.6: "the reads of the producing
+     cone are reads of the consumer's unit". *What grows:* the read sets
+     of the units of one transaction, and the digest over them. `N` rows
+     that each pull one shared cone which journaled `N` reads give `N`
+     units of `N` reads each, and a chain of `n` derived writes gives
+     read sets of `n` times `n` over two entries: 1,000 rows over one
+     shared value read through 1,000 handles is 1,000,000 attributed
+     reads. *Class:* depends on a choice the text leaves open, whether a
+     unit names the read set of a producing cone instance or holds a
+     copy of it. *A fix would change* a representation only.
+     *Measurement:* `N` rows that each read one interim value computed
+     over `N` cells through a handle; the entries of each unit's read
+     set and the bytes that the digest covers, for one change. The rows
+     are run over an array of references, over an array of plain values
+     in place, and over the result of another per-element construct.
+     Question 243 has the same for a chain of outputs. *Today:* not
+     established by the audit.
+252. **Footprint analysis: entries per position of the type written out,
+     and a callee analyzed per call.** `footprint-analysis.md` §2.2: "So
+     a `value` entry over a subtree is accompanied by one `identity`
+     entry per such position". Its §3.6: "When an authored function
+     takes a function parameter, its summary is computed per call, with
+     the argument bound". *What grows:* the entries of a footprint, each
+     a slot of the plan, in the positions of a type written out as a
+     tree and not in its declarations; and compile time, in the call
+     paths through parameters of function type. For `type T1 = { l: T0;
+     r: T0 }` and so on to `T10`, with a handle in `T0`, one read of a
+     value of type `T10` whole gives 1,024 `identity` entries. P7 writes
+     the schema of such a type once and does not reach the entries. A
+     closure passed to a helper that calls a helper with a closure is
+     analyzed once per resolved call at each level. *Class:* depends on
+     a choice the text leaves open, and is not measured: the audit
+     states that the prototype has no `identity` entries of this kind
+     yet and analyzes every callee per call to a depth of eight. *A fix
+     would change* a representation of the footprint, an entry per
+     declaration with the positions it stands for, and the algorithm of
+     the analysis; no label rule. *Measurement:* the type above for a
+     depth from 1 to 12, and helpers `f_d` that call `f_(d-1)` twice
+     with a closure; the time of the analysis, the entries of the
+     footprint and the slots of the plan. At run time each such slot
+     whose path holds `*` is bound once per child, over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct. *Today:* no footprint
+     analysis exists.
+253. **The rounds of a cycle of side-writes.**
+     `plan-and-label-templates.md` §4.5 ("Cycles"): "the round is
+     repeated with the labels of the round before until no staged label
+     changes". *What grows:* the label instantiations of one
+     transaction. Each round can add one clause at one address, so the
+     rounds are bounded by the clauses times the addresses of the cycle,
+     and each round instantiates every template on the cycle: a product,
+     not a sum. A cycle of 10 addresses that 20 distinct clauses reach
+     can take 200 rounds of 10 instantiations. *Class:* certain from the
+     text as an upper bound; whether a run reaches it depends on where
+     the clauses enter. *A fix would change* an algorithm only:
+     instantiate again the templates that read a label which changed.
+     *Measurement:* a cycle of `c` side-writes with `k` clauses that
+     enter at different addresses, `c` and `k` varied; the rounds and
+     the instantiations. Not about a per-element construct. *Today:* not
+     established by the audit.
+
+*The key of an element is formed from its value.* These follow from a
+rule of meaning.
+
+254. **An edit of a plain value with no declared key changes its key,
+     and a re-key moves every document stored under the key.** The case
+     is an array of plain values in place, or a plain array generated
+     from scratch, whose type declares no key field, and a body over the
+     result of another per-element construct applied to such an array.
+     It does not arise over an array of references, where an edit of the
+     cell's content leaves the key equal. `plan-and-label-templates.md`
+     §1.3: "A plain value edited in place is a new element".
+     `execution-and-storage.md` §2.5 ("A write that changes the value
+     re-keys the element"): the runtime "moves what the old key holds to
+     the new key", in storage "the state cells, the streams, the
+     operation state and the children that the body keeps under the
+     key". *What grows:* the documents written for one edit of one
+     member, in what is stored under the row. A row with two state cells
+     and a child of 40 documents, bound as `$value={item.title}`: typing
+     20 characters writes the documents under the key 20 times under new
+     identifiers and retires as many, about 840 written and 840 retired,
+     where one write of one member is expected. Each re-key also hashes
+     the whole element and needs its occurrence count. An edit that is
+     not made through a reference by key moves nothing: the child of the
+     old value is torn down and one is set up for the new value.
+     *Class:* certain from the text, and ruled (questions 160 and 190);
+     how deep the move goes rests on an assumption (PL question 112). *A
+     fix would change* the meaning of a rule, that the key of a plain
+     value is formed from the value; an author bounds it today by
+     declaring a key field. *Measurement:* `N` rows of plain records,
+     each with `C` state cells and one `asInstance()` child; 20
+     characters typed into one row; the documents written and retired
+     and the hashes computed. The same with `ArrayByKey` and with an
+     array of references. *Today:* `listElementKeys`
+     (`runtime/runner/src/builtins/list-element-keys.ts`) keys a value
+     stored in place by its position, so an edit moves nothing, and
+     "today such a child stays and receives the new value as its
+     argument" (`execution-and-storage.md` §2.5).
+255. **Nothing that is stored under an element key is ever deleted.**
+     `plan-and-label-templates.md` §1.3 and `execution-and-storage.md`
+     §2.6: "By ruling the removal of an element deletes nothing that is
+     stored under its key". *What grows:* the stored documents of a
+     collection, in the number of keys it ever held and not in its
+     length. Over an array of references that is the elements ever
+     added. Over an array of plain values in place and over a plain
+     array generated from scratch with no declared key it is the
+     distinct values ever held, since each edit is a new key (question
+     254). Over the result of another per-element construct an element
+     has its upstream key, so it follows the source. A polled list of
+     100 records in which half change per poll, each row an
+     `asInstance()` child, adds 50 instances per poll, each of at least
+     an argument and a result document, and 72,000 instances in a day of
+     one poll a minute. *Class:* certain from the text, which states it
+     and defers reclaiming. *A fix would change* the ruling, or add a
+     mechanism that reclaims storage and changes nothing a pattern
+     computes. *Measurement:* an array of `N` plain records generated
+     from scratch `P` times with one member changed each time, with an
+     `asInstance()` child and one aggregate in the body; the stored
+     documents after each run. *Today:* by the statement of
+     `execution-and-storage.md` §2.6 today's runtime deletes no document
+     of a removed element either, and with a plain value keyed by
+     position the count is bounded by the largest length the array had.
+256. **A change of membership computes the key of every position.**
+     `execution-and-storage.md` §2.5, step 2: "Compute the key of every
+     position." `scheduler-and-serving-loop.md` §3.2: "The evaluation it
+     causes rebuilds the table". *What grows:* the work of one append,
+     insertion or removal, in the length `N` of the collection. Over an
+     array of references it is `N` resolutions of a link. Over an array
+     of plain values in place it is `N` salted hashes of whole values
+     and the occurrence counts, and there every edit that is not made
+     through a reference by key is itself a change of membership. Over
+     the result of another per-element construct no key is computed, and
+     each body of a chain of `D` constructs passes over its collection
+     again, `D` times `N`. The table is per scope key. Building a list
+     of 2,000 by appends is about 2,000,000 key computations. *Class:*
+     certain from the text for the pass; the constant depends on a
+     choice the text leaves open. *A fix would change* an algorithm
+     only: update the table from the splice. *Measurement:* one element
+     appended to an array of 100, 1,000 and 10,000, in each of the three
+     cases and for a chain of `filter`, `map` and `map`; the key
+     computations, link resolutions, hashes and bytes hashed. *Today:*
+     `createMapInstance` (`runtime/runner/src/builtins/map.ts`) also
+     passes over all positions when the list changes, so over an array
+     of references the order is the same; the hash of each whole value,
+     and a pass for each edit, are new over an array of plain values in
+     place.
+257. **A reference by key is resolved by hashing every element where no
+     element table exists.** `execution-and-storage.md` §2.5 ("Resolving
+     a reference by key"): "Where it has none, because no loaded
+     instance iterates the array, the runtime computes the keys of the
+     array's positions as step 2 below does".
+     `plan-and-label-templates.md` §1.3: "Each element is hashed once
+     per element table and once more per resolution of a reference by
+     key", and a reference resolves "at each read and each write". *What
+     grows:* the hashes of one pass, in the references times the length
+     of the array. `M` references into an array of `N` plain values cost
+     `M` times `N` hashes, and `N` rows that each hold a reference to
+     their own element cost `N` times `N`: 1,000,000 for 1,000 rows. The
+     case is an array of plain values in place, a plain array generated
+     from scratch, and the result of another per-element construct whose
+     upstream position holds a plain value. A reference to an element of
+     an array of references is a link and is not hashed. *Class:*
+     certain from the text where no table exists; whether the runtime
+     keeps an index of keys for an array that references alone point
+     into depends on a choice the text leaves open. *A fix would change*
+     an algorithm only. *Measurement:* `N` rows that each hold a
+     reference by key to their own element, in a pattern that does not
+     iterate the array; all of them read once after one write; the
+     hashes. *Today:* a reference to a member of a record stored in
+     place is a link to the position and resolves without a hash (the
+     documents' statement).
+258. **Equal plain values: an edit or a removal changes the key of the
+     later equal elements.** `plan-and-label-templates.md` §1.3: "An
+     edit that makes the value equal to that of another element, or ends
+     such an equality, changes the count of elements that the write did
+     not touch". `execution-and-storage.md` §2.5: "Where two equal
+     values stand in the collection and the first is removed, the one
+     that remains becomes occurrence 0". *What grows:* the cone
+     instances that one removal makes stale, in the number `K` of equal
+     elements: removing the first of `K` equal rows gives `K - 1` rows
+     another key, and each then reads what is stored under that key. The
+     case is equal values in an array of plain values in place or in a
+     plain array generated from scratch, and equal links in an array of
+     references. An element of the result of another per-element
+     construct has its upstream key. Which state an occurrence has is
+     question 76; this entry is the cost. *Class:* certain from the text
+     for the change of key; the cost depends on whether an equal output
+     ends the evaluation. *A fix would change* the meaning of a rule.
+     *Measurement:* `K` equal rows with a state cell each; the first
+     removed; the cone evaluations and the documents written. *Today:* a
+     plain value in place is keyed by position (question 254).
+
+*One element changes, and the work or the bytes follow the length.*
+
+259. **One row's change makes the enclosing cone and the `result` cone
+     return their whole value, and the documents do not agree on it.**
+     `plan-and-label-templates.md` §1.4 ("The partition"): "The
+     enclosing cone uses the assembled result".
+     `execution-and-storage.md` §3.3: "An entry is not current when an
+     upstream output it pulled has a different value from the one
+     recorded." Its §2.2, assumed there: "the function returns the whole
+     constructed value once". By these three, a change of one row's
+     output changes the assembled array, so the cone of the JSX tree
+     that encloses the `map` is not current, is evaluated again and
+     returns the whole tree, and the runtime compares a value of `N`
+     rows with what is stored; the same one level up for each cone that
+     pulls the tree and for the `result` cone. Against that,
+     `execution-and-storage.md` §10.1 lists the cone instances of the
+     derivation transaction behind a send as `facts`, `isEmpty`, the
+     participants derivation, the per-session records, the 30 existing
+     rows and the new row, with no cone of the tree among them, and its
+     seal table has for the document of the main list "One storage link
+     appended". The worked example assumes that the enclosing cone is
+     not evaluated, and the rules make it stale. *What grows:* the work
+     and the bytes returned for a change of one element, in `N` for each
+     enclosing level, over an array of references, over an array of
+     plain values in place, and over the result of another per-element
+     construct alike. *Class:* depends on a choice the text leaves open,
+     and the text conflicts with itself. *A fix would change* a
+     representation only: the enclosing value holds a reference to the
+     collection and depends on its membership, and the store step writes
+     the paths of the cone instance that changed. *Measurement:* one
+     member of one element changed in a list of `N` inside two levels of
+     enclosing JSX, for `N` of 100, 1,000 and 10,000 in each of the
+     three cases; the evaluations of the enclosing cones and of
+     `result`, the bytes that their value functions return, and the
+     positions compared or written. *Today:* the `map` coordinator keeps
+     the content of the elements out of its reads, so a change of one
+     element does not run it again (the audit's reading of
+     `runtime/runner/src/builtins/map.ts`).
+260. **Labels, bindings and stored results are held at positions.**
+     `builtin-inventory.md` ("Element keys"): aggregates and indexes
+     "keep, as part of their state, the position of each element key".
+     `execution-and-storage.md` §2.6: "The stored array is rewritten in
+     the new order". `plan-and-label-templates.md` §1.3: "reordering a
+     collection recomputes nothing but the cones that read the index".
+     *What grows:* the entries written for one insertion or removal at
+     position `i`, in `N - i`: the label entries of the envelope, the
+     provenance records, the origin facts of a derived collection, and
+     the positions in the state of a fold or an index. A row prepended
+     to 1,000 rows moves 1,000 of each. `execution-and-storage.md` §4.2
+     calls the write of the array a `splice`, and §2.6 says "rewritten".
+     *Class:* certain from the text for the count of entries; the bytes
+     are bounded for rows stored in place by `DOCUMENT_MAX_BYTES`, and
+     rows that are parts do not move. *A fix would change* a
+     representation only. *Measurement:* one row prepended to `N` rows,
+     over an array of references, over an array of plain values in
+     place, and over the result of a `filter`; the envelope entries,
+     provenance records and state entries written. *Today:*
+     `normalizeAndDiff` (`runtime/runner/src/data-updating.ts`) visits
+     every index of a written array.
+261. **A read of one element by index is a read of every element, with
+     no diagnostic.** `footprint-analysis.md` §3.1: "An index into an
+     array is not a widening", and "so `rows[0].price` is `rows/*/price`
+     too". Its §3.1 also: "An entry whose path holds `*` is one entry of
+     the footprint and one slot of the plan". *What grows:* for a body
+     that uses one row, the bindings, the values in its argument and the
+     labels joined, each in `N`, and for a `lift` or a `computed` that
+     is not promoted one run for a change of any row. A handler that
+     looks up one of 5,000 messages by index binds and reads 5,000. `N`
+     changes of distinct elements are `N` runs of `N` each. The array is
+     one of references, where each binding crosses a link, or one of
+     plain values in place; the result of another per-element construct
+     read by index in a body is the same. *Class:* certain from the
+     text. *A fix would change* a rule of the analysis, what an index
+     observes, or add a diagnostic. *Measurement:* a body that reads
+     `rows[0].x`, and a change of the `x` of the last row; no evaluation
+     is expected by an author, and one with an argument of `N` values is
+     observed. *Today:* the same order, by the statement of
+     `footprint-analysis.md`.
+262. **The label of the membership is in the label of every element, and
+     a label that all rows share is stored once per part.**
+     `plan-and-label-templates.md` §3.7 gives each element of a `filter`
+     and of a `flatMap` its root "`shape` replaced by the membership
+     template", and its §3.17 does the same for the elements of a
+     bucket. `execution-and-storage.md` §4.10: "A part's envelope is
+     complete for its paths". *What grows:* the documents written for
+     one change of the label of the membership, in `N`: every row's
+     label changes, and where the rows are parts each of the `N` part
+     documents is written. One row whose label differs replaces one
+     entry for all children by `N` entries. The construct is a `filter`
+     or a `flatMap` over an array of references, over an array of plain
+     values in place, or over the result of another per-element
+     construct; a `map` adds no membership of its own. *Class:* certain
+     from the text. *A fix would change* the meaning of a rule for the
+     part that every element carries the membership, and a
+     representation only for the copy of a shared label in each part.
+     *Measurement:* a `filter` over `N` rows that are parts; the
+     confidentiality of one input of the predicate changed; the
+     documents and label entries written. *Today:* an envelope per
+     labeled document (the statement of `execution-and-storage.md` §4.8
+     and §4.9).
+263. **`reduce` evaluates every step on any change.**
+     `execution-and-storage.md` §6.2: "In the baseline the fold is not
+     kept per key, so one changed element evaluates every step".
+     `builtin-inventory.md` (`reduce`): "The value of a `reduce` is
+     therefore recomputed in input order". *What grows:* the steps for
+     one change, in `N`, and `N` pushes cost `N` times `N` over two
+     steps. A step is an expression that does not mutate, so an
+     accumulator that is an array or a record is copied at each step,
+     about `N` times `N` over two members for one evaluation: 2,000
+     elements folded into an array copy 2,000,000 members. The
+     checkpoints that `builtin-inventory.md` names as an option store
+     one accumulator per prefix. The source is an array of references,
+     an array of plain values in place, or the result of another
+     per-element construct, alike. *Class:* certain from the text, which
+     states the first part. *A fix would change* an algorithm and what
+     is stored, with checkpoints, or a rule of the language, with a step
+     that may mutate its accumulator. *Measurement:* a `reduce` into a
+     number and into an array over `N` elements; one element changed and
+     one appended; the steps and the members copied. *Today:* a `reduce`
+     that mutates its accumulator inside a `computed` is linear per run
+     (the audit's statement).
+264. **Part documents: what crossing the size limit does, and what
+     measuring costs.** `execution-and-storage.md` §4.10 ("The rule
+     about size"): "Sizes are computed from the documents being written
+     and are not stored"; where a document exceeds `DOCUMENT_MAX_BYTES`,
+     "every split point directly below it that is stored in place
+     becomes a part, whatever its size"; and "A list of many small rows
+     stays in the document that stores the array until that document
+     exceeds `DOCUMENT_MAX_BYTES`". *What grows,* in three ways. First,
+     a write of one leaf measures every enclosing split point, and with
+     sizes not stored each measurement encodes the subtree, so `N`
+     appends encode about `N` times `N` over two rows. Second, a list of
+     2,000 rows of 33 bytes crosses 65,536 bytes at one append, and that
+     transaction creates up to 2,000 part documents, each with an
+     identifier, a link back, the `within` steps and an envelope, which
+     is several times the row; a reader of the list then loads 2,000
+     documents, and a list that shrinks stays split until a part is
+     written. Third, the array of `N` storage links is one document with
+     no split point. *Class:* the first depends on a choice the text
+     leaves open; the second is certain from the text, with the
+     placeholder numbers of question 41 and the reading of question 229;
+     the third is certain. *A fix would change* an algorithm for the
+     first, and a representation for the second, parts that hold several
+     rows, which changes what a part is and nothing a pattern computes.
+     *Measurement:* a kept collection of `N` rows of 30 bytes, appended
+     to past the limit; the bytes encoded for the size rule per
+     transaction, the documents created in the crossing transaction, the
+     stored bytes before and after, and the documents a reader of the
+     whole list loads. The rows are those of a kept collection over an
+     array of references, over an array of plain values in place, and
+     over the result of another per-element construct. *Today:* no part
+     documents; a `map` element is an instance with several documents of
+     its own, and a list of plain records that no `map` renders is one
+     document (the statement of `execution-and-storage.md` §4.8).
+265. **An element body that reads the index, or that captures the whole
+     collection.** `plan-and-label-templates.md` §1.3: "reordering a
+     collection recomputes nothing but the cones that read the index".
+     `execution-and-storage.md` §2.6 has for a captured outer value that
+     changes every element's cone instances that read it. *What grows:*
+     for a body that reads the index, one insertion at the front
+     evaluates the index-reading cones of all `N` elements, writes `N`
+     arguments where a child takes the index, and requests `N` effects
+     again where a request holds it. For a body that captures the
+     collection it iterates, `N` cone instances each read `N` elements,
+     and one change evaluates `N` of them. It is alike over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct. *Class:* certain from the
+     text, which states it. *A fix would change* the meaning of a rule,
+     since the index and the captured collection are values the body
+     reads; the documents bound it with a hint alone. *Measurement:* a
+     `map` whose callback uses its index in a child's argument, over `N`
+     elements; one element inserted at the front; the evaluations,
+     argument writes and effect requests. *Today:* the same order:
+     `createMapInstance` (`runtime/runner/src/builtins/map.ts`) sets
+     every element up again where the callback uses the index
+     (`usesIndex`).
+266. **Stores of one document that hold one entry per element key.**
+     `execution-and-storage.md` §8.4: "One cache document per instance
+     and per scope key"; its §2.8: "The enclosing instance has one
+     **instances document** per scope key", which lists the children of
+     an element body per element key; and its §6 holds the contributions
+     of an aggregate or an index per key in the operation's own state
+     document. *What grows:* the bytes written for a change of one
+     entry, in `N`, if a write of one entry writes the document, because
+     the rule about size of §4.10 applies to the result and its parts
+     and to none of these. The name of an entry is the text of the key
+     record, which for a link holds a space, a document and a path. A
+     cache document for 2,000 rows with 5 promoted element cones of 5
+     reads each holds 50,000 read records. The durable fingerprint of a
+     cache entry holds the version of the document read, so after a
+     restart an entry of an element cone over an array of plain values
+     in place misses whenever any element of that array's document was
+     written; over an array of references each element has a document of
+     its own, and over the result of another per-element construct it
+     follows what the upstream position holds. *Class:* depends on a
+     choice the text leaves open for the bytes per update; certain from
+     the text for the fingerprint. *A fix would change* a representation
+     only. *Measurement:* a `sum` and a `groupBy` over `N` references
+     with one element changed, and the bytes written to the state
+     document; an element cone that is promoted to the cache, a restart,
+     one element changed, and the cache hits. *Today:* no such documents
+     exist.
+267. **Verifying a `oneOf` reference: `M` result positions against `N`
+     candidates.** `footprint-analysis.md` §3.8: "The runtime verifies
+     both forms by reference identity", and one entry whose path holds
+     `*` stands for every reference its positions hold. *What grows:*
+     the comparisons of one evaluation of a body that returns `M` of the
+     `N` references it was given, as `rows.filter(keep)` or
+     `rows.toSorted(f)` in a function body does: `M` times `N` with a
+     scan, 4,000,000 for a sort of 2,000. The array is one of
+     references, or the result of another per-element construct that
+     holds references; a plain value has no reference to verify.
+     *Class:* depends on a choice the text leaves open. *A fix would
+     change* an algorithm only: a set of the candidates. *Measurement:*
+     a `lift` that returns its `N` input references sorted; the identity
+     comparisons per run. *Today:* not established by the audit.
+
+*The scheduler, demand, a restart, and a client.*
+
+268. **A handler that follows `L` links to instances that are not loaded
+     runs `L + 1` times.** `scheduler-and-serving-loop.md` §5.3 ("A
+     writer in an instance that is not loaded"): "The cost is one more
+     run of the handler for each instance whose stale output a journaled
+     read discovers", and for a runtime with no basis index, such as a
+     client, "There the stale case applies". *What grows:* the runs of
+     one handler for one event, in the number `L` of instances whose
+     stale output it reads through a handle, and the reads over those
+     runs, `L` times `L + 1` over two, since attempt `i` runs the body
+     up to read `i`, is withdrawn, and one instance is loaded. A handler
+     that sums a derived member of 200 linked cards runs 201 times and
+     makes about 20,000 reads. On the server that is for the outputs the
+     basis index shows stale; on a client it is for every such instance
+     that is not loaded. The section states the cost per instance (its
+     open question 28) and not the total or the case of a client.
+     *Class:* certain from the text. *A fix would change* an algorithm
+     only, loading every instance that the withdrawn attempt shows is
+     needed before the next run, as far as a read does not decide which
+     instance is read next. *Measurement:* a handler that reads one
+     computed member of each of `L` instances that are not loaded, for
+     `L` from 1 to 50; the runs of the body, the journaled reads and the
+     loads per event, on a server with all `L` stale and on a client.
+     The links are the elements of an array of references; an array of
+     plain values in place holds no instance. *Today:* by the statement
+     of the same section the read closure of a handler is computed once,
+     by a deep read under the handler's schema before it runs.
+269. **Basis rows are keyed by cone and document, and do not advance
+     under demand for some rows.** `scheduler-and-serving-loop.md`
+     §10.4: "The row of a document every key reads advances only when
+     every bound key has been evaluated against it". Its §4.2: "A reader
+     of one row demands that row's element cones and no other row's."
+     *What grows:* the evaluations at each activation, restart or load.
+     A document that every key reads has one row per cone. Where a
+     client renders 30 of 2,000 rows, the keys that nothing demands are
+     not evaluated, so the row never advances once the document changed,
+     and every demanded key of every element cone is found stale and
+     evaluated at each activation: 30 times the cones of the body, each
+     time. Over an array of plain values in place, and over the result
+     of another per-element construct whose upstream holds plain values,
+     all elements are in one document, so one edit puts the rows of
+     every element cone behind, and after a restart `N` times the cones
+     of the body are stale; the assumption of `execution-and-storage.md`
+     §3.4 then holds over an array of references alone, where each
+     element has a document. A write that was refused never advances its
+     rows and is tried at every load. *Class:* certain from the text. *A
+     fix would change* what is stored, a row per key or the set of keys
+     in a row, and no meaning of a rule. *Measurement:* `N` plain values
+     in one document with 10 rows demanded, a restart, and nothing
+     changed; the cone instances found stale and evaluated. The same
+     with a captured outer value that changed once, over an array of
+     references. *Today:* a row per run of an element's sub-pattern,
+     which other elements do not hold back (the statement of the same
+     section).
+270. **The first evaluation after a restart, and every first render on a
+     client, is not incremental.** `scheduler-and-serving-loop.md`
+     §10.6: "The memo of evaluated cone instances is process memory and
+     starts empty", and so do the element tables.
+     `execution-and-storage.md` §2.5, step 3: "For each key not in the
+     table, create its cone instances", and evaluate them.
+     `scheduler-and-serving-loop.md` §1.5 has an interim output as one
+     "which is stored nowhere". *What grows:* the evaluations for the
+     first change after a restart, in `N` times the cones of the body:
+     the first stale consumer that pulls an interim output of an element
+     body, as a `filter` over the result of a `map` that is not kept
+     does, pulls it for all keys. A client has no basis rows and no memo
+     when a page opens, so every cone instance it renders counts as
+     never evaluated. Over an array of references, over an array of
+     plain values in place, and over the result of another per-element
+     construct the count is the same; the third is the case that has
+     interim outputs to pull. *Class:* depends on a choice the text
+     leaves open: whether step 3 or `execution-and-storage.md` §3.4
+     governs, and no rule says when a client takes a committed kept
+     output as current. *A fix would change* an algorithm for the
+     server, and for a client it needs a rule about evaluation, which is
+     not a rule about what a pattern computes. *Measurement:* a `map`
+     that is not kept, feeding a `filter`, feeding a kept `map`, over
+     `N` elements; all memo entries and tables dropped; one element
+     appended; the element evaluations. On a client, a page of `N`
+     rendered rows and one event that changes one row. *Today:* not
+     established by the audit.
+271. **Finding the demanded outputs that a dirty slot makes due.**
+     `scheduler-and-serving-loop.md` §3.3: "Marking a slot dirty does
+     nothing else". Its §2.2: "The scheduler keeps no second copy of any
+     of them". `plan-and-label-templates.md` §4.1, step 1, makes a
+     demanded output due where a slot that its template reaches has a
+     new label and an unchanged value. *What grows:* the work of one
+     cycle to find where to start. The text gives the order and the
+     condition and not how the set is found: either a walk forward from
+     each mark, which follows the change, or a visit of every demanded
+     output, which follows all that is demanded. For 2,000 rows rendered
+     by 20 sessions and one changed member the second is 40,000 checks
+     per cycle. For a slot whose label alone changed, an index from slot
+     to outputs is slots times outputs, and a propagation along the
+     references is linear in what is downstream; no document says which.
+     *Class:* depends on a choice the text leaves open. *A fix would
+     change* an algorithm only, within the sentence of §2.2 on where
+     staleness is held. *Measurement:* `N` demanded rows and one member
+     of one element changed, for `N` of 100, 1,000 and 10,000, over an
+     array of references, over an array of plain values in place, and
+     over the result of another per-element construct; the memo entries
+     visited and the fingerprints compared in the derivation
+     transaction, which should not grow with `N`. *Today:* a lookup in
+     an index per changed address (`EntityTriggers.forEachMatching` in
+     `runtime/runner/src/scheduler/entity-triggers.ts`).
+272. **A withdrawal of demand derives the counts again over the upstream
+     region, for each path released.** `scheduler-and-serving-loop.md`
+     §4.3: "a withdrawal derives the counts again over the region
+     upstream of the output that lost demand". *What grows:* the visits
+     for one session that closes, in the paths `P` it watched times the
+     upstream region `U` of each, since the rows of one list share most
+     of what is upstream: 2,000 rows of 10 kept paths over a shared
+     region of 50 cone instances is 1,000,000 visits. Demand is also
+     held for the length of an event's transaction, so each event grants
+     and withdraws over the upstream closure of what its handler reads.
+     *Class:* depends on a choice the text leaves open, whether the
+     counts are derived again only where a count reaches zero. *A fix
+     would change* an algorithm only. *Measurement:* `K` sessions that
+     each demand `P` row paths of one list, and one closed; the units
+     visited and the counts written. Then one event for a handler that
+     reads a value derived from all rows. The rows are over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct alike. *Today:*
+     `withdrawDemandFrom`
+     (`runtime/runner/src/scheduler/dependency-graph.ts`) derives the
+     region upstream of its origin again as well; the read closure of a
+     handler is no demand root today, so the work per event is new.
+273. **Factors per scope key and per session.**
+     `execution-and-storage.md` §1.8: "A cone instance of user or
+     session scope is evaluated once per scope key that demands it". Its
+     §10.1 has the per-session records that the room derives for every
+     row evaluated "once per demanding session" on each send. *What
+     grows:* evaluations and stored documents, in rows times sessions. A
+     cone instance takes the narrowest scope of anything it reads, a
+     part document has a scope instance for each session that rendered
+     the row, with no stated end, and a materializer in an element body
+     is one unit, one standing demand and one transaction per key and
+     scope key. A body nested in a body has one cone instance per
+     combination of keys, also for a cone that reads nothing of the
+     inner element. It is alike over an array of references, over an
+     array of plain values in place, and over the result of another
+     per-element construct. *Class:* certain from the text. *A fix would
+     change* the meaning of the scope rules for the first part, and the
+     partition of cones (question 101) for a cone that reads nothing of
+     the element. *Measurement:* `N` rows with one session-scoped cell
+     read by each row, and `S` sessions; one send; the evaluations, and
+     the documents stored after all sessions rendered. *Today:* present,
+     by the figures of the documents.
+274. **The bound of ten, across the transactions of a cycle and the
+     events of a batch.** `execution-and-storage.md` §2.7: "A cone
+     instance is evaluated at most ten times in one transaction".
+     `scheduler-and-serving-loop.md` §8.3: "In one serving cycle, a
+     materializer runs at most 10 times". `execution-and-storage.md`
+     §1.1: "the stale cone instances it reads are evaluated in that
+     handler's own transaction, before its body". *What grows:* inside
+     one transaction the bound is per cone instance, so the ceiling is
+     10 times the cone instances and nesting does not multiply it.
+     Across transactions the count starts again: a cone instance on a
+     cycle with a materializer can be evaluated 100 times in one serving
+     cycle, and again after each backoff. `E` events whose handler reads
+     a derivation over a whole list of `N` cost `E` times `N`, since
+     what a handler reads is evaluated once per event and not once
+     behind the batch. *Class:* bounded by a stated rule inside a
+     transaction; certain from the text across transactions. *A fix
+     would change* the meaning of a rule: a bound per cycle or per batch
+     is a new rule. *Measurement:* `N` rows that read a state cell which
+     a cone writes again from their count with a function that does not
+     settle, for `N` of 5, 50 and 500; the evaluations and which cone
+     instances hold an error state. And `E` events in one batch for a
+     handler that reads an aggregate over `N` rows. Over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct alike. *Today:* `MAX_ITERS`
+     is 10 (`runtime/runner/src/scheduler/constants.ts`).
+275. **Seven smaller sizes.** Each is from the audit's last finding or
+     from the second list, and is certain from the text unless it says
+     otherwise; none is measured. (a) The stream index holds a row per
+     binding and key, so a `filter` whose membership changes writes and
+     deletes rows with it, `N` rows times the bindings of the body, over
+     an array of references, over an array of plain values in place, and
+     over the result of another per-element construct; and the drain
+     still scans the heads of all stream entries
+     (`selectPendingStreamEventDocs` in
+     `runtime/runner/src/executor/space-server.ts`, today). An
+     algorithm. (b) A `wish` search records the name and the schema of
+     every candidate it considered, per cone instance
+     (`scheduler-and-serving-loop.md` §3.4). A representation. (c)
+     Migration compiles and writes the setup of every instance of a
+     space while no cycle runs, and one refused instance holds the space
+     (questions 83 and 84). (d) The key of a member of a `flatMap`
+     result is a record of the source element's key and the member's own
+     (`plan-and-label-templates.md` §1.3), so a chain of `d` `flatMap`
+     constructs, each over the result of the one before, has keys of
+     depth `d` in every reference by key, state member name and cause;
+     over an array of references and over an array of plain values in
+     place with no construct upstream the key has one level. Today an
+     identifier is a hash of fixed length. A representation. (e) A
+     `lift` that instantiates in a loop updates all `N` instances at
+     each run. (f) `footprint-analysis.md` §6.3: "A body with one write
+     that is not static is a materializer for all of its writes", and
+     where an author follows the hint for a widened read and keeps the
+     record in a cell, a write of one child under a computed key, as
+     `counts.key(flavor).set(n)`, is such a write. A rule of the
+     analysis. (g) A `derive` mints one atom with an `inputWitness` for
+     each `TransformedBy` atom that every labeled input carries
+     (`plan-and-label-templates.md` §3.2, assumed, its question 67), so
+     the integrity of a value at the end of a chain of derivations holds
+     atoms that nest those of the steps before, to the depth
+     `INPUT_WITNESS_MAX_DEPTH` allows. It is a size of stored labels and
+     not of the plan, it is bounded by that depth, and the runtime of
+     today has the same bound. *Measurement:* for (a), a `filter` over
+     `N` rows with `B` bindings per row and one predicate input changed,
+     and the rows written; for (d), the bytes of a key at chain depths 1
+     to 4; the others are counted in the fixtures of questions 256, 268
+     and 270.
+
+Findings of the two lists that an earlier question holds, and that have
+no entry above. The instantiation key, the digest and the provenance of
+an output that list every upstream slot: questions 239 and 243. The
+provenance record that copies the dynamic addresses of an upstream body
+into every kept output that depends on it: question 241, which has the
+growth and a measurement. A derived collection that is given whole to an
+instance and copied into its argument: question 212, the same. The label
+of a `fold` that has no durable state, and `min` and `max` when the
+extreme leaves: question 244. The overlay entry for an insertion, which
+holds the whole collection: question 237, the same. The records other
+than `Output` that hold a template, and a template repeated inside one
+cone, at each path of a constructed value, at each write edge of a body,
+in the membership of a `map` and where a constructed value is observed
+whole: questions 242 and 245 (P5, P6). A type written in place at each
+occurrence: question 246 (P7). One finding is settled in the documents
+and is no question: the label of the membership that a collection
+iterates, and the label of a collection's array that a slot of root
+`index` resolves to, were formed once per element, which is `N` times
+`N` for a `filter` over `N` elements; `plan-and-label-templates.md` §4.1
+("A label is instantiated once") has both formed once for the collection
+and the enclosing keys, over an array of references, over an array of
+plain values in place, and over the result of another per-element
+construct. A representation changed there and no label did.
+
+No finding of either list is refuted by the text of the documents. Three
+are bounded by a rule and are entries all the same: the bound of ten
+inside one transaction (question 274), the bytes of rows stored in place
+that move with a position (question 260), and the depth of a
+witness-bearing atom (question 275).
 
 ## Open, and not needing the owner
 
@@ -8101,6 +9054,56 @@ The open questions each document ends with stay where they are.
    artifact holds the files that `dataFile` names. Questions 224 to
    238 are about parts that the prototype's executor does not have,
    and each has to be ruled before a test of its part means anything.
+
+6. **In the prototype, the measurements of the questions on growth**
+   (questions 243, 244 and 247 to 275, with the growth of questions 212,
+   237 and 241). No test of the prototype bounds the size of a plan, the
+   count of stored documents or the bytes written per change yet. Every
+   fixture below reports those three counts beside its own, and a test
+   holds each of them to a bound that is stated in the test. The
+   provisional decisions P6 and P7 are built first:
+   the crate writes `Plan.templates` and the `shared` node and names a
+   repeated subschema of a schema by `$ref`, and the executor forms
+   the label of an entry once for one set of inputs. The fixtures, in
+   the order of the audit's ranking:
+   1. The fixture of twenty-five values that each read the two before
+      them, with sandboxed bodies and with a child's arguments, for the
+      size of the plan and at run time (questions 243, 245 and 248).
+   2. A pattern compiled in at two sites per level, to a depth of 1 to 8
+      (questions 247 and 250), and a chain of bodies with annotated
+      inputs (question 249).
+   3. A list of 100, 1,000 and 10,000 elements over an array of
+      references, over an array of plain values in place, and over the
+      result of another per-element construct: one element appended, one
+      prepended, one member edited, the first removed; the key
+      computations, hashes, cone evaluations, documents and bytes
+      written (questions 254, 256, 259, 260 and 264).
+   4. One row of plain values with state and an `asInstance()` child,
+      edited 20 times (question 254), `K` equal rows with the first
+      removed (question 258), and a plain array generated from scratch
+      `P` times (question 255); the stored documents.
+   5. `N` rows that each read one interim value computed over `N` cells
+      through handles (questions 241 and 251), and `N` rows that each
+      hold a reference by key to their own element in a pattern that
+      does not iterate the array (question 257).
+   6. The footprint of a type of depth 1 to 12 that uses each
+      declaration twice, and of helpers that call a helper with a
+      closure (question 252).
+   7. A read of one element by index, a `reduce` into an array, a
+      `filter` whose membership label changes, and a body that uses the
+      index, each over an array of references, over an array of plain
+      values in place, and over the result of another per-element
+      construct; a `oneOf` result of a sort, and the stores of one
+      document per instance (questions 261 to 263 and 265 to 267, with
+      244 and 212).
+   8. A restart with 10 of `N` rows demanded and nothing changed, and
+      the first change after a restart (questions 269 and 270).
+   9. A handler over `L` instances that are not loaded, on a server and
+      on a client (question 268).
+   10. One changed member among `N` demanded rows, a session that
+      closes, `S` sessions over one list, a cycle that does not settle,
+      and `E` pending insertions (questions 271 to 274 and 237), and the
+      smaller sizes of question 275 and the rounds of question 253.
 
 ### Briefing an author
 

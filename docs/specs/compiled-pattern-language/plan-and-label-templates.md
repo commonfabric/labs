@@ -216,6 +216,17 @@ export type Template =
    */
   | { readonly op: "output"; readonly output: Index }
   /**
+   * An entry of the plan's template table (`Plan.templates`), named and
+   * not written out. Provisional (P6): a template that is larger than
+   * one leaf node and stands at more than one position of a plan is
+   * written once, in the table, and each position holds this node. The
+   * node denotes the label that the entry denotes for the inputs of the
+   * place that holds the node, so a template with each such node
+   * replaced by its entry has the same label (section 3.2, "A template
+   * written once").
+   */
+  | { readonly op: "shared"; readonly template: Index }
+  /**
    * A new value computed from the inputs. A join of templates is this
    * node with `by: { expression: true }` over the joined templates
    * (section 3.2). An input that is an output of the plan is an `output`
@@ -1274,6 +1285,15 @@ export interface Plan {
   readonly slots: readonly Slot[];
   readonly selectors: readonly Selector[];
   readonly picks: readonly Pick[];
+  /**
+   * The template table. Provisional (P6): every template of the plan
+   * that is larger than one leaf node and stands at more than one
+   * position, each once, in the order section 3.2 gives ("A template
+   * written once"). A `shared` node names an entry by its index. An
+   * entry holds `shared` and `output` nodes as any template does, and
+   * no two entries are equal.
+   */
+  readonly templates: readonly Template[];
   readonly collections: readonly Collection[];
   readonly bodies: readonly Body[];
   readonly dynamicReads: readonly DynamicReads[];
@@ -1857,6 +1877,17 @@ analysis that fills it in is specified in `footprint-analysis.md`.
   the template as it is written, and hashing every template of a plan
   costs time linear in the size of the plan. The label of the named
   output enters the memo key as the label of a slot does (section 4.3).
+  A `shared` node is not replaced by its entry either. *Assumed,*
+  provisional (P6; section 8, question 168): the index of a `shared`
+  node is replaced by its position in the template's own ordered list of
+  the entries it names, and each entry of `Plan.templates` has a
+  slot-free hash of its own, formed in the same way from the nodes that
+  the entry itself holds. The label of the entry enters the memo key as
+  the label of a named output does. The slot-free form of a template so
+  depends on which of its parts stand at another position of its plan:
+  two plans share a memo entry for a template where both write it with
+  the same nodes, and miss where one of them writes a part in place that
+  the other names in its table. No label differs for it.
 - **Slot keys.** At run time a slot is bound to an address. The binding's key
   is the address, the path and the class, which is exactly what the stored
   envelope is resolved by (section 2.2). The schema hash is not part of the
@@ -3538,10 +3569,42 @@ where a reader of the plan resolves it.
   written once, as a member of `$defs`, and every occurrence of it is a
   `$ref` to that member. What is written around an occurrence, a handle
   marker, a default, a scope or a label annotation, is written beside
-  the `$ref`. A type that is not recursive is written in place at each
-  occurrence. The mapping's §5.1 gives a definition to every named type;
-  the compiler gives one to the recursive types alone, so that a schema
-  does not depend on which of its types the author named.
+  the `$ref`. A type that is not recursive has no member on account of
+  its declaration. The mapping's §5.1 gives a definition to every named
+  type; the compiler gives one to the recursive types alone, so that a
+  schema does not depend on which of its types the author named.
+- **A subschema that stands at more than one position.** Provisional
+  (P7; section 8, question 169). Beside the recursive types, sharing in
+  a schema is structural, as the template table of a plan is (section
+  3.2, "A template written once"), and does not depend on what the
+  author declared. The compiler first writes the schema with every type
+  that is not recursive in place. In the result a subschema is repeated
+  where an equal subschema stands at another position of the same
+  schema: equal as it is written, with the keywords, the handle marker,
+  the default, the scope and the label annotations it holds, and the
+  order of an object's keys not counted. A subschema that is repeated
+  and is no leaf is written once, as a member of `$defs`, and each
+  position holds a `$ref` to the member and nothing beside it. A leaf
+  is a subschema that holds one primitive `type` and nothing else, or a
+  `$ref` and nothing else. The largest are taken first: once a
+  subschema is a member, what it holds is counted at the positions of
+  the member and not again at each position that names it. A member of
+  a recursive type is not itself made a member a second time, and a
+  subschema inside it is counted as any other. Sharing is part of the
+  canonical form: the compiler has no choice in it, so one type has one
+  schema and one hash. A type that the author wrote in place twice and
+  a type that the author declared once and used twice give the same
+  schema. The size of a schema is then linear in the number of its
+  distinct subschemas and of the positions that name them, and does
+  not follow the number of paths by which one type reaches another:
+  with every type in place, `D` aliases that each use the next one
+  twice gave a schema of 2 to the power `D` copies of the last. No
+  schema changes its meaning, since a `$ref` denotes the schema of the
+  member it names. *Assumed:* the name of such a member is its ordinal
+  from 1 among them, in decimal digits, in the order of first
+  occurrence in the walk that "The name" gives below. No declared name
+  starts with a digit, so it equals the name of no recursive type, and
+  it uses no name of the author's.
 - **What a recursive type is, precisely.** The unit is a declaration with
   its type arguments: an `interface` or a type alias of one module and,
   for a generic declaration, the types it is instantiated with. Two
@@ -3597,6 +3660,15 @@ where a reader of the plan resolves it.
   refer to each other by `#/$defs/<Name>`. Every reference to a member
   from outside that document is
   `{ "$ref": "cid:<hash>#/$defs/<Name>" }` with the document's hash.
+  A member that reaches no member that reaches it back is a document
+  of its own, which holds the member's schema and not its name, and a
+  reference to it is `{ "$ref": "cid:<hash>" }`: `decomposeSchema`
+  makes each definition that stands alone a document. That is every
+  member that provisional decision P7 adds, except one that holds a
+  `$ref` to a recursive type and stands inside that type's member; such
+  a member is in the document of the cycle, under its ordinal. So the
+  ordinal of a member that stands alone is in no emitted document and
+  in no hash.
   What remains of the schema is its root document.
 - **The hash.** Each document is hashed by the rule of section 1.2, which
   is the hash `decomposeSchema` gives it. A member of the plan that
@@ -5425,6 +5497,7 @@ selector `i`:
 | `const` | empty | neutral for `⊓` |
 | `slot s` | `C(s)` | `I(s)`, unchanged |
 | `output n` | `C` of the `template` of entry `n` of `Plan.outputs` | `I` of that template, unchanged; neutral where that template is |
+| `shared n` | `C` of entry `n` of `Plan.templates`, for the inputs of the place that holds the node | `I` of that entry for those inputs, unchanged |
 | `derive` | `⊔` of `C` over `inputs` | `⊓` of `I` over `inputs`, plus `TransformedBy` for `by` |
 | `select` | `C(condition) ⊔ C(branches[sel])` | `I(branches[sel])` |
 | `fold` | `C(membership) ⊔` the `⊔` of `C(body)` over the elements it covers | `⊓` of `I(body)` over those elements, plus `TransformedBy` for its `pattern` |
@@ -5458,8 +5531,11 @@ plan, and no record holds a copy of the template of an output. It
 changes a representation and no label, for the reason "What the node
 denotes" gives below. The template of a body, the `derive` over its
 footprint (section 3.9), is no output, so each write edge of a body
-holds that `derive` itself, with `output` nodes for the entries of
-`Body.computed` that are outputs.
+holds that `derive`, with `output` nodes for the entries of
+`Body.computed` that are outputs. Where the `derive` stands at more
+than one position, which it does for a body with two write edges, it
+is an entry of `Plan.templates` and each position holds a `shared`
+node (provisional, P6; "A template written once", below).
 
 - **Which entry is named.** An input that is a path of a value the
   instance computed is the node of the nearest entry at or above the
@@ -5499,41 +5575,170 @@ holds that `derive` itself, with `output` nodes for the entries of
   reads at a slot and not at an output.
 
 **The size of a plan.** No template grows with the template of another
-output: an `output` node has one size whatever it names. The templates
-of a plan together hold one node for each node that the rules of this
-section write for an expression of the source, at the one place the
-expression is written. The size of a plan is therefore linear in the
-number of its outputs and of the nodes of their templates, and does not
-follow the number of paths by which one output depends on another.
+output: an `output` node has one size whatever it names. The size of a
+plan is therefore linear in the number of its outputs and of the nodes
+of their templates, and does not follow the number of paths by which
+one output depends on another. That bounds the templates of a plan
+against each other. It does not bound one template against the source
+it is written from, because a rule of this section can write one
+template at several positions. The next paragraph is on that.
+
+**A template written once.** *Assumed,* provisional (P6; section 8,
+question 168): no plan holds the same template twice. The ruling on
+`output` nodes removes a copy of the template of an output. Five rules
+of this section write a template that is no output at more than one
+position:
+
+- `a && b`, `a || b` and `a ?? b` have the template of `a` in the
+  condition and in a branch (section 3.5). Where `a` is computed and
+  used inside one cone it has no entry of `Plan.outputs`, so a chain of
+  `n` operands, each written in place, has about 2 to the power `n`
+  nodes.
+- A node over constructed values is written once per path, each with the
+  condition of the `select` or the choice of the `pick` (section 3.4).
+- The template of a body, the `derive` over its footprint, is the
+  template of each write edge of the body and of each path of its result
+  that has an entry (section 3.9).
+- `Collection.membership` of a `map` is the membership its source has
+  ("The membership a collection iterates", below), and the parts of an
+  index repeat the source's membership joined with a `fold` (section
+  3.17). Over an array of references and over an array of plain values
+  in place that membership is one `slot` node, which is a leaf. Over the
+  result of another per-element construct it is the membership of the
+  upstream record, which for a `filter` or a `flatMap` upstream is a
+  `fold`.
+- A constructed value observed whole is the join of the `output` nodes
+  of all its entries, at each place that consumes it (section 3.4).
+
+The plan therefore has a table, `Plan.templates`, and the node `{ op:
+"shared"; template: n }`, which stands for entry `n` of the table. The
+member names are those of the provisional decision.
+
+- **Which templates are entries.** The compiler first writes every
+  template by the rules of this document with nothing shared, each join
+  in the form "A join" gives it below. A *position* is a member of a
+  record of section 1.1 that holds a `Template`, or a member of a node
+  that does. Two templates are equal where they are equal as they are
+  written: the same nodes in the same order, with the same indexes of
+  slots, outputs, selectors, choice points, collections, bodies,
+  patterns and dynamic reads. A template is an entry where it is no leaf
+  node (`const`, `slot`, `output` and `dynamic` are the leaf nodes) and
+  an equal template stands at another position. The largest are taken
+  first: once a template is an entry, what it holds is counted at the
+  positions of the entry and not again at each position that names the
+  entry, so a part of it is an entry of its own only where it also
+  stands somewhere else. Each position of an entry holds the `shared`
+  node, and so does the root of `Output.template` where two outputs have
+  equal templates. An entry holds `shared` nodes for the entries inside
+  it and `output` nodes as any template does. No two entries are equal.
+- **It is part of the canonical form.** The compiler has no choice in
+  it: a plan in which a template that this rule makes an entry is
+  written in place, or in which an entry is named once, is not a plan of
+  this format. One source then has one plan and one plan hash (section
+  1.2).
+- **The order of the entries** is that of first occurrence in a walk of
+  the plan with nothing shared: the members of `Plan` in the order
+  section 1.1 declares them, the entries of each in order, the members
+  of a record in the order of their declaration, and each template depth
+  first with the members of a node in the order of their declaration.
+  The order is part of the provisional decision's question, since the
+  decision names none.
+- **What the node denotes.** The label of the entry by the table above,
+  instantiated with the inputs of the place that holds the node: the
+  element keys, the selections and the chosen children that the same
+  template written in place there is instantiated with. A selector or a
+  choice point of an entry is one entry of `Plan.selectors` or of
+  `Plan.picks` at every position that names the entry, because equal
+  templates have equal indexes. This differs from an `output` node,
+  whose selections are those that the cone of the named output reported.
+  A template with each `shared` node replaced by its entry denotes the
+  same label, so the table changes the meaning of no template.
+- **No cycle.** An entry holds entries that are smaller than itself
+  alone, so the references among the entries form no cycle, and the
+  `output` nodes inside an entry form none for the reason "A reference
+  to an output" gives.
+- **Once per set of inputs.** The label of an entry is formed at most
+  once in a transaction for one set of inputs, and every `shared` node
+  that names the entry for that set uses the one result (section 4.1).
+- **What it does not reach.** Sharing is inside one plan and between
+  equal templates. Two templates that differ in one index are two
+  templates. The copies of a pattern that is compiled in at two sites
+  have slots, bodies and outputs of their own, so they share nothing by
+  this rule, and the records of a plan other than its templates are not
+  shared by it either (section 8, question 168).
+
+With the table the templates of a plan together hold each distinct
+template once, and one node for each position that names it. A chain of
+`n` operands of `&&` is about `n` `select` nodes and at most `n`
+entries, a node over a constructed value of `p` paths holds its
+condition once and `p` `shared` nodes, and a body with `W` write edges
+holds its `derive` once and `W` `shared` nodes.
+
+**How the table fits the two keys and the join.** The provisional
+decision says that the hash, the keys and "the same input of a join"
+treat a `shared` node by the identity of its entry, and asks that this
+be checked against the provisional decisions P2 and P3. The three are
+consistent in the following reading, which is this document's and is
+part of question 168.
+
+- *The join (P3).* Equality as written is decided on the templates with
+  nothing shared, before the table is formed. Because every repeated
+  template that is no leaf is an entry and no two entries are equal, two
+  `shared` nodes stand for equal templates exactly where they have one
+  index, and a `shared` node never stands for a template that is also
+  written in place. So comparing `shared` nodes by index gives the
+  answer that comparing the templates as written gives, and P3 holds
+  unchanged.
+- *The slot-free hash and the two keys (P2).* They treat a `shared` node
+  as P2 has them treat an `output` node: as it is written. The hash
+  replaces the index by a position (section 1.2), and the instantiation
+  key and the memo key hold the identifier of the label of each entry
+  that the template reaches under its own selections, and no slot,
+  selection or chosen child of the entry (sections 4.1 and 4.3). The
+  other reading, in which the hash and the keys are over the template
+  with each `shared` node replaced by its entry, would give each key the
+  size of the replaced form, which for a chain of `&&` is the size the
+  table removes. The table index itself is in no hash of a template,
+  since it is a position in one plan.
+- *What differs from P2 for an output.* Whether a template is an entry
+  depends on what else its plan holds, and whether a value is an output
+  depends on the source alone. So the slot-free hash of a template can
+  differ between two plans that hold it, which costs a miss of the memo
+  across plans and changes no label.
 
 **A rule over a template.** Several rules of this document are stated
 over what a template "reaches", "has" or "holds". Each of them is a rule
 about the template with every `output` node replaced by the template it
-names, so it follows `output` nodes, except where the list below says
-otherwise. By ruling none of them is computed as a walk of that replaced
-form as a tree. Each is computed per output: the result for an output is
-formed from the nodes that its own template holds and from the results
-for the outputs that its `output` nodes name, and the result for an
-output is formed once and used at every node that names it. Each then
-costs time linear in the size of the plan, or of what a transaction
-instantiates.
+names and every `shared` node by its entry (provisional, P6), so it
+follows both nodes, except where the list below says otherwise. By
+ruling none of them is computed as a walk of that replaced form as a
+tree. Each is computed per output: the result for an output is formed
+from the nodes that its own template holds and from the results for the
+outputs that its `output` nodes name, and the result for an output is
+formed once and used at every node that names it. The same holds per
+entry of `Plan.templates`: the result for an entry is formed once, for
+one set of inputs where the rule is one of run time, and used at every
+`shared` node that names it. Each then costs time linear in the size of
+the plan, or of what a transaction instantiates. The last column of the
+table says how each rule treats a `shared` node, all of it provisional
+(P6).
 
-| Rule | Follows `output` nodes | Formed once per |
-| --- | --- | --- |
-| The label of a template (section 4.2) | Yes | Output and set of inputs, in a transaction (section 4.1, "A label is instantiated once") |
-| What makes a demanded output due when a slot's label alone changed (section 4.1, step 1) | Yes: a slot that the template reaches through an `output` node counts | Output |
-| The instantiation key (section 4.1) | No: it holds the label of each output that the template names, and no slot, selection or chosen child of the named template | Template |
-| The slot-free hash of a template (section 1.2) | No: it is over the template as written | Template |
-| `Output.scope` (section 1.4) | Yes | Output, at compile time |
-| The input constraints that an output lists (section 1.5) | Yes | Output, at compile time |
-| Whether an output of a cone reaches a slot that a constraint of expression code lists (section 1.5) | Yes | Output, at compile time |
-| The writer of an output, a `derive` by a body at the root (section 1.5) | Yes, at the root alone | Output, at compile time |
-| The evaluation of a template on declared labels, and whether it is evaluated at all (sections 1.5 and 4.4) | Yes | Output, at compile time |
-| The label of the label-metadata observation of a computed value (section 3.16) | Yes | Output, in a transaction |
-| The labels on a cycle of side-writes (section 4.5) | Yes | Output, in each round |
-| Which staged writes a write uses (section 4.5) | Yes | Output, in a transaction |
-| A `const` or a repeated input of a join (below) | No: the inputs are compared as they are written | Node |
-| When a `derive` and a `fold` mint (below) | No: the condition is on the label of the node, which the labels of its inputs give | Node |
+| Rule | Follows `output` nodes | Formed once per | A `shared` node |
+| --- | --- | --- | --- |
+| The label of a template (section 4.2) | Yes | Output and set of inputs, in a transaction (section 4.1, "A label is instantiated once") | Followed: the node has the label of its entry for the inputs of the place that holds it. Formed once per entry and set of inputs, in a transaction |
+| What makes a demanded output due when a slot's label alone changed (section 4.1, step 1) | Yes: a slot that the template reaches through an `output` node counts | Output | Followed: a slot that an entry holds counts for every output whose template names the entry. Which slots an entry reaches is found once per entry |
+| The instantiation key (section 4.1) | No: it holds the label of each output that the template names, and no slot, selection or chosen child of the named template | Template | Not followed: the key holds the identifier of the label of each entry that the template reaches under its own selections, and no slot, selection or chosen child of the entry. An entry has a key of its own |
+| The slot-free hash of a template (section 1.2) | No: it is over the template as written | Template | Not followed: the hash is over the template as written, with the index of the node replaced by a position. An entry has a hash of its own |
+| `Output.scope` (section 1.4) | Yes | Output, at compile time | Followed: what an entry gives is found once per entry |
+| The input constraints that an output lists (section 1.5) | Yes | Output, at compile time | Followed: the constraints of the bodies whose `derive` an entry holds are found once per entry and listed by every output that names it |
+| Whether an output of a cone reaches a slot that a constraint of expression code lists (section 1.5) | Yes | Output, at compile time | Followed, once per entry |
+| The writer of an output, a `derive` by a body at the root (section 1.5) | Yes, at the root alone | Output, at compile time | Followed at the root alone: an output whose template is a `shared` node has the writer that the root of the entry gives |
+| The evaluation of a template on declared labels, and whether it is evaluated at all (sections 1.5 and 4.4) | Yes | Output, at compile time | Followed: an entry is evaluated once, and a template that names an entry which is not evaluated is not evaluated |
+| The label of the label-metadata observation of a computed value (section 3.16) | Yes | Output, in a transaction | Followed, with the label of the entry that the transaction formed |
+| The labels on a cycle of side-writes (section 4.5) | Yes | Output, in each round | Followed: once per entry and set of inputs, in each round |
+| Which staged writes a write uses (section 4.5) | Yes | Output, in a transaction | Followed: the staged writes that an entry's slots resolve to are found once per entry and set of inputs |
+| A `const` or a repeated input of a join (below) | No: the inputs are compared as they are written | Node | Compared as written: two `shared` nodes are one input where they name one entry, which is exactly where the templates they stand for are equal as written. A `shared` node is no `const` |
+| When a `derive` and a `fold` mint (below) | No: the condition is on the label of the node, which the labels of its inputs give | Node | The node mints nothing. A `derive` and a `fold` of the entry mint as they do written in place, once for each time the label of the entry is formed |
 
 A `select` instantiates the `output` nodes of its condition and of the
 selected branch, and none of an unselected branch. A `fold` instantiates
@@ -5545,6 +5750,14 @@ an `output` node there gets the label of the named entry with the child
 slots bound to that child (section 3.18). A `dynamic` node belongs to the
 template that holds it: the label of its journaled reads reaches a
 template that names that one only as a part of the named output's label.
+
+A `shared` node is instantiated where the same template written in place
+is: a `select` forms the label of an entry that its condition or its
+selected branch names and of none that an unselected branch alone names,
+a `fold` forms the label of an entry in its `body` for each element it
+covers, and a `pick` for the chosen child. A `dynamic` node of an entry
+belongs to the entry, and its journaled reads are those of the place
+that holds the `shared` node.
 
 **The atom of the pattern.** By ruling, trust is attached to a pattern, and
 the code of the reactive tier is named in a `TransformedBy` atom by the
@@ -5623,7 +5836,8 @@ in one order.
 
 - For expression code, one input per operand, in source order. An operand
   written twice is two inputs, and a constant operand is one `const` node
-  each time it is written.
+  each time it is written. Two inputs that are equal and no leaf are two
+  `shared` nodes that name one entry (provisional, P6).
 - For a body, the `slot` nodes of `Body.reads` in that order, then the
   templates of `Body.computed` in that order, then one `dynamic` node per
   entry of `Plan.dynamicReads` the use of the body made, in the order of
@@ -5647,7 +5861,10 @@ says by what. Three cases need no such node.
   template where they are equal as they are written, so two `output`
   nodes are the same where they name one output, and two nodes that
   name two outputs with equal templates are two inputs. The label is
-  the same either way, because a join and a meet are idempotent.
+  the same either way, because a join and a meet are idempotent. Two
+  `shared` nodes are the same where they name one entry (provisional,
+  P6), which is the same test, since no two entries are equal ("A
+  template written once", above).
 - A `fold` joins the membership its collection iterates by its own rule
   (below), so "a `fold` of `t`, joined with membership" is the `fold`
   alone.
@@ -5697,11 +5914,15 @@ the record's `source`:
 | `output` | The template of the output's own `enumeration`: for an assembled entry its `template`, for an array constructed in place the template of its container entry (section 3.4), and for the result of one opaque call the call's template |
 
 `Collection.membership` is a different thing: the label of which elements
-the *result* of the construct has. For a `map` the two are the same. For
-a `filter` and a `flatMap`, `membership` is a `fold` that names the
-record itself (section 3.7), and that `fold` joins what the record
-iterates, so the definition is not circular. `TemplateInputs.membership`
-of section 4.2 returns the membership the record iterates.
+the *result* of the construct has. For a `map` the two are the same. Where
+they are the same and no leaf node, which is a `map` over the result of a
+`filter` or a `flatMap`, the template is an entry of `Plan.templates` and
+both records hold its `shared` node (provisional, P6). Over an array of
+references and over an array of plain values in place the membership is one
+`slot` node. For a `filter` and a `flatMap`, `membership` is a `fold` that
+names the record itself (section 3.7), and that `fold` joins what the record
+iterates, so the definition is not circular. `TemplateInputs.membership` of
+section 4.2 returns the membership the record iterates.
 
 Notes on the integrity column:
 
@@ -5957,35 +6178,41 @@ paths below the interim name `stats`.
 
 **A node whose result is a constructed value** is written once per path.
 A `select` one of whose branches is a constructed value, a `pick` whose
-chosen child is one, and the per-element output of a `map` whose callback
-returns one are not one template over the whole value. For each path at
-which some branch has an entry, the plan has an entry whose template is
-the node with each branch replaced by that branch's template at the path:
-the template of the nearest entry of the branch at or above the path,
-and `const` where the branch is a constructed value that has no such
-path, because the path then holds nothing. Where the branch, the
+chosen child is one, and the per-element output of a `map` whose
+callback returns one are not one template over the whole value. For each
+path at which some branch has an entry, the plan has an entry whose
+template is the node with each branch replaced by that branch's template
+at the path: the template of the nearest entry of the branch at or above
+the path, and `const` where the branch is a constructed value that has
+no such path, because the path then holds nothing. Where the branch, the
 condition or the choice is an output of the plan, each per-path node has
 the `output` node of that entry there and no copy of its template
-(section 3.2, "A reference to an output"). The entries of one `select`
-name one selector, and those of one `pick` one choice point. The
-container entry is the node over the container entries of the branches.
-For `c ? { x: a } : { x: b, y: d }` the path `x` has
-`select(c, [a, b])`, the path `y` has `select(c, [const, d])`, and the
-container entry has `select(c, [const, const])`, the label of which key
-set the value has.
+(section 3.2, "A reference to an output"). Where the condition or the
+choice is computed in the same cone and is no leaf node, it is an entry
+of `Plan.templates`, and each per-path node has the `shared` node of
+that entry (provisional, P6; section 3.2, "A template written once").
+The entries of one `select` name one selector, and those of one `pick`
+one choice point. The container entry is the node over the container
+entries of the branches. For `c ? { x: a } : { x: b, y: d }` the path
+`x` has `select(c, [a, b])`, the path `y` has `select(c, [const, d])`,
+and the container entry has `select(c, [const, const])`, the label of
+which key set the value has.
 
-**A constructed value observed whole.** Where a rule needs one template for
-all of a constructed value, the template is the join (section 3.2) of the
-templates of its entries at and below the observed path, the container
-entry included. That is the case for an operand of expression code that
-consumes the whole value, as a substitution of a template literal does
-(section 3.19); for an entry of `Body.computed` of class `value` at or
-above the constructed value (section 3.9); for a path of an effect's
-request or of a child's argument that the value is written to whole; and
-for the `body` of a `fold` over elements that are constructed values.
-Where the value has entries in `Plan.outputs`, the inputs of the join
-are the `output` nodes of those entries, and no copy of a template. An
-entry of `Body.computed` of class `shape` or `enumeration` at the path of a
+**A constructed value observed whole.** Where a rule needs one template
+for all of a constructed value, the template is the join (section 3.2)
+of the templates of its entries at and below the observed path, the
+container entry included. That is the case for an operand of expression
+code that consumes the whole value, as a substitution of a template
+literal does (section 3.19); for an entry of `Body.computed` of class
+`value` at or above the constructed value (section 3.9); for a path of
+an effect's request or of a child's argument that the value is written
+to whole; and for the `body` of a `fold` over elements that are
+constructed values. Where the value has entries in `Plan.outputs`, the
+inputs of the join are the `output` nodes of those entries, and no copy
+of a template. Where two places consume one constructed value whole, the
+join is an entry of `Plan.templates` and each place holds its `shared`
+node (provisional, P6; section 3.2, "A template written once"). An entry
+of `Body.computed` of class `shape` or `enumeration` at the path of a
 constructed value has the template of its container entry alone. A
 constructed value has no reference, so an `identity` entry there has the
 container entry's template too.
@@ -6024,6 +6251,14 @@ compiler (section 7).
 `c ? a : b` produces `select` with `condition` the template of `c` and two
 branches. `a && b` is `select(a, [b, a])`: when `a` is falsy the result is
 `a` itself. `a || b` and `??` are analogous.
+
+The operand that is both the condition and a branch is written once.
+Where it is an output of the plan, both positions hold its `output`
+node. Where it is computed inside the cone and is no leaf node, it is an
+entry of `Plan.templates` and both positions hold its `shared` node
+(provisional, P6; section 3.2, "A template written once"), so the
+template of a chain `a && b && c` and longer grows by one `select` for
+each operand and not by a factor of two.
 
 The condition's slots have the class the test needs: `value` at the root for
 a scalar condition, `shape` at the root for a record or array, whose
@@ -8753,6 +8988,14 @@ statically known target, so no materializer is involved.
 | A lookup that misses | The same choice label, with no element |
 | `keys()`, `keyEntries()` | A collection whose membership is the source's membership joined with the `fold` of the key function's template |
 
+The `fold` of the key function's template, and the source's membership
+where it is no leaf node, stand in several rows of this table. Each is
+then an entry of `Plan.templates`, and each part holds its `shared` node
+(provisional, P6; section 3.2, "A template written once"). The source's
+membership is a leaf node, one `slot` node, over an array of references
+and over an array of plain values in place, and it is a `fold` over the
+result of a `filter` or a `flatMap`.
+
 The winner among elements with equal index keys in `key` mode is the
 element at the first position among them, in the source order of the
 collection. No element value beyond the index key enters the choice, and
@@ -9304,6 +9547,11 @@ For each one:
    the key holds the identifier of the label of the named output's
    template ("A label is instantiated once", below). The key of a
    template then has the size of the template as it is written.
+   For each `shared` node that the template reaches under those
+   selections the key holds, in the same way, the identifier of the
+   label of the entry for the inputs of the place, and no slot,
+   selection or chosen child of the entry (provisional, P6; section 8,
+   question 168).
 3. If the key equals the key the stored label was instantiated from, reuse
    that label. A change of value alone ends here.
 4. Otherwise instantiate (section 4.2), look the result up in the memo
@@ -9334,6 +9582,20 @@ output, as a memo entry is on the value side.
   collection's array that a slot of root `index` resolves to, are
   formed once for the collection and the enclosing keys as well, and
   not once for each element that reads them.
+- **Once per entry of the template table and set of inputs.**
+  Provisional (P6): in one transaction the label of an entry of
+  `Plan.templates` is formed at most once for one set of inputs, by
+  steps 2 to 4 for the entry as for a named output, and every `shared`
+  node that names the entry for that set uses the one result. A set of
+  inputs is a cone instance and under a `pick` a chosen child, as for an
+  output. The selections are those of the place that holds the node, and
+  one cone instance has one value for each selector, so two positions of
+  one cone instance never ask for two labels of one entry. Two write
+  edges of one run of a body, and the paths of the result of one call,
+  are one set of inputs. No constraint is checked and nothing is staged
+  for an entry on its own account: what is stored and checked is the
+  label of the template that the transaction instantiates, which holds
+  the node.
 - **When it is formed.** The label of a named output is formed when step
   2 first needs its identifier, by steps 2 to 4 for that output's own
   template: its key is collected, and the label is looked up in the memo
@@ -9417,6 +9679,13 @@ interface TemplateInputs {
    * body.
    */
   outputLabel(output: Index): Instantiated;
+  /**
+   * The label of an entry of `Plan.templates` for these inputs. The
+   * adapter instantiates the entry at most once per transaction and set
+   * of inputs and returns the same result to every caller (section
+   * 4.1). Provisional (P6).
+   */
+  sharedLabel(template: Index): Instantiated;
   /** Join of what a journaled read set consumed. */
   dynamicLabel(reads: Index): Label;
   /**
@@ -9441,6 +9710,8 @@ function instantiateTemplate(t: Template, inp: TemplateInputs): Instantiated {
       return inp.slotLabel(t.slot);
     case "output":
       return inp.outputLabel(t.output);
+    case "shared":
+      return inp.sharedLabel(t.template);
     case "dynamic":
       return inp.dynamicLabel(t.reads);
     case "derive": {
@@ -9533,6 +9804,16 @@ those inputs. It returns what that call returned every time after, a
 recursion ends because the references among outputs form no cycle
 (section 3.2).
 
+A `shared` node does not instantiate its entry in place either
+(provisional, P6). It asks the adapter for the label, and the adapter
+calls `instantiateTemplate` on the entry of `Plan.templates` with the
+inputs that the node was reached with, the selections and the chosen
+children of the calling cone included, the first time the label is asked
+for in the transaction for those inputs, and returns what that call
+returned every time after. The recursion ends because an entry holds
+entries smaller than itself alone (section 3.2, "A template written
+once").
+
 A `const` instantiates to `NEUTRAL`, and every node that takes a part
 handles it. A `derive` and a `fold` leave neutral parts out of the join
 and of the meet, so a `derive` over one slot and one literal keeps the
@@ -9556,7 +9837,8 @@ label is an identifier and an instantiation is a function of identifiers:
 
 ```text
 key   = (template hash, selections, slot label ids in template order,
-         label ids of the named outputs in template order)
+         label ids of the named outputs in template order,
+         label ids of the named entries in template order)
 value = label id
 ```
 
@@ -9581,6 +9863,14 @@ value = label id
   entry is as pure as one keyed by every slot the named templates reach.
   Two templates that are equal as written share entries whatever the
   templates of the outputs they name are, where those have equal labels.
+- A `shared` node contributes the identifier of the label of its entry
+  for the inputs of the place, and a neutral result contributes a fixed
+  marker. *Assumed,* provisional (P6; section 8, question 168). The
+  selections, the slots and the chosen children of the entry are in the
+  entry's own key and not in the key of a template that names it. The
+  entry is as pure for the reason given for an `output` node: the label
+  of a template is a function of the template as written, its own
+  selections and slot labels, and the labels of what it names.
 - That design holds label identifiers only above an inline size limit
   (`CFC_LABEL_INLINE_LIMIT` in `runtime/runner/src/cfc/label-documents.ts`).
   The memo key uses the hash of the label either way; whether the stored
@@ -9876,22 +10166,24 @@ table of section 3.2, with these rules.
   names it (section 3.2, "A rule over a template").
 - **A write of a body that holds a handle is not decided.** The template
   of every write edge of a body, and of every output it derives, is a
-  `derive` over all of `Body.reads` (section 3.2). A body that writes
-  through a handle has the `identity` slot of that handle among them
-  (`footprint-analysis.md` §6.1), and an `identity` slot has no
-  `declared` member (section 1.5). By the rule above the template is
-  then not evaluated. So `cfc-flow:writer-fit` and
-  `cfc-flow:write-floor` are never decided for a write a handler, an
-  action or a computation makes through a handle, nor for any other
-  write or output of a body whose footprint has an `identity` slot or a
-  `shape` slot in place. The runtime checks each of them at
-  instantiation. The compiler decides the two for an output or an edge
-  whose template reaches only slots that have a declared label:
+  `derive` over all of `Body.reads` (section 3.2). The plan holds that
+  `derive` once, as an entry of `Plan.templates` where it stands at more
+  than one position (provisional, P6), and the rule of this item is
+  decided once for the entry. A body that writes through a handle has
+  the `identity` slot of that handle among them (`footprint-analysis.md`
+  §6.1), and an `identity` slot has no `declared` member (section 1.5).
+  By the rule above the template is then not evaluated. So
+  `cfc-flow:writer-fit` and `cfc-flow:write-floor` are never decided for
+  a write a handler, an action or a computation makes through a handle,
+  nor for any other write or output of a body whose footprint has an
+  `identity` slot or a `shape` slot in place. The runtime checks each of
+  them at instantiation. The compiler decides the two for an output or
+  an edge whose template reaches only slots that have a declared label:
   expression code over `value`, `shape` and `enumeration` slots, and a
   body that reads values and holds no handle. `cfc-flow:write-policy`
   and `cfc-flow:ui-contract` read no label, and are decided for a write
-  through a handle as for any other. *Assumed* (section 8, question
-  60): this stands.
+  through a handle as for any other. *Assumed* (section 8, question 60):
+  this stands.
 - **A slot of root `event` is not decided on.** The plan records
   `Slot.declared` for such a slot, and it is no lower bound of the slot's
   label, which is the label the event arrived with (section 3.12). For
@@ -10912,13 +11204,14 @@ c1       = collection  source: output facts.main
 
 T_text   = derive(by B3)  [ m0 m1 m2 m4 ]
 T_isSet  = derive(expression) [ m0 m1 m5 ]
-T_edited = select( condition: T_isSet,
+T_edited = select( condition: shared(t2),
                    branches:  [ derive(expression) [ m3 ],
-                                T_isSet ] )
+                                shared(t2) ] )
 T_key    = derive(by B4)  [ m6 ]
 T_place  = pick( p0, from: output facts.places, choice: T_key,
                  body: output(facts.places) )
-T_repl   = select( condition: T_place, branches: [ T_place, const ] )
+T_repl   = select( condition: shared(t3),
+                   branches:  [ shared(t3), const ] )
 T_label  = select( condition: derive(expression) [ output(replies), const ],
                    branches:  [ const,
                                 derive(expression) [ output(replies) ] ] )
@@ -10930,10 +11223,40 @@ T_label  = select( condition: derive(expression) [ output(replies), const ],
 one of them names it: `T_empty` and the membership of `c1` name
 `facts.main`, the body of `T_place` names `facts.places`, and `T_label`
 names `replies`, whose template is `T_repl`. No template holds a copy of
-`T_facts` or of `T_repl`. A `T_` name that stands inside another
-template is written in place there, because the value is computed and
-used inside one cone and has no entry: `T_titles` inside `T_facts`,
-`T_isSet` inside `T_edited`, and `T_key` and `T_place` inside `T_repl`.
+`T_facts` or of `T_repl`.
+
+The template table, `Plan.templates`, provisional (P6; section 3.2, "A
+template written once"). It holds each template of the slice that is no
+leaf node and stands at more than one position, and `shared(t)` above
+is the `shared` node that names entry `t`:
+
+```text
+t0  T_send    the template of w0, w3, w4 and w5, and an input of the
+              joins at w1, w2, w6 and w7
+t1  T_facts   the template of facts.main, facts.entries, facts.places
+              and every other entry of the result of B2
+t2  T_isSet   the condition and the second branch of T_edited
+t3  T_place   the condition and the first branch of T_repl
+```
+
+The plan holds the `derive` of `B0`, with its fourteen slots and five
+`dynamic` nodes, once, in `t0`. Each of `w0`, `w3`, `w4` and `w5` has
+the template `shared(t0)`, where the listing of the bodies writes
+`T_send`, and the join at a path that holds a reference which the
+handler was given has `shared(t0)` as one input. `Output.template` of
+`facts.main`, of `facts.entries` and of `facts.places` is `shared(t1)`,
+so an `output` node that names one of them has the label of `t1`.
+`T_edited` has the template of the tested operand once, in `t2`, and
+`T_repl` has the `pick` once, in `t3`, with one choice point `p0`. The
+order of the entries is that of first occurrence: the write edges of the
+bodies come before the outputs in a plan, and the outputs in the order
+of this listing. A `T_` name that stands inside another template and is
+no entry is written in place there, because the value is computed and
+used inside one cone, has no entry of `Plan.outputs`, and stands at one
+position: `T_titles` inside `T_facts`, and `T_key` inside `T_place`. In
+one transaction the label of `t0` is formed once for a run of `B0` and
+used at every write edge of that run, and the label of `t2` and of `t3`
+once for a row.
 
 The second branch of `T_label` is the template literal
 `${replies} replies`. A template literal is a `derive` over the templates
@@ -14144,3 +14467,96 @@ this document made.
      for the result of another per-element construct, since the three
      differ in how a position's root label is resolved. It is question
      244 of the continuation plan.
+168. **A template that is no output and stands at more than one position
+     of a plan** (for the project owner). The ruling of question 160
+     removes a copy of the template of an output. Five rules of this
+     document write a template that is no output at several positions:
+     an operand of `&&`, `||` and `??` in the condition and in a branch
+     (section 3.5), which for a chain of `n` operands computed in one
+     cone gives about 2 to the power `n` nodes; the condition of a
+     `select` and the choice of a `pick` at every path of a constructed
+     value (section 3.4); the `derive` of a body at each write edge and
+     each entry of its result (section 3.9); the membership of a `map`
+     over the result of a `filter` or a `flatMap`, and the parts of an
+     index (sections 3.2 and 3.17); and a constructed value observed
+     whole at each place that consumes it (section 3.4). *Assumed,*
+     provisional (P6 of the continuation plan, the coordinator's
+     decision, and not ruled): the plan has a table `Plan.templates`,
+     and a node `{ op: "shared"; template }` that stands for an entry of
+     it; every template that is no leaf node and stands at more than one
+     position of a plan is an entry, and each position holds the node
+     (section 3.2, "A template written once"). No label changes: a
+     template with each `shared` node replaced by its entry denotes the
+     same label. Four points are this document's reading of the decision
+     and are part of the question. First, sharing is part of the
+     canonical form and not a choice of the compiler, the largest
+     repeated templates are taken first, and the entries are in the
+     order of first occurrence in a walk of the plan, which the decision
+     does not name. Second, the slot-free hash, the instantiation key
+     and the memo key treat a `shared` node as provisional decision P2
+     has them treat an `output` node, as it is written, with the label
+     identifier of the entry in the two keys (sections 1.2, 4.1 and
+     4.3). The decision's words are that they are over the template
+     "with `shared` nodes expanded by identity of the entry"; a key over
+     the replaced form would have the size that the table removes. The
+     cost of this reading is that the slot-free hash of a template
+     depends on what else its plan holds, so two plans can miss a memo
+     entry that they could share. Third, two `shared` nodes are the same
+     input of a join where they name one entry, which agrees with
+     provisional decision P3 because no two entries are equal. Fourth,
+     the selections of an entry are those of the place that holds the
+     node and not, as for an `output` node, those of another cone. The
+     alternative to the decision writes every template in place, and the
+     size of a plan then follows those five rules. If the owner decides
+     for the alternative, the node and the table are removed from
+     section 1.1, and the paragraphs that name them from sections 1.2,
+     3.2, 3.4, 3.5, 3.17, 4.1 to 4.4 and 6.2. Not covered by either: the
+     records of a plan other than its templates, which questions 247 to
+     250 of the continuation plan are on. The table is formed alike for
+     a template of an element body over an array of references, over an
+     array of plain values in place, and over the result of another
+     per-element construct; the membership of a `map` is shared in the
+     third case alone, because in the first two it is one `slot` node.
+     It is question 245 of the continuation plan.
+169. **A subschema that stands at more than one position of a schema**
+     (for the project owner). Section 1.5 gave a member of `$defs` to
+     the recursive types alone and wrote every other type in place at
+     each occurrence, so `D` aliases that each use the next one twice
+     gave a schema of 2 to the power `D` copies of the last. The plan
+     holds hashes, so the growth was in the schema documents emitted
+     beside it and in the cost of hashing them. *Assumed,* provisional
+     (P7 of the continuation plan, the coordinator's decision, and not
+     ruled): sharing in a schema is structural. A subschema that is
+     equal as written at more than one position of one schema, and is
+     larger than a leaf (one primitive type alone, or one `$ref` alone),
+     is written once under `$defs` and named by `$ref` at each position,
+     the largest first, as part of the canonical form (section 1.5, "A
+     subschema that stands at more than one position"). It does not
+     depend on what the author declared, so the sentence of section 1.5
+     that a schema does not depend on which of its types the author
+     named holds. The recursive types are as they were. No schema
+     changes its meaning. Two points are this document's and are part of
+     the question. The name of such a member is its ordinal among them
+     in the order of first occurrence in the walk that names the
+     recursive types, in decimal digits, which no declared name can
+     equal; for a member that stands alone the name is in no emitted
+     document, because `decomposeSchema` makes it a document of its own
+     named by its hash. And equality counts the default, the scope, the
+     handle marker and the label annotations of a subschema, so two
+     positions of one type with two annotations are two subschemas. What
+     it does not reach. First, `Slot.schema`: a plan names one schema
+     for each distinct type and path of a reader, and a subschema that
+     stands once in each of two of them is written in each, where it is
+     no member that stands alone. An option, not adopted: form the
+     members over all the schemas that one plan names together, a
+     `$defs` of the plan. It changes the meaning of no schema, and it
+     makes the hash of a schema depend on which other schemas its plan
+     names, so two plans would no longer name one type by one hash, and
+     a stored schema identifier would follow the plan. Second, the
+     entries of a footprint, which are per position of the type written
+     out (question 252 of the continuation plan). The alternative to the
+     decision writes every type that is not recursive in place. If the
+     owner decides for it, the provisional paragraph of section 1.5 and
+     the sentences on such a member in "The documents" are removed. Not
+     about a per-element construct. It is question 246 of the
+     continuation plan.

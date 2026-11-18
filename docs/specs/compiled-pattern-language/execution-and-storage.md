@@ -678,14 +678,14 @@ Five things differ.
    instantiation key, which holds the slot-free template hash, the
    selections and the children a `pick` chose, the label identifiers of the
    slots, the staged ones among them, the label identifiers of the outputs
-   that the template names (provisional, P2; its question 163), and the
-   labels of the `dynamic` nodes
-   with their trigger reads; and which derived writes a failed constraint
-   dropped, and which a conflict withdrew, so that the digest is over the
-   writes that commit. A read, a write or a new decision input after the
-   preparation invalidates it, as it does today. The withdrawal of a
-   derived write at the commit is the one exception, and item 4 says why
-   it needs no second verification.
+   that the template names (provisional, P2; its question 163) and of the
+   entries of the template table that it names (provisional, P6; its
+   question 168), and the labels of the `dynamic` nodes with their trigger
+   reads; and which derived writes a failed constraint dropped, and which a
+   conflict withdrew, so that the digest is over the writes that commit. A
+   read, a write or a new decision input after the preparation invalidates
+   it, as it does today. The withdrawal of a derived write at the commit is
+   the one exception, and item 4 says why it needs no second verification.
 4. **Units, so that a conflict can withdraw one derived write.** The
    preparation records what it verified per **unit**, as
    `plan-and-label-templates.md` §4.6 ("Units") rules.
@@ -5022,6 +5022,15 @@ it is written, and `key` covers the labels of the named outputs
 (`plan-and-label-templates.md` §1.2 and §4.1; provisional, P2). The
 record of one kept output then grows with what is upstream of it, and
 question 97 has the alternative.
+
+A template can also name an entry of the plan's template table with a
+`shared` node (`plan-and-label-templates.md` §3.2, "A template written
+once"; provisional, P6). "Reaches" follows a `shared` node as it follows
+the same template written in place: the record holds an entry for each
+selector, each choice point and each set of dynamic reads of the table
+entry, each once, however many positions of the output's template name
+the entry. `key` holds the identifier of the label of each entry that
+the template names, as it holds that of a named output.
 
 What is recorded is what cannot be derived: the selections, the chosen
 keys and the dynamic addresses. A reader that wants the full chain for a

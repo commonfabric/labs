@@ -358,6 +358,16 @@ linear as well, and no template changes its meaning
 ([plan format and label templates](plan-and-label-templates.md), §3.2
 and §4.1).
 
+Provisional (P6 and P7 of the continuation plan, decisions of the
+coordinator of this work and not rulings): a template that is no output
+and stands at more than one position of a plan, as the operand of `&&`
+that is both the condition and a branch does, is written once in a table
+of the plan and named at each position, and a subschema that is equal at
+more than one position of a schema is written once under `$defs` and
+named by `$ref`, whatever types the author declared. Neither changes a
+label or the meaning of a schema ([plan format and label
+templates](plan-and-label-templates.md), §1.5 and §3.2).
+
 Constraints such as required integrity and maximum confidentiality become
 constraints on slots. Where the labels of the slots are declared in schemas the
 compiler checks the constraint and reports a violation as a compile error.

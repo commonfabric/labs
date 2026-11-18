@@ -1554,6 +1554,12 @@ label of the choice. A path that holds a reference the body found below a
 hop whose read is dynamic ([§2.1](#21-abstract-values)) is neither. It has
 the body's template, like a computed value.
 
+The plan holds the body's template once. Where it stands at more than
+one position, as it does for a body with two write edges, it is an entry
+of the plan's template table, and each write edge and each join that has
+it as an input names the entry (`plan-and-label-templates.md` §3.2, "A
+template written once"; provisional, P6).
+
 In a `handler`, an `action`, or an inline event handler, a path of the
 first kind carries the body's template as well, joined with the entry. A
 handler writes the link because an event arrived, and by ruling the link
