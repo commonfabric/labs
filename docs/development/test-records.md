@@ -72,7 +72,9 @@ away, and no identity is mapped twice across all of them. It also fails a
 line that does not parse, naming the file and line, and anything no reader
 would load: an entry of the directory other than a `.jsonl` file directly
 inside it, or a `test-identity-aliases.jsonl` beside the directory, whose
-lines belong in the files inside. The same rename applies to every variant.
+lines belong in the files inside. It measures what changed from the merge base
+with a base revision; `docs/development/automated-gates.md` says which revision
+that is when none is named. The same rename applies to every variant.
 
 ## The environment surface
 
