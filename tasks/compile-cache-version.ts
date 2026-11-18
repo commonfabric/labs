@@ -23,7 +23,6 @@
  */
 
 import { dirname, fromFileUrl } from "@std/path";
-import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type MemoizedOutputVersion,
   memoizeOutputVersion,
@@ -73,8 +72,8 @@ function compiledLine(compiled: CorpusEntryCompiled): string {
 
 /**
  * Run the form `args` names and return the process's exit status: 2 for an
- * argument the task does not take, 1 when the command fails, after printing
- * the failure on standard error, and 0 otherwise.
+ * argument the task does not take, and 0 otherwise. A command that fails
+ * rejects the returned promise with its error.
  */
 export async function main(
   args: readonly string[],
@@ -85,29 +84,19 @@ export async function main(
     console.error(`Unknown argument ${JSON.stringify(unknown)}. ${USAGE}`);
     return 2;
   }
-  // Compiling the corpus locks the realm down, after which a rejection that
-  // escapes the top level is reported as `SES_UNHANDLED_REJECTION` and the
-  // process exits with status 0, so a failure sets the status here.
-  try {
-    if (args.includes("--memo")) {
-      const { version, recorded } = await commands.memoize((compiled) =>
-        console.log(compiledLine(compiled))
-      );
-      console.log(
-        recorded
-          ? `${OUTPUT_VERSION_MEMO_PATH}: recorded ${version}.`
-          : `${OUTPUT_VERSION_MEMO_PATH}: already records ${version} for this tree.`,
-      );
-    } else {
-      console.log(
-        await commands.print((compiled) =>
-          console.error(compiledLine(compiled))
-        ),
-      );
-    }
-  } catch (error) {
-    console.error(`compile-cache-version failed: ${describeFailure(error)}`);
-    return 1;
+  if (args.includes("--memo")) {
+    const { version, recorded } = await commands.memoize((compiled) =>
+      console.log(compiledLine(compiled))
+    );
+    console.log(
+      recorded
+        ? `${OUTPUT_VERSION_MEMO_PATH}: recorded ${version}.`
+        : `${OUTPUT_VERSION_MEMO_PATH}: already records ${version} for this tree.`,
+    );
+  } else {
+    console.log(
+      await commands.print((compiled) => console.error(compiledLine(compiled))),
+    );
   }
   return 0;
 }
