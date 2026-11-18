@@ -66,6 +66,8 @@ pub(crate) struct UseFact {
     pub formals: Vec<String>,
     /// What each formal input and each captured name is bound to.
     pub inputs: Vec<(String, Place)>,
+    /// The captured names that are declared with a handle type.
+    pub handles: Vec<String>,
 }
 
 /// The function of a handler body.
@@ -331,6 +333,9 @@ struct Local<'a> {
 struct Generator<'r, 'm, 'a> {
     resolver: &'r Resolver<'m, 'a>,
     plan: &'r Value,
+    /// The schema documents that the plan names, each with its
+    /// identifier.
+    schemas: &'r [(String, Value)],
     finished: &'r Finished,
     /// The registrations of each module, in the order they were made.
     registrations: BTreeMap<usize, Vec<String>>,
@@ -434,6 +439,28 @@ impl<'r, 'm, 'a> Generator<'r, 'm, 'a> {
             entry.insert(found);
         }
         self.declarators.get(&module)?.get(&start)?.init.as_ref()
+    }
+
+    /// Whether the body of a binding declares a handle at the state path
+    /// `name`: the schema of its slot of root `binding` there has
+    /// `asCell`.
+    fn declares_handle(&self, binding: usize, name: &str) -> bool {
+        let body = &self.plan["bindings"][binding]["handler"]["body"];
+        self.plan["slots"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|slot| {
+                slot["root"]["kind"] == json!("binding")
+                    && slot["root"]["handler"] == *body
+                    && slot["path"] == json!([name])
+            })
+            .filter_map(|slot| slot["schema"].as_str())
+            .any(|id| {
+                self.schemas
+                    .iter()
+                    .any(|(known, document)| known == id && document.get("asCell").is_some())
+            })
     }
 
     fn hoist(&mut self, statement: String) {
@@ -996,6 +1023,11 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                             && Some(self.generator.cone_of(*other)) == self.cone =>
                     {
                         Some(name.clone())
+                    }
+                    // A constant at a position of handle type: the body is
+                    // handed a handle that reads it (ES §2.4).
+                    (None, Place::Const) if used.handles.contains(name) => {
+                        Some(format!("$h.constant({name})"))
                     }
                     (None, Place::Const | Place::Unknown) => Some(name.clone()),
                     (None, Place::Record(_)) => Some(format!("$rt.force({name}, $h)")),
@@ -1820,7 +1852,13 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
             .into_iter()
             .flatten()
         {
-            let constant = entry["place"].get("constant").is_some();
+            // A constant is read from the scope the function is written
+            // in. A constant at a position of handle type is not: the
+            // runtime hands the body a handle that reads it (ES §2.4).
+            let constant = entry["place"].get("constant").is_some()
+                && !entry["path"][0]
+                    .as_str()
+                    .is_some_and(|name| self.generator.declares_handle(binding, name));
             if let (false, Some(name)) = (constant, entry["path"][0].as_str()) {
                 if !names.iter().any(|known| known == name) {
                     names.push(name.to_string());
@@ -2576,11 +2614,13 @@ pub(crate) fn generate(
     resolver: &Resolver<'_, '_>,
     module: usize,
     plan: &Value,
+    schemas: &[(String, Value)],
     finished: &Finished,
 ) -> Value {
     let mut generator = Generator {
         resolver,
         plan,
+        schemas,
         finished,
         registrations: BTreeMap::new(),
         buffers: Vec::new(),

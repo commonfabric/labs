@@ -967,6 +967,17 @@ export class Host {
   }
 
   /**
+   * A constant at a position of handle type, as a body is handed it: a
+   * handle that reads the constant and refuses a write (ES §2.4).
+   * Nothing gives nothing.
+   */
+  constant(value: unknown): unknown {
+    return value === undefined
+      ? undefined
+      : this.instance.handleOfConstant(this.v(value), this);
+  }
+
+  /**
    * A computed value as a body is handed it: what a reference names, read
    * as a value. A marker is handed as a handle to its stream, wherever it
    * is in the value: the body can send to it and can return it, and what
@@ -980,6 +991,8 @@ export class Host {
     if (value instanceof StreamMarker) {
       return this.instance.handleOf(value, this);
     }
+    // A handle that value code made for a constant stays the handle.
+    if (value instanceof Handle) return value;
     if (Array.isArray(value)) return value.map((member) => this.pass(member));
     if (isRecord(value)) {
       return Object.fromEntries(
@@ -2059,11 +2072,24 @@ export class Instance {
       value !== undefined && typeof declared === "object" &&
       declared.asCell !== undefined
     ) {
-      const id = this.#fresh("constant");
-      this.store.create(id, "held constant", this.stored(value));
-      return new Handle(this, new Ref(id, []), host, slot, [], declared, true);
+      return this.handleOfConstant(value, host, slot, declared);
     }
     return value;
+  }
+
+  /**
+   * A handle that reads `value`, a value the instance holds no address
+   * for, and refuses a write.
+   */
+  handleOfConstant(
+    value: unknown,
+    host: Host | undefined,
+    slot?: number,
+    declared?: Schema,
+  ): Handle {
+    const id = this.#fresh("constant");
+    this.store.create(id, "held constant", this.stored(value));
+    return new Handle(this, new Ref(id, []), host, slot, [], declared, true);
   }
 
   /**

@@ -46,7 +46,7 @@
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
             {
-              "eventSchema": "unhashed:schema/3",
+              "eventSchema": "unhashed:schema/4",
               "handler": {
                 "body": 0
               },
@@ -331,7 +331,8 @@
               "root": {
                 "handler": 1,
                 "kind": "binding"
-              }
+              },
+              "schema": "unhashed:schema/3"
             },
             {
               "observes": "identity",
@@ -347,7 +348,7 @@
           "stateCells": [
             {
               "name": "count",
-              "schema": "unhashed:schema/4",
+              "schema": "unhashed:schema/5",
               "scope": "space",
               "within": []
             }
@@ -387,6 +388,9 @@
           {
             "id": "unhashed:schema/3",
             "schema": {
+              "asCell": [
+                "stream"
+              ],
               "properties": {
                 "by": {
                   "type": "number"
@@ -400,6 +404,20 @@
           },
           {
             "id": "unhashed:schema/4",
+            "schema": {
+              "properties": {
+                "by": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "by"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
             "schema": {
               "default": 0
             }

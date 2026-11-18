@@ -207,6 +207,17 @@ const WRITTEN: Record<string, Written[]> = {
       { binding: 2, event: {} },
     ],
   }],
+  // A constant at a position of handle type: `increment` reads it
+  // through its handle, twice. The event of `widen`, which writes it, is
+  // not sent: the compiled path refuses the write (ES §2.4), and today's
+  // runtime writes the argument document of the callee.
+  "action-constant": [{
+    argument: { score: 3 },
+    events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
+  }],
+  // A constant at a position of handle type that a sandboxed body
+  // reads through its handle.
+  "body-constant": [{ argument: { words: ["a", "b"] } }],
   // The debug renderers, in the reactive tier and in a function body.
   "debug-strings": [{
     argument: { entry: { tags: ["x", "y"], title: "a" } },

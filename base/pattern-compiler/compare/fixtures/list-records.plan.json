@@ -48,7 +48,7 @@
               ]
             },
             {
-              "eventSchema": "unhashed:schema/5",
+              "eventSchema": "unhashed:schema/7",
               "handler": {
                 "body": 1
               },
@@ -71,7 +71,7 @@
               "within": []
             },
             {
-              "eventSchema": "unhashed:schema/5",
+              "eventSchema": "unhashed:schema/7",
               "handler": {
                 "body": 2
               },
@@ -94,7 +94,7 @@
               "within": []
             },
             {
-              "eventSchema": "unhashed:schema/6",
+              "eventSchema": "unhashed:schema/8",
               "handler": {
                 "body": 3
               },
@@ -117,7 +117,7 @@
               "within": []
             },
             {
-              "eventSchema": "unhashed:schema/7",
+              "eventSchema": "unhashed:schema/9",
               "handler": {
                 "body": 4
               },
@@ -768,7 +768,8 @@
               "root": {
                 "handler": 0,
                 "kind": "binding"
-              }
+              },
+              "schema": "unhashed:schema/1"
             },
             {
               "observes": "identity",
@@ -779,7 +780,8 @@
               "root": {
                 "handler": 0,
                 "kind": "binding"
-              }
+              },
+              "schema": "unhashed:schema/2"
             },
             {
               "observes": "identity",
@@ -796,7 +798,7 @@
                 "collection": 0,
                 "kind": "element"
               },
-              "schema": "unhashed:schema/1"
+              "schema": "unhashed:schema/3"
             },
             {
               "observes": "identity",
@@ -807,7 +809,7 @@
                 "collection": 0,
                 "kind": "element"
               },
-              "schema": "unhashed:schema/2"
+              "schema": "unhashed:schema/4"
             },
             {
               "observes": "enumeration",
@@ -824,7 +826,7 @@
                 "collection": 1,
                 "kind": "element"
               },
-              "schema": "unhashed:schema/2"
+              "schema": "unhashed:schema/4"
             },
             {
               "observes": "value",
@@ -835,7 +837,7 @@
                 "handler": 1,
                 "kind": "event"
               },
-              "schema": "unhashed:schema/2"
+              "schema": "unhashed:schema/4"
             },
             {
               "observes": "identity",
@@ -846,7 +848,7 @@
                 "handler": 1,
                 "kind": "binding"
               },
-              "schema": "unhashed:schema/3"
+              "schema": "unhashed:schema/5"
             },
             {
               "observes": "identity",
@@ -865,7 +867,7 @@
                 "handler": 2,
                 "kind": "event"
               },
-              "schema": "unhashed:schema/2"
+              "schema": "unhashed:schema/4"
             },
             {
               "observes": "identity",
@@ -876,7 +878,7 @@
                 "handler": 2,
                 "kind": "binding"
               },
-              "schema": "unhashed:schema/3"
+              "schema": "unhashed:schema/5"
             },
             {
               "observes": "enumeration",
@@ -887,7 +889,7 @@
                 "handler": 2,
                 "kind": "binding"
               },
-              "schema": "unhashed:schema/3"
+              "schema": "unhashed:schema/5"
             },
             {
               "observes": "identity",
@@ -899,7 +901,7 @@
                 "handler": 2,
                 "kind": "binding"
               },
-              "schema": "unhashed:schema/1"
+              "schema": "unhashed:schema/3"
             },
             {
               "observes": "identity",
@@ -910,7 +912,7 @@
                 "handler": 3,
                 "kind": "binding"
               },
-              "schema": "unhashed:schema/3"
+              "schema": "unhashed:schema/5"
             },
             {
               "observes": "enumeration",
@@ -921,7 +923,7 @@
                 "handler": 3,
                 "kind": "binding"
               },
-              "schema": "unhashed:schema/3"
+              "schema": "unhashed:schema/5"
             },
             {
               "observes": "identity",
@@ -933,7 +935,7 @@
                 "handler": 3,
                 "kind": "binding"
               },
-              "schema": "unhashed:schema/1"
+              "schema": "unhashed:schema/3"
             },
             {
               "observes": "value",
@@ -944,7 +946,7 @@
                 "handler": 4,
                 "kind": "event"
               },
-              "schema": "unhashed:schema/2"
+              "schema": "unhashed:schema/4"
             },
             {
               "observes": "identity",
@@ -955,7 +957,7 @@
                 "handler": 4,
                 "kind": "binding"
               },
-              "schema": "unhashed:schema/4"
+              "schema": "unhashed:schema/6"
             },
             {
               "observes": "identity",
@@ -973,25 +975,25 @@
               "root": {
                 "kind": "argument"
               },
-              "schema": "unhashed:schema/2"
+              "schema": "unhashed:schema/4"
             }
           ],
           "stateCells": [
             {
               "name": "stops",
-              "schema": "unhashed:schema/8",
+              "schema": "unhashed:schema/10",
               "scope": "space",
               "within": []
             },
             {
               "name": "names",
-              "schema": "unhashed:schema/9",
+              "schema": "unhashed:schema/11",
               "scope": "space",
               "within": []
             },
             {
               "name": "center",
-              "schema": "unhashed:schema/10",
+              "schema": "unhashed:schema/12",
               "scope": "space",
               "within": []
             }
@@ -1015,6 +1017,45 @@
           },
           {
             "id": "unhashed:schema/1",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "properties": {
+                "lat": {
+                  "type": "number"
+                },
+                "lng": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "lat",
+                "lng"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "properties": {
+                "lat": {
+                  "type": "number"
+                },
+                "lng": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "lat",
+                "lng"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
             "schema": {
               "properties": {
                 "position": {
@@ -1044,13 +1085,13 @@
             }
           },
           {
-            "id": "unhashed:schema/2",
+            "id": "unhashed:schema/4",
             "schema": {
               "type": "string"
             }
           },
           {
-            "id": "unhashed:schema/3",
+            "id": "unhashed:schema/5",
             "schema": {
               "asCell": [
                 "cell"
@@ -1086,7 +1127,7 @@
             }
           },
           {
-            "id": "unhashed:schema/4",
+            "id": "unhashed:schema/6",
             "schema": {
               "asCell": [
                 "cell"
@@ -1098,7 +1139,7 @@
             }
           },
           {
-            "id": "unhashed:schema/5",
+            "id": "unhashed:schema/7",
             "schema": {
               "properties": {
                 "title": {
@@ -1112,7 +1153,7 @@
             }
           },
           {
-            "id": "unhashed:schema/6",
+            "id": "unhashed:schema/8",
             "schema": {
               "additionalProperties": false,
               "properties": {},
@@ -1120,7 +1161,7 @@
             }
           },
           {
-            "id": "unhashed:schema/7",
+            "id": "unhashed:schema/9",
             "schema": {
               "properties": {
                 "name": {
@@ -1134,7 +1175,7 @@
             }
           },
           {
-            "id": "unhashed:schema/8",
+            "id": "unhashed:schema/10",
             "schema": {
               "default": [],
               "items": {
@@ -1168,7 +1209,7 @@
             }
           },
           {
-            "id": "unhashed:schema/9",
+            "id": "unhashed:schema/11",
             "schema": {
               "default": [],
               "items": {
@@ -1178,7 +1219,7 @@
             }
           },
           {
-            "id": "unhashed:schema/10",
+            "id": "unhashed:schema/12",
             "schema": {
               "default": {
                 "lat": 0,

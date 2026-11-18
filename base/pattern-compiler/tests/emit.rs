@@ -1050,3 +1050,67 @@ export const P = pattern<{ title: Writable<string>; count: number }>(({ title, c
         "{text}"
     );
 }
+
+#[test]
+fn a_handler_written_in_place_takes_a_constant_of_handle_type_from_its_state() {
+    let (_, code) = emitted(
+        r#"import { action, Default, Writable, pattern, UI } from "commonfabric";
+const Counter = pattern<{
+  value: Writable<number | Default<0>>;
+  step?: Writable<number | Default<1>>;
+  min?: Writable<number | null | Default<null>>;
+  label: string;
+}>(({ value, step, min, label }) => {
+  const increment = action(() => {
+    value.set(Math.max(min.get() ?? 0, value.get() + step.get()) + label.length);
+  });
+  return { [UI]: <button onClick={increment}>{label}</button> };
+});
+export const P = pattern<{ score: Writable<number> }>(({ score }) => {
+  return { [UI]: <div><Counter value={score} step={5} label="Score" /></div> };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    // `step` and `min` are constants of the call that the callee declares
+    // as handles: the runtime hands the body a handle that reads the
+    // constant (ES §2.4). `label` is a constant of plain type, which the
+    // function reads from the scope it is written in.
+    assert!(
+        text.contains("$rt.handler(0, ($e, $s) => { const { min, step, value } = $s;"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_body_is_given_a_constant_at_a_position_of_handle_type_as_a_handle() {
+    let (_, code) = emitted(
+        r#"import { computed, Default, Writable, pattern } from "commonfabric";
+const Callee = pattern<{
+  show?: Writable<boolean | Default<false>>;
+  mark: string;
+  words: string[];
+}>(({ show, mark, words }) => {
+  const cells = computed(() => {
+    let text = mark;
+    if (show.get()) text = words.join(",");
+    return text;
+  });
+  return { cells };
+});
+export const P = pattern<{ words: string[] }>(({ words }) => {
+  const inner = Callee({ words, mark: "?" });
+  return { cells: inner.cells };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    // The call leaves `show` out, so it is the callee's default, a
+    // constant, at a position the callee declares as a handle: the body
+    // is handed a handle that reads the constant (ES §2.4). `mark` is a
+    // constant of plain type.
+    assert!(text.contains("\"show\": $h.constant(show)"), "{text}");
+    assert!(text.contains("\"mark\": mark"), "{text}");
+}

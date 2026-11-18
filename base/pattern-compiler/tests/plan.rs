@@ -4282,3 +4282,80 @@ export const P = pattern<{ items: Item[]; words: string[] }>(({ items, words }) 
         ]
     );
 }
+
+/// PL §1.1, `Binding.state`, and ES §2.4, "A position of handle type can
+/// be bound to a constant": a name that an `action` of a pattern compiled
+/// in captures has, in the slot of root `binding`, the schema of the type
+/// the name is declared with, a handle where the callee declares one, and
+/// its state path holds the literal that the call writes, or the default
+/// of a path that the call leaves out.
+#[test]
+fn a_name_an_action_captures_has_the_declared_type_and_the_constant_of_the_call() {
+    let analysis = program(
+        r#"import { action, Default, Writable, pattern, UI } from "commonfabric";
+const Counter = pattern<{
+  value: Writable<number | Default<0>>;
+  step?: Writable<number | Default<1>>;
+  min?: Writable<number | null | Default<null>>;
+  label: string;
+}>(({ value, step, min, label }) => {
+  const increment = action(() => {
+    value.set(Math.max(min.get() ?? 0, value.get() + step.get()) + label.length);
+  });
+  return { [UI]: <button onClick={increment}>{label}</button> };
+});
+export const P = pattern<{ score: Writable<number> }>(({ score }) => {
+  return { [UI]: <div><Counter value={score} step={5} label="Score" /></div> };
+});
+"#,
+    );
+    let found = analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.plans)
+        .find(|plan| plan.name.as_deref() == Some("P"))
+        .expect("the pattern");
+    let plan = &found.plan;
+    let schema_of = |path: &str, class: &str| -> Value {
+        let slot = plan["slots"]
+            .as_array()
+            .expect("slots")
+            .iter()
+            .find(|slot| {
+                slot["root"]["kind"] == json!("binding")
+                    && slot["path"] == json!([path])
+                    && slot["observes"] == json!(class)
+            })
+            .unwrap_or_else(|| panic!("no slot binding {path} : {class}"));
+        let id = slot["schema"].as_str().unwrap_or("");
+        found
+            .schemas
+            .iter()
+            .find(|(known, _)| known == id)
+            .map_or(Value::Null, |(_, document)| document.clone())
+    };
+    // A handle where the callee declares one, with the declared default.
+    let step = schema_of("step", "identity");
+    assert!(step["asCell"].is_array(), "{step}");
+    assert_eq!(step["default"], json!(1));
+    assert!(schema_of("value", "identity")["asCell"].is_array());
+    assert!(schema_of("min", "identity")["asCell"].is_array());
+    // A value where it declares a value.
+    let label = schema_of("label", "value");
+    assert_eq!(label["type"], json!("string"));
+    assert!(label.get("asCell").is_none(), "{label}");
+    // The constants of the call, and the default of the path it leaves
+    // out.
+    let state = plan["bindings"][0]["state"].as_array().expect("state");
+    let place = |path: &str| {
+        state
+            .iter()
+            .find(|entry| entry["path"] == json!([path]))
+            .unwrap_or_else(|| panic!("no state entry at {path}"))["place"]
+            .clone()
+    };
+    assert_eq!(place("step"), json!({ "constant": 5 }));
+    assert_eq!(place("label"), json!({ "constant": "Score" }));
+    assert_eq!(place("min"), json!({ "constant": null }));
+    assert!(place("value")["slot"].is_number());
+}

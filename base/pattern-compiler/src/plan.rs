@@ -28,7 +28,7 @@ use crate::module::{symbol_of, Binding, DefKind};
 use crate::program::Resolver;
 use crate::syntax::{static_key_name, unwrap, FunctionLike};
 use crate::tiers::{Body, BodyKind};
-use crate::types::{Annotation, Shape, TypeId};
+use crate::types::{Annotation, Property, Shape, TypeId};
 use oxc_syntax::symbol::SymbolId;
 
 /// The plan of one pattern.
@@ -902,6 +902,45 @@ impl<'a> Emitter<'_, '_, 'a> {
         if let Ok(ty) = self.resolver.formal_parameter_type(module, parameter) {
             self.root_types.insert(root, ty);
         }
+    }
+
+    /// The type of the state of a handler written in place: an object
+    /// with a property for each name the function refers to that is
+    /// declared outside it, of the type the name is declared with. A name
+    /// whose declared type is not evaluated has no property.
+    fn captured_types(&self, module: usize, function: FunctionLike<'a, 'a>) -> TypeId {
+        let mut properties: Vec<Property> = Vec::new();
+        let span = function.span();
+        if let Some(parsed) = self.resolver.parsed(module) {
+            let scoping = parsed.semantic.scoping();
+            let mut seen = HashSet::new();
+            for node in parsed.semantic.nodes().iter() {
+                let AstKind::IdentifierReference(identifier) = node.kind() else {
+                    continue;
+                };
+                if !(span.start <= identifier.span.start && identifier.span.end <= span.end) {
+                    continue;
+                }
+                let Some(symbol) = symbol_of(scoping, identifier) else {
+                    continue;
+                };
+                let declared = scoping.symbol_span(symbol);
+                if (span.start <= declared.start && declared.end <= span.end)
+                    || !seen.insert(symbol)
+                {
+                    continue;
+                }
+                if let Ok(ty) = self.resolver.declared_symbol_type(module, symbol, 0) {
+                    properties.push(Property {
+                        name: identifier.name.to_string(),
+                        ty,
+                        optional: false,
+                        readonly: false,
+                    });
+                }
+            }
+        }
+        self.resolver.intern(Shape::Object(properties, None))
     }
 
     /// The types on the way from the type of a slot root to a path of
@@ -5262,6 +5301,19 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
         listed.sort_by(|a, b| a.0.cmp(&b.0));
         listed.dedup_by(|a, b| a.0 == b.0);
+        let handles: Vec<String> = match self.resolver.shape(self.captured_types(home, function)) {
+            Shape::Object(properties, _) => properties
+                .into_iter()
+                .filter(|property| {
+                    matches!(
+                        self.resolver.shape(self.resolver.present(property.ty)),
+                        Shape::Handle(..)
+                    )
+                })
+                .map(|property| property.name)
+                .collect(),
+            _ => Vec::new(),
+        };
         self.facts.uses.insert(
             value,
             crate::emit::UseFact {
@@ -5271,6 +5323,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 kind: plan_kind,
                 formals: parameter_names(kind, function),
                 inputs: listed,
+                handles,
             },
         );
         self.values[value].template = self.body_template(body);
@@ -5336,6 +5389,11 @@ impl<'a> Emitter<'_, '_, 'a> {
             if let Some(event) = function.params().items.first() {
                 self.root_type(home, Root::Event(index), event);
             }
+            // Its state is what it captures, each name with the type it
+            // is declared with: a handle where a pattern declares one for
+            // its parameter (ES §2.4).
+            let captured = self.captured_types(home, function);
+            self.root_types.insert(Root::Binding(index), captured);
         }
         let mut inputs: HashMap<String, Place> = HashMap::new();
         inputs.insert(
@@ -5400,10 +5458,16 @@ impl<'a> Emitter<'_, '_, 'a> {
         // A name the parameter of a pattern compiled in binds to a
         // property that the call writes as a literal: the path holds the
         // literal, whole, as its constant.
-        if let (Place::Const | Place::Record(_), Some(Expression::Identifier(identifier))) =
-            (place, written.map(|written| unwrap(written)))
-        {
-            if let Some(constant) = self.callee_literals.get(identifier.name.as_str()) {
+        // A name that a handler written in place captures has no written
+        // expression: its path is the name.
+        let named = match written.map(|written| unwrap(written)) {
+            Some(Expression::Identifier(identifier)) => Some(identifier.name.as_str()),
+            Some(_) => None,
+            None if path.len() == 1 => Some(path[0].as_str()),
+            None => None,
+        };
+        if let (Place::Const | Place::Record(_), Some(named)) = (place, named) {
+            if let Some(constant) = self.callee_literals.get(named) {
                 entry.insert("place".to_string(), json!({ "constant": constant }));
                 entry.insert("template".to_string(), json!({ "op": "const" }));
                 state.push(Value::Object(entry));
@@ -7692,7 +7756,7 @@ pub fn emit_module<'a>(
         let (mut plan, unsupported, cycles, flows, finished) = emitter.finish(&parsed.path);
         let schemas = name_schemas(&mut plan, argument_schema.as_ref(), result_schema.as_ref());
         let code = crate::emit::requested()
-            .then(|| crate::emit::generate(resolver, module, &plan, &finished));
+            .then(|| crate::emit::generate(resolver, module, &plan, &schemas, &finished));
         plans.push(PatternPlan {
             name: body.name.clone(),
             line: body.line,

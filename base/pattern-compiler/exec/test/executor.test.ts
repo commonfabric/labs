@@ -6256,3 +6256,48 @@ describe("a debug renderer", () => {
     });
   });
 });
+
+// A constant at a position of handle type (ES §2.4): the call of a
+// pattern compiled in writes `step` as a literal and leaves `max` out,
+// and the callee declares both as handles (`fixtures/action-constant.tsx`).
+describe("a name of handle type that an `action` captures and the call binds to a constant", () => {
+  const [INCREMENT, WIDEN] = [0, 1];
+
+  it("is a handle that reads the constant", async () => {
+    const instance = new Instance(await artifactOf("action-constant"), {
+      score: 3,
+    });
+    expect(instance.result()).toMatchObject({ score: 3, stepNow: 5 });
+
+    expect(instance.send(INCREMENT, {}).committed).toBe(true);
+
+    expect(instance.result()).toMatchObject({ score: 8, stepNow: 5 });
+  });
+
+  it("refuses a write through the handle, which fails the handler", async () => {
+    const instance = new Instance(await artifactOf("action-constant"), {
+      score: 3,
+    });
+
+    const outcome = instance.send(WIDEN, {});
+
+    expect(outcome.committed).toBe(false);
+    expect(outcome.error).toContain(
+      "a write through a handle to a value the instance holds no address for",
+    );
+    expect(instance.result()).toMatchObject({ score: 3, stepNow: 5 });
+  });
+});
+
+// A constant at a position of handle type that a sandboxed body captures
+// (ES §2.4): the call of a pattern compiled in leaves `show` and `hide`
+// out or writes `hide` as a literal (`fixtures/body-constant.tsx`).
+describe("a name of handle type that a body captures and the call binds to a constant", () => {
+  it("is a handle that reads the constant", async () => {
+    const instance = new Instance(await artifactOf("body-constant"), {
+      words: ["a", "b"],
+    });
+
+    expect(instance.result()).toEqual({ open: "a,b", closed: "-" });
+  });
+});
