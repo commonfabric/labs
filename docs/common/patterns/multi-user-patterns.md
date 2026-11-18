@@ -774,10 +774,12 @@ an empty list. Call it where `spaceAccess(target)` can be called. In a
 computation the value is the viewer's own, and updates when the access list
 changes.
 
-It lists principals, not people. To show each member by the profile they joined
-with, match the space's roster against it with `principalOf()` (see
-[Build the roster by join](#build-the-roster-by-join)), and show a member with
-no matching profile by their DID.
+It lists principals, not people. To show each member by the profiles they
+joined with, join the space's roster (see
+[Build the roster by join](#build-the-roster-by-join)) to it with
+`joinSpaceMembers(roster, members, profileOwnerOf, equalsKey)`, which gives each
+member the roster's profiles of their own, and show a member with none by their
+DID.
 [`space-access.md`](../../features/space-access.md#a-spaces-members) has the
 details.
 

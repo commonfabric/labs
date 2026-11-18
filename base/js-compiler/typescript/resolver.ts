@@ -102,10 +102,10 @@ import {
 
 /**
  * What a module declares it depends on, read out of its source by
- * {@link scanModuleDeclarations}: the modules it imports and the data files it
- * reads.
+ * {@link scanModuleDeclarations}: the modules it imports, the data files it
+ * reads, and the directories of assets it reads.
  *
- * Both lists hold what the source writes, unresolved, so that a caller can
+ * All three lists hold what the source writes, unresolved, so that a caller can
  * resolve them against whichever name it holds the module by. The scan reads
  * that name only to tell what kind of file the module is, which turns on its
  * base name alone, so one result holds for the module under every name with

@@ -2899,8 +2899,9 @@ async function recordSavedIndexSource(
  * Each file is written as the bytes it was stored from, so a binary media
  * file, which the package holds as a `data:` URL, comes back as the image,
  * font, or sound it was read from. Every name is checked and every file
- * encoded before the first is written, so a package that cannot be written
- * writes nothing.
+ * encoded before the first is written, so a refused name or a file that
+ * cannot be encoded writes nothing; a failure to write a file can still leave
+ * the files before it written.
  */
 export async function writeSourcePackage(
   program: RuntimeProgram,

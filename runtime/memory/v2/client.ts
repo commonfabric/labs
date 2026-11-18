@@ -428,10 +428,10 @@ export type MountOptions = {
   resumeAttempt?: number;
 
   /** The session-level delegated READ binding (OW31; see the wire
-   * `SessionDescriptor.actingAs`): only the serving plane's loopback
-   * managers set it; the server admits it for delegating-class
-   * principals only. Carried on reopen so a route replacement keeps
-   * the binding. */
+   * `SessionDescriptor.actingAs`): only the serving plane's managers set
+   * it, on loopback or on the route to a space's owner; the server admits
+   * it for delegating-class principals only. Carried on reopen so a route
+   * replacement keeps the binding. */
   actingAs?: "space-owner";
 
   /** The session's declared read ceiling (the wire

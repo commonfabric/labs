@@ -420,7 +420,8 @@ not spec debt; Phases 1–5 meet them wherever scoped state appears.
   `entity_scope_key`, admissible for the space's own serving session
   — the same trust argument and the same one equality check as
   derived writes — and, since owner routing R3 (2026-11-01), for a
-  session of the deployment's service identity from any process under
+  session of the delegating class (the identities of the deployment's
+  serving processes, protocol.md §2) from any process under
   the named actor's READ grant on the space (protocol.md §2's read row
   and its grant-scoped read), so a cross-space scoped read names its
   foreign instance through the space's owner. Without it a
