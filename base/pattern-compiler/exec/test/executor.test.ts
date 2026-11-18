@@ -3619,6 +3619,21 @@ describe("a spread among the children of a view node", () => {
     expect((held[6] as ViewNode).children).toEqual(["last"]);
   });
 
+  it("stores the links of an array of references that is spread, and the values of plain values in place", async () => {
+    const instance = await start();
+
+    const stored = (instance.store.docs.get(instance.id)?.value as {
+      $UI: ViewNode;
+    }).$UI.children;
+
+    // Over an array of references: each position holds the link to the
+    // cell of its element.
+    expect(stored[3]).toEqual([link("a"), link("b")]);
+    // Over plain values in place.
+    expect(stored[1]).toEqual(["x", "y"]);
+    expect(stored[4]).toEqual(["before", "x", "y", "after"]);
+  });
+
   it("stores an array literal with a spread, and one with a hole, as one child", async () => {
     const instance = await start();
 

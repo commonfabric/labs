@@ -14,7 +14,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/spread-child.tsx",
-              "source": "const { \"pattern\": pattern, \"UI\": UI } = $rt.external(\"commonfabric\");\n\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/spread-child.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($rt.h(\"li\", {  }, [$h.slot(2)])));\n}\n$rt.value(3, ($h) => ($rt.h(\"ul\", {  }, [$rt.h(\"li\", {  }, [\"first\"]), $h.v($h.slot(4)), $h.v($h.output(0)), $h.v($h.slot(3)), [(\"before\"), ...$rt.spread($h.v($h.slot(4))), (\"after\")], [(\"left\"), , (\"right\")], $rt.h(\"li\", {  }, [\"last\"])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(3) })));\n});"
+              "source": "const { \"pattern\": pattern, \"UI\": UI } = $rt.external(\"commonfabric\");\n\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/spread-child.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($rt.h(\"li\", {  }, [$h.slot(2)])));\n}\n$rt.value(3, ($h) => ($rt.h(\"ul\", {  }, [$rt.h(\"li\", {  }, [\"first\"]), $h.spread($h.slot(0)), $h.spread($h.output(0)), $h.spread($h.slot(3)), [(\"before\"), ...$h.spread($h.slot(0)), (\"after\")], [(\"left\"), , (\"right\")], $rt.h(\"li\", {  }, [\"last\"])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(3) })));\n});"
             }
           ],
           "outputsBelow": [],

@@ -785,11 +785,13 @@ export const P = pattern<{ items: Item[]; selected: Writable<Item | null> }>(
 }
 
 /// An array literal with a spread is an array literal in value code,
-/// with the members of each spread operand read through `$rt.spread`,
-/// which gives none for an operand that holds nothing. The runtime is
-/// told nothing about which entry a position came from (ruling Z43).
-/// The spread collection is over records in the first array and over
-/// plain values in the second.
+/// with the members of each spread operand read through `$h.spread`,
+/// which is given the operand as the reference it is, so that a position
+/// that holds a link gives the link, and which gives none for an operand
+/// that holds nothing. The runtime is told nothing about which entry a
+/// position came from (ruling Z43). The spread operand is the result of
+/// a `map` over records in the first array, the result of a `map` over
+/// plain values in the second, and an input array in the third.
 #[test]
 fn an_array_with_a_spread_is_an_array_literal() {
     let (_, code) = emitted(
@@ -799,6 +801,7 @@ export const P = pattern<{ items: Item[]; tags: string[]; note: string }>(({ ite
   return {
     rows: [note, ...items.map((item) => item.title), note],
     labels: [...tags.map((tag) => tag + "!"), note],
+    all: [...items, note],
     plain: [note, note],
   };
 });
@@ -807,10 +810,12 @@ export const P = pattern<{ items: Item[]; tags: string[]; note: string }>(({ ite
     );
     let text = source(&code);
     assert!(
-        text.contains("rows: [$h.slot(") && text.contains("...$rt.spread($h.v($h.output("),
+        text.contains("rows: [$h.slot(") && text.contains("...$h.spread($h.output("),
         "{text}"
     );
-    assert!(text.contains("labels: [...$rt.spread("), "{text}");
+    assert!(text.contains("labels: [...$h.spread($h.output("), "{text}");
+    assert!(text.contains("all: [...$h.spread($h.slot("), "{text}");
+    assert!(!text.contains("$rt.spread("), "{text}");
     assert!(text.contains("plain: [$h.slot("), "{text}");
     assert!(!text.contains("$rt.list("), "{text}");
 }

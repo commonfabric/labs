@@ -1317,8 +1317,8 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                         // operand holds, and none for an operand that
                         // holds nothing.
                         ArrayExpressionElement::SpreadElement(spread) => {
-                            let code = self.render(&spread.argument, Want::Use);
-                            members.push(format!("...$rt.spread({code})"));
+                            let code = self.render(&spread.argument, Want::Pass);
+                            members.push(format!("...$h.spread({code})"));
                         }
                         element => {
                             if let Some(element) = element.as_expression() {
@@ -2157,10 +2157,14 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                     }
                 }
                 JSXChild::Spread(spread) => {
-                    let code = self.render(&spread.expression, Want::Use);
+                    // In the reactive tier the operand is given as the
+                    // reference it is, so that a position of it that
+                    // holds a link gives the link.
                     written.push(if self.context.is_some() {
-                        code
+                        let code = self.render(&spread.expression, Want::Pass);
+                        format!("$h.spread({code})")
                     } else {
+                        let code = self.render(&spread.expression, Want::Use);
                         format!("...{code}")
                     });
                 }

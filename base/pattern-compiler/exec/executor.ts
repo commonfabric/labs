@@ -967,6 +967,33 @@ export class Host {
   }
 
   /**
+   * The members of the operand of a spread in the reactive tier, each as
+   * what its position holds: the reference to the cell where the position
+   * holds a link, and the value where it holds one. So a spread of an
+   * array of references stores the links, and a spread of plain values in
+   * place stores the values. An operand that the instance computed gives
+   * its members as they are, and one that holds nothing gives none.
+   */
+  spread(value: unknown): unknown[] {
+    if (value instanceof Ref) {
+      const { store } = this.instance;
+      const located = store.locate(value, true, this.reads);
+      const held = located.value;
+      if (Array.isArray(held)) {
+        return held.map((member, index) =>
+          isLink(member)
+            ? new Ref(member.$link.doc, member.$link.path)
+            : this.v(located.ref.key(`${index}`))
+        );
+      }
+      return this.spread(this.v(value));
+    }
+    if (Array.isArray(value)) return value;
+    if (value === undefined || value === null) return [];
+    return Array.from(value as Iterable<unknown>);
+  }
+
+  /**
    * A constant at a position of handle type, as a body is handed it: a
    * handle that reads the constant and refuses a write (ES §2.4).
    * Nothing gives nothing.
