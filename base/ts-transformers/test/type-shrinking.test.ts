@@ -689,6 +689,21 @@ export default pattern<{ v: any }>(({ v }) => ({ m: l(v) }));`,
         expect(messages[0]).toContain("'.missing'");
       });
 
+      it("names the element type an alias of an array of arrays holds when reporting a head it lacks", async () => {
+        // `B`, the element of `A`, is printed from its type, and is read as
+        // that type to reach its own element, `C`.
+
+        expect(
+          await liftDiagnostics(
+            "type A = B[]; type B = C[]; interface C { y: number }",
+            "(r: A & { x: string }) => r.missing",
+          ),
+        ).toEqual([
+          "Parameter 'r' accesses '.missing' but type 'C' does not include " +
+          "it. Add the missing property to the type.",
+        ]);
+      });
+
       it("reports nothing for the member on an array of objects", async () => {
         expect(
           await liftDiagnostics(
