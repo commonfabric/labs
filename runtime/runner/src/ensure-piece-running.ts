@@ -36,6 +36,25 @@ const openLogger = getLogger("ensure-piece-running.open", {
 const MAX_RESULT_LINK_DEPTH = 10;
 
 /**
+ * What `work` produces for each of `items`, started for all of them at once,
+ * once every one has settled. The first failure in the order of `items` is
+ * thrown, so nothing is left running past a failure and which one is
+ * reported does not depend on timing.
+ */
+async function eachAtOnce<T, R>(
+  items: readonly T[],
+  work: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const settled = await Promise.allSettled(
+    items.map(async (item) => await work(item)),
+  );
+  return settled.map((outcome) => {
+    if (outcome.status === "rejected") throw outcome.reason;
+    return outcome.value;
+  });
+}
+
+/**
  * Follows `result` backlinks from `rootCell` to the result document that
  * owns the chain, naming each document before its metadata is read: the
  * store delivers a backlink as data on the document that carries it, never
@@ -209,12 +228,17 @@ async function inputSourcesOf(
     signal?.throwIfAborted();
     const ownerKey = rootKey(owner);
     const followed = new Set([ownerKey, rootKey(argumentLink)]);
-    const sources = new Map<string, NormalizedFullLink>();
+    const documents: { link: NormalizedFullLink; document: string }[] = [];
     for (const link of linksIn(argument.getRaw(), argument)) {
       if (link.space !== owner.space) continue;
       const document = rootKey(link);
       if (followed.has(document)) continue;
       followed.add(document);
+      documents.push({ link, document });
+    }
+    // Each hop of a chain is a load, so the chains are followed at once, and
+    // their ends are taken in the order the argument names the documents.
+    const chains = await eachAtOnce(documents, async ({ link, document }) => {
       const chain: OwningRootAddress[] = [];
       const root = await followResultCellChain(
         runtime,
@@ -224,7 +248,10 @@ async function inputSourcesOf(
         chain,
         signal,
       );
-      signal?.throwIfAborted();
+      return { document, chain, root };
+    });
+    const sources = new Map<string, NormalizedFullLink>();
+    for (const { document, chain, root } of chains) {
       if (root === undefined) continue;
       const source = root.getAsNormalizedFullLink();
       const key = rootKey(source);
@@ -277,7 +304,7 @@ async function enclosingPieceOf(
   // nothing in the runtime derives. `space-server-enclosing-start.test.ts`
   // pins it.
   const candidates = await inputSourcesOf(runtime, owner, signal, true);
-  const encloses = await Promise.all(candidates.map(async (candidate) => {
+  const encloses = await eachAtOnce(candidates, async (candidate) => {
     const tx = runtime.edit();
     tx.tx.immediate = true;
     try {
@@ -286,7 +313,7 @@ async function enclosingPieceOf(
       runtime.prepareTxForCommit(tx);
       await tx.commit().settled;
     }
-  }));
+  });
   const found = candidates.find((_, index) => encloses[index]);
   return found === undefined ? [] : [found];
 }
@@ -313,23 +340,25 @@ async function enclosesAsNested(
   const ownerKey = rootKey(owner);
   const namesOwner = (link: NormalizedFullLink | undefined) =>
     link !== undefined && link.path.length === 0 && rootKey(link) === ownerKey;
-  /** The whole-value link `document` holds, once it is loaded. */
-  const valueLink = async (document: Cell<any>) => {
-    await document.sync();
-    signal?.throwIfAborted();
-    return parseLink(document.getRaw(), document);
-  };
-  for (const entry of internal) {
+  const links = internal.flatMap((entry) => {
     const link = isKeyableObjectOrArray(entry)
       ? parseLink((entry as { link?: unknown }).link, root)
       : undefined;
-    if (link === undefined || link.space !== owner.space) continue;
-    const held = await valueLink(
-      runtime.getCellFromLink({ ...link, path: [] }, undefined, tx),
+    return link === undefined || link.space !== owner.space ? [] : [link];
+  });
+  // A piece's internal documents include whatever its graph derives, which
+  // can be large, so they load at once rather than one after another.
+  const held = await eachAtOnce(links, async (link) => {
+    const document = runtime.getCellFromLink(
+      { ...link, path: [] },
+      undefined,
+      tx,
     );
-    if (namesOwner(held)) return true;
-  }
-  return false;
+    await document.sync();
+    signal?.throwIfAborted();
+    return parseLink(document.getRaw(), document);
+  });
+  return held.some(namesOwner);
 }
 
 /**
