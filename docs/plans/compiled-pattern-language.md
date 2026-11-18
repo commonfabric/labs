@@ -5410,6 +5410,13 @@ is relitigated.
 
 **Architecture**
 
+- The design is validated on two tracks at once (2026-11-18): the
+  prototype is the reference for semantics, and its executor run inside
+  the runtime is the reference for cost. Both work toward one target,
+  Topics (`patterns/apps/topics/`) at 100, 1,000 and 2,000 topics.
+  [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)
+  has the goal of each track and what decides whether the work continues.
+  It settles provisional decision P30.
 - The language is a subset of TypeScript with its own compiler, written in
   Rust. The runtime's CFC kernel and scheduler stay in TypeScript.
 - The compiler emits JavaScript value code and a data plan. There is no
@@ -6293,10 +6300,8 @@ pointer to its entry.
 6. **P22,** which resolves a conflict of the documents with themselves: a cone
    that places the result of a per-element construct holds a reference to the
    collection, so one row's change evaluates no enclosing cone.
-7. **P30,** how the design is validated from here on: the prototype's
-   executor runs inside the runtime, on its storage transactions, its CFC
-   preparation, and later its scheduler and sandbox, while the prototype
-   stays the reference for semantics.
+7. **P30,** settled by the owner on 2026-11-18: both tracks, with Topics
+   as their shared target.
    [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)
    has the options, the milestones, and the first figures.
 
@@ -7162,7 +7167,7 @@ today.
   executor written for the runtime, which is two implementations of one
   semantics. *How it is written:*
   [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
-  with five milestones, what each measures, and what stays in the prototype.
+  with the milestones, what each measures, and what stays in the prototype.
   *Built:* milestone 1, in the prototype's tree (`exec/executor.ts`
   `TransactionHooks`, `compare/runtime-transactions.ts`,
   `compare/integrated.ts`). *First figures:* over 213 corpus modules on the
@@ -7171,7 +7176,8 @@ today.
   events against 73 to 75 s; 176 commits of 79 modules refused for want of the
   schema of a write, which the adapter does not yet record. *If decided
   otherwise:* those three stay as a measurement, and the missing pieces are
-  built into the prototype.
+  built into the prototype. *Settled* by the owner on 2026-11-18, with both
+  tracks and Topics as their shared target; see [Decided](#decided).
 
 ## Open, and needing the owner
 

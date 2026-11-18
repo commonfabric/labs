@@ -338,8 +338,9 @@ a record: archive it to `docs/history/plans/` following the procedure in
 - [Compiled pattern language: measuring it in the real runtime](compiled-pattern-language-integration.md)
   runs the prototype's executor inside the runtime, on its storage
   transactions and CFC preparation and later its scheduler and sandbox, to
-  get costs the prototype alone cannot give: the options weighed, five
-  milestones with what each measures, and what stays in the prototype.
+  get costs the prototype alone cannot give: the options weighed, two
+  tracks with Topics as their shared target, six milestones with what each
+  measures, and what stays in the prototype.
 
 ## Concepts not planned for deployment
 
