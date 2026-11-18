@@ -5,7 +5,11 @@ import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { FIRST_PARTY_HTTP_AUTH_HEADERS } from "@commonfabric/runner/toolshed-http-auth";
-import { newPieceFromCommand, piece } from "../commands/piece.ts";
+import {
+  newPieceFromCommand,
+  piece,
+  recordIndexedPiece,
+} from "../commands/piece.ts";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
 import { newPiece, newPieceWithReceipt } from "../lib/piece.ts";
 import { captureStderr } from "./utils.ts";
@@ -433,6 +437,46 @@ describe("piece new --from-index", () => {
         expect(error.rawCauseMessage).toBe("no such pattern");
         expect(created).toBeUndefined();
       });
+    });
+  });
+
+  describe("recordIndexedPiece()", () => {
+    it("records the pattern a piece came from in the store for that index", async () => {
+      const home = await Deno.makeTempDir();
+      try {
+        const warnings = await captureStderr(() =>
+          recordIndexedPiece(
+            INDEX_URL,
+            "fid1:created",
+            "pat-1",
+            (key) => key === "CF_PATTERN_INDEX_HOME" ? home : undefined,
+          )
+        );
+
+        expect(warnings).toEqual([]);
+        expect(
+          await new PatternIndexStore(`${home}/index.example`).indexedPiece(
+            "fid1:created",
+          ),
+        ).toBe("pat-1");
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+    });
+
+    it("warns, rather than throwing, when there is no place to keep the record", async () => {
+      const warnings = await captureStderr(() =>
+        recordIndexedPiece(INDEX_URL, "fid1:created", "pat-1", () => undefined)
+      );
+
+      expect(warnings).toEqual([
+        expect.stringContaining(
+          "Could not record that fid1:created came from pat-1: ",
+        ),
+      ]);
+      expect(warnings[0]).toContain(
+        "No place to keep pattern index membership",
+      );
     });
   });
 });

@@ -691,20 +691,33 @@ but fails rather than discard commits on `origin` that the branch has never
 included, even when they have been fetched. A dialog says which branch it pushes
 where, then shows git's output as it arrives, with an Abort button that stops
 the push. Up, Down, Page Up, Page Down, Home, End, and the mouse wheel scroll
-the output, and Left and Right move the focus between the buttons. When the push
-ends, the dialog adds how it ended, and two buttons replace Abort. Close leaves
-that summary in the status line. Quit (`Q`) closes the viewer, first offering to
-save any unsaved edits. Git asks nothing on the terminal while the viewer holds
-it; a question such as a key's passphrase goes to the program `SSH_ASKPASS`
-names, and fails when it names none. `P` refuses to push `origin`'s default
-branch, and refuses when `origin` names no default branch
+the output, and Left and Right move the focus between the buttons. When color is
+on, each web address in the dialog is a link for terminals that open links. When
+the push ends, the dialog adds how it ended, and two buttons replace Abort.
+Close leaves that summary in the status line. Quit (`Q`) closes the viewer,
+first offering to save any unsaved edits. Git asks nothing on the terminal while
+the viewer holds it; a question such as a key's passphrase goes to the program
+`SSH_ASKPASS` names, and fails when it names none. `P` refuses to push
+`origin`'s default branch, and refuses when `origin` names no default branch
 (`git remote set-head origin --auto` finds it). It also refuses a checkout not
 on a branch, and refuses when git started the viewer as its pager for a
 different repository.
 
-When a push fails or is aborted, as it can when the network is unreliable, a
-Retry push button (`P`) pushes again, unless git says the push was rejected, or
-GitHub says the account has no permission to push, which pushing again cannot
+When `origin` already has the branch, as git last fetched or pushed it, the
+dialog asks before pushing. It says which commit `origin`'s branch is at, and
+what pushing would do to it: add commits, replace it, removing the commits that
+the checkout does not have, or leave it as it is. In a shallow checkout, whose
+history git cannot count to the end, it says so in place of the counts. It also
+gives the number and address of the pull request open from the branch, which it
+looks for as `L` does, below, or says that there is none, or why it could not
+look; Abort stops that search, and the dialog asks without it. Push (`u`) then
+pushes, its output following the question, and Cancel takes the dialog down. No
+button is the default, so Enter does nothing until a button has the focus, and
+pressing `P` again does not push.
+
+When git fails to push or is aborted, as it can when the network is unreliable,
+a Retry push button (`P`) pushes again, unless git says the push was rejected,
+or GitHub says the account has no permission to push, which pushing again cannot
 change. Each later push's output follows the earlier one's in the same dialog.
 
 Once the push succeeds, the settings say what happens next, and the radio
@@ -800,10 +813,10 @@ page once it has connected or failed to. While it connects, Abort, or an
 interrupt, gives up on the connection. When a delivery reports that a pull
 request was opened from the pushed branch, at the pushed commit, in the GitHub
 repository that `origin` names, or that the pull request `L` found merged, the
-dialog gives the pull request's address and says it is quitting, and half a
-second later the viewer closes the dialog and quits as Quit does, unless the
-dialog was closed meanwhile. Pressing Quit in that moment quits at once, for the
-pull request all the same. Quitting once the viewer creates or merges the pull
+dialog gives the pull request's address and says it is quitting, and two seconds
+later the viewer closes the dialog and quits as Quit does, unless the dialog was
+closed meanwhile. Pressing Quit in that moment quits at once, for the pull
+request all the same. Quitting once the viewer creates or merges the pull
 request works the same way. Once the screen is restored, it prints the pull
 request's address on the terminal. The address is printed only when the viewer
 quit for it, so a quit after cancelling the save prompt it raised prints
@@ -838,16 +851,24 @@ text, so edited lines read `uncommitted` before they are saved. In a diff, a
 file that follows a commit header is blamed as it stands in that commit. Any
 other hunk is blamed as its file stands in the working tree, and only while that
 file still holds the hunk's added and context lines where the hunk places them.
-Removed lines show nothing. The column fills in as `git blame` finishes for each
-file in view. When git cannot blame a file, the status line says why, and the
-viewer does not try that file again.
+A commit header, and the lines after it that are not part of the diff, such as
+the commit's author, date, and message, show the commit's own entry when the
+viewer can find the commit's repository: when the commit was authored, and its
+author. Such a line edited since the view was loaded or last saved shows
+nothing. Removed lines show nothing. The column fills in as git finishes reading
+each file and commit in view. Turning the column on when no line on the screen
+can be blamed says so in the status line. When git cannot blame a file, the
+status line says why, and the viewer does not try that file again.
 
 Press `\` in the interactive pager to cycle through unwrapped lines, hard
 wrapping, and word wrapping. Hard wrapping fills every screen row before it
 continues. Word wrapping breaks at whitespace and indents each continuation row
 by the width of the line's leading punctuation and whitespace. A row is drawn
 unindented when it could hold the rest of the line only without the indentation,
-or when it is too narrow for the indentation and any text.
+or when it is too narrow for the indentation and any text. Either way, a row
+does not start in the middle of a character that takes two columns, such as a
+Han character or an emoji. A character the edge of the screen would cut in two
+when lines are not wrapped is left blank.
 
 Press `c` to cycle how non-printable characters are shown. The pager starts in
 the ANSI color mode, which applies color escape sequences to the text that
@@ -2417,18 +2438,19 @@ contract before that restriction is widened.
 
 A host profile may bound each model call with `maxInputBytes` and
 `maxOutputTokens`; a caller may only narrow either ceiling. Bounded calls use
-`openai-codex`, make one provider attempt without transport retries, check the
-final UTF-8 request body before sending it, and set the provider's output-token
-ceiling, including reasoning tokens. The byte check includes instructions,
-history and tool schemas and rejects oversized context without discarding it.
-The same model client carries these limits into research and delegated calls. A
-run under the gateway provider refuses these limits as its model client is
-built, before any model call. An input-byte ceiling is not a token count;
-callers budgeting tokens must reserve separate provider framing headroom.
-Provider-added native-search context and image token expansion require separate
-accounting; the serialized byte check does not bound them. A response that
-reaches its output-token ceiling ends as a provider failure, with no partial
-structured result admitted.
+`openai-codex`, make one provider attempt without transport retries (a request
+whose access token the provider refuses is issued once more with a refreshed
+token), check the final UTF-8 request body before sending it, and set the
+provider's output-token ceiling, including reasoning tokens. The byte check
+includes instructions, history and tool schemas and rejects oversized context
+without discarding it. The same model client carries these limits into research
+and delegated calls. A run under the gateway provider refuses these limits as
+its model client is built, before any model call. An input-byte ceiling is not a
+token count; callers budgeting tokens must reserve separate provider framing
+headroom. Provider-added native-search context and image token expansion require
+separate accounting; the serialized byte check does not bound them. A response
+that reaches its output-token ceiling ends as a provider failure, with no
+partial structured result admitted.
 
 `imageAttachments` contains at most eight `{mediaType, base64}` objects, using
 PNG, JPEG, GIF or WebP bytes. Canonical base64 and the declared image signature
@@ -3310,9 +3332,9 @@ the launcher's current directory. This preserves `deno task cf` behavior from a
 caller directory. Direct sandbox or wrapper callers should pass `--cwd` when
 they need to ignore a stale inherited `INIT_CWD`.
 
-The child CLI process inherits the parent environment. The launcher only adds
-`CF_CLI_NAME=cf`, so caller-provided `CF_API_URL`, `CF_IDENTITY`, experimental
-flags, and CFC/sandbox-related environment variables continue to flow through.
+The child CLI process inherits the parent environment unchanged, so
+caller-provided `CF_API_URL`, `CF_IDENTITY`, experimental flags, and
+CFC/sandbox-related environment variables continue to flow through.
 
 From the Labs checkout:
 
@@ -3340,15 +3362,18 @@ deno run --allow-run --allow-env --allow-read vendor/labs/runtime/cli/launcher.t
 Use `--launcher-help` for launcher-specific help. Normal CLI flags such as
 `--help` are passed through to `cf`.
 
-## Publishing to the pattern index
+## Keeping, sharing and publishing in the pattern index
 
-The pattern index is where patterns are published and found. `cf index` holds
-the membership commands and `cf pattern` the publishing ones: `cf index join`
-once, `cf pattern publish` each time a pattern is ready to share, and
-`cf pattern ls` (also `cf pattern mine`) to see where they stand. Every call to
-the index signs with the identity (`--identity` or `CF_IDENTITY`), except the
-invite redemption in `cf index join`, which the index-only root key it creates
-signs (see "Joining"). All of them talk to the index `--pattern-index-url` or
+The pattern index is where a person's patterns are kept while they work on them,
+and where shared and published patterns are found. `cf index` holds the
+membership commands and `cf pattern` the rest: `cf index join` once, after which
+each deploy of the person's own pattern is kept as a private version
+(`cf pattern history`, `cf pattern rollback`); `cf pattern share` shares one
+anonymously, `cf pattern publish` under the person's name, and `cf pattern ls`
+(also `cf pattern mine`) says where shared ones stand. Every call to the index
+signs with the identity (`--identity` or `CF_IDENTITY`), except the invite
+redemption in `cf index join`, which the index-only root key it creates signs
+(see "Joining"). All of them talk to the index `--pattern-index-url` or
 `CF_PATTERN_INDEX_URL` names, the deployment's by default.
 
 ### Joining
@@ -3380,50 +3405,129 @@ the same person through chains the root issues:
   presents it with `cf index move-root <file>`. Chains from the old root stop
   working.
 
+`cf index sharing` shows the person's give-to-get setting, the same one their
+loom's settings change, and `cf index sharing on|off` and `--self-built on|off`
+change it. On, which is the default, their patterns are shared anonymously once
+they open them in their loom and they pass the privacy check, and they see what
+others share; off, nothing of theirs is shared on its own (what they shared with
+`cf pattern share` stays shared until `cf pattern unshare`), and search and
+listings show them only patterns published under a name, though a shared pattern
+opened by its id, as an import or `--from-index` does, still works.
+`--self-built` says whether that covers the patterns they build themselves in
+`cf` and Claude Code.
+
 `cf index whoami` says which member the index sees the identity as. An admin
 admits a key without an invite with `cf index admit <did>`.
 
-### Publishing
+### Private versions
 
-`cf pattern publish <entry file>` compiles the pattern as `cf piece new` does,
-against the same fabric (`--api-url`, `--space`), so that the id it publishes
-under is the one a deploy computes; `--test`, `--datafile`, `--main-export` and
+On an index that keeps versions, each `cf piece new <file>` and
+`cf piece setsrc` of a pattern the person owns is kept as a version only they
+can read, once the deploy commits, and the deploy prints one line saying which
+version it is (`piece new --json` carries it as `version`, whose `status` is
+`recorded`, `unchanged`, `not-joined`, `skipped` or `failed`). A deploy whose
+source the newest version already has keeps no new one and says so
+(`unchanged`). An index from before private versions is sent nothing, and the
+deploy prints no version line (`--json` reports `skipped`). A version holds the
+source as deployed, personal details included, so it is kept where only its
+owner can read it, and admins cannot see it. The versions of one entry file form
+its lineage, which the index finds by a slot `cf` computes. In a git checkout
+with an `origin` remote the slot is a hash of the remote and the file's path in
+the repository, so every worktree and clone continues one lineage. Elsewhere it
+is the absolute path keyed with a secret kept in this machine's index store, so
+the index cannot confirm a guessed path; moving such a file starts a new
+lineage. A deploy from the index (`--from-index`), a `setsrc --origin` deploy (a
+system or repository pattern), and a file fetched from someone else's pattern
+and deployed unchanged keep no version; an edited one is kept as the person's
+remix of it. When this machine never joined an index, a deploy makes no index
+call and says so once. The index write never changes a deploy's outcome: a
+failure is reported in one line and the deploy's exit status stands.
+
+A deploy never shares a version by itself: drafts land many times an hour. The
+index shares a version once it settles, when its owner opens it in a loom, and
+only while their sharing setting (kept by the index; `cf index sharing` and
+Loom's settings change it) covers what they build; the deploy's line says so,
+and `--json` carries it as `version.autoShare: "when_used"`. `cf pattern share`
+shares one at once. The index write follows the deploy's commit and never
+changes its outcome, but the command waits for it before exiting.
+
+`cf pattern history` lists the person's lineages; `cf pattern history <entry>`
+lists one entry's versions, newest first, and where each stands.
+`cf pattern rollback <entry> <version>` writes an earlier version's files over
+the entry's, then makes it the newest version in the index. It refuses when a
+file it would write over holds something no version keeps, since nothing could
+bring that back, unless `--force`, and it never writes outside the pattern's
+directory. Naming the current version with `--force` writes its files back
+without a new version. Running pieces keep the source they have until the next
+`cf piece setsrc`.
+
+### Sharing
+
+`cf pattern share <entry file>` compiles the pattern as `cf piece new` does,
+against the same fabric (`--api-url`, `--space`), so that the id it shares under
+is the one a deploy computes; `--test`, `--datafile`, `--main-export` and
 `--root` package it the same way and must match how the piece was deployed. The
 description is the first paragraph of the entry's doc comment, which may follow
 `//` lines and imports, and the tags are its `@hashtags` and `@keywords` lines;
 `--description`, `--hashtags` and `--keywords` override them. An identity that
-is no member is refused before anything compiles.
+is no member is refused before anything compiles. What it shares is a version of
+the entry's lineage. Others who share see it under a pseudonym of that lineage
+alone, never linked to the person's other lineages, beside a coarse tier of how
+much their other shared work is used.
 
-Before publishing, it asks the index's own privacy question locally: it fetches
-the prompt the index's privacy check runs and sends it, with the pattern, to the
+Before sharing, it asks the index's own privacy question locally: it fetches the
+prompt the index's privacy check runs and sends it, with the pattern, to the
 fabric toolshed's LLM. When the answer is that the pattern would reveal
 something identifying, it asks for a generalized version, with specific values
 lifted into arguments and fields renamed away from personal names, at most
 twice, recompiling and checking each. A rewrite may change only the files the
 findings name. A rewrite that passes is written over those files only when git
 tracks each one, it has no uncommitted edits, it is not a symbolic link, and it
-has not changed since it was read (`--allow-dirty` waives the git checks). The
-command then names the kinds of change and the files, never a value, and says to
-review with `git diff`. When a rewrite passes but cannot be written, nothing is
-published and the command exits 1, saying what to do. When no rewrite passes,
-the pattern is published as it is, with the findings shown. The index's own
-check then holds it unlisted until they are fixed: it is in no one else's search
-or listing, and only its author and admins see it listed, though anyone given
-its id can still open it, as with any unlisted pattern. When the LLM call fails,
-the local check is skipped with one line saying so; the index checks every
-listing request either way. `--skip-local-check` skips it on purpose.
+has not changed since it was read (`--allow-dirty` waives the git checks), or,
+outside git or over uncommitted edits, once the source as it stood is kept as a
+private version, which `cf pattern rollback` restores. The command then names
+the kinds of change and the files, never a value, and says how to take it back.
+When a rewrite passes but cannot be written, nothing is shared and the command
+exits 1, saying what to do. When no rewrite passes, the pattern is shared as it
+is, with the findings shown. The index's own check then holds it unlisted until
+they are fixed: it is in no one else's search or listing, and only its author
+and admins see it listed, though anyone given its id can still open it, as with
+any unlisted pattern. When the LLM call fails, the local check is skipped with
+one line saying so; the index checks every listing request either way.
+`--skip-local-check` skips it on purpose.
 
-A publish names the id last published from the same entry file on this machine
-as its predecessor (`priorPatternId`), so the new version keeps the old one's
-standing. A file `cf piece getsrc` wrote from a piece that
-`cf piece new --from-index` created is published as a remix of that pattern
-(`remixedFrom`), or as a new version of it when it was the caller's own;
-`--remixed-from` names the source where `cf` has no record. Publishing then
-requests a listing. Past the index's daily limit it says when the limit resets,
-and running the same command then requests it again. The next step it prints is
-deploying the pattern with `cf piece new --from-index <id>`, or opening it in a
-loom with `/deploy index:<id>`. A listed pattern moves from Unvetted to Main
-once its author opens it in a loom.
+A share names the id last shared from the same entry file on this machine as its
+predecessor (`priorPatternId`), so the new version keeps the old one's standing.
+A file `cf piece getsrc` wrote from a piece that `cf piece new --from-index`
+created is published as a remix of that pattern (`remixedFrom`), or as a new
+version of it when it was the caller's own; `--remixed-from` names the source
+where `cf` has no record. Sharing then requests a listing. Past the index's
+daily limit it says when the limit resets, and running the same command then
+requests it again. The next step it prints is deploying the pattern with
+`cf piece new --from-index <id>`, or opening it in a loom with
+`/deploy index:<id>`. A listed pattern moves from Unvetted to Main once its
+author opens it in a loom.
+
+`cf pattern unshare <entry>` takes the pattern out of others' searches and
+listings and shares no later version until `cf pattern share` runs again. A
+version already shared stays readable by its id, so imports of it keep working.
+
+### Publishing under a name
+
+`cf pattern publish <entry file>` shares the pattern as `cf pattern share` does,
+then names the person as its author under one of their Common Fabric profiles
+(`--profile <space>`, the one `#profile` answers with by default). Only that
+lineage is named; the person's other lineages stay anonymous and are not linked
+to it. Without `--as "<the profile's name>"` it prints one line saying the name
+will be shown to every member and cannot be unseen, and names nothing: repeating
+the name is how an agent shows it asked the person. The index takes the profile
+only with proof that it is the person's: the delegation the profile space issued
+to their identity, which Home records. A profile made before profiles owned
+themselves has none and cannot be published under yet. Everything that can
+refuse the naming is checked before anything is shared; a naming the index
+refuses afterwards leaves the pattern shared, says so, and exits 1.
+`cf pattern unpublish <entry>` stops showing the name from then on; the lineage
+stays shared under its pseudonym.
 
 ### Where patterns stand
 
@@ -3480,11 +3584,14 @@ The supported output switches are:
   `{handle, role, root, signer, joined, storeDir, rootKeptHere}`, where
   `rootKeptHere` says whether backing up `storeDir` keeps the root key;
   `cf index whoami --json` prints the handle, the role and the signer.
-- `cf pattern publish --json` prints the publish report. Its `outcome` is
-  `published`, with the id, whether it was new, the listing request's outcome
-  and the next step, or `blocked`, with nothing published and the next step.
-  Both carry the local check's outcome: findings and changes by category and
-  file, never a value. `cf pattern ls --json` prints its rows.
+- `cf pattern share --json` prints the share report. Its `outcome` is `shared`,
+  with the id, the version, whether it was new, the listing request's outcome
+  and the next step, or `blocked`, with nothing shared and the next step. Both
+  carry the local check's outcome: findings and changes by category and file,
+  never a value. `cf pattern publish --json` prints the same report with a
+  `named` line once the name is shown. `cf pattern ls --json` prints its rows,
+  `cf pattern history --json` the versions (or, without an entry, the lineages),
+  and `cf pattern rollback --json` what it restored and wrote.
 - `cf check --json` compiles without evaluating and prints one object with a
   `files` array. Each entry has the input `path` and the compiled module bodies
   in `output`.

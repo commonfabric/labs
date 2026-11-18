@@ -13,25 +13,29 @@
 import { diffContentRowCount, maxPagerTop, maxTop } from "./actions.ts";
 import {
   cpLen,
-  LEADING_ESCAPE,
+  ESCAPE_SPLIT,
   paint,
   RESET,
   stripAnsi,
   type Style,
   term,
-  visibleWidth,
 } from "./ansi.ts";
 import { BLAME_WIDTH, blameLabel, type BlameLine } from "./blame.ts";
 import type { Document, Line, StructureNode, ViewMode } from "./model.ts";
 import {
   type DisplayCell,
+  displayColumnOf,
   displayLine,
   type DisplayMode,
   displayWidth,
-  glyphFor,
+  drawnCharacters,
+  showControls,
+  shownCells,
+  truncate,
 } from "./display.ts";
 import { overlaySpanStyle, spanStyle } from "./highlight.ts";
 import { firstShown } from "./lineedit.ts";
+import { charColumns, columns, graphemes, visibleWidth } from "./width.ts";
 import { lineBg, styleFor, ui } from "./theme.ts";
 import {
   buildWrapPlan,
@@ -248,8 +252,9 @@ export interface ViewState {
    * coexist. */
   dialog?: DialogState | null;
 
-  /** The text cursor, in document coordinates (line + display column), when
-   * edit mode has it visible. The pager positions the real terminal cursor. */
+  /** The text cursor, in document coordinates (line + source column, in code
+   * points), when edit mode has it visible. The pager positions the real
+   * terminal cursor. */
   cursor?: { line: number; col: number } | null;
 
   /** Edit-mode key hints, shown on the status line in place of the navigation
@@ -362,8 +367,9 @@ export function cursorScreenPos(
   const { line, col } = view.cursor;
   if (line < 0 || line >= doc.lines.length) return null;
   const { gutterWidth, guideWidth, contentWidth } = layout(doc, view);
+  const displayCol = displayColumnOf(doc.lines[line], view.displayMode, col);
   let screenLine = line;
-  let contentCol = col - view.left;
+  let contentCol = displayCol - view.left;
   if (view.wrapMode !== "off") {
     const plan = view.wrapPlan ??
       buildWrapPlan(
@@ -373,9 +379,9 @@ export function cursorScreenPos(
         new Map(),
         view.wrapMode,
       );
-    const row = wrappedRowForPosition(plan, line, col);
+    const row = wrappedRowForPosition(plan, line, displayCol);
     screenLine = row?.row ?? plan.firstRow[line];
-    contentCol = (row?.indentWidth ?? 0) + col - (row?.offset ?? 0);
+    contentCol = (row?.indentWidth ?? 0) + displayCol - (row?.offset ?? 0);
   }
   const contentHeight = view.height - 1;
   const r = screenLine - view.top;
@@ -429,6 +435,9 @@ export interface DialogState {
    * than the rest. */
   readonly emphasized?: readonly number[];
 
+  /** The links on each of the body's rows, by row. */
+  readonly links?: readonly (readonly DialogLink[])[];
+
   /** The width the box gives the body, in columns, when that is fixed rather
    * than fitted to the body's lines. */
   readonly width?: number;
@@ -447,6 +456,20 @@ export interface DialogState {
 
   /** Index of the focused field, or -1 when none is. */
   readonly fieldFocus?: number;
+}
+
+/** A link to `url` on the columns of a row of text from `from` up to `to`,
+ * counted in code points. */
+export interface DialogLink {
+  readonly from: number;
+  readonly to: number;
+  readonly url: string;
+}
+
+/** Returns the web addresses in `text`, each of which ends before
+ * punctuation that ends a clause or a sentence. */
+export function webAddresses(text: string): IterableIterator<RegExpExecArray> {
+  return text.matchAll(/https?:\/\/\S*[^\s.,;:!?)\]'"]/g);
 }
 
 /** A check box, drawn as Turbo Vision draws one: `[X]` when it is checked
@@ -506,6 +529,9 @@ export type DialogField = DialogCheckBox | DialogInputLine | DialogRadioButtons;
 interface Cell {
   ch: string;
   style: Style;
+
+  /** The address the cell links to, if any. */
+  link?: string;
 }
 
 const EMPTY_STYLE: Style = {};
@@ -1050,34 +1076,38 @@ function composeContent(
   for (let i = 0; i < cells.length; i++) {
     cells[i] = { ch: " ", style: rowBg };
   }
+  // A row whose one character is wider than its text draws the character
+  // over the marker's column instead of the marker.
+  const overMarker = showWrapMarker && display !== undefined &&
+    Math.min(display.length, sourceEnd) > offset + sourceWidth;
   if (line && display) {
     // The display list may hold fewer cells than the line has code points —
     // ANSI sequences are hidden and runs of control codes collapse — so cells
     // are placed by their position in this list, not by their source column.
     // Each cell still knows the source column it stands for, which is what the
     // selection and search ranges are stated in.
+    // A cell is in a match or the selection when any source column it
+    // stands for is.
     const styleCell = (dc: DisplayCell): Style => {
       if (!color) return EMPTY_STYLE;
-      const hit = lineMatches ? matchStyle(lineMatches, dc.col) : null;
-      if (hit) return hit;
+      for (let col = dc.col; lineMatches && col < dc.sourceEnd; col++) {
+        const hit = matchStyle(lineMatches, col);
+        if (hit) return hit;
+      }
       const base = mergeBg(dc.ansi ?? dc.syntax, rowBg);
       const inSel = sel !== null &&
-        dc.col >= sel.lo && dc.col < sel.hi;
+        dc.sourceEnd > sel.lo && dc.col < sel.hi;
       return inSel ? mergeBg(base, sel.bg) : base;
     };
     const end = Math.min(
       display.length,
       sourceEnd,
-      offset + sourceWidth,
+      offset + sourceWidth + (overMarker ? 1 : 0),
     );
-    for (let d = offset; d < end; d++) {
-      const idx = indentWidth + d - offset;
-      const dc = display[d];
-      cells[idx] = { ch: dc.ch, style: styleCell(dc) };
-    }
+    placeDisplayCells(cells, indentWidth, display, offset, end, styleCell);
   }
 
-  if (showWrapMarker) {
+  if (showWrapMarker && !overMarker) {
     cells[indentWidth + sourceWidth] = {
       ch: "\\",
       style: color ? mergeBg(ui.wrapMarker, rowBg) : EMPTY_STYLE,
@@ -1112,6 +1142,30 @@ function composeContent(
   }
 
   return cellsToAnsi(cells, color);
+}
+
+/** Write the cells of `display` from `from` to `to` in `cells` from column
+ * `at`, each in `style(cell)`, leaving blank the columns of a wide character
+ * that either end cuts. */
+function placeDisplayCells(
+  cells: Cell[],
+  at: number,
+  display: readonly DisplayCell[],
+  from: number,
+  to: number,
+  style: (cell: DisplayCell) => Style,
+): void {
+  for (let d = from; d < to; d++) {
+    let first = d;
+    while (first > from && display[first].ch === "") first--;
+    let end = d + 1;
+    while (display[end]?.ch === "") end++;
+    const cut = display[first].ch === "" || end > to;
+    cells[at + d - from] = {
+      ch: cut ? " " : display[d].ch,
+      style: style(display[d]),
+    };
+  }
 }
 
 /** The search-match style for a cell at source column `col`, or null when the
@@ -1279,8 +1333,7 @@ function linkAddresses(
   const kept = shown === text ? text.length : shown.length - 1;
   let out = "";
   let at = 0;
-  // An address ends before punctuation that ends a clause or a sentence.
-  for (const match of text.matchAll(/https?:\/\/\S*[^\s.,;:!?)\]'"]/g)) {
+  for (const match of webAddresses(text)) {
     if (match.index >= kept) break;
     const end = Math.min(match.index + match[0].length, kept);
     out += paintText(shown.slice(at, match.index)) +
@@ -1301,29 +1354,6 @@ function fitHints(
     out.push(h);
   }
   return out;
-}
-
-/** Replace the control characters in `text` with their Control Pictures glyphs,
- * the same substitution the content rows use. This is applied to the strings
- * that reach the terminal outside `displayLine` — the status bar's file name and
- * the dialog body — which can carry a file name a user chose. One code point in
- * gives one code point out, so the callers' width arithmetic is unchanged. */
-export function showControls(text: string): string {
-  let out = "";
-  for (const cp of text) out += glyphFor(cp);
-  return out;
-}
-
-/** Truncate `text` to `max` columns with an ellipsis. `dropTail` keeps the head
- * (a trailing `…`); otherwise it keeps the tail (a leading `…`, for a path whose
- * file name matters most). */
-function truncate(text: string, max: number, dropTail: boolean): string {
-  const cps = [...text];
-  if (cps.length <= max) return text;
-  if (max <= 1) return "…";
-  return dropTail
-    ? cps.slice(0, max - 1).join("") + "…"
-    : "…" + cps.slice(cps.length - (max - 1)).join("");
 }
 
 /** The default browsing key hints, in priority order (most important first) so
@@ -1467,13 +1497,14 @@ function applyOverlay(
       const display = displayLine(srcLine, view.displayMode, styler);
       // One blank column of margin sits inside each border, so content is drawn
       // into cells[1 … innerW-2].
-      for (let idx = 0; idx < display.length; idx++) {
-        const col = idx + 1;
-        if (col >= innerW - 1) break;
-        const dc = display[idx];
-        const style = view.color ? mergeBg(dc.ansi ?? dc.syntax, rowBg) : rowBg;
-        cells[col] = { ch: dc.ch, style };
-      }
+      placeDisplayCells(
+        cells,
+        1,
+        display,
+        0,
+        Math.min(display.length, innerW - 2),
+        (dc) => view.color ? mergeBg(dc.ansi ?? dc.syntax, rowBg) : rowBg,
+      );
     }
     const body = cellsToAnsi(cells, view.color);
     const rowText = paintIf("║", border, view.color) + body +
@@ -1514,8 +1545,8 @@ function darkenSpan(
   if (r < 0 || r >= rows.length || from < 0) return;
   const n = Math.min(count, view.width - from);
   if (n <= 0) return;
-  const chars = stripAnsi(sliceVisible(rows[r], from, from + n))
-    .padEnd(n, " ").slice(0, n);
+  const shown = stripAnsi(sliceVisible(rows[r], from, from + n));
+  const chars = shown + " ".repeat(n - columns(shown));
   rows[r] = overlayRow(rows[r], from, paint(chars, ui.overlayShadow));
 }
 
@@ -1536,7 +1567,7 @@ function faceText(b: DialogButton): string {
 }
 
 function faceWidth(b: DialogButton): number {
-  return cpLen(faceText(b));
+  return shownCells(faceText(b)).length;
 }
 
 /** The face plus the one column of right-hand shadow it casts. */
@@ -1567,10 +1598,10 @@ export function dialogBox(
   view: Pick<ViewState, "width" | "height">,
   dialog: DialogState,
 ): DialogBox {
-  const titleW = cpLen(dialog.title) + 4; // the padding spaces and some fill
+  const titleW = shownCells(dialog.title).length + 4; // the padding and fill
   const bodyW = dialog.width ??
     [...dialog.body, ...(dialog.fields ?? []).flatMap(fieldTexts)].reduce(
-      (m, l) => Math.max(m, cpLen(l)),
+      (m, l) => Math.max(m, shownCells(l).length),
       0,
     );
   const btnW = buttonsWidth(dialog.buttons);
@@ -1599,8 +1630,21 @@ export function dialogBox(
 /** The top border of a dialog: the title centered in the width and filled with
  * the double rule. */
 function titleBar(title: string, width: number): string {
-  if (width <= 0) return "";
   return truncCenter(` ${title} `, width, "═");
+}
+
+/** The first `width` of `chars`, the cells of some text, with a wide
+ * character that would be cut in two left blank. */
+function clip(chars: readonly string[], width: number): string[] {
+  const out = chars.slice(0, Math.max(0, width));
+  let k = out.length;
+  while (k > 0 && chars[k] === "") out[--k] = " ";
+  return out;
+}
+
+/** The cells of each character of an input line's value. */
+function inputChars(field: DialogInputLine): string[][] {
+  return drawnCharacters(field.value).map(shownCells);
 }
 
 interface ButtonPos {
@@ -1691,7 +1735,7 @@ function inputLineStart(field: DialogInputLine, width: number): number {
     field.scroll,
     field.cursor,
     width - 2,
-    [...field.value].length,
+    drawnCharacters(field.value),
   );
 }
 
@@ -1737,7 +1781,9 @@ function dialogCursorPos(
   const row = shownFieldRows(dialog, box.innerH)[index];
   const width = box.innerW - 2 * DIALOG_HMARGIN;
   if (field?.kind !== "inputLine" || row == null || width < 3) return null;
-  const col = DIALOG_HMARGIN + 1 + field.cursor - inputLineStart(field, width);
+  const shown = inputChars(field)
+    .slice(inputLineStart(field, width), field.cursor).flat().length;
+  const col = DIALOG_HMARGIN + 1 + shown;
   return { row: box.y + row + 3, col: box.x + col + 2 };
 }
 
@@ -1770,7 +1816,7 @@ export function dialogControlAt(
   return button < 0 ? -1 : fields.length + button;
 }
 
-/** Returns how many characters an input line of `dialog` shows, between the
+/** Returns how many columns an input line of `dialog` shows, between the
  * arrows at its ends. */
 export function inputLineColumns(
   view: Pick<ViewState, "width" | "height">,
@@ -1800,10 +1846,15 @@ export function inputLineIndexAt(
   const box = dialogBox(view, dialog);
   const row = shownFieldRows(dialog, box.innerH)[index];
   if (row == null || y !== box.y + 1 + row + 1) return null;
-  const columns = inputLineColumns(view, dialog);
-  const column = x - box.x - 1 - DIALOG_HMARGIN - 1;
-  return inputLineStart(field, columns + 2) +
-    Math.max(0, Math.min(column, columns - 1));
+  const width = inputLineColumns(view, dialog);
+  const column = Math.min(x - box.x - 1 - DIALOG_HMARGIN - 1, width - 1);
+  const chars = inputChars(field);
+  let at = inputLineStart(field, width + 2);
+  for (let used = 0; at < chars.length; at++) {
+    used += chars[at].length;
+    if (used > column) break;
+  }
+  return at;
 }
 
 /**
@@ -1835,17 +1886,18 @@ export function radioButtonAt(
     : null;
 }
 
-/** The index in `label` of the highlighted shortcut letter, its first that
- * matches `hotkey` in either case, or -1 when none does. */
-function hotkeyIndex(label: string, hotkey: string): number {
+/** The index in `chars`, the cells of a label, of the highlighted shortcut
+ * letter, its first that matches `hotkey` in either case, or -1 when none
+ * does. */
+function hotkeyIndex(chars: readonly string[], hotkey: string): number {
   const hk = hotkey.toLowerCase();
-  return [...label].findIndex((c) => c.toLowerCase() === hk);
+  return chars.findIndex((c) => c.toLowerCase() === hk);
 }
 
 /** The face index of the highlighted shortcut letter, or -1 if the hotkey does
  * not appear in the label. Offset by one for the leading pad space. */
 function hotkeyFaceIndex(b: DialogButton): number {
-  const idx = hotkeyIndex(b.label, b.hotkey);
+  const idx = hotkeyIndex(shownCells(b.label), b.hotkey);
   return idx < 0 ? -1 : idx + 1;
 }
 
@@ -1898,6 +1950,7 @@ function applyDialog(
         dialog.body[bodyIdx],
         dialog.emphasized?.includes(bodyIdx) ? emphasisStyle : textStyle,
         dialog.output,
+        dialog.links?.[bodyIdx],
       );
     } else if (field && fieldRow < fieldHeight(field)) {
       placeField(
@@ -1921,22 +1974,48 @@ function applyDialog(
   if (view.color) castShadow(rows, view, x, y, boxW, boxH);
 }
 
+/** Write `chars`, the cells of some text, in `cells` from column `from`,
+ * the one at index `j` in `style(j)`, clipped to end before column `end`. */
+function putCells(
+  cells: Cell[],
+  from: number,
+  end: number,
+  chars: readonly string[],
+  style: (j: number) => Style,
+): void {
+  clip(chars, end - from).forEach((ch, j) => {
+    cells[from + j] = { ch, style: style(j) };
+  });
+}
+
 /** Write `text` in `cells`, centered or starting after the dialog's margin,
- * and clipped to leave one blank column inside each edge. */
+ * and clipped to leave one blank column inside each edge, with `links` on
+ * it. */
 function placeText(
   cells: Cell[],
   text: string,
   style: Style,
   leftAligned = false,
+  links: readonly DialogLink[] = [],
 ): void {
   const innerW = cells.length;
-  const chars = [...showControls(text)];
+  const chars = shownCells(text);
   const start = leftAligned
     ? DIALOG_HMARGIN
     : 1 + Math.max(0, Math.floor((innerW - 2 - chars.length) / 2));
-  for (let j = 0; j < chars.length; j++) {
-    const col = start + j;
-    if (col >= 1 && col <= innerW - 2) cells[col] = { ch: chars[j], style };
+  putCells(cells, start, innerW - 1, chars, () => style);
+  // Each cell links where the code point of `text` it draws does.
+  let at = 0;
+  let cell = start;
+  for (const char of drawnCharacters(text)) {
+    const link = links.find(({ from, to }) => from <= at && at < to)?.url;
+    for (const _ of shownCells(char)) {
+      if (link !== undefined && cell >= 1 && cell < innerW - 1) {
+        cells[cell] = { ...cells[cell], link };
+      }
+      cell++;
+    }
+    at += cpLen(char);
   }
 }
 
@@ -1957,10 +2036,18 @@ function placeField(
   textStyle: Style,
 ): void {
   const width = cells.length - 2 * DIALOG_HMARGIN;
-  const put = (at: number, ch: string, style: Style) => {
-    const col = DIALOG_HMARGIN + at;
-    if (at < width) cells[col] = { ch, style: color ? style : EMPTY_STYLE };
-  };
+  const put = (
+    at: number,
+    chars: readonly string[],
+    style: (j: number) => Style,
+  ) =>
+    putCells(
+      cells,
+      DIALOG_HMARGIN + at,
+      DIALOG_HMARGIN + width,
+      chars,
+      (j) => color ? style(j) : EMPTY_STYLE,
+    );
   const label = (
     from: number,
     text: string,
@@ -1969,10 +2056,9 @@ function placeField(
   ) => {
     const style = highlighted ? ui.fieldFocus : textStyle;
     const keyStyle = { ...ui.fieldKey, bg: style.bg ?? textStyle.bg };
-    const key = hotkeyIndex(text, hotkey);
-    [...text].forEach((ch, j) =>
-      put(from + j, ch, j === key ? keyStyle : style)
-    );
+    const chars = shownCells(text);
+    const key = hotkeyIndex(chars, hotkey);
+    put(from, chars, (j) => j === key ? keyStyle : style);
   };
   const mark = (
     open: string,
@@ -1980,8 +2066,10 @@ function placeField(
     close: string,
     highlighted: boolean,
   ) =>
-    [open, on, close, " "].forEach((ch, j) =>
-      put(j, ch, highlighted ? ui.fieldFocus : textStyle)
+    put(
+      0,
+      [open, on, close, " "],
+      () => highlighted ? ui.fieldFocus : textStyle,
     );
   if (field.kind === "checkBox") {
     mark("[", field.checked ? "X" : " ", "]", focused);
@@ -1999,15 +2087,13 @@ function placeField(
     label(4, button.label, button.hotkey, focused && selected);
     return;
   }
-  const chars = [...field.value];
   const start = inputLineStart(field, width);
-  for (let j = 0; j < width; j++) put(j, " ", ui.inputLine);
-  if (start > 0) put(0, "◄", ui.inputArrow);
+  const shown = inputChars(field).slice(start).flat();
+  put(0, [..." ".repeat(Math.max(0, width))], () => ui.inputLine);
+  if (start > 0) put(0, ["◄"], () => ui.inputArrow);
   const valueStyle = field.selected ? ui.inputSelection : ui.inputLine;
-  chars.slice(start, start + width - 2).forEach((ch, j) =>
-    put(1 + j, showControls(ch), valueStyle)
-  );
-  if (chars.length > start + width - 2) put(width - 1, "►", ui.inputArrow);
+  put(1, clip(shown, width - 2), () => valueStyle);
+  if (shown.length > width - 2) put(width - 1, ["►"], () => ui.inputArrow);
 }
 
 function placeButtonFaces(
@@ -2019,7 +2105,7 @@ function placeButtonFaces(
   pushed: number,
 ): void {
   layout.forEach(({ b, start, faceW }, idx) => {
-    const chars = [...faceText(b)];
+    const chars = shownCells(faceText(b));
     const face = !color
       ? panelBg
       : idx === focus
@@ -2029,12 +2115,13 @@ function placeButtonFaces(
     const hk = hotkeyFaceIndex(b);
     // A pressed button slides one column right, into the space its shadow held.
     const shift = idx === pushed ? 1 : 0;
-    for (let j = 0; j < chars.length; j++) {
-      const col = start + shift + j;
-      if (col >= 0 && col < cells.length) {
-        cells[col] = { ch: chars[j], style: j === hk ? keyStyle : face };
-      }
-    }
+    putCells(
+      cells,
+      start + shift,
+      cells.length,
+      chars,
+      (j) => j === hk ? keyStyle : face,
+    );
     const rightShadow = start + faceW;
     if (
       color && idx !== pushed && rightShadow >= 0 && rightShadow < cells.length
@@ -2072,7 +2159,7 @@ function placeButtonShadows(
 /** Splice `insert` into `base` starting at visible column `x`. */
 function overlayRow(base: string, x: number, insert: string): string {
   const left = sliceVisible(base, 0, x);
-  const insertW = visibleWidth(insert);
+  const insertW = columns(stripAnsi(insert));
   const right = sliceVisible(base, x + insertW, Number.MAX_SAFE_INTEGER);
   return left + RESET + insert + RESET + right;
 }
@@ -2086,7 +2173,13 @@ function cellsToAnsi(cells: Cell[], color: boolean): string {
   let out = "";
   let curKey: string | null = null;
   let curOpen = "";
+  let curLink: string | undefined;
   for (const cell of cells) {
+    if (cell.link !== curLink) {
+      if (curLink !== undefined) out += term.linkEnd;
+      if (cell.link !== undefined) out += term.linkStart(cell.link);
+      curLink = cell.link;
+    }
     const open = sgrInline(cell.style);
     if (open !== curKey) {
       if (curKey !== null) out += RESET;
@@ -2096,6 +2189,7 @@ function cellsToAnsi(cells: Cell[], color: boolean): string {
     }
     out += cell.ch;
   }
+  if (curLink !== undefined) out += term.linkEnd;
   if (curOpen !== "") out += RESET;
   return out;
 }
@@ -2163,44 +2257,56 @@ function padTo(text: string, width: number): string {
   return text + " ".repeat(width - len);
 }
 
-/** Slice by visible columns (code points), keeping ANSI escapes before kept
- * text. A non-BMP code point counts as one column. */
+/** Slice by visible columns, keeping every ANSI escape. A character counts
+ * as many columns as it takes, and the columns of one that the slice cuts in
+ * two are kept as spaces, after the escapes inside it. A character that
+ * takes no column is kept with the character before it. */
 function sliceVisible(text: string, from: number, to: number): string {
+  const parts = text.split(ESCAPE_SPLIT);
+  const escapes: Array<{ at: number; escape: string }> = [];
+  let plain = "";
+  parts.forEach((part, i) => {
+    if (i % 2 === 1) escapes.push({ at: plain.length, escape: part });
+    else plain += part;
+  });
   let out = "";
   let col = 0;
-  let i = 0;
-  while (i < text.length) {
-    if (text[i] === "\x1b") {
-      const m = text.slice(i).match(LEADING_ESCAPE);
-      if (m) {
-        out += m[0];
-        i += m[0].length;
-        continue;
-      }
+  let at = 0;
+  let next = 0;
+  for (const char of graphemes(plain)) {
+    const start = at;
+    at += char.length;
+    while (next < escapes.length && escapes[next].at <= start) {
+      out += escapes[next++].escape;
     }
-    const ch = String.fromCodePoint(text.codePointAt(i)!);
-    if (col >= from && col < to) out += ch;
-    col += 1;
-    i += ch.length;
+    // The character as the text writes it, with the escapes inside it.
+    let source = "";
+    let inside = "";
+    let copied = start;
+    while (next < escapes.length && escapes[next].at < at) {
+      const { at: escapeAt, escape } = escapes[next++];
+      source += plain.slice(copied, escapeAt) + escape;
+      inside += escape;
+      copied = escapeAt;
+    }
+    source += plain.slice(copied, at);
+    const end = col + charColumns(char);
+    const kept = end > col ? col >= from && end <= to : col > from && col <= to;
+    out += kept ? source : inside +
+      " ".repeat(Math.max(0, Math.min(end, to) - Math.max(col, from)));
+    col = end;
   }
+  for (const { escape } of escapes.slice(next)) out += escape;
   return out;
 }
 
+/** `text` centered in `width` columns between runs of `fill`, or as much of
+ * it as fits when it is wider. */
 function truncCenter(text: string, width: number, fill: string): string {
-  const len = cpLen(text);
-  if (len >= width) {
-    let out = "";
-    let c = 0;
-    for (const ch of text) {
-      if (c >= width) break;
-      out += ch;
-      c += 1;
-    }
-    return out;
-  }
-  const total = width - len;
+  const chars = clip(shownCells(text), width);
+  const total = Math.max(0, width - chars.length);
   const leftN = Math.floor(total / 2);
-  return fill.repeat(leftN) + text + fill.repeat(total - leftN);
+  return fill.repeat(leftN) + chars.join("") + fill.repeat(total - leftN);
 }
 
 export const _internal = {

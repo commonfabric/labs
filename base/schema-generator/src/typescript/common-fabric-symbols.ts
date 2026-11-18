@@ -188,29 +188,13 @@ export function resolvesToCommonFabricSymbol(
 function isCommonFabricDefaultTypeNode(
   typeNode: ts.TypeNode | undefined,
   checker: ts.TypeChecker,
-  visited: Set<ts.Symbol> = new Set(),
 ): boolean {
-  if (!typeNode || !ts.isTypeReferenceNode(typeNode)) return false;
-  const symbol = checker.getSymbolAtLocation(typeNode.typeName);
-  if (!symbol || visited.has(symbol)) return false;
-  visited.add(symbol);
-  if (resolvesToCommonFabricSymbol(symbol, checker, "Default")) {
-    return true;
-  }
-  const declarations = symbol.getDeclarations();
-  if (!declarations) return false;
-  for (const declaration of declarations) {
-    if (ts.isTypeAliasDeclaration(declaration)) {
-      const aliased = declaration.type;
-      if (
-        aliased && ts.isTypeReferenceNode(aliased) &&
-        isCommonFabricDefaultTypeNode(aliased, checker, visited)
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return !!typeNode && ts.isTypeReferenceNode(typeNode) &&
+    resolvesToCommonFabricSymbol(
+      checker.getSymbolAtLocation(typeNode.typeName),
+      checker,
+      "Default",
+    );
 }
 
 /**
@@ -220,23 +204,10 @@ export function symbolDeclaresCommonFabricDefault(
   symbol: ts.Symbol | undefined,
   checker: ts.TypeChecker,
 ): boolean {
-  if (!symbol) return false;
-  const declarations = symbol.getDeclarations();
-  if (!declarations) return false;
-  return declarations.some((declaration) => {
-    const nodeWithType = declaration as { type?: ts.TypeNode };
-    if (
-      nodeWithType.type &&
-      isCommonFabricDefaultTypeNode(nodeWithType.type, checker)
-    ) {
-      return true;
-    }
-    if (ts.isPropertySignature(declaration) && declaration.type) {
-      return isCommonFabricDefaultTypeNode(declaration.type, checker);
-    }
-    if (ts.isTypeAliasDeclaration(declaration) && declaration.type) {
-      return isCommonFabricDefaultTypeNode(declaration.type, checker);
-    }
-    return false;
-  });
+  return (symbol?.getDeclarations() ?? []).some((declaration) =>
+    isCommonFabricDefaultTypeNode(
+      (declaration as { type?: ts.TypeNode }).type,
+      checker,
+    )
+  );
 }

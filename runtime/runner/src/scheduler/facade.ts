@@ -1,4 +1,9 @@
-import type { CellScope, ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import {
+  type CellScope,
+  resolveScopeKey,
+  type ScopeKey,
+  type ScopeKeyIdentity,
+} from "@commonfabric/memory/v2";
 import { type ArmedTurn, armTurn } from "@commonfabric/async/turn";
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
 import { ensureNotRenderThread } from "@commonfabric/platform/env";
@@ -126,7 +131,7 @@ import {
   type SettlingTracker,
   summarizeNonSettlingWindow,
 } from "./execution.ts";
-import { dirtyFanOutKey, keyAtRatchet } from "./fan-out.ts";
+import { dirtyFanOutKey, fanOutInstances, keyAtRatchet } from "./fan-out.ts";
 import { SchedulerGates } from "./gates.ts";
 import {
   buildSchedulerGraphSnapshot,
@@ -145,6 +150,7 @@ import { NodeRegistry, type SchedulerNode } from "./node-record.ts";
 import {
   resolveRegistrationSurface,
   resubscribePullSchedulerAction,
+  type SchedulerResubscribeOptions,
   type SchedulerSubscribeActionState,
   type SchedulerSubscriptionState,
   type SchedulerUnsubscribeActionState,
@@ -270,6 +276,11 @@ function isAuthorizationLoadFailure(error: unknown): boolean {
   return error instanceof ReplicaLoadFailureError &&
     error.failure.failureClass === "authorization";
 }
+
+/** The key of one document in `Scheduler`'s produced-watchers: its space and
+ * id, which hold no NUL. */
+const producedWatchKey = (space: string, id: string): string =>
+  `${space}\0${id}`;
 
 /**
  * Like `isAuthorizationLoadFailure()`, except that the failure also carries
@@ -984,16 +995,22 @@ export class Scheduler {
   resubscribe(
     action: Action,
     log: ReactivityLog,
-    options: {
-      isEffect?: boolean;
-      changeGroup?: ChangeGroup;
-    } = {},
+    options: SchedulerResubscribeOptions = {},
   ): void {
+    this.#resubscribe(action, log, options);
+  }
+
+  /** Like {@link resubscribe}, except that it returns the action's node. */
+  #resubscribe(
+    action: Action,
+    log: ReactivityLog,
+    options: SchedulerResubscribeOptions = {},
+  ): SchedulerNode {
     const record = this.#nodes.get(action);
     const wasLiveBeforeRootRegistration = record !== undefined &&
       isLive(this.#dependencyGraphState, record);
     this.#updateMaterializerRegistration(action);
-    resubscribePullSchedulerAction(
+    return resubscribePullSchedulerAction(
       this.#subscribeActionState,
       action,
       log,
@@ -1533,6 +1550,9 @@ export class Scheduler {
 
   #demandedWriterHookInstalled = false;
 
+  /** The callbacks `watchProducedDocument()` holds, by `producedWatchKey()`. */
+  readonly #producedWatchers = new Map<string, Set<() => void>>();
+
   #installDemandedWriterHook(): void {
     if (this.#demandedWriterHookInstalled) return;
     this.#demandedWriterHookInstalled = true;
@@ -1541,6 +1561,9 @@ export class Scheduler {
     // its last demanded entity leaves it. Bracketed like every other root
     // flip (serving-loop.md §8: capture wasLive → flip → notify).
     this.#writeIndex.onWriterEntitiesChanged = (action, added, removed) => {
+      // A writer that stops writing a document has stopped owing it, which
+      // is news to whoever waits on it being produced.
+      if (removed.size > 0) this.#wakeProducedWatchers(removed);
       let touchesDemand = false;
       for (const entity of added) {
         if ((this.#demandedEntityRefs.get(entity) ?? 0) > 0) {
@@ -1586,7 +1609,6 @@ export class Scheduler {
       this.#nodes.demandedWriters.delete(action);
       this.#demandRootCounters.leaves += 1;
     }
-    if (record === undefined) return;
     notifyNodeLivenessChange(this.#dependencyGraphState, action, wasLive);
     if (
       shouldBeRoot && this.#isLiveAction(action) &&
@@ -1673,12 +1695,11 @@ export class Scheduler {
     if (writers === undefined || writers.size === 0) return 0;
     let rearmed = 0;
     for (const writer of writers) {
-      const record = this.#nodes.get(writer);
-      if (record === undefined) continue;
-      if (record.fanOut === undefined) continue;
-      const pairKey = keyAtRatchet(record.fanOut, demander);
+      const fanOut = this.#nodes.get(writer)?.fanOut;
+      if (fanOut === undefined) continue;
+      const pairKey = keyAtRatchet(fanOut, demander);
       if (pairKey === undefined) continue;
-      if (record.fanOut.clean.has(pairKey)) continue;
+      if (fanOut.clean.has(pairKey)) continue;
       this.#markActionInvalid(writer, undefined, { fanOutInstances: "keep" });
       this.#pending.add(writer);
       rearmed += 1;
@@ -2081,27 +2102,188 @@ export class Scheduler {
   }
 
   /**
-   * Whether an action registered here other than `except` declares a write to
-   * some instance of `address`'s document, at any scope.
+   * Whether an action registered here, other than the one `tx` runs, declares
+   * a write to some instance of `address`'s document and has not yet produced
+   * the instance `tx` reads (`#owingWriters()`). A writer whose run finished
+   * and left the instance absent has produced it, and its value is
+   * `undefined`; one whose run was withdrawn has not.
+   */
+  owesScopedInstance(
+    address: Pick<IMemorySpaceAddress, "space" | "id" | "scope">,
+    tx: IExtendedStorageTransaction,
+  ): boolean {
+    return this.#owingWriters(address, tx).owing.length > 0;
+  }
+
+  /**
+   * Calls `wake`, once, when a writer of `address`'s document finishes a run
+   * that was not withdrawn, or stops writing the document; returns a cancel.
+   * A writer's run that leaves its instance absent commits no write to it, so
+   * one waiting on the instance learns of that run here rather than from a
+   * commit. A served event whose handler did not run waits this way
+   * (events.md §5).
+   */
+  watchProducedDocument(
+    address: { space: string; id: string },
+    wake: () => void,
+  ): () => void {
+    this.#installDemandedWriterHook();
+    const key = producedWatchKey(address.space, address.id);
+    let watchers = this.#producedWatchers.get(key);
+    if (watchers === undefined) {
+      watchers = new Set();
+      this.#producedWatchers.set(key, watchers);
+    }
+    watchers.add(wake);
+    return () => {
+      const current = this.#producedWatchers.get(key);
+      current?.delete(wake);
+      if (current?.size === 0) this.#producedWatchers.delete(key);
+    };
+  }
+
+  /** Wakes, once, the watchers of every document among `entities`
+   * (`watchProducedDocument()`). */
+  #wakeProducedWatchers(entities: Iterable<SpaceScopeAndURI>): void {
+    if (this.#producedWatchers.size === 0) return;
+    for (const entity of entities) {
+      // An entity key is `<space>/<scope>/<id>` (`entityNameKey()`).
+      const [space, , ...id] = entity.split("/");
+      const key = producedWatchKey(space, id.join("/"));
+      const watchers = this.#producedWatchers.get(key);
+      if (watchers === undefined) continue;
+      this.#producedWatchers.delete(key);
+      for (const wake of watchers) wake();
+    }
+  }
+
+  /** Notes that `action` finished a run that was not withdrawn, waking the
+   * watchers of the documents it writes. */
+  #noteProduced(action: Action): void {
+    const entities = this.#writeIndex.actionWriteEntities.get(action);
+    if (entities !== undefined) this.#wakeProducedWatchers(entities);
+  }
+
+  /**
+   * The key of `address`'s instance, as the run `tx` carries reads it, when
+   * some writer that owes it (`owesScopedInstance()`) will run for it
+   * (`#willRunForInstance()`); undefined when none will. A writer nothing
+   * demands stays dormant, and one that has run stays clean until an input
+   * changes, so neither is coming to produce the instance, and a served event
+   * waiting on it would wait for nothing.
+   */
+  comingOwedScopedInstance(
+    address: Pick<IMemorySpaceAddress, "space" | "id" | "scope">,
+    tx: IExtendedStorageTransaction,
+  ): ScopeKey | undefined {
+    const { owing, instance } = this.#owingWriters(address, tx);
+    return instance !== undefined &&
+        owing.some((writer) => this.#willRunForInstance(writer, instance))
+      ? instance
+      : undefined;
+  }
+
+  /**
+   * The writers registered here, other than the one `tx` runs, that declare a
+   * write to some instance of `address`'s document, at any scope, and have not
+   * produced the instance `tx` reads (`#hasProducedInstance()`), with that
+   * instance's key: `address`'s scope resolved against the run identity of
+   * `tx`.
    *
    * The lookup spans every scope because the write index keys a derivation by
    * its declared scope, while a JavaScript derivation writes its output at the
    * scope its reads narrowed to: a user instance of an output declared at
    * space scope has a writer indexed only at space scope.
    */
-  hasOtherWriterOf(
-    address: Pick<IMemorySpaceAddress, "space" | "id">,
-    except: object,
-  ): boolean {
+  #owingWriters(
+    address: Pick<IMemorySpaceAddress, "space" | "id" | "scope">,
+    tx: IExtendedStorageTransaction,
+  ): { owing: Action[]; instance: ScopeKey | undefined } {
+    const reader = tx.tx.sourceAction;
+    const identity = waveRunContextOf(tx)?.scopeKeyIdentity ??
+      this.runtime.scopeKeyIdentity;
+    let instance: ScopeKey | undefined;
+    try {
+      instance = resolveScopeKey(address.scope, identity);
+    } catch {
+      // An identity that cannot name the instance (a sessionless one read
+      // at session scope) names none any writer has produced.
+    }
+    const owing: Action[] = [];
     for (const scope of ["space", "user", "session"] as const) {
       const writers = this.#writeIndex.writersByEntity.get(
         entityNameKey({ ...address, scope }),
       );
       for (const writer of writers ?? []) {
-        if (writer !== except) return true;
+        if (
+          writer !== reader && !owing.includes(writer) &&
+          !this.#hasProducedInstance(writer, instance)
+        ) {
+          owing.push(writer);
+        }
       }
     }
-    return false;
+    return { owing, instance };
+  }
+
+  /**
+   * Whether `action` will run for the instance keyed `instance`. It must be
+   * live, a materializer, or pending, which is what has the scheduler queue
+   * it. On a node that is not fanned out it must also be invalid or never
+   * have run. On a fanned-out node, whose dirtiness is per instance, the
+   * instance must instead not be current (`fanOut.clean`), and be one its
+   * current demanders produce (`fanOutInstances()`, as `runSchedulerAction()`
+   * asks): the run supply runs no other, so a principal nothing demands this
+   * node for gets no run of it.
+   */
+  #willRunForInstance(action: Action, instance: ScopeKey): boolean {
+    const node = this.#nodes.get(action);
+    if (node === undefined) return false;
+    const queued = this.#isLiveAction(action) ||
+      this.#materializers.isMaterializer(action) ||
+      this.#pending.has(action);
+    if (!queued) return false;
+    if (node.fanOut === undefined) return this.#isInvalidAction(action);
+    if (node.fanOut.clean.has(instance)) return false;
+    const observation = (action as Partial<TelemetryAnnotations>)
+      .schedulerObservationIdentity;
+    const roots = observation?.demandRootIds ??
+      (observation?.pieceRootId !== undefined
+        ? [observation.pieceRootId]
+        : undefined);
+    if (roots === undefined) return false;
+    const demanders = this.runtime.serverRunDemandersFor(roots) ?? [];
+    return fanOutInstances(node.fanOut, demanders).some((candidate) =>
+      candidate.key === instance
+    );
+  }
+
+  /**
+   * Whether `action` has produced the instance keyed `instance`: it is a
+   * JavaScript derivation, and a run of it finished without being withdrawn,
+   * for that instance on a fanned-out node and at all on any other. A
+   * JavaScript derivation writes its whole result in its run, so a run that
+   * left the instance absent produced that absence. A builtin can write its
+   * output after its run returns, as a list coordinator does once its element
+   * setups complete, so a finished run of one shows nothing about whether it
+   * has produced the instance. And a fanned-out node's run for another
+   * instance, such as its space-keyed probe before it learned to narrow,
+   * produced that instance and not this one.
+   */
+  #hasProducedInstance(
+    action: Action,
+    instance: ScopeKey | undefined,
+  ): boolean {
+    if (
+      (action as Partial<TelemetryAnnotations>).module?.type !== "javascript"
+    ) {
+      return false;
+    }
+    const node = this.#nodes.get(action);
+    if (node === undefined) return false;
+    if (node.fanOut === undefined) return node.produced === true;
+    return instance !== undefined &&
+      node.fanOut.instances.get(instance)?.produced === true;
   }
 
   /**
@@ -2916,9 +3098,6 @@ export class Scheduler {
         this.#eventQueue[0] === head
       ) break;
       if (--remaining <= 0 || this.#eventQueue.length === 0) break;
-      // The handler's run has to have landed before the next preflight
-      // reads what it wrote.
-      if (this.runningPromise) await this.runningPromise;
     }
     return {
       eventBlockingDeps,
@@ -3625,9 +3804,7 @@ export class Scheduler {
       ],
       writes: previous?.writes ?? [],
     };
-    this.resubscribe(action, log);
-    const record = this.#nodes.get(action);
-    if (record === undefined) return;
+    const record = this.#resubscribe(action, log);
     const cancels: (() => void)[] = [];
     for (const space of new Set(log.reads.map((read) => read.space))) {
       const replica = this.runtime.storageManager.open(space).replica;
@@ -3684,6 +3861,7 @@ export class Scheduler {
       maybeAutoDebounce: (target) => this.#maybeAutoDebounce(target),
       markActionHasRun: (target) => this.#gates.markActionHasRun(target),
       markNodeHasRun: (target) => this.#markNodeHasRun(target),
+      noteProduced: (target) => this.#noteProduced(target),
       handleError: (error, target) => this.#handleError(error, target),
       resubscribe: (target, log) => this.resubscribe(target, log),
       markInvalid: (target, options) =>
@@ -3967,14 +4145,18 @@ export class Scheduler {
     const history = this.#headEventLoadParkHistory;
     if (!history || history.eventId !== event.id) return [...keys];
     return keys.filter((key) => {
-      const currentGeneration =
-        this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0;
+      const currentGeneration = this.#pendingLoadGeneration(key);
       const settledGeneration = history.generations.get(key);
       if (settledGeneration === undefined) return true;
       if (settledGeneration === currentGeneration) return false;
       return this.#preflightPendingLoadGenerations.get(key) ===
         currentGeneration;
     });
+  }
+
+  /** The generation of `key`'s pending load, or 0 when none is pending. */
+  #pendingLoadGeneration(key: string): number {
+    return this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0;
   }
 
   #capturePendingLoadGenerations(): void {
@@ -3986,22 +4168,23 @@ export class Scheduler {
       const key = entityKey(address, this.runtime.scopeKeyIdentity);
       this.#preflightPendingLoadGenerations.set(
         key,
-        this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0,
+        this.#pendingLoadGeneration(key),
       );
     }
   }
 
+  /**
+   * Parks `event`, the head, on the loads of `keys`. The event is not parked
+   * already: a parked event neither passes its preflight nor runs, and those
+   * are the only places that park one.
+   */
   #parkHeadEventForLoads(
     event: QueuedEvent,
     keys: readonly string[],
     withdrawal?: LoadingReadWithdrawal,
   ): void {
-    if (this.#headEventLoadPark?.eventId === event.id) return;
     const generations = new Map(
-      keys.map((key) => [
-        key,
-        this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0,
-      ]),
+      keys.map((key) => [key, this.#pendingLoadGeneration(key)]),
     );
     logger.debug("event-load-park", () => [
       `event ${event.id} parks on ${keys.length} loading document(s)`,
@@ -4361,10 +4544,6 @@ export class Scheduler {
   #markNodeHasRun(action: Action): void {
     const record = this.#nodes.get(action);
     if (!record) return;
-
-    if (record.status === "never-ran") {
-      this.#nodes.setStatus(action, "clean");
-    }
 
     if (
       record.provisionalDemand &&

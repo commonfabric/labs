@@ -1482,7 +1482,8 @@ function buildHunk(hunk: DiffHunk, ctx: HunkCtx): StructureNode {
       continue;
     }
     const n = entry.newLine!;
-    if (verified && ctx.fileDoc) {
+    const fileDoc = verified ? ctx.fileDoc : null;
+    if (fileDoc) {
       newToDiff.set(n, i);
       const sourceLine = ctx.newSourceLines?.[n];
       if (sourceLine) sourceFallbacks.set(i, sourceLine);
@@ -1492,32 +1493,22 @@ function buildHunk(hunk: DiffHunk, ctx: HunkCtx): StructureNode {
       if (ctx.mapping && !ctx.mapping.newToDiff.has(n)) {
         ctx.mapping.newToDiff.set(n, i);
       }
-      const shifted = shiftCompleteLineSpans(
-        ctx.viewMode === "rendered" && canRenderDiffLines(ctx.newLanguage) &&
-          ctx.newFileLines?.[n]
-          ? `${t.slice(0, 1)}${ctx.newFileLines[n].text}`
-          : t,
-        ctx.newFileLines?.[n]?.spans ?? ctx.fileDoc.lines[n].spans,
-      );
-      if (shifted) {
-        if (
-          ctx.viewMode === "rendered" &&
-          canRenderDiffLines(ctx.newLanguage) &&
-          ctx.newFileLines?.[n]
-        ) {
-          lines[i].text = `${t.slice(0, 1)}${ctx.newFileLines[n].text}`;
-          if (ctx.newFileLines[n].renderedSourceHidden) {
-            lines[i].renderedSourceHidden = true;
-          }
-        }
-        lines[i].spans = shifted;
-      } else {
-        newFragment.push({
-          diffLine: i,
-          code: newCode,
-          omitsUtf8Bom: newCode !== body,
-        });
-      }
+    }
+    const rendered = ctx.viewMode === "rendered" &&
+        canRenderDiffLines(ctx.newLanguage)
+      ? ctx.newFileLines?.[n]
+      : undefined;
+    const lineText = rendered ? `${t.slice(0, 1)}${rendered.text}` : t;
+    const shifted = fileDoc
+      ? shiftCompleteLineSpans(
+        lineText,
+        ctx.newFileLines?.[n]?.spans ?? fileDoc.lines[n].spans,
+      )
+      : null;
+    if (shifted) {
+      lines[i].text = lineText;
+      if (rendered?.renderedSourceHidden) lines[i].renderedSourceHidden = true;
+      lines[i].spans = shifted;
     } else {
       newFragment.push({
         diffLine: i,

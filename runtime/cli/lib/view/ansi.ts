@@ -65,8 +65,10 @@ const ESCAPE_SOURCE = String.raw`\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*\x07`;
 
 const ANSI_PATTERN = new RegExp(ESCAPE_SOURCE, "g");
 
-/** An escape sequence at the start of a string. */
-export const LEADING_ESCAPE = new RegExp(`^(?:${ESCAPE_SOURCE})`);
+/** An escape sequence, captured, so that splitting a string on it gives the
+ * text between escape sequences at even indices and the sequences at odd
+ * ones. */
+export const ESCAPE_SPLIT = new RegExp(`(${ESCAPE_SOURCE})`);
 
 /** Strip every ANSI escape from `text`. Used for width maths and tests. */
 export function stripAnsi(text: string): string {
@@ -91,11 +93,6 @@ export function isSurrogatePairEnd(s: string, i: number): boolean {
   const previous = s.charCodeAt(i - 1);
   return unit >= 0xdc00 && unit <= 0xdfff &&
     previous >= 0xd800 && previous <= 0xdbff;
-}
-
-/** Visible width of `text` (code points) once ANSI escapes are removed. */
-export function visibleWidth(text: string): number {
-  return cpLen(stripAnsi(text));
 }
 
 //
@@ -136,6 +133,12 @@ export const term = {
    * ASCII is percent-encoded as its UTF-8 bytes, so that a link taken
    * from content cannot end the sequence or start another. */
   hyperlink(url: string, text: string): string {
+    return `${term.linkStart(url)}${text}${term.linkEnd}`;
+  },
+
+  /** Starts a link to `url` (OSC 8), percent-encoded as
+   * {@link term.hyperlink} encodes it, which {@link term.linkEnd} ends. */
+  linkStart(url: string): string {
     const safe = url.replace(
       /[^!-~]/gu,
       (char) =>
@@ -144,6 +147,9 @@ export const term = {
           (byte) => `%${byte.toString(16).toUpperCase().padStart(2, "0")}`,
         ).join(""),
     );
-    return `${OSC}8;;${safe}${BEL}${text}${OSC}8;;${BEL}`;
+    return `${OSC}8;;${safe}${BEL}`;
   },
+
+  /** Ends the link {@link term.linkStart} started. */
+  linkEnd: `${OSC}8;;${BEL}`,
 };

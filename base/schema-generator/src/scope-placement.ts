@@ -64,8 +64,7 @@ const SAME_SLOT_COMPOUND_KEYWORDS = ["anyOf", "oneOf", "allOf"] as const;
  * that reader also follows a `$ref` to its definition, which this one does not,
  * since the walk visits each definition in `$defs` itself.
  */
-const topLevelScope = (schema: MutableJSONSchema): string | undefined => {
-  if (!isObjectOrArray(schema)) return undefined;
+const topLevelScope = (schema: MutableJSONSchemaObj): string | undefined => {
   const entry = Array.isArray(schema.asCell) ? schema.asCell[0] : undefined;
   // A string entry (`asCell: ["cell"]`) carries no scope of its own and does
   // not stand in for one: `Cell<PerSession<T>>` puts the scope on the sibling
@@ -134,7 +133,7 @@ const walkSlot = (schema: MutableJSONSchema): void => {
   for (const keyword of SAME_SLOT_COMPOUND_KEYWORDS) {
     const branches = schema[keyword];
     if (!Array.isArray(branches)) continue;
-    for (const branch of branches) checkBranch(branch as MutableJSONSchema);
+    for (const branch of branches) checkBranch(branch);
   }
 
   descendIntoChildSlots(schema);
@@ -154,15 +153,13 @@ const checkBranch = (schema: MutableJSONSchema): void => {
   for (const keyword of SAME_SLOT_COMPOUND_KEYWORDS) {
     const branches = schema[keyword];
     if (!Array.isArray(branches)) continue;
-    for (const branch of branches) checkBranch(branch as MutableJSONSchema);
+    for (const branch of branches) checkBranch(branch);
   }
 
   descendIntoChildSlots(schema);
 };
 
-const descendIntoChildSlots = (schema: MutableJSONSchema): void => {
-  if (!isObjectOrArray(schema)) return;
-
+const descendIntoChildSlots = (schema: MutableJSONSchemaObj): void => {
   for (const keyword of CHILD_SLOT_KEYWORDS) {
     const group = schema[keyword];
     if (!isObjectOrArray(group) || Array.isArray(group)) continue;
@@ -175,17 +172,12 @@ const descendIntoChildSlots = (schema: MutableJSONSchema): void => {
 
   for (const keyword of CHILD_SLOT_SINGLE_KEYWORDS) {
     const child = schema[keyword];
-    if (child === undefined) continue;
-    if (Array.isArray(child)) {
-      for (const entry of child) walkSlot(entry as MutableJSONSchema);
-    } else {
-      walkSlot(child as MutableJSONSchema);
-    }
+    if (child !== undefined) walkSlot(child);
   }
 
   const prefixItems = schema.prefixItems;
   if (Array.isArray(prefixItems)) {
-    for (const entry of prefixItems) walkSlot(entry as MutableJSONSchema);
+    for (const entry of prefixItems) walkSlot(entry);
   }
 };
 

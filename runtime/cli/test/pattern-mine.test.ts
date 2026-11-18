@@ -61,7 +61,7 @@ describe("pattern-mine", () => {
 
       expect(held.findings).toHaveLength(1);
       expect(held.next).toBe(
-        "held: fix the findings, then run cf pattern publish ./bins.tsx",
+        "held: fix the findings, then run cf pattern share ./bins.tsx",
       );
       expect(mineLines([held]).join("\n")).toContain(
         "personal_name in /main.tsx:3",
@@ -75,7 +75,7 @@ describe("pattern-mine", () => {
       );
 
       expect(held.next).toBe(
-        "held: fix the findings, then run cf pattern publish '/work/my patterns/main.tsx'",
+        "held: fix the findings, then run cf pattern share '/work/my patterns/main.tsx'",
       );
     });
 
@@ -126,6 +126,61 @@ describe("pattern-mine", () => {
           noEntry,
         ),
       ).toEqual([]);
+    });
+
+    it("says what moves an unlisted, a listed-off, a Main, a featured and a plainly listed pattern on", async () => {
+      const rows = await mineRows([
+        row({ patternId: "n", listing: "not_requested" }),
+        row({ patternId: "off", listing: "passed", listed: false }),
+        row({ patternId: "m", listing: "passed", bucket: "main" }),
+        row({ patternId: "f", listing: "passed", bucket: "featured" }),
+        row({ patternId: "l", listing: "passed" }),
+      ], noEntry);
+
+      expect(Object.fromEntries(rows.map((r) => [r.patternId, r.next])))
+        .toEqual({
+          n: "unlisted: run cf pattern share <entry file> to request a listing",
+          off: "unlisted",
+          m: "in Main: other people's use ranks it",
+          f: "featured",
+          l: "listed",
+        });
+    });
+  });
+
+  describe("mineLines()", () => {
+    it("returns where to start for no patterns", () => {
+      expect(mineLines([])).toEqual([
+        "You have shared no patterns. Start with: cf pattern share <entry file>",
+      ]);
+    });
+
+    it("returns a row's name, versions, next step and use counts, and no counts line for none", () => {
+      expect(mineLines([
+        {
+          patternId: "p2",
+          lineageId: "p1",
+          versions: 2,
+          name: "Bin day",
+          description: "about bins",
+          counts: { deployed: 3, opened: 5 },
+          next: "listed",
+        },
+        {
+          patternId: "q",
+          lineageId: "q",
+          versions: 1,
+          description: "about q",
+          counts: {},
+          next: "featured",
+        },
+      ])).toEqual([
+        "Bin day  p2 (2 versions)",
+        "  listed",
+        "  deployed: 3, opened: 5",
+        "about q  q",
+        "  featured",
+      ]);
     });
   });
 });

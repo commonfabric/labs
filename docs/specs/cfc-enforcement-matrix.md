@@ -480,6 +480,15 @@ The strict-only delta is:
   the transaction object, which host code holds and pattern code does not
   reach.
 
+  A cache record that holds a flow stamp keeps it until the load ahead of a
+  setup repairs it: the
+  repair erases a stamped compiled record and rewrites a stamped source record
+  to the value the compile-cache writer stores for its identity, under an
+  identity reserved for it, in a transaction it refuses to commit if that
+  transaction is CFC-relevant or its commit would prepare it
+  (`module-loading.md`, "Repairing a stamped record"; pending
+  [specs#103](https://github.com/commonfabric/specs/pull/103)).
+
   One thing this class does NOT take from §18.6.2 is its write-side mirror.
   That section states its read exclusion as mirroring "the write-side rule
   that the same addresses are not value-write targets", which would leave the

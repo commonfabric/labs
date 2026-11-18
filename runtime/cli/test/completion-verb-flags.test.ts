@@ -215,4 +215,19 @@ describe("shapeVerbFlagCandidates()", () => {
     expect(values).toContain("--title");
     expect(values).toContain("--body");
   });
+
+  it("offers a flag that two field names spell once, with the first field's annotation", () => {
+    const candidates = shapeVerbFlagCandidates({
+      inputSchema: {
+        type: "object",
+        properties: {
+          sortKey: { type: "string", description: "The camelCase field." },
+          "sort-key": { type: "string", description: "The kebab-case field." },
+        },
+      },
+    }).filter((candidate) => candidate.value === "--sort-key");
+    expect(candidates).toEqual([
+      { value: "--sort-key", description: "The camelCase field." },
+    ]);
+  });
 });

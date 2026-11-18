@@ -18,7 +18,6 @@ import {
   unmarkUiInputBlindWriteTx,
 } from "../src/storage/reactivity-log.ts";
 import {
-  getDirectTransactionReactivityLog,
   getDirectTransactionReadActivities,
 } from "../src/storage/transaction-inspection.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
@@ -143,7 +142,7 @@ describe("pending write elision provenance", () => {
       expect(isReadIgnoredForScheduling(reads[0].meta)).toBe(true);
       expect(isInternalVerifierRead(reads[0].meta)).toBe(true);
       expect(isReadMarkedAsAttemptedWrite(reads[0].meta)).toBe(false);
-      expect(getDirectTransactionReactivityLog(consumer)!.reads).toEqual([]);
+      expect(consumer.getReactivityLog().reads).toEqual([]);
       const second = await seal(consumer);
       expect(second.commit.reads.pending).toHaveLength(1);
       expect(second.commit.reads.pending).toEqual([
@@ -284,7 +283,7 @@ describe("pending write elision provenance", () => {
     expect(tx.write(input, "pending").error).toBeUndefined();
     expect(tx.write({ ...output, space: otherSpace }, "home").error)
       .toBeUndefined();
-    expect(getDirectTransactionReactivityLog(tx)!.reads).toEqual([]);
+    expect(tx.getReactivityLog().reads).toEqual([]);
     await seal(tx);
     expect(readOnly).toHaveLength(1);
     expect(readOnly).toEqual([{

@@ -89,6 +89,7 @@ import type {
   CfcGrantWriteInput,
   CfcLabelMetadataObservation,
   CfcLabelMetadataProtectionMode,
+  CfcMetadata,
   CfcPolicyEvaluationMode,
   CfcPreparationWork,
   CfcRefusalDetail,
@@ -1863,10 +1864,11 @@ export interface IStorageTransaction {
   /**
    * The first user- or session-scoped instance, as `<space>/<scope>/<id>`,
    * that this transaction read through a link while the instance was missing
-   * and another derivation registered in the same runtime writes the
-   * document. Set by link resolution on a serving runtime only, where such an
-   * instance is one the serving loop has not produced yet, and read by the
-   * reactive action's commit, which a run that read one does not make.
+   * and another derivation registered in the same runtime writes the document
+   * and has not yet run for that instance. Set by link resolution on a serving
+   * runtime only, where such an instance is one the serving loop has not
+   * produced yet, and read by the reactive action's commit, which a run that
+   * read one does not make.
    */
   unproducedScopedInstance?: string;
 
@@ -1938,12 +1940,9 @@ export interface IStorageTransaction {
   readonly journal: ITransactionJournal;
 
   /**
-   * Optional lightweight dependency summary.
-   *
-   * V2 transactions can provide this directly instead of requiring callers to
-   * reconstruct it from journal activity.
+   * The transaction's dependency summary: the addresses it read and wrote.
    */
-  getReactivityLog?(): TransactionReactivityLog;
+  getReactivityLog(): TransactionReactivityLog;
 
   /**
    * Optional scheduler observation payload to persist alongside the native
@@ -2515,6 +2514,12 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   stageSchemaDocClosure(space: MemorySpace, rootHash: string): void;
 
   /**
+   * Record a folded SQLite write onto this transaction. See
+   * {@link IStorageTransaction.recordSqliteWrite}.
+   */
+  recordSqliteWrite(space: MemorySpace, op: SqliteOperation): void;
+
+  /**
    * Stages the content-addressed document holding `value` into this
    * transaction and returns its id: `cid:` plus the general content hash
    * of the value. The document is the value and nothing else, so no
@@ -2529,12 +2534,11 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   /**
    * Mints the runtime secret called `name` in `space` when no trusted value
    * is stored: a random value, written under the secret's label and writer
-   * claim (`runtime-secret.ts`), replacing any untrusted value. Returns
-   * nothing; the runtime reads a secret back with `readRuntimeSecret()`. The
-   * one writer of the reserved namespace, which refuses every unprivileged
-   * write, and callable only with the runtime's authorization, since code
-   * that minted a secret in its own transaction could read it back there
-   * before its label is stored.
+   * claim (`runtime-secret.ts`), replacing any untrusted value. Returns the
+   * secret, the trusted stored value or the one minted. The one writer of the
+   * reserved namespace, which refuses every unprivileged write, and callable
+   * only with the runtime's authorization, since code that minted a secret in
+   * its own transaction could read it back there before its label is stored.
    *
    * @throws Error without the runtime's authorization, or when the stored
    * value's schema cannot be resolved.
@@ -2543,7 +2547,7 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
     space: MemorySpace,
     name: string,
     authorization: RuntimeWritePolicyAuthorization,
-  ): void;
+  ): string;
 
   tx: IStorageTransaction;
 
@@ -2646,7 +2650,7 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * underlying transaction after resolving the link to a memory address. See
    * {@link IStorageTransaction.recordTextChanges}.
    */
-  recordTextChanges?(
+  recordTextChanges(
     link: NormalizedFullLink,
     changes: readonly TextChange[],
   ): string;
@@ -3174,6 +3178,23 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * fails closed at prepare (S18 class).
    */
   writeCfcGrant(input: CfcGrantWriteInput): { space: MemorySpace; id: string };
+
+  /**
+   * The repair of a compile-cache record a flow stamp labeled: writes
+   * `replacement`'s value and label envelope over the document a compile-cache
+   * record's key `target.key` names, or deletes the document when
+   * `replacement` is absent, inside the privileged system-write scope.
+   * Requires the transaction's current implementation identity to be the
+   * `compile-cache-repair` builtin, and the key to be a compile-cache record's.
+   * The caller, `repairCompileCacheStamps()`, computes the replacement from
+   * the verified closure; this method trusts it.
+   *
+   * @throws When the identity is not the repair's, or the key not a record's.
+   */
+  writeRepairedCompileCacheRecord(
+    target: { space: MemorySpace; key: string },
+    replacement: { value: FabricValue; cfc: CfcMetadata } | undefined,
+  ): void;
 
   /**
    * The trusted writer path for an owner's release of the confidentiality

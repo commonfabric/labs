@@ -429,6 +429,51 @@ describe("touchgate", () => {
       expect(error).toContain("closed the connection");
     });
 
+    it("rejects with the abort when its signal aborts while it waits to learn whether the server numbers the pull request", async () => {
+      const request = encodeRequest(1, "laptop", [
+        "work",
+        "octo/repo",
+        "fork:feature",
+        "main",
+        "Fix the frobnicator",
+        "It was broken.\nNow it is not.",
+      ]);
+      const controller = new AbortController();
+      let after: Uint8Array | undefined;
+      const server = fakeServer(async (conn) => {
+        await readExact(conn, SECRET.length + request.length);
+        await conn.write(concat(u32(0), CHALLENGE));
+        await readExact(conn, ASSERTION.length);
+        await conn.write(reply(0, "created"));
+        after = await readExact(conn, 1);
+      });
+      const directory = configDirectory(server.port);
+      const service = touchGate("work", {
+        directory,
+        tool: fakeTools().tool,
+        connect: async (...args) => {
+          const connection = await connectPinned(...args);
+          return {
+            ...connection,
+            ended: () => {
+              controller.abort();
+              return connection.ended();
+            },
+          };
+        },
+      });
+
+      try {
+        await expect(service.create(CREATE, () => {}, controller.signal))
+          .rejects.toThrow("the request was aborted");
+      } finally {
+        Deno.removeSync(directory, { recursive: true });
+      }
+      await server.done;
+
+      expect(after).toEqual(new Uint8Array(0));
+    });
+
     it("merges a pull request, asking for the touch by the key's name", async () => {
       const request = encodeRequest(2, "laptop", [
         "work",

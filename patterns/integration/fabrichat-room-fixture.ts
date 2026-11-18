@@ -444,7 +444,7 @@ async function profileSpaceOf(member: MemberSession): Promise<DID> {
  * Has the starter create the room from their manager, naming every other
  * member by address, and returns the room as the starter's runtime holds it.
  */
-async function createRoom(
+export async function createRoom(
   starter: MemberSession,
   others: readonly Identity[],
 ): Promise<Cell<unknown>> {
@@ -479,7 +479,7 @@ async function createRoom(
 }
 
 /** Starts the room in `member`'s runtime, beside their Home. */
-async function enterRoom(
+export async function enterRoom(
   member: MemberSession,
   room: Cell<unknown>,
 ): Promise<Cell<unknown>> {
@@ -499,7 +499,7 @@ function countOf(member: MemberSession): Cell<number | undefined> {
  * copy of the room counts `total` entries, which it does once the room has
  * recorded it.
  */
-async function writeAs(
+export async function writeAs(
   member: MemberSession,
   what: string,
   event: Record<string, unknown>,

@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { gitUncommitted } from "../commands/pattern.ts";
+import { Identity } from "@commonfabric/identity";
+import { PatternIndexClient } from "@commonfabric/pattern-index/client";
+import { PatternIndexStore } from "@commonfabric/pattern-index/store";
+import { gitUncommitted, mine } from "../commands/pattern.ts";
+import type { IndexDeps } from "../commands/pattern-index.ts";
+import { FakePatternIndex } from "../../pattern-index/test/fake-pattern-index.ts";
 
 const git = async (cwd: string, ...args: string[]) => {
   const { code } = await new Deno.Command("git", {
@@ -82,6 +87,101 @@ describe("pattern", () => {
       await Deno.writeTextFile(join(dir, "a.tsx"), "export {};\n");
 
       expect(await gitUncommitted([join(dir, "a.tsx")])).toBeUndefined();
+    });
+  });
+
+  describe("mine()", () => {
+    const BASE = "https://index.test";
+    let dir: string;
+    let keyPath: string;
+    let signer: Identity;
+    let index: FakePatternIndex;
+    let store: PatternIndexStore;
+    let rendered: { value: unknown; json?: boolean }[];
+    let deps: IndexDeps;
+
+    beforeEach(async () => {
+      dir = await Deno.makeTempDir();
+      keyPath = join(dir, "me.key");
+      const pkcs8 = await Identity.generatePkcs8();
+      await Deno.writeFile(keyPath, pkcs8);
+      signer = await Identity.fromPkcs8(pkcs8);
+      index = new FakePatternIndex();
+      store = new PatternIndexStore(join(dir, "store"));
+      rendered = [];
+      deps = {
+        fetchFn: index.fetchFn,
+        store,
+        render: (value, options) => {
+          rendered.push({ value, json: options?.json });
+        },
+      };
+    });
+
+    afterEach(async () => {
+      await Deno.remove(dir, { recursive: true });
+    });
+
+    /** Publishes `patternId` as `as`, a member under `handle`. */
+    const publishAs = async (
+      as: Identity,
+      handle: string,
+      patternId: string,
+    ) => {
+      index.admit(as.did(), handle);
+      await new PatternIndexClient({
+        baseUrl: BASE,
+        signer: as,
+        fetchFn: index.fetchFn,
+      }).publishPattern({
+        patternId,
+        description: `about ${patternId}`,
+        hashtags: [],
+        program: { main: "/main.tsx", files: [] },
+      });
+    };
+
+    it("prints the identity's own patterns, with the entry file each was published from", async () => {
+      await publishAs(signer, "p-me", "id-mine");
+      await publishAs(await Identity.generate(), "p-other", "id-theirs");
+      await store.recordPublished(join(dir, "bins.tsx"), "id-mine");
+
+      await mine({ identity: keyPath, patternIndexUrl: BASE }, deps);
+
+      expect(rendered).toEqual([{
+        value: [
+          "about id-mine  id-mine",
+          `  unlisted: run cf pattern share ${
+            join(dir, "bins.tsx")
+          } to request a listing`,
+        ].join("\n"),
+        json: undefined,
+      }]);
+    });
+
+    it("prints the rows as JSON with --json", async () => {
+      await publishAs(signer, "p-me", "id-mine");
+
+      await mine(
+        { identity: keyPath, patternIndexUrl: BASE, json: true },
+        deps,
+      );
+
+      expect(rendered[0].json).toBe(true);
+      expect(rendered[0].value).toEqual([
+        expect.objectContaining({
+          patternId: "id-mine",
+          versions: 1,
+          listing: "not_requested",
+        }),
+      ]);
+    });
+
+    it("throws what to do for an identity the index does not know, printing nothing", async () => {
+      await expect(
+        mine({ identity: keyPath, patternIndexUrl: BASE }, deps),
+      ).rejects.toThrow("join with your invite link");
+      expect(rendered).toEqual([]);
     });
   });
 });

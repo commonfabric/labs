@@ -1922,20 +1922,20 @@ loaded every file and run every test.
 ## What the dashboard shows
 
 Two tiles read the newest manifest. The flake tile reports how many tests
-are too noisy to judge a change by. The selection tile reports what share
-of the corpus a change touching nothing would run and how close the fullest
-lane is to
-its budget; it goes amber when the manifest has gone stale and red when a
-lane's projected work is past its bound, or when the publisher found the
-cost model broken. Both tiles link to the full manifest detail page, and a
-broken model links the selection tile straight to that page's cost model
-section, which shows what broke, how the lanes came out, and each suite's
-charges against the manifest before and against what its batches spent.
+are too noisy to judge a change by. The selection tile reports two shares
+of the corpus that a change touching nothing would run: the share of its
+tests, by count, and the share of its test time. It goes amber when the
+manifest has gone stale and red when a lane's projected work is past its
+bound, or when the publisher found the cost model broken. Both tiles link
+to the full manifest detail page, and a broken model links the selection
+tile straight to that page's cost model section, which shows what broke,
+how the lanes came out, and each suite's charges against the manifest
+before and against what its batches spent.
 
 Each tile charts its measurement from every available manifest, positioned
-by generation time. The selected percentage uses each manifest's own corpus
-size. Empty corpora and unreadable manifests leave gaps; measured zeros
-remain visible. The chart's span follows the available objects. The dashboard
+by generation time. The selection tile charts the share of tests, using
+each manifest's own corpus size. Empty corpora and unreadable manifests
+leave gaps; measured zeros remain visible. The chart's span follows the available objects. The dashboard
 caches compact counts across restarts and removes them when their source
 objects leave the listing. A latest manifest with no tests makes both
 headlines unknown.

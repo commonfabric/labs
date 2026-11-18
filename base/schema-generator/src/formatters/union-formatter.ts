@@ -16,15 +16,12 @@ import type { SchemaGenerator } from "../schema-generator.ts";
 import { unionFoldedFrom } from "../schema-origins.ts";
 import { readBoundTypeNode } from "../type-parameter-bindings.ts";
 import {
-  cloneSchemaDefinition,
-  detectWrapperViaNode,
   extractDefaultValueFromBrandedMembers,
-  getNativeTypeSchema,
+  extractValueFromLiteralType,
   getPropertyNameText,
-  isEmptyObjectDefaultType,
+  primitiveLiteralValue,
   resolveWrapperNode,
   soleNonNullishMember,
-  TypeWithInternals,
 } from "../type-utils.ts";
 import { hasDefaultMarker } from "../typescript/default-brand.ts";
 import { extractLiteralValueOfSymbol } from "../typescript/literal-value.ts";
@@ -36,6 +33,9 @@ import {
   unwrapTypeParentheses,
 } from "../typescript/type-node.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
+
+/** The prefix of a reference to a schema in the root's `$defs`. */
+const DEFS_PREFIX = "#/$defs/";
 
 // Simple primitive schemas only have these keys (possibly just one)
 const PRIMITIVE_SCHEMA_KEY_SET = new Set(["type", "enum"]);
@@ -70,17 +70,6 @@ interface DefaultUnionEntry {
   readonly defaultValue: unknown;
 }
 
-function getTypeNodeMemberType(
-  node: ts.TypeNode,
-  checker: ts.TypeChecker,
-): ts.Type | undefined {
-  try {
-    return checker.getTypeFromTypeNode(node);
-  } catch {
-    return undefined;
-  }
-}
-
 function unionMemberTypesMatch(
   left: ts.Type,
   right: ts.Type,
@@ -100,12 +89,12 @@ function orderMemberNodesBySemanticType(
 ): Array<ts.TypeNode | undefined> {
   const remaining = memberNodes.map((node) => ({
     node,
-    type: getTypeNodeMemberType(node, checker),
+    type: checker.getTypeFromTypeNode(node),
   }));
 
   return members.map((member) => {
     const matchIndex = remaining.findIndex(({ type }) =>
-      type !== undefined && unionMemberTypesMatch(type, member, checker)
+      unionMemberTypesMatch(type, member, checker)
     );
     if (matchIndex === -1) {
       return undefined;
@@ -253,8 +242,8 @@ function pairWrittenMemberNodes(
   const ordered = orderMemberNodesBySemanticType(members, memberNodes, checker);
   const wholeNodes = new Map<ts.Type, WholeMemberNode[]>();
   for (const node of memberNodes) {
-    const type = getTypeNodeMemberType(node, checker);
-    if (!type || !readsWhole(type, node)) continue;
+    const type = checker.getTypeFromTypeNode(node);
+    if (!readsWhole(type, node)) continue;
     for (const member of type.isUnion() ? type.types : [type]) {
       wholeNodes.set(member, [...wholeNodes.get(member) ?? [], { node, type }]);
     }
@@ -533,10 +522,6 @@ export class UnionFormatter implements TypeFormatter {
     const orderedMemberNodes = paired &&
       order.map((index) => paired.ordered[index]);
 
-    if (members.length === 0) {
-      throw new Error("UnionFormatter received empty union type");
-    }
-
     const defaultUnionSchema = memberNodes
       ? this.#tryFormatDefaultUnion(
         memberNodes,
@@ -586,21 +571,10 @@ export class UnionFormatter implements TypeFormatter {
       memberIndex: number,
       typeNode?: ts.TypeNode,
     ): MutableJSONSchema => {
-      const memberNode = typeNode ?? orderedMemberNodes?.[memberIndex];
-      const wrapperKind = detectWrapperViaNode(
-        memberNode,
-        context.typeChecker,
-      );
-      const native = wrapperKind === undefined
-        ? getNativeTypeSchema(t, context.typeChecker)
-        : undefined;
-      if (native !== undefined) {
-        return cloneSchemaDefinition(native);
-      }
       return this.#schemaGenerator.formatChildType(
         t,
         context,
-        memberNode,
+        typeNode ?? orderedMemberNodes?.[memberIndex],
         t === valued[0] ? soleInstantiated : undefined,
       );
     };
@@ -624,28 +598,14 @@ export class UnionFormatter implements TypeFormatter {
     // intentionally falling through to the anyOf path which emits { type: "undefined" }.
     // Include null in the enum if present (null is a runtime value; undefined is
     // represented as a separate { type: "undefined" } schema member instead).
-    const allLiteral = nonNull.length > 0 &&
-      nonNull.every((m) =>
-        (m.flags & ts.TypeFlags.StringLiteral) !== 0 ||
-        (m.flags & ts.TypeFlags.NumberLiteral) !== 0 ||
-        (m.flags & ts.TypeFlags.BooleanLiteral) !== 0
-      );
-
-    if (allLiteral) {
-      const values: Array<string | number | boolean | null> = nonNull.map(
-        (m) => {
-          if (m.flags & ts.TypeFlags.StringLiteral) {
-            return (m as ts.StringLiteralType).value;
-          }
-          if (m.flags & ts.TypeFlags.NumberLiteral) {
-            return (m as ts.NumberLiteralType).value;
-          }
-          if (m.flags & ts.TypeFlags.BooleanLiteral) {
-            return (m as TypeWithInternals).intrinsicName === "true";
-          }
-          return undefined;
-        },
-      ).filter((v) => v !== undefined) as Array<string | number | boolean>;
+    const literalValues = nonNull.map((m) =>
+      primitiveLiteralValue(m, context.typeChecker)
+    );
+    if (
+      literalValues.length > 0 &&
+      literalValues.every((value) => value !== undefined)
+    ) {
+      const values: Array<string | number | boolean | null> = literalValues;
 
       // Special case: union of both boolean literals {true, false} becomes type: "boolean"
       const boolValues = values.filter((v) => typeof v === "boolean");
@@ -775,17 +735,13 @@ export class UnionFormatter implements TypeFormatter {
       rest = rest.filter((m) => !this.#isEmptyArrayType(m, checker));
     }
     if (rest.length === 0) return undefined;
-    const schemas = rest.map((m) => {
-      const memberNode = orderedMemberNodes?.[members.indexOf(m)];
-      const native = detectWrapperViaNode(memberNode, context.typeChecker) ===
-          undefined
-        ? getNativeTypeSchema(m, context.typeChecker)
-        : undefined;
-      if (native !== undefined) {
-        return cloneSchemaDefinition(native) as MutableJSONSchema;
-      }
-      return this.#schemaGenerator.formatChildType(m, context, memberNode);
-    });
+    const schemas = rest.map((m) =>
+      this.#schemaGenerator.formatChildType(
+        m,
+        context,
+        orderedMemberNodes?.[members.indexOf(m)],
+      )
+    );
     return this.#applySchemaDefault(
       this.#combineUnionSchemas(schemas, context),
       extracted.value,
@@ -910,10 +866,10 @@ export class UnionFormatter implements TypeFormatter {
     const directName = this.#getTypeReferenceName(memberNode);
     if (directName === "DeepDefault") {
       const typeArgs = memberNode.typeArguments;
-      if (!typeArgs || typeArgs.length !== 1 || !typeArgs[0]) {
+      if (typeArgs?.length !== 1) {
         throw new Error("DeepDefault<V> requires exactly 1 type argument");
       }
-      const valueTypeNode = typeArgs[0];
+      const valueTypeNode = typeArgs[0]!;
       return {
         kind: "DeepDefault",
         valueTypeNode,
@@ -932,15 +888,12 @@ export class UnionFormatter implements TypeFormatter {
       return undefined;
     }
     const typeArgs = resolved.node.typeArguments;
-    if (!typeArgs || typeArgs.length < 1 || typeArgs.length > 2) {
+    if (!typeArgs?.length || typeArgs.length > 2) {
       throw new Error("Default<T,V> requires 1 or 2 type arguments");
     }
 
-    const valueTypeNode = typeArgs[0];
+    const valueTypeNode = typeArgs[0]!;
     const defaultTypeNode = typeArgs[1] ?? valueTypeNode;
-    if (!valueTypeNode || !defaultTypeNode) {
-      throw new Error("Default<T,V> type arguments cannot be undefined");
-    }
     const valueType = readBoundTypeNode(valueTypeNode, context);
     const defaultType = readBoundTypeNode(defaultTypeNode, context);
     if (typeArgs.length === 1 && this.#isUndefinedType(valueType)) {
@@ -1003,8 +956,12 @@ export class UnionFormatter implements TypeFormatter {
     nonDefaultTypes: readonly ts.Type[],
     checker: ts.TypeChecker,
   ): void {
+    // A member written as an alias of a union, as `type U = Obj | null` is,
+    // offers each of its members as a target.
     const hasObjectTarget = nonDefaultTypes.some((memberType) =>
-      this.#isPlainObjectType(memberType, checker)
+      (memberType.isUnion() ? memberType.types : [memberType]).some((type) =>
+        this.#isPlainObjectType(type, checker)
+      )
     );
     if (
       hasObjectTarget &&
@@ -1037,16 +994,8 @@ export class UnionFormatter implements TypeFormatter {
     context: GenerationContext,
     instantiatedAs?: ts.Type,
   ): MutableJSONSchema {
-    const type = context.typeChecker.getTypeFromTypeNode(typeNode);
-    const native = detectWrapperViaNode(typeNode, context.typeChecker) ===
-        undefined
-      ? getNativeTypeSchema(type, context.typeChecker)
-      : undefined;
-    if (native !== undefined) {
-      return cloneSchemaDefinition(native);
-    }
     return this.#schemaGenerator.formatChildType(
-      type,
+      context.typeChecker.getTypeFromTypeNode(typeNode),
       context,
       typeNode,
       instantiatedAs,
@@ -1057,9 +1006,6 @@ export class UnionFormatter implements TypeFormatter {
     schemas: MutableJSONSchema[],
     context: GenerationContext,
   ): MutableJSONSchema {
-    if (schemas.length === 0) {
-      return true;
-    }
     if (schemas.length === 1) {
       return schemas[0]!;
     }
@@ -1128,7 +1074,7 @@ export class UnionFormatter implements TypeFormatter {
       withDefault,
       defaultValue,
       [],
-      this.#getSchemaDefs(withDefault) ?? rootDefs,
+      rootDefs,
     );
   }
 
@@ -1142,20 +1088,22 @@ export class UnionFormatter implements TypeFormatter {
     const properties = isObjectOrArray(schema.properties)
       ? { ...schema.properties }
       : {};
-    const targetProperties = this.#getObjectTargetProperties(
+    const target = this.#getObjectTargetProperties(
       isObjectOrArray(targetSchema) ? targetSchema : schema,
       rootDefs,
     );
 
     for (const [name, value] of Object.entries(defaults)) {
       const fullPath = [...path, name];
-      const targetExisting = (properties[name] ??
-        targetProperties?.[name]) as MutableJSONSchema | undefined;
+      const targetExisting = properties[name] ??
+        (typeof target === "string" ? undefined : target[name]);
       if (targetExisting === undefined) {
         throw new Error(
-          `DeepDefault key "${
-            fullPath.join(".")
-          }" does not exist on the target object type.`,
+          `DeepDefault key "${fullPath.join(".")}" ${
+            typeof target === "string"
+              ? target
+              : "does not exist on the target object type"
+          }.`,
         );
       }
       properties[name] = this.#applyDeepDefaultToProperty(
@@ -1194,13 +1142,21 @@ export class UnionFormatter implements TypeFormatter {
     );
   }
 
+  /**
+   * The properties of the one object `schema` describes, through local
+   * references and the alternatives of an `anyOf`, or, where it describes no
+   * one object, why not, as the end of the message a DeepDefault key it
+   * cannot default reports.
+   */
   #getObjectTargetProperties(
     schema: MutableJSONSchemaObj,
     rootDefs?: Record<string, unknown>,
     seen = new Set<MutableJSONSchemaObj>(),
-  ): Record<string, unknown> | undefined {
+  ): NonNullable<MutableJSONSchemaObj["properties"]> | string {
+    const noProperties =
+      "does not exist on the target object type, which declares no properties";
     if (seen.has(schema)) {
-      return undefined;
+      return noProperties;
     }
     seen.add(schema);
 
@@ -1208,60 +1164,38 @@ export class UnionFormatter implements TypeFormatter {
       return schema.properties;
     }
 
-    const refSchema = this.#resolveLocalRefSchema(schema, rootDefs);
-    if (refSchema) {
-      return this.#getObjectTargetProperties(refSchema, rootDefs, seen);
-    }
-
-    if (Array.isArray(schema.anyOf)) {
-      const candidates = schema.anyOf
-        .map((option) =>
-          isObjectOrArray(option)
-            ? this.#getObjectTargetProperties(
-              option as MutableJSONSchemaObj,
-              rootDefs,
-              new Set(seen),
-            )
-            : undefined
-        )
-        .filter((properties): properties is Record<string, unknown> =>
-          properties !== undefined
-        );
-
-      if (candidates.length === 1) {
-        return candidates[0];
+    if (typeof schema.$ref === "string") {
+      if (!schema.$ref.startsWith(DEFS_PREFIX)) {
+        return `cannot be found on the target object type, ` +
+          `\`${schema.$ref}\`, which is a schema outside \`$defs\``;
+      }
+      const resolved = rootDefs?.[schema.$ref.slice(DEFS_PREFIX.length)];
+      if (isObjectOrArray(resolved)) {
+        return this.#getObjectTargetProperties(resolved, rootDefs, seen);
       }
     }
 
-    return undefined;
-  }
-
-  #resolveLocalRefSchema(
-    schema: MutableJSONSchemaObj,
-    rootDefs?: Record<string, unknown>,
-  ): MutableJSONSchemaObj | undefined {
-    if (typeof schema.$ref !== "string") {
-      return undefined;
+    if (Array.isArray(schema.anyOf)) {
+      // Alternatives that declare equal properties, as `Obj` and an alias of
+      // `Obj | null` do, are one candidate.
+      const candidates = dedupeByValueEqual(
+        schema.anyOf.flatMap((option) => {
+          const properties = isObjectOrArray(option)
+            ? this.#getObjectTargetProperties(option, rootDefs, new Set(seen))
+            : "";
+          return typeof properties === "string" ? [] : [properties];
+        }),
+      );
+      if (candidates.length === 1) {
+        return candidates[0]!;
+      }
+      if (candidates.length > 1) {
+        return "has no one target object type, as the union's members " +
+          "describe objects that declare different properties";
+      }
     }
-    const prefix = "#/$defs/";
-    if (!schema.$ref.startsWith(prefix)) {
-      return undefined;
-    }
 
-    const defs = this.#getSchemaDefs(schema) ?? rootDefs;
-    const resolved = defs?.[schema.$ref.slice(prefix.length)];
-    return isObjectOrArray(resolved)
-      ? resolved as MutableJSONSchemaObj
-      : undefined;
-  }
-
-  #getSchemaDefs(
-    schema: MutableJSONSchemaObj,
-  ): Record<string, unknown> | undefined {
-    if (isObjectOrArray(schema.$defs)) {
-      return schema.$defs;
-    }
-    return isObjectOrArray(schema.definitions) ? schema.definitions : undefined;
+    return noProperties;
   }
 
   #isDefaultObject(value: unknown): value is Record<string, unknown> {
@@ -1282,7 +1216,10 @@ export class UnionFormatter implements TypeFormatter {
         : outer;
       return argument.node
         ? this.#extractDefaultValueFromNode(argument.node, argumentContext)
-        : this.#extractDefaultValue(argument.type, argumentContext);
+        : extractValueFromLiteralType(
+          argument.type,
+          argumentContext.typeChecker,
+        )?.value;
     }
     if (ts.isTypeQueryNode(typeNode)) {
       return this.#extractValueFromTypeQuery(typeNode, context);
@@ -1313,9 +1250,8 @@ export class UnionFormatter implements TypeFormatter {
         if (!ts.isPropertySignature(member) || !member.name || !member.type) {
           const type = context.typeRegistry?.get(typeNode) ??
             context.typeChecker.getTypeFromTypeNode(typeNode);
-          return isEmptyObjectDefaultType(type, context.typeChecker)
-            ? {}
-            : undefined;
+          return extractValueFromLiteralType(type, context.typeChecker)
+            ?.value;
         }
         const propName = getPropertyNameText(member.name, context.typeChecker);
         if (propName === undefined) return undefined;
@@ -1331,45 +1267,10 @@ export class UnionFormatter implements TypeFormatter {
       return obj;
     }
 
-    if (typeNode.kind === ts.SyntaxKind.NullKeyword) return null;
-    if (typeNode.kind === ts.SyntaxKind.UndefinedKeyword) return undefined;
-
-    return this.#extractDefaultValue(
+    return extractValueFromLiteralType(
       context.typeChecker.getTypeFromTypeNode(typeNode),
-      context,
-    );
-  }
-
-  #extractDefaultValue(
-    type: ts.Type,
-    context: GenerationContext,
-  ): unknown {
-    if (type.flags & ts.TypeFlags.StringLiteral) {
-      return (type as ts.StringLiteralType).value;
-    }
-    if (type.flags & ts.TypeFlags.NumberLiteral) {
-      return (type as ts.NumberLiteralType).value;
-    }
-    if (type.flags & ts.TypeFlags.BooleanLiteral) {
-      return (type as TypeWithInternals).intrinsicName === "true";
-    }
-    if (type.flags & ts.TypeFlags.Null) {
-      return null;
-    }
-    if (type.flags & ts.TypeFlags.Undefined) {
-      return undefined;
-    }
-
-    if (isEmptyObjectDefaultType(type, context.typeChecker)) {
-      return {};
-    }
-
-    const symbol = type.getSymbol();
-    if (symbol?.valueDeclaration) {
-      return this.#extractValueFromSymbol(symbol, context);
-    }
-
-    return undefined;
+      context.typeChecker,
+    )?.value;
   }
 
   #extractValueFromTypeQuery(
@@ -1379,14 +1280,8 @@ export class UnionFormatter implements TypeFormatter {
     const symbol = context.typeChecker.getSymbolAtLocation(
       typeQueryNode.exprName,
     );
-    return symbol ? this.#extractValueFromSymbol(symbol, context) : undefined;
-  }
-
-  #extractValueFromSymbol(
-    symbol: ts.Symbol,
-    context: GenerationContext,
-  ): unknown {
-    return extractLiteralValueOfSymbol(symbol, context.typeChecker)?.value;
+    return symbol &&
+      extractLiteralValueOfSymbol(symbol, context.typeChecker)?.value;
   }
 
   #isUndefinedType(type: ts.Type): boolean {
@@ -1403,8 +1298,6 @@ export class UnionFormatter implements TypeFormatter {
   #mergeIdenticalSchemas(
     schemas: MutableJSONSchema[],
   ): MutableJSONSchema[] {
-    if (schemas.length <= 1) return schemas;
-
     // Group schemas by their structure (ignoring enum values)
     const groups = new Map<string, MutableJSONSchema[]>();
 
@@ -1549,15 +1442,13 @@ export class UnionFormatter implements TypeFormatter {
       delete result.const;
       result.type = widened;
     }
-    if (isObjectNotArray(properties)) {
+    if (properties !== undefined) {
       result.properties = Object.fromEntries(
         Object.entries(properties).map(([key, value]) => [
           key,
           this.#normalizeSchemaForComparison(value as MutableJSONSchema),
         ]),
       );
-    } else if (properties !== undefined) {
-      result.properties = properties;
     }
     if (items !== undefined) {
       result.items = this.#normalizeSchemaForComparison(
@@ -1576,10 +1467,6 @@ export class UnionFormatter implements TypeFormatter {
   #mergeSchemaGroup(
     schemas: MutableJSONSchema[],
   ): MutableJSONSchema {
-    if (schemas.length === 0) {
-      throw new Error("Cannot merge empty schema group");
-    }
-
     const first = schemas[0]!;
     if (typeof first === "boolean") return first;
 

@@ -1644,3 +1644,181 @@ describe("openai-codex", () => {
     });
   });
 });
+
+const unexpiredCodexCredential = (
+  accessToken: string,
+): OpenAICodexOAuthCredential => ({
+  type: "oauth",
+  providerId: "openai-codex",
+  accessToken,
+  refreshToken: "refresh-old",
+  // far from expiry by the stored estimate
+  expiresAt: 10_000 + 24 * 60 * 60 * 1000,
+  accountId: "acct-1",
+});
+
+const rejectionResolver = (
+  store: InMemoryHarnessCredentialStore,
+  reply: () => Response,
+) => {
+  const seen = { refreshes: 0 };
+  const resolver = new OpenAICodexCredentialResolver({
+    store,
+    ownerKey: "local",
+    now: () => 10_000,
+    fetchFn: () => {
+      seen.refreshes += 1;
+      return Promise.resolve(reply());
+    },
+  });
+  return { resolver, seen };
+};
+
+const refreshedTokenReply = (): Response =>
+  new Response(
+    JSON.stringify({
+      access_token: jwt({
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+        refreshed: true,
+      }),
+      refresh_token: "refresh-new",
+      expires_in: 3600,
+    }),
+    { status: 200 },
+  );
+
+Deno.test("a Codex token the provider refused is refreshed though its expiry is ahead", async () => {
+  const store = new InMemoryHarnessCredentialStore();
+  const refused = unexpiredCodexCredential("access-refused");
+  await store.set("local", "openai-codex", refused);
+  const { resolver, seen } = rejectionResolver(store, refreshedTokenReply);
+
+  // the stored expiry alone asks for no refresh
+  assertEquals((await resolver.resolve()).accessToken, "access-refused");
+  assertEquals(seen.refreshes, 0);
+
+  const next = await resolver.refreshRejected(refused);
+
+  assertEquals(seen.refreshes, 1);
+  assertEquals(next?.fresh, true);
+  assertEquals(next?.credential.refreshToken, "refresh-new");
+  assertEquals(
+    (await store.get("local", "openai-codex"))?.accessToken,
+    next?.credential.accessToken,
+  );
+  assertEquals(
+    (await new OpenAICodexAuthService(store, "local").status()).status,
+    "connected",
+  );
+});
+
+Deno.test("a refused Codex token already replaced is not refreshed again", async () => {
+  const store = new InMemoryHarnessCredentialStore();
+  await store.set(
+    "local",
+    "openai-codex",
+    unexpiredCodexCredential("access-newer"),
+  );
+  const { resolver, seen } = rejectionResolver(store, refreshedTokenReply);
+
+  const next = await resolver.refreshRejected(
+    unexpiredCodexCredential("access-refused"),
+  );
+
+  assertEquals(seen.refreshes, 0);
+  assertEquals(next?.fresh, false);
+  assertEquals(next?.credential.accessToken, "access-newer");
+});
+
+Deno.test("a refused Codex token whose refresh is refused for good needs reconnection", async () => {
+  const store = new InMemoryHarnessCredentialStore();
+  const refused = unexpiredCodexCredential("access-refused");
+  await store.set("local", "openai-codex", refused);
+  const { resolver } = rejectionResolver(
+    store,
+    () =>
+      new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 }),
+  );
+
+  assertEquals(await resolver.refreshRejected(refused), undefined);
+  assertEquals(
+    await new OpenAICodexAuthService(store, "local").status(),
+    {
+      providerId: "openai-codex",
+      status: "reconnect-required",
+      refreshHealth: "reconnect-required",
+      reason: "invalid-grant",
+    },
+  );
+});
+
+Deno.test("a refused Codex token whose refresh cannot be completed stays connected", async () => {
+  const store = new InMemoryHarnessCredentialStore();
+  const refused = unexpiredCodexCredential("access-refused");
+  await store.set("local", "openai-codex", refused);
+  const { resolver } = rejectionResolver(
+    store,
+    () => new Response("unavailable", { status: 503 }),
+  );
+
+  const error = await assertRejects(() => resolver.refreshRejected(refused));
+  assertEquals(error instanceof HarnessControlError, true);
+  assertEquals((error as HarnessControlError).code, "provider-unavailable");
+  assertEquals(
+    (await new OpenAICodexAuthService(store, "local").status()).status,
+    "connected",
+  );
+  assertEquals(
+    (await store.get("local", "openai-codex"))?.accessToken,
+    "access-refused",
+  );
+});
+
+Deno.test("a refresh that returns a token with no account id is reported as the refresh's failure", async () => {
+  const store = new InMemoryHarnessCredentialStore();
+  const refused = unexpiredCodexCredential("access-refused");
+  await store.set("local", "openai-codex", refused);
+  const { resolver } = rejectionResolver(
+    store,
+    () =>
+      new Response(
+        JSON.stringify({
+          access_token: jwt({ refreshed: true }),
+          refresh_token: "refresh-new",
+          expires_in: 3600,
+        }),
+        { status: 200 },
+      ),
+  );
+
+  const error = await assertRejects(() => resolver.refreshRejected(refused));
+  assertEquals((error as HarnessControlError).code, "provider-unavailable");
+  assertEquals(
+    (error as HarnessControlError).message,
+    "OpenAI Codex token did not include a ChatGPT account id",
+  );
+  assertEquals(
+    (await store.get("local", "openai-codex"))?.accessToken,
+    "access-refused",
+  );
+});
+
+Deno.test("marking a refused Codex token needs reconnection only while it is the stored one", async () => {
+  const store = new InMemoryHarnessCredentialStore();
+  const stored = unexpiredCodexCredential("access-stored");
+  await store.set("local", "openai-codex", stored);
+  const { resolver, seen } = rejectionResolver(store, refreshedTokenReply);
+  const status = () => new OpenAICodexAuthService(store, "local").status();
+
+  await resolver.markRejected(unexpiredCodexCredential("access-other"));
+  assertEquals((await status()).status, "connected");
+
+  await resolver.markRejected(stored);
+  assertEquals(await status(), {
+    providerId: "openai-codex",
+    status: "reconnect-required",
+    refreshHealth: "reconnect-required",
+    reason: "revoked",
+  });
+  assertEquals(seen.refreshes, 0);
+});

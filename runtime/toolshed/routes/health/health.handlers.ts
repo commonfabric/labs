@@ -1,4 +1,5 @@
 import { z } from "zod";
+import env from "@/env.ts";
 import { resolveGitSha } from "@/lib/build-info.ts";
 import type { AppRouteHandler } from "@/lib/types.ts";
 import type {
@@ -22,7 +23,6 @@ import { getServingLoopStats } from "@commonfabric/runner/executor/stats";
 import type { CollectedWorkerMemory } from "@commonfabric/runner/executor/serving-worker-host";
 import {
   collectedMemory as collectThisThread,
-  garbageCollectorExposed,
 } from "@commonfabric/runner/collected-memory";
 import { serverExecutionHost } from "@/lib/server-execution.ts";
 import {
@@ -154,7 +154,7 @@ export const collectedMemory: AppRouteHandler<CollectedMemoryRoute> = async (
   c,
 ) => {
   c.header("Cache-Control", "no-store");
-  if (!garbageCollectorExposed()) {
+  if (!env.EXPOSE_GC) {
     return c.json(
       { error: "This server was started without EXPOSE_GC=true" },
       HttpStatusCodes.NOT_FOUND,

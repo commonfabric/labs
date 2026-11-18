@@ -17,6 +17,6 @@
   "tasks": {
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
     // --no-check: workspace types are checked by `deno task check`.
-    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-read --allow-write --allow-env --allow-ffi --allow-net --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" test"
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-read --allow-write --allow-env --allow-ffi --allow-net --allow-run=git,\"$(deno eval \"console.log(Deno.execPath())\")\" test"
   }
 }

@@ -36,6 +36,22 @@ a composition past the cap, name none. A compile diagnostic, or an index
 response body, can quote that source, so it is kept apart as `rawCauseMessage`
 for an artifact or an operator log.
 
+## Syncing a repository
+
+A GitHub repository's pattern entries are published to the index, one lineage
+per entry file, in two steps that run in two jobs. `sync-plan.ts` compiles every
+entry and writes a plan, holding no credential. `sync-publish.ts` reads the
+plan, compares each entry's source hash and pattern id with the ones
+`listRepoHeads` returns for its path, publishes what changed, and withdraws the
+lineages of paths that are gone (`withdrawRepoPaths`). Its only credential is a
+GitHub OIDC token bound to a key made for the run (`src/github-oidc.ts`).
+`src/repo-sync.ts` says why the two steps are kept apart, and `src/repo-plan.ts`
+decides which files are entries. Other repositories adopt it through the
+composite action in `.github/actions/pattern-index-sync`, whose README covers
+adoption and the run step by step. This repository's own patterns sync through
+`.github/workflows/pattern-index-sync.yml`, which runs only while the repository
+variable `PATTERN_INDEX_SYNC` is `on`.
+
 ## Loom helper contract
 
 Loom's CFS commands spawn `runtime/pattern-index/cli.ts` once per request:
@@ -54,7 +70,7 @@ or the checkout's `deno.jsonc` through its vendor-config helper.
 
 The identity file contains PKCS#8 bytes. The helper reads one JSON value until
 stdin closes, writes one JSON answer followed by a newline on stdout, and exits.
-Its only operations are:
+Its operations are:
 
 - Search: `{"op":"search","text":"calendar","limit":10,"tags":["time"]}`. Search
   fields are optional and use the read frontend's shaping: string text, numeric
@@ -66,6 +82,25 @@ Its only operations are:
   "eventType":"thumbs_up","recordedBy":"did:key:..."}}`.
   The author comes from the signer. Extra input fields, including `did` and
   `note`, are omitted.
+- View: `{"op":"view","piece":"piece:<sha256 hex>"}` or
+  `{"op":"view","patternId":"..."}`, exactly one. It records the signer's
+  `viewed_in_loom`: a piece key (`deployedPieceRef`) settles the version of
+  theirs deployed to that piece, which shares it under their sharing setting,
+  and ranks nothing. A pattern id ranks a pattern the person placed from the
+  index. The result is the index's answer,
+  `{"ok":true,"value":{"ok":true,
+  "recorded":false,"settled":{...}}}`; an
+  index answer of `ok:false` returns status 502.
+- Sharing settings: `{"op":"getSharing"}` reads the signer's member's
+  give-to-get settings, and `{"op":"setSharing","enabled":false}` changes them,
+  sending only the switches given (`enabled`, `selfBuilt`, each a boolean; at
+  least one). Both answer
+  `{"ok":true,"value":{"enabled":true,"selfBuilt":true,
+  "receivesAnonymous":true,"updatedAt":null}}`,
+  as the index answered it.
+
+Membership operations (`whoami`, `admit`, `join`) are described with the
+membership store below.
 
 A refused request returns `{"ok":false,"status":400,"error":"..."}`. Index 4xx
 statuses pass through, including distinct 401 signature failures and 403

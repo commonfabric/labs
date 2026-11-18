@@ -304,7 +304,18 @@ export interface GitRunner {
   ): { status: string; head: string };
 }
 
-export function realGit(cwd: string): GitRunner {
+/** The filesystem operations {@link realGit} uses to release locks and remove
+ * temporary files. Injected so tests can make them fail; `Deno` is the
+ * production one. */
+export interface GitFileSystem {
+  removeSync(path: string, options?: Deno.RemoveOptions): void;
+  renameSync(oldPath: string, newPath: string): void;
+}
+
+export function realGit(
+  cwd: string,
+  fileSystem: GitFileSystem = Deno,
+): GitRunner {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const runBytes = (
@@ -643,11 +654,6 @@ export function realGit(cwd: string): GitRunner {
                 ? oldEnd
                 : change.oldStart;
             }
-            if (position < newEnd) {
-              throw new Error(
-                `Pager edits overlap workspace changes in ${path}; no commit was amended.`,
-              );
-            }
             if (position === newEnd) return oldEnd;
             delta += change.newCount - change.oldCount;
           }
@@ -732,7 +738,7 @@ export function realGit(cwd: string): GitRunner {
       return decoder.decode(result.stdout);
     } finally {
       try {
-        Deno.removeSync(tempDir, { recursive: true });
+        fileSystem.removeSync(tempDir, { recursive: true });
       } catch {
         // Temporary merge files are removed when possible.
       }
@@ -1051,7 +1057,7 @@ exit "$status"
         hookProxy = installHookProxy();
       } catch (error) {
         try {
-          Deno.removeSync(tempDir, { recursive: true });
+          fileSystem.removeSync(tempDir, { recursive: true });
         } catch {
           // Temporary content cleanup is best effort.
         }
@@ -1134,7 +1140,7 @@ exit "$status"
         const errors: string[] = [];
         for (let index = referenceLocks.length - 1; index >= 0; index--) {
           try {
-            Deno.removeSync(referenceLocks[index]);
+            fileSystem.removeSync(referenceLocks[index]);
             referenceLocks.splice(index, 1);
           } catch (error) {
             const lock = referenceLocks[index];
@@ -1143,7 +1149,7 @@ exit "$status"
               `.cf-view-lock-${crypto.randomUUID()}`,
             );
             try {
-              Deno.renameSync(lock, quarantine);
+              fileSystem.renameSync(lock, quarantine);
               referenceLocks.splice(index, 1);
               errors.push(`${error}; moved the lock to ${quarantine}`);
             } catch (renameError) {
@@ -1352,17 +1358,16 @@ exit "$status"
             ).trim();
             return Deno.readTextFileSync(logPath).split("\n").flatMap(
               (line, sequence): ReflogTransition[] => {
-                const tab = line.indexOf("\t");
-                if (tab < 0) return [];
-                const [old, object] = line.slice(0, tab).split(" ");
-                if (!old || !object) return [];
-                return [{
-                  ref,
-                  old,
-                  object,
-                  marked: line.slice(tab + 1).startsWith(`${reflogAction}:`),
-                  sequence,
-                }];
+                const entry = /^(\S+) (\S+)[^\t]*\t(.*)$/s.exec(line);
+                return entry
+                  ? [{
+                    ref,
+                    old: entry[1],
+                    object: entry[2],
+                    marked: entry[3].startsWith(`${reflogAction}:`),
+                    sequence,
+                  }]
+                  : [];
               },
             );
           } catch {
@@ -1520,22 +1525,14 @@ exit "$status"
             rollbackHead = targetHead;
           }
         }
-        refUpdated = publishedRef !== null && committedHead !== null;
-        if (!refUpdated) {
+        if (committedHead === null || publishedRef === null) {
           throw new Error(
             uniqueCandidates.length > 1
               ? "Git published more than one possible amended commit."
               : "Git did not publish the amended commit.",
           );
         }
-        if (committedHead === null || publishedRef === null) {
-          throw new Error("Git did not publish the amended commit.");
-        }
-        if (!hasOriginalLineage(committedHead)) {
-          throw new Error(
-            "HEAD changed before Git created the amended commit; no commit was amended.",
-          );
-        }
+        refUpdated = true;
         const referenceLockPaths = fileBackedRefs
           ? [
             `${
@@ -1705,7 +1702,7 @@ exit "$status"
             setIndexEntry(file.path, file.after, realIndexEnv);
           }
           Deno.copyFileSync(preparedIndex, indexLock);
-          Deno.renameSync(indexLock, realIndex);
+          fileSystem.renameSync(indexLock, realIndex);
           ownsIndexLock = false;
         }
         const releaseErrors = releaseReferenceLocks();
@@ -1742,7 +1739,7 @@ exit "$status"
         }
         if (ownsIndexLock && indexLock !== null) {
           try {
-            Deno.removeSync(indexLock);
+            fileSystem.removeSync(indexLock);
             ownsIndexLock = false;
           } catch (rollbackError) {
             rollbackErrors.push(String(rollbackError));
@@ -1756,13 +1753,13 @@ exit "$status"
       } finally {
         if (preparedIndex !== null) {
           try {
-            Deno.removeSync(preparedIndex);
+            fileSystem.removeSync(preparedIndex);
           } catch {
             // Temporary index cleanup is best effort.
           }
         }
         try {
-          Deno.removeSync(tempDir, { recursive: true });
+          fileSystem.removeSync(tempDir, { recursive: true });
         } catch {
           // Temporary content cleanup is best effort.
         }

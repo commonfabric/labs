@@ -10,6 +10,7 @@ import {
   isDeepFrozen,
   isKeyableObjectOrArray,
   taggedHashStringOf,
+  valueEqualByWalk,
 } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
@@ -161,7 +162,6 @@ import { isCellScope, normalizeCellScope } from "../scope.ts";
 import {
   normalizeSpaceHost,
   type SpaceHostRegistration,
-  SpaceHostValidationError,
 } from "../space-host.ts";
 import type { RuntimeTelemetryMarker } from "../telemetry.ts";
 import { combineOptionalSchema, isUnknownCellSchema } from "../traverse.ts";
@@ -1173,6 +1173,12 @@ const materializedVersionThroughPending = (
   return cache.prefixes[pendingCount - 1]!;
 };
 
+/**
+ * Drops the cached materializations of `record`'s pending layers from
+ * `pendingIndex` on, and releases the whole cache, values included, when it
+ * was built over another confirmed version than the record's or holds no
+ * layer once the drop is done.
+ */
 const dropMaterializedSuffix = (
   record: DocumentRecord,
   pendingIndex: number,
@@ -1194,6 +1200,52 @@ const dropMaterializedSuffix = (
   cache.prefixes.length = Math.min(cache.prefixes.length, pendingIndex);
   if (cache.prefixes.length === 0) {
     record.materialized = undefined;
+  }
+};
+
+/**
+ * Keeps what still holds of `record`'s materialization cache now that the
+ * layers at `from` through `through` may replay differently, and drops the
+ * rest.
+ * A cached prefix holds when replaying its layer over the prefix before it
+ * gives an equal document, and the prefix keeps the document it holds, so a
+ * reader sees no new identity for an unchanged value. Each prefix is a
+ * function of the one before it and of its own layer, so once every changed
+ * layer holds, every prefix after them holds too, and the cost of the check
+ * is those layers' replays rather than the whole stack's.
+ *
+ * Under an interleaved wave promotion the cache is not what materialization
+ * reads, so it is dropped from `from` without being checked.
+ */
+const revalidateMaterializedPrefixes = (
+  record: DocumentRecord,
+  logContext: PendingPatchLogContext,
+  from: number,
+  through: number,
+): void => {
+  const cache = record.materialized;
+  if (
+    cache === undefined || cache.confirmed !== record.confirmed ||
+    record.confirmed.localWavePromotion?.entries.length
+  ) {
+    dropMaterializedSuffix(record, from);
+    return;
+  }
+  const last = Math.min(through, cache.prefixes.length - 1);
+  for (let index = from; index <= last; index++) {
+    const base = index === 0 ? record.confirmed : cache.prefixes[index - 1]!;
+    const pending = record.pending[index]!;
+    const replayed = isCoveredPendingVersion(record.confirmed, pending)
+      ? base.value
+      : applyPendingVersion(base.value, pending, logContext);
+    const cached = cache.prefixes[index]!.value;
+    const holds = replayed === undefined || cached === undefined
+      ? replayed === cached
+      : valueEqualByWalk(replayed, cached);
+    if (!holds) {
+      dropMaterializedSuffix(record, index);
+      return;
+    }
   }
 };
 
@@ -1591,6 +1643,12 @@ const coarsenCommitForWire = (commit: ClientCommit): ClientCommit => {
   return reads === commit.reads ? commit : { ...commit, reads };
 };
 
+/**
+ * Returns a commit's reads compacted without loss, each dependency group
+ * against the document `observedDocument` says its reads observed
+ * (`compactDependencyGroup()`), in order of scope, document, shallow before
+ * recursive, and path.
+ */
 const compactCommitReads = <
   Read extends ConfirmedCommitRead | PendingCommitRead,
 >(
@@ -1599,16 +1657,6 @@ const compactCommitReads = <
   observedDocument: (read: Read) => EntityDocument | undefined = () =>
     undefined,
 ): Read[] => {
-  const dependencyKeys = new Map<number | number[], string>();
-  const dependencyKeyFor = (localSeq: number | number[]): string => {
-    let key = dependencyKeys.get(localSeq);
-    if (key === undefined) {
-      key = localSeqKey(localSeq);
-      dependencyKeys.set(localSeq, key);
-    }
-    return key;
-  };
-
   const grouped = new Map<string, Read[]>();
   for (const candidate of reads) {
     // The dependency key carries every admission-relevant field — seq for
@@ -1616,13 +1664,7 @@ const compactCommitReads = <
     // reads with divergent bases never merge: ancestor-path compaction
     // within a group may drop a descendant read, and a surviving ancestor
     // must not claim a higher basis than the dropped read declared.
-    const dependencyKey = "seq" in candidate
-      ? `confirmed:${
-        normalizeCellScope(candidate.scope)
-      }:${candidate.id}:${candidate.seq}`
-      : `pending:${normalizeCellScope(candidate.scope)}:${candidate.id}:${
-        dependencyKeyFor(candidate.localSeq)
-      }:${candidate.basisSeq}`;
+    const dependencyKey = commitReadDependencyKey(candidate);
     const group = grouped.get(dependencyKey);
     if (group === undefined) {
       grouped.set(dependencyKey, [candidate]);
@@ -1645,18 +1687,6 @@ const compactCommitReads = <
 
     if (left.id !== right.id) {
       return left.id < right.id ? -1 : 1;
-    }
-
-    if ("seq" in left && "seq" in right && left.seq !== right.seq) {
-      return left.seq - right.seq;
-    }
-
-    if ("localSeq" in left && "localSeq" in right) {
-      const leftKey = dependencyKeyFor(left.localSeq);
-      const rightKey = dependencyKeyFor(right.localSeq);
-      if (leftKey !== rightKey) {
-        return leftKey < rightKey ? -1 : 1;
-      }
     }
 
     if (left.nonRecursive !== right.nonRecursive) {
@@ -2191,10 +2221,11 @@ export class StorageManager implements IStorageManager {
   /**
    * The CFC schema document syncer a test may supply, the pending-load
    * registration step, and the linked-cell sync collector, which a test
-   * drives directly, and the observers of `subscribeHoldsCollected()`.
+   * drives directly, the observers of `subscribeHoldsCollected()`, and the
+   * replica `open()` opens for a space.
    */
   get accessForTestingOnly(): {
-    cfcSchemaDocumentSyncer: CfcSchemaDocumentSyncer | undefined;
+    set cfcSchemaDocumentSyncer(value: CfcSchemaDocumentSyncer | undefined);
     readonly holdsCollectedObservers: Set<() => void>;
     registerPendingLoad(address: {
       space: MemorySpace;
@@ -2209,14 +2240,12 @@ export class StorageManager implements IStorageManager {
       promises: Promise<unknown>[],
       seen: Set<unknown>,
     ): void;
+    openReplica(space: MemorySpace): SpaceReplica;
   } {
     // deno-lint-ignore no-this-alias
     const outerThis = this;
     return {
-      get cfcSchemaDocumentSyncer() {
-        return outerThis.#cfcSchemaDocumentSyncer;
-      },
-      set cfcSchemaDocumentSyncer(value) {
+      set cfcSchemaDocumentSyncer(value: CfcSchemaDocumentSyncer | undefined) {
         outerThis.#cfcSchemaDocumentSyncer = value;
       },
       holdsCollectedObservers: this.#holdsCollectedObservers,
@@ -2230,6 +2259,7 @@ export class StorageManager implements IStorageManager {
           seen,
           undefined,
         ),
+      openReplica: (space) => this.#openProvider(space).replica,
     };
   }
 
@@ -2311,7 +2341,7 @@ export class StorageManager implements IStorageManager {
     try {
       route = normalizeSpaceHost(host);
     } catch (cause) {
-      if (!(cause instanceof SpaceHostValidationError)) throw cause;
+      // `normalizeSpaceHost()` throws only a `SpaceHostValidationError`.
       throw new Error(
         `Invalid host for space ${space}`,
         { cause },
@@ -3136,15 +3166,13 @@ export class StorageManager implements IStorageManager {
       activeClients.delete(normal.client);
       await normal.client.close();
       assertCurrentRoute();
-      let bootstrapSessionId = crypto.randomUUID();
-      while (bootstrapSessionId === this.#sessionId) {
-        bootstrapSessionId = crypto.randomUUID();
-      }
       const bootstrap = track(
         await this.#createSession(
           space,
           signer,
-          { sessionId: bootstrapSessionId },
+          // A fresh random UUID, which no other session holds, as every
+          // session id this manager mints relies on.
+          { sessionId: crypto.randomUUID() },
           routeSignal,
         ),
       );
@@ -4750,13 +4778,17 @@ export class StorageManager implements IStorageManager {
     if (ContextualFlowControl.declaresStream(schema)) return;
     const scope = normalizeCellScope(link.scope as CellScope | undefined);
     if (hasInlineCellScheme(link.id)) {
-      const dataBase: NormalizedLink = { space, id: link.id, scope, path: [] };
+      const dataBase: NormalizedLink & { id: URI } = {
+        space,
+        id: link.id,
+        scope,
+        path: [],
+      };
       const segments = link.path.map((segment) => segment.toString());
       let target: unknown = this.#immutableValue(link.id).value;
       for (let i = 0; i < segments.length; i++) {
         if (isPrimitiveCellLink(target)) {
           const inner = parseLinkPrimitive(target, dataBase);
-          if (inner.id === undefined) return;
           const remaining = segments.slice(i);
           const innerSchema = inner.schema === undefined
             ? undefined
@@ -4764,7 +4796,6 @@ export class StorageManager implements IStorageManager {
           this.#syncLinkTarget(
             {
               ...inner,
-              id: inner.id,
               path: [...inner.path, ...remaining],
             },
             dataBase,
@@ -5257,7 +5288,6 @@ class Provider
    * `04-protocol.md` §4.14); a closed provider sends nothing.
    */
   sendReport(report: SessionReport): void {
-    if (this.#destroyed) return;
     void this.replica.sendReport(report);
   }
 
@@ -5527,7 +5557,6 @@ class Provider
   /** See SpaceReplica.noteAclChanged (THE SESSION REMOUNT's latch). Only
    *  the CURRENT replica: a replaced one is being torn down. */
   noteAclChanged(): void {
-    if (this.#destroyed) return;
     this.replica.noteAclChanged();
   }
 
@@ -6915,7 +6944,6 @@ export class SpaceReplica
    * completed a handshake: the remount it owes dials such a space again.
    */
   noteRetryRequested(): void {
-    if (this.#closed) return;
     this.#retryRequestedSinceMount = true;
     this.noteAclChanged();
   }
@@ -8481,9 +8509,6 @@ export class SpaceReplica
       return superset === undefined;
     });
     if (newEntries.length === 0) {
-      if (coveredInFlight.length === 0) {
-        return { ok: {} };
-      }
       const results = await Promise.all(coveredInFlight);
       return results.find((result) => result.error) ?? { ok: {} };
     }
@@ -12081,6 +12106,14 @@ export class SpaceReplica
       return;
     }
     this.#kickedCfcSchemaPulls.add(hash);
+    const reportThrown = (error: unknown) => {
+      logger.warn("cfc-schema-hydration-failed", () => [
+        "arrived-metadata document pull threw; a later frame " +
+        "carrying the reference re-kicks",
+        { hash, error: String(error) },
+      ]);
+      this.#kickedCfcSchemaPulls.delete(hash);
+    };
     queueMicrotask(() => {
       this.sync(`cid:${hash}` as URI)
         .then((result) => {
@@ -12102,14 +12135,7 @@ export class SpaceReplica
             // frame retries instead of the window going permanent.
             this.#kickedCfcSchemaPulls.delete(hash);
           }
-        }, (error) => {
-          logger.warn("cfc-schema-hydration-failed", () => [
-            "arrived-metadata document pull threw; a later frame " +
-            "carrying the reference re-kicks",
-            { hash, error: String(error) },
-          ]);
-          this.#kickedCfcSchemaPulls.delete(hash);
-        });
+        }, reportThrown);
     });
   }
 
@@ -12890,7 +12916,9 @@ export class SpaceReplica
       // The verdict is in: a splice shown as the array its writer computed
       // (`displayedPatches`) promotes as the store applied it, which over a
       // moved array is a different value, so the layers are marked accepted
-      // and the view materialized over them is rebuilt.
+      // and the view materialized over them is rebuilt from the first layer
+      // whose accepted replay differs from what the view showed. Over an
+      // array nothing moved, that is none of them, and the view stands.
       if (
         pendingIndexes.some((index) => {
           const entry = record.pending[index]!;
@@ -12903,7 +12931,12 @@ export class SpaceReplica
             ? { ...entry, accepted: true }
             : entry
         );
-        dropMaterializedSuffix(record, firstPendingIndex);
+        revalidateMaterializedPrefixes(
+          record,
+          { space: this.#space, id, scope },
+          firstPendingIndex,
+          lastPendingIndex,
+        );
       }
       const pending = record.pending[lastPendingIndex]!;
       const previousConfirmed = record.confirmed;

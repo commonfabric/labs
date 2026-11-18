@@ -3538,9 +3538,10 @@ function verbNameToken(name: string): string {
  * `verb` was given a number of them its `arity` does not take, and returns
  * nothing where it was given a number it does.
  *
- * The arms are written out one each and closed by a `never`, so an arm added
- * to {@link Arity} reds the type checker here rather than falling through to
- * a sentence written for a different one.
+ * The arms are written out one each, and `section` is what the switch leaves:
+ * its annotation reds the type checker when an arm added to {@link Arity} is
+ * not handled, rather than letting it fall through to a sentence written for a
+ * different one.
  */
 function wrongOperandCount(
   verb: string,
@@ -3568,17 +3569,13 @@ function wrongOperandCount(
       return given === 1
         ? refuse(`\`${verb}\` takes ${arity.names}.`)
         : tooMany(verb, "two operands", given);
-    case "section":
-      // No maximum, and none is missing: the words past the verb's own
-      // operands are the section, which is as long as the callable takes.
-      return given >= arity.least
-        ? undefined
-        : refuse(`\`${verb}\` takes ${arity.names}.`);
-    default: {
-      const unreached: never = arity;
-      return unreached;
-    }
   }
+  // No maximum, and none is missing: the words past the verb's own operands
+  // are the section, which is as long as the callable takes.
+  const section: Extract<Arity, { operands: "section" }> = arity;
+  return given >= section.least
+    ? undefined
+    : refuse(`\`${verb}\` takes ${section.names}.`);
 }
 
 /**

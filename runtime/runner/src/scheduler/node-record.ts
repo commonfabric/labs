@@ -48,6 +48,10 @@ export interface SchedulerNode {
   readonly action: Action;
   /** Whether this registration has an accepted result to retain while gated. */
   hasCommittedResult?: boolean;
+  /** Whether a run of this registration has finished without being withdrawn
+   * for a read it could not take as state: its output, absent or not, is what
+   * it produced. */
+  produced?: boolean;
   /** The latest sealed run that can still owe dependency-withdrawal recovery. */
   pendingWaveRun?: object;
 
@@ -87,6 +91,14 @@ export interface SchedulerNode {
    * a retry — is recorded once. Taken by the run that consumes them.
    */
   invalidCauses: Map<string, IMemorySpaceAddress>;
+
+  /**
+   * Where the node stands among the invalid nodes: taken from a counter each
+   * time it joins them, so ascending ordinals are the order
+   * `NodeRegistry.getInvalidNodes()` iterates in. Meaningless while the node
+   * is not one of them.
+   */
+  invalidOrdinal: number;
   liveRefs: number;
   provisionalDemand: boolean;
   provisionalDemandPass?: number;
@@ -119,6 +131,27 @@ export class NodeRegistry {
    * removed node drops out even though its record persists in `#records`.
    */
   #invalidNodes = new Set<Action>();
+
+  /** Source of `SchedulerNode.invalidOrdinal`. */
+  #nextInvalidOrdinal = 0;
+
+  /**
+   * The invalid nodes a pull seed scan still has to look at: every invalid
+   * node except those a scan found dormant (neither live nor pending) and
+   * parked with `parkSeedCandidate()`. A dormant node contributes nothing to
+   * a seed scan, and under lazy materialization nearly every invalid node of
+   * a large graph is dormant, so the scans walk this set and not
+   * `#invalidNodes`.
+   *
+   * A parked node returns when it joins the invalid nodes again, when its
+   * status is written, and when whoever maintains liveness reports that it
+   * may have become live (`noteMayBeLive()`). Reporting too often only costs
+   * a scan one more look; a liveness change that is NOT reported leaves a
+   * runnable node unseen, so every site that can make a node live reports
+   * it. Pending nodes are not tracked here: the scans read the pending set
+   * themselves.
+   */
+  #seedCandidates = new Set<Action>();
 
   /**
    * Active nodes whose gate holds convergence-backoff state
@@ -250,6 +283,7 @@ export class NodeRegistry {
       registrationToken: {},
       declaredReads: [],
       invalidCauses: new Map(),
+      invalidOrdinal: 0,
       liveRefs: 0,
       provisionalDemand: false,
       gate: { backoffStreak: 0, convergenceHoldPasses: 0 },
@@ -275,6 +309,7 @@ export class NodeRegistry {
     endLocalReadValidationStretch();
     record.registrationToken = {};
     delete record.hasCommittedResult;
+    delete record.produced;
     delete record.gate.retryOwed;
     delete record.pendingWaveRun;
     record.adoptedViewIdentity = undefined;
@@ -285,6 +320,7 @@ export class NodeRegistry {
     this.#activeEffects.delete(action);
     this.#activeComputations.delete(action);
     this.#invalidNodes.delete(action);
+    this.#seedCandidates.delete(action);
     this.#backedOffNodes.delete(record);
     this.#unfileFromDemandRoots(record);
     this.#joinedAt.delete(record);
@@ -345,6 +381,43 @@ export class NodeRegistry {
     return this.#invalidNodes;
   }
 
+  /** Whether `action` is an active node that is `invalid` or `never-ran`. */
+  isInvalid(action: Action): boolean {
+    return this.#invalidNodes.has(action);
+  }
+
+  /**
+   * The invalid nodes no scan has parked: the ones a pull seed scan has to
+   * look at. In no particular order; `SchedulerNode.invalidOrdinal` restores
+   * the order of `getInvalidNodes()`.
+   */
+  getSeedCandidates(): ReadonlySet<Action> {
+    return this.#seedCandidates;
+  }
+
+  /**
+   * Takes `action` out of the seed candidates. For a scan that found the
+   * node dormant: neither live nor pending. Safe to call while iterating
+   * `getSeedCandidates()`.
+   */
+  parkSeedCandidate(action: Action): void {
+    this.#seedCandidates.delete(action);
+  }
+
+  /**
+   * Reports that `action` may have become live, so the next seed scan looks
+   * at it again if it is invalid. Every site that can turn a node live calls
+   * this; a call for a node that did not become live is harmless.
+   */
+  noteMayBeLive(action: Action): void {
+    if (this.#invalidNodes.has(action)) this.#seedCandidates.add(action);
+  }
+
+  /** `noteMayBeLive()` for every node, after liveness was rebuilt wholesale. */
+  noteAllMayBeLive(): void {
+    for (const action of this.#invalidNodes) this.#seedCandidates.add(action);
+  }
+
   /** Active nodes whose gate holds convergence-backoff state. */
   getBackedOffNodes(): ReadonlySet<SchedulerNode> {
     return this.#backedOffNodes;
@@ -365,9 +438,16 @@ export class NodeRegistry {
       this.#all.has(record) &&
       (record.status === "invalid" || record.status === "never-ran")
     ) {
-      this.#invalidNodes.add(record.action);
+      if (!this.#invalidNodes.has(record.action)) {
+        record.invalidOrdinal = this.#nextInvalidOrdinal++;
+        this.#invalidNodes.add(record.action);
+      }
+      // A status write is also a fresh look: cheap, and it keeps a node that
+      // was parked as `never-ran` from staying parked through an invalidation.
+      this.#seedCandidates.add(record.action);
     } else {
       this.#invalidNodes.delete(record.action);
+      this.#seedCandidates.delete(record.action);
     }
   }
 

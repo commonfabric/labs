@@ -1493,7 +1493,10 @@ let pullProjectedOf: <R>(
   project: (value: unknown) => R,
   options: { awaitDurability?: boolean },
 ) => Promise<R>;
-let writeTargetOf: (cell: CellImpl<FabricValue>) => Cell<FabricValue>;
+let resolveAsCellOf: (
+  cell: CellImpl<FabricValue>,
+  lastNode: LastNode,
+) => Cell<FabricValue>;
 let sinkProjectedOf: <R>(
   cell: CellImpl<FabricValue>,
   project: (value: unknown) => R,
@@ -2241,9 +2244,6 @@ export class CellImpl<T extends FabricValue>
       throw new Error(
         ".exec() must be called within a transaction (e.g. inside a handler)",
       );
-    }
-    if (!this.#tx.recordSqliteWrite) {
-      throw new Error("storage transaction does not support sqlite writes");
     }
     // `"sqlite"` is a type-level kind (the public `SqliteDb` type restricts who
     // can call `.exec`); at runtime we validate the actual handle value rather
@@ -3634,11 +3634,6 @@ export class CellImpl<T extends FabricValue>
           "help: use in handlers only, ensure cell is typed as string",
       );
     }
-    if (!this.#tx.recordTextChanges) {
-      throw new Error(
-        "Cell.applyChanges() requires a transaction that records text changes",
-      );
-    }
     if (!this.#synced) this.#startLoad();
 
     const resolvedLink = resolveLink(
@@ -4269,11 +4264,13 @@ export class CellImpl<T extends FabricValue>
   }
 
   /**
-   * The cell this one's links lead to, for `"value"`, or the cell a write to
+   * The cell this one's links lead to, for `"value"`, the cell a write to
    * this one lands in, for `"writeRedirect"`: write redirects are followed,
-   * and a link stored there as the value is not.
+   * and a link stored there as the value is not, or the cell this one's field
+   * is, for `"top"`: the links on the way to it are followed, and none stored
+   * there is.
    */
-  #resolveAsCell(lastNode: "value" | "writeRedirect"): Cell<T> {
+  #resolveAsCell(lastNode: LastNode): Cell<T> {
     const readTx = this.#runtime.readTx(this.#tx);
     const tracesBefore = readTx.getCfcState().dereferenceTraces.length;
     let link: NormalizedFullLink = resolveLink(
@@ -5241,7 +5238,7 @@ export class CellImpl<T extends FabricValue>
       cell.#pullProjected(project, options, false);
     sinkProjectedOf = (cell, project, callback, options) =>
       cell.#sinkProjected(project, callback, options);
-    writeTargetOf = (cell) => cell.#resolveAsCell("writeRedirect");
+    resolveAsCellOf = (cell, lastNode) => cell.#resolveAsCell(lastNode);
   }
 }
 
@@ -6103,7 +6100,17 @@ export function pullProjected<R>(
  * value written into a cell from one reached through a link stored there.
  */
 export function resolveWriteTarget(cell: Cell<unknown>): Cell<unknown> {
-  return writeTargetOf(requireCellImpl(cell));
+  return resolveAsCellOf(requireCellImpl(cell), "writeRedirect");
+}
+
+/**
+ * The cell `cell`'s field is, as `resolveAsCell()` resolves one: the links on
+ * the way to it are followed, and none stored there is.
+ * `writtenPrincipalAt()` reads from it the space of the document holding the
+ * field.
+ */
+export function resolveField(cell: Cell<unknown>): Cell<unknown> {
+  return resolveAsCellOf(requireCellImpl(cell), "top");
 }
 
 /**

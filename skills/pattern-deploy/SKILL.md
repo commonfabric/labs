@@ -60,26 +60,43 @@ deno task cf piece new patterns/[name]/main.tsx --test patterns/[name]/main.test
 # Output: Created piece bafyreia... <- SAVE this piece ID
 ```
 
-**Publish it to the pattern index** once it works, so others can find it, with
-the same identity, API URL, space and packaging flags (`--test`, `--datafile`)
-it was deployed with, so the published id is the deployed one:
+**Versions are kept for you.** Once the person has joined a pattern index that
+keeps versions, each `piece new <file>` and `piece setsrc` of their own pattern
+whose source changed is kept as a private version, and the deploy prints one
+line saying which; a `setsrc --origin` deploy, or one of someone else's pattern
+unchanged, keeps none. Nobody runs a save command. To undo a bad step,
+`cf pattern history <entry>` lists the versions and
+`cf pattern rollback <entry> <version>` restores one over the files (then
+`setsrc` to update the piece). Rollback refuses over edits never deployed.
+Deploys never share by themselves. When the person's sharing setting covers what
+they build, the index shares a version anonymously once they open it in a loom,
+and the deploy line says so (`version.autoShare: "when_used"` under `--json`).
+Run `cf pattern share` only when the person asks to share it sooner, or to share
+it with the setting off.
+
+**Sharing**, so others can find it, takes the same identity, API URL, space and
+packaging flags (`--test`, `--datafile`) it was deployed with, so the shared id
+is the deployed one:
 
 ```bash
-deno task cf pattern publish patterns/[name]/main.tsx --test patterns/[name]/main.test.tsx --json --identity cf.key --api-url $CF_API_URL --space <space>
+deno task cf pattern share patterns/[name]/main.tsx --test patterns/[name]/main.test.tsx --json --identity cf.key --api-url $CF_API_URL --space <space>
 ```
 
-The person joins once by piping their invite link to `cf index join` (the link
-carries a secret; keep it off the command line). A second machine does not
-redeem another invite: the first runs `cf delegation issue --index --to <DID>`
-and the second `cf index join --chain <file>`. Publish checks the pattern for
-personal details and may rewrite committed files into a general version; when
-`localCheck.applied` is `true`, show the person `git diff`, and update the
-deployed piece with the rewritten files (`cf piece setsrc`, below) so it runs
-the source the index published. `outcome: "blocked"` published nothing, and
-`next` says what to do before running it again. Publishing the same entry file
-again after changing its source or packaging records a new version of the last
-one; unchanged source publishes nothing new. The rest is in
-`runtime/cli/README.md`, "Publishing to the pattern index".
+Sharing is anonymous: others see a pseudonym of this pattern alone.
+`cf pattern publish` instead shows the person's name, which cannot be unseen:
+run it only when they ask, and pass `--as "<name>"` only after they agree to the
+name it prints. The person joins once by piping their invite link to
+`cf index join` (the link carries a secret; keep it off the command line). A
+second machine does not redeem another invite: the first runs
+`cf delegation issue --index --to <DID>` and the second
+`cf index join --chain <file>`. Sharing checks the pattern for personal details
+and may rewrite the files into a general version; when `localCheck.applied` is
+`true`, tell the person what changed (`git diff`, or the kept version that
+`cf pattern rollback` restores), and update the deployed piece with the
+rewritten files (`cf piece setsrc`, below) so it runs the source the index
+shared. `outcome: "blocked"` shared nothing, and `next` says what to do before
+running it again. The rest is in `runtime/cli/README.md`, "Keeping, sharing and
+publishing in the pattern index".
 
 **Update deployed pattern (all subsequent iterations):**
 

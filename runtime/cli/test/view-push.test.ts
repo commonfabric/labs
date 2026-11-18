@@ -2,6 +2,7 @@ import { join } from "@std/path";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { stripAnsi, term } from "../lib/view/ansi.ts";
 import type { EditableSource } from "../lib/view/editsource.ts";
 import {
   type CreateRequest,
@@ -11,11 +12,15 @@ import {
 } from "../lib/view/github.ts";
 import { type PagerDeps, runPager } from "../lib/view/pager.ts";
 import {
+  describePush,
   offeredPullRequestUrl,
   pushBranch,
+  type PushedBranch,
+  pushedBranch,
   type PushIo,
   pushRefused,
   realPushIo,
+  relayText,
 } from "../lib/view/push.ts";
 import { dialogBox } from "../lib/view/render.ts";
 import { Session } from "../lib/view/session.ts";
@@ -28,6 +33,7 @@ import {
   mouseKey,
   parseDocument,
   pullRequestPayload,
+  relayFrame,
 } from "./view-helpers.ts";
 
 /** Query answers for a checkout of `feature` whose `origin` has `main` as its
@@ -40,6 +46,20 @@ const FEATURE_CHECKOUT: Readonly<Record<string, string | null>> = {
 
 const PUSH_FEATURE = "push --force-with-lease --force-if-includes --progress " +
   "origin HEAD:refs/heads/feature";
+
+/** The query that counts the commits on each side of `origin`'s `feature`
+ * and the checkout. */
+const COUNT_FEATURE =
+  "rev-list --left-right --count refs/remotes/origin/feature...HEAD";
+
+/** Query answers for a checkout of `feature` that `origin` has at
+ * `0123456789abcdef`, with a commit the checkout lacks, and lacking two of
+ * the checkout's. */
+const FEATURE_PUSHED: Readonly<Record<string, string | null>> = {
+  "rev-parse --verify --quiet refs/remotes/origin/feature":
+    "0123456789abcdef\n",
+  [COUNT_FEATURE]: "1\t2\n",
+};
 
 const GITHUB_OFFER = [
   "Enumerating objects: 5, done.",
@@ -586,6 +606,145 @@ describe("view-push", () => {
       );
       expect(ran).toEqual([]);
     });
+
+    it("returns what `ask` returns, given how origin's branch stands, and runs nothing, when origin already has the branch", async () => {
+      const { io, ran, shown } = fakeIo({ answers: FEATURE_PUSHED });
+      const asked: Array<[string, PushedBranch]> = [];
+
+      const summary = await pushBranch(io, undefined, undefined, undefined, (
+        branch,
+        pushed,
+      ) => {
+        asked.push([branch, pushed]);
+        return Promise.resolve("asked");
+      });
+
+      expect(summary).toBe("asked");
+      expect(asked).toEqual([
+        ["feature", {
+          commit: "0123456789abcdef",
+          counts: { removed: 1, added: 2 },
+        }],
+      ]);
+      expect(ran).toEqual([]);
+      expect(shown).toEqual([]);
+    });
+
+    it("pushes without asking when origin does not have the branch, or there is no `ask`", async () => {
+      const cases: ReadonlyArray<
+        readonly [Readonly<Record<string, string | null>>, boolean]
+      > = [[{}, true], [FEATURE_PUSHED, false]];
+      for (const [answers, ask] of cases) {
+        const { io, ran } = fakeIo({ answers });
+        const asked: string[] = [];
+
+        const summary = await pushBranch(
+          io,
+          undefined,
+          undefined,
+          undefined,
+          ask
+            ? (branch) => Promise.resolve(String(asked.push(branch)))
+            : undefined,
+        );
+
+        expect(summary).toBe("Pushed feature to origin.");
+        expect(asked).toEqual([]);
+        expect(ran).toEqual([PUSH_FEATURE]);
+      }
+    });
+  });
+
+  describe("pushedBranch()", () => {
+    it("returns the commit origin's branch is at, and how many commits each side has that the other does not", () => {
+      const query = fakeIo({ answers: FEATURE_PUSHED }).io.query;
+
+      expect(pushedBranch(query, "feature")).toEqual({
+        commit: "0123456789abcdef",
+        counts: { removed: 1, added: 2 },
+      });
+    });
+
+    it("returns no counts when the checkout's history is shallow", () => {
+      const query = fakeIo({
+        answers: {
+          ...FEATURE_PUSHED,
+          "rev-parse --is-shallow-repository": "true\n",
+        },
+      }).io.query;
+
+      expect(pushedBranch(query, "feature")).toEqual({
+        commit: "0123456789abcdef",
+        counts: null,
+      });
+    });
+
+    it("returns null when git has never seen origin have the branch", () => {
+      expect(pushedBranch(fakeIo().io.query, "feature")).toBeNull();
+    });
+
+    it("throws when git cannot compare the branch with origin's", () => {
+      const query = fakeIo({
+        answers: { ...FEATURE_PUSHED, [COUNT_FEATURE]: null },
+      }).io.query;
+
+      expect(() => pushedBranch(query, "feature")).toThrow(
+        "git could not compare feature with origin's",
+      );
+    });
+  });
+
+  describe("describePush()", () => {
+    it("says which commit origin's branch is at, and that pushing would add the commits it lacks", () => {
+      expect(
+        describePush("feature", {
+          commit: "0123456789abcdef",
+          counts: { removed: 0, added: 2 },
+        }),
+      ).toBe(
+        "origin already has feature, at 0123456789ab when last fetched or " +
+          "pushed.\nPushing would add 2 commits to it.",
+      );
+    });
+
+    it("says that pushing would replace a branch that has commits the checkout does not, and what it would add", () => {
+      const said = (removed: number, added: number) =>
+        describePush("feature", {
+          commit: "c0ffee",
+          counts: { removed, added },
+        }).split("\n")[1];
+
+      expect(said(1, 0)).toBe(
+        "Pushing would replace it, removing 1 commit that this checkout " +
+          "does not have.",
+      );
+      expect(said(3, 1)).toBe(
+        "Pushing would replace it, removing 3 commits that this checkout " +
+          "does not have and adding 1 commit.",
+      );
+    });
+
+    it("says that pushing would leave a branch at the checked-out commit as it is", () => {
+      expect(
+        describePush("feature", {
+          commit: "c0ffee",
+          counts: { removed: 0, added: 0 },
+        }),
+      ).toBe(
+        "origin already has feature, at c0ffee when last fetched or pushed." +
+          "\nPushing would leave it as it is.",
+      );
+    });
+
+    it("says that the commits cannot be counted when the checkout's history is shallow", () => {
+      expect(
+        describePush("feature", { commit: "c0ffee", counts: null }),
+      ).toBe(
+        "origin already has feature, at c0ffee when last fetched or pushed." +
+          "\nThis checkout's history is shallow, so the commits pushing " +
+          "would add or remove cannot be counted.",
+      );
+    });
   });
 
   describe("offeredPullRequestUrl()", () => {
@@ -736,6 +895,75 @@ describe("view-push", () => {
         expect(written.join("")).toContain(
           "remote: Create a pull request for 'feature' by visiting:",
         );
+      } finally {
+        Deno.removeSync(root, { recursive: true });
+      }
+    });
+
+    it("asks once origin has the branch, counting the commits a rewrite removes and adds", async () => {
+      const { root, env, work } = repositories();
+      try {
+        const io = realPushIo({ cwd: work, env, write: () => {} });
+        const push = () =>
+          pushBranch(
+            io,
+            undefined,
+            () => "",
+            undefined,
+            (_, pushed) => Promise.resolve(pushed),
+          );
+
+        expect(await push()).toBe("Pushed feature to origin.");
+        const pushedCommit = git(work, env, "rev-parse", "HEAD");
+        expect(await push()).toEqual({
+          commit: pushedCommit,
+          counts: { removed: 0, added: 0 },
+        });
+        git(work, env, "commit", "--quiet", "--amend", "-m", "Amended");
+        git(work, env, "commit", "--quiet", "--allow-empty", "-m", "More");
+
+        expect(await push()).toEqual({
+          commit: pushedCommit,
+          counts: { removed: 1, added: 2 },
+        });
+      } finally {
+        Deno.removeSync(root, { recursive: true });
+      }
+    });
+
+    it("counts no commits once origin has the branch in a shallow clone", async () => {
+      const { root, env, origin, work } = repositories();
+      try {
+        const io = realPushIo({ cwd: work, env, write: () => {} });
+        expect(await pushBranch(io, undefined, () => "")).toBe(
+          "Pushed feature to origin.",
+        );
+        const shallow = join(root, "shallow");
+        git(
+          root,
+          env,
+          "clone",
+          "--quiet",
+          "--depth",
+          "1",
+          "--no-single-branch",
+          `file://${origin}`,
+          shallow,
+        );
+        git(shallow, env, "switch", "--quiet", "feature");
+
+        expect(
+          await pushBranch(
+            realPushIo({ cwd: shallow, env, write: () => {} }),
+            undefined,
+            () => "",
+            undefined,
+            (_, remote) => Promise.resolve(remote),
+          ),
+        ).toEqual({
+          commit: git(work, env, "rev-parse", "HEAD"),
+          counts: null,
+        });
       } finally {
         Deno.removeSync(root, { recursive: true });
       }
@@ -902,6 +1130,55 @@ describe("view-push", () => {
     });
   });
 
+  describe("relayText()", () => {
+    const encoder = new TextEncoder();
+
+    it("passes each decoded piece of the stream to its writer", async () => {
+      const written: string[] = [];
+      const stream = new ReadableStream<Uint8Array<ArrayBuffer>>({
+        start(controller) {
+          controller.enqueue(encoder.encode("one "));
+          controller.enqueue(encoder.encode("two"));
+          controller.close();
+        },
+      });
+
+      await relayText(stream, (text) => written.push(text));
+
+      expect(written.join("")).toBe("one two");
+    });
+
+    it("rejects with the stream's own failure", async () => {
+      const stream = new ReadableStream<Uint8Array<ArrayBuffer>>({
+        start(controller) {
+          controller.error(new Error("the pipe broke"));
+        },
+      });
+
+      await expect(
+        relayText(stream, () => {}, new AbortController().signal),
+      ).rejects.toThrow("the pipe broke");
+    });
+
+    it("resolves with what arrived when its signal aborts", async () => {
+      const controller = new AbortController();
+      const written: string[] = [];
+      // A stream that never ends, as when a process git started holds the pipe.
+      const stream = new ReadableStream<Uint8Array<ArrayBuffer>>({
+        start(stream) {
+          stream.enqueue(encoder.encode("started"));
+        },
+      });
+
+      await relayText(stream, (text) => {
+        written.push(text);
+        controller.abort();
+      }, controller.signal);
+
+      expect(written).toEqual(["started"]);
+    });
+  });
+
   describe("Session", () => {
     it("requests a push when `P` is pressed", () => {
       const session = editableSession();
@@ -1026,6 +1303,42 @@ describe("view-push", () => {
         "Pushed feature to origin. Opened",
         url.slice(0, 72),
         url.slice(72),
+      ]);
+    });
+
+    it("wraps by the columns the characters take, not by how many there are", () => {
+      // Forty Han characters take eighty columns, so the first thirty-six
+      // fill a row of the dialog's seventy-two. Seventy-two letters with
+      // combining accents take seventy-two columns, and so a row of their
+      // own, though they are twice as many code points.
+      const session = editableSession();
+      session.beginTask("Push", () => {});
+      const han = "漢".repeat(40);
+      const accented = "e\u0301".repeat(72);
+
+      session.appendTaskOutput(`${han}\n${accented}\n`);
+
+      expect(session.view().dialog!.body.slice(0, 4)).toEqual([
+        han.slice(0, 36),
+        han.slice(36),
+        accented,
+        "",
+      ]);
+    });
+
+    it("gives a character wider than the dialog a row of its own", () => {
+      // The view is nine columns wide, so the dialog's rows are one column
+      // wide, too narrow for a Han character.
+      const session = editableSession();
+      session.resize(9, 24);
+      session.beginTask("Push", () => {});
+
+      session.appendTaskOutput("漢字a\n");
+
+      expect(session.view().dialog!.body.slice(0, 3)).toEqual([
+        "漢",
+        "字",
+        "a",
       ]);
     });
 
@@ -1365,6 +1678,169 @@ describe("view-push", () => {
       session.handleKey({ name: "d", char: "d" });
       expect(session.quit).toBe(true);
     });
+
+    describe("asking whether to push", () => {
+      /** A session whose push dialog, having looked, asks whether to push. */
+      function asking(): Session {
+        const session = editableSession();
+        session.beginTask("Push", () => {});
+        session.appendTaskOutput("Looking.\n");
+        session.confirmPush("origin already has feature.\nPushing would add.");
+        return session;
+      }
+
+      it("asks under what the task found, emphasized, offering Push and Cancel with no button as its default", () => {
+        const dialog = asking().view().dialog!;
+
+        expect(dialog.title).toBe("Push");
+        expect(dialog.body.filter((row) => row !== "")).toEqual([
+          "Looking.",
+          "origin already has feature.",
+          "Pushing would add.",
+        ]);
+        expect(dialog.emphasized).toEqual([1, 2]);
+        expect(dialog.buttons.map((b) => b.label)).toEqual(["Push", "Cancel"]);
+        expect(dialog.buttons.some((b) => b.kind === "default")).toBe(false);
+        expect(dialog.focus).toBe(-1);
+      });
+
+      it("asks nothing unless a task is running in the task dialog", () => {
+        const session = editableSession();
+        session.confirmPush("Push?");
+        expect(session.view().dialog).toBeNull();
+        session.beginTask("Push", () => {});
+        session.finishTask("Done.");
+
+        session.confirmPush("Push?");
+
+        expect(session.view().dialog!.buttons.map((b) => b.label)).toEqual([
+          "Close",
+          "Quit",
+        ]);
+      });
+
+      it("asks for the push on Push, keeping the dialog up for it, and for none on `P` or on Enter until a button has the focus", () => {
+        for (
+          const keys of [
+            [{ name: "u", char: "u" }],
+            [{ name: "U", char: "U" }],
+            [
+              { name: "P", char: "P" },
+              { name: "enter" },
+              { name: "tab" },
+              { name: "enter" },
+            ],
+          ]
+        ) {
+          const session = asking();
+
+          for (const key of keys) {
+            expect(session.pushConfirmed).toBe(false);
+            expect(session.branchPushRequested).toBe(false);
+            session.handleKey(key);
+          }
+
+          expect(session.pushConfirmed).toBe(true);
+          expect(session.view().dialog!.title).toBe("Push");
+        }
+      });
+
+      it("asks for no push on Cancel or Escape, which take the dialog down", () => {
+        for (const key of [{ name: "c", char: "c" }, { name: "escape" }]) {
+          const session = asking();
+
+          session.handleKey(key);
+
+          expect(session.pushConfirmed).toBe(false);
+          expect(session.view().dialog).toBeNull();
+        }
+      });
+    });
+
+    describe("links", () => {
+      const LONG = `https://example.test/${"a".repeat(80)}`;
+
+      /** A push dialog on a screen whose rows are `color`ed, with web
+       * addresses in its output and in what it says about the watch. */
+      function linking(color: boolean): Session {
+        const session = new Session(
+          parseDocument("const a = 1;\n"),
+          { color, showLineNumbers: false },
+          { width: 80, height: 24 },
+        );
+        session.beginTask("Push", () => {});
+        session.appendTaskOutput(`See ${PULL_REQUEST}.\n${LONG}\n`);
+        session.setPullRequestWatch(`Pull request: ${OCTO_PULL_REQUEST}`);
+        return session;
+      }
+
+      it("links each web address in the output and under it to the whole address, on each row it wraps onto", () => {
+        const dialog = linking(false).view().dialog!;
+        const linksOf = (text: string) =>
+          dialog.links![dialog.body.indexOf(text)];
+
+        expect(linksOf(`See ${PULL_REQUEST}.`)).toEqual([
+          { from: 4, to: 4 + PULL_REQUEST.length, url: PULL_REQUEST },
+        ]);
+        expect(linksOf(LONG.slice(0, 72))).toEqual([
+          { from: 0, to: 72, url: LONG },
+        ]);
+        expect(linksOf(LONG.slice(72))).toEqual([
+          { from: 0, to: LONG.length - 72, url: LONG },
+        ]);
+        expect(linksOf(`Pull request: ${OCTO_PULL_REQUEST}`)).toEqual([
+          {
+            from: 14,
+            to: 14 + OCTO_PULL_REQUEST.length,
+            url: OCTO_PULL_REQUEST,
+          },
+        ]);
+        expect(dialog.links).toHaveLength(dialog.body.length);
+      });
+
+      it("draws each link as a terminal link around its text when drawing in color, and none otherwise", () => {
+        const colored = drawnRows(linking(true)).join("\n");
+        const plain = drawnRows(linking(false)).join("\n");
+
+        // The text each link to `url` covers, leaving out links that cover
+        // none.
+        const linked = (url: string) =>
+          colored.split(term.linkStart(url)).slice(1).map((part) =>
+            stripAnsi(part.split(term.linkEnd)[0])
+          ).filter((text) => text !== "");
+
+        expect(linked(PULL_REQUEST)).toEqual([PULL_REQUEST]);
+        expect(linked(OCTO_PULL_REQUEST)).toEqual([OCTO_PULL_REQUEST]);
+        expect(linked(LONG)).toEqual([LONG.slice(0, 72), LONG.slice(72)]);
+        expect(plain).not.toContain("\x1b]8;");
+        expect(plain).toContain(`See ${PULL_REQUEST}.`);
+      });
+
+      it("links an address after wide characters by code points, and draws the link over the address's columns", () => {
+        // The Han characters take two columns each but one code point.
+        const session = new Session(
+          parseDocument("const a = 1;\n"),
+          { color: true, showLineNumbers: false },
+          { width: 80, height: 24 },
+        );
+        session.beginTask("Push", () => {});
+        session.appendTaskOutput(`漢字 ${PULL_REQUEST}\n`);
+        const dialog = session.view().dialog!;
+        const drawn = drawnRows(session).join("\n");
+        // The text each link covers, leaving out links that cover none.
+        const linked = drawn.split(term.linkStart(PULL_REQUEST)).slice(1)
+          .map((part) => stripAnsi(part.split(term.linkEnd)[0]))
+          .filter((text) => text !== "");
+
+        expect(dialog.links![dialog.body.indexOf(`漢字 ${PULL_REQUEST}`)])
+          .toEqual([{
+            from: 3,
+            to: 3 + PULL_REQUEST.length,
+            url: PULL_REQUEST,
+          }]);
+        expect(linked).toEqual([PULL_REQUEST]);
+      });
+    });
   });
 
   describe("runPager()", () => {
@@ -1599,6 +2075,173 @@ describe("view-push", () => {
       await harness.run(["P", () => closable, "c"]);
 
       expect(harness.writes.at(-2)).toContain("Push failed: no git");
+    });
+
+    describe("asking before pushing a branch origin has", () => {
+      /** A GitHub API that finds pull request 7 of `octo/repo` open. */
+      const findingGitHub: GitHubApi = {
+        ...unusedGitHub,
+        find: () => Promise.resolve({ number: 7, url: OCTO_PULL_REQUEST }),
+      };
+
+      /** Drives the viewer over a checkout of `feature` that `origin`
+       * already has, recording each push in `ran`. */
+      function pushedHarness(
+        options: Partial<Pick<PagerDeps, "git" | "github">> = {},
+      ) {
+        const ran: string[] = [];
+        const harness = pagerHarness(
+          () => {
+            const fake = fakeIo({ answers: FEATURE_PUSHED });
+            return {
+              ...fake.io,
+              run: (args) => {
+                ran.push(args.join(" "));
+                return fake.io.run(args);
+              },
+            };
+          },
+          { git: viewerGit({}, UPSTREAM), github: findingGitHub, ...options },
+        );
+        return { ...harness, ran };
+      }
+
+      it("says what pushing would do and which pull request is open, pushing nothing until Push, which continues the dialog", async () => {
+        const harness = pushedHarness();
+        const asked = harness.frame((text) => text.includes(" Cancel "));
+        const pushed = harness.frame((text) =>
+          text.includes("Pushed feature to origin.")
+        );
+        let ranWhenAsked: string[] = [];
+
+        await harness.run([
+          "P",
+          async () => {
+            await asked;
+            ranWhenAsked = [...harness.ran];
+          },
+          "P",
+          "u",
+          () => pushed,
+          "c",
+        ]);
+
+        expect(ranWhenAsked).toEqual([]);
+        expect(harness.ran).toEqual([PUSH_FEATURE]);
+        // The push that asked, and the one Push started; the second `P`
+        // started none.
+        expect(harness.signals).toHaveLength(2);
+        const question = frameRows(
+          harness.writes.find((text) => text.includes(" Cancel "))!,
+        ).join("\n");
+        expect(harness.writes.join("")).toContain(
+          "Looking for the pull request of feature in octo/repo.",
+        );
+        expect(question).toContain(
+          "origin already has feature, at 0123456789ab",
+        );
+        expect(question).toContain(
+          "Pushing would replace it, removing 1 commit that this checkout",
+        );
+        expect(question).toContain(
+          `Pull request 7 is open from it: ${OCTO_PULL_REQUEST}`,
+        );
+        expect(question).toContain(" Push ");
+        expect(question).not.toContain(" Abort ");
+        const after = harness.writes.find((text) =>
+          text.includes("Pushed feature to origin.")
+        )!;
+        expect(after).toContain("Pushing feature to origin.");
+        expect(after).toMatch(/═ Push ═/);
+      });
+
+      it("pushes nothing on Cancel, which takes the dialog down", async () => {
+        const harness = pushedHarness();
+        const asked = harness.frame((text) => text.includes(" Cancel "));
+
+        await harness.run(["P", () => asked, "c"]);
+
+        expect(harness.ran).toEqual([]);
+        expect(harness.writes.at(-2)).not.toContain(" Push ═");
+      });
+
+      it("says when the branch has no open pull request, or why it could not look for one", async () => {
+        const cases: ReadonlyArray<
+          readonly [Partial<Pick<PagerDeps, "git" | "github">>, string]
+        > = [
+          [{ github: unusedGitHub }, "It has no open pull request."],
+          [
+            {
+              github: {
+                ...unusedGitHub,
+                find: () => Promise.reject(new Error("GitHub is down")),
+              },
+            },
+            "Could not look for its pull request: GitHub is down.",
+          ],
+          [
+            {
+              git: viewerGit({}, {
+                "remote get-url --push origin": "/srv/repo.git\n",
+              }),
+            },
+            "Could not look for its pull request: origin is not a GitHub " +
+            "repository.",
+          ],
+        ];
+        for (const [options, said] of cases) {
+          const harness = pushedHarness(options);
+          const asked = harness.frame((text) => text.includes(" Cancel "));
+
+          await harness.run(["P", () => asked, "c"]);
+
+          const question = harness.writes.find((text) =>
+            text.includes(" Cancel ")
+          )!;
+          expect(question).toContain(said);
+          expect(question).toContain(" Push ");
+        }
+      });
+
+      it("stops looking for the pull request on Abort, and asks without it, pushing on Push", async () => {
+        const harness = pushedHarness({
+          github: {
+            ...unusedGitHub,
+            find: (_, signal) =>
+              new Promise((_, reject) =>
+                signal.addEventListener("abort", () => reject(signal.reason))
+              ),
+          },
+        });
+        const looking = harness.frame((text) =>
+          text.includes("Looking for the pull request")
+        );
+        const asked = harness.frame((text) => text.includes(" Cancel "));
+        const pushed = harness.frame((text) =>
+          text.includes("Pushed feature to origin.")
+        );
+        let ranWhenAsked: string[] = [];
+
+        await harness.run([
+          "P",
+          () => looking,
+          "a",
+          async () => {
+            await asked;
+            ranWhenAsked = [...harness.ran];
+          },
+          "u",
+          () => pushed,
+          "c",
+        ]);
+
+        expect(ranWhenAsked).toEqual([]);
+        expect(harness.ran).toEqual([PUSH_FEATURE]);
+        expect(harness.writes.find((text) => text.includes(" Cancel ")))
+          .toContain(
+            "Stopped looking for its pull request.",
+          );
+      });
     });
 
     describe("watching for the pull request", () => {
@@ -2021,6 +2664,73 @@ describe("view-push", () => {
 
         expect(harness.writes.at(-1)).not.toContain(PULL_REQUEST);
       });
+
+      it("says why it is not watching when git fails as it names what was pushed, and reports the push as it went", async () => {
+        const answers = viewerGit();
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: (args) => {
+              if (args.join(" ") === "rev-parse --verify --quiet HEAD") {
+                throw new Error("git is gone");
+              }
+              return answers(args);
+            },
+            relay: () => fakeRelay().connect,
+          },
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => closable, "c"]);
+
+        const shown = harness.writes.find((text) => text.includes(" Close "))!;
+        expect(shown).toContain(
+          "Not watching for the pull request: git is gone.",
+        );
+        expect(shown).toContain("Pushed feature to origin. Opened");
+      });
+
+      it("sets nothing going to quit for a pull request that opened as the viewer closed", async () => {
+        const delivered = Promise.withResolvers<void>();
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit(),
+            relay: () => () =>
+              Promise.resolve({
+                readable: new ReadableStream<Uint8Array>({
+                  // The delivery reaches the read in progress, and then the
+                  // viewer is told to terminate before it reads what came.
+                  pull: (controller) => {
+                    controller.enqueue(
+                      relayFrame("pull_request", pullRequestPayload()),
+                    );
+                    try {
+                      harness.handlers.get("SIGTERM")!();
+                    } catch {
+                      // The harness's exit throws in place of ending the
+                      // process.
+                    }
+                    delivered.resolve();
+                  },
+                }, { highWaterMark: 0 }),
+                close: () => {},
+              }),
+          },
+        );
+        const watching = harness.frame((text) =>
+          text.includes("Quitting when the pull request opens.")
+        );
+
+        await harness.run(["P", async () => {
+          await watching;
+          await delivered.promise;
+        }]);
+
+        expect(harness.exits).toEqual([143]);
+        expect(harness.timers).not.toContain(500);
+        expect(harness.writes.at(-1)?.endsWith("\x1b[?1049l")).toBe(true);
+      });
     });
 
     describe("creating the pull request", () => {
@@ -2060,7 +2770,7 @@ describe("view-push", () => {
         );
       });
 
-      it("gives the created pull request's address in the dialog, saying it is quitting, for half a second before it quits", async () => {
+      it("gives the created pull request's address in the dialog, saying it is quitting, for two seconds before it quits", async () => {
         const harness = pagerHarness(
           () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
           {
@@ -2085,7 +2795,7 @@ describe("view-push", () => {
           `Pull request: ${OCTO_PULL_REQUEST}`,
         );
         expect(harness.writes[quitting]).toContain(" Close ");
-        expect(harness.timers).toContain(500);
+        expect(harness.timers).toContain(2000);
         expect(harness.writes.at(-1)).toMatch(
           new RegExp(`\\x1b\\[\\?1049l${OCTO_PULL_REQUEST}\\n$`),
         );
@@ -2808,7 +3518,7 @@ describe("view-push", () => {
           .toContain(`Merged ${OCTO_PULL_REQUEST}`);
       });
 
-      it("gives the merged pull request's address in the dialog, saying it is quitting, for half a second before it quits, when the settings say to", async () => {
+      it("gives the merged pull request's address in the dialog, saying it is quitting, for two seconds before it quits, when the settings say to", async () => {
         const harness = pagerHarness(() => fakeIo().io, {
           git: viewerGit(
             {
@@ -2832,7 +3542,7 @@ describe("view-push", () => {
         )!;
         expect(quitting).toContain(" Land ");
         expect(quitting).toContain(`Pull request: ${OCTO_PULL_REQUEST}`);
-        expect(harness.timers).toContain(500);
+        expect(harness.timers).toContain(2000);
         expect(harness.writes.at(-1)).toMatch(
           new RegExp(`\\x1b\\[\\?1049l${OCTO_PULL_REQUEST}\\n$`),
         );
