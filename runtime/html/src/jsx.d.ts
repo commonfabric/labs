@@ -4141,6 +4141,13 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "autofocus"?: boolean;
   "cursorPosition"?: "start" | "end";
   "oncf-change"?: any;
+
+  /**
+   * An edit the viewer made, with the whole document after it. Unlike
+   * `oncf-change`, never another collaborator's edit, a value the bound cell
+   * pushed, or a rewrite the editor made itself.
+   */
+  "oncf-edit"?: EventHandler<{ value: string }>;
   "oncf-focus"?: any;
   "oncf-blur"?: any;
   "oncf-file-paste"?: any;
