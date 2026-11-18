@@ -348,6 +348,16 @@ labels held by content address
 instantiation is a union of identifiers and can be memoized by template and
 input label identifiers.
 
+By ruling a template that reads another output of the plan names that
+output's template and holds no copy of it. The size of a plan is then
+linear in the number of its outputs and of the nodes of their templates,
+and does not follow the number of paths by which one output depends on
+another. The label of an output is evaluated once in a transaction and
+used by every template that names it, so the cost of label evaluation is
+linear as well, and no template changes its meaning
+([plan format and label templates](plan-and-label-templates.md), §3.2
+and §4.1).
+
 Constraints such as required integrity and maximum confidentiality become
 constraints on slots. Where the labels of the slots are declared in schemas the
 compiler checks the constraint and reports a violation as a compile error.

@@ -1317,7 +1317,9 @@ instance computes").
   handle that can write, the body's record has a target or an envelope through
   that handle, and the position can hold no reference on any evaluation. The
   third holds where the producing template at the position is a `const`, a
-  `derive` of expression code, or a `fold`, and where a producing body has the
+  `derive` of expression code, or a `fold`, with an `output` node followed
+  to the template it names (`plan-and-label-templates.md` §3.2, "A
+  reference to an output"), and where a producing body has the
   abstract value `Computed`, or a record or a list it built, at the path and
   `Body.outputs` has no `reference` entry there. It does not hold for a path
   with a `reference` entry, for a path the body found below a hop whose read is
@@ -1541,7 +1543,10 @@ reference rules of §3.8 apply to each path of the written value. A path
 that holds one projection of container, handle, reference, or factory
 type, whose path has no `*` segment, is a reference the body passed on,
 and its template is that projection's `identity` entry: the slot, or, for
-an entry of `Body.computed`, the entry's template. A path that holds one
+an entry of `Body.computed`, the entry's template, which is an `output`
+node where the value is an output of the plan and never a copy of that
+output's template (`plan-and-label-templates.md` §3.2, "A reference to
+an output"; provisional, P5). A path that holds one
 such projection whose path has a `*` segment, or alternatives of such
 projections, is a reference the body chose: its label is the label of the
 entry the reference came from, joined with the body's template as the

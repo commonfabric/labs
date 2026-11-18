@@ -1294,7 +1294,12 @@ In this design a label-only change does the following.
 - For a kept output or a write edge that is demanded and whose template
   reaches a label-dirty slot under its last selections, a derivation
   transaction instantiates the template again, from the memo's value and
-  the last selections. This is the second of the three conditions of
+  the last selections. A slot that the template reaches through an
+  output it names counts: a template names the template of another
+  output and holds no copy of it, and the label of a named output is
+  formed once in the transaction and used at every template that names
+  it (`plan-and-label-templates.md` §3.2 and §4.1). This is the second
+  of the three conditions of
   `plan-and-label-templates.md` §4.1. The instantiation key differs, so
   steps 2 to 4 of that section run: the label is rewritten and the
   constraints are checked again. The cycle runs a derivation transaction
@@ -1957,7 +1962,7 @@ and §4.6; `execution-and-storage.md` §1.6). This is the **early step**.
   instance whose value the handler receives, directly or through any
   number of `output` edges. A value the handler receives for a state path
   that names an output of its own instance is not read by address: the
-  handler's template holds the output's template, and the handler
+  handler's template names the output's template, and the handler
   receives the computed value whether or not the output's write is
   stored. But the cone instance that computed it read addresses, and a
   write staged at one of them is among these.
@@ -2276,7 +2281,10 @@ constraint never rejects a derivation transaction.
   constraint, and the instantiation key of the write's template, which is
   the label identifiers of the slots the template reaches under the
   reported selections, with those selections
-  (`plan-and-label-templates.md` §4.1, step 2). A constraint on a write,
+  (`plan-and-label-templates.md` §4.1, step 2). Where the template names
+  another output, the key holds the identifier of the label of that
+  output's template in place of the slots that template reaches
+  (provisional, P2; question 163 there). A constraint on a write,
   such as writer-fit or a write floor, lists no slot of its own, and its
   verdict is a function of that key.
 - It does not advance the basis rows of the cone instance.

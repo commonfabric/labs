@@ -472,12 +472,20 @@ evaluation, and what is written.
   that read a dropped value is evaluated again (section 1.7).
 - **What is instantiated.** The templates of what the transaction stores or
   checks. `plan-and-label-templates.md` §4.1 has the list. An interim
-  value is not instantiated.
+  value is not instantiated for storage: no label is stored for it and
+  no constraint is checked on it. Where a template that is instantiated
+  names an interim output, with an `output` node, the preparation forms
+  the label of that output's template once in the transaction and uses
+  it at every node that names the output
+  (`plan-and-label-templates.md` §4.1, "A label is instantiated once").
 - **When there is something to do.** One of the three conditions of that
   section holds: the cone or body that computes the value was evaluated in
   this transaction; something demands it and a slot its template reaches
   has a new label and an unchanged value; or it is unstored and something
-  demands it.
+  demands it. A slot that the template reaches through an output it
+  names counts, and whether an output reaches such a slot is found once
+  per output (`plan-and-label-templates.md` §3.2, "A rule over a
+  template").
 - **Order, and labels staged in the transaction.** A write is instantiated
   before every template that has a slot bound to its target: the derived
   writes instantiated early first, in the three groups above, each before
@@ -669,7 +677,9 @@ Five things differ.
    transaction evaluated; for every template it instantiated, the
    instantiation key, which holds the slot-free template hash, the
    selections and the children a `pick` chose, the label identifiers of the
-   slots, the staged ones among them, and the labels of the `dynamic` nodes
+   slots, the staged ones among them, the label identifiers of the outputs
+   that the template names (provisional, P2; its question 163), and the
+   labels of the `dynamic` nodes
    with their trigger reads; and which derived writes a failed constraint
    dropped, and which a conflict withdrew, so that the digest is over the
    writes that commit. A read, a write or a new decision input after the
@@ -4933,7 +4943,10 @@ of its own and no cone. Its state is the database's handle.
 A kept output records where its value and its label came from: the
 template, the identities bound to the template's slots, and the identity of
 the compiled pattern. An interim value has no stored provenance. Its
-template is a sub-template of every kept output that depends on it.
+template is a sub-template of every kept output that depends on it, by
+reference and not by copy: the template of the kept output names it with
+an `output` node, or names an output that does
+(`plan-and-label-templates.md` §3.2, "A reference to an output").
 
 ### 7.1 Per document
 
@@ -4995,6 +5008,20 @@ record where the plan and the document determine them:
   the origins of section 7.3. A slot with root `index` is that position.
 - A slot with root `event`, `cause` or `binding` belongs to a handler's
   write edge, not to a kept output.
+
+**A template that names other outputs.** The template of a kept output
+names the template of each output it reads with an `output` node and
+holds no copy of it (`plan-and-label-templates.md` §3.2). *Assumed,*
+provisional (P4; section 11.1, question 97): "reaches" in the comments
+of `selections`, `picks` and `dynamic` follows `output` nodes. The
+record holds an entry for each selector, each choice point and each set
+of dynamic reads that the output's template reaches through the outputs
+it names, each once, so that it holds what it would hold with every
+template in place. `template` is the slot-free hash of the template as
+it is written, and `key` covers the labels of the named outputs
+(`plan-and-label-templates.md` §1.2 and §4.1; provisional, P2). The
+record of one kept output then grows with what is upstream of it, and
+question 97 has the alternative.
 
 What is recorded is what cannot be derived: the selections, the chosen
 keys and the dynamic addresses. A reader that wants the full chain for a
@@ -6223,6 +6250,30 @@ Added by the ruling that the scheduler is switched per space (section 9):
     collection over an array of references, over an array of plain
     values in place, and over the result of another per-element
     construct. It is question 229 of the continuation plan.
+97. **What the provenance record of a kept output holds of the outputs
+    that its template names** (section 7.2). By ruling a template names
+    the template of another output and holds no copy of it
+    (`plan-and-label-templates.md` §3.2). `OutputProvenance` holds the
+    selections, the chosen keys and the dynamic addresses "the template
+    reaches", and the ruling does not say whether that follows an
+    `output` node. *Assumed,* provisional (P4 of the continuation plan,
+    the author's recommendation, adopted by the coordinator of this work
+    and not ruled): it does, each selector, choice point and set of
+    dynamic reads once, so the record holds what it held with every
+    template in place. An interim output has no record of its own, so
+    nothing else stores its selections. The size of one record then
+    follows everything upstream of its output, and the records of an
+    instance together can grow faster than the plan. The alternative
+    holds the entries of the nodes of the output's own template alone:
+    the records are then linear in the plan, and the selections of an
+    interim output that a kept output names are stored nowhere, unless
+    such an output gets a record of its own. If the owner decides for
+    the alternative, the paragraph "A template that names other
+    outputs" of section 7.2 and the comments of the three members
+    change. The same for a kept output of an element body over an array
+    of references, over an array of plain values in place, and over the
+    result of another per-element construct. It is question 241 of the
+    continuation plan.
 
 ### 11.2 For another document or the prototype
 

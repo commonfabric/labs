@@ -3903,7 +3903,10 @@ names the case.
   that it reads** (question 222). The crate writes the whole template of
   each input into a `derive` node, so a value that two others read is
   written out once for each. The size of a plan follows the number of
-  ways through its outputs. No test bounds the size of a plan.
+  ways through its outputs. No test bounds the size of a plan. By ruling
+  a template names the template of another output with a node of its
+  own and holds no copy of it ([Decided](#decided)); the crate at this
+  commit does not follow that ruling.
 
 ### Documents
 
@@ -4806,6 +4809,143 @@ is relitigated.
 - A factory value that changes under a child tears the child down and starts
   a new one under the same name. An `inSpace` instantiation's identifiers
   are known before the cross-space commit.
+- A label template names the template of another output by reference.
+  The type `Template` has a node that names an output of the plan,
+  `{ op: "output", output }`, and the input of a `derive`, and of every
+  other node or record that takes a template, is that node wherever the
+  input is an output of the plan, kept or interim. A template never
+  holds a copy of the template of another output. The size of a plan is
+  therefore linear in the number of its outputs and of the nodes of
+  their templates, and does not follow the number of paths by which one
+  output depends on another. The statement of
+  `plan-and-label-templates.md` §4.1 that the template of an interim
+  value is a sub-template of every kept output that depends on it holds
+  by reference and not by copy. The label of an output is evaluated once
+  and used by every template that names it, as a memo entry is on the
+  value side, so the cost of label evaluation is linear as well. No rule
+  is defined as a walk of a template as a tree that follows the
+  references without that reuse. The meaning of every template is
+  unchanged: a template with each reference replaced by the template it
+  names denotes the same label. The member names of the node are the
+  documents' choice. Not about a per-element construct: the rule is the
+  same for a template of an element body over an array of references,
+  over an array of plain values in place, and over the result of another
+  per-element construct (question 222). What the ruling leaves
+  undetermined is questions 239 to 242, each with a provisional decision
+  ([Provisional decisions](#provisional-decisions-awaiting-the-owners-ratification)).
+  The ruling is on the templates of outputs. Its consequence for the
+  other records of a plan that hold a template is the provisional
+  decision P5, and no ruling.
+
+## Provisional decisions awaiting the owner's ratification
+
+The owner's standing instruction of 2026-11-17: "Don't block progress on
+my ratifications, go with your recommendations but make sure to track
+them." An undecided design point therefore does not wait. The
+recommendation of the coordinator of this work is taken as a provisional
+decision, numbered P1, P2 and so on, and listed here. A provisional
+decision is the coordinator's and not the owner's. It is never moved to
+[Decided](#decided) and never cited as an owner ruling. The documents
+and the prototype follow it and say "provisional (P<n>)" where they do.
+Each entry names the question it answers, the alternatives, the reason,
+and what in the documents and the prototype has to change if the owner
+decides otherwise. The question stays in
+[Open, and needing the owner](#open-and-needing-the-owner) with a
+pointer to its entry.
+
+- **P1. A read gives the members of a stored record in the order of the
+  `base/data-model` codec** (question 218). A read gives the members of
+  a stored record in the order in which the serialization of a fabric
+  value by `base/data-model` writes them: the order of the UTF-8 bytes
+  of their names (`encodePlainObject` of `JsonEncodeAct` in
+  `base/data-model/src/codec-json/JsonEncodeAct.ts`). *Alternative:* the
+  order in which the members were written. *Reason:* it is consistent
+  with the ruling that this design takes every written form from the
+  helpers of that package, and today's runtime gives the order of the
+  names in the one module of the corpus that shows it. Which order a
+  member whose name reads as an integer has stays part of question 218.
+  *If decided otherwise:* `execution-and-storage.md` §2.4 says what "the
+  stored order" of a record is with the other order, and its question 94
+  changes. The prototype's executor gives the written order, which is
+  the alternative, so under P1 it is the prototype that has to change,
+  and 6 values of the corpus run differ for it. Not about a per-element
+  construct.
+- **P2. The slot-free hash, the instantiation key and the memo key are
+  over a template as it is written** (question 239). The recommendation
+  of the author of `plan-and-label-templates.md`, adopted by the
+  coordinator subject to review. In the slot-free hash the index of a
+  node that names an output is replaced by its position in the
+  template's own list of the outputs it names, as a slot index is. The
+  instantiation key and the memo key hold, for each such node that the
+  template reaches under its own selections, the identifier of the
+  label of the named output's template, and no slot, selection or chosen
+  child of the named template. *Alternative:* the keys are over the
+  template with every reference replaced, so the hash covers the hash
+  of each named template and the key lists every slot, selection and
+  chosen child reached through the references, each once. *Reason:* the
+  label is a function of exactly what the recommended key holds, so no
+  label changes, and the keys of a plan stay linear in its size, which
+  the ruling on references requires of label evaluation. What differs is
+  which runs share a memo entry and which changes leave a key equal.
+  *If decided otherwise:* `plan-and-label-templates.md` §1.2, §4.1, §4.3
+  and §4.6 and two rows of the table of its §3.2 ("A rule over a
+  template"), `execution-and-storage.md` §1.9 and §7.2, and
+  `scheduler-and-serving-loop.md` §5.6. The prototype implements neither
+  yet. The same for a template of an element body over an array of
+  references, over an array of plain values in place, and over the
+  result of another per-element construct.
+- **P3. Two inputs of a join are the same template where they are equal
+  as they are written** (question 240). The recommendation of the author
+  of `plan-and-label-templates.md`, adopted by the coordinator subject
+  to review. Two nodes that name one output are one input of a join, and
+  two nodes that name two outputs with equal templates are two inputs.
+  *Alternative:* the compiler compares the templates that the nodes
+  name. *Reason:* the label is the same under both, because a join and a
+  meet are idempotent; the recommended reading compares no template down
+  to its slots; only the canonical form of a plan, and so its hash,
+  differs. *If decided otherwise:* the second case of "A join" in
+  `plan-and-label-templates.md` §3.2 and its row of the table there, and
+  the prototype's compiler compares named templates. Not about a
+  per-element construct.
+- **P4. The provenance record of a kept output holds what its template
+  reaches through the outputs it names** (question 241). The
+  recommendation of the author of the Z58 pass, adopted by the
+  coordinator subject to review. `OutputProvenance` of
+  `execution-and-storage.md` §7.2 holds an entry for each selector,
+  choice point and set of dynamic reads that the output's template
+  reaches through its references, each once, as it did with every
+  template in place. *Alternative:* the record holds the entries of the
+  nodes of the output's own template alone. *Reason:* an interim output
+  has no record of its own, so under the alternative nothing stores the
+  selections of an interim output that a kept output names, which
+  changes what the record means. The cost is that one record grows with
+  everything upstream of its output. *If decided otherwise:* the
+  paragraph "A template that names other outputs" of
+  `execution-and-storage.md` §7.2, the comments of the three members of
+  the record, and its question 97. The prototype stores no provenance
+  record. The same for a kept output of an element body over an array of
+  references, over an array of plain values in place, and over the
+  result of another per-element construct.
+- **P5. Every record of a plan that holds a template names an output
+  by reference** (question 242). The coordinator's extension of the
+  ruling on question 222, which is on the templates of outputs.
+  `WriteEdge.template`, `ComputedInput.template`, `Operation.input`,
+  `Collection.membership`, and the `template` of a path of
+  `Binding.state` and of `Closure.params` have the node that names an
+  output wherever the template they hold, or an input of it, is an
+  output of the plan. No record holds a copy of the template of an
+  output. *Alternative:* those records hold a copy. *Reason:* it is the
+  ruling's reasoning applied to the other records: a representation
+  changes and no label does, and the size of those records no longer
+  follows the paths through the outputs. *If decided otherwise:* the
+  provisional paragraph of "A reference to an output" in
+  `plan-and-label-templates.md` §3.2, the comments of those members in
+  its §1.1, and `footprint-analysis.md` §6.5. The prototype's crate
+  writes copies in every record. Not covered: the template of a body is
+  no output, so it is still written at each write edge of the body. The
+  same for a record of an element body over an array of references,
+  over an array of plain values in place, and over the result of another
+  per-element construct.
 
 ## Open, and needing the owner
 
@@ -6766,7 +6906,9 @@ alone.
      written, which the prototype's executor does. 6 values of the
      corpus run differ for it. That today's runtime gives the order of
      the names for every stored record rests on that one module. Not
-     about a per-element construct.
+     about a per-element construct. The recommendation is taken as the
+     provisional decision P1
+     ([Provisional decisions](#provisional-decisions-awaiting-the-owners-ratification)).
 219. **A write through a handle to a path that the call of a pattern
      compiled in leaves out** (LS question 46; note 473). The case is
      `Counter({})`, where `Counter` declares `value` as a handle that
@@ -6846,31 +6988,38 @@ alone.
      has made no recommendation. Today's runtime runs neither form in a
      pattern body, so nothing of this is compared with it.
 222. **The label template of an output that reads another output** (PL
-     question 160; note 478). The type `Template` of
-     `plan-and-label-templates.md` §1.1 has no node that stands for the
-     template of another output: a `derive` holds the whole template of
-     each of its inputs, down to the slots. Its §4.1 says of an interim
-     value that its template "is a sub-template of every kept output
-     that depends on it". So where an output reads two outputs that each
-     read two more, the template of each is written once for every way
-     that leads to it, and the size of a plan grows with the number of
-     ways and not with the number of outputs. In the prototype's fixture
-     `shared-values` twenty-five values each read the two before them.
-     Its plan was 31 MB as compact JSON, all but 8 kB of it in
-     `outputs[].template`, and the template of the last value alone was
-     12 MB. The sizes follow the Fibonacci numbers along the chain. The
-     cones, the edges and the value code of the same plan grow with the
-     number of values. *Assumed:* the documents as they stand, so a
-     template holds the template of each input in place. The alternative
-     gives `Template` a node that names an output of the plan. The
-     document then has to say how the node is instantiated, with which
-     selections and picks, and how the slot-free hash of a template and
-     the instantiation key cover the template that is named. The
-     coordinator has made no recommendation. The fixture holds eleven
-     values at commit `abd965cc37`, because its generated files could
-     not be pushed at twenty-five. The notes do not say whether a plan
-     of the corpus is large for this reason, and no test bounds the size
-     of a plan. Not about a per-element construct.
+     question 160; note 478). Settled by ruling: the owner adopted the
+     recommendation of the coordinator of this work
+     ([Decided](#decided)). The type `Template` of
+     `plan-and-label-templates.md` §1.1 has a node that names an output
+     of the plan, and a template never holds a copy of the template of
+     another output. The size of a plan is linear in the number of its
+     outputs and of the nodes of their templates, the label of an output
+     is evaluated once and used by every template that names it, and
+     the meaning of no template changes. The documents' assumption that
+     a template holds the template of each input in place is replaced by
+     the ruling. With the copies, where an output reads two outputs that
+     each read two more, the template of each is written once for every
+     way that leads to it. In the prototype's fixture `shared-values`
+     twenty-five values each read the two before them. Its plan was
+     31 MB as compact JSON, all but 8 kB of it in `outputs[].template`,
+     and the template of the last value alone was 12 MB. The sizes
+     follow the Fibonacci numbers along the chain. The prototype's crate
+     at commit `abd965cc37` writes the copies, and does not follow the
+     ruling; its fixture holds eleven values, because its generated
+     files could not be pushed at twenty-five. Three parts are not
+     ruled, and each has a provisional decision: how the slot-free hash
+     and the keys cover a named template (question 239), what the same
+     template is in a join (question 240), and what the provenance
+     record of a kept output holds of the outputs that its template
+     names (question 241). How the node is instantiated, and with which
+     selections and picks, follows from the documents and is no
+     question: for the inputs of the template that holds it, under the
+     selections and the chosen children that the cone of the named
+     output reported (`plan-and-label-templates.md` §3.2, "A reference
+     to an output"). The notes do not say whether a plan of the corpus
+     is large for this reason, and no test bounds the size of a plan.
+     Not about a per-element construct. The entry keeps its number.
 223. **Where a compiled artifact holds the files that `dataFile` names**
      (BI question 15; note 465). `builtin-inventory.md` has the result
      of `dataFile(path)` as "a constant of the program" and *assumes*
@@ -7176,6 +7325,108 @@ that analysis that are no question are named after question 238.
      order in which the transactions sealed, and these evaluations are
      of one transaction. Nothing is assumed. It extends question 45
      and question 61.
+
+**From the ruling of 2026-11-17 that a template names the template of
+another output.** Questions 239 to 242 are what that ruling
+([Decided](#decided); question 222) leaves undetermined. Each is written
+into the documents as an assumption, and the assumption of each is a
+provisional decision
+([Provisional decisions](#provisional-decisions-awaiting-the-owners-ratification)).
+Questions 243 and 244 are two findings of a read-only audit of growth
+that the text of `plan-and-label-templates.md` bears out. Nothing is
+assumed for either and neither has a provisional decision: each names
+the measurement that the prototype should run.
+
+239. **How the slot-free hash, the instantiation key and the memo key
+     cover a template that is named** (PL question 163). The ruling says
+     that the label of an output is evaluated once and used by every
+     template that names it, and that the cost of label evaluation is
+     linear. It does not say what the slot-free hash of
+     `plan-and-label-templates.md` §1.2, the instantiation key of its
+     §4.1 and the memo key of its §4.3 hold for a node that names an
+     output. *Assumed,* provisional (P2): each is over the template as
+     it is written. The hash replaces the index of such a node by its
+     position in the template's own list of the outputs it names, and
+     the two keys hold the identifier of the label of each named
+     output's template, and no slot, selection or chosen child of it.
+     The alternative keeps the keys over the template with every
+     reference replaced, which grows with everything upstream of an
+     output. No label differs between the two. The same for a template
+     of an element body over an array of references, over an array of
+     plain values in place, and over the result of another per-element
+     construct.
+240. **What the same template is in a join** (PL question 164).
+     `plan-and-label-templates.md` §3.2 ("A join") leaves a repeated
+     input out of a join. With a node that names an output, two outputs
+     can have equal templates under two indexes. *Assumed,* provisional
+     (P3): two inputs are the same where they are equal as they are
+     written, so two nodes are the same where they name one output. The
+     alternative compares the templates that the nodes name. The label
+     is the same under both, and the hash of a plan differs. Not about a
+     per-element construct.
+241. **What the provenance record of a kept output holds of the outputs
+     that its template names** (ES question 97).
+     `execution-and-storage.md` §7.2 has `OutputProvenance` hold the
+     selections, the chosen keys and the dynamic addresses "the template
+     reaches". The ruling does not say whether that follows a node that
+     names an output. *Assumed,* provisional (P4): it does, each entry
+     once, so the record holds what it held with every template in
+     place. An interim output has no record of its own. The size of one
+     record then follows everything upstream of its output. The
+     alternative holds the entries of the output's own template alone,
+     which is linear in the plan and stores the selections of a named
+     interim output nowhere. The same for a kept output of an element
+     body over an array of references, over an array of plain values in
+     place, and over the result of another per-element construct.
+242. **The records other than `Output` that hold a template** (PL
+     question 165). The ruling on question 222 is on the templates of
+     outputs. `WriteEdge.template`, `ComputedInput.template`,
+     `Operation.input`, `Collection.membership`, and the `template` of a
+     path of `Binding.state` and of `Closure.params` hold a template in
+     place as well. *Assumed,* provisional (P5): each has the node that
+     names an output wherever the template it holds, or an input of it,
+     is an output of the plan. The alternative leaves a copy there. No
+     label differs. The template of a body is no output and is written
+     at each write edge of the body under either. The same for a record
+     of an element body over an array of references, over an array of
+     plain values in place, and over the result of another per-element
+     construct.
+243. **What forming the key of an output costs where the outputs it
+     names did not change** (PL question 166). Within one transaction
+     the label of each named output is formed once. Across transactions
+     nothing requires the runtime to keep the label identifier of an
+     interim output, so where the cone at the end of a chain of D
+     outputs is evaluated alone, forming the key of its output forms the
+     keys of the D outputs behind it. The units that a staged write uses
+     and the reads of a unit follow the same chain
+     (`plan-and-label-templates.md` §4.5 and §4.6). Nothing is assumed.
+     *Measurement:* the fixture of twenty-five values that each read the
+     two before them, at run time, with a change of the first value and
+     then of the last; for each changed output the count of template
+     nodes visited, of keys formed, the length of each key, and the
+     entries of each unit's read set and of the units it uses. The
+     counts for the change of the last value should not grow with the
+     number of values. The same for a chain in an element body over an
+     array of references, over an array of plain values in place, and
+     over the result of another per-element construct.
+244. **The label of a `fold` that has no durable state** (PL question
+     167). `plan-and-label-templates.md` §4.3 says that a count per
+     label identifier is kept "with the fold's durable state, so adding
+     or removing an element updates the set in constant time". The
+     membership `fold` of a `filter` and of a `flatMap` belongs to no
+     operation and has no such state, a scan needs no state by §3.13
+     and joins a prefix, the function of §4.2 instantiates the body for
+     every element, and the label of a collection's array for the index
+     joins every position with no count stated. For `min` and `max` the
+     removal of the extreme needs the other contributions in an order.
+     Nothing is assumed. *Measurement:* a `filter`, a `flatMap`, a
+     `some`, and a `map` whose body reads the index, each over 100,
+     1,000 and 10,000 elements, with one element changed, one appended
+     and one removed, and for `min` the extreme removed; the count of
+     body-label instantiations and of label identifiers joined for each
+     change. Each is run over an array of references, over an array of
+     plain values in place, and over the result of another per-element
+     construct.
 
 Six places of that analysis are no question, because the documents
 decide them. `streamData` and `llm` are removed ([Decided](#decided)),
@@ -7670,7 +7921,13 @@ The open questions each document ends with stay where they are.
   two before them has templates whose sizes follow the Fibonacci
   numbers. The fixture that showed it holds eleven values, and no test
   bounds the size of a plan. Whether a plan of the corpus is large for
-  this reason was not examined.
+  this reason was not examined. By ruling a template names the template
+  of another output with a node of its own and holds no copy of it, so
+  the size of a plan is linear in the number of its outputs and of the
+  nodes of their templates ([Decided](#decided)). The prototype at
+  commit `abd965cc37` does not follow that ruling yet: its crate writes
+  no such node, and writes the copies. How its executor evaluates the
+  label of a template that holds copies was not examined.
 - **At commit `abd965cc37` the corpus was run by the prototype's author,
   for the comparison of values and the comparison of labels.** The
   coordinator of this work ran the tests and the fixtures. Neither run
@@ -7790,9 +8047,11 @@ The open questions each document ends with stay where they are.
    validation of a read against its schema; `$defs` in the schema of a
    type that refers to itself; and the report of
    `binding:write-to-computed` for a write that an `action` makes.
-   Also bound the size of a plan in a test, which waits on question
-   222, and have the generator of the comparison give a value for a
-   member of type `unknown` or `FabricBytes`.
+   Also follow the ruling on question 222: have the crate write the
+   node that names an output and the executor evaluate the label of an
+   output once, with the provisional decisions P2 and P3, and bound the
+   size of a plan in a test. And have the generator of the comparison
+   give a value for a member of type `unknown` or `FabricBytes`.
 5. **In the prototype, for the rulings of 2026-11-17 on keys.** The
    prototype at commit `682b918ed1` has the rulings, the four on
    questions 207 to 210 included, and the record forms of the documents

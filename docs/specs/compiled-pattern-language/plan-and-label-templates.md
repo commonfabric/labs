@@ -206,9 +206,20 @@ export type Template =
   /** The observation of one slot, passed through unchanged. */
   | { readonly op: "slot"; readonly slot: Index }
   /**
+   * The template of another output of the plan (`Plan.outputs`), named
+   * and not written out. By ruling every input of a node that is an
+   * output of the plan, kept or interim, is this node, and no template
+   * holds a copy of the template of another output. The node denotes the
+   * label that the named output's `template` denotes, so a template with
+   * each such node replaced by the template it names has the same label
+   * (section 3.2, "A reference to an output").
+   */
+  | { readonly op: "output"; readonly output: Index }
+  /**
    * A new value computed from the inputs. A join of templates is this
    * node with `by: { expression: true }` over the joined templates
-   * (section 3.2).
+   * (section 3.2). An input that is an output of the plan is an `output`
+   * node.
    */
   | {
     readonly op: "derive";
@@ -256,8 +267,9 @@ export type Template =
    * of a container slot, or a child of a container the instance computed
    * (`Plan.outputs`). `pick` is the node's own choice point
    * (`Plan.picks`), as `selector` is a `select`'s. `body` is over the
-   * chosen child's slots, and for a computed container it is the template
-   * of the chosen child (section 3.18).
+   * chosen child's slots, and for a computed container it is the `output`
+   * node of the entry that has the label of the chosen child (section
+   * 3.18).
    */
   | {
     readonly op: "pick";
@@ -385,7 +397,10 @@ export interface Collection {
   /**
    * The label of which elements the result of the construct has and in
    * what order. For a scan and for `operation` it is the membership the
-   * record iterates (section 3.7).
+   * record iterates (section 3.7). Where that is the template of an
+   * output of the plan, as for a record whose `source` names an output,
+   * it is the `output` node of that entry (section 3.2, "A reference to
+   * an output").
    */
   readonly membership: Template;
 }
@@ -478,7 +493,11 @@ export interface ComputedInput {
    */
   readonly at: Path;
   readonly observes: ObservationClass;
-  /** The label of what the body observes there. */
+  /**
+   * The label of what the body observes there. Where the value is an
+   * output of the plan, an `output` node, or the join of the `output`
+   * nodes of its entries at and below the path (section 3.9).
+   */
   readonly template: Template;
 }
 
@@ -662,7 +681,11 @@ export interface WriteEdge {
     }
     /** The anchors document of the field at an `identity` slot. */
     | { readonly kind: "anchors"; readonly of: Index };
-  /** The label of the value written. */
+  /**
+   * The label of the value written. Where the value, or an input of the
+   * template, is an output of the plan, an `output` node and no copy
+   * (section 3.2, "A reference to an output").
+   */
   readonly template: Template;
   /**
    * The value written at the target is a reference the body was given, as
@@ -1013,6 +1036,8 @@ export interface Operation {
    * cone; for a materializer, the template of its body; for a database,
    * `const`, because its table declarations are constants of the plan. It
    * is also the label of the operation's bookkeeping state (section 2.6).
+   * Each joined template that is an output of the plan is an `output`
+   * node (section 3.2, "A reference to an output").
    */
   readonly input: Template;
   /**
@@ -1125,6 +1150,7 @@ export interface Closure {
   /** What is bound to each path of the pattern's private parameters. */
   readonly params: readonly {
     readonly path: Path;
+    /** An `output` node where the bound value is an output of the plan. */
     readonly template: Template;
     /**
      * For a closure used as a value: a data value is copied into the
@@ -1189,8 +1215,9 @@ export interface Binding {
      * instance, for a path bound to the name of `[SELF]`. `template` is
      * the label of the same
      * place: the `slot` node, which for a slot of root `index` resolves to
-     * the label of that collection's array (section 2.2), the output's
-     * template, and `const` for a stream, for a constant, and for the
+     * the label of that collection's array (section 2.2), the `output`
+     * node that names the output, and `const` for a stream, for a
+     * constant, and for the
      * result of the instance, which is a reference passed on. A constant
      * is held as its value, whether it is written as a literal or as the
      * name of a module-scope constant, which the compiler evaluates. A
@@ -1822,6 +1849,14 @@ analysis that fills it in is specified in `footprint-analysis.md`.
   *slot-free* form: each slot index is replaced by its position in the
   template's own ordered slot list, and each selector index likewise. Two
   patterns with structurally equal templates then share memo entries.
+  The lists are of the nodes the template itself holds. An `output` node
+  is not replaced by the template it names. *Assumed,* provisional (P2;
+  section 8, question 163): the index of an `output` node is replaced, as a slot
+  index is, by its position in the template's own ordered list of the
+  outputs it names, so the slot-free form of a template has the size of
+  the template as it is written, and hashing every template of a plan
+  costs time linear in the size of the plan. The label of the named
+  output enters the memo key as the label of a slot does (section 4.3).
 - **Slot keys.** At run time a slot is bound to an address. The binding's key
   is the address, the path and the class, which is exactly what the stored
   envelope is resolved by (section 2.2). The schema hash is not part of the
@@ -3452,6 +3487,12 @@ value, in the order `space`, `user`, `session`. It is the narrowest among:
   that answers for the acting principal (`spaceAccess` and `spaceMembers`,
   section 3.16).
 
+"Reaches" follows an `output` node into the template it names (section
+3.2, "A rule over a template"). The compiler computes the member per
+output, once each: the narrowest among what the nodes of the output's own
+template give by the two items above and `Output.scope` of each output
+that an `output` node of the template names.
+
 The scope an output has at run time can be narrower, because a slot can be
 bound through a link to a document of narrower scope, and it is never
 wider. The scope of a cone instance is the narrowest among `Output.scope`
@@ -3810,7 +3851,10 @@ the annotations of two sets of schemas (section 4.4 has the keys).
     has no `Body.code` to compare, so no alternative with a `body`
     admits the write. An alternative without a `body` is not affected.
     Where the template of the output or the edge is a `derive` by a
-    body at its root, that body is the writer.
+    body at its root, that body is the writer. A root that is an
+    `output` node is followed to the root of the template it names, so
+    an output that passes the result of a body on unchanged has that
+    body as its writer. The compiler decides it once per output.
 - **At an input.** For each use of a body, the compiler takes each
   `requiredIntegrity` and `maxConfidentiality` annotation of the types
   of the body's formal inputs, and of the read envelopes of its
@@ -3821,11 +3865,15 @@ the annotations of two sets of schemas (section 4.4 has the keys).
   write edge of the body, and of every output whose template has a
   `derive` by that body: those are the writes the body's inputs flow
   into. The `derive` can be anywhere in the output's template: under a
-  `select`, a `fold` or a `pick`, in the template of an output the
-  template's cone received through an edge, and in the template of an
-  entry of `Body.computed` of another body. So the constraint is found
-  by walking the template, and an output that passes a body's result on
-  through a further cone lists it too.
+  `select`, a `fold` or a `pick`, in the template of an output that an
+  `output` node names, and in the template of an entry of
+  `Body.computed` of another body. So an output that passes a body's
+  result on through a further cone lists the constraint too. The rule
+  follows `output` nodes (section 3.2, "A rule over a template"), and
+  the compiler computes it per output, once each: the input constraints
+  of an output are those of the bodies of the `derive` nodes that its
+  own template holds, with the input constraints of each output that an
+  `output` node of the template names.
 
   Three points complete the rule.
 
@@ -3863,7 +3911,10 @@ the annotations of two sets of schemas (section 4.4 has the keys).
   constraint that lists the slots of `Cone.slots` whose path overlaps
   the annotated path, in `ConstraintInputs.slots`. It is listed in the
   `constraints` of every output and every write edge of the cone whose
-  template reaches one of the listed slots.
+  template reaches one of the listed slots. "Reaches" follows an
+  `output` node into the template it names, and whether an output
+  reaches a slot is computed once per output (section 3.2, "A rule over
+  a template").
 
 Equal constraints are one entry of `Plan.constraints`.
 
@@ -3884,7 +3935,10 @@ constraint tests") and, per diagnostic, the cases the compiler reports
 and the cases it leaves to the runtime ("What the compiler decides"). A
 template is evaluated on declared labels only where every `slot` node
 it reaches has the `declared` member of the dimension tested, on every
-selection, and it has no `dynamic` node, no `fold` and no `pick`. An
+selection, and it has no `dynamic` node, no `fold` and no `pick`. Both
+conditions follow `output` nodes, and the evaluation of an output's
+template on declared labels is made once per output and reused at every
+`output` node that names it (section 3.2, "A rule over a template"). An
 input constraint is evaluated only where it lists no entry of
 `Body.handles`. In every other case the diagnostic is not reported and
 the constraint is checked at instantiation. One case is large: an
@@ -5370,6 +5424,7 @@ selector `i`:
 | --- | --- | --- |
 | `const` | empty | neutral for `⊓` |
 | `slot s` | `C(s)` | `I(s)`, unchanged |
+| `output n` | `C` of the `template` of entry `n` of `Plan.outputs` | `I` of that template, unchanged; neutral where that template is |
 | `derive` | `⊔` of `C` over `inputs` | `⊓` of `I` over `inputs`, plus `TransformedBy` for `by` |
 | `select` | `C(condition) ⊔ C(branches[sel])` | `I(branches[sel])` |
 | `fold` | `C(membership) ⊔` the `⊔` of `C(body)` over the elements it covers | `⊓` of `I(body)` over those elements, plus `TransformedBy` for its `pattern` |
@@ -5379,6 +5434,117 @@ selector `i`:
 The label of a kept output is the label of its template by this table, with
 one atom added to the integrity: the `TransformedBy` atom of the pattern the
 plan is compiled from ("The atom of the pattern", below).
+
+**A reference to an output.** By ruling a template names the template of
+another output and never holds a copy of it. Where an input of a node is
+the value of an entry of `Plan.outputs`, kept or interim, the input is
+the `output` node that names the entry. The rule holds at every position
+that takes a template: an input of a `derive`, the `condition` and a
+branch of a `select`, the `body` of a `fold`, the `choice` and the `body`
+of a `pick`, a template of a record (`WriteEdge.template`,
+`ComputedInput.template`, `Collection.membership`, `Operation.input`,
+and the `template` of a path of `Binding.state` and of
+`Closure.params`), and the root of `Output.template` where an output
+passes the value of another output on. It holds whichever cone computes
+the named output, the cone of the template that names it included. The
+member names `op: "output"` and `output` are this document's choice.
+
+The ruling is on the templates of outputs. That the templates of the
+other records follow it is *assumed,* provisional (P5; section 8,
+question 165): every record of section 1.1 that holds a `Template`, the
+ones named above and any other, has the `output` node wherever the
+template it holds, or an input of that template, is an output of the
+plan, and no record holds a copy of the template of an output. It
+changes a representation and no label, for the reason "What the node
+denotes" gives below. The template of a body, the `derive` over its
+footprint (section 3.9), is no output, so each write edge of a body
+holds that `derive` itself, with `output` nodes for the entries of
+`Body.computed` that are outputs.
+
+- **Which entry is named.** An input that is a path of a value the
+  instance computed is the node of the nearest entry at or above the
+  path, as the label of a path is the template of that entry (section
+  3.4). An input that is a constructed value observed whole is the join
+  of the `output` nodes of its entries at and below the path (section
+  3.4). A value that only the cone computing it uses has no entry
+  (section 1.4), so no node can name it, and its template is written in
+  place in the template of what uses it.
+- **What the node denotes.** The label of the named output's `template`
+  by the table above, and the neutral label where that template
+  instantiates to it. It is the label of the template and not of the
+  stored output: for a kept output it is without the atom that the rule
+  for every kept output adds. So a template with each `output` node
+  replaced by the template it names denotes the same label, and the
+  ruling changes the meaning of no template.
+- **For which inputs.** The node is instantiated for the inputs of the
+  template that holds it (section 4.2). A template of an element body
+  that names an output of the same body gets the label of that output
+  for the same element keys, and one that names an output of an
+  enclosing body, or of the pattern body, gets the label for the
+  enclosing keys. No template outside an element body names a
+  per-element output except under a `fold` or a `pick` over the
+  collection, which instantiates its `body` for an element. That is the
+  same for a body over an array of references, over an array of plain
+  values in place, and over the result of another per-element construct:
+  the cases differ in how a key is computed (section 1.3) and not in
+  which output a node names.
+- **The selections of the named template.** The selections and the
+  chosen children that the named template is instantiated under are
+  those that the cone computing the named output reported at its last
+  evaluation, for the same keys. They are not reported again by the cone
+  of the template that holds the node.
+- **No cycle.** The references among the outputs of a plan form no
+  cycle. A value is computed before it is used, and a cycle of an
+  instance goes through a side-write (section 1.4), which its reader
+  reads at a slot and not at an output.
+
+**The size of a plan.** No template grows with the template of another
+output: an `output` node has one size whatever it names. The templates
+of a plan together hold one node for each node that the rules of this
+section write for an expression of the source, at the one place the
+expression is written. The size of a plan is therefore linear in the
+number of its outputs and of the nodes of their templates, and does not
+follow the number of paths by which one output depends on another.
+
+**A rule over a template.** Several rules of this document are stated
+over what a template "reaches", "has" or "holds". Each of them is a rule
+about the template with every `output` node replaced by the template it
+names, so it follows `output` nodes, except where the list below says
+otherwise. By ruling none of them is computed as a walk of that replaced
+form as a tree. Each is computed per output: the result for an output is
+formed from the nodes that its own template holds and from the results
+for the outputs that its `output` nodes name, and the result for an
+output is formed once and used at every node that names it. Each then
+costs time linear in the size of the plan, or of what a transaction
+instantiates.
+
+| Rule | Follows `output` nodes | Formed once per |
+| --- | --- | --- |
+| The label of a template (section 4.2) | Yes | Output and set of inputs, in a transaction (section 4.1, "A label is instantiated once") |
+| What makes a demanded output due when a slot's label alone changed (section 4.1, step 1) | Yes: a slot that the template reaches through an `output` node counts | Output |
+| The instantiation key (section 4.1) | No: it holds the label of each output that the template names, and no slot, selection or chosen child of the named template | Template |
+| The slot-free hash of a template (section 1.2) | No: it is over the template as written | Template |
+| `Output.scope` (section 1.4) | Yes | Output, at compile time |
+| The input constraints that an output lists (section 1.5) | Yes | Output, at compile time |
+| Whether an output of a cone reaches a slot that a constraint of expression code lists (section 1.5) | Yes | Output, at compile time |
+| The writer of an output, a `derive` by a body at the root (section 1.5) | Yes, at the root alone | Output, at compile time |
+| The evaluation of a template on declared labels, and whether it is evaluated at all (sections 1.5 and 4.4) | Yes | Output, at compile time |
+| The label of the label-metadata observation of a computed value (section 3.16) | Yes | Output, in a transaction |
+| The labels on a cycle of side-writes (section 4.5) | Yes | Output, in each round |
+| Which staged writes a write uses (section 4.5) | Yes | Output, in a transaction |
+| A `const` or a repeated input of a join (below) | No: the inputs are compared as they are written | Node |
+| When a `derive` and a `fold` mint (below) | No: the condition is on the label of the node, which the labels of its inputs give | Node |
+
+A `select` instantiates the `output` nodes of its condition and of the
+selected branch, and none of an unselected branch. A `fold` instantiates
+its `body` for each element it covers: an `output` node of the body that
+names a per-element output gets that element's label, and one that names
+an output outside the element body gets one label, formed once for all
+the elements. A `pick` instantiates its `body` for the chosen child, and
+an `output` node there gets the label of the named entry with the child
+slots bound to that child (section 3.18). A `dynamic` node belongs to the
+template that holds it: the label of its journaled reads reaches a
+template that names that one only as a part of the named output's label.
 
 **The atom of the pattern.** By ruling, trust is attached to a pattern, and
 the code of the reactive tier is named in a `TransformedBy` atom by the
@@ -5474,8 +5640,14 @@ of the pattern", above). That holds for the membership of a derived
 collection too: which elements are present was computed, and the atom
 says by what. Three cases need no such node.
 
-- A join with `const` is the other template alone.
-- A join of one template with itself is that template.
+- A join with `const` is the other template alone. An `output` node is
+  no `const` node, also where the template it names is `const`.
+- A join of one template with itself is that template. *Assumed,*
+  provisional (P3; section 8, question 164): two inputs are the same
+  template where they are equal as they are written, so two `output`
+  nodes are the same where they name one output, and two nodes that
+  name two outputs with equal templates are two inputs. The label is
+  the same either way, because a join and a meet are idempotent.
 - A `fold` joins the membership its collection iterates by its own rule
   (below), so "a `fold` of `t`, joined with membership" is the `fold`
   alone.
@@ -5791,7 +5963,10 @@ which some branch has an entry, the plan has an entry whose template is
 the node with each branch replaced by that branch's template at the path:
 the template of the nearest entry of the branch at or above the path,
 and `const` where the branch is a constructed value that has no such
-path, because the path then holds nothing. The entries of one `select`
+path, because the path then holds nothing. Where the branch, the
+condition or the choice is an output of the plan, each per-path node has
+the `output` node of that entry there and no copy of its template
+(section 3.2, "A reference to an output"). The entries of one `select`
 name one selector, and those of one `pick` one choice point. The
 container entry is the node over the container entries of the branches.
 For `c ? { x: a } : { x: b, y: d }` the path `x` has
@@ -5807,7 +5982,9 @@ consumes the whole value, as a substitution of a template literal does
 (section 3.19); for an entry of `Body.computed` of class `value` at or
 above the constructed value (section 3.9); for a path of an effect's
 request or of a child's argument that the value is written to whole; and
-for the `body` of a `fold` over elements that are constructed values. An
+for the `body` of a `fold` over elements that are constructed values.
+Where the value has entries in `Plan.outputs`, the inputs of the join
+are the `output` nodes of those entries, and no copy of a template. An
 entry of `Body.computed` of class `shape` or `enumeration` at the path of a
 constructed value has the template of its container entry alone. A
 constructed value has no reference, so an `identity` entry there has the
@@ -6062,7 +6239,12 @@ For a collection the instance computed (`Collection.source` of kind
 The element's root slots then take the producing template: `shape` its
 membership template, and `identity` the template of the reference at the
 position. A slot below the root crosses that reference like any link
-(section 2.5), with the producing template as the pointer's label.
+(section 2.5), with the producing template as the pointer's label. The
+plan holds no copy of the producing template for this: the slots resolve
+at run time to the label of the entry of `Plan.outputs` that has it,
+which a transaction instantiates once and uses for every element and
+every slot that resolves to it (section 4.1, "A label is instantiated
+once").
 
 A collection over a module-scope constant, or over an array literal
 written in place, is a collection of this kind: the cone that yields the
@@ -6291,7 +6473,8 @@ it, the template of `.length` is the template of the collection's own
 `enumeration`, as the `output` row of the table in section 3.2 gives it: for an
 assembled entry its `template`, for an array constructed in place the template
 of its container entry (section 3.4), and for the result of one opaque call the
-call's template.
+call's template. In each of the three the template of `.length` is the `output`
+node that names that entry.
 
 `.length` of a string is not an aggregate. A string has no membership, and its
 length is computed from its content. For a string that is an input the template
@@ -6373,7 +6556,11 @@ result of another body or of expression code: as an argument of a call in
 the reactive tier, or as a capture of a body written there. Such a value
 has a template and no slot. `Body.computed` lists what
 the body observes of it, one entry per path and class, each with the
-template of the producing expression at that path. The cone's value
+template of the producing expression at that path. Where the value is an
+output of the plan, that template is the `output` node of the nearest
+entry at or above the path, and where only the cone of the call computes
+and uses the value, it is written in place (section 3.2, "A reference to
+an output"). The cone's value
 function passes the value, and the runtime copies into the argument the
 paths the entries name, each narrowed to its class, as it
 narrows a slot. The body's label joins the templates of the entries, and
@@ -8527,7 +8714,11 @@ What that observation reads depends on what the target is:
   so the instantiated template is the one answer that is current for both.
   The observation's own label is the join of the label-metadata labels of
   every slot the template reaches under the current selections, and of the
-  conditions that made those selections.
+  conditions that made those selections. The slots are those the template
+  reaches through its `output` nodes as well. The label is formed per
+  output, from the slots of the output's own template and the labels so
+  formed for the outputs it names, once for each in a transaction (section
+  3.2, "A rule over a template").
 
 This answers the question `builtin-inventory.md` puts under
 `inspectConfLabel`. In both cases the result fails closed to "not available"
@@ -8674,10 +8865,12 @@ from makes it stale as a change of any input does.
 
 **A container the instance computed.** Where `a` is a value another
 expression of the instance computed, `from` names its output and `body` is
-the template of the chosen child. When one opaque call produced `a`, every
-path of `a` has the call's template (section 3.3), so `body` is that
-template whichever child is chosen, and the label is the template of `k`
-joined with the call's. When `a` is a constructed object with a static key
+the template of the chosen child: the `output` node of the nearest entry
+of `Plan.outputs` at or above the child's path, and no copy of that
+entry's template. When one opaque call produced `a`, every
+path of `a` has the call's template (section 3.3), so `body` names the
+call's entry whichever child is chosen, and the label is the template of
+`k` joined with the call's. When `a` is a constructed object with a static key
 set, the compiler emits a `select` over its keys in place of a `pick`, and
 each branch is the template of that member. Its `condition` is the
 template of `k`, and it has one branch more than the object has keys:
@@ -9104,15 +9297,71 @@ For each one:
    reported selections, the selections themselves, and the children the
    template's `pick` nodes chose. With the slot-free hash of the template
    and the labels of its `dynamic` nodes (section 4.6), this is the
-   **instantiation key**.
+   **instantiation key**. *Assumed,* provisional (P2; section 8, question
+   163): the slots, the selections, the chosen children and the `dynamic`
+   nodes are those of the nodes that the template itself holds, and for
+   each `output` node that the template reaches under those selections
+   the key holds the identifier of the label of the named output's
+   template ("A label is instantiated once", below). The key of a
+   template then has the size of the template as it is written.
 3. If the key equals the key the stored label was instantiated from, reuse
    that label. A change of value alone ends here.
 4. Otherwise instantiate (section 4.2), look the result up in the memo
    (section 4.3), check the constraints (section 4.4), and stage the label
    with the write.
 
-An interim value that is not kept is never labeled. Its template is not lost:
-it is a sub-template of every kept output that depends on it.
+An interim value that is not kept is never labeled: no label is stored
+for it and no constraint is checked on it. Its template is not lost.
+Every output that depends on it names it, with an `output` node or
+through the outputs between them, so its template is a sub-template of
+every kept output that depends on it by reference and not by copy. The
+label of its template is formed where a template that is instantiated
+names it, as the next paragraph says, and is held for the transaction
+alone.
+
+**A label is instantiated once.** By ruling the label of an output's
+template is evaluated once and used by every template that names the
+output, as a memo entry is on the value side.
+
+- **Once per output and set of inputs.** In one transaction the template
+  of an output is instantiated at most once for one set of inputs: one
+  cone instance, which is one combination of element keys, and under a
+  `pick` one chosen child. Every `output` node that names the output for
+  that set uses the one result. The same holds where a slot resolves to
+  the label of an output's template (sections 2.2 and 3.6), and where
+  `TemplateInputs.membership` returns it (section 3.2). The label of
+  the membership that a collection iterates, and the label of a
+  collection's array that a slot of root `index` resolves to, are
+  formed once for the collection and the enclosing keys as well, and
+  not once for each element that reads them.
+- **When it is formed.** The label of a named output is formed when step
+  2 first needs its identifier, by steps 2 to 4 for that output's own
+  template: its key is collected, and the label is looked up in the memo
+  or instantiated. No constraint is checked and nothing is staged for an
+  interim output on that account. For a kept output that the transaction
+  also stores, the one instantiation serves both: the stored label is
+  the label of the template with the atom of the kept output added, and
+  an `output` node uses it without that atom (section 3.2). Where step 3
+  reuses the stored label of a kept output, the label of its template is
+  the entry of the memo for the same key.
+- **What it costs.** A transaction instantiates each template it needs
+  once per set of inputs, and every node of a template once. The cost of
+  the label evaluation of a transaction is linear in the number of nodes
+  of the templates it instantiates, counted once for each cone instance
+  and each element a `fold` covers, and does not follow the number of
+  paths by which one output depends on another. No rule of this document
+  is a walk of a template as a tree that follows `output` nodes without
+  this reuse (section 3.2, "A rule over a template").
+- **Step 1 for a named output.** The second condition of step 1 follows
+  `output` nodes: a demanded output is due where a slot that its
+  template reaches, through the outputs it names included, has a new
+  label and an unchanged value. Whether an output reaches such a slot is
+  found once per output.
+- **Between transactions.** Nothing requires the runtime to keep the
+  label of an interim output after the transaction. The memo of section
+  4.3 returns it from its key. Whether the runtime keeps the key or the
+  label identifier of an interim output with the cone instance belongs
+  to `execution-and-storage.md`.
 
 **A label that changes alone.** A label can change without its value
 changing, when a slot's label changed. *Assumed,* as
@@ -9159,6 +9408,15 @@ interface TemplateInputs {
   chosen(pick: Index): TemplateInputs | undefined;
   /** Label of the membership a collection iterates (section 3.2). */
   membership(collection: Index): Label;
+  /**
+   * The label of the `template` of an output, for these inputs, without
+   * the atom of a kept output. The adapter instantiates it at most once
+   * per transaction and set of inputs and returns the same result to
+   * every caller (section 4.1). The inputs of an element return the
+   * result of the enclosing inputs for an output outside the element
+   * body.
+   */
+  outputLabel(output: Index): Instantiated;
   /** Join of what a journaled read set consumed. */
   dynamicLabel(reads: Index): Label;
   /**
@@ -9181,6 +9439,8 @@ function instantiateTemplate(t: Template, inp: TemplateInputs): Instantiated {
       return NEUTRAL;
     case "slot":
       return inp.slotLabel(t.slot);
+    case "output":
+      return inp.outputLabel(t.output);
     case "dynamic":
       return inp.dynamicLabel(t.reads);
     case "derive": {
@@ -9262,6 +9522,17 @@ the adapter adds the atom of entry 0 of `Plan.patterns` to the integrity of
 what it returns, a `NEUTRAL` result included (section 3.2, "The atom of the
 pattern").
 
+An `output` node does not instantiate the template it names in place.
+It asks the adapter for the label, and the adapter calls
+`instantiateTemplate` on the named output's template, with the
+selections and the chosen children of the cone that computes that
+output, the first time the label is asked for in the transaction for
+those inputs. It returns what that call returned every time after, a
+`NEUTRAL` result included. The function stays pure: the label of an
+`output` node is one of its inputs, as the label of a slot is. The
+recursion ends because the references among outputs form no cycle
+(section 3.2).
+
 A `const` instantiates to `NEUTRAL`, and every node that takes a part
 handles it. A `derive` and a `fold` leave neutral parts out of the join
 and of the meet, so a `derive` over one slot and one literal keeps the
@@ -9284,7 +9555,8 @@ With labels held by content address
 label is an identifier and an instantiation is a function of identifiers:
 
 ```text
-key   = (template hash, selections, slot label ids in template order)
+key   = (template hash, selections, slot label ids in template order,
+         label ids of the named outputs in template order)
 value = label id
 ```
 
@@ -9301,6 +9573,14 @@ value = label id
 - A slot contributes the identifier of its whole label, the pointer labels
   of its chain included (section 2.5). A `sampled` slot contributes the
   identifier resolved at the cone's last evaluation.
+- An `output` node contributes the identifier of the label of the
+  template it names, and a neutral result contributes a fixed marker.
+  *Assumed,* provisional (P2; section 8, question 163). The label of a
+  template is a function of the template as written, its selections, the
+  labels of its slots and the labels of the outputs it names, so the
+  entry is as pure as one keyed by every slot the named templates reach.
+  Two templates that are equal as written share entries whatever the
+  templates of the outputs they name are, where those have equal labels.
 - That design holds label identifiers only above an inline size limit
   (`CFC_LABEL_INLINE_LIMIT` in `runtime/runner/src/cfc/label-documents.ts`).
   The memo key uses the hash of the label either way; whether the stored
@@ -9589,7 +9869,11 @@ table of section 3.2, with these rules.
 - A template is evaluated only where every `slot` node it reaches, on
   every selection, has the `declared` member of the dimension tested,
   and it has no `dynamic`, `fold` or `pick` node. An input constraint is
-  evaluated only where it lists no entry of `handles`.
+  evaluated only where it lists no entry of `handles`. An `output` node
+  evaluates to what the template it names evaluates to, and is not
+  evaluated where that template is not. The compiler evaluates the
+  template of an output once and uses the result at every node that
+  names it (section 3.2, "A rule over a template").
 - **A write of a body that holds a handle is not decided.** The template
   of every write edge of a body, and of every output it derives, is a
   `derive` over all of `Body.reads` (section 3.2). A body that writes
@@ -9718,7 +10002,7 @@ cannot hold under full enforcement.
   cone commit when their own constraints hold. The value stays available
   to the transaction that computed it: a cone that receives it through an
   `output` edge, and a handler whose state names the output, read the
-  current value, and their own labels hold the output's template. A reader
+  current value, and their own templates name the output's template. A reader
   by address reads what is stored (section 4.6).
 
 A dropped derived write is not an event's outcome, and no party delivered it. It
@@ -9859,13 +10143,19 @@ evaluated.
   and can only remove inherited integrity atoms, so the rounds end. The
   result is the least confidentiality that satisfies every template on the
   cycle, and an integrity atom is inherited on the cycle only when every
-  input from outside the cycle that the templates reach carries it.
+  input from outside the cycle that the templates reach carries it. The
+  label of an output that a template names is instantiated once in a
+  round and used at every node of the round that names it. It is
+  instantiated again in the next round where a label it was formed from
+  changed.
 - **What a write uses.** A staged write **uses** another staged write, of
   the same transaction or of an earlier transaction of the batch, when one
   of these holds:
   - a slot of its template, of one of its constraints, or of an egress
     check on it resolved to a label the other write staged, a round of a
-    cycle included;
+    cycle included. A slot of the template of an output that the
+    template names counts, and the staged writes that the label of an
+    output uses are found once per output in a transaction;
   - its value was computed from a value read at an address the other write
     staged, by a slot, by a journaled read, or by the following of a
     reference;
@@ -9895,10 +10185,12 @@ therefore records as decision inputs, and the digest binds:
 
 - the identity of the `CompiledPattern` of every instance the transaction
   evaluated;
-- for every template it instantiated, the instantiation key: the slot-free
+- for every template it instantiated, the template of an output that an
+  `output` node names included, the instantiation key: the slot-free
   hash of the template, the selections and the children a `pick` chose, the
-  label identifiers of the slots, the staged ones among them, and the
-  labels of the `dynamic` nodes with their trigger reads;
+  label identifiers of the slots, the staged ones among them, the label
+  identifiers of the outputs it names, and the labels of the `dynamic`
+  nodes with their trigger reads;
 - which derived writes a failed constraint dropped, and which a conflict
   withdrew, so that the digest is over the writes that commit.
 
@@ -10613,9 +10905,10 @@ T_send   = derive(by B0)  [ e0 e1 e2 e3 e4 e5 e6 e7 e8 b0 b1 b2 b3 b4
 T_titles = derive(by B1)  [ s2 s3 s4 s5  dynamic(link through s4) ]
 T_facts  = derive(by B2)  [ s0  T_titles  dynamic(handle B2.h0) ]
 
-T_empty  = derive(expression) [ T_facts, const ]
+T_empty  = derive(expression) [ output(facts.main), const ]
 
-c1       = collection  source: output facts.main   membership: T_facts
+c1       = collection  source: output facts.main
+                       membership: output(facts.main)
 
 T_text   = derive(by B3)  [ m0 m1 m2 m4 ]
 T_isSet  = derive(expression) [ m0 m1 m5 ]
@@ -10624,12 +10917,23 @@ T_edited = select( condition: T_isSet,
                                 T_isSet ] )
 T_key    = derive(by B4)  [ m6 ]
 T_place  = pick( p0, from: output facts.places, choice: T_key,
-                 body: T_facts )
+                 body: output(facts.places) )
 T_repl   = select( condition: T_place, branches: [ T_place, const ] )
-T_label  = select( condition: derive(expression) [ T_repl, const ],
+T_label  = select( condition: derive(expression) [ output(replies), const ],
                    branches:  [ const,
-                                derive(expression) [ T_repl ] ] )
+                                derive(expression) [ output(replies) ] ] )
 ```
+
+`output(x)` is the `output` node that names the entry `x` of
+`Plan.outputs` (section 3.2, "A reference to an output"). `facts.main`,
+`facts.places` and `replies` are entries, so every template that reads
+one of them names it: `T_empty` and the membership of `c1` name
+`facts.main`, the body of `T_place` names `facts.places`, and `T_label`
+names `replies`, whose template is `T_repl`. No template holds a copy of
+`T_facts` or of `T_repl`. A `T_` name that stands inside another
+template is written in place there, because the value is computed and
+used inside one cone and has no entry: `T_titles` inside `T_facts`,
+`T_isSet` inside `T_edited`, and `T_key` and `T_place` inside `T_repl`.
 
 The second branch of `T_label` is the template literal
 `${replies} replies`. A template literal is a `derive` over the templates
@@ -10650,7 +10954,8 @@ message cell's identity (section 1.3), and a row keeps its cone instances
 when the list is reordered or a message is inserted before it.
 
 `facts` is the result of one opaque call, so every path of it has
-`T_facts`, `facts.main` and `facts.places` included. `B2` reads its second
+`T_facts`, `facts.main` and `facts.places` included: `T_facts` is the
+`template` of each of those entries. `B2` reads its second
 argument at the keys it looks up, so its computed input is
 `titles/* : value`, with the template of what `B1` returned. `isEmpty` is a
 pure expression over `facts.main.length`; its template is the template of
@@ -10891,7 +11196,10 @@ specification change expresses compiler trust that way:
 There is consequently no fallback label. The **cone-level join** is the
 join over every slot of a cone and, since a cone also receives outputs of
 other cones (section 1.4), over every slot of the cones those outputs come
-from, transitively. It is not a mode of operation. It keeps two uses:
+from, transitively. It is formed per cone, from the slots of the cone
+and the cone-level joins of the cones it receives outputs from, each
+formed once, and not by a walk from each cone over every path that leads
+to it. It is not a mode of operation. It keeps two uses:
 
 - **As the bound on a compiler defect.** Section 7.3's cone narrowing means
   a miscompiled cone can at worst give an output the data of its own cone
@@ -13633,24 +13941,29 @@ this document made.
      JSX spread child. The runtime of today runs neither form in a
      pattern body, so nothing of this is compared with it. It is
      question 221 of the continuation plan.
-160. **The label template of an output that reads another output** (for
-     the project owner; from the prototype). The type `Template` of
-     section 1.1 has no node that stands for the template of another
-     output: a `derive` holds the whole template of each of its inputs,
-     and the template of an interim value is a sub-template of every
-     kept output that depends on it (section 4.1). Where an output reads
-     two outputs that each read two more, the template of each is
-     written once for every way that leads to it, so the size of a plan
-     grows with the number of ways through its outputs and not with
-     their number. In a fixture of the prototype, twenty-five values
-     that each read the two before them gave a plan of 31 MB, nearly all
-     of it templates. *Assumed:* the type as section 1.1 has it, with
-     each input's template in place. The alternative is a node that
-     names an output of the plan. This document then has to say how such
-     a node is instantiated, with which selections and picks, and how
-     the slot-free hash of a template and the instantiation key (section
-     4.1) cover the template that is named. Not about a per-element
-     construct. It is question 222 of the continuation plan.
+160. **The label template of an output that reads another output**
+     (from the prototype). Settled by ruling. A template names the
+     template of another output with an `output` node and never holds a
+     copy of it (section 1.1). The size of a plan is linear in the
+     number of its outputs and of the nodes of their templates, the
+     label of an output is evaluated once and used by every template
+     that names it, and the meaning of no template changes (sections
+     3.2 and 4.1). With a copy in place, where an output reads two
+     outputs that each read two more, the template of each is written
+     once for every way that leads to it: in a fixture of the
+     prototype, twenty-five values that each read the two before them
+     gave a plan of 31 MB, nearly all of it templates. The prototype's
+     compiler writes the copies and does not follow the ruling. The
+     member names of the node are this document's choice. The ruling
+     does not say how the slot-free hash and the instantiation key
+     cover a named template (question 163), what the same template
+     is in a join (question 164), or whether the other records that
+     hold a template follow (question 165). The node is instantiated for
+     the inputs of the template that holds it, with the selections and
+     the chosen children that the cone of the named output reported,
+     which follows from the rules for `Cone.selectors` and
+     `Cone.picks` (section 3.2, "A reference to an output"). The entry
+     keeps its number. It is question 222 of the continuation plan.
 161. **`asScope` on a call that is compiled into the surrounding
      instance** (for the project owner). `Child.scope` holds the scope
      of a call through `asScope` (section 1.1), and a statically
@@ -13687,3 +14000,147 @@ this document made.
      a plain array generated from scratch that is given whole to an
      instance of its own, or into which a reference by key is stored
      elsewhere. It is question 236 of the continuation plan.
+163. **How the slot-free hash, the instantiation key and the memo key
+     cover a template that is named** (for the project owner). By
+     ruling a template names another output's template with an `output`
+     node, the label of an output is evaluated once and used by every
+     template that names it, and the cost of label evaluation is linear
+     (question 160). The ruling does not say what the three keys hold
+     for an `output` node. *Assumed,* provisional (P2 of the
+     continuation plan, the author's recommendation, adopted by the
+     coordinator of this work and not ruled): each is over the template
+     as it is written. In the slot-free hash the index of an `output`
+     node is replaced by its position in the template's own ordered
+     list of the outputs it names, as a slot index is (section 1.2). The
+     instantiation key and the memo key hold, for each `output` node the
+     template reaches under its own selections, the identifier of the
+     label of the named output's template, and no slot, selection or
+     chosen child of the named template (sections 4.1 and 4.3). The
+     label is a function of exactly those, so no label changes. What
+     changes is which runs share a memo entry and which changes leave a
+     key equal: a change of a slot of a named template that leaves the
+     named output's label equal leaves the key of the template that
+     names it equal, where a key over every slot reached would change.
+     The alternative keeps the keys over the replaced form: the hash
+     covers the hash of each named template, and the key lists every
+     slot, selection and chosen child that the template reaches through
+     its `output` nodes, each once. That key grows with everything
+     upstream of an output, so the keys of a plan together grow faster
+     than the plan. If the owner decides for the alternative, sections
+     1.2, 4.1, 4.3 and 4.6 change, with the rows of the table of
+     section 3.2 ("A rule over a template") for the two keys, and
+     `execution-and-storage.md` §1.9 and §7.2 and
+     `scheduler-and-serving-loop.md` §5.6 where they say what the key
+     holds. The same for a template of an element body over an
+     array of references, over an array of plain values in place, and
+     over the result of another per-element construct. It is question
+     239 of the continuation plan.
+164. **What the same template is in a join** (for the project owner).
+     Section 3.2 ("A join") leaves a repeated input out of a join: "A
+     join of one template with itself is that template." With every
+     template in place two inputs were the same where their templates
+     were equal. With `output` nodes two outputs can have equal
+     templates under two indexes. *Assumed,* provisional (P3 of the
+     continuation plan, the author's recommendation, adopted by the
+     coordinator of this work and not ruled): two inputs are the same
+     where they are equal as they are written, so two `output` nodes
+     are the same where they name one output, and the compiler compares
+     no template of a named output. The label is the same under either
+     reading, because a join and a meet are idempotent. The canonical
+     form of a plan differs, and so its hash. The alternative compares
+     the templates that the nodes name, which costs a comparison of two
+     templates down to the slots for each pair of inputs. If the owner
+     decides for the alternative, the second case of "A join" in
+     section 3.2 and its row of the table there change, and the
+     prototype's compiler has to compare so. Not about a per-element
+     construct. It is question 240 of the continuation plan.
+165. **The records other than `Output` that hold a template** (for the
+     project owner). The ruling of question 160 is on the templates of
+     outputs. `WriteEdge.template`, `ComputedInput.template`,
+     `Operation.input`, `Collection.membership`, and the `template` of a
+     path of `Binding.state` and of `Closure.params` hold a `Template`
+     in place as well (section 1.1; `footprint-analysis.md` §6.5).
+     *Assumed,* provisional (P5 of the continuation plan, the
+     coordinator's extension of the ruling, and not ruled): each has the
+     `output` node wherever the template it holds, or an input of it, is
+     an output of the plan, and no record holds a copy of the template
+     of an output (section 3.2, "A reference to an output"). No label
+     changes. The alternative leaves a copy in those records, and their
+     size then follows the paths through the outputs as
+     `Output.template` did. If the owner decides for the alternative,
+     that paragraph of section 3.2 and the comments of those members in
+     section 1.1 change, and `footprint-analysis.md` §6.5. Not covered
+     by either: the template of a body is no output, and it is written
+     at each write edge of the body. The same for a record of an element
+     body over an array of references, over an array of plain values in
+     place, and over the result of another per-element construct. It is
+     question 242 of the continuation plan.
+166. **What forming the key of an output costs where the outputs it
+     names did not change** (for the project owner; from a read-only
+     audit of growth). Step 2 of section 4.1 forms the instantiation key
+     of a template from the labels of its own slots and the label
+     identifiers of the outputs it names (provisional, P2), and section
+     4.1 ("A label is instantiated once") says that nothing requires the
+     runtime to keep the label of an interim output after a transaction.
+     Within one transaction each named output is formed once. Across
+     transactions, where the cone at the end of a chain of D outputs is
+     evaluated alone, the key of its output needs the label identifier
+     of the output it names, which needs that output's key, and so on
+     through the D outputs behind it: D key formations for one change,
+     and about D times D over two for one change at each. Step 3 says "A
+     change of value alone ends here", which holds for the comparison
+     and not for the cost of forming the key that is compared. The same
+     holds for the units that a staged write uses (section 4.5), which
+     are found through the named outputs, and for the reads of a unit
+     (section 4.6), which are those of every producing cone. Nothing is
+     assumed, and no provisional decision is made: whether the runtime
+     holds the label identifier and the key of each output with its
+     cone instance between transactions belongs to
+     `execution-and-storage.md`, which holds there the label identifiers
+     that a cone instance's reads consumed (its §3.1) and names none for
+     an output. The measurement the prototype should run: the fixture
+     of twenty-five values that each read the two before them, at run
+     time, with a change of the first value and then of the last, and
+     the count for each changed output of the template nodes visited,
+     the keys formed, the length of each key, and the entries of each
+     unit's read set and of the units it uses. The count for the change
+     of the last value should not grow with the number of values. The
+     same for a chain inside an element body over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct. It is question 243 of the
+     continuation plan.
+167. **The label of a `fold` that has no durable state** (for the
+     project owner; from a read-only audit of growth). Section 4.3 says
+     that the runtime keeps a count per label identifier "with the
+     fold's durable state, so adding or removing an element updates the
+     set in constant time". Four things in this document do not fit
+     that sentence. The membership `fold` of a `filter` and of a
+     `flatMap` (section 3.7) belongs to no `Operation`, and the stored
+     state of a derived collection is its origin facts (section 2.6),
+     which hold no count. A scan has a `fold` with `through`, and
+     section 3.13 says of it "State. None is required"; its set is that
+     of a prefix, which a change of the deciding position changes for
+     many elements at once. `instantiateTemplate` as section 4.2 shows
+     it instantiates the body for every element the `fold` covers. And
+     the label of a collection's array, which a slot of root `index`
+     resolves to (sections 2.2 and 3.6), joins the root of every
+     position, with no count stated. Section 4.1 says each of these
+     labels is formed once for the collection in a transaction, which
+     removes the factor of the elements that read it and leaves one
+     pass over the elements for each change. Section 3.8 says of an
+     aggregate "A change to one element costs one update", and for
+     `min` and `max` the removal of the current extreme needs the other
+     contributions in an order, which the text leaves to a state whose
+     shape is private. Nothing is assumed, and no provisional decision
+     is made. The measurement the prototype should run: a `filter`, a
+     `flatMap`, a `some` and a `map` whose body reads the index, each
+     over 100, 1,000 and 10,000 elements, with one element changed, one
+     appended and one removed, and for `min` the extreme removed; the
+     count of body-label instantiations and of label identifiers joined
+     for each change. A count that grows with the number of elements
+     for a change of one element shows that the sentence of section 4.3
+     does not hold for that construct. The measurement is made for an
+     array of references, for an array of plain values in place, and
+     for the result of another per-element construct, since the three
+     differ in how a position's root label is resolved. It is question
+     244 of the continuation plan.
