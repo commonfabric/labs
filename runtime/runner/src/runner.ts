@@ -3698,6 +3698,9 @@ export class Runner {
     tx.enqueuePostCommitEffect({
       id: `runner-acceptance:${crypto.randomUUID()}`,
       kind: RUNNER_ACCEPTANCE_EFFECT_KIND,
+      // Both arms settle `callback` from this runner's own state, and neither
+      // reads the transaction.
+      readsPreparationRecords: false,
       flush: () => {
         effectAccepted = true;
         publish();

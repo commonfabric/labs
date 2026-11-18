@@ -110,13 +110,28 @@ the main thread under the worker arm and so are not on the worker.
   verified them, whose input held the same records. Those were 38 KB of the
   54 KB the transaction of a map element's start left per create, 21 KB of it
   the write-policy inputs and 13 KB the traces; the state is charged 2 KB per
-  create since, its modes and the snapshots it shares. A settled transaction runs no
-  further gate over them; the one reader after settlement is a post-commit
-  effect's release check, so a commit releases them once its inline effects
-  have flushed, an abort or a commit refused before storage releases them at
-  once, the refusal keeping its reasons, and a transaction whose effects a seal
-  destination took over keeps them, since the destination flushes after its
-  wave lands.
+  create since, its modes and the snapshots it shares. A settled transaction runs
+  no further gate over them. The one reader that needs them after a commit
+  settles is a post-commit effect's release check, so a commit releases them
+  once its inline effects have flushed, and an abort or a commit refused before
+  storage releases them at once, the refusal keeping its reasons; a handler's
+  run that aborted its own transaction still collects its trusted-event
+  candidates from it, and finds none. A transaction whose effects a seal
+  destination took over, to flush after its wave lands, releases them at the
+  same point when every one of those effects declares that it reads none of
+  them (`PostCommitSideEffect.readsPreparationRecords`), and keeps them
+  otherwise. The runner acceptance and `navigateTo` declare it. A Topic
+  create's handler transaction is one of these: what it hands over is the
+  runner acceptance that its start of the new Topic enqueues, and in a local
+  run it held a median of 475 write-policy inputs and 165 dereference traces.
+  The index preparation builds over the write-policy inputs is keyed by their
+  array (`writePolicyInputsForDocument` in `cfc/prepare.ts`), so it goes with
+  them. On a local board with four writers, in three rounds that alternated a
+  server with the hand-off release and the array key against one with
+  neither, the board worker held 80 to 88 MB less at 164 Topics, about 0.5 MB per Topic
+  filed. Heap snapshots at 28 and 68 Topics place about 290 KB per Topic of
+  that in the released records and index entries themselves; what accounts
+  for the rest is not known.
 
 ## What is left
 
@@ -153,15 +168,16 @@ describe.
   behavior from that binding; and the immutable cell store's snapshots keep a
   query-result proxy made under the transaction. Cutting the paths one by one
   has each next one take the charge over, so the three go together.
-- The preparation records of a transaction whose post-commit effects a seal
-  destination took over, which stay after the destination has flushed them.
-  The transaction cannot tell from its flush calls when the last one has run:
-  the outbox selects among several attachments' flushes for one request and
-  drops the ones it did not dispatch, an abandoned wave's effects are never
-  admitted, and the speculation overlay owns effects it never enacts. Releasing
-  them needs each destination to tell the transaction when its last effect is
-  retired or dropped. It is a transaction with an external request in it, so a
-  Topic create leaves none.
+- The preparation records of a transaction that handed a seal destination an
+  effect which may read them, which stay after the destination has flushed it.
+  A sink request is such an effect: its release check reads the transaction's
+  write-policy inputs when it flushes. The transaction cannot tell from its
+  flush calls when the last such effect has run: the outbox selects among
+  several attachments' flushes for one request and drops the ones it did not
+  dispatch, an abandoned wave's effects are never admitted, and the speculation
+  overlay owns effects it never enacts. Releasing them needs each destination
+  to tell the transaction when its last effect is retired or dropped. Only a
+  transaction with an external request in it keeps them.
 - `deepFrozenCache` is a set of `WeakSet` generations, and the charge the
   tools gave it was their own tables, which V8 sizes by the peak number of
   live frozen objects each holds; it fell to nothing once the transactions

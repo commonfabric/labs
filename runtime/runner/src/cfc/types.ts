@@ -1014,6 +1014,17 @@ export type PostCommitSideEffect = {
    * an ending.
    */
   abandon?(error: unknown): void;
+
+  /**
+   * Whether {@link flush} or {@link abandon} reads the preparation records of
+   * the transaction carrying this effect: what its `getCfcState()` reports of
+   * write-policy inputs, dereference traces, trigger reads and the rest of
+   * what a settled transaction releases. Absent means it may, as a sink
+   * request's release check does. A transaction whose effects a seal
+   * destination takes over releases those records when it settles only if
+   * each of its effects says `false`.
+   */
+  readsPreparationRecords?: boolean;
 };
 
 /**

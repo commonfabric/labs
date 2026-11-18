@@ -388,6 +388,8 @@ export function navigateTo(
         ])
       }`,
       kind: "navigateTo",
+      // The navigation needs only the target resolved here.
+      readsPreparationRecords: false,
       // No `abandon`: nothing waits on a result cell here, and the `navigated`
       // flag is restored by the commit callback above, so a later attempt
       // navigates. An effect whose work simply does not happen has nothing to
@@ -459,6 +461,8 @@ export function navigateTo(
         ])
       }`,
       kind: "navigateTo",
+      // The navigation needs only the target resolved here.
+      readsPreparationRecords: false,
       flush: async () => {
         if (navigationAttempt !== thisAttempt) return;
         const work = Promise.resolve().then(() =>

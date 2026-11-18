@@ -31,6 +31,7 @@ import {
   CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE,
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
+  type PostCommitSideEffect,
   runtimeWritePolicyAuthorization,
 } from "../src/cfc/types.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -417,13 +418,20 @@ describe("extended-storage-transaction", () => {
 
     describe("with a seal destination that owns the effects", () => {
       // The destination flushes the effects after the wave that carries the
-      // contribution lands, which is after the transaction settles here, so
-      // the release checks still have their prepared inputs to read.
+      // contribution lands, which is after the transaction settles here. A
+      // transaction keeps its prepared inputs for an effect whose release
+      // check may read them then, and releases them as it settles when none
+      // of the effects it handed over reads them.
 
       let sealing: ReturnType<typeof StorageManager.emulate>;
       let serving: Runtime;
+      let handedOver: {
+        tx: IExtendedStorageTransaction;
+        effects: readonly PostCommitSideEffect[];
+      }[];
 
       beforeEach(() => {
+        handedOver = [];
         sealing = StorageManager.emulate({ as: signer });
         serving = new Runtime({
           apiUrl: new URL(import.meta.url),
@@ -432,12 +440,23 @@ describe("extended-storage-transaction", () => {
         });
         serving.installSealDestination({
           seal: (tx) => tx.tx.commit(),
-          deferSealedEffects: () => true,
+          deferSealedEffects: (tx, effects) => {
+            handedOver.push({ tx, effects });
+            return true;
+          },
         });
       });
       afterEach(async () => {
         await serving?.dispose();
         await sealing?.close();
+      });
+
+      /** An effect that declares it reads no preparation records. */
+      const recordBlind = (): PostCommitSideEffect => ({
+        id: "record-blind-effect",
+        kind: "test",
+        readsPreparationRecords: false,
+        flush: () => {},
       });
 
       it("keeps them after the commit settles", async () => {
@@ -450,6 +469,51 @@ describe("extended-storage-transaction", () => {
         expect(state.prepare.status).toBe("prepared");
         expect(state.writePolicyInputs).toHaveLength(1);
         expect(state.dereferenceTraces).toHaveLength(1);
+      });
+
+      it("releases them after the commit settles when no effect it handed over reads them", async () => {
+        const tx = staged(serving);
+        tx.enqueuePostCommitEffect(recordBlind());
+
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await tx.postCommitEffectsSettled();
+
+        expect(handedOver).toHaveLength(1);
+        const state = tx.getCfcState();
+        expect(state.prepare.status).toBe("unprepared");
+        expect(state.writePolicyInputs).toEqual([]);
+        expect(state.writePolicyInputIdentities.size).toBe(0);
+        expect(state.dereferenceTraces).toEqual([]);
+      });
+
+      it("keeps them when any effect it handed over may read them", async () => {
+        const tx = staged(serving, () => {});
+        tx.enqueuePostCommitEffect(recordBlind());
+
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await tx.postCommitEffectsSettled();
+
+        expect(handedOver[0]?.effects).toHaveLength(2);
+        const state = tx.getCfcState();
+        expect(state.prepare.status).toBe("prepared");
+        expect(state.writePolicyInputs).toHaveLength(1);
+        expect(state.dereferenceTraces).toHaveLength(1);
+      });
+
+      it("hands a destination that flushes later the recorded inputs of an effect that reads them", async () => {
+        let seen: number | undefined;
+        const tx = staged(serving, (committed) => {
+          seen = committed.getCfcState().writePolicyInputs.length;
+        });
+
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await tx.postCommitEffectsSettled();
+        expect(seen).toBeUndefined();
+        for (const batch of handedOver) {
+          for (const effect of batch.effects) await effect.flush(batch.tx);
+        }
+
+        expect(seen).toBe(1);
       });
     });
   });

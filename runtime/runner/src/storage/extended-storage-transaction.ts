@@ -4578,15 +4578,22 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * dereference traces, trigger reads, structure containers, asserted value
    * roots, the writes made under a non-builtin identity, consulted grants
    * and manifests, the observations, and the preparation that verified
-   * them, whose input holds the same records. A preparation that was
-   * invalidated holds its reasons and no input, and stays for whoever reads
-   * why a commit was refused. A transaction that has settled runs no further
-   * gate over the records, so a reference to it that outlives it, from the
-   * piece its start ran in for one, keeps none of them.
-   * The one reader after settlement is a post-commit effect's release check,
-   * so `#commit` releases them only once the effects have flushed, and not at
-   * all when a seal destination took the effects over to flush after its wave
-   * lands.
+   * them, whose input holds the same records. A
+   * preparation that was invalidated holds its reasons and no input, and
+   * stays for whoever reads why a commit was refused. A transaction that has
+   * settled runs no further gate over the records, so a reference to it that
+   * outlives it, from the piece its start ran in for one, keeps none of them.
+   * The one reader that needs them after a commit settles is a post-commit
+   * effect's release check, so `#commit` releases them only once the inline
+   * effects have flushed. A transaction whose effects a seal destination took
+   * over, to flush after its wave lands, releases them at that same point
+   * unless one of those effects may read them
+   * (`PostCommitSideEffect.readsPreparationRecords`), in which case it keeps
+   * them. Other reads after the release find them empty and decide nothing:
+   * a handler's run that aborted its own transaction still collects its
+   * trusted-event candidates from it
+   * (`trustedEventWriteCandidatesFromTransaction`), and this transaction's
+   * own checks for a preparation to invalidate find none.
    */
   #releasePreparationInputs(): void {
     const state = this.#cfcState;
@@ -4914,6 +4921,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // backend cannot report a separate verdict.
     const verdict = receipt.verdict;
     let effectsHandedOff = false;
+    let handedOffEffectsReadRecords = false;
     const effects = verdict.then(
       async (result) => {
         this.#runVerdictCallbacks(result);
@@ -4936,6 +4944,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
               ) === true;
           if (deferred) {
             effectsHandedOff = true;
+            handedOffEffectsReadRecords = this.#cfcState.outbox.some(
+              (effect) => effect.readsPreparationRecords !== false,
+            );
             this.#clearPostCommitOutbox(true);
             return;
           }
@@ -4989,10 +5000,12 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
     // By the time the inline effects have flushed, the commit callbacks have
     // run too, so no callback and no release check reads the prepared inputs
-    // afterwards. Effects a destination owns flush on its schedule, and their
-    // checks read the inputs then.
+    // afterwards. Effects a destination owns flush on its schedule, so when
+    // any of them may read the inputs, the transaction keeps them for it.
     const release = (): void => {
-      if (!effectsHandedOff) this.#releasePreparationInputs();
+      if (!effectsHandedOff || !handedOffEffectsReadRecords) {
+        this.#releasePreparationInputs();
+      }
     };
 
     // The receipt's settlement stage includes the inline effect layer.
