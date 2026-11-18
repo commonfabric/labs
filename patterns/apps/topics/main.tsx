@@ -2,6 +2,7 @@ import {
   action,
   Default,
   equals,
+  equalsKey,
   handler,
   lift,
   NAME,
@@ -28,6 +29,7 @@ import {
   recordNames,
   SEQUENCE_NAMING,
 } from "../../product/collection-naming/naming.ts";
+import { crossrefIndexOf } from "./crossref-index.ts";
 import Topic, {
   rejectMutation,
   snippet,
@@ -36,6 +38,8 @@ import Topic, {
   topicAuthorFromAgent,
   topicAuthorFromPerson,
   topicAuthorLabel,
+  type TopicCrossrefIndex,
+  type TopicCrossrefNamedRow,
   type TopicCrossrefRow,
   type TopicMentionable,
   type TopicMentionSource,
@@ -288,12 +292,14 @@ export function mentionListsOf<M>(
 }
 
 /**
- * The topics that mention `topic`, out of `list` — the pivot's whole join,
- * lifted out so a test can hand it a list built by hand.
+ * The topics that mention `topic`, out of `list` — the pivot's join for one
+ * topic, stated pair by pair so a test can hand it a list built by hand.
+ * `mentionedByEach()` makes the same join for every entry at once.
  *
  * The result holds one element for each entry of `list` whose mentions name
- * `topic` and which is not `topic` itself, in `list`'s order. The pivot hands
- * it the list `distinctByIdentity` returns, which names each topic once.
+ * `topic` and which is not `topic` itself, in `list`'s order. Over the list
+ * `distinctByIdentity()` returns, which names each topic once, that is each
+ * mentioning topic once.
  *
  * `mentions[i]` is what `list[i]` points at, read once by the caller because
  * reading it through the reactive array costs a link resolution per topic per
@@ -325,25 +331,71 @@ export function mentionedBy<T extends object>(
 }
 
 /**
+ * Returns what `equals()` compares of `value`, as something a `Map` or a `Set`
+ * can hold: `equals()` matches two values exactly when this returns the same
+ * thing for both. That is the `equalsKey()` of what a reference names. A value
+ * with no place in the graph has no key, and `equals()` matches it to nothing
+ * but itself, which is what holding the value itself does.
+ */
+function identityOf(value: object): unknown {
+  return equalsKey(value) ?? value;
+}
+
+/**
+ * Returns the join `mentionedBy()` makes, for every entry of `list` at once:
+ * the result holds, at each entry's place, what
+ * `mentionedBy(entry, list, mentions)` returns.
+ *
+ * It resolves each entry and each mention to its identity once and then looks
+ * sources up by that, so the work grows with the entries plus the mentions,
+ * where asking `mentionedBy()` of each entry in turn grows with one times the
+ * other.
+ */
+export function mentionedByEach<T extends object>(
+  list: readonly T[],
+  mentions: readonly (readonly (object | undefined)[] | undefined)[],
+): T[][] {
+  const identities = list.map(identityOf);
+  const inbound = new Map<unknown, T[]>();
+  list.forEach((source, from) => {
+    // What this entry points at, each once however often it is mentioned, and
+    // never the entry's own topic.
+    const named = new Set<unknown>();
+    for (const mention of mentions[from] ?? []) {
+      if (!mention) continue;
+      const identity = identityOf(mention);
+      if (identity === identities[from] || named.has(identity)) continue;
+      named.add(identity);
+      const sources = inbound.get(identity);
+      if (sources === undefined) inbound.set(identity, [source]);
+      else sources.push(source);
+    }
+  });
+  return identities.map((identity) => [...(inbound.get(identity) ?? [])]);
+}
+
+/**
  * The entries of `list` naming distinct topics, each kept at its first entry
  * and in `list`'s order, leaving out an entry with nothing behind it yet. These
  * are the topics the pivot builds rows for and joins over as sources.
  *
  * Identity is `equals`, the comparison `mentionedBy` makes, so two entries that
  * resolve to one document are one topic whether they hold the same link or one
- * holds an alias of it. Nothing in the pattern API turns a `ReadonlyCell` entry
- * into a resolved key carrying space, scope, and path, so each entry is
- * compared with `equals` against the distinct entries kept before it: at most
- * `n(n - 1) / 2` comparisons over `n` entries.
+ * holds an alias of it. Each entry is looked up in a set by its `equalsKey`,
+ * which two entries share exactly when `equals` matches them, so `n` entries
+ * cost `n` keys and `n` lookups.
  */
 export function distinctByIdentity<T extends object>(
   list: readonly (T | undefined)[],
 ): T[] {
+  const seen = new Set<unknown>();
   const distinct: T[] = [];
   for (const entry of list) {
-    if (entry && !distinct.some((kept) => equals(kept, entry))) {
-      distinct.push(entry);
-    }
+    if (!entry) continue;
+    const identity = identityOf(entry);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    distinct.push(entry);
   }
   return distinct;
 }
@@ -362,9 +414,13 @@ export function distinctByIdentity<T extends object>(
  * thread, verbs, or rendered UI. It reads the shape of the graph and nothing
  * else.
  *
- * Matching uses `equals` so aliases and scoped references keep their canonical
- * identity semantics. The scan runs over plain arrays and compares source
- * identity only after finding a matching mention.
+ * Matching is by what `equals()` compares, so aliases and scoped references keep
+ * their canonical identity semantics. Each topic and each mention is resolved
+ * to its identity once, so a run grows with the topics plus the mentions.
+ *
+ * Each row carries the number its topic publishes as `name`, read off the same
+ * topic documents the join reads, so the board's index can file the row under
+ * it; a topic with no number gets a row without one.
  *
  * The rows and the join's sources both come from `distinctByIdentity`. A topic
  * the board lists at two entries therefore gets one row, which is what lets a
@@ -389,11 +445,11 @@ const crossrefTable = lift(
       // documents and fails the idempotency recheck.
       sources: ReadonlyCell<TopicMentionSource>[] | Default<[]>;
     },
-  ): TopicCrossrefRow[] => {
+  ): TopicCrossrefNamedRow[] => {
     const rows: unknown[] = [];
     // Every pass below reads this plain array: an element read through the
-    // reactive array resolves a link every time, and the passes read each
-    // element many times. It holds each distinct topic at its first entry, and
+    // reactive array resolves a link every time, and each pass reads every
+    // element. It holds each distinct topic at its first entry, and
     // is both the list of rows and the join's sources. An entry with nothing
     // behind it yet (mid-sync) has no identity to address a row by, and
     // `Writable.for(undefined)` is not a cause, so `distinctByIdentity` leaves
@@ -401,26 +457,27 @@ const crossrefTable = lift(
     // identity, not by position, so a shorter table costs nothing.
     const list = distinctByIdentity(Array.from(sources));
     // Materialize each mention array once, from `list` itself, so `mentions[i]`
-    // is what `list[i]` points at; scanning a reactive array resolves its
-    // elements again for every destination topic.
+    // is what `list[i]` points at.
     const mentions = mentionListsOf(list).map((refs) =>
       refs === undefined ? undefined : Array.from(refs)
     );
-    list.forEach((topic) => {
-      const inbound = mentionedBy(topic, list, mentions);
+    const inbound = mentionedByEach(list, mentions);
+    list.forEach((topic, at) => {
       // Addressed by the topic it describes, so a row keeps its identity
       // wherever it sits and however the board is reordered. That is what lets
       // every topic's lookup re-run freely on any board change and still write
       // nothing: an unchanged row recomputes to the same links at the same
       // address.
+      const name = topic.key("shortName").get();
       rows.push(
-        Writable.for<TopicCrossrefRow>(topic).set({
-          topic,
-          mentionedBy: inbound,
-        }),
+        Writable.for<TopicCrossrefNamedRow>(topic).set(
+          typeof name === "string"
+            ? { topic, mentionedBy: inbound[at], name }
+            : { topic, mentionedBy: inbound[at] },
+        ),
       );
     });
-    return rows as TopicCrossrefRow[];
+    return rows as TopicCrossrefNamedRow[];
   },
 );
 
@@ -624,7 +681,13 @@ export interface TopicsOutput {
    * that mention it. Published so a topic composed outside `addTopic` can be
    * wired to the same table the board's own children read — the graph is
    * derived once, here, and never per topic. */
-  crossrefs: TopicCrossrefRow[] | Default<[]>;
+  crossrefs: TopicCrossrefNamedRow[] | Default<[]>;
+
+  /** `crossrefs` grouped by topic number: under each number, the positions of
+   * the rows carrying it. Published so a topic composed outside `addTopic` can
+   * find its row the way the board's own children do, by number, without
+   * reading every row; a topic checks the row it finds is its own. */
+  crossrefIndex: TopicCrossrefIndex;
 
   /** The full-board survey surface: one bounded row per topic, carrying the
    * scalars a survey reads. A row IS its topic, so a row's own address is the
@@ -670,6 +733,13 @@ export const submitProfileTopic = handler<void, {
    * writes a row. */
   boardCrossrefs: ReadonlyCell<TopicCrossrefRow[] | Default<[]>>;
 
+  /** The board's index of that pivot by number, handed to the new topic as it
+   * arrives; nothing here reads it. */
+  boardCrossrefIndex: ReadonlyCell<
+    // deno-lint-ignore ban-types
+    Default<TopicCrossrefIndex, { byName: {} }>
+  >;
+
   /** The namespace, written one key per create. Read for its keys and written
    * at one of them inside this handler, so the allocation and the append are
    * one transaction. */
@@ -681,6 +751,7 @@ export const submitProfileTopic = handler<void, {
   topics,
   mentionable,
   boardCrossrefs,
+  boardCrossrefIndex,
   names,
   newTitle,
   profileName,
@@ -708,9 +779,11 @@ export const submitProfileTopic = handler<void, {
       shortName: allocated,
       // Same wiring `addTopic` gives its children: the board's mention index
       // is the universe the new topic's editor autocompletes over, and the
-      // board's pivot is where it reads its inbound references.
+      // board's pivot, through its index by number, is where it reads its
+      // inbound references.
       mentionable,
       boardCrossrefs,
+      boardCrossrefIndex,
     }));
   topics.push(piece);
   newTitle.set("");
@@ -737,6 +810,9 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   // document under this name has no such link, and the run stores the rows in
   // it at space scope, where every reader finds them.
   const pivot = crossrefTable({ sources: topics });
+  // The pivot's rows by number, so each topic reads the positions filed under
+  // its own number rather than every row.
+  const crossrefIndex = crossrefIndexOf({ rows: pivot });
   // Also derived once for the whole board: the mention universe every
   // child's editor autocompletes over, as one document of copies instead of
   // the topics themselves.
@@ -799,8 +875,9 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
         mentionable,
         // The board's mention pivot. A topic reads its inbound references out
         // of the row the board already built for it rather than rebuilding the
-        // join.
+        // join, and finds that row through the pivot's index by number.
         boardCrossrefs: pivot,
+        boardCrossrefIndex: crossrefIndex,
       }));
     // Mergeable append: concurrent creates from different users all land.
     // The session composer draft is `submitTopic`'s to clear; a headless
@@ -822,6 +899,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
     topics,
     mentionable,
     boardCrossrefs: pivot,
+    boardCrossrefIndex: crossrefIndex,
     names,
     newTitle,
     profileName,
@@ -922,6 +1000,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
     naming: SEQUENCE_NAMING,
     topicCount,
     crossrefs: pivot,
+    crossrefIndex,
     // The topics themselves, declared through the index's narrow row schema:
     // a row's address is the topic's address, so a survey and a follow-up read
     // name the same document.

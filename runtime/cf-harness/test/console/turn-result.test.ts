@@ -150,6 +150,44 @@ describe("console/turn-result", () => {
     }
   });
 
+  it("returns no result for a stored outcome that names a question with none asked", async () => {
+    const artifactRoot = await Deno.makeTempDir();
+    try {
+      const turnId = "turn-with-empty-question";
+      await writeTranscript(artifactRoot, turnId, [
+        { role: "user", content: "Prepare the request" },
+        { role: "assistant", content: "Which account?" },
+      ]);
+      const reportPath = join(artifactRoot, turnId, "run-report.json");
+      const report = JSON.parse(await Deno.readTextFile(reportPath));
+      const read = () =>
+        readConsoleTurnResult({
+          sessionId: "session",
+          continuable: true,
+          artifactRoot,
+          turnId,
+          spaceName: "console-test",
+        });
+
+      report.taskOutcome = { outcome: "question", question: { text: " " } };
+      await Deno.writeTextFile(reportPath, JSON.stringify(report));
+      await expect(read()).resolves.toBeUndefined();
+
+      // The same report asking a question reads as that question.
+      report.taskOutcome = {
+        outcome: "question",
+        question: { text: "Which account?" },
+      };
+      await Deno.writeTextFile(reportPath, JSON.stringify(report));
+      await expect(read()).resolves.toMatchObject({
+        outcome: "question",
+        question: { text: "Which account?" },
+      });
+    } finally {
+      await Deno.remove(artifactRoot, { recursive: true });
+    }
+  });
+
   it("ties a named Pattern to its verified composition component without exposing its cell address", async () => {
     const artifactRoot = await Deno.makeTempDir();
     const call = (

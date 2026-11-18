@@ -1,13 +1,15 @@
 /**
  * Validates stored arguments without treating unreadable links as invalid
  * values, without reading through a stored link that reaches data outside the
- * argument's own space and scope, and without reading through one the
- * argument schema types as a cell handle.
+ * argument's own space and scope or a document that stores a confidentiality
+ * label, and without reading through one the argument schema types as a cell
+ * handle.
  */
 
 import {
   FabricInstance,
   type FabricValue,
+  isFabricPlainObject,
   isKeyableObjectNotArray,
   isKeyableObjectOrArray,
   isWalkableObjectOrArray,
@@ -26,6 +28,10 @@ import {
   resolveCfcSchemaRefRoot,
   resolveCfcSchemaRefs,
 } from "./cfc/schema-refs.ts";
+import {
+  readStoredCfcMetadata,
+  StoredCfcMetadataError,
+} from "./cfc/metadata.ts";
 import { validateSchemaValue } from "./cfc/schema-sanitization.ts";
 import {
   type CellLink,
@@ -88,27 +94,27 @@ interface HandleViewContext {
 /**
  * Returns the stored value at `cell` as validation reads it: its schemaless
  * materialization through `tx`, in which a stored link that reaches another
- * space or scope than `cell`'s is a handle rather than the value the link
- * reaches, whatever the position's schema in `schema` declares. Nothing of
- * what it reaches is read, so nothing about it is judged here: the reactive
- * reads that follow the link check it against the schema they read it under,
- * as they check a link this replica cannot read. That data is another
- * piece's or another audience's, and it carries labels of its own, which a
- * read here would join to the transaction doing the judging, and so to
- * everything that transaction writes, such as the result of a nested piece
- * whose stored argument links another person's data.
+ * space or scope than `cell`'s, or a document that stores a confidentiality
+ * label, is a handle rather than the value the link reaches, whatever the
+ * position's schema in `schema` declares. Nothing of what it reaches is read,
+ * so nothing about it is judged here: the reactive reads that follow the link
+ * check it against the schema they read it under, as they check a link this
+ * replica cannot read. That data is another piece's or another audience's, or
+ * held under labels of its own, which a read here would join to the
+ * transaction doing the judging, and so to everything that transaction
+ * writes, such as the result of a nested piece whose stored argument links it.
  *
- * A stored link that stays within `cell`'s space and scope, such as one to an
- * element the argument's own write stored as a document, is the argument's
- * own data. Where the position's schema declares a cell handle it is that
- * handle rather than the value the link reaches, and what the link reaches is
- * judged by its top level alone: a shallow read of it, which takes in no label
- * declared below it, is held to the `type` the position's schema allows, and a
- * primitive also to its `enum` and `const`. Nothing below that level is read,
- * so no constraint on it is judged here; the reactive reads that follow the
- * handle check it against the handle's own schema. A link whose top level does
- * not fit is no handle: its position reads as the materialized value, judged
- * in full.
+ * A stored link that stays within `cell`'s space and scope, to a document that
+ * stores no confidentiality label, such as one to an element the argument's own
+ * write stored as a document, is the argument's own data. Where the position's
+ * schema declares a cell handle it is that handle rather than the value the
+ * link reaches, and what the link reaches is judged by its top level alone: a
+ * shallow read of it, which takes in no label declared below it, is held to the
+ * `type` the position's schema allows, and a primitive also to its `enum` and
+ * `const`. Nothing below that level is read, so no constraint on it is judged
+ * here; the reactive reads that follow the handle check it against the handle's
+ * own schema. A link whose top level does not fit is no handle: its position
+ * reads as the materialized value, judged in full.
  *
  * Every other position reads as the materialized value does. So do the
  * positions along `materializedPath`, the one a caller writes at, whatever
@@ -146,6 +152,172 @@ export function materializeStoredValueForValidation(
       (isObjectOrArray(value) && context.handles.has(value)) ||
       acceptsOpaqueCellOrUnresolvedLink(value, schema),
   };
+}
+
+/** An argument a setup has just staged, as validation is handed it. */
+export interface StagedArgument {
+  /**
+   * The value staged: the caller's argument folded over the slots the stored
+   * argument carries, with defaults merged. A slot holds a cell handle the
+   * caller passed, a stored link the setup carried, or content.
+   */
+  value: unknown;
+
+  /** The cell at `link`, in the transaction validation reads through. */
+  cellAt: (link: NormalizedFullLink) => Cell<unknown>;
+}
+
+/**
+ * {@link materializeStoredValueForValidation}'s view of the argument at
+ * `cell`, built from `staged`, the value a setup staged there, where reading
+ * the argument back would take in the labels stored at its slots again. The
+ * slots of the view are the document's, read without descending; which of
+ * them hold a reference, and to what, comes from `staged` wherever it holds
+ * the slot, so the setup reads none of those references again. Each is judged
+ * as the stored view judges it, a handle or what it reaches. A slot holding
+ * content reads as the stored view reads it, from the document, and so does a
+ * slot `staged` does not hold, such as one the setup's write fills in itself
+ * (a scoped slot's redirect). A staged value or a document that is not a plain
+ * record is viewed as stored.
+ *
+ * What a reference reaches is the argument's to judge, not which reference
+ * the setup put there: that came from the caller, or from the stored
+ * argument, read as a wiring read (`Runner.#readStoredArgument`).
+ */
+export function materializeStagedArgumentForValidation(
+  cell: Cell<unknown>,
+  staged: StagedArgument,
+  schema: JSONSchema,
+  tx: IExtendedStorageTransaction,
+): {
+  value: unknown;
+  acceptsOpaque: (value: unknown, schema: JSONSchema) => boolean;
+} {
+  const value = staged.value;
+  const top = cell.getRaw({
+    meta: ignoreReadForScheduling,
+    nonRecursive: true,
+  });
+  if (!isStagedRecord(value) || !isStagedRecord(top)) {
+    return materializeStoredValueForValidation(cell, schema, tx);
+  }
+  const context: HandleViewContext = {
+    views: new WeakMap(),
+    handles: new WeakSet(),
+    tx,
+    home: cellHome(cell),
+  };
+  const base = cell.getAsNormalizedFullLink();
+  const view: Record<string, unknown> = {};
+  for (const key of Object.keys(top as object)) {
+    Object.defineProperty(view, key, {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        const childSchema = ContextualFlowControl.schemaAtPath(schema, [key]);
+        const content = () =>
+          cell.key(key).asSchema(undefined).withTx(tx).get();
+        const held = Object.hasOwn(value as object, key);
+        const link = held
+          ? stagedSlotLink((value as Record<string, unknown>)[key], base)
+          : undefined;
+        let child: unknown;
+        if (!held) {
+          child = viewStoredSlot(cell, key, childSchema, [], content, context);
+        } else if (link === undefined) {
+          child = viewStoredLinksAsHandles(content(), childSchema, [], context);
+        } else {
+          const reached = staged.cellAt(link);
+          if (
+            reachesBeyondOwnData(link, context) ||
+            (declaresHandleForLink(childSchema) &&
+              reachedTopLevelFits(reached, childSchema, tx))
+          ) {
+            context.handles.add(reached);
+            child = reached;
+          } else {
+            // Materialized under the schema the link itself carries, as the
+            // stored view's own access through the slot materializes it.
+            child = viewStoredLinksAsHandles(
+              reached.withTx(tx).get(),
+              childSchema,
+              [],
+              context,
+            );
+          }
+        }
+        Object.defineProperty(view, key, {
+          configurable: true,
+          enumerable: true,
+          writable: true,
+          value: child,
+        });
+        return child;
+      },
+    });
+  }
+  return {
+    value: view,
+    acceptsOpaque: (candidate, candidateSchema) =>
+      (isObjectOrArray(candidate) && context.handles.has(candidate)) ||
+      acceptsOpaqueCellOrUnresolvedLink(candidate, candidateSchema),
+  };
+}
+
+/**
+ * Helper for the staged view, which says whether `value` is a plain record
+ * of slots, rather than a whole value: a link (a cell and a query result
+ * among them), a class instance, a scalar or an array.
+ */
+function isStagedRecord(value: unknown): boolean {
+  return isFabricPlainObject(value as FabricValue) && !isCellLink(value) &&
+    !isCellResult(value);
+}
+
+/**
+ * Helper for the staged view, which returns the reference `slotValue`, a slot
+ * of a staged argument, stands for, resolved against `base`, or `undefined`
+ * for content. A cell handle the caller passed and a query result over one
+ * are links (`isCellLink()`) as much as a stored link the setup carried is.
+ */
+function stagedSlotLink(
+  slotValue: unknown,
+  base: NormalizedFullLink,
+): NormalizedFullLink | undefined {
+  return isCellLink(slotValue) ? parseLink(slotValue, base) : undefined;
+}
+
+/**
+ * Helper for `storedArgumentJudge()`, which returns the stored form of
+ * `staged`, for the unreadable-link overlay: a slot `staged` holds as a
+ * reference as the link to it, and every other slot as the document stores
+ * it.
+ */
+function stagedArgumentAsStored(
+  cell: Cell<unknown>,
+  staged: StagedArgument,
+): unknown {
+  const value = staged.value;
+  const top = cell.getRaw({
+    meta: ignoreReadForScheduling,
+    nonRecursive: true,
+  });
+  if (!isStagedRecord(value) || !isStagedRecord(top)) {
+    return cell.getRaw({ meta: ignoreReadForScheduling });
+  }
+  return Object.fromEntries(
+    Object.keys(top as object).map((key) => {
+      const slotValue = Object.hasOwn(value as object, key)
+        ? (value as Record<string, unknown>)[key]
+        : undefined;
+      return [
+        key,
+        isCellLink(slotValue)
+          ? slotValue
+          : cell.key(key).getRaw({ meta: ignoreReadForScheduling }),
+      ];
+    }),
+  );
 }
 
 /**
@@ -353,21 +525,12 @@ function viewStoredLinksAsHandles(
       configurable: true,
       enumerable: true,
       get: () => {
-        const childSchema = ContextualFlowControl.schemaAtPath(schema, [key]);
-        const kept = keep[0] === key;
-        const slot = container.key(key);
-        // Only the slot's own bytes are read here: a raw read resolves links
-        // on the way to the slot and leaves the one stored in it unfollowed.
-        const stored = slot.getRaw({ meta: ignoreReadForScheduling });
-        const handle = !kept && isCellLink(stored) &&
-          (reachesOutsideHome(stored, slot, context) ||
-            (declaresHandleForLink(childSchema) &&
-              reachedTopLevelFits(slot, childSchema, context.tx)));
-        if (handle) context.handles.add(slot);
-        const child = handle ? slot : viewStoredLinksAsHandles(
-          (materialized as Record<string, unknown>)[key],
-          childSchema,
-          kept ? keep.slice(1) : [],
+        const child = viewStoredSlot(
+          container,
+          key,
+          ContextualFlowControl.schemaAtPath(schema, [key]),
+          keep,
+          () => (materialized as Record<string, unknown>)[key],
           context,
         );
         Object.defineProperty(view, key, {
@@ -383,6 +546,43 @@ function viewStoredLinksAsHandles(
   return view;
 }
 
+/**
+ * Helper for the validation views, which views the slot `key` of `container`
+ * as {@link viewStoredLinksAsHandles} does: the handle a stored link there
+ * stands for where the link reaches no data of the argument's own, or where
+ * `childSchema` declares a handle whose reach fits it, and otherwise what
+ * `materialize` returns, viewed in turn. `keep` is the materialized path, which
+ * reads as the materialized value whatever it holds.
+ */
+function viewStoredSlot(
+  container: Cell<unknown>,
+  key: string,
+  childSchema: JSONSchema,
+  keep: readonly string[],
+  materialize: () => unknown,
+  context: HandleViewContext,
+): unknown {
+  const kept = keep[0] === key;
+  const slot = container.key(key);
+  // Only the slot's own bytes are read here: a raw read resolves links on the
+  // way to the slot and leaves the one stored in it unfollowed.
+  const stored = slot.getRaw({ meta: ignoreReadForScheduling });
+  const handle = !kept && isCellLink(stored) &&
+    (reachesBeyondOwnData(parseLink(stored, slot), context) ||
+      (declaresHandleForLink(childSchema) &&
+        reachedTopLevelFits(slot, childSchema, context.tx)));
+  if (handle) {
+    context.handles.add(slot);
+    return slot;
+  }
+  return viewStoredLinksAsHandles(
+    materialize(),
+    childSchema,
+    kept ? keep.slice(1) : [],
+    context,
+  );
+}
+
 /** The space and scope of `cell`'s document. */
 function cellHome(cell: Cell<unknown>): HandleViewContext["home"] {
   const { space, scope } = cell.getAsNormalizedFullLink();
@@ -390,24 +590,71 @@ function cellHome(cell: Cell<unknown>): HandleViewContext["home"] {
 }
 
 /**
- * Helper for `viewStoredLinksAsHandles()`, which says whether the link
- * `stored` at `slot` reaches, through any links it chains through, a position
- * outside `context.home`. Only the documents inside it are read on the way.
+ * Helper for the validation views, which says whether `link`, a stored link,
+ * reaches, through any links it chains through, a document that is not the
+ * argument's own data: one outside `context.home`, or one that stores a
+ * confidentiality label. Only the documents that are its own data are read on
+ * the way. Of a document inside `context.home` that stores such a label only
+ * the label metadata is read, which no read of the payload's labels takes in
+ * (CFC §4.6.5), and a document outside it is not read at all.
+ *
+ * A labeled document is not judged here because judging it would read it,
+ * and that read would join its labels to everything the transaction doing the
+ * judging writes, such as a nested piece's result. The reads that follow the
+ * link judge what it reaches under the schema they read it with. Which way a
+ * link goes turns on whether its document stores a label entry holding a
+ * confidentiality atom, which label metadata keeps observable: an entry's
+ * existence, and its atoms' presence
+ * (`docs/specs/cfc-label-metadata-confidentiality.md` §3, §4). So the choice
+ * shows nothing that was hidden.
+ *
+ * TODO(danfuzz): A value such a read finds of the wrong type reads as
+ * absent, with no refusal or diagnostic, so a deferred mismatch is caught
+ * nowhere; the same holds for a link outside `context.home`. See the matching
+ * `TODO` in `pattern-update-argument-validation.test.ts`.
+ *
+ * TODO(danfuzz): If label metadata ever hides whether a document stores a
+ * label entry, or whether an entry holds a confidentiality atom, this choice
+ * becomes a read of hidden metadata whose outcome is visible (a refusal or
+ * none), and it has to be labeled or made another way. See the matching
+ * `TODO` in `stored-argument-validation.test.ts`.
  */
-function reachesOutsideHome(
-  stored: CellLink,
-  slot: Cell<unknown>,
+function reachesBeyondOwnData(
+  link: NormalizedFullLink,
   context: HandleViewContext,
 ): boolean {
-  const inside = (link: NormalizedFullLink) =>
+  const ownData = (link: NormalizedFullLink) =>
     link.space === context.home.space &&
-    (link.scope ?? "space") === (context.home.scope ?? "space");
-  return readStoredLinkChainRaw(
-    context.tx,
-    parseLink(stored, slot),
-    new Set(),
-    inside,
-  ).outside === true;
+    (link.scope ?? "space") === (context.home.scope ?? "space") &&
+    !storesConfidentiality(context.tx, link);
+  return readStoredLinkChainRaw(context.tx, link, new Set(), ownData)
+    .outside === true;
+}
+
+/**
+ * Helper for `reachesBeyondOwnData()`, which says whether the document `link`
+ * names stores a label entry carrying confidentiality, anywhere in it. Label
+ * metadata this build cannot interpret may carry any label, so it counts as
+ * one.
+ */
+function storesConfidentiality(
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+): boolean {
+  let metadata: ReturnType<typeof readStoredCfcMetadata>;
+  try {
+    metadata = readStoredCfcMetadata(tx, {
+      space: link.space,
+      id: link.id,
+      scope: link.scope,
+    });
+  } catch (error) {
+    if (error instanceof StoredCfcMetadataError) return true;
+    throw error;
+  }
+  return metadata?.labelMap.entries.some((entry) =>
+    (entry.label.confidentiality?.length ?? 0) > 0
+  ) ?? false;
 }
 
 /** Per-validation caches for the unreadable-link view. */
@@ -661,11 +908,15 @@ export function storedArgumentValidationIssue(
   argumentSchema: JSONSchema,
   defaults: FabricValue,
   tx: IExtendedStorageTransaction,
+  staged?: StagedArgument,
 ): string | undefined {
-  return storedArgumentJudge(argumentCell, argumentSchema, defaults, tx)(
+  return storedArgumentJudge(
+    argumentCell,
     argumentSchema,
-    (argument) => argument,
-  );
+    defaults,
+    tx,
+    staged,
+  )(argumentSchema, (argument) => argument);
 }
 
 /**
@@ -682,8 +933,15 @@ export function storedArgumentSlotIssues(
   defaults: FabricValue,
   tx: IExtendedStorageTransaction,
   slots: Iterable<string>,
+  staged?: StagedArgument,
 ): Map<string, string> {
-  const judge = storedArgumentJudge(argumentCell, argumentSchema, defaults, tx);
+  const judge = storedArgumentJudge(
+    argumentCell,
+    argumentSchema,
+    defaults,
+    tx,
+    staged,
+  );
   const issues = new Map<string, string>();
   for (const slot of slots) {
     const issue = judge(
@@ -698,25 +956,30 @@ export function storedArgumentSlotIssues(
 
 /**
  * Helper for `storedArgumentValidationIssue()` and
- * `storedArgumentSlotIssues()`, which materializes the stored argument once
- * and returns a function judging the part `select` picks out of it against
- * `schema`, resolving references against `argumentSchema`.
+ * `storedArgumentSlotIssues()`, which materializes the stored argument once,
+ * from `staged` where the caller has just staged it, and returns a function
+ * judging the part `select` picks out of it against `schema`, resolving
+ * references against `argumentSchema`.
  */
 function storedArgumentJudge(
   argumentCell: Cell<unknown>,
   argumentSchema: JSONSchema,
   defaults: FabricValue,
   tx: IExtendedStorageTransaction,
+  staged: StagedArgument | undefined,
 ): (
   schema: JSONSchema,
   select: (argument: unknown) => unknown,
 ) => string | undefined {
   const argumentLink = argumentCell.getAsNormalizedFullLink();
-  const stored = materializeStoredValueForValidation(
-    argumentCell,
-    argumentSchema,
-    tx,
-  );
+  const stored = staged === undefined
+    ? materializeStoredValueForValidation(argumentCell, argumentSchema, tx)
+    : materializeStagedArgumentForValidation(
+      argumentCell,
+      staged,
+      argumentSchema,
+      tx,
+    );
   const validationArgument: unknown = mergeSchemaDefaults(
     stored.value,
     defaults,
@@ -768,7 +1031,9 @@ function storedArgumentJudge(
       value: overlayUnreadableLinkPlaceholders(
         tx,
         argumentLink,
-        argumentCell.withTx(tx).getRaw({ meta: ignoreReadForScheduling }),
+        staged === undefined
+          ? argumentCell.withTx(tx).getRaw({ meta: ignoreReadForScheduling })
+          : stagedArgumentAsStored(argumentCell.withTx(tx), staged),
         validationArgument,
       ),
     };

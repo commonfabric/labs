@@ -1,9 +1,9 @@
 /**
  * Classifies the JS values the data model converts, after SES lockdown has run
  * in this realm, as it has in every realm that evaluates patterns. Lockdown
- * replaces the global `Date` and `RegExp`, and the pattern compartment has a
- * `Date` of its own, so each class is checked as made by host code and as made
- * by pattern code.
+ * replaces the global `Date`, and the pattern compartment has a `Date` of its
+ * own, so each class is checked as made by host code and as made by pattern
+ * code.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -63,12 +63,6 @@ const CLASSES: readonly ConvertibleClass[] = [
     make: () => new Uint8Array(1),
     source: "new Uint8Array(1)",
   },
-  {
-    name: "RegExp",
-    tag: VALUE_TAGS.JsRegExp,
-    make: () => /a/g,
-    source: "/a/g",
-  },
 ];
 
 /**
@@ -85,14 +79,13 @@ function makeInPatternCompartment(source: string): unknown {
 }
 
 describe("lockdown-value-classification", () => {
-  it("replaces the global `Date` and `RegExp` constructors", () => {
+  it("replaces the global `Date` constructor", () => {
     // The cases below are about a realm in which a prototype's `constructor` is
     // not the global of the same name. This pins that lockdown makes it one.
 
     ensureSESLockdown();
 
     expect(Date.prototype.constructor).not.toBe(Date);
-    expect(RegExp.prototype.constructor).not.toBe(RegExp);
   });
 
   describe("a value made by host code", () => {

@@ -65,6 +65,9 @@ describe("PiecesController runtime diagnostics", () => {
       getRaw: () => {
         throw failure;
       },
+      sync() {
+        return Promise.resolve(this);
+      },
     } as unknown as Cell<unknown>;
     Object.defineProperty(pieces, "getArgument", {
       configurable: true,
@@ -73,6 +76,12 @@ describe("PiecesController runtime diagnostics", () => {
     const piece = {
       resolveAsCell() {
         return this;
+      },
+      asSchema() {
+        return this;
+      },
+      sync() {
+        return Promise.resolve(this);
       },
     } as unknown as Cell<unknown>;
 
@@ -94,6 +103,12 @@ describe("PiecesController runtime diagnostics", () => {
     const piece = {
       resolveAsCell() {
         return this;
+      },
+      asSchema() {
+        return this;
+      },
+      sync() {
+        return Promise.resolve(this);
       },
     } as unknown as Cell<unknown>;
 
@@ -118,6 +133,9 @@ describe("PiecesController runtime diagnostics", () => {
     });
     const argumentCell = {
       getRaw: () => argumentValue,
+      sync() {
+        return Promise.resolve(this);
+      },
     } as unknown as Cell<unknown>;
     Object.defineProperty(pieces, "getArgument", {
       configurable: true,
@@ -126,6 +144,12 @@ describe("PiecesController runtime diagnostics", () => {
     const piece = {
       resolveAsCell() {
         return this;
+      },
+      asSchema() {
+        return this;
+      },
+      sync() {
+        return Promise.resolve(this);
       },
     } as unknown as Cell<unknown>;
 
@@ -150,6 +174,9 @@ describe("PiecesController runtime diagnostics", () => {
     });
     const argumentCell = {
       getRaw: () => argumentValue,
+      sync() {
+        return Promise.resolve(this);
+      },
     } as unknown as Cell<unknown>;
     Object.defineProperty(pieces, "getArgument", {
       configurable: true,
@@ -158,6 +185,12 @@ describe("PiecesController runtime diagnostics", () => {
     const piece = {
       resolveAsCell() {
         return this;
+      },
+      asSchema() {
+        return this;
+      },
+      sync() {
+        return Promise.resolve(this);
       },
     } as unknown as Cell<unknown>;
 
@@ -202,6 +235,12 @@ describe("PiecesController runtime diagnostics", () => {
     const piece = {
       resolveAsCell() {
         return this;
+      },
+      asSchema() {
+        return this;
+      },
+      sync() {
+        return Promise.resolve(this);
       },
     } as unknown as Cell<unknown>;
 

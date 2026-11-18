@@ -31,7 +31,7 @@ import {
   encodeJsonPointer,
   linkPathSegmentToCellPathSegment,
   parseCellReference,
-  parseScopedIdSegment,
+  parsePieceSegment,
   renderCellReference,
 } from "@commonfabric/runner/shared";
 import { decode } from "@commonfabric/text/utf8";
@@ -87,6 +87,7 @@ import {
   applyPieceInput,
   checkPiecePattern,
   createSpace,
+  type DeployedProgram,
   describePiece,
   type EntryConfig,
   executePieceCallable,
@@ -106,10 +107,11 @@ import {
   listPieces,
   listSpaceSlugs,
   MapFormat,
-  newPiece,
+  newPieceWithReceipt,
   partitionVerbListing,
   pathRequiredRefusal,
   PieceConfig,
+  type PieceEntry,
   pieceIdOnlyPathRefusal,
   PieceResultProjectionError,
   PieceVerbReadError,
@@ -131,6 +133,7 @@ import type {
   ExecutedPieceCallable,
   PieceCallablesListing,
   PieceInspection,
+  PieceResolutionDeps,
   SlugSummary,
 } from "../lib/piece.ts";
 import { render, safeStringify } from "../lib/render.ts";
@@ -144,7 +147,16 @@ import {
   type UnreportedRunDeps,
 } from "../lib/unreported-run.ts";
 import { absPath } from "../lib/utils.ts";
+import {
+  PatternIndexStore,
+  patternIndexStoreDir,
+} from "@commonfabric/pattern-index/store";
 import { noteWroteTo } from "../lib/write-receipt.ts";
+import { loadIdentity } from "../lib/identity.ts";
+import type {
+  DeployedSource,
+  VersionOutcome,
+} from "../lib/pattern-versions.ts";
 
 // Hint system: print helpful next-step suggestions after operations. The
 // posture is the process's rather than one call's, so it stands as the last
@@ -1182,6 +1194,13 @@ export function renderPieceCallOutcome(
     // Invocation JSON — settled, or stopped at "committed" under --no-wait —
     // prose stays on stderr via hint().
     renderOut(JSON.stringify(invocationJson(result.invocation), null, 2));
+    if (result.invocation.withheld) {
+      hintOut(cliText(
+        "Handled; outcome withheld: the handler read data this space does " +
+          "not admit, so whether it committed, and what it returned, is not " +
+          "told.",
+      ));
+    }
     // The address the envelope published, when the runtime wrote a receipt.
     // It leads the detached next steps because it collects the outcome
     // without running the verb again, and it composes into the command named
@@ -1235,7 +1254,8 @@ export function renderPieceCallOutcome(
  * the receipt carried one — a value-less verb omits it rather than reporting
  * `null`, which would be indistinguishable from a verb that returned null.
  * `links` appears only under --show-links: provenance beside the value,
- * never inline in it.
+ * never inline in it. `withheld` appears only for a handling whose outcome is
+ * withheld, which carries no `result`.
  *
  * `receipt` is the one key that does not depend on a readback or a flag: it
  * is the address of the cell holding this outcome, known at commit, so it
@@ -1249,6 +1269,7 @@ export function invocationJson(
     invocation: outcome.id,
     status: outcome.status,
     ...(outcome.deduplicated ? { deduplicated: true } : {}),
+    ...(outcome.withheld ? { withheld: true } : {}),
     ...(outcome.receipt !== undefined ? { receipt: outcome.receipt } : {}),
     ...("result" in outcome && outcome.result !== undefined
       ? { result: outcome.result }
@@ -1442,11 +1463,12 @@ export function writePieceRenderStatus(
 export function handlePieceRenderNoUi(
   error: Error,
   jsonOutput: boolean,
+  print: (text: string) => void = render,
 ): void {
   if (jsonOutput) {
     throw error;
   }
-  render("<piece has no UI>");
+  print("<piece has no UI>");
 }
 
 // Override usage, since we do not "require" args that can be reflected by env vars.
@@ -2047,6 +2069,19 @@ interface SpaceCommandCLIOptions extends PieceCLIOptions {
   confirm?: string;
 }
 
+/** What the space-level commands below act and report through. */
+export interface SpaceCommandDependencies {
+  recreateSpaceRootPattern?: typeof recreateSpaceRootPattern;
+  createSpace?: typeof createSpace;
+  deleteSpace?: typeof deleteSpace;
+
+  /** Where the result goes, stdout unless the caller says otherwise. */
+  render?: (value: string) => void;
+
+  /** Where the next steps go, stderr unless the caller says otherwise. */
+  hint?: (message: string) => void;
+}
+
 /**
  * `recreate-root`, which rebuilds a space's root pattern.
  *
@@ -2056,15 +2091,20 @@ interface SpaceCommandCLIOptions extends PieceCLIOptions {
  * `cf space` is not a target-scoped noun the way `cf piece` is: its other
  * subcommands read a store on disk and take no server, identity or space.
  */
-// deno-lint-ignore no-explicit-any
-export function buildRecreateRootCommand(spelling: string): Command<any> {
+export function buildRecreateRootCommand(
+  spelling: string,
+  deps: SpaceCommandDependencies = {},
+  // deno-lint-ignore no-explicit-any
+): Command<any> {
   const act = async (options: SpaceCommandCLIOptions) => {
     refuseJsonOutput(spelling, options);
     setQuietMode(!!options.quiet);
     const spaceConfig = parseSpaceOptions(options);
-    const pieceId = await recreateSpaceRootPattern(spaceConfig);
-    render(pieceId);
-    hint(cliText(`NEXT STEPS:
+    const pieceId = await (
+      deps.recreateSpaceRootPattern ?? recreateSpaceRootPattern
+    )(spaceConfig);
+    (deps.render ?? render)(pieceId);
+    (deps.hint ?? hint)(cliText(`NEXT STEPS:
   → Open space in browser: ${spaceConfig.apiUrl}/${spaceConfig.space}/${pieceId}
   → Inspect state:         cf piece inspect --cell ${pieceId} ...`));
   };
@@ -2092,15 +2132,21 @@ export function buildRecreateRootCommand(spelling: string): Command<any> {
  * `space create`, which creates a space owned by the identity and records it
  * in the identity's Home space list.
  */
-// deno-lint-ignore no-explicit-any
-export function buildCreateSpaceCommand(spelling: string): Command<any> {
+export function buildCreateSpaceCommand(
+  spelling: string,
+  deps: SpaceCommandDependencies = {},
+  // deno-lint-ignore no-explicit-any
+): Command<any> {
   const act = async (options: SpaceCommandCLIOptions) => {
     refuseJsonOutput(spelling, options);
     setQuietMode(!!options.quiet);
     const baseConfig = parseIdentityTargetOptions(options);
-    const space = await createSpace(baseConfig, options.label);
-    render(space);
-    hint(cliText(`NEXT STEPS:
+    const space = await (deps.createSpace ?? createSpace)(
+      baseConfig,
+      options.label,
+    );
+    (deps.render ?? render)(space);
+    (deps.hint ?? hint)(cliText(`NEXT STEPS:
   → Open space in browser: ${baseConfig.apiUrl}/${space}
   → Create a piece in it:  cf piece new --space ${space} ...`));
   };
@@ -2131,8 +2177,11 @@ export function buildCreateSpaceCommand(spelling: string): Command<any> {
  *
  * `spelling` carries the meaning it has in {@link buildRecreateRootCommand}.
  */
-// deno-lint-ignore no-explicit-any
-export function buildDeleteSpaceCommand(spelling: string): Command<any> {
+export function buildDeleteSpaceCommand(
+  spelling: string,
+  deps: SpaceCommandDependencies = {},
+  // deno-lint-ignore no-explicit-any
+): Command<any> {
   const act = async (options: SpaceCommandCLIOptions) => {
     refuseJsonOutput(spelling, options);
     setQuietMode(!!options.quiet);
@@ -2144,8 +2193,8 @@ export function buildDeleteSpaceCommand(spelling: string): Command<any> {
       );
     }
     const config = parseSpaceOptions(options);
-    await deleteSpace(config, options.confirm);
-    render(`Deleted ${options.confirm}.`);
+    await (deps.deleteSpace ?? deleteSpace)(config, options.confirm);
+    (deps.render ?? render)(`Deleted ${options.confirm}.`);
   };
   // deno-lint-ignore no-explicit-any
   const command: Command<any> = new Command()
@@ -2443,7 +2492,7 @@ export const piece = targetOptions(
   .action(searchPiecesFromCommand)
   /* piece new */
   .command("new", "Create a new piece with a pattern.")
-  .usage(`${spaceUsage} <main>`)
+  .usage(`${spaceUsage} [main]`)
   .example(
     cliText(`cf piece new ${EX_ID} ${EX_COMP} ./main.tsx`),
     `Create a new piece, using ./main.tsx as source.`,
@@ -2464,7 +2513,35 @@ export const piece = targetOptions(
     ),
     `Create a piece and take "project-notes" from whatever it names now.`,
   )
-  .arguments("<main:string>")
+  .example(
+    cliText(
+      `cf piece new ${EX_ID} ${EX_COMP} --from-index <patternId> --pattern-index-url https://index.example`,
+    ),
+    `Create a piece from a published pattern, deployed the way run_pattern deploys one.`,
+  )
+  .arguments("[main:string]")
+  .option(
+    "--from-index <patternId:string>",
+    "Create the piece from this published pattern instead of local source.",
+    {
+      conflicts: [
+        "main-export",
+        "root",
+        "repository",
+        "test",
+        "datafile",
+      ],
+    },
+  )
+  .env(
+    "CF_PATTERN_INDEX_URL=<url:string>",
+    "Base URL of the pattern index --from-index reads.",
+    { prefix: "CF_" },
+  )
+  .option(
+    "--pattern-index-url <url:string>",
+    "Base URL of the pattern index --from-index reads.",
+  )
   .option(
     "--request-key <key:string>",
     "Reuse a creation request after an uncertain result without creating another piece.",
@@ -2506,6 +2583,10 @@ export const piece = targetOptions(
     "--dangerously-allow-incompatible-schema",
     "Accepted for deploy-script symmetry; a new piece has no previous schema to compare.",
   )
+  .option(
+    "--json",
+    'Output {"pieceId", "name"} as JSON; name only for --from-index, when the index has one.',
+  )
   .action(newPieceFromCommand)
   /* piece set-slug */
   .command(
@@ -2538,26 +2619,7 @@ export const piece = targetOptions(
     "--force",
     "Take the name even when it already points somewhere.",
   )
-  .action(async (options, slug, sourceRef) => {
-    setQuietMode(!!options.quiet);
-    const spaceConfig = parseSpaceOptions(options);
-    const source = parseLink(sourceRef, { space: spaceConfig.space });
-    collectEmbeddedSpace(spaceConfig, source);
-    await setPieceSlug(
-      spaceConfig,
-      slug,
-      source.pieceId,
-      source.path || [],
-      {
-        sourceScope: source.scope,
-        resolveBeforeLinking: !!(options as any).resolveBeforeLinking,
-        force: !!(options as any).force,
-      },
-    );
-    render(`Set slug ${slug} to ${sourceRef}`);
-    hint(cliText(`NEXT STEPS:
-  → Open in browser: ${spaceConfig.apiUrl}/${spaceConfig.space}/${slug}`));
-  })
+  .action(setPieceSlugFromCommand)
   /* piece step */
   .command("step", "Run a single scheduling step: start → idle → synced → stop")
   .usage(pieceUsage)
@@ -2566,11 +2628,7 @@ export const piece = targetOptions(
     `Start, wait for idle+synced, then stop piece "${EX_PIECE}".`,
   )
   .option("-c,--cell, --piece <cell:string>", PIECE_OPTION_HELP)
-  .action(async (options) => {
-    const pieceConfig = parsePieceOptions(options);
-    await stepPiece(pieceConfig);
-    render(`Stepped piece ${pieceConfig.piece}`);
-  })
+  .action(stepPieceFromCommand)
   /* piece apply */
   .command("apply", "Pass in new inputs to the target piece")
   .usage(pieceUsage)
@@ -2583,9 +2641,7 @@ export const piece = targetOptions(
     `Applies the input '{"foo":5}' to piece "${EX_PIECE}".`,
   )
   .option("-c,--cell, --piece <cell:string>", PIECE_OPTION_HELP)
-  .action(async (options) =>
-    applyPieceInput(parsePieceOptions(options), await drainStdin())
-  )
+  .action(applyPieceInputFromCommand)
   /* piece call */
   .command("call", pieceDataCommand("call"))
   /* piece getsrc */
@@ -2601,9 +2657,7 @@ export const piece = targetOptions(
   )
   .option("-c,--cell, --piece <cell:string>", PIECE_OPTION_HELP)
   .arguments("<outpath:string>")
-  .action((options, outPath) =>
-    savePiecePattern(parsePieceOptions(options), absPath(outPath))
-  )
+  .action(savePiecePatternFromCommand)
   /* piece setsrc */
   .command("setsrc", "Update the pattern source for the given piece.")
   .usage(`${pieceUsage} <main>`)
@@ -2655,23 +2709,7 @@ export const piece = targetOptions(
     "Report whether the source could replace the piece's current one, without issuing storage writes. Exits non-zero when it could not.",
   )
   .arguments("<main:string>")
-  .action(async (options, mainPath) => {
-    setQuietMode(!!options.quiet);
-    if (options.check) {
-      // A refusal exits 1 from inside the check (plain stderr, no usage
-      // dump), so `--check` gates a deploy script as well as informing a
-      // person.
-      const { config, summary } = await checkPieceSourceFromCommand(
-        options,
-        mainPath,
-      );
-      render(summary);
-      hint(cliText(`NEXT STEPS:
-  → Apply it: cf piece setsrc --cell ${config.piece} ${mainPath} ...`));
-      return;
-    }
-    await applyPieceSourceCommandAction(options, mainPath);
-  })
+  .action(setsrcFromCommand)
   /* piece follow */
   .command(
     "follow",
@@ -2726,10 +2764,7 @@ a piece that is off either pin is refused, writing nothing, with exit status 3.`
       "source-transition protections still apply.",
   )
   .arguments("<origin:string>")
-  .action(async (options, origin) => {
-    setQuietMode(!!options.quiet);
-    await followPieceSourceAction(options, origin);
-  })
+  .action(followPieceSourceAction)
   /* piece inspect */
   .command("inspect", "Inspect detailed information about a piece")
   .usage(pieceUsage)
@@ -2992,20 +3027,7 @@ a piece that is off either pin is refused, writing nothing, with exit status 3.`
   )
   .option("-c,--cell, --piece <cell:string>", PIECE_OPTION_HELP)
   .option("--json", "Output raw JSON data")
-  .action(async (options) => {
-    const pieceConfig = parsePieceOptions(options);
-    const view = await getPieceView(pieceConfig);
-    if (options.json) {
-      render(view ?? null, { json: true });
-      return;
-    }
-    if (view) {
-      const tree = formatViewTree(view);
-      render(tree);
-    } else {
-      render("<no view data>");
-    }
-  })
+  .action(viewPieceFromCommand)
   /* piece render */
   .command("render", "Render a piece's UI to HTML")
   .usage(pieceUsage)
@@ -3028,72 +3050,7 @@ a piece that is off either pin is refused, writing nothing, with exit status 3.`
     "--no-start",
     "Render without starting the piece (useful when another instance is running it)",
   )
-  .action(async (options) => {
-    const pieceConfig = parsePieceOptions(options);
-
-    try {
-      // Rendering is the one thing here that needs the HTML renderer and its
-      // worker protocol, and every other `piece` command should not pay for them.
-      // deno-lint-ignore cf-imports/no-inline-module-import
-      const { renderPiece } = await import("../lib/piece-render.ts");
-      if (options.watch) {
-        writePieceRenderStatus(
-          "Watching for changes... Press Ctrl+C to exit.\n",
-          !!options.json,
-        );
-
-        // Initial render
-        const pieceData = await inspectPiece(pieceConfig);
-        writePieceRenderStatus(
-          `Rendering piece: ${pieceData.name || pieceConfig.piece}`,
-          !!options.json,
-        );
-
-        let renderCount = 0;
-        const cleanup = await renderPiece(pieceConfig, {
-          watch: true,
-          start: options.start,
-          onUpdate: (html) => {
-            renderCount++;
-            writePieceRenderStatus(
-              `\n--- Render #${renderCount} ---`,
-              !!options.json,
-            );
-            if (options.json) {
-              render({ html, renderCount }, { json: true });
-            } else {
-              render(html);
-            }
-          },
-        }) as () => void;
-
-        // Handle Ctrl+C gracefully
-        Deno.addSignalListener("SIGINT", () => {
-          writePieceRenderStatus("\nStopping watch mode...", !!options.json);
-          cleanup();
-          Deno.exit(0);
-        });
-
-        // Keep the process running
-        await new Promise(() => {});
-      } else {
-        const html = await renderPiece(pieceConfig, {
-          start: options.start,
-        }) as string;
-        if (options.json) {
-          render({ html }, { json: true });
-        } else {
-          render(html);
-        }
-      }
-    } catch (error) {
-      if (error instanceof Error && error.message.includes("has no UI")) {
-        handlePieceRenderNoUi(error, !!options.json);
-      } else {
-        throw error;
-      }
-    }
-  })
+  .action(renderPieceFromCommand)
   /* piece link */
   .command(
     "link",
@@ -3134,89 +3091,7 @@ well-known IDs. See docs/common/concepts/well-known-ids.md for IDs and usage.`,
     "--allow-non-existing",
     "Allow missing pieces or endpoint values, without overriding target input schemas",
   )
-  .action(async (options, sourceRef, targetRef) => {
-    setQuietMode(!!options.quiet);
-    const spaceConfig = parseSpaceOptions(options);
-
-    // Phase 7: `cf piece link sqlite:<absPath> <piece>/<field>` injects a
-    // read-only on-disk SQLite source into the target field (v1). Detect this
-    // BEFORE parseLink (the sqlite: scheme is not a piece ref).
-    const sqliteSource = parseSqliteSource(sourceRef);
-    if (sqliteSource) {
-      const target = parseLink(targetRef, { space: spaceConfig.space });
-      collectEmbeddedSpace(spaceConfig, target);
-      if (!target.path) {
-        throw new ValidationError(
-          `Target reference must include a path. Expected: pieceId/path/to/field`,
-          { exitCode: 1 },
-        );
-      }
-      await linkSqliteDiskSource(
-        spaceConfig,
-        sqliteSource.path,
-        target.pieceId,
-        target.path,
-        { start: options.start, targetScope: target.scope },
-      );
-      render(`Linked ${sourceRef} to ${targetRef} (read-only on-disk source)`);
-      hint(cliText(`NEXT STEPS:
-  → Inspect target piece:  cf piece inspect --cell ${target.pieceId} ...`));
-      return;
-    }
-
-    // Parse source and target references - handle both pieceId/path and well-known IDs
-    const source = parseLink(sourceRef, {
-      allowWellKnown: true,
-      space: spaceConfig.space,
-    });
-    const target = parseLink(targetRef, { space: spaceConfig.space });
-    collectEmbeddedSpace(spaceConfig, source);
-    collectEmbeddedSpace(spaceConfig, target);
-
-    // For linking, sources can be either:
-    // 1. pieceId (links entire result cell)
-    // 2. pieceId/path/to/field (links specific field in result cell)
-    // Both well-known IDs and regular piece IDs can link without a path
-
-    if (!target.path) {
-      throw new ValidationError(
-        `Target reference must include a path. Expected: pieceId/path/to/field`,
-        { exitCode: 1 },
-      );
-    }
-
-    try {
-      await linkPieces(
-        spaceConfig,
-        source.pieceId,
-        source.path || [], // Empty path for well-known IDs
-        target.pieceId,
-        target.path,
-        {
-          start: options.start,
-          allowNonExisting: !!(options as any).allowNonExisting,
-          sourceScope: source.scope,
-          targetScope: target.scope,
-        },
-      );
-    } catch (error) {
-      // A link that fails validation is a data error (the pieces/paths read
-      // over the network don't support the link), not a usage error — report
-      // it like `cf cell get` does instead of letting Cliffy dump the help
-      // screen over it.
-      const report = pieceLinkDataErrorReport(error, {
-        sourcePieceId: source.pieceId,
-        targetPieceId: target.pieceId,
-      });
-      if (report) exitWithDataError(report);
-      throw error;
-    }
-
-    render(`Linked ${sourceRef} to ${targetRef}`);
-    hint(cliText(`NEXT STEPS:
-  → Visualize connections: cf piece map -i ... -a ... -s ...
-  → Inspect target piece:  cf piece inspect --cell ${target.pieceId} ...`));
-  })
+  .action(linkPiecesFromCommand)
   /* piece map */
   .command("map", "Show registered pieces and the connections between them")
   .usage(spaceUsage)
@@ -3233,13 +3108,7 @@ well-known IDs. See docs/common/concepts/well-known-ids.md for IDs and usage.`,
     "Output format: ascii (default) or dot (Graphviz)",
     { default: "ascii" },
   )
-  .action(async (options) => {
-    const spaceConfig = parseSpaceOptions(options);
-    const format = options.format === "dot" ? MapFormat.DOT : MapFormat.ASCII;
-
-    const map = await generateSpaceMap(spaceConfig, format);
-    render(map);
-  })
+  .action(mapSpaceFromCommand)
   /* piece verbs */
   .command(
     "verbs",
@@ -3261,31 +3130,7 @@ well-known IDs. See docs/common/concepts/well-known-ids.md for IDs and usage.`,
     "Include wrapper-tier and deprecated verbs the default listing hides. " +
       "Hidden verbs stay callable either way.",
   )
-  .action(async (options) => {
-    setQuietMode(!!options.quiet);
-    const pieceConfig = parsePieceOptions(options);
-    const listing = await listPieceCallables(pieceConfig);
-    // Default view: wrapper-tier (session-UI affordances) and deprecated
-    // verbs are omitted, LOUDLY — the hidden counts always print, so nothing
-    // is silently invisible. Rows carry their marks in both views, and
-    // `cf piece call` never consults them. The same rule covers the other way
-    // this listing can be short, which `verbListingNotes` prints beside them.
-    if (options.json) {
-      render(verbListingJson(listing, !!options.all), { json: true });
-      return;
-    }
-    for (const line of verbListingLines(listing, !!options.all)) render(line);
-    const shown = options.all
-      ? listing.verbs
-      : partitionVerbListing(listing.verbs).shown;
-    // No rows means no per-verb help to point at.
-    if (shown.length === 0) return;
-    hint(
-      cliText(
-        `TIP: --json includes each verb's input schema; 'cf piece call --cell ${pieceConfig.piece} <verb> --help --json' has the full command spec.`,
-      ),
-    );
-  })
+  .action(listPieceVerbsFromCommand)
   /* piece describe */
   .command(
     "describe",
@@ -3321,11 +3166,404 @@ well-known IDs. See docs/common/concepts/well-known-ids.md for IDs and usage.`,
     `Remove piece "${EX_PIECE}".`,
   )
   .option("-c,--cell, --piece <cell:string>", PIECE_OPTION_HELP)
-  .action(async (options) => {
-    const pieceConfig = parsePieceOptions(options);
-    await removePiece(pieceConfig);
-    render(`Removed piece ${pieceConfig.piece}`);
+  .action(removePieceFromCommand);
+
+/**
+ * The collaborators the `piece` actions below connect, read, and report
+ * through. Each defaults to what the command line uses: a connection opened
+ * from the parsed options, standard input, stdout for the value, stderr for
+ * hints and data errors, and `Deno.exit` for a data error's exit.
+ */
+export interface PieceCommandDependencies extends PieceResolutionDeps {
+  /** Where `piece apply` reads its input from, standard input by default. */
+  drainStdin?: typeof drainStdin;
+
+  /** Where the value goes, stdout unless the caller says otherwise. */
+  render?: typeof render;
+
+  /** Where the next steps go, stderr unless the caller says otherwise. */
+  hint?: (message: string) => void;
+
+  /** Where a data error's message goes, stderr unless the caller says so. */
+  printError?: (message: string) => void;
+
+  /** How a data error ends the caller, `Deno.exit` by default. */
+  exit?: (code: number) => never;
+
+  /**
+   * Resolves when `piece render --watch` is asked to stop, which is at
+   * `SIGINT` by default.
+   */
+  interrupted?: () => Promise<void>;
+}
+
+/** The flags `cf piece set-slug` takes beyond the shared piece flags. */
+export interface SetSlugCLIOptions extends PieceCLIOptions {
+  quiet?: boolean;
+  resolveBeforeLinking?: boolean;
+  force?: boolean;
+}
+
+/** The `cf piece set-slug <slug> <source>` action. */
+export async function setPieceSlugFromCommand(
+  options: SetSlugCLIOptions,
+  slug: string,
+  sourceRef: string,
+  deps: PieceCommandDependencies = {},
+): Promise<void> {
+  setQuietMode(!!options.quiet);
+  const spaceConfig = parseSpaceOptions(options);
+  const source = parseLink(sourceRef, { space: spaceConfig.space });
+  collectEmbeddedSpace(spaceConfig, source);
+  await setPieceSlug(
+    spaceConfig,
+    slug,
+    source.pieceId,
+    source.path || [],
+    {
+      sourceScope: source.scope,
+      resolveBeforeLinking: !!options.resolveBeforeLinking,
+      force: !!options.force,
+    },
+    deps,
+  );
+  (deps.render ?? render)(`Set slug ${slug} to ${sourceRef}`);
+  (deps.hint ?? hint)(cliText(`NEXT STEPS:
+  → Open in browser: ${spaceConfig.apiUrl}/${spaceConfig.space}/${slug}`));
+}
+
+/** The `cf piece step` action. */
+export async function stepPieceFromCommand(
+  options: PieceCLIOptions,
+  deps: PieceCommandDependencies = {},
+): Promise<void> {
+  const pieceConfig = parsePieceOptions(options);
+  await stepPiece(pieceConfig, deps);
+  (deps.render ?? render)(`Stepped piece ${pieceConfig.piece}`);
+}
+
+/** The `cf piece apply` action, which reads the new input from stdin. */
+export async function applyPieceInputFromCommand(
+  options: PieceCLIOptions,
+  deps: PieceCommandDependencies = {},
+): Promise<void> {
+  await applyPieceInput(
+    parsePieceOptions(options),
+    await (deps.drainStdin ?? drainStdin)(),
+    deps,
+  );
+}
+
+/** The `cf piece getsrc <outpath>` action. */
+export async function savePiecePatternFromCommand(
+  options: PieceCLIOptions,
+  outPath: string,
+  deps: PieceCommandDependencies = {},
+): Promise<void> {
+  await savePiecePattern(parsePieceOptions(options), absPath(outPath), deps);
+}
+
+/** The flags `cf piece setsrc` takes beyond the shared piece flags. */
+export interface SetsrcCLIOptions extends PieceCLIOptions {
+  quiet?: boolean;
+  check?: boolean;
+}
+
+/** The two halves of `cf piece setsrc`, and where `--check` reports. */
+export interface SetsrcCommandDependencies {
+  checkPieceSourceFromCommand?: typeof checkPieceSourceFromCommand;
+  applyPieceSourceCommandAction?: typeof applyPieceSourceCommandAction;
+  render?: typeof render;
+  hint?: (message: string) => void;
+}
+
+/**
+ * The `cf piece setsrc <main>` action. With `--check` it reports whether the
+ * source could replace the piece's, and a refusal exits 1 from inside the
+ * check, so `--check` gates a deploy script as well as informing a person.
+ */
+export async function setsrcFromCommand(
+  options: SetsrcCLIOptions,
+  mainPath: string,
+  deps: SetsrcCommandDependencies = {},
+): Promise<void> {
+  setQuietMode(!!options.quiet);
+  if (options.check) {
+    const { config, summary } = await (
+      deps.checkPieceSourceFromCommand ?? checkPieceSourceFromCommand
+    )(options, mainPath);
+    (deps.render ?? render)(summary);
+    (deps.hint ?? hint)(cliText(`NEXT STEPS:
+  → Apply it: cf piece setsrc --cell ${config.piece} ${mainPath} ...`));
+    return;
+  }
+  await (deps.applyPieceSourceCommandAction ?? applyPieceSourceCommandAction)(
+    options,
+    mainPath,
+  );
+}
+
+/** The `cf piece view` action. */
+export async function viewPieceFromCommand(
+  options: PieceSummaryCLIOptions,
+  deps: PieceCommandDependencies = {},
+): Promise<void> {
+  const print = deps.render ?? render;
+  const view = await getPieceView(parsePieceOptions(options), deps);
+  if (options.json) {
+    print(view ?? null, { json: true });
+  } else {
+    print(view ? formatViewTree(view) : "<no view data>");
+  }
+}
+
+/** The flags `cf piece render` takes beyond the shared piece flags. */
+export interface PieceRenderCLIOptions extends PieceSummaryCLIOptions {
+  watch?: boolean;
+  start?: boolean;
+}
+
+/** The part of the `Deno` namespace {@link untilInterrupted} listens through. */
+export type SignalListeners = Pick<
+  typeof Deno,
+  "addSignalListener" | "removeSignalListener"
+>;
+
+/** Resolves at the next `SIGINT` `signals` delivers, the process's own by
+ * default, and stops listening then. */
+export function untilInterrupted(
+  signals: SignalListeners = Deno,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const listener = () => {
+      signals.removeSignalListener("SIGINT", listener);
+      resolve();
+    };
+    signals.addSignalListener("SIGINT", listener);
   });
+}
+
+/**
+ * The `cf piece render` action. With `--watch` the render stays mounted and
+ * prints each settled tree until {@link PieceCommandDependencies.interrupted}
+ * resolves.
+ */
+export async function renderPieceFromCommand(
+  options: PieceRenderCLIOptions,
+  deps: PieceCommandDependencies = {},
+): Promise<void> {
+  const pieceConfig = parsePieceOptions(options);
+  const print = deps.render ?? render;
+  const json = !!options.json;
+  try {
+    // Rendering is the one thing here that needs the HTML renderer and its
+    // worker protocol, and every other `piece` command should not pay for them.
+    // deno-lint-ignore cf-imports/no-inline-module-import
+    const { renderPiece } = await import("../lib/piece-render.ts");
+    if (!options.watch) {
+      const html = await renderPiece(pieceConfig, {
+        start: options.start,
+      }, deps) as string;
+      if (json) print({ html }, { json: true });
+      else print(html);
+      return;
+    }
+    writePieceRenderStatus(
+      "Watching for changes... Press Ctrl+C to exit.\n",
+      json,
+    );
+    const pieceData = await inspectPiece(pieceConfig, deps);
+    writePieceRenderStatus(
+      `Rendering piece: ${pieceData.name || pieceConfig.piece}`,
+      json,
+    );
+    let renderCount = 0;
+    const cleanup = await renderPiece(pieceConfig, {
+      watch: true,
+      start: options.start,
+      onUpdate: (html) => {
+        renderCount++;
+        writePieceRenderStatus(`\n--- Render #${renderCount} ---`, json);
+        if (json) print({ html, renderCount }, { json: true });
+        else print(html);
+      },
+    }, deps) as () => void;
+    await (deps.interrupted ?? untilInterrupted)();
+    writePieceRenderStatus("\nStopping watch mode...", json);
+    cleanup();
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("has no UI")) {
+      handlePieceRenderNoUi(error, json, print);
+    } else {
+      throw error;
+    }
+  }
+}
+
+/** The flags `cf piece link` takes beyond the shared piece flags. */
+export interface PieceLinkCLIOptions extends PieceCLIOptions {
+  quiet?: boolean;
+  start?: boolean;
+  allowNonExisting?: boolean;
+}
+
+/**
+ * The `cf piece link <source> <target>` action. A source spelled
+ * `sqlite:<absPath>` injects a read-only on-disk SQLite source into the
+ * target field rather than linking a piece.
+ */
+export async function linkPiecesFromCommand(
+  options: PieceLinkCLIOptions,
+  sourceRef: string,
+  targetRef: string,
+  deps: PieceCommandDependencies = {},
+): Promise<void> {
+  setQuietMode(!!options.quiet);
+  const spaceConfig = parseSpaceOptions(options);
+  const print = deps.render ?? render;
+  const printHint = deps.hint ?? hint;
+  const targetPath = (
+    target: { path?: (string | number)[] },
+  ): (string | number)[] => {
+    if (!target.path) {
+      throw new ValidationError(
+        `Target reference must include a path. Expected: pieceId/path/to/field`,
+        { exitCode: 1 },
+      );
+    }
+    return target.path;
+  };
+
+  // The sqlite: scheme is not a piece reference, so it is detected before
+  // the source is parsed as one.
+  const sqliteSource = parseSqliteSource(sourceRef);
+  if (sqliteSource) {
+    const target = parseLink(targetRef, { space: spaceConfig.space });
+    collectEmbeddedSpace(spaceConfig, target);
+    await linkSqliteDiskSource(
+      spaceConfig,
+      sqliteSource.path,
+      target.pieceId,
+      targetPath(target),
+      { start: options.start, targetScope: target.scope },
+      deps,
+    );
+    print(`Linked ${sourceRef} to ${targetRef} (read-only on-disk source)`);
+    printHint(cliText(`NEXT STEPS:
+  → Inspect target piece:  cf piece inspect --cell ${target.pieceId} ...`));
+    return;
+  }
+
+  // A source may be a well-known ID or a piece, with or without a path; a
+  // source without one links the whole result cell.
+  const source = parseLink(sourceRef, {
+    allowWellKnown: true,
+    space: spaceConfig.space,
+  });
+  const target = parseLink(targetRef, { space: spaceConfig.space });
+  collectEmbeddedSpace(spaceConfig, source);
+  collectEmbeddedSpace(spaceConfig, target);
+  const path = targetPath(target);
+
+  try {
+    await linkPieces(
+      spaceConfig,
+      source.pieceId,
+      source.path || [],
+      target.pieceId,
+      path,
+      {
+        start: options.start,
+        allowNonExisting: !!options.allowNonExisting,
+        sourceScope: source.scope,
+        targetScope: target.scope,
+      },
+      deps,
+    );
+  } catch (error) {
+    // A link that fails validation is a data error (the pieces/paths read
+    // over the network don't support the link), not a usage error — report
+    // it like `cf cell get` does instead of letting Cliffy dump the help
+    // screen over it.
+    const report = pieceLinkDataErrorReport(error, {
+      sourcePieceId: source.pieceId,
+      targetPieceId: target.pieceId,
+    });
+    if (report) {
+      exitWithDataError(report, {
+        printError: deps.printError,
+        printHint: deps.hint,
+        exit: deps.exit,
+      });
+    }
+    throw error;
+  }
+
+  print(`Linked ${sourceRef} to ${targetRef}`);
+  printHint(cliText(`NEXT STEPS:
+  → Visualize connections: cf piece map -i ... -a ... -s ...
+  → Inspect target piece:  cf piece inspect --cell ${target.pieceId} ...`));
+}
+
+/** The `cf piece map` action. */
+export async function mapSpaceFromCommand(
+  options: PieceCLIOptions & { format?: string },
+  deps: PieceCommandDependencies = {},
+): Promise<void> {
+  const format = options.format === "dot" ? MapFormat.DOT : MapFormat.ASCII;
+  (deps.render ?? render)(
+    await generateSpaceMap(parseSpaceOptions(options), format, deps),
+  );
+}
+
+/** The flags `cf piece verbs` takes beyond the shared piece flags. */
+export interface PieceVerbsCLIOptions extends PieceSummaryCLIOptions {
+  quiet?: boolean;
+  all?: boolean;
+}
+
+/**
+ * The `cf piece verbs` action. The default view omits wrapper-tier
+ * (session-UI affordances) and deprecated verbs, and always prints the hidden
+ * counts, so nothing is silently invisible. Rows carry their marks in both
+ * views, and `cf piece call` never consults them. The same rule covers the
+ * other way this listing can be short, which `verbListingNotes` prints beside
+ * them.
+ */
+export async function listPieceVerbsFromCommand(
+  options: PieceVerbsCLIOptions,
+  deps: PieceCommandDependencies = {},
+): Promise<void> {
+  setQuietMode(!!options.quiet);
+  const print = deps.render ?? render;
+  const pieceConfig = parsePieceOptions(options);
+  const listing = await listPieceCallables(pieceConfig, deps);
+  if (options.json) {
+    print(verbListingJson(listing, !!options.all), { json: true });
+    return;
+  }
+  for (const line of verbListingLines(listing, !!options.all)) print(line);
+  const shown = options.all
+    ? listing.verbs
+    : partitionVerbListing(listing.verbs).shown;
+  // No rows means no per-verb help to point at.
+  if (shown.length === 0) return;
+  (deps.hint ?? hint)(
+    cliText(
+      `TIP: --json includes each verb's input schema; 'cf piece call --cell ${pieceConfig.piece} <verb> --help --json' has the full command spec.`,
+    ),
+  );
+}
+
+/** The `cf piece rm` action. */
+export async function removePieceFromCommand(
+  options: PieceCLIOptions,
+  deps: PieceCommandDependencies = {},
+): Promise<void> {
+  const pieceConfig = parsePieceOptions(options);
+  await removePiece(pieceConfig, deps);
+  (deps.render ?? render)(`Removed piece ${pieceConfig.piece}`);
+}
 
 /** Shared flags accepted by piece commands that resolve a target or source. */
 export interface PieceCLIOptions {
@@ -5020,9 +5258,138 @@ export async function restoreFromCommand(
   }
 }
 
-export interface NewPieceCommandDependencies {
-  newPiece?: typeof newPiece;
+/** The modules recording a version needs, loaded on first use. */
+const loadVersionModules = async () => ({
+  // deno-lint-ignore cf-imports/no-inline-module-import
+  access: await import("@commonfabric/pattern-index/access"),
+  // deno-lint-ignore cf-imports/no-inline-module-import
+  versions: await import("../lib/pattern-versions.ts"),
+});
+
+/**
+ * Keeps a deploy of the person's own source as a private version in the
+ * pattern index `CF_PATTERN_INDEX_URL` names, else the default index,
+ * signing as the deploying identity. Never throws, synchronously or not:
+ * the deploy it follows has committed, and an index that is misconfigured
+ * or unreachable must not turn that into a failure.
+ */
+export async function recordVersionInIndex(
+  identity: string,
+  deployed: DeployedSource,
+): Promise<VersionOutcome> {
+  // Loaded here rather than with the command: recording reaches the
+  // compiler's identity code, which starting `cf piece` must not load.
+  let modules;
+  let baseUrl: string;
+  let store: PatternIndexStore;
+  try {
+    modules = await loadVersionModules();
+    baseUrl = modules.access.resolvePatternIndexUrl(undefined);
+    store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
+  } catch (error) {
+    return { status: "failed", reason: describeFailure(error) };
+  }
+  const { openPatternIndexClient } = modules.access;
+  return await modules.versions.recordDeployedVersion(deployed, {
+    store,
+    openClient: async () =>
+      openPatternIndexClient({
+        baseUrl,
+        signer: await loadIdentity(identity),
+        store,
+      }),
+    readTextFile: (path) => Deno.readTextFile(path),
+  });
 }
+
+/**
+ * The version a deploy is recording, started from `onDeployed` once the
+ * deploy commits; `settle` waits for it, prints its one line, if any, and
+ * answers the outcome (`undefined` when nothing was deployed). The deploy
+ * has committed by then, so the index adds latency to the command's exit
+ * and never changes its outcome; a hung index connection holds the exit
+ * for as long as the operating system keeps the connection open.
+ */
+function versionRecorder(
+  record: (deployed: DeployedSource) => Promise<VersionOutcome>,
+  entry: string,
+  origin: string | undefined,
+  print: (line: string) => void,
+): {
+  onDeployed: (deployed: DeployedProgram) => void;
+  settle: () => Promise<VersionOutcome | undefined>;
+} {
+  let pending: Promise<VersionOutcome> | undefined;
+  return {
+    onDeployed: (deployed) => {
+      pending = record({
+        entry,
+        ...deployed,
+        ...(origin === undefined ? {} : { origin }),
+      });
+    },
+    settle: async () => {
+      if (pending === undefined) return undefined;
+      const outcome = await pending;
+      // A module that failed to load already made the outcome a failure;
+      // reporting it must not fail the deploy either.
+      const line = await loadVersionModules().then(
+        ({ versions }) => versions.versionLine(outcome),
+        () =>
+          outcome.status === "failed"
+            ? `Version not kept: ${outcome.reason}. The deploy itself succeeded.`
+            : undefined,
+      );
+      if (line !== undefined) print(line);
+      return outcome;
+    },
+  };
+}
+
+export interface NewPieceCommandDependencies {
+  newPiece?: typeof newPieceWithReceipt;
+
+  /** Where the receipt goes, stdout unless the caller says otherwise. */
+  render?: typeof render;
+
+  /** Keeps a deploy as a private version; the pattern index by default. */
+  recordVersion?: (deployed: DeployedSource) => Promise<VersionOutcome>;
+
+  /** Where the version's line goes, stderr unless the caller says otherwise. */
+  note?: (message: string) => void;
+
+  /** Records which published pattern a piece came from; the local store by default. */
+  recordIndexedPiece?: (
+    patternIndexUrl: string,
+    pieceId: string,
+    patternId: string,
+  ) => Promise<void>;
+}
+
+/**
+ * Remembers that `pieceId` was created from `patternId`, in the store for
+ * the index under the state directory `env` names, so source saved from it
+ * with `cf piece getsrc` and published again credits the original
+ * (`remixedFrom`). A record that cannot be written costs that credit and
+ * nothing else, so it warns rather than failing a creation that succeeded.
+ */
+export const recordIndexedPiece = async (
+  patternIndexUrl: string,
+  pieceId: string,
+  patternId: string,
+  env: (key: string) => string | undefined = (key) => Deno.env.get(key),
+): Promise<void> => {
+  try {
+    await new PatternIndexStore(patternIndexStoreDir(patternIndexUrl, env))
+      .recordIndexedPiece(pieceId, patternId);
+  } catch (error) {
+    console.error(
+      `Could not record that ${pieceId} came from ${patternId}: ${
+        describeFailure(error)
+      }`,
+    );
+  }
+};
 
 /**
  * `cf piece new`'s action, as a function a test can call.
@@ -5032,13 +5399,74 @@ export interface NewPieceCommandDependencies {
  * which options become the naming request `newPiece` receives, and that the
  * address it points a reader at is the slug when there is one.
  */
+/**
+ * Where `cf piece new`'s program comes from: the `main` file, or the
+ * published pattern `--from-index` names, never both and never neither. A
+ * published pattern needs the index to read it from, and a missing one is
+ * refused here rather than when the deploy reaches the network.
+ */
+function newPieceEntry(
+  options: {
+    fromIndex?: string;
+    patternIndexUrl?: string;
+    mainExport?: string;
+    repository?: string;
+    root?: string;
+    test?: string[];
+    datafile?: string[];
+  },
+  main: string | undefined,
+): PieceEntry {
+  if (options.fromIndex === undefined) {
+    if (main === undefined) {
+      throw new ValidationError(
+        "Missing a pattern: pass a source file, or --from-index <patternId>.",
+      );
+    }
+    return localPatternEntry(main, options);
+  }
+  if (main !== undefined) {
+    throw new ValidationError(
+      `--from-index creates the piece from a published pattern; drop the source file "${main}", or drop --from-index.`,
+    );
+  }
+  const patternId = options.fromIndex.trim();
+  if (patternId === "") {
+    throw new ValidationError("--from-index requires a non-blank pattern id.");
+  }
+  const patternIndexUrl = options.patternIndexUrl?.trim();
+  if (patternIndexUrl === undefined || patternIndexUrl === "") {
+    throw new ValidationError(
+      "--from-index needs the pattern index to read from: pass --pattern-index-url <url>, or set CF_PATTERN_INDEX_URL.",
+    );
+  }
+  // The index client appends a function name to the base's path, so it
+  // refuses a base with a query or fragment; refused here too, before the
+  // space root is touched.
+  const base = URL.parse(patternIndexUrl);
+  if (
+    base === null || (base.protocol !== "https:" && base.protocol !== "http:")
+  ) {
+    throw new ValidationError(
+      `--pattern-index-url must be an http(s) URL: ${patternIndexUrl}`,
+    );
+  }
+  if (base.search !== "" || base.hash !== "") {
+    throw new ValidationError(
+      `--pattern-index-url must not carry a query or fragment: ${patternIndexUrl}`,
+    );
+  }
+  return { patternId, patternIndexUrl };
+}
+
 export async function newPieceFromCommand(
   // deno-lint-ignore no-explicit-any
   options: any,
-  main: string,
+  main: string | undefined,
   deps: NewPieceCommandDependencies = {},
 ): Promise<void> {
   setQuietMode(!!options.quiet);
+  const entry = newPieceEntry(options, main);
   const spaceConfig = parseSpaceOptions(options);
   const input = options.inputFile === undefined
     ? undefined
@@ -5049,10 +5477,18 @@ export async function newPieceFromCommand(
   ) {
     throw new Error("`--input-file` must contain a JSON object.");
   }
-  const pieceId = await (deps.newPiece ?? newPiece)(
+  const version = main === undefined ? undefined : versionRecorder(
+    deps.recordVersion ??
+      ((deployed) => recordVersionInIndex(spaceConfig.identity, deployed)),
+    absPath(main),
+    undefined,
+    deps.note ?? note,
+  );
+  const { pieceId, name } = await (deps.newPiece ?? newPieceWithReceipt)(
     spaceConfig,
-    localPatternEntry(main, options),
+    entry,
     {
+      ...(version === undefined ? {} : { onDeployed: version.onDeployed }),
       start: options.start,
       slug: options.slug,
       force: !!options.force,
@@ -5062,11 +5498,52 @@ export async function newPieceFromCommand(
         : { requestKey: options.requestKey }),
     },
   );
-  render(pieceId);
+  // `--json` is the machine surface: one object naming the piece and, for a
+  // piece from the index that has one, the pattern's display name, and for
+  // one from a file, what became of its private version.
+  const print = deps.render ?? render;
+  if (options.json) {
+    const kept = await version?.settle();
+    const versionJson = kept === undefined
+      ? undefined
+      : await loadVersionModules().then(
+        ({ versions }) => versions.versionJson,
+        // The modules failing to load made the outcome a failure, which a
+        // script still reads as one.
+        () => (outcome: VersionOutcome) => ({
+          status: outcome.status,
+          ...("reason" in outcome ? { reason: outcome.reason } : {}),
+        }),
+      );
+    print(
+      {
+        pieceId,
+        ...(name === undefined ? {} : { name }),
+        ...(kept === undefined || versionJson === undefined
+          ? {}
+          : { version: versionJson(kept) }),
+      },
+      { json: true },
+    );
+  } else {
+    print(pieceId);
+    await version?.settle();
+  }
+  if ("patternId" in entry) {
+    await (deps.recordIndexedPiece ?? recordIndexedPiece)(
+      entry.patternIndexUrl,
+      pieceId,
+      entry.patternId,
+    );
+  }
   const browserPieceRef = options.slug ?? pieceId;
+  // A piece from the index has no local source to update from until it is
+  // saved; building on it publishes it as a remix.
+  const updateCode = main === undefined
+    ? `\n  → Build on it:     cf piece getsrc --cell ${pieceId} ./src, edit, then cf pattern share ./src/<entry file>`
+    : `\n  → Update code:     cf piece setsrc --cell ${pieceId} ${main} ...`;
   hint(cliText(`NEXT STEPS:
-  → Open in browser: ${spaceConfig.apiUrl}/${spaceConfig.space}/${browserPieceRef}
-  → Update code:     cf piece setsrc --cell ${pieceId} ${main} ...
+  → Open in browser: ${spaceConfig.apiUrl}/${spaceConfig.space}/${browserPieceRef}${updateCode}
   → Test a callable: cf piece call --cell ${pieceId} <callableName> ...
   → Inspect state:   cf piece inspect --cell ${pieceId} ...`));
 }
@@ -5144,6 +5621,9 @@ export async function searchPiecesFromCommand(
 /** Injectable dependencies for testing the `piece setsrc` command boundary. */
 export interface SetPieceSourceCommandDependencies {
   setPiecePattern?: typeof setPiecePattern;
+
+  /** Told what was deployed once storage accepted it. */
+  onDeployed?: (deployed: DeployedProgram) => void;
 }
 
 /** Injectable effects for testing the `piece setsrc` action. */
@@ -5154,6 +5634,9 @@ export interface ApplyPieceSourceCommandDependencies {
   hint?: (message: string) => void;
   /** Exit-status seam for a committed source whose running refresh failed. */
   setExitCode?: (code: number) => void;
+
+  /** Keeps a deploy as a private version; the pattern index by default. */
+  recordVersion?: (deployed: DeployedSource) => Promise<VersionOutcome>;
 }
 
 /** Injectable dependencies for testing `piece setsrc --check`. */
@@ -5230,6 +5713,7 @@ export async function setPieceSourceFromCommand(
       dangerouslyAllowIncompatibleSchema:
         options.dangerouslyAllowIncompatibleSchema,
       ...(options.origin === undefined ? {} : { origin: options.origin }),
+      ...(deps.onDeployed === undefined ? {} : { onDeployed: deps.onDeployed }),
     },
   );
   return { config, update };
@@ -5237,6 +5721,8 @@ export async function setPieceSourceFromCommand(
 
 /** The flags `cf piece follow` takes beyond the shared piece flags. */
 export interface FollowPieceSourceCLIOptions extends PieceCLIOptions {
+  quiet?: boolean;
+
   /** The pattern the piece must still run, as `<identity>#<symbol>`. */
   expect?: string;
 
@@ -5266,6 +5752,7 @@ export async function followPieceSourceAction(
   origin: string,
   deps: FollowPieceSourceCommandDependencies = {},
 ): Promise<void> {
+  setQuietMode(!!options.quiet);
   const config = parsePieceOptions(options);
   const trimmed = origin.trim();
   if (trimmed.length === 0) {
@@ -5383,10 +5870,19 @@ export async function applyPieceSourceCommandAction(
   mainPath: string,
   deps: ApplyPieceSourceCommandDependencies = {},
 ): Promise<void> {
+  const version = versionRecorder(
+    deps.recordVersion ??
+      ((deployed) =>
+        recordVersionInIndex(parseSpaceOptions(options).identity, deployed)),
+    absPath(mainPath),
+    options.origin,
+    deps.warn ?? note,
+  );
   const { config, update } = await (
     deps.setPieceSourceFromCommand ?? setPieceSourceFromCommand
-  )(options, mainPath);
+  )(options, mainPath, { onDeployed: version.onDeployed });
   (deps.render ?? render)(setsrcSuccessLine(config, update));
+  await version.settle();
   const refreshWarning = setsrcRefreshWarning(update);
   if (refreshWarning !== undefined) {
     (deps.warn ?? note)(refreshWarning);
@@ -5411,18 +5907,29 @@ successful refresh.`));
 }
 
 /**
- * Like `parseScopedIdSegment`, except a rejected `@scope` suffix is raised
- * as a usage error, the suffix being something the user typed.
+ * Splits the qualifiers off a bare piece id or slug, which the cell reference
+ * grammar reads as it reads a reference's piece segment: a scope is written
+ * `@user` or `@scope=user`. A segment the grammar refuses is a usage error. A
+ * pin is refused, since a target names the piece as it is rather than a
+ * pattern it must run, and so is `@inherit`, since a target has no reference
+ * to inherit a scope from.
  */
 function parseScopedId(id: string): { id: string; scope?: CellScope } {
+  let segment;
   try {
-    return parseScopedIdSegment(id);
+    segment = parsePieceSegment(id);
   } catch (error) {
+    throw new ValidationError(describeFailure(error), { exitCode: 1 });
+  }
+  if (segment.pin !== undefined || segment.scope === "inherit") {
     throw new ValidationError(
-      describeFailure(error),
+      `"${id}" carries a \`@pin\` or \`@inherit\` qualifier, which a target does not take.`,
       { exitCode: 1 },
     );
   }
+  return segment.scope === undefined
+    ? { id: segment.id }
+    : { id: segment.id, scope: segment.scope };
 }
 
 /**
@@ -5810,12 +6317,6 @@ export function parseLink(
   ref = bare.target;
 
   const parts = ref.split("/");
-  if (parts.length < 1) {
-    throw new ValidationError(
-      `Invalid reference format. Expected: pieceId or pieceId/path/to/field`,
-      { exitCode: 1 },
-    );
-  }
 
   const parsedPiece = parseScopedId(parts[0]);
   const pieceId = parsedPiece.id;
@@ -5933,10 +6434,15 @@ function decomposeUrl(
   return { apiUrl, space, reference };
 }
 
-// We use stdin for piece input which must be an `Object`
-async function drainStdin(): Promise<object> {
+/**
+ * Reads the whole of `input`, standard input by default, as the JSON value a
+ * piece takes as input.
+ */
+export async function drainStdin(
+  input: ReadableStream<Uint8Array> = Deno.stdin.readable,
+): Promise<object> {
   let out = "";
-  for await (const chunk of Deno.stdin.readable) {
+  for await (const chunk of input) {
     out += decode(chunk);
   }
   try {

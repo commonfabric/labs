@@ -17,7 +17,6 @@ import {
 
 import Note from "./note.tsx";
 import {
-  getPieceName,
   type MentionablePiece,
   type MinimalPiece,
   type NotebookInput,
@@ -133,7 +132,11 @@ const handleDropOntoCurrentNotebook = handler<
     selectedNoteIndices: Writable<number[]>;
   }
 >((event, { notes, notebooks, selectedNoteIndices }) => {
-  const sourceCell = event.detail.sourceCell;
+  // A row's drag source hands over the row's position in its notebook's list
+  // rather than the note. Every cell this moves is resolved to the note it
+  // names before anything is removed: the removal shifts another note into
+  // that position, and adding the position would add that other note.
+  const sourceCell = event.detail.sourceCell.resolveAsCell();
   const notesList = notes.get();
   const selected = selectedNoteIndices.get();
 
@@ -144,7 +147,7 @@ const handleDropOntoCurrentNotebook = handler<
 
   if (isDraggedInSelection && selected.length > 1) {
     // Multi-item move
-    const itemsToMove = selected.map((idx) => notes.key(idx));
+    const itemsToMove = selected.map((idx) => notes.key(idx).resolveAsCell());
 
     // Remove from all notebooks
     removeFromAllNotebooks(notebooks, itemsToMove);
@@ -170,98 +173,41 @@ const handleDropOntoCurrentNotebook = handler<
   }
 });
 
-// Handler for dropping any item onto a notebook - moves from current notebook to target
-// Supports multi-item drag: if dragged item is in selection, moves ALL selected items
+// Handler for dropping a note onto one of this notebook's rows: files the note
+// here. If the dragged note is part of a multi-selection, the whole selection
+// moves here, leaving every other notebook.
 const handleDropOntoNotebook = handler<
   { detail: { sourceCell: Writable<NotePiece> } },
   {
-    targetNotebook: Writable<{
-      title?: string;
-      notes?: NotePiece[];
-      isNotebook?: boolean;
-    }>;
-    currentNotes: Writable<NotePiece[]>;
+    self: Writable<NotebookPiece>;
+    notes: Writable<NotePiece[]>;
     selectedNoteIndices: Writable<number[]>;
     notebooks: Writable<NotebookPiece[]>;
   }
->((event, { targetNotebook, currentNotes, selectedNoteIndices, notebooks }) => {
-  const sourceCell = event.detail.sourceCell;
-
-  // Check if target is actually a notebook
-  if (!targetNotebook.key("isNotebook").get()) return;
-
-  const targetNotesCell = targetNotebook.key("notes");
-  const currentList = currentNotes.get();
+>((event, { self, notes, selectedNoteIndices, notebooks }) => {
+  // A row's drag source hands over a position in a notes list; the note it
+  // holds is what gets filed.
+  const sourceCell = event.detail.sourceCell.resolveAsCell();
   const selected = selectedNoteIndices.get();
 
-  // The only binding today passes the notebook's own SELF as the target, so
-  // target and current usually alias the same notes collection. In that case
-  // there is nothing to remove from "current": removing would strip or
-  // reorder the very memberships addUnique confirms below.
-  const targetIsCurrent = equals(targetNotesCell, currentNotes);
-
-  // Check if dragged item is in the selection
-  const draggedIndex = currentList.findIndex((n) => equals(sourceCell, n));
-  const isDraggedInSelection = draggedIndex >= 0 &&
-    selected.includes(draggedIndex);
-
-  if (isDraggedInSelection && selected.length > 1) {
-    // Multi-item move
-    const itemsToMove = selected.map((idx) => currentNotes.key(idx)).filter(
-      Boolean,
-    );
-
-    // Add all to target, deduplicated by link identity on the server —
-    // addUnique needs no read of the target list, so concurrent drops onto the
-    // same notebook merge instead of conflicting.
-    for (const item of itemsToMove) {
-      targetNotesCell.addUnique(item);
-      item.key("isHidden").set(true);
-    }
-
-    // Find target notebook index to skip it during removal
-    const notebooksList = notebooks.get();
-    const targetIndex = notebooksList.findIndex(
-      (nb) => equals(nb, targetNotebook),
-    );
-
-    // Remove from all notebooks except target
-    removeFromAllNotebooks(notebooks, itemsToMove, targetIndex);
-
-    // Remove from current notebook — unless current IS the target, where
-    // "removing" would strip the memberships this drop just confirmed. (The
-    // pre-addUnique code ran this unconditionally, so a same-notebook
-    // multi-drop silently dropped the selected notes from the notebook.)
-    if (!targetIsCurrent) {
-      currentNotes.set(
-        currentList.filter(
-          (n) => !itemsToMove.some((item) => equals(n, item)),
-        ),
-      );
-    }
+  const draggedIndex = notes.get().findIndex((n) => equals(sourceCell, n));
+  if (
+    draggedIndex >= 0 && selected.includes(draggedIndex) && selected.length > 1
+  ) {
+    // The selection indexes this notebook's notes, so the selected notes are
+    // already members; moving them here means taking them out of every other
+    // notebook. The positions are resolved to the notes they hold, which are
+    // what the other notebooks' lists are matched against.
+    const itemsToMove = selected.map((idx) => notes.key(idx).resolveAsCell());
+    for (const item of itemsToMove) item.key("isHidden").set(true);
+    const selfIndex = notebooks.get().findIndex((nb) => equals(nb, self));
+    removeFromAllNotebooks(notebooks, itemsToMove, selfIndex);
     selectedNoteIndices.set([]);
   } else {
-    // Single-item move
-    // Remove from current notebook if present — unless current IS the
-    // target, where the removal would turn addUnique's no-op below into a
-    // move-to-tail reorder of an already-present note.
-    if (!targetIsCurrent) {
-      const indexInCurrent = currentList.findIndex((n) =>
-        equals(sourceCell, n)
-      );
-      if (indexInCurrent !== -1) {
-        const copy = [...currentList];
-        copy.splice(indexInCurrent, 1);
-        currentNotes.set(copy);
-      }
-    }
-
     sourceCell.key("isHidden").set(true);
-    // Deduplicated by link identity on the server, so a note the target
-    // already holds keeps a single membership with no whole-list read. For a
-    // genuinely distinct target this completes the move (the old guard
-    // skipped it entirely, leaving the note in both notebooks).
-    targetNotesCell.addUnique(sourceCell);
+    // Deduplicated by link identity on the server, so a note this notebook
+    // already holds keeps a single membership with no whole-list read.
+    notes.addUnique(sourceCell);
   }
 });
 
@@ -841,80 +787,6 @@ const Notebook = pattern<NotebookInput, NotebookOutput>(
       selectedNoteIndices.set([]);
     });
 
-    // COMBINED computed for ALL notebook relationships to avoid nested computed access issues
-    // Returns parents, children, siblings, and their boolean flags all in one place
-    // NOTE: Prefixed with _ because siblings feature is disabled; kept for re-enabling
-    const _notebookRelationships = computed(() => {
-      // Current notebook's name for comparison - use title since it's our local prop
-      const currentTitle = title;
-      // Build a pattern to match our NAME format: "📓 {title} ({count})"
-      const _currentNamePattern = `📓 ${currentTitle}`;
-      const nbCount = notebooks.length;
-
-      // Find parent notebooks (notebooks that contain this notebook in their notes)
-      // For now, skip parent detection as it requires accessing notes arrays of other pieces
-      const parents: NotebookPiece[] = [];
-      // Note: Parent detection requires deeper integration with piece introspection
-
-      // Find child notebooks (notebooks in our notes list)
-      const notesList = notes.get() ?? [];
-      const childNames = (Array.isArray(notesList) ? notesList : [])
-        .filter((n) => n?.isNotebook === true)
-        .map((n) => getPieceName(n))
-        .filter((t) => t.length > 0);
-
-      const children: (NotePiece | NotebookPiece)[] = [];
-      for (let i = 0; i < nbCount; i++) {
-        const nb = notebooks[i];
-        const nbName = getPieceName(nb);
-        if (
-          childNames.some((cn) => nbName.includes(cn) || cn.includes(nbName))
-        ) {
-          children.push(nb);
-        }
-      }
-
-      // ========================================================================
-      // SIBLINGS FEATURE DISABLED FOR PERFORMANCE
-      // ========================================================================
-      // The "Other notebooks" sibling feature was causing significant performance
-      // issues with 50+ notebooks due to O(n*m) complexity in the computation.
-      //
-      // To re-enable:
-      // 1. Uncomment the siblings computation below
-      // 2. Uncomment the UI section in JSX (search for "DISABLED FOR PERFORMANCE")
-      // 3. Set hasSiblings to: siblings.length > 0
-      //
-      // Performance consideration: Consider implementing lazy evaluation or
-      // a collapsible UI that only computes siblings when expanded.
-      // ========================================================================
-
-      // const notesListNames = (Array.isArray(notesList) ? notesList : [])
-      //   .map((n: any) => getPieceName(n))
-      //   .filter((t: any) => t.length > 0);
-      //
-      // const siblings: any[] = [];
-      // for (let i = 0; i < nbCount; i++) {
-      //   const nb = notebooks[i];
-      //   const nbName = getPieceName(nb);
-      //   if (nbName.length === 0) continue;
-      //   if (nbName.startsWith(currentNamePattern)) continue;
-      //   if (notesListNames.some((n) => nbName.includes(n) || n.includes(nbName))) continue;
-      //   siblings.push(nb);
-      // }
-
-      const siblings: any[] = []; // Empty - siblings feature disabled
-
-      return {
-        parents,
-        hasParents: parents.length > 0,
-        children,
-        hasChildren: children.length > 0,
-        siblings,
-        hasSiblings: false, // Set to: siblings.length > 0 when re-enabling
-      };
-    });
-
     // Computed items for cf-select dropdowns (notebooks + "New Notebook...")
     // cf-select has proper bidirectional DOM sync, unlike native <select>
     const notebookSelectItems = computed(() => [
@@ -1166,7 +1038,7 @@ const Notebook = pattern<NotebookInput, NotebookOutput>(
                   }}
                 >
                   {/* Notes List - using cf-table like default-app for consistent spacing */}
-                  <cf-table full-width hover>
+                  <cf-table fullWidth hover>
                     <tbody>
                       {notes.map((note, index) => (
                         <tr
@@ -1208,8 +1080,8 @@ const Notebook = pattern<NotebookInput, NotebookOutput>(
                             <cf-drop-zone
                               accept="note,notebook"
                               oncf-drop={handleDropOntoNotebook({
-                                targetNotebook: self,
-                                currentNotes: notes,
+                                self,
+                                notes,
                                 selectedNoteIndices,
                                 notebooks,
                               })}
@@ -1349,8 +1221,6 @@ const Notebook = pattern<NotebookInput, NotebookOutput>(
                 </cf-hstack>
               </cf-vstack>
             </cf-card>
-
-            {/* Siblings feature disabled for performance - see _notebookRelationships for re-enabling */}
           </cf-vstack>
 
           {/* New Notebook Prompt Modal */}

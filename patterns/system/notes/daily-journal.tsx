@@ -63,76 +63,61 @@ function applyTemplate(templateStr: string, dateStr: string): string {
 
 // ===== Module-scope handlers =====
 
+interface EntryState {
+  entries: Writable<NotePiece[]>;
+  template: Writable<string>;
+  selectedDate: Writable<string>;
+  addPiece: Stream<{ piece: MentionablePiece }>;
+}
+
 /**
  * Handle calendar day selection: navigate to existing note or create a new one.
  */
 const handleCalendarChange = handler<
   { detail: { value: string; oldValue: string } },
-  {
-    entries: Writable<NotePiece[]>;
-    template: Writable<string>;
-    selectedDate: Writable<string>;
-    addPiece: Stream<{ piece: MentionablePiece }>;
-  }
+  EntryState
 >(({ detail }, { entries, template, selectedDate, addPiece }) => {
   const dateStr = detail.value;
   selectedDate.set(dateStr);
-
-  // Check if a note already exists for this date
-  const all = entries.get();
-  for (const entry of all) {
-    if (entry?.title === journalTitle(dateStr)) {
-      return navigateTo(entry as any);
-    }
-  }
-
-  // Create a new daily note
   const noteTitle = journalTitle(dateStr);
-  const t = template.get();
-  const content = applyTemplate(t || DEFAULT_TEMPLATE, dateStr);
+  const list = entries.get();
+  const index = list.findIndex((entry) => entry?.title === noteTitle);
+  if (index >= 0) return navigateTo(entries.key(index));
+
   const note = Note({
     title: noteTitle,
-    content,
+    content: applyTemplate(template.get() || DEFAULT_TEMPLATE, dateStr),
   });
-  entries.push(note as any);
-  addPiece.send({ piece: note as any });
-  return navigateTo(note as any);
+  // A read-modify-write rather than a push: whether to file the note
+  // depends on the list just read.
+  entries.set([...list, note]);
+  addPiece.send({ piece: note });
+  return navigateTo(note);
 });
 
 /**
  * Handle "Go to Today" — navigate to today's note, creating it if needed.
  */
-const handleGoToToday = handler<
-  void,
-  {
-    entries: Writable<NotePiece[]>;
-    template: Writable<string>;
-    selectedDate: Writable<string>;
-    addPiece: Stream<{ piece: MentionablePiece }>;
-  }
->((_event, { entries, template, selectedDate, addPiece }) => {
+const handleGoToToday = handler<void, EntryState>((
+  _event,
+  { entries, template, selectedDate, addPiece },
+) => {
   const dateStr = getTodayDate(Date.now());
   selectedDate.set(dateStr);
+  const noteTitle = journalTitle(dateStr);
+  const list = entries.get();
+  const index = list.findIndex((entry) => entry?.title === noteTitle);
+  if (index >= 0) return navigateTo(entries.key(index));
 
-  const all = entries.get();
-  for (const entry of all) {
-    if (entry?.title === journalTitle(dateStr)) {
-      return navigateTo(entry as any);
-    }
-  }
-
-  const d = new Date(dateStr + "T00:00:00");
-  const dayOfWeek = d.toLocaleDateString("en-US", { weekday: "long" });
-  const noteTitle = `${dateStr} - ${dayOfWeek}`;
-  const t = template.get();
-  const content = applyTemplate(t || DEFAULT_TEMPLATE, dateStr);
   const note = Note({
     title: noteTitle,
-    content,
+    content: applyTemplate(template.get() || DEFAULT_TEMPLATE, dateStr),
   });
-  entries.push(note as any);
-  addPiece.send({ piece: note as any });
-  return navigateTo(note as any);
+  // A read-modify-write rather than a push: whether to file the note
+  // depends on the list just read.
+  entries.set([...list, note]);
+  addPiece.send({ piece: note });
+  return navigateTo(note);
 });
 
 // ===== Weekly rollup =====
@@ -158,6 +143,199 @@ const triggerRollup = handler<
     }],
   });
 });
+
+// ===== Rollup view =====
+
+interface RollupViewInput {
+  rollup?: WeeklyRollup;
+}
+
+interface RollupViewOutput {
+  [UI]: VNode;
+
+  /** What the suggestion beside the rollup is asked for. */
+  situation: string;
+  context: {
+    weeklyHeadline: string;
+    themes: WeeklyRollup["themes"];
+    accomplishments: string[];
+    openThreads: string[];
+  };
+}
+
+/**
+ * A weekly rollup as the journal shows it, and what it asks the suggestion
+ * beside it for. A sub-pattern so that a rollup can be handed to it directly:
+ * the journal's own comes from a language model.
+ */
+export const RollupView = pattern<RollupViewInput, RollupViewOutput>(
+  ({ rollup }) => {
+    const situation = computed(() => {
+      if (!rollup) return "Suggest something useful based on my daily journal.";
+      const threads: string[] = [];
+      if (rollup.openThreads) {
+        for (const t of rollup.openThreads) threads.push(t);
+      }
+      const themeNames: string[] = [];
+      if (rollup.themes) {
+        for (const t of rollup.themes) themeNames.push(t.name);
+      }
+      const mood = rollup.mood || "unknown";
+      return `Based on my weekly journal rollup, suggest a next step or useful pattern. Active themes: ${
+        themeNames.join(", ")
+      }. Open threads: ${threads.join(", ")}. Mood: ${mood}.`;
+    });
+
+    const context = computed(() => {
+      if (!rollup) {
+        return {
+          weeklyHeadline: "",
+          themes: [],
+          accomplishments: [],
+          openThreads: [],
+        };
+      }
+      return {
+        weeklyHeadline: rollup.headline || "",
+        themes: rollup.themes,
+        accomplishments: rollup.accomplishments,
+        openThreads: rollup.openThreads,
+      };
+    });
+
+    return {
+      [UI]: (
+        <cf-vstack gap="3">
+          <p
+            style={{
+              fontSize: "15px",
+              fontWeight: "600",
+              margin: 0,
+              lineHeight: "1.3",
+            }}
+          >
+            {rollup?.headline}
+          </p>
+
+          <cf-vstack gap="1">
+            <span
+              style={{
+                fontSize: "11px",
+                fontWeight: "500",
+                color: "var(--cf-colors-gray-500)",
+                textTransform: "uppercase",
+                letterSpacing: "0.05em",
+              }}
+            >
+              Themes
+            </span>
+            {rollup?.themes.map(
+              (theme: { name: string; detail: string }) => (
+                <div
+                  style={{
+                    padding: "6px 8px",
+                    borderRadius: "6px",
+                    background: "var(--cf-colors-gray-50)",
+                    fontSize: "13px",
+                  }}
+                >
+                  <strong>{theme.name}</strong>
+                  {" — "}
+                  <span
+                    style={{
+                      color: "var(--cf-colors-gray-600)",
+                    }}
+                  >
+                    {theme.detail}
+                  </span>
+                </div>
+              ),
+            )}
+          </cf-vstack>
+
+          {ifElse(
+            computed(
+              () =>
+                (rollup?.accomplishments?.length ?? 0) >
+                  0,
+            ),
+            <cf-vstack gap="1">
+              <span
+                style={{
+                  fontSize: "11px",
+                  fontWeight: "500",
+                  color: "var(--cf-colors-gray-500)",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                }}
+              >
+                Done
+              </span>
+              <ul
+                style={{
+                  margin: 0,
+                  paddingLeft: "1.2rem",
+                  fontSize: "13px",
+                  lineHeight: "1.5",
+                }}
+              >
+                {rollup?.accomplishments.map(
+                  (item: string) => <li>{item}</li>,
+                )}
+              </ul>
+            </cf-vstack>,
+            <span />,
+          )}
+
+          {ifElse(
+            computed(
+              () => (rollup?.openThreads?.length ?? 0) > 0,
+            ),
+            <cf-vstack gap="1">
+              <span
+                style={{
+                  fontSize: "11px",
+                  fontWeight: "500",
+                  color: "var(--cf-colors-gray-500)",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                }}
+              >
+                Open Threads
+              </span>
+              <ul
+                style={{
+                  margin: 0,
+                  paddingLeft: "1.2rem",
+                  fontSize: "13px",
+                  lineHeight: "1.5",
+                }}
+              >
+                {rollup?.openThreads.map(
+                  (item: string) => <li>{item}</li>,
+                )}
+              </ul>
+            </cf-vstack>,
+            <span />,
+          )}
+
+          <p
+            style={{
+              margin: 0,
+              fontSize: "13px",
+              fontStyle: "italic",
+              color: "var(--cf-colors-gray-600)",
+            }}
+          >
+            {rollup?.mood}
+          </p>
+        </cf-vstack>
+      ),
+      situation,
+      context,
+    };
+  },
+);
 
 // ===== Input / Output types =====
 
@@ -325,41 +503,8 @@ ${notesXml}
     );
     const hasRollup = computed(() => !!weeklyRollup);
 
-    // Suggestion context derived from the weekly rollup
-    const suggestionSituation = computed(() => {
-      const rollup = weeklyRollup;
-      if (!rollup) return "Suggest something useful based on my daily journal.";
-      const threads: string[] = [];
-      if (rollup.openThreads) {
-        for (const t of rollup.openThreads) threads.push(t);
-      }
-      const themeNames: string[] = [];
-      if (rollup.themes) {
-        for (const t of rollup.themes) themeNames.push(t.name);
-      }
-      const mood = rollup.mood || "unknown";
-      return `Based on my weekly journal rollup, suggest a next step or useful pattern. Active themes: ${
-        themeNames.join(", ")
-      }. Open threads: ${threads.join(", ")}. Mood: ${mood}.`;
-    });
-
-    const suggestionContext = computed(() => {
-      const rollup = weeklyRollup;
-      if (!rollup) {
-        return {
-          weeklyHeadline: "",
-          themes: [],
-          accomplishments: [],
-          openThreads: [],
-        };
-      }
-      return {
-        weeklyHeadline: rollup.headline || "",
-        themes: rollup.themes,
-        accomplishments: rollup.accomplishments,
-        openThreads: rollup.openThreads,
-      };
-    });
+    // The rollup as shown, and what it asks the suggestion beside it for.
+    const rollupView = RollupView({ rollup: weeklyRollup });
 
     return {
       [NAME]: computed(() => `📅 ${title.get()}`),
@@ -381,12 +526,7 @@ ${notesXml}
                 <cf-button
                   color="primary"
                   variant="solid"
-                  onClick={handleGoToToday({
-                    entries,
-                    template,
-                    selectedDate,
-                    addPiece,
-                  })}
+                  onClick={goToToday}
                   style={{
                     width: "100%",
                     padding: "12px",
@@ -472,131 +612,7 @@ ${notesXml}
 
                     {ifElse(
                       hasRollup,
-                      <cf-vstack gap="3">
-                        <p
-                          style={{
-                            fontSize: "15px",
-                            fontWeight: "600",
-                            margin: 0,
-                            lineHeight: "1.3",
-                          }}
-                        >
-                          {weeklyRollup?.headline}
-                        </p>
-
-                        <cf-vstack gap="1">
-                          <span
-                            style={{
-                              fontSize: "11px",
-                              fontWeight: "500",
-                              color: "var(--cf-colors-gray-500)",
-                              textTransform: "uppercase",
-                              letterSpacing: "0.05em",
-                            }}
-                          >
-                            Themes
-                          </span>
-                          {weeklyRollup?.themes.map(
-                            (theme: { name: string; detail: string }) => (
-                              <div
-                                style={{
-                                  padding: "6px 8px",
-                                  borderRadius: "6px",
-                                  background: "var(--cf-colors-gray-50)",
-                                  fontSize: "13px",
-                                }}
-                              >
-                                <strong>{theme.name}</strong>
-                                {" — "}
-                                <span
-                                  style={{
-                                    color: "var(--cf-colors-gray-600)",
-                                  }}
-                                >
-                                  {theme.detail}
-                                </span>
-                              </div>
-                            ),
-                          )}
-                        </cf-vstack>
-
-                        {ifElse(
-                          computed(
-                            () =>
-                              (weeklyRollup?.accomplishments?.length ?? 0) >
-                                0,
-                          ),
-                          <cf-vstack gap="1">
-                            <span
-                              style={{
-                                fontSize: "11px",
-                                fontWeight: "500",
-                                color: "var(--cf-colors-gray-500)",
-                                textTransform: "uppercase",
-                                letterSpacing: "0.05em",
-                              }}
-                            >
-                              Done
-                            </span>
-                            <ul
-                              style={{
-                                margin: 0,
-                                paddingLeft: "1.2rem",
-                                fontSize: "13px",
-                                lineHeight: "1.5",
-                              }}
-                            >
-                              {weeklyRollup?.accomplishments.map(
-                                (item: string) => <li>{item}</li>,
-                              )}
-                            </ul>
-                          </cf-vstack>,
-                          <span />,
-                        )}
-
-                        {ifElse(
-                          computed(
-                            () => (weeklyRollup?.openThreads?.length ?? 0) > 0,
-                          ),
-                          <cf-vstack gap="1">
-                            <span
-                              style={{
-                                fontSize: "11px",
-                                fontWeight: "500",
-                                color: "var(--cf-colors-gray-500)",
-                                textTransform: "uppercase",
-                                letterSpacing: "0.05em",
-                              }}
-                            >
-                              Open Threads
-                            </span>
-                            <ul
-                              style={{
-                                margin: 0,
-                                paddingLeft: "1.2rem",
-                                fontSize: "13px",
-                                lineHeight: "1.5",
-                              }}
-                            >
-                              {weeklyRollup?.openThreads.map(
-                                (item: string) => <li>{item}</li>,
-                              )}
-                            </ul>
-                          </cf-vstack>,
-                          <span />,
-                        )}
-
-                        <p
-                          style={{
-                            margin: 0,
-                            fontSize: "13px",
-                            fontStyle: "italic",
-                            color: "var(--cf-colors-gray-600)",
-                          }}
-                        >
-                          {weeklyRollup?.mood}
-                        </p>
-                      </cf-vstack>,
+                      rollupView[UI],
                       <div
                         style={{
                           textAlign: "center",
@@ -634,8 +650,8 @@ ${notesXml}
                       Suggested
                     </span>
                     <Suggestion
-                      situation={suggestionSituation}
-                      context={suggestionContext}
+                      situation={rollupView.situation}
+                      context={rollupView.context}
                       initialResults={[]}
                     />
                   </cf-vstack>

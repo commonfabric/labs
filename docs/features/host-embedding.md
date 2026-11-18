@@ -557,9 +557,16 @@ refused, or when the run throws or its event is dropped or refused admission.
 A run that finishes without an error resolves it, whether or not it wrote
 anything; a handler that turns an event down throws, with a reason a person can
 read, which fails its run and rejects the send. Under server execution the run is the served one, and its outcome is the
-consequence the serving loop recorded for the event. `sendStrict()` waits the
-same way when given `{ awaitHandling: true }`, and otherwise confirms only that
-the runtime took the event.
+consequence the serving loop recorded for the event. A served run that read
+data its stream's space doesn't admit has its outcome withheld, the same
+whether it committed or not
+([events.md §5](../specs/server-side-execution/events.md#5-failure-semantics)):
+the response to `cell:send-reviewed` is then `{ handling: "withheld" }` in
+place of an empty one, and the send resolves with it and never rejects, so a
+native client can say the action was sent and that its outcome is private. A
+client that ignores the field reads the response as a success. `sendStrict()`
+waits the same way when given `{ awaitHandling: true }`, and otherwise
+confirms only that the runtime took the event.
 
 The runtime's ordinary checks still apply: the writer the contract names, the
 surface and action, the actor, and the space's access list. The mark reaches a

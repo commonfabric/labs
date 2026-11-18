@@ -25,6 +25,26 @@ export const buildInfo: BuildInfo = Deno.build.standalone
   ? readBuildInfoFrom(COMPILED_PATH)
   : { commitSha: null, builtAt: null };
 
+/** Runs git in `dir`, returning its exit code and trimmed stdout, or null when
+ * git cannot be started there (git unavailable, no such directory, no run
+ * permission). */
+async function git(
+  dir: string,
+  args: string[],
+): Promise<{ code: number; stdout: string } | null> {
+  try {
+    const { code, stdout } = await new Deno.Command("git", {
+      args,
+      cwd: dir,
+      stdout: "piped",
+      stderr: "null",
+    }).output();
+    return { code, stdout: new TextDecoder().decode(stdout).trim() };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * HEAD of the labs checkout whose `runtime/cli/lib` directory is `dir`, or
  * null when that cannot be determined (git unavailable, no repository, no
@@ -37,23 +57,14 @@ export const buildInfo: BuildInfo = Deno.build.standalone
  * its expected location is trusted; anything else reports unknown.
  */
 export async function gitShaForCliLibDir(dir: string): Promise<string | null> {
+  const result = await git(dir, ["rev-parse", "HEAD", "--show-toplevel"]);
+  if (result?.code !== 0) return null;
+  const [sha, toplevel] = result.stdout.split("\n");
   try {
-    const { success, stdout } = await new Deno.Command("git", {
-      args: ["rev-parse", "HEAD", "--show-toplevel"],
-      cwd: dir,
-      stdout: "piped",
-      stderr: "null",
-    }).output();
-    if (!success) return null;
-    const [sha, toplevel] = new TextDecoder().decode(stdout).trim().split(
-      "\n",
-    );
-    if (!sha || !toplevel) return null;
     const expected = Deno.realPathSync(
       join(toplevel, "runtime", "cli", "lib"),
     );
-    if (expected !== Deno.realPathSync(dir)) return null;
-    return sha;
+    return expected === Deno.realPathSync(dir) ? sha : null;
   } catch {
     return null;
   }
@@ -74,14 +85,17 @@ export interface CliVersion {
  * compiled binary built without COMMIT_SHA stays unknown rather than
  * guessing from the build machine's checkout.
  */
-export async function resolveCliVersion(): Promise<CliVersion> {
-  if (Deno.build.standalone) {
+export async function resolveCliVersion(
+  standalone = Deno.build.standalone,
+  moduleUrl = import.meta.url,
+): Promise<CliVersion> {
+  if (standalone) {
     return { sha: buildInfo.commitSha, checkoutDir: null };
   }
-  if (!import.meta.url.startsWith("file://")) {
+  if (!moduleUrl.startsWith("file://")) {
     return { sha: null, checkoutDir: null };
   }
-  const dir = dirname(fromFileUrl(import.meta.url));
+  const dir = dirname(fromFileUrl(moduleUrl));
   const sha = await gitShaForCliLibDir(dir);
   return { sha, checkoutDir: sha === null ? null : dir };
 }
@@ -115,19 +129,10 @@ async function isAncestor(
   ancestor: string,
   descendant: string,
 ): Promise<boolean | null> {
-  try {
-    const { code } = await new Deno.Command("git", {
-      args: ["merge-base", "--is-ancestor", ancestor, descendant],
-      cwd: dir,
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    if (code === 0) return true;
-    if (code === 1) return false;
-    return null;
-  } catch {
-    return null;
-  }
+  const code =
+    (await git(dir, ["merge-base", "--is-ancestor", ancestor, descendant]))
+      ?.code;
+  return code === 0 ? true : code === 1 ? false : null;
 }
 
 /** Commits reachable from `descendant` but not `ancestor`, or null when git
@@ -137,19 +142,13 @@ async function countBehind(
   ancestor: string,
   descendant: string,
 ): Promise<number | null> {
-  try {
-    const { success, stdout } = await new Deno.Command("git", {
-      args: ["rev-list", "--count", `${ancestor}..${descendant}`],
-      cwd: dir,
-      stdout: "piped",
-      stderr: "null",
-    }).output();
-    if (!success) return null;
-    const count = Number(new TextDecoder().decode(stdout).trim());
-    return Number.isFinite(count) ? count : null;
-  } catch {
-    return null;
-  }
+  const result = await git(dir, [
+    "rev-list",
+    "--count",
+    `${ancestor}..${descendant}`,
+  ]);
+  const count = result?.code === 0 ? Number(result.stdout) : NaN;
+  return Number.isFinite(count) ? count : null;
 }
 
 /** Whether the visible graph proves a common base for two commits. False
@@ -161,17 +160,7 @@ async function haveCommonBase(
   a: string,
   b: string,
 ): Promise<boolean> {
-  try {
-    const { code } = await new Deno.Command("git", {
-      args: ["merge-base", a, b],
-      cwd: dir,
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    return code === 0;
-  } catch {
-    return false;
-  }
+  return (await git(dir, ["merge-base", a, b]))?.code === 0;
 }
 
 /**

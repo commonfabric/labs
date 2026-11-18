@@ -32,8 +32,8 @@ export interface CachedAsset {
 /**
  * The cache of static assets served from one base location, holding each
  * asset's content together with a strong ETag over that content. An asset is
- * read at most once per instance: under Deno it is read off the file system,
- * and elsewhere it is fetched over the network.
+ * read at most once per instance: from a `file:` base it is read off the file
+ * system, and from any other base it is fetched over the network.
  */
 export class StaticCache {
   #cache: Map<string, Promise<CachedAsset>> = new Map();
@@ -105,16 +105,15 @@ export class StaticCache {
 
   /**
    * Helper for `getWithETag()`, which reads an asset and generates its ETag,
-   * off the file system under Deno and over the network elsewhere.
+   * off the file system for a `file:` URL and over the network otherwise.
    */
   async #requestWithETag(assetName: string): Promise<CachedAsset> {
     const url = this.getUrl(assetName);
     let bytes: Uint8Array<ArrayBuffer>;
 
-    if (isDeno()) {
-      // In Deno, use readFile rather than `fetch`, as
-      // `fetch` doesn't seem to play well with included assets
-      // in "compiled" builds
+    if (url.protocol === "file:") {
+      // Use readFile rather than `fetch`, as `fetch` doesn't seem to play
+      // well with included assets in "compiled" builds.
       bytes = await Deno.readFile(url);
     } else {
       const res = await fetch(url);

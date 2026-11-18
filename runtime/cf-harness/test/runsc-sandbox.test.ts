@@ -5,7 +5,9 @@ import {
   assertRejects,
   assertThrows,
 } from "@std/assert";
+import { expect } from "@std/expect";
 import { join } from "@std/path";
+import { describe, it } from "@std/testing/bdd";
 
 import {
   assertRunscCfcPolicyForMode,
@@ -27,6 +29,7 @@ import {
 } from "../src/sandbox/runsc.ts";
 import { SandboxPathEscapeError } from "../src/sandbox/errors.ts";
 import { ProcessTimeoutError } from "../src/sandbox/process-runner.ts";
+import { writesDespiteMode } from "./support/runsc-privilege.ts";
 import { SandboxSessionUnavailableError } from "../src/sandbox/types.ts";
 import { createHarnessCfcInvocationContext } from "../src/contracts/cfc-invocation-context.ts";
 import { createToolOutputId } from "../src/contracts/tool-result.ts";
@@ -2418,4 +2421,82 @@ Deno.test("a call that finds its session's container gone says so, rather than f
   );
   assertEquals(runtime.sessionContainerIds(), [third]);
   await runtime.close();
+});
+
+describe("runsc", () => {
+  describe("RunscSandboxRuntime", () => {
+    it("refuses a session call whose session finished starting after the runtime closed, running nothing in it", async () => {
+      const runner = new FakeRunscRunner();
+      const runtime = new RunscSandboxRuntime(config(), runner);
+      const call = runtime.run({ argv: ["/bin/true"], session: "late" });
+      const closing = runtime.close();
+      await expect(call).rejects.toThrow("sandbox runtime is closed");
+      await closing;
+      // The session's container started, and the close took it down.
+      expect(runner.spawns.length).toBe(1);
+      expect(runner.killed).toEqual([
+        expect.stringMatching(/^s-run-abc-[0-9a-f]{8}-0001:SIGKILL$/),
+      ]);
+      expect(runner.execIds).toEqual([]);
+    });
+
+    it("keeps the result of a session call that failed as its container exited, asking runsc nothing, and reports the session lost on the next call", async () => {
+      const runner = new FakeRunscRunner();
+      const runtime = new RunscSandboxRuntime(config(), runner);
+      await runtime.run({ argv: ["/bin/true"], session: "k" });
+      const [cid] = runtime.sessionContainerIds();
+      const base = runner.run.bind(runner);
+      runner.run = async (request) => {
+        const result = await base(request);
+        // The command takes the container down with it before it returns.
+        if (request.args.includes("exec")) runner.exits.get(cid!)!(137);
+        return result;
+      };
+      runner.runResult = { stdout: "partial\n", stderr: "", exitCode: 1 };
+      const before = runner.requests.length;
+
+      const result = await runtime.run({ argv: ["false"], session: "k" });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("partial\n");
+      // The call, then straight to taking the container down: no `state`
+      // asked of runsc whether the container still runs.
+      const subcommands = runner.requests.slice(before).map((r) =>
+        r.args.find((a) => ["exec", "state", "delete", "kill"].includes(a))
+      );
+      expect(subcommands.slice(0, 2)).toEqual(["exec", "delete"]);
+      expect(runtime.sessionContainerIds()).toEqual([]);
+      runner.runResult = {};
+      await expect(runtime.run({ argv: ["/bin/true"], session: "k" })).rejects
+        .toThrow('sandbox session "k" ended (its container exited)');
+      await runtime.close();
+    });
+
+    it({
+      name:
+        "under pasta, fails a call with the error itself where its container's state cannot be removed",
+      ignore: writesDespiteMode(),
+      fn: async () => {
+        const runner = new UnderPasta();
+        const c = pastaConfig({ rootless: true });
+        const runtime = new RunscSandboxRuntime(c, runner);
+        const base = runner.fake.run.bind(runner.fake);
+        runner.fake.run = async (request) => {
+          const root = rootOf(request.args);
+          await Deno.mkdir(root, { recursive: true });
+          await Deno.writeTextFile(join(root, "container.state"), "{}");
+          // Nothing may now be taken out of the directory the root is in.
+          await Deno.chmod(join(root, ".."), 0o500);
+          return await base(request);
+        };
+        try {
+          await expect(runtime.runShell({ command: "echo one" })).rejects
+            .toThrow(Deno.errors.PermissionDenied);
+        } finally {
+          await Deno.chmod(join(c.scratchDir, "state"), 0o700);
+          await runtime.close();
+        }
+      },
+    });
+  });
 });

@@ -420,10 +420,39 @@ withdrawal re-derives, over the region that can be affected and no further:
 `origin`'s transitive upstream, which is closed under the writer edge.
 Any node whose support routes through `origin` is upstream of it, so a live
 reader *outside* that region cannot owe its own liveness to anything inside, and
-its support is taken at face value. Clearing the region and re-seeding from the
-roots inside it plus the live readers outside is cycle-safe (a rootless cycle
-finds no seed and settles dormant) and diamond-accurate (each surviving arm
-re-contributes its own reference).
+its support is taken at face value. Clearing the region and re-seeding it from
+the live readers outside it is cycle-safe (a rootless cycle finds no seed and
+settles dormant) and diamond-accurate (each surviving arm re-contributes its own
+reference). The region holds no root: a root `origin` keeps its demand and ends
+the withdrawal, and a writer that is a root bounds the region as described
+next.
+
+That region is narrowed to the part of it that may actually die. A node that a
+root reaches along reader edges avoiding the region keeps its support whatever
+the region loses, so withdrawal first asks that of `origin` itself, and stops
+there if a root answers: `origin` stays live and contributes upstream exactly
+what it did. Otherwise, walking upstream, it asks the same of each writer it
+reaches, and a writer a root finds that way bounds the region rather than
+joining it: it stays live, so the walk does not continue past it. The search
+runs downstream, depth first, and skips nodes that are not live, which loses no
+path, since withdrawing only removes reachability. No node on a path it finds
+ever joins the region, because the one nearest the root would have found that
+root itself. A boundary node gives back the references the region's live nodes
+held on it before the region is re-seeded, and the re-seeding hands back those
+of the survivors. The search ends at the first root, which for a UI node is a
+few readers away, so a writer shared by many rows does not pay for its whole
+upstream, and every reader of every node in it, each time one row goes away.
+Within one withdrawal, each node is entered by at most one search: one that
+finds a root puts that root and every node on its path to it on the boundary,
+and marks everything else it entered as a dead end, as does one that finds
+nothing; later searches stop at a dead end, and a writer marked that way joins
+the region without a search of its own. A node marked after a successful search
+may in fact reach a root through the path found, so the marking is sound rather
+than exact: a later search that stops at it may fail and add nodes to the region
+that did not need to be there, and re-seeding gives them back whatever support
+they have, so the cost of such a mistake is work, never a wrong count. The
+searches of one withdrawal together cost at most the readers of the nodes they
+enter.
 
 `recomputeLiveRefs` derives the same state from the roots in one pass over the
 whole graph. Nothing on the maintenance path calls it: it is the definition the
@@ -770,6 +799,13 @@ each ready event behind it in turn, the handlers running back to back ahead
 of the pass's one settle, so that derivations several events invalidate run
 once; an event the gate below holds ends that run, and the settle serves it):
 
+0. **Earlier commits.** A transaction that writes several spaces commits them
+   one at a time, and hands a space its writes only once the server has
+   answered for the spaces before it (an `.inSpace()` create closes the new
+   space first and its own space last). While such a commit still has a space
+   to hand over, the head holds its lane slot and the pass ends there, so the
+   handler reads every write an event before it committed. A commit to one
+   space holds nothing: its writes are in the replica as it is issued.
 1. **Presync.** Bring the handler's input documents into the local replica
    (`presyncInputs`). The head holds its lane slot while the presync's I/O
    runs, as it does while its handler's piece loads, and the pass ends there:
@@ -935,11 +971,14 @@ correctness comes from cancellation, not staging:
      (Future server-routed/cross-runtime event delivery would reopen this
      with an origin-attestation design; deferred until such a path
      exists.)
-   If the send observes that its origin transaction is already settled, it
-   does not create pending lineage: an already-committed origin is treated as
-   confirmed immediately, and an already-failed origin is treated as failed
-   immediately so descendants cancel or drop instead of waiting for a callback
-   that will never arrive.
+   If the send, or a requeue recording a follow-up's lineage again for a re-run,
+   observes that its origin transaction is already settled, wherever its commit
+   went (a commit sealed into a serving wave or the client's speculation overlay
+   settles the transaction while the storage transaction it wraps still reads
+   `ready`), it does not create pending lineage: an already-committed origin is
+   treated as confirmed immediately, and an already-failed origin is treated as
+   failed immediately so descendants cancel or drop instead of waiting for a
+   callback that will never arrive.
 2. Client-side, the runtime keeps a lineage registry: origin tx →
    {queued events, started pieces}. When an origin's failure becomes known
    locally, undispatched descendant events (parked or queued) are cancelled

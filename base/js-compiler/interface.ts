@@ -19,10 +19,23 @@ export type ProgramResolver = {
    * A resolver that does not implement it has its data files read through
    * `resolveSource`, which is right wherever source and data come from the
    * same place. A resolver reads them itself when the transport calls for it:
-   * the file system reads a data file strictly as UTF-8 and keeps a byte order
-   * mark that module reading would consume.
+   * the file system reads a data file through `decodeDataFile`, which keeps a
+   * byte order mark that module reading would consume and stores a binary
+   * media file as its `data:` URL.
    */
   resolveDataFile?(name: string): Promise<Source | undefined>;
+
+  /**
+   * Lists the files directly inside the root-relative directory `directory`,
+   * by the root-relative name each would be read by, so that the files a
+   * `dataFile.urls()` call declares can be attached. Undefined when this
+   * resolver holds no such directory.
+   *
+   * A resolver that cannot list a directory, as one reading over HTTP cannot,
+   * does not implement it, and a program that declares a directory cannot be
+   * assembled through it.
+   */
+  listDataFiles?(directory: string): Promise<readonly string[] | undefined>;
 };
 
 // An entry point and its sources for a program.

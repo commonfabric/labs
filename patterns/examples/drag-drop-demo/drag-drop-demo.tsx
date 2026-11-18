@@ -18,8 +18,8 @@ interface Item {
 }
 
 interface DragDropDemoInput {
-  availableItems: Item[] | Default<[]>;
-  droppedItems: Item[] | Default<[]>;
+  availableItems?: Item[] | Default<[]>;
+  droppedItems?: Item[] | Default<[]>;
 }
 
 export interface DragDropDemoOutput {
@@ -45,14 +45,10 @@ const removeItem = handler<
 const dropItem = handler<
   { detail: { sourceCell: Writable<Item> } },
   { droppedItems: Writable<Item[]> }
->((e, props) => {
-  if (!props) {
-    console.warn("[drag-drop-demo] dropItem: props is undefined");
-    return;
-  }
-  const sourceItem = e.detail?.sourceCell?.get() as Item;
+>((e, { droppedItems }) => {
+  const sourceItem = e.detail?.sourceCell?.get();
   if (sourceItem) {
-    props.droppedItems.push(sourceItem);
+    droppedItems.push(sourceItem);
   }
 });
 

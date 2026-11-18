@@ -15,7 +15,6 @@
 import {
   computed,
   type Default,
-  equals,
   generateObject,
   handler,
   ifElse,
@@ -25,107 +24,47 @@ import {
   Stream,
   toIndentedDebugString,
   UI,
+  type VNode,
   Writable,
 } from "commonfabric";
+import {
+  acceptedExample,
+  type AutoClassifiedItem,
+  buildClassificationPrompt,
+  buildRuleGenerationPrompt,
+  calculateF1,
+  type ClassifiableInput,
+  classificationFailure,
+  type ClassificationResult,
+  type ClassificationRule,
+  type ClassifierConfig,
+  correctedExample,
+  deriveClassification,
+  generateId,
+  getTierColor,
+  getTierLabel,
+  type LabeledExample,
+  type LLMClassificationResult,
+  matchRulesAgainstInput,
+  newRule,
+  type PendingClassification,
+  previewFields,
+  type RuleSuggestion,
+  type RuleSuggestionsResult,
+  scoreRules,
+  scoringOf,
+  selectVisibleSuggestions,
+  viewVerdict,
+} from "./classifier-logic.ts";
 
-// =============================================================================
-// TYPES
-// =============================================================================
-
-/** Confidence tiers from the self-hoisting essay */
-type Tier = 0 | 1 | 2 | 3 | 4;
-
-/** Input to classify - generic key-value structure */
-export interface ClassifiableInput {
-  id: string;
-  receivedAt: number;
-  fields: Record<string, string>;
-}
-
-/** Full audit trail for labeled examples */
-export interface LabeledExample {
-  input: ClassifiableInput;
-  label: boolean;
-  decidedBy: "user" | "auto" | "suggestion-accepted";
-  reasoning: string;
-  confidence: number;
-  labeledAt: number;
-  wasCorrection: boolean;
-  originalPrediction?: boolean;
-  isInteresting: boolean;
-  interestingReason?: string;
-}
-
-/** A regex-based classification rule */
-export interface ClassificationRule {
-  id: string;
-  name: string;
-  targetField: string;
-  pattern: string;
-  caseInsensitive: boolean;
-  predicts: boolean;
-  precision: number;
-  recall: number;
-  tier: Tier;
-  evaluationCount: number;
-  truePositives: number;
-  falsePositives: number;
-  trueNegatives: number;
-  falseNegatives: number;
-  createdAt: number;
-  // NOTE: isShared/sharedFrom are planned for cross-classifier rule sharing.
-  // When implemented, users will be able to share high-performing rules
-  // between classifiers and track rule provenance.
-  isShared: boolean;
-  sharedFrom?: string;
-}
-
-/** User configuration */
-interface ClassifierConfig {
-  question: string;
-  minExamplesForRules: number;
-  autoClassifyThreshold: number;
-  prefillThreshold: number;
-  suggestionThreshold: number;
-  // NOTE: harmAsymmetry is planned for asymmetric error weighting -
-  // "fp" penalizes false positives more, "fn" penalizes false negatives more.
-  // Not yet implemented - will affect confidence thresholds and tier promotion.
-  harmAsymmetry: "fp" | "fn" | "equal";
-  enableLLMFallback: boolean;
-}
-
-/** LLM classification response */
-interface LLMClassificationResult {
-  itemId: string;
-  classification: boolean;
-  confidence: number;
-  reasoning: string;
-}
-
-/** Rule suggestion from LLM */
-export interface RuleSuggestion {
-  name: string;
-  targetField: string;
-  pattern: string;
-  predicts: boolean;
-  reasoning: string;
-}
-
-/** Classification result for an item */
-export interface ClassificationResult {
-  inputId: string;
-  classification: boolean;
-  confidence: number;
-  reasoning: string;
-  decidedBy: "rules" | "llm" | "user";
-  matchedRules: string[];
-}
-
-/** Pending item awaiting user confirmation */
-export interface PendingClassification {
-  input: ClassifiableInput;
-  result: ClassificationResult;
-}
+export type {
+  ClassifiableInput,
+  ClassificationResult,
+  ClassificationRule,
+  LabeledExample,
+  PendingClassification,
+  RuleSuggestion,
+} from "./classifier-logic.ts";
 
 // =============================================================================
 // DEFAULT CONFIG
@@ -149,9 +88,8 @@ interface ClassifierInput {
   config: Writable<ClassifierConfig | Default<typeof DEFAULT_CONFIG>>;
   examples: Writable<LabeledExample[] | Default<[]>>;
   rules: Writable<ClassificationRule[] | Default<[]>>;
-  // NOTE: pendingClassifications is reserved for future batch processing API.
-  // Currently items flow through currentItem → LLM → user confirmation → examples.
-  // External systems could use this queue for bulk submissions in the future.
+  // Classifications awaiting the user's confirmation, settled through the view
+  // or the confirm, correct, and dismiss streams
   pendingClassifications: Writable<PendingClassification[] | Default<[]>>;
   // The item currently being classified (null when idle)
   // Only one item can be classified at a time
@@ -160,6 +98,8 @@ interface ClassifierInput {
 
 /** Self-improving binary classifier with LLM + regex rules. #classifier #learning */
 export interface ClassifierOutput {
+  [NAME]: string;
+  [UI]: VNode;
   config: ClassifierConfig;
   examples: LabeledExample[];
   rules: ClassificationRule[];
@@ -182,123 +122,9 @@ export interface ClassifierOutput {
   removeRule: Stream<{ ruleId: string }>;
 }
 
-/** Item that was auto-classified (tracked for undo functionality) */
-interface AutoClassifiedItem {
-  input: ClassifiableInput;
-  label: boolean;
-  confidence: number;
-  reasoning: string;
-  matchedRules: string[];
-  tier: Tier;
-  classifiedAt: number;
-}
-
 // =============================================================================
-// REGEX SAFETY
+// STATISTICS
 // =============================================================================
-
-/**
- * Maximum length for regex patterns to prevent ReDoS attacks.
- * Patterns longer than this are rejected.
- */
-const REGEX_MAX_PATTERN_LENGTH = 500;
-
-/**
- * Check if a regex pattern is potentially dangerous (ReDoS).
- * This is a heuristic check for common catastrophic backtracking patterns.
- * Returns true if the pattern appears safe, false if potentially dangerous.
- */
-function isRegexSafe(pattern: string): boolean {
-  // Reject overly long patterns
-  if (pattern.length > REGEX_MAX_PATTERN_LENGTH) {
-    return false;
-  }
-
-  // Check for nested quantifiers which can cause catastrophic backtracking
-  // Patterns like (a+)+, (.*)+, (a*)*
-  const nestedQuantifiers = /\([^)]*[+*][^)]*\)[+*]|\([^)]*\)[+*][+*]/;
-  if (nestedQuantifiers.test(pattern)) {
-    return false;
-  }
-
-  // Check for overlapping alternatives with quantifiers
-  // Patterns like (a|a)+, (ab|abc)+
-  const overlappingAlts = /\([^)]*\|[^)]*\)[+*]{2,}/;
-  if (overlappingAlts.test(pattern)) {
-    return false;
-  }
-
-  return true;
-}
-
-/**
- * Compile a regex after validation.
- * Returns null for invalid or potentially dangerous regex patterns.
- */
-function getCachedRegex(
-  pattern: string,
-  caseInsensitive: boolean,
-): RegExp | null {
-  // Check for potentially dangerous patterns (ReDoS prevention)
-  if (!isRegexSafe(pattern)) {
-    console.warn(
-      `[Classifier] Rejecting potentially dangerous regex pattern: "${pattern}"`,
-    );
-    return null;
-  }
-
-  try {
-    const flags = caseInsensitive ? "i" : "";
-    return new RegExp(pattern, flags);
-  } catch (e) {
-    // Log invalid regex pattern for debugging
-    console.warn(
-      `[Classifier] Invalid regex pattern "${pattern}": ${
-        e instanceof Error ? e.message : "Unknown error"
-      }`,
-    );
-    return null;
-  }
-}
-
-// =============================================================================
-// HELPER FUNCTIONS
-// =============================================================================
-
-/** Generate a unique ID */
-function generateId(): string {
-  return Math.random().toString(36).substring(2, 15);
-}
-
-/** Validate a regex pattern and return validation result */
-function isValidRegex(pattern: string): { valid: boolean; error?: string } {
-  try {
-    new RegExp(pattern);
-    return { valid: true };
-  } catch (e) {
-    return {
-      valid: false,
-      error: e instanceof Error ? e.message : "Invalid regex",
-    };
-  }
-}
-
-/** Validate a rule suggestion has valid structure */
-function isValidRuleSuggestion(s: unknown): s is RuleSuggestion {
-  if (!s || typeof s !== "object") return false;
-  const suggestion = s as Record<string, unknown>;
-  return (
-    typeof suggestion.name === "string" &&
-    suggestion.name.trim() !== "" &&
-    typeof suggestion.targetField === "string" &&
-    suggestion.targetField.trim() !== "" &&
-    typeof suggestion.pattern === "string" &&
-    suggestion.pattern.trim() !== "" &&
-    typeof suggestion.predicts === "boolean" &&
-    typeof suggestion.reasoning === "string" &&
-    suggestion.reasoning.trim() !== ""
-  );
-}
 
 /** Compute statistics from examples */
 const computeStats = lift((args: {
@@ -321,8 +147,11 @@ const computeStats = lift((args: {
       if (!e) return acc; // Skip undefined/null entries
       if (e.label) acc.positive++;
       else acc.negative++;
-      if (e.decidedBy === "auto") acc.auto++;
-      if (e.wasCorrection) acc.corrections++;
+      // An auto-classification the user has reviewed since still counts as
+      // one, and the correction rate is the share of those the user
+      // corrected; corrections of the model's predictions do not count
+      if (e.decidedBy === "auto" || e.reviewedAutoClassification) acc.auto++;
+      if (e.reviewedAutoClassification && e.wasCorrection) acc.corrections++;
       return acc;
     },
     { positive: 0, negative: 0, auto: 0, corrections: 0 },
@@ -340,209 +169,6 @@ const computeStats = lift((args: {
   };
 });
 
-/**
- * Calculate F1 score for a rule based on its metrics
- * F1 = 2 * (precision * recall) / (precision + recall)
- */
-function calculateF1(rule: ClassificationRule | undefined): number {
-  if (!rule) return 0;
-  const precision = rule.precision ?? 0;
-  const recall = rule.recall ?? 0;
-  if (precision + recall === 0) return 0;
-  return (2 * precision * recall) / (precision + recall);
-}
-
-/**
- * Calculate precision and recall from confusion matrix metrics.
- * Precision = TP / (TP + FP) - how often the rule is correct when it fires
- * Recall = TP / (TP + FN) - how often the rule fires when it should
- *
- * For a rule that "predicts: true":
- * - TP: rule matched AND actual was true
- * - FP: rule matched AND actual was false
- * - TN: rule didn't match AND actual was false
- * - FN: rule didn't match AND actual was true
- *
- * For a rule that "predicts: false":
- * - TP: rule matched AND actual was false
- * - FP: rule matched AND actual was true
- * - TN: rule didn't match AND actual was true
- * - FN: rule didn't match AND actual was false
- */
-function calculatePrecisionRecall(rule: {
-  truePositives: number;
-  falsePositives: number;
-  trueNegatives: number;
-  falseNegatives: number;
-}): { precision: number; recall: number } {
-  const tp = rule.truePositives || 0;
-  const fp = rule.falsePositives || 0;
-  const fn = rule.falseNegatives || 0;
-
-  // Precision: TP / (TP + FP)
-  const precision = tp + fp > 0 ? tp / (tp + fp) : 0.5;
-
-  // Recall: TP / (TP + FN)
-  const recall = tp + fn > 0 ? tp / (tp + fn) : 0.5;
-
-  return { precision, recall };
-}
-
-/**
- * Determine what tier a rule should be at based on its metrics
- *
- * Tier thresholds (from self-hoisting essay):
- * - Tier 0: Silent (no predictions) - default
- * - Tier 1: Suggestions (user can accept) - F1 >= 0.5, 3+ evals
- * - Tier 2: Default (pre-filled) - F1 >= 0.7, 5+ evals
- * - Tier 3: Self-driving (auto with undo) - F1 >= 0.85, 10+ evals
- * - Tier 4: Automatic (fully auto) - F1 >= 0.95, 20+ evals
- */
-function _calculateTier(rule: ClassificationRule): Tier {
-  const f1 = calculateF1(rule);
-  const evals = rule.evaluationCount;
-
-  if (evals >= 20 && f1 >= 0.95) return 4;
-  if (evals >= 10 && f1 >= 0.85) return 3;
-  if (evals >= 5 && f1 >= 0.70) return 2;
-  if (evals >= 3 && f1 >= 0.50) return 1;
-  return 0;
-}
-
-/**
- * Get human-readable tier label
- */
-function getTierLabel(tier: Tier | undefined): string {
-  switch (tier) {
-    case 0:
-      return "Silent";
-    case 1:
-      return "Suggest";
-    case 2:
-      return "Default";
-    case 3:
-      return "Auto+Undo";
-    case 4:
-      return "Automatic";
-    default:
-      return "Silent";
-  }
-}
-
-/**
- * Get tier badge color
- */
-function getTierColor(tier: Tier | undefined): string {
-  switch (tier) {
-    case 0:
-    default:
-      return "var(--cf-colors-gray-400)";
-    case 1:
-      return "var(--cf-colors-info)";
-    case 2:
-      return "var(--cf-theme-color-success)";
-    case 3:
-      return "var(--cf-theme-color-warning)";
-    case 4:
-      return "var(--cf-theme-color-error)";
-  }
-}
-
-/**
- * Result of matching rules against an input
- */
-interface RuleMatchResult {
-  matchedRules: string[];
-  prediction: boolean | null;
-  confidence: number;
-  highestTier: Tier;
-  shouldAutoClassify: boolean;
-  votes: Array<{
-    name: string;
-    predicts: boolean;
-    precision: number;
-    tier: Tier;
-  }>;
-}
-
-/**
- * Match rules against an input and return the aggregated result
- */
-function matchRulesAgainstInput(
-  input: ClassifiableInput,
-  rules: readonly ClassificationRule[],
-  autoClassifyThreshold: number,
-): RuleMatchResult {
-  const matchedRules: string[] = [];
-  const votes: RuleMatchResult["votes"] = [];
-
-  for (const rule of rules) {
-    const fieldValue = input.fields[rule.targetField];
-    if (!fieldValue) continue;
-
-    const regex = getCachedRegex(rule.pattern, rule.caseInsensitive);
-    if (regex && regex.test(fieldValue)) {
-      matchedRules.push(rule.name);
-      votes.push({
-        name: rule.name,
-        predicts: rule.predicts,
-        precision: rule.precision,
-        tier: rule.tier,
-      });
-    }
-  }
-
-  // Precision-weighted voting
-  let yesWeight = 0;
-  let noWeight = 0;
-  let highestTier: Tier = 0;
-
-  for (const vote of votes) {
-    if (vote.predicts) {
-      yesWeight += vote.precision;
-    } else {
-      noWeight += vote.precision;
-    }
-    if (vote.tier > highestTier) {
-      highestTier = vote.tier;
-    }
-  }
-
-  // Determine prediction
-  let prediction: boolean | null = null;
-  let confidence = 0;
-
-  if (votes.length > 0) {
-    const totalWeight = yesWeight + noWeight;
-    if (yesWeight > noWeight) {
-      prediction = true;
-      confidence = totalWeight > 0 ? yesWeight / totalWeight : 0.5;
-    } else if (noWeight > yesWeight) {
-      prediction = false;
-      confidence = totalWeight > 0 ? noWeight / totalWeight : 0.5;
-    } else {
-      // Tie - use the higher tier rule's prediction
-      const highestTierVote = votes.reduce((a, b) => a.tier > b.tier ? a : b);
-      prediction = highestTierVote.predicts;
-      confidence = 0.5;
-    }
-  }
-
-  // Determine if we should auto-classify (Tier 3-4 with high confidence)
-  const shouldAutoClassify = prediction !== null &&
-    highestTier >= 3 &&
-    confidence >= autoClassifyThreshold;
-
-  return {
-    matchedRules,
-    prediction,
-    confidence,
-    highestTier,
-    shouldAutoClassify,
-    votes,
-  };
-}
-
 // =============================================================================
 // LIFT FUNCTIONS FOR REACTIVE .map() DISPLAY
 // These need lift() because they're used inside .map() with reactive proxies
@@ -559,12 +185,9 @@ const getFieldValue = lift(
 );
 
 /** Format example preview - truncates first field value for compact display */
-const getExamplePreview = lift((example: LabeledExample): string => {
-  if (!example?.input?.fields) return "(invalid)";
-  const entries = Object.entries(example.input.fields);
-  const first = entries[0];
-  return first ? `${first[0]}: ${first[1].substring(0, 30)}...` : "(empty)";
-});
+const getExamplePreview = lift((example: LabeledExample): string =>
+  example?.input?.fields ? previewFields(example.input.fields) : "(invalid)"
+);
 
 /** Extract decidedBy label - simple property access wrapped for reactivity */
 const getExampleDecidedBy = lift(
@@ -599,104 +222,103 @@ const updateFieldHandler = handler<
 
 // =============================================================================
 // MODULE-SCOPED HANDLERS FOR BUTTON CLICKS IN .map()
-// These handlers receive the pending item as a parameter at render time (in reactive context)
-// so they don't need to access reactive proxies in the callback.
-// Uses equals() for idiomatic cell reference comparison.
+// These handlers receive the row's ID as state at render time, and find the
+// row by that ID when they run.
 // =============================================================================
+
+/**
+ * Records the example `decide` makes of the classification pending for
+ * `inputId`, and takes it off the queue. Does nothing when none is pending.
+ */
+function settlePending(
+  pendingClassifications: Writable<PendingClassification[]>,
+  examples: Writable<LabeledExample[]>,
+  inputId: string,
+  decide: (item: PendingClassification) => LabeledExample,
+): void {
+  const pending = pendingClassifications.get();
+  const item = pending.find((p) => p.input.id === inputId);
+  if (!item) return;
+  examples.push(decide(item));
+  dropPending(pendingClassifications, inputId);
+}
+
+/** Takes the classification pending for `inputId` off the queue. */
+function dropPending(
+  pendingClassifications: Writable<PendingClassification[]>,
+  inputId: string,
+): void {
+  pendingClassifications.set(
+    pendingClassifications.get().filter((p) => p.input.id !== inputId),
+  );
+}
+
+/** Removes the rule with `ruleId`. */
+function dropRule(
+  rules: Writable<ClassificationRule[]>,
+  ruleId: string,
+): void {
+  rules.set(rules.get().filter((r) => r.id !== ruleId));
+}
+
+/** The example recording the user's agreement with a pending prediction. */
+const confirmPending = (item: PendingClassification) =>
+  acceptedExample(item.input, item.result);
 
 /** Confirm a pending classification (user agrees with the prediction) */
 const confirmPendingClassification = handler<
   unknown,
   {
-    pending: PendingClassification;
+    inputId: string;
     examples: Writable<LabeledExample[]>;
     pendingClassifications: Writable<PendingClassification[]>;
   }
->((_event, { pending, examples, pendingClassifications }) => {
-  const pendingList = pendingClassifications.get();
-  const idx = pendingList.findIndex((p) => equals(pending, p));
-  if (idx < 0) return;
-
-  const item = pendingList[idx];
-  const result = item.result;
-
-  // Spread to create plain objects (breaks proxy chain)
-  examples.push({
-    input: { ...item.input, fields: { ...item.input.fields } },
-    label: result.classification,
-    decidedBy: "suggestion-accepted",
-    reasoning: result.reasoning,
-    confidence: result.confidence,
-    labeledAt: Date.now(),
-    wasCorrection: false,
-    isInteresting: result.confidence < 0.7,
-    ...(result.confidence < 0.7 &&
-      { interestingReason: "Low confidence, user confirmed" }),
-  });
-  pendingClassifications.set(
-    pendingList.filter((p) => !equals(pending, p)),
-  );
-});
+>((_event, { inputId, examples, pendingClassifications }) =>
+  settlePending(pendingClassifications, examples, inputId, confirmPending)
+);
 
 /** Correct a pending classification (user disagrees with the prediction) */
 const correctPendingClassification = handler<
   unknown,
   {
-    pending: PendingClassification;
+    inputId: string;
     examples: Writable<LabeledExample[]>;
     pendingClassifications: Writable<PendingClassification[]>;
   }
->((_event, { pending, examples, pendingClassifications }) => {
-  const pendingList = pendingClassifications.get();
-  const idx = pendingList.findIndex((p) => equals(pending, p));
-  if (idx < 0) return;
-
-  const item = pendingList[idx];
-  const correctLabel = !item.result.classification;
-
-  // Spread to create plain objects (breaks proxy chain)
-  examples.push({
-    input: { ...item.input, fields: { ...item.input.fields } },
-    label: correctLabel,
-    decidedBy: "user",
-    reasoning: "User correction",
-    confidence: 1.0,
-    labeledAt: Date.now(),
-    wasCorrection: true,
-    originalPrediction: item.result.classification,
-    isInteresting: true,
-    interestingReason: "User corrected classification",
-  });
-  pendingClassifications.set(
-    pendingList.filter((p) => !equals(pending, p)),
-  );
-});
+>((_event, { inputId, examples, pendingClassifications }) =>
+  settlePending(
+    pendingClassifications,
+    examples,
+    inputId,
+    (item) =>
+      correctedExample(
+        item.input,
+        item.result.classification,
+        !item.result.classification,
+        "User correction",
+      ),
+  )
+);
 
 /** Dismiss a pending classification without recording it */
 const dismissPendingClassification = handler<
   unknown,
   {
-    pending: PendingClassification;
+    inputId: string;
     pendingClassifications: Writable<PendingClassification[]>;
   }
->((_event, { pending, pendingClassifications }) => {
-  const pendingList = pendingClassifications.get();
-  pendingClassifications.set(
-    pendingList.filter((p) => !equals(pending, p)),
-  );
-});
+>((_event, { inputId, pendingClassifications }) =>
+  dropPending(pendingClassifications, inputId)
+);
 
 /** Remove a rule from the rules list */
 const removeRuleHandler = handler<
   unknown,
   {
-    rule: ClassificationRule;
+    ruleId: string;
     rules: Writable<ClassificationRule[]>;
   }
->((_event, { rule, rules }) => {
-  const currentRules = rules.get();
-  rules.set(currentRules.filter((r) => !equals(rule, r)));
-});
+>((_event, { ruleId, rules }) => dropRule(rules, ruleId));
 
 /** Toggle example selection for expanded details view */
 const toggleExampleSelectionHandler = handler<
@@ -785,7 +407,7 @@ const reclassifyExampleHandler = handler<
 });
 
 /** Undo an auto-classification (module-scoped handler) */
-const undoAutoClassificationHandler = handler<
+export const undoAutoClassificationHandler = handler<
   unknown,
   {
     autoItem: AutoClassifiedItem;
@@ -799,6 +421,15 @@ const undoAutoClassificationHandler = handler<
     _event,
     { autoItem, examples, rules, recentAutoClassified, undoneAutoItem },
   ) => {
+    // One undone item awaits review at a time; undoing another now would
+    // replace it, and it is already out of the examples and the metrics
+    if (undoneAutoItem.get() !== null) {
+      console.warn(
+        "[Classifier] An undone item awaits review, cannot undo another",
+      );
+      return;
+    }
+
     const inputId = autoItem.input.id;
 
     // Remove from examples
@@ -809,64 +440,11 @@ const undoAutoClassificationHandler = handler<
     const autoItems = recentAutoClassified.get();
     recentAutoClassified.set(autoItems.filter((a) => a.input.id !== inputId));
 
-    // Revert rule metrics and recalculate tiers (create new objects to avoid mutation)
-    // This is the inverse of the logic in submitItemHandler - decrement the metrics
-    // that were incremented when this item was auto-classified.
+    // Take back the rule metrics the auto-classification recorded, from the
+    // rules it recorded them against
     const rulesVal = rules.get();
-    const actual = autoItem.label;
-    const updatedRules = rulesVal.map((rule) => {
-      const ruleMatched = autoItem.matchedRules.includes(rule.name);
-      const predicted = rule.predicts;
-
-      // Calculate reverted confusion matrix values (decrement what was incremented)
-      let newTP = rule.truePositives || 0;
-      let newFP = rule.falsePositives || 0;
-      let newTN = rule.trueNegatives || 0;
-      let newFN = rule.falseNegatives || 0;
-
-      if (ruleMatched) {
-        // Rule matched - revert its prediction metric
-        if (predicted === actual) {
-          // TP was incremented - decrement it
-          newTP = Math.max(0, newTP - 1);
-        } else {
-          // FP was incremented - decrement it
-          newFP = Math.max(0, newFP - 1);
-        }
-      } else {
-        // Rule didn't match - revert its non-match metric
-        if (predicted === actual) {
-          // FN was incremented - decrement it
-          newFN = Math.max(0, newFN - 1);
-        } else {
-          // TN was incremented - decrement it
-          newTN = Math.max(0, newTN - 1);
-        }
-      }
-
-      // Recalculate precision and recall from the reverted confusion matrix
-      const { precision, recall } = calculatePrecisionRecall({
-        truePositives: newTP,
-        falsePositives: newFP,
-        trueNegatives: newTN,
-        falseNegatives: newFN,
-      });
-
-      const updatedRule = {
-        ...rule,
-        truePositives: newTP,
-        falsePositives: newFP,
-        trueNegatives: newTN,
-        falseNegatives: newFN,
-        precision,
-        recall,
-        evaluationCount: Math.max(0, (rule.evaluationCount || 0) - 1),
-      };
-      // Recalculate tier based on reverted metrics (may demote)
-      updatedRule.tier = _calculateTier(updatedRule);
-      return updatedRule;
-    });
-    rules.set(updatedRules);
+    const scoring = scoringOf(autoItem, rulesVal);
+    rules.set(scoreRules(rulesVal, scoring, autoItem.label, -1));
 
     // Set as undone item for manual review (shows rules-based result immediately)
     // Create a mutable copy to satisfy type requirements
@@ -880,6 +458,10 @@ const undoAutoClassificationHandler = handler<
       confidence: autoItem.confidence,
       reasoning: autoItem.reasoning,
       matchedRules: [...autoItem.matchedRules], // Mutable array copy
+      scoring: {
+        ruleIds: [...scoring.ruleIds],
+        matchedRuleIds: [...scoring.matchedRuleIds],
+      },
       tier: autoItem.tier,
       classifiedAt: autoItem.classifiedAt,
     });
@@ -950,6 +532,7 @@ const submitItemHandler = handler<
         confidence: ruleMatch.confidence,
         reasoning: example.reasoning,
         matchedRules: ruleMatch.matchedRules,
+        scoring: ruleMatch.scoring,
         tier: ruleMatch.highestTier,
         classifiedAt: Date.now(),
       };
@@ -957,70 +540,10 @@ const submitItemHandler = handler<
         [autoItem, ...recentAutoClassified.get()].slice(0, 10),
       );
 
-      // Update rule metrics and recalculate tiers (create new objects to avoid mutation)
-      // For each rule that matched, update its confusion matrix based on whether
-      // its individual prediction aligned with the actual outcome.
-      //
-      // Confusion matrix for a rule:
-      // - TP: rule matched AND rule.predicts === actual
-      // - FP: rule matched AND rule.predicts !== actual
-      // - TN: rule didn't match AND rule.predicts !== actual (would have been correct)
-      // - FN: rule didn't match AND rule.predicts === actual (missed the correct prediction)
-      const actual = ruleMatch.prediction!;
-      const updatedRules = rulesVal.map((rule) => {
-        const ruleMatched = ruleMatch.matchedRules.includes(rule.name);
-        const predicted = rule.predicts;
-
-        // Calculate new confusion matrix values
-        let newTP = rule.truePositives || 0;
-        let newFP = rule.falsePositives || 0;
-        let newTN = rule.trueNegatives || 0;
-        let newFN = rule.falseNegatives || 0;
-
-        if (ruleMatched) {
-          // Rule matched - it made a prediction
-          if (predicted === actual) {
-            // Rule predicted correctly
-            newTP += 1;
-          } else {
-            // Rule predicted incorrectly
-            newFP += 1;
-          }
-        } else {
-          // Rule didn't match - it "predicted" the opposite of rule.predicts
-          // (by not firing, a rule that predicts:true implies false, and vice versa)
-          if (predicted === actual) {
-            // Rule should have fired but didn't - it missed
-            newFN += 1;
-          } else {
-            // Rule correctly didn't fire
-            newTN += 1;
-          }
-        }
-
-        // Recalculate precision and recall from the updated confusion matrix
-        const { precision, recall } = calculatePrecisionRecall({
-          truePositives: newTP,
-          falsePositives: newFP,
-          trueNegatives: newTN,
-          falseNegatives: newFN,
-        });
-
-        const updatedRule = {
-          ...rule,
-          truePositives: newTP,
-          falsePositives: newFP,
-          trueNegatives: newTN,
-          falseNegatives: newFN,
-          precision,
-          recall,
-          evaluationCount: (rule.evaluationCount || 0) + 1,
-        };
-        // Recalculate tier based on new metrics
-        updatedRule.tier = _calculateTier(updatedRule);
-        return updatedRule;
-      });
-      rules.set(updatedRules);
+      // Record the outcome against every rule's metrics
+      rules.set(
+        scoreRules(rulesVal, ruleMatch.scoring, ruleMatch.prediction, 1),
+      );
 
       console.log(
         `[Classifier] Auto-classified as ${
@@ -1041,32 +564,9 @@ const confirmClassificationHandler = handler<
     pendingClassifications: Writable<PendingClassification[]>;
     examples: Writable<LabeledExample[]>;
   }
->(({ inputId }, { pendingClassifications, examples }) => {
-  const pending = pendingClassifications.get();
-  const itemIndex = pending.findIndex((p) => p.input.id === inputId);
-  if (itemIndex < 0) return;
-
-  const item = pending[itemIndex];
-  const result = item.result;
-
-  const example: LabeledExample = {
-    input: item.input,
-    label: result.classification,
-    decidedBy: "suggestion-accepted",
-    reasoning: result.reasoning,
-    confidence: result.confidence,
-    labeledAt: Date.now(),
-    wasCorrection: false,
-    isInteresting: result.confidence < 0.7,
-    ...(result.confidence < 0.7 &&
-      { interestingReason: "Low confidence, user confirmed" }),
-  };
-
-  examples.push(example);
-  pendingClassifications.set(
-    pending.filter((p) => p.input.id !== inputId),
-  );
-});
+>(({ inputId }, { pendingClassifications, examples }) =>
+  settlePending(pendingClassifications, examples, inputId, confirmPending)
+);
 
 /** Correct a classification (user disagrees) - for API use */
 const correctClassificationHandler = handler<
@@ -1078,31 +578,20 @@ const correctClassificationHandler = handler<
 >((
   { inputId, correctLabel, reasoning },
   { pendingClassifications, examples },
-) => {
-  const pending = pendingClassifications.get();
-  const itemIndex = pending.findIndex((p) => p.input.id === inputId);
-  if (itemIndex < 0) return;
-
-  const item = pending[itemIndex];
-
-  const example: LabeledExample = {
-    input: item.input,
-    label: correctLabel,
-    decidedBy: "user",
-    reasoning: reasoning || "User correction",
-    confidence: 1.0,
-    labeledAt: Date.now(),
-    wasCorrection: true,
-    originalPrediction: item.result.classification,
-    isInteresting: true,
-    interestingReason: "User corrected classification",
-  };
-
-  examples.push(example);
-  pendingClassifications.set(
-    pending.filter((p) => p.input.id !== inputId),
-  );
-});
+) =>
+  settlePending(
+    pendingClassifications,
+    examples,
+    inputId,
+    (item) =>
+      correctedExample(
+        item.input,
+        item.result.classification,
+        correctLabel,
+        reasoning || "User correction",
+      ),
+  )
+);
 
 /** Dismiss a classification without recording it - for API use */
 const dismissClassificationHandler = handler<
@@ -1110,12 +599,9 @@ const dismissClassificationHandler = handler<
   {
     pendingClassifications: Writable<PendingClassification[]>;
   }
->(({ inputId }, { pendingClassifications }) => {
-  const pending = pendingClassifications.get();
-  pendingClassifications.set(
-    pending.filter((p) => p.input.id !== inputId),
-  );
-});
+>(({ inputId }, { pendingClassifications }) =>
+  dropPending(pendingClassifications, inputId)
+);
 
 /** Add a new rule */
 const addRuleHandler = handler<
@@ -1124,34 +610,8 @@ const addRuleHandler = handler<
     rules: Writable<ClassificationRule[]>;
   }
 >((event, { rules }) => {
-  // Validate regex pattern before adding
-  const validation = isValidRegex(event.pattern);
-  if (!validation.valid) {
-    console.error(
-      `[Classifier] Cannot add rule "${event.name}": invalid regex pattern "${event.pattern}" - ${validation.error}`,
-    );
-    return;
-  }
-
-  const newRule: ClassificationRule = {
-    id: generateId(),
-    name: event.name,
-    targetField: event.targetField,
-    pattern: event.pattern,
-    caseInsensitive: true,
-    predicts: event.predicts,
-    precision: 0.5,
-    recall: 0.5,
-    tier: 0,
-    evaluationCount: 0,
-    truePositives: 0,
-    falsePositives: 0,
-    trueNegatives: 0,
-    falseNegatives: 0,
-    createdAt: Date.now(),
-    isShared: false,
-  };
-  rules.push(newRule);
+  const rule = newRule(event);
+  if (rule) rules.push(rule);
 });
 
 /** Remove a rule */
@@ -1160,10 +620,7 @@ const removeRuleActionHandler = handler<
   {
     rules: Writable<ClassificationRule[]>;
   }
->(({ ruleId }, { rules }) => {
-  const current = rules.get();
-  rules.set(current.filter((r) => r.id !== ruleId));
-});
+>(({ ruleId }, { rules }) => dropRule(rules, ruleId));
 
 /** Add field to new item */
 const addFieldToNewItemHandler = handler<
@@ -1206,35 +663,9 @@ const acceptSuggestionHandler = handler<
   _event,
   { suggestion, originalIndex, rules, dismissedSuggestionIndices },
 ) => {
-  // Validate regex pattern before adding
-  const validation = isValidRegex(suggestion.pattern);
-  if (!validation.valid) {
-    console.error(
-      `[Classifier] Cannot accept suggestion "${suggestion.name}": invalid regex pattern "${suggestion.pattern}" - ${validation.error}`,
-    );
-    return;
-  }
-
-  // Add the rule
-  const newRule: ClassificationRule = {
-    id: generateId(),
-    name: suggestion.name,
-    targetField: suggestion.targetField,
-    pattern: suggestion.pattern,
-    caseInsensitive: true,
-    predicts: suggestion.predicts,
-    precision: 0.5,
-    recall: 0.5,
-    tier: 0,
-    evaluationCount: 0,
-    truePositives: 0,
-    falsePositives: 0,
-    trueNegatives: 0,
-    falseNegatives: 0,
-    createdAt: Date.now(),
-    isShared: false,
-  };
-  rules.push(newRule);
+  const rule = newRule(suggestion);
+  if (!rule) return;
+  rules.push(rule);
 
   // Mark as dismissed
   dismissedSuggestionIndices.addUnique(originalIndex);
@@ -1273,24 +704,7 @@ const acceptCurrentClassificationHandler = handler<
   const result = resultCell.get();
   if (!result) return;
 
-  const { item, classification } = result;
-
-  examples.push({
-    input: {
-      id: item.id,
-      receivedAt: item.receivedAt,
-      fields: { ...item.fields },
-    },
-    label: classification.classification,
-    decidedBy: "suggestion-accepted",
-    reasoning: classification.reasoning,
-    confidence: classification.confidence,
-    labeledAt: Date.now(),
-    wasCorrection: false,
-    isInteresting: classification.confidence < 0.7,
-    ...(classification.confidence < 0.7 &&
-      { interestingReason: "Low confidence, user confirmed" }),
-  });
+  examples.push(acceptedExample(result.item, result.classification));
   currentItem.set(null);
 });
 
@@ -1310,44 +724,23 @@ const correctCurrentClassificationHandler = handler<
   const result = resultCell.get();
   if (!result) return;
 
-  const { item, classification } = result;
-  const flippedLabel = !classification.classification;
-
-  examples.push({
-    input: {
-      id: item.id,
-      receivedAt: item.receivedAt,
-      fields: { ...item.fields },
-    },
-    label: flippedLabel, // FLIP the classification
-    decidedBy: "user",
-    reasoning: "User corrected classification",
-    confidence: 1.0, // User is certain
-    labeledAt: Date.now(),
-    wasCorrection: true,
-    originalPrediction: classification.classification,
-    isInteresting: true,
-    interestingReason: "User corrected classification",
-  });
+  const original = result.classification.classification;
+  examples.push(
+    correctedExample(
+      result.item,
+      original,
+      !original,
+      "User corrected classification",
+    ),
+  );
   currentItem.set(null);
 });
 
-/** Item that was auto-classified (for handler state typing) */
-interface AutoClassifiedItemState {
-  input: ClassifiableInput;
-  label: boolean;
-  confidence: number;
-  reasoning: string;
-  matchedRules: string[];
-  tier: Tier;
-  classifiedAt: number;
-}
-
 /** Accept the undone item's classification (user agrees with the original rules-based result) */
-const acceptUndoneClassificationHandler = handler<
+export const acceptUndoneClassificationHandler = handler<
   void,
   {
-    undoneAutoItem: Writable<AutoClassifiedItemState | null>;
+    undoneAutoItem: Writable<AutoClassifiedItem | null>;
     examples: Writable<LabeledExample[]>;
     rules: Writable<ClassificationRule[]>;
   }
@@ -1369,65 +762,23 @@ const acceptUndoneClassificationHandler = handler<
     labeledAt: Date.now(),
     wasCorrection: false,
     isInteresting: false,
+    reviewedAutoClassification: true,
   });
 
-  // Re-add rule metrics since user confirmed the original prediction was correct
-  // The actual label is what the rules predicted (undone.label)
+  // Record the rules' original prediction as the outcome
   const rulesVal = rules.get();
-  const actual = undone.label;
-  const updatedRules = rulesVal.map((rule) => {
-    const ruleMatched = undone.matchedRules.includes(rule.name);
-    const predicted = rule.predicts;
-
-    let newTP = rule.truePositives || 0;
-    let newFP = rule.falsePositives || 0;
-    let newTN = rule.trueNegatives || 0;
-    let newFN = rule.falseNegatives || 0;
-
-    if (ruleMatched) {
-      if (predicted === actual) {
-        newTP += 1;
-      } else {
-        newFP += 1;
-      }
-    } else {
-      if (predicted === actual) {
-        newFN += 1;
-      } else {
-        newTN += 1;
-      }
-    }
-
-    const { precision, recall } = calculatePrecisionRecall({
-      truePositives: newTP,
-      falsePositives: newFP,
-      trueNegatives: newTN,
-      falseNegatives: newFN,
-    });
-
-    const updatedRule = {
-      ...rule,
-      truePositives: newTP,
-      falsePositives: newFP,
-      trueNegatives: newTN,
-      falseNegatives: newFN,
-      precision,
-      recall,
-      evaluationCount: (rule.evaluationCount || 0) + 1,
-    };
-    updatedRule.tier = _calculateTier(updatedRule);
-    return updatedRule;
-  });
-  rules.set(updatedRules);
+  rules.set(
+    scoreRules(rulesVal, scoringOf(undone, rulesVal), undone.label, 1),
+  );
 
   undoneAutoItem.set(null);
 });
 
 /** Correct the undone item's classification (user disagrees with the original rules-based result) */
-const correctUndoneClassificationHandler = handler<
+export const correctUndoneClassificationHandler = handler<
   void,
   {
-    undoneAutoItem: Writable<AutoClassifiedItemState | null>;
+    undoneAutoItem: Writable<AutoClassifiedItem | null>;
     examples: Writable<LabeledExample[]>;
     rules: Writable<ClassificationRule[]>;
   }
@@ -1438,72 +789,20 @@ const correctUndoneClassificationHandler = handler<
   // The user is correcting - the actual label is the OPPOSITE of what rules predicted
   const actual = !undone.label;
 
-  // Store to examples with the FLIPPED classification
   examples.push({
-    input: {
-      id: undone.input.id,
-      receivedAt: undone.input.receivedAt,
-      fields: { ...undone.input.fields },
-    },
-    label: actual, // FLIPPED classification
-    decidedBy: "user",
-    reasoning: "User corrected classification",
-    confidence: 1.0, // User is certain
-    labeledAt: Date.now(),
-    wasCorrection: true,
-    originalPrediction: undone.label,
-    isInteresting: true,
-    interestingReason: "User corrected classification",
+    ...correctedExample(
+      undone.input,
+      undone.label,
+      actual,
+      "User corrected classification",
+    ),
+    reviewedAutoClassification: true,
   });
 
-  // Add rule metrics based on the corrected (flipped) actual label
-  // This means the rules were WRONG - matched rules that predicted undone.label
-  // should now count as FP (they predicted wrong), and so on.
+  // Record the corrected label as the outcome: matched rules that predicted
+  // the original label count as false positives
   const rulesVal = rules.get();
-  const updatedRules = rulesVal.map((rule) => {
-    const ruleMatched = undone.matchedRules.includes(rule.name);
-    const predicted = rule.predicts;
-
-    let newTP = rule.truePositives || 0;
-    let newFP = rule.falsePositives || 0;
-    let newTN = rule.trueNegatives || 0;
-    let newFN = rule.falseNegatives || 0;
-
-    if (ruleMatched) {
-      if (predicted === actual) {
-        newTP += 1;
-      } else {
-        newFP += 1;
-      }
-    } else {
-      if (predicted === actual) {
-        newFN += 1;
-      } else {
-        newTN += 1;
-      }
-    }
-
-    const { precision, recall } = calculatePrecisionRecall({
-      truePositives: newTP,
-      falsePositives: newFP,
-      trueNegatives: newTN,
-      falseNegatives: newFN,
-    });
-
-    const updatedRule = {
-      ...rule,
-      truePositives: newTP,
-      falsePositives: newFP,
-      trueNegatives: newTN,
-      falseNegatives: newFN,
-      precision,
-      recall,
-      evaluationCount: (rule.evaluationCount || 0) + 1,
-    };
-    updatedRule.tier = _calculateTier(updatedRule);
-    return updatedRule;
-  });
-  rules.set(updatedRules);
+  rules.set(scoreRules(rulesVal, scoringOf(undone, rulesVal), actual, 1));
 
   undoneAutoItem.set(null);
 });
@@ -1512,7 +811,7 @@ const correctUndoneClassificationHandler = handler<
 const dismissUndoneItemHandler = handler<
   void,
   {
-    undoneAutoItem: Writable<AutoClassifiedItemState | null>;
+    undoneAutoItem: Writable<AutoClassifiedItem | null>;
   }
 >((_event, { undoneAutoItem }) => {
   undoneAutoItem.set(null);
@@ -1674,39 +973,13 @@ export default pattern<ClassifierInput, ClassifierOutput>(
     // Build the classification prompt for the current item
     const classificationPrompt = computed(() => {
       const item = currentItem.get();
-      if (!item) return "";
-
-      const question = config.get()?.question || "Is this a positive example?";
-      const examplesList = examples.get();
-
-      // Get recent examples for few-shot learning
-      const recentPositive = examplesList.filter((e) => e.label).slice(-3);
-      const recentNegative = examplesList.filter((e) => !e.label).slice(-3);
-
-      // Include itemId in prompt so LLM echoes it back
-      let prompt = `Item ID: ${item.id}\n\n`;
-      prompt += `Question: ${question}\n\n`;
-      prompt += `Input to classify:\n${
-        JSON.stringify(item.fields, null, 2)
-      }\n\n`;
-
-      if (recentPositive.length > 0 || recentNegative.length > 0) {
-        prompt += "Examples for context:\n";
-        if (recentPositive.length > 0) {
-          prompt += "\nPositive examples (answer is YES):\n";
-          for (const ex of recentPositive) {
-            prompt += `- ${JSON.stringify(ex.input.fields)}\n`;
-          }
-        }
-        if (recentNegative.length > 0) {
-          prompt += "\nNegative examples (answer is NO):\n";
-          for (const ex of recentNegative) {
-            prompt += `- ${JSON.stringify(ex.input.fields)}\n`;
-          }
-        }
-      }
-
-      return prompt;
+      return item
+        ? buildClassificationPrompt(
+          item,
+          config.get()?.question ?? "",
+          examples.get(),
+        )
+        : "";
     });
 
     // LLM classification - only runs when there's a prompt
@@ -1728,100 +1001,38 @@ Respond with:
       item: ClassifiableInput;
       classification: ClassificationResult;
     } | null => {
-      // Skip if still pending or error
-      if (llmResult.pending || llmResult.error) return null;
-
-      const llmResultValue = llmResult.result;
-      if (!llmResultValue || !llmResultValue.itemId) return null;
-
-      // Get the current item being classified
       const item = currentItem.get();
       if (!item) return null;
-
-      // Verify the LLM response matches the item we sent
-      if (item.id !== llmResultValue.itemId) {
-        console.warn(
-          `[Classifier] Item ID mismatch: expected ${item.id}, got ${llmResultValue.itemId}`,
-        );
-        return null;
-      }
-
-      // Validate LLM response fields
-      if (typeof llmResultValue.classification !== "boolean") {
-        console.warn(
-          `[Classifier] Invalid classification type: expected boolean, got ${typeof llmResultValue
-            .classification}`,
-        );
-        return null;
-      }
-      if (
-        typeof llmResultValue.confidence !== "number" ||
-        llmResultValue.confidence < 0 ||
-        llmResultValue.confidence > 1
-      ) {
-        console.warn(
-          `[Classifier] Invalid confidence: expected number between 0 and 1, got ${llmResultValue.confidence}`,
-        );
-        return null;
-      }
-      if (
-        typeof llmResultValue.reasoning !== "string" ||
-        llmResultValue.reasoning.trim() === ""
-      ) {
-        console.warn(
-          `[Classifier] Invalid reasoning: expected non-empty string`,
-        );
-        return null;
-      }
-
-      // Try rules first with precision-weighted voting
-      // Use the shared matchRulesAgainstInput function to avoid duplication
-      const configVal = config.get() || DEFAULT_CONFIG;
-      const rulesVal = rules.get();
-      const threshold = configVal.autoClassifyThreshold || 0.85;
-
-      const ruleResult = matchRulesAgainstInput(item, rulesVal, threshold);
-      // Access properties directly to avoid CTS transformer issues with destructuring rename
-      const matchedRules = ruleResult.matchedRules;
-      const rulesPrediction = ruleResult.prediction;
-      const rulesConfidence = ruleResult.confidence;
-
-      let classification: ClassificationResult;
-
-      // Determine if rules should be used:
-      // 1. Rules must have produced a prediction (rulesPrediction !== null means at least one rule matched)
-      // 2. Rules confidence must meet the threshold
-      const useRules = rulesPrediction !== null && rulesConfidence >= threshold;
-
-      if (useRules && rulesPrediction !== null) {
-        // TypeScript needs the explicit null check here for type narrowing
-        classification = {
-          inputId: item.id,
-          classification: rulesPrediction,
-          confidence: rulesConfidence,
-          reasoning: `Rules matched: ${matchedRules.join(", ")}`,
-          decidedBy: "rules",
-          matchedRules,
-        };
-      } else {
-        // Use LLM when: no rules matched OR rules confidence below threshold
-        classification = {
-          inputId: item.id,
-          classification: llmResultValue.classification,
-          confidence: llmResultValue.confidence,
-          reasoning: llmResultValue.reasoning ?? "",
-          decidedBy: "llm",
-          matchedRules,
-        };
-      }
-
-      // Return the computed classification - NO SIDE EFFECTS
-      return { item, classification };
+      const classification = deriveClassification(
+        llmResult,
+        item,
+        rules.get(),
+        (config.get() || DEFAULT_CONFIG).autoClassifyThreshold,
+      );
+      return classification ? { item, classification } : null;
     });
 
     // Helper computed to check if we have a classification result ready
     const hasClassificationResult = computed(
       () => currentClassificationResult !== null,
+    );
+
+    // Why the model gave no usable classification of the current item, or
+    // null while it may still give one
+    const currentFailure = computed(() => {
+      const item = currentItem.get();
+      return item
+        ? classificationFailure(
+          llmResult,
+          item.id,
+          currentClassificationResult?.classification ?? null,
+        )
+        : null;
+    });
+
+    // The current classification as the view shows it
+    const currentVerdict = computed(() =>
+      viewVerdict(currentClassificationResult?.classification)
     );
 
     // ==========================================================================
@@ -1883,79 +1094,15 @@ Respond with:
 
     // Build the rule generation prompt when conditions are met
     const ruleGenerationPrompt = computed(() => {
-      const examplesList = examples.get();
-      const configVal = config.get();
       // Read counter to establish dependency (forces regeneration when incremented)
-      const _refreshCount = ruleGenCounter.get();
-
-      // Only generate when we have enough examples
-      if (!configVal) return "";
-      if (examplesList.length < (configVal.minExamplesForRules || 5)) return "";
-
-      // Check for errors/corrections that indicate room for improvement
-      const corrections = examplesList.filter((e) => e.wasCorrection);
-      const interestingExamples = examplesList.filter((e) => e.isInteresting);
-
-      // Only suggest rules if we have at least some interesting examples
-      if (corrections.length === 0 && interestingExamples.length < 2) return "";
-
-      // Get field names from examples
-      const allFields = new Set<string>();
-      for (const ex of examplesList) {
-        for (const key of Object.keys(ex.input.fields)) {
-          allFields.add(key);
-        }
-      }
-
-      const question = configVal.question || "Is this a positive example?";
-
-      const positiveExamples = examplesList.filter((e) => e.label).slice(-5);
-      const negativeExamples = examplesList.filter((e) => !e.label).slice(-5);
-
-      let prompt =
-        `You are analyzing classification examples to generate regex rules.
-
-Question being classified: "${question}"
-
-Available fields: ${Array.from(allFields).join(", ")}
-
-Positive examples (label = YES):
-${positiveExamples.map((e) => JSON.stringify(e.input.fields)).join("\n")}
-
-Negative examples (label = NO):
-${negativeExamples.map((e) => JSON.stringify(e.input.fields)).join("\n")}
-
-`;
-
-      if (corrections.length > 0) {
-        prompt += `Recent corrections (initially misclassified):
-${
-          corrections.slice(-3).map((e) =>
-            `- ${JSON.stringify(e.input.fields)} → was ${
-              e.originalPrediction ? "YES" : "NO"
-            }, correct: ${e.label ? "YES" : "NO"}`
-          ).join("\n")
-        }
-
-`;
-      }
-
-      prompt +=
-        `Generate 1-3 regex patterns that could help classify future inputs.
-Each rule should:
-1. Target a specific field
-2. Use a simple regex pattern (avoid overly complex patterns)
-3. Be specific enough to avoid false positives
-4. Explain why this pattern indicates the classification`;
-
-      return prompt;
+      ruleGenCounter.get();
+      const configVal = config.get();
+      return configVal
+        ? buildRuleGenerationPrompt(examples.get(), configVal)
+        : "";
     });
 
     // LLM rule generation - only runs when there's a prompt
-    interface RuleSuggestionsResult {
-      suggestions: RuleSuggestion[];
-    }
-
     const ruleGenResult = generateObject<RuleSuggestionsResult>({
       prompt: ruleGenerationPrompt,
       system:
@@ -1970,32 +1117,11 @@ Each suggestion should have:
 
     // Derive visible suggestions from LLM result, filtered by dismissed indices
     // This is pure derivation with no side effects
-    const visibleSuggestions = computed(
-      (): Array<{ suggestion: RuleSuggestion; originalIndex: number }> => {
-        if (ruleGenResult.pending || ruleGenResult.error) return [];
-
-        const result = ruleGenResult.result;
-        if (!result || !result.suggestions || result.suggestions.length === 0) {
-          return [];
-        }
-
-        const dismissed = dismissedSuggestionIndices.get();
-        // Convert reactive proxy to plain array to avoid mapWithPattern issues
-        const suggestionsArray = [...result.suggestions];
-        return suggestionsArray
-          .map((suggestion, index) => ({ suggestion, originalIndex: index }))
-          .filter(({ originalIndex }) => !dismissed.includes(originalIndex))
-          .filter(({ suggestion }) => {
-            const isValid = isValidRuleSuggestion(suggestion);
-            if (!isValid) {
-              console.warn(
-                `[Classifier] Invalid rule suggestion, skipping:`,
-                suggestion,
-              );
-            }
-            return isValid;
-          });
-      },
+    const visibleSuggestions = computed(() =>
+      selectVisibleSuggestions(
+        ruleGenResult,
+        dismissedSuggestionIndices.get(),
+      )
     );
 
     /** Clear all suggestions and trigger new generation */
@@ -2179,10 +1305,6 @@ Each suggestion should have:
                     {/* Show item being classified */}
                     <pre style="font-size: 0.75rem; overflow: auto; max-height: 100px; margin: 0; background: var(--cf-colors-gray-50); padding: 0.5rem; border-radius: 4px;">
                       {computed(() => {
-                        const result = currentClassificationResult;
-                        if (result) {
-                          return toIndentedDebugString(result.item.fields);
-                        }
                         const item = currentItem.get();
                         return item ? toIndentedDebugString(item.fields) : "";
                       })}
@@ -2197,43 +1319,20 @@ Each suggestion should have:
                           <span
                             style={{
                               fontWeight: "600",
-                              color: ifElse(
-                                computed(() =>
-                                  currentClassificationResult?.classification
-                                    .classification ?? false
-                                ),
-                                "var(--cf-theme-color-success)",
-                                "var(--cf-theme-color-error)",
-                              ),
+                              color: currentVerdict.color,
                             }}
                           >
-                            {ifElse(
-                              computed(() =>
-                                currentClassificationResult?.classification
-                                  .classification ?? false
-                              ),
-                              "YES",
-                              "NO",
-                            )}
+                            {currentVerdict.answer}
                           </span>
                           <span style="color: var(--cf-colors-gray-500); font-size: 0.875rem;">
-                            ({computed(() =>
-                              (
-                                (currentClassificationResult?.classification
-                                  .confidence ?? 0) * 100
-                              ).toFixed(0)
-                            )}% confidence via {computed(() =>
-                              currentClassificationResult?.classification
-                                .decidedBy ?? ""
-                            )})
+                            ({currentVerdict.confidencePercent}% confidence via
+                            {" "}
+                            {currentVerdict.decidedBy})
                           </span>
                         </cf-hstack>
 
                         <span style="font-size: 0.875rem; color: var(--cf-colors-gray-600);">
-                          {computed(() =>
-                            currentClassificationResult?.classification
-                              .reasoning ?? ""
-                          )}
+                          {currentVerdict.reasoning}
                         </span>
 
                         <cf-hstack gap="2">
@@ -2249,14 +1348,7 @@ Each suggestion should have:
                             variant="outline"
                             onClick={correctCurrentClassification}
                           >
-                            Actually {ifElse(
-                              computed(() =>
-                                currentClassificationResult?.classification
-                                  .classification ?? false
-                              ),
-                              "NO",
-                              "YES",
-                            )}
+                            Actually {currentVerdict.opposite}
                           </cf-button>
                           <cf-button
                             color="neutral"
@@ -2267,10 +1359,30 @@ Each suggestion should have:
                           </cf-button>
                         </cf-hstack>
                       </cf-vstack>,
-                      // Still loading
+                      // No usable result: the call failed, the answer was
+                      // rejected, or the model is still working (or has not
+                      // started). Either way the item can be dismissed,
+                      // which frees the classifier
                       <cf-hstack gap="2" align="center">
-                        <cf-loader size="sm" />
-                        <span style="font-weight: 500;">Classifying...</span>
+                        {ifElse(
+                          computed(() => currentFailure !== null),
+                          <span style="flex: 1; color: var(--cf-theme-color-error);">
+                            Classification failed: {currentFailure}
+                          </span>,
+                          <cf-hstack gap="2" align="center" style="flex: 1;">
+                            <cf-loader size="sm" />
+                            <span style="font-weight: 500;">
+                              Classifying...
+                            </span>
+                          </cf-hstack>,
+                        )}
+                        <cf-button
+                          color="neutral"
+                          variant="ghost"
+                          onClick={dismissCurrentItem}
+                        >
+                          Dismiss
+                        </cf-button>
                       </cf-hstack>,
                     )}
                   </cf-vstack>
@@ -2321,11 +1433,9 @@ Each suggestion should have:
                         )}
                       </span>
                       <span style="color: var(--cf-colors-gray-500); font-size: 0.875rem;">
-                        ({computed(() =>
-                          (
-                            (undoneAutoItem.get()?.confidence ?? 0) * 100
-                          ).toFixed(0)
-                        )}% confidence via rules - Tier{" "}
+                        ({computed(() => (
+                          (undoneAutoItem.get()?.confidence ?? 0) * 100
+                        ).toFixed(0))}% confidence via rules - Tier{" "}
                         {computed(() => undoneAutoItem.get()?.tier ?? 0)})
                       </span>
                     </cf-hstack>
@@ -2415,7 +1525,7 @@ Each suggestion should have:
                               color="primary"
                               variant="solid"
                               onClick={confirmPendingClassification({
-                                pending,
+                                inputId: pending.input.id,
                                 examples,
                                 pendingClassifications,
                               })}
@@ -2426,7 +1536,7 @@ Each suggestion should have:
                               color="neutral"
                               variant="outline"
                               onClick={correctPendingClassification({
-                                pending,
+                                inputId: pending.input.id,
                                 examples,
                                 pendingClassifications,
                               })}
@@ -2441,7 +1551,7 @@ Each suggestion should have:
                               color="neutral"
                               variant="ghost"
                               onClick={dismissPendingClassification({
-                                pending,
+                                inputId: pending.input.id,
                                 pendingClassifications,
                               })}
                             >
@@ -2506,7 +1616,10 @@ Each suggestion should have:
                         <cf-button
                           color="neutral"
                           variant="ghost"
-                          onClick={removeRuleHandler({ rule, rules })}
+                          onClick={removeRuleHandler({
+                            ruleId: rule.id,
+                            rules,
+                          })}
                         >
                           x
                         </cf-button>
@@ -2629,19 +1742,15 @@ Each suggestion should have:
                           {ifElse(autoItem.label, "YES", "NO")}
                         </span>
                         <span style="flex: 1; font-size: 0.875rem;">
-                          {computed(() => {
-                            const fields = autoItem.input.fields;
-                            const entries = Object.entries(fields);
-                            const first = entries[0];
-                            return first
-                              ? `${first[0]}: ${first[1].substring(0, 30)}...`
-                              : "(empty)";
-                          })}
+                          {computed(() => previewFields(autoItem.input.fields))}
                         </span>
                         <cf-button
                           color="neutral"
                           variant="outline"
                           size="sm"
+                          disabled={computed(() =>
+                            undoneAutoItem.get() !== null
+                          )}
                           onClick={undoAutoClassificationHandler({
                             autoItem,
                             examples,

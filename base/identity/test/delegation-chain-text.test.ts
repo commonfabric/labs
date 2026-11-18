@@ -53,6 +53,25 @@ Deno.test("delegation-chain-text: throws a DelegationError for another format", 
   );
 });
 
+Deno.test("delegation-chain-text: throws a DelegationError for a text without a list of chains", () => {
+  for (const chains of [undefined, "AQID", { 0: ["AQID"] }]) {
+    const text = JSON.stringify({ format: DELEGATION_CHAIN_FORMAT, chains });
+    expect(() => decodeDelegationChains(text)).toThrow(
+      "the chain text lists no chains",
+    );
+  }
+});
+
+Deno.test("delegation-chain-text: throws a DelegationError naming a link that is not a string", () => {
+  const text = JSON.stringify({
+    format: DELEGATION_CHAIN_FORMAT,
+    chains: [["AQID"], ["AQID", 7]],
+  });
+  expect(() => decodeDelegationChains(text)).toThrow(
+    "chain 1 link 1 is not a string",
+  );
+});
+
 Deno.test("delegation-chain-text: throws a DelegationError for an empty chain", () => {
   const text = JSON.stringify({
     format: DELEGATION_CHAIN_FORMAT,

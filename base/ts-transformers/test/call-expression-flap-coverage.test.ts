@@ -115,7 +115,6 @@ function emitterContextFor(
     context,
     analyze,
     dataFlows,
-    inSafeContext: false,
     reactiveContextKind: "pattern",
     preferInputBoundWrappers: false,
     rewriteChildren: (node: ts.Expression) => node,

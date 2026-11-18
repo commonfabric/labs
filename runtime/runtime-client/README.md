@@ -190,7 +190,14 @@ throws, and when the event is dropped or refused admission. A run that finishes
 without an error resolves it, whether or not it wrote anything; a handler that
 turns an event down throws, which fails its run and rejects the send. Under
 server execution the run it waits for is the served one, whose outcome reaches
-the worker as the consequence the serving loop recorded for the event.
+the worker as the consequence the serving loop recorded for the event. A served
+run that read data its stream's space doesn't admit has its outcome withheld: it
+reports the same thing whether it committed or not
+([events.md §5](../../docs/specs/server-side-execution/events.md#5-failure-semantics)),
+and the send resolves with `{ handling: "withheld" }` rather than with nothing,
+and never rejects. A host can say the event was sent and that its outcome is
+private. A caller that ignores the value reads it as the success it may have
+been.
 
 Each of these delivers its event to the stream the handle's stored links lead
 to, such as a nested pattern's stream that the result it is reached through
@@ -206,8 +213,9 @@ action. The worker stamps the event with `native` provenance for them, replacing
 any `provenance` the payload carries, and marks it renderer-trusted, so a write
 gated on that surface and action commits as it would for a reviewed gesture on
 the pattern's rendered surface. It always waits for the handler's run, as
-`sendStrict()` does with `awaitHandling`, and rejects with the reason on the
-same refusals. The event is a trusted gesture, as a DOM event on the pattern's
+`sendStrict()` does with `awaitHandling`, rejects with the reason on the same
+refusals, and resolves with `{ handling: "withheld" }` for a run whose outcome
+is withheld. The event is a trusted gesture, as a DOM event on the pattern's
 rendered surface is, so it meets what `grantSpaceAccess()` and
 `revokeSpaceAccess()` require of a handler's event; the change they stage is
 still held to every other check.

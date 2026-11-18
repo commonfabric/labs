@@ -598,8 +598,9 @@ shell's runtime client, runs the operation, waits until the view has settled and
 the runtime is idle, and turns both off again. From the `scheduler.run.complete`
 markers it sums runs, `durationMs`, proxy accesses, the largest single run's
 accesses, link resolutions, distinct documents, and registered dependencies, in
-one row for the board's pivot (`crossrefTable`, the producer), one for the
-per-topic consumer (`backlinksOf`), and one for every other run. It also records the scheduler
+one row each for the board's pivot (`crossrefTable`) and its index by topic
+number (`crossrefIndexOf`), the producers, one for the per-topic consumer
+(`backlinksOf`), and one for every other run. It also records the scheduler
 graph's node and edge counts before and after, the operation's elapsed time, and
 the timing statistics the main thread and the worker accumulated over it, less
 the helper's own requests. A timing row sums spans that can overlap, so its
@@ -1393,9 +1394,10 @@ repository root to measure the Topics board's mention pivot and each topic's
 backlink lookup over the headless fixture in
 `patterns/integration/topics-headless-fixture.ts`. The fixture writes synthetic
 topics straight to emulated storage and runs the unmodified Topics lifts —
-`crossrefTable` and `backlinksOf` — with no browser and no server. A topic's
-comment count and last activity are stored values its verbs keep in the write
-that changes them, so there is no derivation of theirs to measure.
+`crossrefTable`, `crossrefIndexOf` and `backlinksOf` — with no browser and no
+server. A topic's comment count and last activity are stored values its verbs
+keep in the write that changes them, so there is no derivation of theirs to
+measure.
 Each case runs in a process of its own, started with `--frozen` as well, so no
 process in a run writes `deno.lock`.
 
@@ -1466,8 +1468,15 @@ At 32 and at 128 topics a sweep varies mentions per source over 0, 1, 4, and
 16, where 0 is the `none` graph: 32 topics is the size the read budget gates,
 and 128 is the size the probe reports the effect of mention degree at. The
 small pivot cases hold 4 topics, with as many mentions per source, up to four,
-as each graph allows. The fixture's documentation of
-`MentionGraph` says how each graph spreads its mentions.
+as each graph allows. The fixture's documentation of `MentionGraph` says how
+each graph spreads its mentions.
+
+Every topic in those cases is wired as `addTopic` wires one, to the pivot and to
+the pivot's index by topic number, so each numbered topic's lookup reads its row
+by number. One more case, the 32-topic `high-degree` case at four mentions per
+source, holds unbound topics instead: each lookup is handed the pivot and no
+index, as a topic filed before its board published an index is until it is
+bound, so every lookup scans the pivot.
 
 The pivot cases are recorded under three demand workloads. The first topic is
 the focus topic: the one `topic-open` opens. The mention phases change which
@@ -1490,7 +1499,8 @@ pivot and that topic's backlinks. That is one small sample. Server execution,
 and lazy materialization off, were not measured.
 
 A case's ID names all of that, as
-`pivot/<graph>/mentions-<count>/topics-<count>/<workload>`.
+`pivot/<graph>/mentions-<count>/topics-<count>/<workload>`, with `/unbound`
+before the workload for the case whose topics are unbound.
 
 ### The phases
 
@@ -1615,7 +1625,9 @@ The gated cases are:
 - the 4-topic `low-degree` pivot cases under `topic-open` and `all-backlinks`;
 - the 32-topic pivot cases under both workloads for the `high-degree` and
   `single-bucket` graphs at four mentions per source, and for the `low-degree`
-  graph at 16.
+  graph at 16;
+- the 32-topic `high-degree` case whose topics are unbound, under both
+  workloads, which gates the scan every unbound topic's lookup makes.
 
 No `board` case is gated, since the probe measures none. Every gated case holds
 32 topics or the small case's 4; the larger sizes run only from the probe. A
@@ -1661,11 +1673,17 @@ lifts, in the same transaction:
 Every limit is an upper bound, so the budget catches a change that reads more
 and is blind to one that reads differently. Lazy materialization turned back
 into eager traversal is the case that matters: it makes fewer proxy accesses,
-not more, while every topic's `backlinksOf` runs again on each mention edit.
-`patterns/integration/topics-lazy-lookup-reruns.test.ts` holds that
-property directly, on the 32-topic `high-degree` `all-backlinks` case under
-lazy materialization: a mention edit re-runs the lookups of the topics whose
-pivot row changed, and no other.
+not more, while every unbound topic's `backlinksOf`, which scans the pivot, runs
+again on each mention edit. A keyed lookup reads only the positions filed under
+its number and re-runs only for its own row in either mode.
+`patterns/integration/topics-lazy-lookup-reruns.test.ts` holds the property
+directly, under lazy materialization, on the 32-topic `high-degree`
+`all-backlinks` case with its topics unbound and with them wired to the index: a
+mention edit re-runs the lookups of the topics whose pivot row changed, and no
+other. The same file holds that a numbered topic's lookup, which reads its row
+through the pivot's index, registers the same reads at 4 and at 32 topics, and
+that filing a topic re-runs only its own lookup and those of the topics it
+mentions.
 
 A case's test fails when a count exceeds its limit, when a measured count has no
 limit, or when a limit names a phase the case did not record. The failure names

@@ -357,6 +357,15 @@ export type ConnectOptions = {
   instanceNames?: boolean;
 
   /**
+   * Whether this client's sessions are demand (`SessionDescriptor.demand`).
+   * When `false`, every `session.open` the client sends, a reopen included,
+   * declares `demand: false`: no one waits on these sessions' results, so the
+   * server neither serves a space for them nor keeps it served. Absent or
+   * `true`, the client declares nothing and its sessions are demand.
+   */
+  demand?: boolean;
+
+  /**
    * Whether this client takes `cid:` schema documents by reference
    * (`syncCidReferencesV1`; `docs/specs/content-addressed-schemas.md`,
    * "Delivery by reference"). When `true`, its `hello` advertises the
@@ -761,13 +770,8 @@ const runWithAbortSignal = async <T>(
   const cancelled = Promise.withResolvers<never>();
   const cancel = (): void => cancelled.reject(abortError());
   signal.addEventListener("abort", cancel, { once: true });
-  let work: Promise<T>;
-  try {
-    work = Promise.resolve(start());
-  } catch (error) {
-    signal.removeEventListener("abort", cancel);
-    throw error;
-  }
+  // A `start` that throws rejects `work`, which settles the race below.
+  const work = Promise.try(start);
   if (signal.aborted) {
     cancel();
   }
@@ -831,6 +835,9 @@ export class Client {
 
   /** Whether every open declares `instanceNames: true` (`ConnectOptions`). */
   readonly #instanceNames: boolean;
+
+  /** Whether this client's sessions are demand (`ConnectOptions`). */
+  readonly #demand: boolean;
 
   /** Whether this client's `hello` offers `syncCidReferencesV1` (`ConnectOptions`). */
   readonly #offersCidReferences: boolean;
@@ -973,9 +980,11 @@ export class Client {
     clientInfo: Readonly<ClientInfo>,
     instanceNames: boolean,
     offersCidReferences: boolean,
+    demand: boolean,
   ) {
     this.#clientInfo = clientInfo;
     this.#instanceNames = instanceNames;
+    this.#demand = demand;
     this.#offersCidReferences = offersCidReferences;
     this.#transport = transport;
     this.#transport.setReceiver((payload) => this.#onMessage(payload));
@@ -998,6 +1007,7 @@ export class Client {
       Object.freeze(info),
       options.instanceNames === true,
       options.syncCidReferences === true,
+      options.demand !== false,
     );
     const abortError = (): Error =>
       options.signal?.reason instanceof Error
@@ -1242,17 +1252,34 @@ export class Client {
     if (answeredOnEpoch !== undefined && this.#staleSince(answeredOnEpoch)) {
       try {
         session.handleDisconnect();
-        await this.restoreConnection();
-        // A reconnect that had not yet taken stock of the client's sessions
-        // when this one was registered has restored it already, or holds it
-        // after a refusal for now. A held session is left to the retry its
-        // hold has scheduled: a restore made here would send its open again
-        // at once, ahead of the backoff the hold keeps.
-        if (session.restorePending && !session.held) await session.restore();
-        // A restore that a permanent denial ended terminated the session
-        // rather than failing; one a refusal for now holds is still pending.
-        await session.whenRestored();
+        // The mount's caller can cancel it here as it can while the open is
+        // made: a host that stays down would otherwise keep a cancelled
+        // mount waiting for it.
+        await runWithAbortSignal(
+          signal,
+          "memory session mount cancelled",
+          async () => {
+            await this.restoreConnection();
+            // A reconnect that had not yet taken stock of the client's
+            // sessions when this one was registered has restored it already,
+            // or holds it after a refusal for now. A held session is left to
+            // the retry its hold has scheduled: a restore made here would
+            // send its open again at once, ahead of the backoff the hold
+            // keeps.
+            if (session.restorePending && !session.held) {
+              await session.restore();
+            }
+            // A restore that a permanent denial ended terminated the session
+            // rather than failing; one a refusal for now holds is still
+            // pending.
+            await session.whenRestored();
+          },
+        );
+        // The caller may have cancelled just as the restore completed, as it
+        // may just as the open is answered.
+        if (signal?.aborted) throw mountCancelled(signal);
       } catch (error) {
+        // No caller is handed this session, so nothing else would close it.
         await session.close().catch(() => undefined);
         throw error;
       }
@@ -1611,6 +1638,7 @@ export class Client {
       ...mount,
       client: this.#clientInfo,
       ...(this.#instanceNames ? { instanceNames: true as const } : {}),
+      ...(this.#demand ? {} : { demand: false as const }),
     };
     const whileConnected = options.restoring === true;
     // A mount made while the connection is down waits for the reconnect to
@@ -1765,10 +1793,23 @@ export class Client {
             return STALE;
           }
           const epoch = this.#connectionEpoch;
-          const signed = await sign?.(space, session, {
-            ...this.sessionOpenAuthContext(),
-            ...(proofs === undefined ? {} : { proofs }),
-          });
+          // A mount its caller has cancelled gives up its turn here. One
+          // cancelled while it waited asks for no signature and sends
+          // nothing. One cancelled while its signer holds the turn stops
+          // waiting for the signer, which if it never returned would keep
+          // every later signed open waiting; whatever it returns after that
+          // is used for nothing.
+          const signed = await runWithAbortSignal(
+            options.signal,
+            "memory session mount cancelled",
+            () =>
+              sign?.(space, session, {
+                ...this.sessionOpenAuthContext(),
+                ...(proofs === undefined ? {} : { proofs }),
+              }),
+          );
+          // The caller may have cancelled just as the signer returned.
+          requireUncancelled();
           if (this.#staleSince(epoch)) {
             if (whileConnected) throw connectionLostWhileRestoring();
             return STALE;
@@ -1904,15 +1945,14 @@ export class Client {
     return this.#stateChanged.promise;
   }
 
+  /**
+   * The `session.open` metadata of the last `hello.ok`. Every client
+   * `connect()` returns has one, since a `hello.ok` without it fails the
+   * handshake; before that it throws the error that handshake would.
+   */
   sessionOpenAuthContext(): SessionOpenAuthContext {
-    if (this.#sessionOpenAuthContext === null) {
-      const error = new Error(
-        "memory server did not provide session.open authentication metadata",
-      );
-      error.name = "ProtocolError";
-      throw error;
-    }
-    return this.#sessionOpenAuthContext;
+    return this.#sessionOpenAuthContext ??
+      requireSessionOpenAuthMetadata(undefined);
   }
 
   #updateSessionOpenAuthContext(sessionOpen: unknown): void {
@@ -3178,8 +3218,12 @@ export class Client {
       return this.#connectionEpoch;
     }
     await this.#reconnect();
-    // #reconnect() resolves without connecting when it gives up on a permanent
-    // handshake failure; surface it here rather than returning as if connected.
+    // `#reconnect()` resolves without connecting when a close ends it, or when
+    // it gives up on a permanent handshake failure. Either is thrown here
+    // rather than returning as if connected.
+    if (this.#closed) {
+      throw new Error("memory client is closed");
+    }
     if (this.#fatalError) {
       throw this.#fatalError;
     }
@@ -3221,24 +3265,21 @@ export class Client {
    * Reconnects, handshaking until one succeeds, the client closes, or a
    * failure is permanent. `firstHandshake`, for the handshakes a connect
    * makes, bounds them: the last allowed one to fail fails the client with
-   * `firstHandshakeFailedError()`.
+   * `firstHandshakeFailedError()`. A client already closed or failed makes
+   * no handshake, and its callers read which from the client.
    */
   async #reconnect(
     firstHandshake?: { attempts: number; address?: string },
   ): Promise<void> {
-    if (this.#closed) {
-      throw new Error("memory client is closed");
-    }
-    if (this.#fatalError) {
-      throw this.#fatalError;
-    }
     if (this.#reconnecting) {
       return await this.#reconnecting;
     }
-    // The loop always waits before it ends, so `#reconnecting` holds it by
+    // A loop that runs waits before it ends, so `#reconnecting` holds it by
     // the time its `finally` runs, and nothing else starts a loop while it
     // runs. The `finally` clears it in the same turn as the loop's last
-    // check, so a restart or a drop from then on starts a new loop.
+    // check, so a restart or a drop from then on starts a new loop. On a
+    // closed or failed client the loop runs no iteration, and its settled
+    // promise stays here, which every later call returns at once.
     this.#reconnecting = (async () => {
       try {
         let attempt = 0;
@@ -3865,7 +3906,7 @@ export class SpaceSession {
         validatePresencePublication(publication);
         joined.publication = publication;
         joined.revision += 1;
-        this.#publishPresence(joined, joined.revision);
+        this.#publishPresence(joined, joined.revision, publication);
       },
       leave: async () => {
         if (left) return;
@@ -4965,10 +5006,11 @@ export class SpaceSession {
     this.#terminateSession(error);
   }
 
+  /**
+   * Marks the session as needing a restore on the next connection. A closed
+   * session is no longer the client's, so the client never calls this on one.
+   */
   handleDisconnect(): void {
-    if (this.#closed) {
-      return;
-    }
     // The next connection restores this session; a held retry belongs to
     // the connection that is gone.
     this.#held = false;
@@ -5001,18 +5043,20 @@ export class SpaceSession {
   }
 
   /**
-   * Sends the room's record at `revision` once the session is restored and
-   * the current join has settled — a reconnect in progress reopens the
-   * session and rejoins the room, and a publication sent before either has
-   * completed would be refused as not joined. A publication overtaken by a
-   * newer one while it waited is not sent: the relay wants only the latest,
-   * and it refuses a revision that does not advance. A connection error is
-   * not reported, since the reconnect that follows rejoins and republishes;
-   * any other refusal reaches the observers.
+   * Sends `publication`, the room's record at `revision`, once the session is
+   * restored and the current join has settled — a reconnect in progress
+   * reopens the session and rejoins the room, and a publication sent before
+   * either has completed would be refused as not joined. A publication
+   * overtaken by a newer one while it waited is not sent: the relay wants
+   * only the latest, and it refuses a revision that does not advance. A
+   * connection error is not reported, since the reconnect that follows
+   * rejoins and republishes; any other refusal reaches the observers.
    */
-  #publishPresence(state: PresenceRoomState, revision: number): void {
-    const publication = state.publication;
-    if (publication === null) return;
+  #publishPresence(
+    state: PresenceRoomState,
+    revision: number,
+    publication: PresencePublication,
+  ): void {
     const send = async (): Promise<void> => {
       // A restore that begins while the join is awaited replaces it, so the
       // wait is repeated until the join awaited is still the room's.
@@ -5066,7 +5110,7 @@ export class SpaceSession {
         });
         if (state.publication !== null) {
           state.revision += 1;
-          this.#publishPresence(state, state.revision);
+          this.#publishPresence(state, state.revision, state.publication);
         }
       }).catch((error) => {
         if (isConnectionError(error) || this.#closed) return;
@@ -6135,9 +6179,9 @@ export const queuedFrameTransport = (
       deliveryWaiters.shift()!.resolve();
     }
   };
+  // `end()` cancels the turn, so a turn that runs finds the transport open.
   const drainOne = () => {
     turn = null;
-    if (closed) return;
     const frame = queue.shift();
     if (frame === undefined) return;
     handedOver++;

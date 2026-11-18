@@ -1,3 +1,4 @@
+export { type AssetRecord, toAssetRecord } from "./assets.ts";
 export * from "./csp.ts";
 export * as IPC from "./ipc.ts";
 export * from "./bridge.ts";

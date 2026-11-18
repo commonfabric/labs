@@ -847,37 +847,52 @@ export const removeSharedSpace = handler<
 >(
   eventSchema,
   toSchema<SharedSpaceCatalogState>(),
-  (removal, { catalog }) => {
-    if (
-      !plainObject(removal) || !isWellFormedDID(removal.space) ||
-      !boundedString(removal.expectedRevision, 320)
-    ) {
-      throw new TypeError("Invalid shared-space removal.");
-    }
-    const stored = readSharedSpaceCatalog(catalog);
-    const current = stored.entries[removal.space];
-    if (!current) return { status: "conflict", reason: "missing" };
-    if (current.revision !== removal.expectedRevision) {
-      return { status: "conflict", reason: "revision" };
-    }
-    if (
-      Object.values(stored.offers).some((receipt) =>
-        receipt.space === removal.space
-      )
-    ) return { status: "conflict", reason: "offer" };
-    // Writing the entries without this one deletes its slot and leaves the
-    // others unwritten. `undefined` written at the slot itself would be stored
-    // as its value, which the validating reader refuses.
-    catalog.key("entries").set(
-      Object.fromEntries(
-        Object.entries(stored.entries).filter(([space]) =>
-          space !== removal.space
-        ),
-      ),
-    );
-    return { status: "removed", space: removal.space };
-  },
+  (removal, { catalog }) => removeSharedSpaceIn(catalog, removal),
 );
+
+/**
+ * Removes the entry for `removal.space` from `catalog`, under the conditions
+ * {@link removeSharedSpace} states, staging its write in the transaction of
+ * the handler that calls it. Returns `conflict` without writing when the space
+ * has no entry, the observed revision is not the current one, or an offer
+ * receipt names the space.
+ *
+ * @throws When `removal` names no well-formed space or revision, or `catalog`
+ *   holds something other than a valid catalog.
+ */
+export function removeSharedSpaceIn(
+  catalog: Writable<SharedSpaceCatalogStorage>,
+  removal: SharedSpaceRemoval,
+): SharedSpaceRemovalResult {
+  if (
+    !plainObject(removal) || !isWellFormedDID(removal.space) ||
+    !boundedString(removal.expectedRevision, 320)
+  ) {
+    throw new TypeError("Invalid shared-space removal.");
+  }
+  const stored = readSharedSpaceCatalog(catalog);
+  const current = stored.entries[removal.space];
+  if (!current) return { status: "conflict", reason: "missing" };
+  if (current.revision !== removal.expectedRevision) {
+    return { status: "conflict", reason: "revision" };
+  }
+  if (
+    Object.values(stored.offers).some((receipt) =>
+      receipt.space === removal.space
+    )
+  ) return { status: "conflict", reason: "offer" };
+  // Writing the entries without this one deletes its slot and leaves the
+  // others unwritten. `undefined` written at the slot itself would be stored
+  // as its value, which the validating reader refuses.
+  catalog.key("entries").set(
+    Object.fromEntries(
+      Object.entries(stored.entries).filter(([space]) =>
+        space !== removal.space
+      ),
+    ),
+  );
+  return { status: "removed", space: removal.space };
+}
 
 /**
  * Home's records of the profile acting in each social space, with their

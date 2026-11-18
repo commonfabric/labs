@@ -29,8 +29,42 @@
  *
  * Run: deno task cf test patterns/showcase/battleship/pass-and-play/main.test.tsx --verbose
  */
-import { action, assert, pattern, TESTS } from "commonfabric";
+import { action, assert, pattern, TESTS, UI } from "commonfabric";
+import {
+  fireClick,
+  styleOf,
+  textContent,
+} from "../../../tools/test-support/vnode-helpers.ts";
+import {
+  type BoardView,
+  shows,
+  squareAt,
+  viewOf,
+} from "../shared/board-view.ts";
+import { createEmptyGrid, getShipCoordinates } from "./schemas.tsx";
 import Battleship, { type SquareState } from "./main.tsx";
+
+/** Which of the three stacked screens shows, as each one's display: the
+ * absolutely placed layers, in the order the view stacks them. */
+const screens = (view: BoardView): string =>
+  view.nodes.filter((node) => styleOf(node, "position") === "absolute")
+    .map((node) => styleOf(node, "display")).join(" ");
+
+/** `screens()` when only the screen `shown` shows, which is `display`ed so. */
+const only = (shown: "victory" | "transition" | "game"): string =>
+  shown === "victory"
+    ? "flex none none"
+    : shown === "transition"
+    ? "none flex none"
+    : "none none block";
+
+/** The display of the pass button's bar, and the button's text. */
+const passBar = (view: BoardView): { display: unknown; text: string } => {
+  const bar = view.nodes.find((node) =>
+    styleOf(node, "backgroundColor") === "#1e40af"
+  );
+  return { display: styleOf(bar, "display"), text: textContent(bar).trim() };
+};
 
 export default pattern(() => {
   // Instantiate the battleship pattern
@@ -55,14 +89,33 @@ export default pattern(() => {
     game.resetGame.send();
   });
 
-  // Fire at a miss location (row 9, col 0 - empty for Player 2's board)
+  // Fire at a miss location (row 9, col 0 - empty for Player 2's board) by
+  // clicking that square of the enemy board.
   const action_fire_miss = action(() => {
-    game.fireShot.send({ row: 9, col: 0 });
+    fireClick(squareAt(viewOf(game[UI]).enemy, 9, 0), "enemy square A10");
   });
 
   // Player 2 fires at Player 1's carrier (row 0, col 0)
   const action_p2_fire_hit_carrier = action(() => {
     game.fireShot.send({ row: 0, col: 0 });
+  });
+
+  // Hit every square of Player 2's fleet but J10, the destroyer's last.
+  const action_leave_one_square = action(() => {
+    const state = game.game.get();
+    const shots = createEmptyGrid();
+    for (
+      const { row, col } of state.player2.ships.flatMap(getShipCoordinates)
+    ) {
+      shots[row][col] = "hit";
+    }
+    shots[9][9] = "empty";
+    game.game.set({ ...state, player2: { ...state.player2, shots } });
+  });
+
+  // Player 1 sinks the destroyer with the last shot of the match.
+  const action_fire_winning_shot = action(() => {
+    game.fireShot.send({ row: 9, col: 9 });
   });
 
   // ==========================================================================
@@ -127,6 +180,56 @@ export default pattern(() => {
     () => game.game.get().currentTurn === 1,
   );
 
+  // The view, read once per screen worth showing.
+  const assert_player1_view = assert(() => {
+    const view = viewOf(game[UI]);
+    return screens(view) === only("game") &&
+      passBar(view).display === "none" &&
+      // Player 1's carrier on their own board; open water beside it.
+      shows(squareAt(view.own, 0, 0), "", "#22c55e") &&
+      shows(squareAt(view.own, 9, 0), "", "#1e3a5f") &&
+      shows(squareAt(view.enemy, 9, 0), "", "#1e3a5f") &&
+      view.own.length === 100 && view.enemy.length === 100;
+  });
+  const assert_miss_view = assert(() => {
+    const view = viewOf(game[UI]);
+    return shows(squareAt(view.enemy, 9, 0), "O", "#374151") &&
+      view.text.includes("A10: Miss.") &&
+      passBar(view).display === "block" &&
+      passBar(view).text === "Pass to Player 2";
+  });
+  // Player 2 sees Player 1's miss on their own board, and their hit on
+  // Player 1's carrier.
+  const assert_player2_view = assert(() => {
+    const view = viewOf(game[UI]);
+    return shows(squareAt(view.own, 9, 0), "O", "#374151") &&
+      shows(squareAt(view.enemy, 0, 0), "X", "#dc2626") &&
+      view.text.includes("A1: Hit!");
+  });
+  // Between turns, the transition screen hides both boards.
+  const assert_transition_view = assert(() => {
+    const view = viewOf(game[UI]);
+    return screens(view) === only("transition") &&
+      view.text.includes("I'm Player 1 - Ready!") &&
+      view.own.length === 0 && view.enemy.length === 0;
+  });
+  const assert_damage_shown_to_player1 = assert(() =>
+    shows(squareAt(viewOf(game[UI]).own, 0, 0), "X", "#dc2626")
+  );
+
+  const assert_player1_won = assert(() => {
+    const state = game.game.get();
+    return state.phase === "finished" && state.winner === 1 &&
+      state.viewingAs === 1 && state.awaitingPass === false &&
+      state.player2.shots[9][9] === "hit" &&
+      state.lastMessage === "J10: Hit! You sunk the Destroyer! Player 1 wins!";
+  });
+  const assert_victory_view = assert(() => {
+    const view = viewOf(game[UI]);
+    return screens(view) === only("victory") &&
+      view.text.includes("Player 1 Wins!");
+  });
+
   // After reset
   const assert_reset_phase_playing = assert(
     () => game.game.get().phase === "playing",
@@ -163,11 +266,13 @@ export default pattern(() => {
       { action: action_player_ready },
       { assertion: assert_viewingAs_player1 },
       { assertion: assert_still_turn_player1 },
+      { assertion: assert_player1_view },
       // === Test 3: Player 1 fires a miss ===
       { action: action_fire_miss },
       { assertion: assert_shot_recorded_miss },
       { assertion: assert_turn_switched_to_player2 },
       { assertion: assert_awaiting_pass_after_shot },
+      { assertion: assert_miss_view },
       // === Test 4: Pass device ===
       { action: action_pass_device },
       { assertion: assert_viewingAs_null_after_pass },
@@ -179,8 +284,20 @@ export default pattern(() => {
       { action: action_p2_fire_hit_carrier },
       { assertion: assert_shot_recorded_hit },
       { assertion: assert_turn_back_to_player1 },
-      // === Test 7: Pass and reset ===
+      { assertion: assert_player2_view },
+      // === Test 7: Player 1 sinks the last ship ===
       { action: action_pass_device },
+      { assertion: assert_transition_view },
+      { action: action_player_ready },
+      { assertion: assert_damage_shown_to_player1 },
+      { action: action_leave_one_square },
+      { action: action_fire_winning_shot },
+      { assertion: assert_player1_won },
+      { assertion: assert_victory_view },
+      // === Test 8: Pass (ignored once the match is over) and reset ===
+      { action: action_pass_device },
+      { assertion: assert_player1_won },
+      { assertion: assert_victory_view },
       { action: action_reset_game },
       { assertion: assert_reset_phase_playing },
       { assertion: assert_reset_turn_player1 },

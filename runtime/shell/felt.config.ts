@@ -62,7 +62,7 @@ const config: Config = {
     {
       in: "../runtime-client/src/backends/web-worker/index.ts",
       // Changing this path requires a matching update in
-      // runtime/shell/src/lib/runtime.ts (fetchBuildHash).
+      // runtime/lib-shell/src/build-hash.ts (readBuildHash).
       out: "scripts/worker-runtime",
       // The TypeScript compiler stack is reached only through the single
       // dynamic import in deferred-compiler-stack.ts. Splitting emits it as a

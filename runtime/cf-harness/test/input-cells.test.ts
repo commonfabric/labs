@@ -24,6 +24,7 @@ import {
   mintInputCellHandles,
   parseInputCellArgument,
   parseNamedPieceAddress,
+  parseStoredPieceAddress,
 } from "../src/input-cells.ts";
 
 const SPACE_DID =
@@ -275,6 +276,41 @@ describe("input-cells", () => {
       // It carries a colon, so it falls to the entity-URI grammar, which
       // refuses it there. One name for one thing.
       expect(parseNamedPieceAddress("piece:my-space/reading-list"))
+        .toBeUndefined();
+    });
+  });
+
+  describe("parseStoredPieceAddress()", () => {
+    const PIECE_ID = `fid1:${"C".repeat(43)}`;
+
+    it("reads a stored piece address, with or without `of:` before the id", () => {
+      expect(parseStoredPieceAddress(`pattern:${SPACE_DID}/${PIECE_ID}`))
+        .toEqual({ space: SPACE_DID, id: PIECE_ID });
+      expect(parseStoredPieceAddress(`pattern:${SPACE_DID}/of:${PIECE_ID}`))
+        .toEqual({ space: SPACE_DID, id: PIECE_ID });
+    });
+
+    it("answers undefined for an address with no space before its piece", () => {
+      expect(parseStoredPieceAddress(`pattern:/${PIECE_ID}`)).toBeUndefined();
+      expect(parseStoredPieceAddress(`pattern:${PIECE_ID}`)).toBeUndefined();
+    });
+
+    it("answers undefined for a slug or a malformed id after the space", () => {
+      expect(parseStoredPieceAddress("pattern:my-space/reading-list"))
+        .toBeUndefined();
+      expect(parseStoredPieceAddress(`pattern:${SPACE_DID}/fid1:short`))
+        .toBeUndefined();
+      expect(parseStoredPieceAddress(`${SPACE_DID}/${PIECE_ID}`))
+        .toBeUndefined();
+    });
+
+    it("answers undefined for an address reaching below the piece, or doubling `of:`", () => {
+      expect(parseStoredPieceAddress(`pattern:${SPACE_DID}/${PIECE_ID}/field`))
+        .toBeUndefined();
+      expect(
+        parseStoredPieceAddress(`pattern:${SPACE_DID}/of:${PIECE_ID}/field`),
+      ).toBeUndefined();
+      expect(parseStoredPieceAddress(`pattern:${SPACE_DID}/of:of:${PIECE_ID}`))
         .toBeUndefined();
     });
   });

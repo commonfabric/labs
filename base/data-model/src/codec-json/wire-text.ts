@@ -140,11 +140,12 @@ function holeRunLength(entry: JsonCodecValue): number | undefined {
 }
 
 /**
- * Returns true if `v` is a single-key object whose key starts with `/` --
+ * Returns true if the object `v` has a single key, which starts with `/` --
  * the wire form of an encoded instance (tag-wrapped value).
  */
-export function isEncodedInstance(v: JsonCodecValue): boolean {
-  if (!isObjectNotArray(v)) return false;
+export function isEncodedInstance(
+  v: { readonly [key: string]: JsonCodecValue },
+): boolean {
   const keys = Object.keys(v);
   return keys.length === 1 && keys[0]!.startsWith("/");
 }

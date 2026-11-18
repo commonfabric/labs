@@ -43,20 +43,36 @@ export async function interleaveCompileYield(
 }
 
 /**
- * Turns at a cold compile, one at a time in the order they are taken, for the
- * runtimes that share one instance. A compile that yields lets another runtime
- * read the byte cache while it runs, and without a turn to wait for that runtime
- * would read a miss and compile the same modules again.
+ * Turns at a cold compile, taken by key: the runtimes that share a byte cache
+ * take one before compiling a set of modules the cache does not hold, keyed by
+ * that set. A turn for a key waits for every earlier turn for the same key to
+ * end, and for no other, so two runtimes compiling the same modules compile
+ * them once while different modules compile side by side. Ending a turn
+ * releases the next one whether the compile it guarded put its modules or
+ * failed, so a failure is never what the next turn reads.
  */
-export class CompileTurns {
-  #last: Promise<void> = Promise.resolve();
+export interface CompileClaims {
+  /** Waits for every earlier turn for `key` to end; returns what ends this one. */
+  take(key: string): Promise<() => void>;
+}
 
-  /** Waits for every earlier turn to end; returns what ends this one. */
-  async take(): Promise<() => void> {
+/**
+ * {@link CompileClaims} for the runtimes of one realm. A compile that yields
+ * lets another runtime read the byte cache while it runs, and without a turn to
+ * wait for that runtime would read a miss and compile the same modules again.
+ */
+export class CompileTurns implements CompileClaims {
+  /** The last turn taken for each key, until it ends with none behind it. */
+  readonly #last = new Map<string, Promise<void>>();
+
+  async take(key: string): Promise<() => void> {
     const { promise: ended, resolve: end } = Promise.withResolvers<void>();
-    const previous = this.#last;
-    this.#last = ended;
+    const previous = this.#last.get(key);
+    this.#last.set(key, ended);
     await previous;
-    return end;
+    return () => {
+      end();
+      if (this.#last.get(key) === ended) this.#last.delete(key);
+    };
   }
 }

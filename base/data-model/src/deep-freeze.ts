@@ -1,10 +1,20 @@
 /**
  * Freezing a value all the way down, and asking whether it already is.
  *
- * Both walks are memoized in a `WeakSet`, which is what makes the ordinary
- * case cheap: a value frozen once takes constant time ever after, and a
- * primitive never needs asking at all. Both fast paths run before any per-walk
- * state is allocated, so the cheap path costs nothing.
+ * Both walks are memoized in a weak identity cache, which is what makes the
+ * ordinary case cheap: a value frozen once takes constant time for as long as
+ * the cache remembers it, and a primitive never needs asking at all. Both fast
+ * paths run before any per-walk state is allocated, so the cheap path costs
+ * nothing.
+ *
+ * Both walks recurse on the call stack, so either throws a `RangeError` for a
+ * value nested deeper than the stack allows, some thousands of levels. The
+ * cache can hide that limit without lifting it. A value built and frozen one
+ * level at a time never walks more than a level while the cache remembers the
+ * levels below; once the cache has forgotten them, the next check or freeze
+ * walks the whole depth and can throw where every earlier call succeeded.
+ * Walking with a stack of its own rather than the call stack is what would
+ * lift the limit.
  *
  * A `FabricInstance` keeps its contents private, so neither walk can descend
  * into one directly. Each calls the instance's own protocol member and passes
@@ -13,6 +23,7 @@
  */
 
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { GenerationalWeakSet } from "./GenerationalWeakSet.ts";
 import type { FabricValue } from "./interface.ts";
 import {
   BaseFabricInstance,
@@ -22,8 +33,32 @@ import {
 import { BaseFabricPrimitive } from "./fabric-bases/BaseFabricPrimitive.ts";
 import { isValidFabricValueWithCache } from "./types/validation.ts";
 
-/** Cache of confirmed deep-frozen objects. */
-const deepFrozenCache = new WeakSet<object>();
+/**
+ * Most entries one generation of `deepFrozenCache` takes. V8's ceiling for a
+ * weak table is about 23 million live entries; a generation stays well below
+ * it however many of its keys are still alive.
+ */
+const DEEP_FROZEN_GENERATION_SIZE = 4_000_000;
+
+/** Generations `deepFrozenCache` keeps: at most 16 million entries in all. */
+const DEEP_FROZEN_GENERATIONS = 4;
+
+/**
+ * Cache of confirmed deep-frozen objects.
+ *
+ * Both walks record every container they confirm, not only the root, so this
+ * holds an entry for every object of every deep-frozen value still alive. On
+ * a server that keeps gigabytes of decoded documents that is tens of millions
+ * of entries, past the ceiling V8 puts on one weak table, where the process
+ * ends rather than the cache failing. So it is kept in generations of at most
+ * `DEEP_FROZEN_GENERATION_SIZE` entries each (see `GenerationalWeakSet`), and
+ * an object the oldest generation took is forgotten when that generation is
+ * dropped, to be proven and recorded again the next time it is asked about.
+ */
+const deepFrozenCache = new GenerationalWeakSet<object>(
+  DEEP_FROZEN_GENERATION_SIZE,
+  DEEP_FROZEN_GENERATIONS,
+);
 
 /**
  * Object graphs proven to be deep-frozen `FabricValue`s, memoized by root
@@ -44,6 +79,19 @@ function addToDeepFrozenCache(obj: object) {
  */
 function isInDeepFrozenCache(obj: object): boolean {
   return deepFrozenCache.has(obj);
+}
+
+/**
+ * Makes `deepFrozenCache` forget every object it holds, as the dropping of
+ * its generations eventually does. Every later answer stays the same, but the
+ * next check or freeze of each value walks its whole depth again, with the
+ * cost the file header describes.
+ *
+ * @internal Not in the package's barrel; `for-testing-only.ts` offers it to
+ * tests, and the suffix is there to keep it from gaining any other caller.
+ */
+export function forgetDeepFrozenCacheForTestingOnly(): void {
+  deepFrozenCache.clear();
 }
 
 /**
@@ -93,7 +141,8 @@ function isNecessarilyOrKnownDeepFrozen(value: unknown): boolean {
  * frozen object/array whose every nested value is also deeply frozen
  * (recursively). Caches results for fast repeat checks.
  *
- * Handles circular references and sparse arrays.
+ * Handles circular references and sparse arrays. Throws a `RangeError` for a
+ * value nested deeper than the call stack allows; the file header says when.
  */
 export function isDeepFrozen(value: unknown): boolean {
   return isDeepFrozenWithCache(value);
@@ -202,14 +251,15 @@ function isDeepFrozenWithCache(
  *
  * Arrays and plain objects are frozen after their children are recursively
  * frozen. Primitives pass through unchanged. Records the result in the
- * deep-frozen cache so subsequent `isDeepFrozen()` checks return in O(1).
- * Returns the (now-frozen) value.
+ * deep-frozen cache so subsequent `isDeepFrozen()` checks return in O(1) for as
+ * long as the cache remembers it. Returns the (now-frozen) value.
  *
  * Handles circular references: a shared `inProgress` set is threaded through
  * all recursive calls -- including into participating `FabricInstance`s'
  * `[DEEP_FREEZE]` impls via the `subFreeze` callback closure -- so a cycle
  * back to a value currently being deep-frozen short-circuits rather than
- * recursing infinitely.
+ * recursing infinitely. Throws a `RangeError` for a value nested deeper than
+ * the call stack allows; the file header says when.
  */
 export function deepFreeze<T>(value: T): T {
   // Arm 1: necessarily- or already-known-deep-frozen (primitives,
@@ -256,7 +306,8 @@ export function deepFreeze<T>(value: T): T {
     if (BaseFabricInstance.isInstance(value)) {
       const result = value[DEEP_FREEZE](freeze) as U;
       // Cache the now-deep-frozen result so subsequent `isDeepFrozen()` checks
-      // short-circuit in O(1), mirroring arm 4's cache-write below.
+      // short-circuit in O(1) while the cache remembers it, mirroring arm 4's
+      // cache-write below.
       addToDeepFrozenCache(result as object);
       return result;
     }

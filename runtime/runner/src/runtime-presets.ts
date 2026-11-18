@@ -260,6 +260,8 @@ export {
   EXPERIMENTAL_FLAG_AUTHORITY,
   type ExperimentalFlagAuthority,
   experimentalOptionsFromEnv,
+  experimentalOptionsWithFollowedPosture,
+  FOLLOWED_POSTURE_ENV,
   parseFlagValue,
   parseServerExperimentalOptions,
   SERVER_EXPERIMENTAL_PATH,

@@ -21,8 +21,7 @@ import { captureStderr, checkStderr, relevantStderr } from "./utils.ts";
 
 // The line `deno task` echoes before it runs the CLI. Every command the tests
 // spawn goes through that task, so it is the one line a passing budget holds.
-const TASK_ECHO =
-  "Task cli-no-pwd-override CF_CLI_NAME=cf deno run --allow-net ./mod.ts 'id'";
+const TASK_ECHO = "Task cli-no-pwd-override deno run --allow-net ./mod.ts 'id'";
 
 /**
  * Emits `key` and `messages` through a real logger named `loggerName` at

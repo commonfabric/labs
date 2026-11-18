@@ -3,7 +3,10 @@ import {
   defaultHarnessFetch,
   type HarnessFetch,
 } from "../contracts/http-fetch.ts";
-import type { HarnessCredentialStore } from "./credential-store.ts";
+import type {
+  HarnessCredentialRecord,
+  HarnessCredentialStore,
+} from "./credential-store.ts";
 import {
   HARNESS_CREDENTIAL_OWNER_REF_TYPE,
   type HarnessCredentialOwnerRef,
@@ -11,6 +14,7 @@ import {
 import {
   type HarnessCredentialHealth,
   type HarnessCredentialStatus,
+  type HarnessCredentialTerminalReason,
   OPENAI_CODEX_PROVIDER_ID,
   type OpenAICodexOAuthCredential,
 } from "./types.ts";
@@ -29,8 +33,13 @@ export const OPENAI_CODEX_DEVICE_VERIFICATION_URL =
   `${OPENAI_CODEX_AUTH_ORIGIN}/codex/device`;
 export const OPENAI_CODEX_DEVICE_REDIRECT_URL =
   `${OPENAI_CODEX_AUTH_ORIGIN}/deviceauth/callback`;
-export const OPENAI_CODEX_BROWSER_REDIRECT_URL =
-  "http://localhost:1455/auth/callback";
+// OpenAI has registered only this port's callback for the Codex client.
+const BROWSER_CALLBACK_PORT = 1455;
+const browserRedirectUrl = (port: number): string =>
+  `http://localhost:${port}/auth/callback`;
+export const OPENAI_CODEX_BROWSER_REDIRECT_URL = browserRedirectUrl(
+  BROWSER_CALLBACK_PORT,
+);
 export const OPENAI_CODEX_SCOPE = "openid profile email offline_access";
 const ACCOUNT_CLAIM = "https://api.openai.com/auth";
 const REFRESH_SKEW_MS = 60_000;
@@ -44,6 +53,16 @@ export type OpenAICodexAuthErrorKind =
   | "network"
   | "storage"
   | "provider";
+
+// The refresh failures that no retry can fix, so the credential is marked as
+// needing reconnection instead of being refreshed again on the next use.
+const TERMINAL_REASONS: Partial<
+  Record<OpenAICodexAuthErrorKind, HarnessCredentialTerminalReason>
+> = {
+  invalid_grant: "invalid-grant",
+  revoked: "revoked",
+  refresh_token_reused: "refresh-token-reused",
+};
 
 export class OpenAICodexAuthError extends Error {
   constructor(
@@ -121,9 +140,9 @@ const decodeJwtPayload = (
   }
 };
 
-export const extractOpenAICodexAccountId = (
-  ...tokens: Array<string | undefined>
-): string => {
+const findAccountId = (
+  tokens: ReadonlyArray<string | undefined>,
+): string | undefined => {
   for (const token of tokens) {
     if (!token) continue;
     const payload = decodeJwtPayload(token);
@@ -133,7 +152,17 @@ export const extractOpenAICodexAccountId = (
       : undefined;
     if (typeof accountId === "string" && accountId.length > 0) return accountId;
   }
-  throw new Error("OpenAI Codex token did not include a ChatGPT account id");
+  return undefined;
+};
+
+export const extractOpenAICodexAccountId = (
+  ...tokens: Array<string | undefined>
+): string => {
+  const accountId = findAccountId(tokens);
+  if (accountId === undefined) {
+    throw new Error("OpenAI Codex token did not include a ChatGPT account id");
+  }
+  return accountId;
 };
 
 interface TokenResponse {
@@ -202,13 +231,20 @@ const readTokenResponse = async (
     );
   }
   const idToken = typeof json.id_token === "string" ? json.id_token : undefined;
+  const accountId = findAccountId([idToken, json.access_token]);
+  if (accountId === undefined) {
+    throw new OpenAICodexAuthError(
+      "malformed_response",
+      "OpenAI Codex token did not include a ChatGPT account id",
+    );
+  }
   return {
     type: "oauth",
     providerId: OPENAI_CODEX_PROVIDER_ID,
     accessToken: json.access_token,
     refreshToken,
     expiresAt: now + json.expires_in * 1000,
-    accountId: extractOpenAICodexAccountId(idToken, json.access_token),
+    accountId,
   };
 };
 
@@ -352,39 +388,7 @@ export class OpenAICodexCredentialResolver {
           if (latest.expiresAt - this.#refreshSkewMs > this.#now()) {
             return currentRecord;
           }
-          let response: Response;
-          try {
-            response = await this.#fetchFn(OPENAI_CODEX_TOKEN_URL, {
-              method: "POST",
-              redirect: "error",
-              headers: { "Content-Type": "application/x-www-form-urlencoded" },
-              body: new URLSearchParams({
-                grant_type: "refresh_token",
-                refresh_token: latest.refreshToken,
-                client_id: OPENAI_CODEX_CLIENT_ID,
-              }),
-              signal,
-            });
-          } catch {
-            if (signal?.aborted) throw abortReason(signal);
-            throw new OpenAICodexAuthError(
-              "network",
-              "OpenAI Codex token refresh failed before receiving a response",
-            );
-          }
-          try {
-            const credential = await readTokenResponse(
-              response,
-              "refresh",
-              this.#now(),
-              latest.refreshToken,
-            );
-            return { credential };
-          } catch (error) {
-            const terminal = terminalHealthOf(error);
-            if (terminal === undefined) throw error;
-            return { credential: latest, health: terminal };
-          }
+          return await this.#refreshed(latest, signal);
         },
         signal,
       );
@@ -417,6 +421,146 @@ export class OpenAICodexCredentialResolver {
       );
     }
     return refreshed;
+  }
+
+  /**
+   * The record a refresh of `latest` leaves: a new credential, or the same
+   * one marked as needing reconnection when the provider refused the refresh
+   * for good. Any other failure is thrown, and the record stays as it was.
+   */
+  async #refreshed(
+    latest: OpenAICodexOAuthCredential,
+    signal?: AbortSignal,
+  ): Promise<HarnessCredentialRecord> {
+    let response: Response;
+    try {
+      response = await this.#fetchFn(OPENAI_CODEX_TOKEN_URL, {
+        method: "POST",
+        redirect: "error",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: latest.refreshToken,
+          client_id: OPENAI_CODEX_CLIENT_ID,
+        }),
+        signal,
+      });
+    } catch {
+      if (signal?.aborted) throw abortReason(signal);
+      throw new OpenAICodexAuthError(
+        "network",
+        "OpenAI Codex token refresh failed before receiving a response",
+      );
+    }
+    try {
+      const credential = await readTokenResponse(
+        response,
+        "refresh",
+        this.#now(),
+        latest.refreshToken,
+      );
+      return { credential };
+    } catch (error) {
+      const reason = error instanceof OpenAICodexAuthError
+        ? TERMINAL_REASONS[error.kind]
+        : undefined;
+      if (reason === undefined) throw error;
+      return {
+        credential: latest,
+        health: { status: "reconnect-required", reason },
+      };
+    }
+  }
+
+  /**
+   * The provider answered a model request made with `rejected` by refusing
+   * its access token, though the stored expiry said it was still good. The
+   * expiry is the token endpoint's estimate; the refusal is the fact. So the
+   * token is refreshed now, whatever its expiry says.
+   *
+   * Returns the credential to issue the request again with: the refreshed
+   * one (`fresh`), or the stored one when another process has already
+   * replaced the refused token. Returns `undefined` when there is none to
+   * try: the owner disconnected, the credential already needs reconnection,
+   * or the refresh was refused for good (which marks it so). A refresh that
+   * could not be completed, or a store that could not be updated, rejects as
+   * `provider-unavailable`, as it does in `resolve`: the credential is still
+   * connected, and the refusal is not the reason the request failed.
+   */
+  async refreshRejected(
+    rejected: OpenAICodexOAuthCredential,
+    signal?: AbortSignal,
+  ): Promise<
+    { credential: OpenAICodexOAuthCredential; fresh: boolean } | undefined
+  > {
+    let fresh = false;
+    try {
+      const record = await this.#store.updateRecord(
+        this.#ownerKey,
+        OPENAI_CODEX_PROVIDER_ID,
+        async (currentRecord) => {
+          if (signal?.aborted) throw abortReason(signal);
+          const latest = currentRecord.credential;
+          if (
+            !latest || currentRecord.health !== undefined ||
+            latest.accessToken !== rejected.accessToken
+          ) {
+            return currentRecord;
+          }
+          fresh = true;
+          return await this.#refreshed(latest, signal);
+        },
+        signal,
+      );
+      if (signal?.aborted) throw abortReason(signal);
+      return record.health === undefined && record.credential !== undefined
+        ? { credential: record.credential, fresh }
+        : undefined;
+    } catch (error) {
+      if (signal?.aborted) throw abortReason(signal);
+      if (error instanceof HarnessControlError) throw error;
+      throw new HarnessControlError(
+        "provider-unavailable",
+        error instanceof OpenAICodexAuthError
+          ? error.message
+          : "OpenAI Codex credential storage could not be updated",
+      );
+    }
+  }
+
+  /**
+   * The provider refused `rejected` although it had just been refreshed, so
+   * no token this credential can obtain is accepted: mark it as needing
+   * reconnection. A credential replaced since, or already marked, is left as
+   * it is. A store that cannot be written leaves the mark unmade; the request
+   * has already failed as authentication required.
+   */
+  async markRejected(
+    rejected: OpenAICodexOAuthCredential,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    try {
+      await this.#store.updateRecord(
+        this.#ownerKey,
+        OPENAI_CODEX_PROVIDER_ID,
+        (currentRecord) => {
+          const latest = currentRecord.credential;
+          if (
+            !latest || currentRecord.health !== undefined ||
+            latest.accessToken !== rejected.accessToken
+          ) {
+            return currentRecord;
+          }
+          return {
+            credential: latest,
+            health: { status: "reconnect-required", reason: "revoked" },
+          };
+        },
+        signal,
+      );
+    } catch {
+      if (signal?.aborted) throw abortReason(signal);
+    }
   }
 }
 
@@ -567,13 +711,24 @@ export const completeOpenAICodexDeviceAuthorization = async (options: {
   throw new Error("OpenAI Codex device authorization expired");
 };
 
-export const loginOpenAICodexWithBrowser = async (options: {
+interface BrowserLoginOptions {
   authService: OpenAICodexAuthService;
   fetchFn?: HarnessFetch;
   signal?: AbortSignal;
   onAuthorizationUrl: (url: string) => void | Promise<void>;
   now?: () => number;
-}): Promise<OpenAICodexOAuthCredential> => {
+  /**
+   * The port the callback listener binds, `0` for any free one. The redirect
+   * URI sent to OpenAI names the port actually bound, and OpenAI accepts only
+   * the default, so another port is for tests that answer the callback
+   * themselves.
+   */
+  port?: number;
+}
+
+export const loginOpenAICodexWithBrowser = async (
+  options: BrowserLoginOptions,
+): Promise<OpenAICodexOAuthCredential> => {
   if (options.signal?.aborted) {
     throw abortReason(options.signal);
   }
@@ -583,64 +738,62 @@ export const loginOpenAICodexWithBrowser = async (options: {
     );
   }
   activeBrowserLoginOwners.add(options.authService.ownerKey);
-  let flow: OpenAICodexBrowserAuthorization;
   try {
-    flow = await createOpenAICodexBrowserAuthorization();
-  } catch (error) {
+    return await runBrowserLogin(options);
+  } finally {
     activeBrowserLoginOwners.delete(options.authService.ownerKey);
-    throw error;
   }
-  if (options.signal?.aborted) {
-    activeBrowserLoginOwners.delete(options.authService.ownerKey);
-    throw abortReason(options.signal);
-  }
+};
+
+const runBrowserLogin = async (
+  options: BrowserLoginOptions,
+): Promise<OpenAICodexOAuthCredential> => {
   const closeController = new AbortController();
   type CallbackResult =
     | { status: "received"; code: string }
     | { status: "failed"; error: unknown };
+  let flow: OpenAICodexBrowserAuthorization | undefined;
   let settle!: (value: CallbackResult) => void;
   const callback = new Promise<CallbackResult>((resolve) => {
     settle = resolve;
   });
+  const server = Deno.serve({
+    hostname: "localhost",
+    port: options.port ?? BROWSER_CALLBACK_PORT,
+    signal: closeController.signal,
+    onListen: () => {},
+  }, (request) => {
+    const url = new URL(request.url);
+    if (url.pathname !== "/auth/callback") {
+      return new Response("Not found", { status: 404 });
+    }
+    if (url.searchParams.get("state") !== flow?.state) {
+      return new Response("State mismatch", { status: 400 });
+    }
+    const code = url.searchParams.get("code");
+    if (!code) {
+      settle({
+        status: "failed",
+        error: new Error("OAuth callback is missing an authorization code"),
+      });
+      return new Response("Missing authorization code", { status: 400 });
+    }
+    settle({ status: "received", code });
+    return new Response(
+      "OpenAI authorization received. Return to cf-harness to confirm the connection.",
+      {
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      },
+    );
+  });
   const onAbort = () =>
     settle({ status: "failed", error: abortReason(options.signal!) });
   options.signal?.addEventListener("abort", onAbort, { once: true });
-  let server: ReturnType<typeof Deno.serve>;
   try {
-    server = Deno.serve({
-      hostname: "localhost",
-      port: 1455,
-      signal: closeController.signal,
-      onListen: () => {},
-    }, (request) => {
-      const url = new URL(request.url);
-      if (url.pathname !== "/auth/callback") {
-        return new Response("Not found", { status: 404 });
-      }
-      if (url.searchParams.get("state") !== flow.state) {
-        return new Response("State mismatch", { status: 400 });
-      }
-      const code = url.searchParams.get("code");
-      if (!code) {
-        settle({
-          status: "failed",
-          error: new Error("OAuth callback is missing an authorization code"),
-        });
-        return new Response("Missing authorization code", { status: 400 });
-      }
-      settle({ status: "received", code });
-      return new Response(
-        "OpenAI authorization received. Return to cf-harness to confirm the connection.",
-        {
-          headers: { "content-type": "text/plain; charset=utf-8" },
-        },
-      );
+    flow = await createOpenAICodexBrowserAuthorization({
+      redirectUri: browserRedirectUrl(server.addr.port),
     });
-  } catch (error) {
-    activeBrowserLoginOwners.delete(options.authService.ownerKey);
-    throw error;
-  }
-  try {
+    if (options.signal?.aborted) throw abortReason(options.signal);
     await options.onAuthorizationUrl(flow.url);
     const received = await callback;
     if (received.status === "failed") throw received.error;
@@ -655,14 +808,9 @@ export const loginOpenAICodexWithBrowser = async (options: {
     await options.authService.save(credential, options.signal);
     return credential;
   } finally {
-    activeBrowserLoginOwners.delete(options.authService.ownerKey);
     options.signal?.removeEventListener("abort", onAbort);
     closeController.abort();
-    await server.finished.catch((error) => {
-      if (!(error instanceof DOMException && error.name === "AbortError")) {
-        throw error;
-      }
-    });
+    await server.finished;
   }
 };
 
@@ -715,19 +863,3 @@ export class OpenAICodexAuthService {
     await this.store.delete(this.ownerKey, OPENAI_CODEX_PROVIDER_ID);
   }
 }
-
-const terminalHealthOf = (
-  error: unknown,
-): HarnessCredentialHealth | undefined => {
-  if (!(error instanceof OpenAICodexAuthError)) return undefined;
-  if (error.kind === "invalid_grant") {
-    return { status: "reconnect-required", reason: "invalid-grant" };
-  }
-  if (error.kind === "revoked") {
-    return { status: "reconnect-required", reason: "revoked" };
-  }
-  if (error.kind === "refresh_token_reused") {
-    return { status: "reconnect-required", reason: "refresh-token-reused" };
-  }
-  return undefined;
-};

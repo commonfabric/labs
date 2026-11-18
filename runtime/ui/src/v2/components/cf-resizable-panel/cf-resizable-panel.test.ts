@@ -4,21 +4,25 @@ import { mount } from "../../test-utils/dom.ts";
 import { expect } from "@std/expect";
 import { afterEach, describe, it } from "@std/testing/bdd";
 
+import { adopt } from "../cf-resizable-panel-group/membership.ts";
 import { CFResizablePanel } from "./index.ts";
 
-/** A panel mounted with `properties`, and the names of the events it fires
- * to its group, which hears them only from its own children. */
+/** A panel mounted with `properties` in a group that records what the panel
+ * tells it, and the names of those calls. */
 async function panelWith(properties: Partial<CFResizablePanel> = {}) {
-  const element = Object.assign(new CFResizablePanel(), properties);
+  const element = await mount(
+    Object.assign(new CFResizablePanel(), properties),
+  );
   const heard: string[] = [];
-  for (const type of ["cf-panel-sizes", "cf-panel-shown"]) {
-    element.addEventListener(type, (event) => {
-      expect(event.bubbles).toBe(true);
-      expect(event.composed).toBe(false);
-      heard.push(type);
-    });
-  }
-  return { element: await mount(element), heard };
+  adopt(element, {
+    orientation: "horizontal",
+    memberJoined: () => {},
+    memberLeft: () => {},
+    panelSizesChanged: () => heard.push("panelSizesChanged"),
+    panelShownChanged: () => heard.push("panelShownChanged"),
+    handleAdjusted: () => {},
+  });
+  return { element, heard };
 }
 
 describe("CFResizablePanel", () => {
@@ -95,23 +99,23 @@ describe("CFResizablePanel", () => {
   });
 
   describe("events", () => {
-    it("fires `cf-panel-sizes` when a size changes, and not `cf-panel-shown`", async () => {
+    it("tells its group when a size changes, and not that it was shown or hidden", async () => {
       const { element, heard } = await panelWith();
       heard.length = 0;
       element.maxSize = 80;
       await element.updateComplete;
-      expect(heard).toEqual(["cf-panel-sizes"]);
+      expect(heard).toEqual(["panelSizesChanged"]);
     });
 
-    it("fires `cf-panel-shown` when only hideWhenStacked changes", async () => {
+    it("tells its group it was shown or hidden when only hideWhenStacked changes", async () => {
       const { element, heard } = await panelWith();
       heard.length = 0;
       element.hideWhenStacked = true;
       await element.updateComplete;
-      expect(heard).toEqual(["cf-panel-shown"]);
+      expect(heard).toEqual(["panelShownChanged"]);
     });
 
-    it("fires neither when nothing it sizes or hides by changes", async () => {
+    it("tells its group nothing when nothing it sizes or hides by changes", async () => {
       const { element, heard } = await panelWith();
       heard.length = 0;
       element.collapsible = true;

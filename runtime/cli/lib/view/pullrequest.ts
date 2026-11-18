@@ -1,9 +1,10 @@
 /**
  * Noticing, through the GitHub webhook relay, that the pull request for a
- * branch `P` pushed has been opened. The relay passes on each delivery of the
- * organization's webhook the moment GitHub makes it, and keeps none for a
- * subscriber that was not connected, so the viewer opens the page for creating
- * the pull request once it has connected.
+ * branch `P` pushed has been opened, or that the pull request `L` landed has
+ * merged. The relay passes on each delivery of the organization's webhook the
+ * moment GitHub makes it, and keeps none for a subscriber that was not
+ * connected, so the viewer opens a page that leads to either once it has
+ * connected.
  */
 
 import {
@@ -29,7 +30,8 @@ export interface PullRequestHead {
 }
 
 /** What a pull request's address on GitHub looks like. */
-const PULL_REQUEST_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/;
+export const PULL_REQUEST_URL =
+  /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/;
 
 /**
  * Returns the head that the checked-out commit, pushed to `branch` of
@@ -74,15 +76,44 @@ export function openedPullRequest(
 }
 
 /**
+ * Returns the address of pull request `number` of `repository`, as
+ * `owner/name`, when `delivery` reports that it merged, or null when it
+ * reports nothing of the kind, or gives an address that is not a pull
+ * request's on GitHub.
+ */
+export function mergedPullRequest(
+  delivery: GitHubDelivery,
+  repository: string,
+  number: number,
+): string | null {
+  const { event, payload } = delivery;
+  if (
+    event !== "pull_request" || !isObjectNotArray(payload) ||
+    payload.action !== "closed"
+  ) return null;
+  const pullRequest = payload.pull_request;
+  if (!isObjectNotArray(pullRequest)) return null;
+  const { base, html_url: url, merged } = pullRequest;
+  const repo = isObjectNotArray(base) ? base.repo : undefined;
+  const name = isObjectNotArray(repo) ? repo.full_name : undefined;
+  return merged === true && pullRequest.number === number &&
+      typeof name === "string" &&
+      name.toLowerCase() === repository.toLowerCase() &&
+      typeof url === "string" && PULL_REQUEST_URL.test(url)
+    ? url
+    : null;
+}
+
+/**
  * Connects to the relay with `connect`, calls `connected` once it has, and
- * resolves with the address of the pull request opened with `head` as its
- * head once a delivery reports it.
+ * resolves with the address `match` returns for the first delivery it
+ * returns one for.
  * Rejects when the connection cannot be opened, or ends first, or carries a
  * frame the relay would not send, or `signal` aborts.
  */
 export async function watchForPullRequest(
   connect: RelayConnect,
-  head: PullRequestHead,
+  match: (delivery: GitHubDelivery) => string | null,
   signal: AbortSignal,
   connected: () => void = () => {},
 ): Promise<string> {
@@ -101,8 +132,8 @@ export async function watchForPullRequest(
         signal.throwIfAborted();
         throw new Error("the webhook relay closed the connection");
       }
-      // A delivery the viewer cannot read cannot say the pull request opened.
-      const url = frame.delivery && openedPullRequest(frame.delivery, head);
+      // A delivery the viewer cannot read says nothing of the pull request.
+      const url = frame.delivery && match(frame.delivery);
       if (url) return url;
     }
   } finally {

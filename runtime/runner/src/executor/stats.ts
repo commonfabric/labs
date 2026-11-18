@@ -543,6 +543,15 @@ export type ServingLoopStats = {
     handlerNotRunDeferrals: number;
 
     /**
+     * Of `handlerNotRunDeferrals`, the withdrawals that waited on a document
+     * rather than spending the deferral budget (events.md §5): the run read
+     * a scoped instance of it the serving loop had not produced, and a writer
+     * that owes it will still run. A commit writing the document re-drains
+     * the entry.
+     */
+    handlerNotRunWaits: number;
+
+    /**
      * Events requeued at a wave commit because a recorded read of the handler
      * run was stale: a commit the serving replica had not taken wrote what
      * the run read (serving-loop.md §3d). Counted per event, the later
@@ -764,8 +773,11 @@ export type ServingLoopStats = {
    * those closed once their host held nothing, `evicted` those closed while
    * parked to stay within the parked-worker cap or the heap budget,
    * `failed` those that reported an error, failed to start or were killed
-   * by the watchdog, and `shared` the placements that joined a worker
-   * already serving another space because the pool was at its cap.
+   * by the watchdog, `shared` the placements that joined a worker
+   * already serving another space because the pool was at its cap, and
+   * `heapLimited` the workers, among the `failed` ones, that reached their
+   * heap limit. `heapStopped` is how many spaces are on no worker now because
+   * a worker they were alone on reached its heap limit.
    */
   workers: {
     serving: number;
@@ -777,6 +789,8 @@ export type ServingLoopStats = {
     evicted: number;
     failed: number;
     shared: number;
+    heapLimited: number;
+    heapStopped: number;
   };
 };
 
@@ -853,6 +867,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     lt1LateSealsRefused: 0,
     orphanDeliveriesRefused: 0,
     handlerNotRunDeferrals: 0,
+    handlerNotRunWaits: 0,
     staleReadRequeues: 0,
     arrivalHeldDeferrals: 0,
     originPendingDeferrals: 0,
@@ -905,6 +920,8 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     evicted: 0,
     failed: 0,
     shared: 0,
+    heapLimited: 0,
+    heapStopped: 0,
   },
 });
 

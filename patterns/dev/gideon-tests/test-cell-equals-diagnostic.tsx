@@ -16,6 +16,7 @@ import {
   pattern,
   toIndentedDebugString,
   UI,
+  type VNode,
   Writable,
 } from "commonfabric";
 
@@ -28,6 +29,11 @@ export interface DiagInput {
   items: Item[] | Default<[]>;
   selectedItem: Item | null | Default<null>;
   log: string[] | Default<[]>;
+}
+
+export interface DiagOutput extends DiagInput {
+  [NAME]: string;
+  [UI]: VNode;
 }
 
 // Add item handler
@@ -100,7 +106,7 @@ const clearLog = handler<unknown, { log: Writable<string[]> }>(
   },
 );
 
-export default pattern<DiagInput, DiagInput>(
+export default pattern<DiagInput, DiagOutput>(
   ({ items, selectedItem, log }) => {
     return {
       [NAME]: "Writable.equals Diagnostic",

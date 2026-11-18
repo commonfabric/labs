@@ -216,7 +216,7 @@ const FileRow = pattern<FileRowInput, { [UI]: VNode }>(
               ? (
                 <cf-image
                   blob={blob}
-                  media-type={mediaType}
+                  mediaType={mediaType}
                   alt={name}
                   style="width: 3rem; height: 3rem;"
                 />

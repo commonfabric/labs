@@ -27,6 +27,17 @@ import {
 } from "commonfabric";
 import ShoppingList, { removeItem, selectAisle } from "./shopping-list.tsx";
 
+// With server execution on, the serving loop asks the model to categorize the
+// items once a store layout is set; the test states that every such request
+// fails. With it off, nothing reads the categories, so no request is made.
+export const llmMocks = [
+  {
+    when: { systemContains: "grocery store assistant" },
+    error: "The model is unavailable.",
+    repeat: true,
+  },
+];
+
 interface ShoppingItem {
   title: string;
   done: boolean;

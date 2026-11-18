@@ -137,6 +137,8 @@ blob store, cells hold descriptors), `apps/habit-tracker/`,
 `examples/iframe-cursor-canvas/` (a shared board in a sandboxed iframe: shapes
 are stored, while each viewer's pointer and a shape held mid-drag or mid-resize
 travel through a presence room and are stored nowhere),
+`examples/iframe-donut-menu/` (a menu in a sandboxed iframe whose pictures the
+pattern ships as files and hands its guest as `assets`),
 `examples/iframe-verb-list/` (a list in a sandboxed iframe whose guest adds an
 item only by sending the pattern's `addItem` verb, which writes the pattern's
 own state), `product/lobby/`, `apps/lunch-poll/`, `examples/math-note/`,
@@ -306,10 +308,11 @@ interface TopicsInput {
   // unread reference
   names?: Writable<Default<NamesMap, {}>>;
 }
-// TopicInput additionally takes the two wirings addTopic gives a child —
-// mentionable (the @-mention universe for the body editor) and boardCrossrefs
-// (the reference pivot) — plus shortName, the number the create allocated,
-// which the topic stores and reports.
+// TopicInput additionally takes the three wirings addTopic gives a child —
+// mentionable (the @-mention universe for the body editor), boardCrossrefs
+// (the reference pivot), and boardCrossrefIndex (that pivot's positions by
+// topic number, which lets a topic read its own row alone) — plus shortName,
+// the number the create allocated, which the topic stores and reports.
 ```
 
 ### Output Schema
@@ -323,8 +326,11 @@ interface TopicsOutput {
   // The topics, read through { title, createdAt, createdBy, commentCount,
   //   lastActivityAt, shortName } — a row addresses the topic it describes
   index: TopicIndexRow[];
-  // { topic, mentionedBy } per topic — the reference graph, derived once here
-  crossrefs: TopicCrossrefRow[];
+  // { topic, mentionedBy, name? } per topic — the reference graph, derived
+  // once here; a row carries its topic's number when the topic has one
+  crossrefs: TopicCrossrefNamedRow[];
+  // { source, byName } — the pivot's positions grouped by topic number
+  crossrefIndex: TopicCrossrefIndex;
   // The namespace, the reverse lookup a caller reads a topic's number out of
   // by identity, and the policy the numbers are held to
   names: Default<NamesMap, {}>;
@@ -1941,14 +1947,16 @@ metadata and screenshot.
 
 ```ts
 interface LinkPreviewInput {
-  url: string | Default<"https://github.com">;
+  url?: string | Default<"https://github.com">;
 }
 ```
 
 ### Output Schema
 
 ```ts
-interface LinkPreviewInput {
+interface LinkPreviewOutput {
+  [NAME]: string;
+  [UI]: VNode;
   url: string;
 }
 ```

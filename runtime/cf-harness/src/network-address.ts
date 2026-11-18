@@ -140,7 +140,7 @@ const parseIpv4Address = (value: string): Uint8Array | undefined => {
 };
 
 const isGloballyRoutableIpv4 = (address: Uint8Array): boolean => {
-  const [a, b, c, d] = address;
+  const [a, b, c] = address;
   if (a === 0) return false; // Current network.
   if (a === 10) return false; // RFC 1918 private.
   if (a === 100 && b >= 64 && b <= 127) return false; // CGNAT.
@@ -154,8 +154,7 @@ const isGloballyRoutableIpv4 = (address: Uint8Array): boolean => {
   if (a === 198 && (b === 18 || b === 19)) return false; // Benchmarking.
   if (a === 198 && b === 51 && c === 100) return false; // TEST-NET-2.
   if (a === 203 && b === 0 && c === 113) return false; // TEST-NET-3.
-  if (a >= 224) return false; // Multicast, reserved, broadcast.
-  return !(a === 255 && b === 255 && c === 255 && d === 255);
+  return a < 224; // Not multicast, reserved or broadcast.
 };
 
 const parseIpv6Address = (value: string): Uint8Array | undefined => {

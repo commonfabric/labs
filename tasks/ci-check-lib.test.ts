@@ -784,3 +784,185 @@ Deno.test("downloadAndExtractArtifact unpacks the artifact it downloads", async 
     await Deno.remove(directory, { recursive: true });
   }
 });
+
+/**
+ * Runs `fn` with every `fetch` answered by `answer`, which is handed the
+ * number of the call, counting from 1, and returns `fn`'s result with the
+ * number of calls made and the warnings printed.
+ */
+async function withFetch<T>(
+  answer: (call: number) => Promise<Response>,
+  fn: () => Promise<T>,
+): Promise<{ result: T; calls: number; warnings: string[] }> {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const warnings: string[] = [];
+  let calls = 0;
+  globalThis.fetch = () => answer(++calls);
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.join(" "));
+  };
+  try {
+    return { result: await fn(), calls, warnings };
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+}
+
+/** A `sleep` that records each delay it is asked to wait out, and waits none. */
+function recordingSleep(): {
+  delays: number[];
+  sleep: (ms: number) => Promise<void>;
+} {
+  const delays: number[] = [];
+  return {
+    delays,
+    sleep: (ms) => {
+      delays.push(ms);
+      return Promise.resolve();
+    },
+  };
+}
+
+function okJson(body: unknown): Promise<Response> {
+  return Promise.resolve(
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  );
+}
+
+Deno.test("githubGet retries a request that fails to send, doubling the delay each time", async () => {
+  const { delays, sleep } = recordingSleep();
+  const { result, calls } = await withFetch(
+    (call) =>
+      call < 3 ? Promise.reject(new TypeError("reset")) : okJson({ n: call }),
+    () => githubGet<{ n: number }>("/repos/a/b", { sleep }),
+  );
+  assertEquals(result, { n: 3 });
+  assertEquals(calls, 3);
+  assertEquals(delays, [250, 500]);
+});
+
+Deno.test("githubGet throws the send failure once its attempts are spent", async () => {
+  const { delays, sleep } = recordingSleep();
+  const { result, calls } = await withFetch(
+    () => Promise.reject(new TypeError("reset")),
+    () => githubGet("/repos/a/b", { sleep }).catch((error) => error),
+  );
+  assertEquals(String(result), "TypeError: reset");
+  assertEquals(calls, 4);
+  assertEquals(delays, [250, 500, 1000]);
+});
+
+Deno.test("githubGet waits as long as a `Retry-After` date says, within the cap", async () => {
+  const { delays, sleep } = recordingSleep();
+  const retryAfter = [
+    "Wed, 21 Oct 2015 07:28:00 GMT",
+    "whenever",
+    "Fri, 01 Jan 2999 00:00:00 GMT",
+  ];
+  const { result } = await withFetch(
+    (call) =>
+      call <= retryAfter.length
+        ? Promise.resolve(
+          new Response("busy", {
+            status: 503,
+            headers: { "retry-after": retryAfter[call - 1]! },
+          }),
+        )
+        : okJson({ done: true }),
+    () => githubGet("/repos/a/b", { sleep }),
+  );
+  assertEquals(result, { done: true });
+  // A date already past waits nothing, a header that is neither seconds nor
+  // a date falls back to the doubling delay, and a far date is capped.
+  assertEquals(delays, [0, 500, 5000]);
+});
+
+Deno.test("downloadAndExtractArtifact retries a download that fails to send", async () => {
+  const { delays, sleep } = recordingSleep();
+  const { result, calls, warnings } = await withFetch(
+    (call) =>
+      call === 1
+        ? Promise.reject(new TypeError("reset"))
+        : Promise.resolve(new Response("gone", { status: 410 })),
+    () => downloadAndExtractArtifact(5, "artifact-send-test-", { sleep }),
+  );
+  assertEquals(result, null);
+  assertEquals(calls, 2);
+  assertEquals(delays, [250]);
+  assertEquals(
+    warnings.some((warning) =>
+      warning.includes("attempt 1: fetch failed: TypeError: reset") &&
+      warning.includes("attempt 2: GitHub artifact download 410")
+    ),
+    true,
+  );
+});
+
+Deno.test("downloadAndExtractArtifact gives up on a download that never sends", async () => {
+  const { delays, sleep } = recordingSleep();
+  const { result, calls, warnings } = await withFetch(
+    () => Promise.reject(new TypeError("reset")),
+    () => downloadAndExtractArtifact(5, "artifact-send-test-", { sleep }),
+  );
+  assertEquals(result, null);
+  assertEquals(calls, 4);
+  assertEquals(delays, [250, 500, 1000]);
+  assertEquals(
+    warnings[0],
+    "  Warning: could not download/extract artifact 5 " +
+      "(/repos/commonfabric/labs/actions/artifacts/5/zip) after 4 " +
+      "attempt(s): fetch failed: TypeError: reset",
+  );
+});
+
+Deno.test("downloadAndExtractArtifact retries an artifact whose body breaks off", async () => {
+  const { delays, sleep } = recordingSleep();
+  const broken = () =>
+    new Response(
+      new ReadableStream({
+        pull(controller) {
+          controller.error(new Error("connection reset"));
+        },
+      }),
+      { status: 200 },
+    );
+  const { result, calls, warnings } = await withFetch(
+    () => Promise.resolve(broken()),
+    () => downloadAndExtractArtifact(6, "artifact-broken-test-", { sleep }),
+  );
+  assertEquals(result, null);
+  assertEquals(calls, 4);
+  assertEquals(delays, [250, 500, 1000]);
+  assertEquals(
+    warnings[1],
+    "  Artifact download attempts: " +
+      [1, 2, 3, 4].map((n) => `attempt ${n}: Error: connection reset`)
+        .join(" | "),
+  );
+});
+
+Deno.test("downloadAndExtractArtifact retries an artifact that does not unzip", async () => {
+  const { delays, sleep } = recordingSleep();
+  const { result, calls, warnings } = await withFetch(
+    (call) =>
+      Promise.resolve(
+        call === 1
+          ? new Response("not a zip", { status: 200 })
+          : new Response("gone", { status: 410 }),
+      ),
+    () => downloadAndExtractArtifact(8, "artifact-unzip-test-", { sleep }),
+  );
+  assertEquals(result, null);
+  assertEquals(calls, 2);
+  assertEquals(delays, [250]);
+  assertEquals(
+    /attempt 1: unzip failed with exit code [1-9]\d*: .+ \| attempt 2: GitHub artifact download 410/s
+      .test(warnings[1] ?? ""),
+    true,
+  );
+});

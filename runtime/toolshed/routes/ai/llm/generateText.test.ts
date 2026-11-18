@@ -6,6 +6,7 @@ import {
   assertThrows,
 } from "@std/assert";
 import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
 import { APICallError, type LanguageModel } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { GOOGLE_SEARCH_NATIVE_MODEL_TOOL } from "@commonfabric/llm/types";
@@ -16,7 +17,13 @@ import {
   configureJsonMode,
   generateText,
 } from "./generateText.ts";
-import { MODELS } from "./models.ts";
+import { LLMRequestError } from "./errors.ts";
+import {
+  MOCK_CAPABILITIES,
+  registryWith,
+  streamingModel,
+  textModel,
+} from "@/test/fixtures/llm-models.ts";
 
 if (env.ENV !== "test") {
   throw new Error("ENV must be 'test'");
@@ -367,34 +374,12 @@ describe("applyNativeModelTools", () => {
 
 const MOCK_MODEL_NAME = "mock:test-model";
 
-/**
- * Registers `model` under a name that `findModel` resolves, runs `body`, then
- * takes the registration back out of the shared model list.
- */
-async function withMockModel(
+/** Runs `body` against a registry holding `model` alone. */
+function withRegistry(
   model: LanguageModel,
-  body: () => Promise<void>,
+  body: (models: ReturnType<typeof registryWith>) => Promise<void>,
 ): Promise<void> {
-  MODELS[MOCK_MODEL_NAME] = {
-    model,
-    name: MOCK_MODEL_NAME,
-    capabilities: {
-      contextWindow: 1000,
-      maxOutputTokens: 100,
-      streaming: true,
-      systemPrompt: true,
-      stopSequences: true,
-      prefill: false,
-      images: false,
-      reasoning: false,
-    },
-    aliases: [],
-  };
-  try {
-    await body();
-  } finally {
-    delete MODELS[MOCK_MODEL_NAME];
-  }
+  return body(registryWith(MOCK_MODEL_NAME, model));
 }
 
 /**
@@ -512,13 +497,13 @@ async function readStreamLines(stream: ReadableStream): Promise<string[]> {
 
 describe("generateText failure reporting", () => {
   it("reports the provider's failure for a non-streaming request", async () => {
-    await withMockModel(rejectingModel(), async () => {
+    await withRegistry(rejectingModel(), async (models) => {
       const error = await assertRejects(
         () =>
           generateText({
             model: MOCK_MODEL_NAME,
             messages: [{ role: "user", content: "hi" }],
-          }),
+          }, models),
         Error,
       );
 
@@ -539,13 +524,13 @@ describe("generateText failure reporting", () => {
   });
 
   it("reports the finish reason when a response carries no text", async () => {
-    await withMockModel(silentModel(), async () => {
+    await withRegistry(silentModel(), async (models) => {
       const error = await assertRejects(
         () =>
           generateText({
             model: MOCK_MODEL_NAME,
             messages: [{ role: "user", content: "hi" }],
-          }),
+          }, models),
         Error,
       );
 
@@ -556,13 +541,13 @@ describe("generateText failure reporting", () => {
   });
 
   it("fails rather than returning an answer that was cut short", async () => {
-    await withMockModel(truncatingModel(), async () => {
+    await withRegistry(truncatingModel(), async (models) => {
       const error = await assertRejects(
         () =>
           generateText({
             model: MOCK_MODEL_NAME,
             messages: [{ role: "user", content: "hi" }],
-          }),
+          }, models),
         Error,
       );
 
@@ -573,13 +558,13 @@ describe("generateText failure reporting", () => {
 
   it("spells out a failure the provider reported as a plain object", async () => {
     const payload = { type: "overloaded_error", message: "Overloaded" };
-    await withMockModel(failingWithPayload(payload), async () => {
+    await withRegistry(failingWithPayload(payload), async (models) => {
       const error = await assertRejects(
         () =>
           generateText({
             model: MOCK_MODEL_NAME,
             messages: [{ role: "user", content: "hi" }],
-          }),
+          }, models),
         Error,
       );
 
@@ -589,13 +574,13 @@ describe("generateText failure reporting", () => {
   });
 
   it("survives a failure reported without a value", async () => {
-    await withMockModel(failingWithPayload(null), async () => {
+    await withRegistry(failingWithPayload(null), async (models) => {
       const error = await assertRejects(
         () =>
           generateText({
             model: MOCK_MODEL_NAME,
             messages: [{ role: "user", content: "hi" }],
-          }),
+          }, models),
         Error,
       );
 
@@ -607,12 +592,12 @@ describe("generateText failure reporting", () => {
   });
 
   it("reports the provider's failure on a streaming request", async () => {
-    await withMockModel(rejectingModel(), async () => {
+    await withRegistry(rejectingModel(), async (models) => {
       const result = await generateText({
         model: MOCK_MODEL_NAME,
         messages: [{ role: "user", content: "hi" }],
         stream: true,
-      });
+      }, models);
       assert(result.stream, "a streaming request should return a stream");
       const lines = await readStreamLines(result.stream);
 
@@ -626,6 +611,564 @@ describe("generateText failure reporting", () => {
         lines.some((line) => line.includes('"finish"')),
         false,
         "a failed stream should not report itself finished",
+      );
+    });
+  });
+});
+
+describe("generateText generation", () => {
+  // These run generations to completion against mock models and check what
+  // the caller receives: the message, the conversation it extends, and on a
+  // streaming request the events written to the stream.
+
+  const user = (content = "hi") => ({ role: "user" as const, content });
+
+  /** A model that records the options of each call and streams `parts`. */
+  function recordingModel(
+    parts: Parameters<typeof streamingModel>[0],
+    reason: Parameters<typeof streamingModel>[1] = "stop",
+  ) {
+    const calls: Parameters<MockLanguageModelV4["doStream"]>[0][] = [];
+    const model = new MockLanguageModelV4({
+      doStream: (options) => {
+        calls.push(options);
+        return streamingModel(parts, reason).doStream(options);
+      },
+    });
+    return { model, calls };
+  }
+
+  const text = (delta: string) => [
+    { type: "text-start" as const, id: "t" },
+    { type: "text-delta" as const, id: "t", delta },
+    { type: "text-end" as const, id: "t" },
+  ];
+
+  async function streamEvents(
+    params: Parameters<typeof generateText>[0],
+    model: LanguageModel,
+    capabilities: Parameters<typeof registryWith>[2] = {},
+  ): Promise<unknown[]> {
+    const result = await generateText(
+      { ...params, model: MOCK_MODEL_NAME, stream: true },
+      registryWith(MOCK_MODEL_NAME, model, capabilities),
+    );
+    assert(result.stream, "a streaming request should return a stream");
+    return (await readStreamLines(result.stream)).map((line) =>
+      JSON.parse(line)
+    );
+  }
+
+  describe("without streaming", () => {
+    it("returns the model's text appended to the conversation", async () => {
+      const result = await generateText(
+        { model: MOCK_MODEL_NAME, messages: [user()] },
+        registryWith(MOCK_MODEL_NAME, textModel("Hello")),
+      );
+      expect(result.message).toEqual({ role: "assistant", content: "Hello" });
+      expect(result.messages).toEqual([
+        user(),
+        { role: "assistant", content: "Hello" },
+      ]);
+      expect(result.stream).toBeUndefined();
+    });
+
+    it("appends the stop sequence to a response that stopped on it", async () => {
+      const models = registryWith(MOCK_MODEL_NAME, textModel("Hello"));
+      const stopped = await generateText(
+        { model: MOCK_MODEL_NAME, messages: [user()], stop: "</a>" },
+        models,
+      );
+      expect(stopped.message.content).toBe("Hello</a>");
+
+      const cut = await generateText(
+        { model: MOCK_MODEL_NAME, messages: [user()], stop: "</a>" },
+        registryWith(MOCK_MODEL_NAME, textModel("Hello", "length")),
+      );
+      expect(cut.message.content).toBe("Hello");
+    });
+
+    it("unwraps a fenced JSON response in JSON mode and appends no stop", async () => {
+      const result = await generateText(
+        {
+          model: MOCK_MODEL_NAME,
+          messages: [user()],
+          mode: "json",
+          stop: "</a>",
+        },
+        registryWith(MOCK_MODEL_NAME, textModel('```json\n{"a":1}\n```')),
+      );
+      expect(result.message.content).toBe('{"a":1}');
+    });
+
+    it("replaces a prefilled assistant message with the response", async () => {
+      const result = await generateText(
+        {
+          model: MOCK_MODEL_NAME,
+          messages: [user(), { role: "assistant", content: "{" }],
+        },
+        registryWith(MOCK_MODEL_NAME, textModel('"a":1}')),
+      );
+      expect(result.messages).toEqual([
+        user(),
+        { role: "assistant", content: '"a":1}' },
+      ]);
+    });
+
+    it("refuses a model the registry does not hold", async () => {
+      await assertRejects(
+        () =>
+          generateText(
+            { model: "mock:missing", messages: [user()] },
+            registryWith(MOCK_MODEL_NAME, textModel("unused")),
+          ),
+        LLMRequestError,
+        "Unsupported model: mock:missing",
+      );
+    });
+
+    it("refuses JSON mode streamed from Groq", async () => {
+      await assertRejects(
+        () =>
+          generateText(
+            {
+              model: "groq:mock",
+              messages: [user()],
+              mode: "json",
+              stream: true,
+            },
+            registryWith("groq:mock", textModel("unused")),
+          ),
+        LLMRequestError,
+        "Groq models don't support streaming in JSON mode",
+      );
+    });
+  });
+
+  describe("request shaping", () => {
+    it("hands the model the caller's tools and stop sequence", async () => {
+      const { model, calls } = recordingModel(text("ok"));
+      await generateText(
+        {
+          model: MOCK_MODEL_NAME,
+          messages: [user()],
+          stop: "END",
+          tools: {
+            lookup: {
+              description: "Looks a word up",
+              inputSchema: {
+                type: "object",
+                properties: { word: { type: "string" } },
+              },
+            },
+          },
+        },
+        registryWith(MOCK_MODEL_NAME, model),
+      );
+      expect(calls[0].stopSequences).toEqual(["END"]);
+      expect(calls[0].tools).toMatchObject([{
+        type: "function",
+        name: "lookup",
+        description: "Looks a word up",
+      }]);
+    });
+
+    it("drops the stop sequence for a model without stop sequences", async () => {
+      const { model, calls } = recordingModel(text("ok"));
+      await generateText(
+        { model: MOCK_MODEL_NAME, messages: [user()], stop: "END" },
+        registryWith(MOCK_MODEL_NAME, model, { stopSequences: false }),
+      );
+      expect(calls[0].stopSequences).toBeUndefined();
+    });
+
+    it("sends the system prompt as its own message where the model takes one", async () => {
+      const { model, calls } = recordingModel(text("ok"));
+      await generateText(
+        { model: MOCK_MODEL_NAME, messages: [user()], system: "Be brief" },
+        registryWith(MOCK_MODEL_NAME, model),
+      );
+      expect(calls[0].prompt[0]).toEqual({
+        role: "system",
+        content: "Be brief",
+      });
+    });
+
+    it("prepends the system prompt to a first message given as text", async () => {
+      const { model, calls } = recordingModel(text("ok"));
+      await generateText(
+        { model: MOCK_MODEL_NAME, messages: [user()], system: "Be brief" },
+        registryWith(MOCK_MODEL_NAME, model, { systemPrompt: false }),
+      );
+      expect(calls[0].prompt).toEqual([{
+        role: "user",
+        content: [{ type: "text", text: "Be brief\n\nhi" }],
+      }]);
+    });
+
+    it("prepends the system prompt to a first message given as parts", async () => {
+      const { model, calls } = recordingModel(text("ok"));
+      await generateText(
+        {
+          model: MOCK_MODEL_NAME,
+          messages: [{
+            role: "user",
+            content: [{ type: "text", text: "hi" }],
+          }],
+          system: "Be brief",
+        },
+        registryWith(MOCK_MODEL_NAME, model, { systemPrompt: false }),
+      );
+      expect(calls[0].prompt).toEqual([{
+        role: "user",
+        content: [
+          { type: "text", text: "Be brief" },
+          { type: "text", text: "hi" },
+        ],
+      }]);
+    });
+  });
+
+  describe("native model tool results", () => {
+    const search = () => ({
+      type: "provider" as const,
+      id: "google.google_search" as const,
+      args: {},
+    });
+
+    function searchingRegistry() {
+      const models = registryWith("google:mock", textModel("unused"));
+      const { model } = recordingModel([
+        {
+          type: "source",
+          sourceType: "url",
+          id: "s1",
+          url: "https://example.test/",
+        },
+        ...text("Found it"),
+      ]);
+      models.register({
+        name: "google:mock",
+        model,
+        aliases: [],
+        capabilities: { ...MOCK_CAPABILITIES },
+        nativeModelToolFactories: { [GOOGLE_SEARCH_NATIVE_MODEL_TOOL]: search },
+      });
+      return models;
+    }
+
+    const expected = [{
+      type: "cf-harness.native-model-tool-result",
+      toolId: GOOGLE_SEARCH_NATIVE_MODEL_TOOL,
+      provider: "google",
+      sources: [expect.objectContaining({ url: "https://example.test/" })],
+    }];
+
+    it("attaches the tool's results to the message", async () => {
+      const result = await generateText(
+        {
+          model: "google:mock",
+          messages: [user()],
+          nativeModelToolIds: [GOOGLE_SEARCH_NATIVE_MODEL_TOOL],
+        },
+        searchingRegistry(),
+      );
+      expect(result.message).toMatchObject({
+        content: "Found it",
+        nativeModelToolResults: expected,
+      });
+    });
+
+    it("reports the tool's results in the finish event of a stream", async () => {
+      const result = await generateText(
+        {
+          model: "google:mock",
+          messages: [user()],
+          nativeModelToolIds: [GOOGLE_SEARCH_NATIVE_MODEL_TOOL],
+          stream: true,
+        },
+        searchingRegistry(),
+      );
+      const events = (await readStreamLines(result.stream!)).map((line) =>
+        JSON.parse(line)
+      );
+      expect(events.at(-1)).toMatchObject({
+        type: "finish",
+        nativeModelToolResults: expected,
+      });
+    });
+
+    it("attaches nothing to a message that used no native tool", async () => {
+      const result = await generateText(
+        { model: MOCK_MODEL_NAME, messages: [user()] },
+        registryWith(MOCK_MODEL_NAME, textModel("Hello")),
+      );
+      expect(result.message).not.toHaveProperty("nativeModelToolResults");
+    });
+  });
+
+  describe("streaming", () => {
+    it("writes each text delta and then a finish event", async () => {
+      const completed: unknown[] = [];
+      const events = await streamEvents(
+        {
+          model: MOCK_MODEL_NAME,
+          messages: [user()],
+          onStreamComplete: (result) => completed.push(result.messages),
+        },
+        streamingModel([
+          { type: "text-start", id: "t" },
+          { type: "text-delta", id: "t", delta: "Hel" },
+          { type: "text-delta", id: "t", delta: "lo" },
+          { type: "text-end", id: "t" },
+        ]),
+      );
+      expect(events).toEqual([
+        { type: "text-delta", textDelta: "Hel" },
+        { type: "text-delta", textDelta: "lo" },
+        { type: "finish" },
+      ]);
+      expect(completed).toEqual([[
+        user(),
+        { role: "assistant", content: "Hello" },
+      ]]);
+    });
+
+    it("writes the stop sequence after a response that stopped on it", async () => {
+      const events = await streamEvents(
+        { model: MOCK_MODEL_NAME, messages: [user()], stop: "END" },
+        textModel("Hi"),
+      );
+      expect(events).toEqual([
+        { type: "text-delta", textDelta: "Hi" },
+        "END",
+        { type: "finish" },
+      ]);
+    });
+
+    it("unwraps a fenced JSON response in JSON mode", async () => {
+      const completed: unknown[] = [];
+      await streamEvents(
+        {
+          model: MOCK_MODEL_NAME,
+          messages: [user()],
+          mode: "json",
+          onStreamComplete: (result) => completed.push(result.message),
+        },
+        textModel('```json\n{"a":1}\n```'),
+      );
+      expect(completed).toEqual([{ role: "assistant", content: '{"a":1}' }]);
+    });
+
+    it("writes a prefilled assistant message first and extends it", async () => {
+      const completed: unknown[] = [];
+      const events = await streamEvents(
+        {
+          model: MOCK_MODEL_NAME,
+          messages: [user(), { role: "assistant", content: "{" }],
+          onStreamComplete: (result) => completed.push(result.messages),
+        },
+        textModel("}"),
+      );
+      expect(events).toEqual([
+        "{",
+        { type: "text-delta", textDelta: "}" },
+        { type: "finish" },
+      ]);
+      expect(completed).toEqual([[
+        user(),
+        { role: "assistant", content: "{}" },
+      ]]);
+    });
+
+    it("reports a prefilled assistant message given as parts", async () => {
+      const events = await streamEvents(
+        {
+          model: MOCK_MODEL_NAME,
+          messages: [user(), {
+            role: "assistant",
+            content: [{ type: "text", text: "{" }],
+          }],
+        },
+        textModel("}"),
+      );
+      expect(events).toEqual([{
+        type: "error",
+        error: "Structured content not supported in responses.",
+      }]);
+    });
+
+    it("writes tool calls and records them in the message", async () => {
+      const completed: unknown[] = [];
+      const events = await streamEvents(
+        {
+          model: MOCK_MODEL_NAME,
+          messages: [user()],
+          tools: {
+            lookup: {
+              description: "Looks a word up",
+              inputSchema: {
+                type: "object",
+                properties: { word: { type: "string" } },
+              },
+            },
+          },
+          onStreamComplete: (result) => completed.push(result.message),
+        },
+        streamingModel([
+          ...text("Let me look."),
+          {
+            type: "tool-call",
+            toolCallId: "call-1",
+            toolName: "lookup",
+            input: '{"word":"fabric"}',
+          },
+        ], "tool-calls"),
+      );
+      expect(events).toEqual([
+        { type: "text-delta", textDelta: "Let me look." },
+        {
+          type: "tool-call",
+          toolCallId: "call-1",
+          toolName: "lookup",
+          args: { word: "fabric" },
+        },
+        { type: "finish" },
+      ]);
+      expect(completed).toEqual([{
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me look." },
+          {
+            type: "tool-call",
+            toolCallId: "call-1",
+            toolName: "lookup",
+            input: { word: "fabric" },
+          },
+        ],
+      }]);
+    });
+
+    it("records a turn of tool calls alone without a text part", async () => {
+      const completed: unknown[] = [];
+      await streamEvents(
+        {
+          model: MOCK_MODEL_NAME,
+          messages: [user()],
+          tools: {
+            lookup: {
+              description: "Looks a word up",
+              inputSchema: { type: "object" },
+            },
+          },
+          onStreamComplete: (result) => completed.push(result.message),
+        },
+        streamingModel([{
+          type: "tool-call",
+          toolCallId: "call-1",
+          toolName: "lookup",
+          input: "{}",
+        }], "tool-calls"),
+      );
+      expect(completed).toEqual([{
+        role: "assistant",
+        content: [{
+          type: "tool-call",
+          toolCallId: "call-1",
+          toolName: "lookup",
+          input: {},
+        }],
+      }]);
+    });
+
+    it("writes the result of a tool the provider ran", async () => {
+      const models = registryWith(MOCK_MODEL_NAME, textModel("unused"));
+      models.register({
+        name: MOCK_MODEL_NAME,
+        model: streamingModel([
+          {
+            type: "tool-call",
+            toolCallId: "search-1",
+            toolName: GOOGLE_SEARCH_NATIVE_MODEL_TOOL,
+            input: "{}",
+            providerExecuted: true,
+          },
+          {
+            type: "tool-result",
+            toolCallId: "search-1",
+            toolName: GOOGLE_SEARCH_NATIVE_MODEL_TOOL,
+            result: { hits: 1 },
+          },
+          ...text("Found"),
+        ]),
+        aliases: [],
+        capabilities: MOCK_CAPABILITIES,
+        nativeModelToolFactories: {
+          [GOOGLE_SEARCH_NATIVE_MODEL_TOOL]: () => ({
+            type: "provider",
+            id: "google.google_search",
+            args: {},
+          }),
+        },
+      });
+      const result = await generateText({
+        model: MOCK_MODEL_NAME,
+        messages: [user()],
+        nativeModelToolIds: [GOOGLE_SEARCH_NATIVE_MODEL_TOOL],
+        stream: true,
+      }, models);
+      const events = (await readStreamLines(result.stream!)).map((line) =>
+        JSON.parse(line)
+      );
+      expect(events).toContainEqual({
+        type: "tool-result",
+        toolCallId: "search-1",
+        result: { hits: 1 },
+      });
+    });
+  });
+
+  describe("failure descriptions", () => {
+    async function failureMessage(payload: unknown): Promise<string> {
+      const error = await assertRejects(
+        () =>
+          generateText(
+            { model: MOCK_MODEL_NAME, messages: [user()] },
+            registryWith(MOCK_MODEL_NAME, failingWithPayload(payload)),
+          ),
+        Error,
+      );
+      return error.message;
+    }
+
+    it("includes the provider data a stream provider error carries", async () => {
+      const failure = Object.assign(new Error("stream broke"), {
+        name: "AI_StreamProviderError",
+        data: { code: "overloaded" },
+      });
+      expect(await failureMessage(failure)).toBe(
+        `LLM request to ${MOCK_MODEL_NAME} failed: AI_StreamProviderError: ` +
+          'stream broke; provider data: {"code":"overloaded"}',
+      );
+    });
+
+    it("truncates a long description", async () => {
+      const message = await failureMessage(new Error("x".repeat(5000)));
+      expect(message).toContain("… (truncated)");
+      expect(message.length).toBeLessThan(1100);
+    });
+
+    it("describes a plain object that cannot be serialized", async () => {
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+      expect(await failureMessage(circular)).toBe(
+        `LLM request to ${MOCK_MODEL_NAME} failed: [object Object]`,
+      );
+    });
+
+    it("describes a failure reported as a string", async () => {
+      expect(await failureMessage("plain failure")).toBe(
+        `LLM request to ${MOCK_MODEL_NAME} failed: plain failure`,
       );
     });
   });

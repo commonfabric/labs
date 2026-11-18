@@ -3,7 +3,8 @@
 A room's messages, offered for structured access rather than as one array. A
 room ([`ChatRoomOutput`](ChatRoomOutput.md)) offers one, as `messages`. It says
 where the conversation stands, holds its newest messages, and lists its
-threads, the same for every reader.
+threads, the same for every reader, and holds the reading session's windows
+onto them.
 
 ```ts
 // Shown for illustration only.
@@ -23,6 +24,15 @@ interface ChatMessageList {
 
   /** How many messages reply naming neither a thread nor a quote. */
   legacyReplies: number;
+
+  /** This session's open windows, by the `windowId` its client chose. */
+  windows: PerSession<Record<string, ChatMessageWindow>>;
+
+  /** Opens a window, or moves one already open. */
+  openWindow: Stream<RoomWindowEvent>;
+
+  /** Closes a window. */
+  closeWindow: Stream<RoomWindowEvent>;
 }
 ```
 
@@ -54,21 +64,37 @@ interface ChatMessageList {
   conversation, and doesn't show it where it was shown only in a thread. A
   client that shows the room's messages says how many there are while this
   isn't 0.
+- **`windows`** holds the reading session's open
+  [`ChatMessageWindow`](ChatMessageWindow.md)s, each under the `windowId` its
+  client chose; it is absent until the session opens one. **`openWindow`** and
+  **`closeWindow`** set and remove them, as
+  [`ChatMessageWindow`](ChatMessageWindow.md#opening-and-closing) states.
 
 ## Scope
 
-Every field is `PerSpace` ([scopes](../scoped-cell-instances.md#summary)): the
-same for everyone the room's space admits, derived from the room's messages
-when it's read, and stored nowhere, so reading it needs no instance of anything,
-and no write. That is what lets every member read the room's newest messages,
-including a READ member, who can't write (see
-[`ChatRoomOutput`](ChatRoomOutput.md#membership)).
+Every field but the windows is `PerSpace`
+([scopes](../scoped-cell-instances.md#summary)): the same for everyone the
+room's space admits, derived from the room's messages when it's read, and
+stored nowhere, so reading it needs no instance of anything, and no write. That
+is what lets every member read the room's newest messages, including a READ
+member, who can't write (see [`ChatRoomOutput`](ChatRoomOutput.md#membership)).
+`windows` is `PerSession`: each session's are its own, and no part of the
+room's record.
 
 ## Reading the rest
 
 `latest` holds the newest `maxWindowCount` messages of the main conversation,
 and each thread's `messages` the newest of its own (see
-[`ChatRoomPolicy`](ChatRoomPolicy.md)). A client that shows more reads the
-room's stored messages themselves, each a cell, and derives the view it shows
-from their `replyTo` as [`ChatReply`](ChatReply.md#the-two-views) states. A message list offers no stream: every write goes to the room's own
-streams (see [`ChatRoomOutput`](ChatRoomOutput.md#streams)).
+[`ChatRoomPolicy`](ChatRoomPolicy.md)). A window holds up to as many again,
+from either end of either view. A client that shows more reads the room's
+stored messages themselves, each a cell, and derives the view it shows from
+their `replyTo` as [`ChatReply`](ChatReply.md#the-two-views) states. The
+message list's only streams are `openWindow` and `closeWindow`, which change
+nothing but the sending session's windows: every write to the room's record
+goes to the room's own streams (see
+[`ChatRoomOutput`](ChatRoomOutput.md#streams)).
+
+The room's own rendering opens no window. A room's stored result can hold a
+writer claim at `messages/windows` naming the handler that writes the windows,
+and every later program of the room keeps that claim (see `commitWindow` in
+`room-records.tsx`), so the position keeps holding them.

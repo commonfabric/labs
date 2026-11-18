@@ -77,8 +77,9 @@ export function rewritingFetch(
 function requestUrl(input: RequestInfo | URL): URL | undefined {
   try {
     return new URL(input instanceof Request ? input.url : input);
-  } catch (cause) {
-    if (!(cause instanceof TypeError)) throw cause;
+  } catch {
+    // Only a `TypeError` is possible here: a string that is not an absolute
+    // URL.
     return undefined;
   }
 }

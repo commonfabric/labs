@@ -1,0 +1,222 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "color": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "#fef08a",
+        "type": "string"
+      },
+      "date": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "endTime": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "10:00",
+        "type": "string"
+      },
+      "eventId": {
+        "default": "",
+        "type": "string"
+      },
+      "isHidden": {
+        "default": false,
+        "type": "boolean"
+      },
+      "notes": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "startTime": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "09:00",
+        "type": "string"
+      },
+      "title": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "Untitled Event",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "apps/weekly-calendar/event.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AnonymousType_1": {
+        "items": {
+          "$ref": "#/$defs/MentionablePiece"
+        },
+        "type": "array"
+      },
+      "MentionablePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_1"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "mentioned": {
+            "$ref": "#/$defs/AnonymousType_1"
+          }
+        },
+        "required": [
+          "mentioned",
+          "backlinks"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Represents a calendar event with a date, time, and notes.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "backlinks": {
+        "$ref": "#/$defs/AnonymousType_1"
+      },
+      "color": {
+        "type": "string"
+      },
+      "date": {
+        "type": "string"
+      },
+      "endTime": {
+        "type": "string"
+      },
+      "eventId": {
+        "type": "string"
+      },
+      "isHidden": {
+        "type": "boolean"
+      },
+      "notes": {
+        "type": "string"
+      },
+      "setColor": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "newColor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "newColor"
+        ],
+        "type": "object"
+      },
+      "setDate": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "newDate": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "newDate"
+        ],
+        "type": "object"
+      },
+      "setNotes": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "newNotes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "newNotes"
+        ],
+        "type": "object"
+      },
+      "setTime": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "newEndTime": {
+            "type": "string"
+          },
+          "newStartTime": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "newStartTime",
+          "newEndTime"
+        ],
+        "type": "object"
+      },
+      "setTitle": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "newTitle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "newTitle"
+        ],
+        "type": "object"
+      },
+      "startTime": {
+        "type": "string"
+      },
+      "summary": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "date",
+      "startTime",
+      "endTime",
+      "color",
+      "notes",
+      "summary",
+      "isHidden",
+      "eventId",
+      "backlinks",
+      "setTitle",
+      "setDate",
+      "setTime",
+      "setColor",
+      "setNotes",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

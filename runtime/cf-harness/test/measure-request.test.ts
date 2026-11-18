@@ -2,7 +2,9 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
+
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 import { main, measureRequest } from "../scripts/measure-request.ts";
 
@@ -204,5 +206,27 @@ describe("measure-request", () => {
     expect(await main([], out)).toBe(2);
     expect(logged).toEqual([]);
     expect(errors[0]).toContain("usage:");
+  });
+
+  it("exits 2 with its usage on standard error when run as a program with no directory", async () => {
+    // The entry point runs only as a program, so this spawns it, once: a
+    // spawned Deno is slow to start.
+
+    const root = fromFileUrl(new URL("../../..", import.meta.url));
+    const output = await runDenoCommandWithTemporaryLock({
+      root,
+      args: (lock) => [
+        "run",
+        "-A",
+        `--lock=${lock}`,
+        join(root, "runtime/cf-harness/scripts/measure-request.ts"),
+      ],
+    });
+    const decoder = new TextDecoder();
+    expect(output.code).toBe(2);
+    expect(decoder.decode(output.stdout)).toBe("");
+    expect(decoder.decode(output.stderr)).toContain(
+      "usage: measure-request.ts <recorded-artifact-dir>",
+    );
   });
 });

@@ -368,9 +368,11 @@ export function compileAndRun(
         // how we pass input into the builtin.
 
         // The instantiation is the builtin's, in a continuation of its
-        // action: no principal's act attributes what its setup initializes.
+        // action: no principal's act attributes what its setup initializes,
+        // and its transaction holds none of the reads that chose the program.
         runtime.runSynced(result, pattern, input.get(), {
           attributeInitialization: false,
+          runtimeStarted: true,
         });
         runtime.editWithRetry((asyncTx) => {
           result.withTx(asyncTx).key("isHidden").set(true);
@@ -562,10 +564,25 @@ function compileAndRunServed(
         runtime.trackAsyncWork(
           settleAbandonedRequest(
             runtime,
-            "compileAndRun",
-            effectKey,
+            {
+              builtinId: "compileAndRun",
+              effectKey,
+              identity,
+              scope: pending.getAsNormalizedFullLink().scope ?? "space",
+              attributeToBuiltin: true,
+            },
             (settleTx) => {
-              settleTx.tx.scopeKeyIdentity = identity;
+              // TODO(danfuzz): This read of the program, which decides
+              // whether the request is still the target's, puts the program's
+              // label in the ending's join, and so stamps it on everything
+              // the ending writes, the memo's request hash included. The
+              // node's next run reads the memo and takes the label into its
+              // request. Deciding from an in-memory record of the latest
+              // run's program would lose the guarantee that this ending never
+              // lands over a program that replaced it; an ending that read no
+              // input and recorded no hash would end the carry-over, as the
+              // `llm` builtins' does. The tests pinning today's outcomes are
+              // in `served-effect-refusal-rerun.test.ts`.
               const current = snapshotQueryResult(
                 inputs.asSchema<RuntimeProgram>(programSchema).withTx(settleTx)
                   .get(),

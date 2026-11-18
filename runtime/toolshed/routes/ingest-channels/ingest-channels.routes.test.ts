@@ -14,8 +14,8 @@ describe("Ingest channels route (transport + middleware)", () => {
   // ingest-channels.utils.test.ts; what can only be checked HERE is the
   // middleware stack — which is the most novel part of this route package and
   // was otherwise asserted by nothing but a comment. NOTE: the rate limiters
-  // are module-level in .index.ts, so every request in this file spends real
-  // tokens from a bucket shared across the whole test process
+  // belong to the one router .index.ts builds, so every request in this file
+  // spends real tokens from a bucket shared across the whole test process
   // (mint/rotate/revoke: capacity 10, refill 0.1/s). Adding many more requests
   // here will silently turn 401 expectations into 429s. Keep it small, or give
   // the new assertions their own verb.

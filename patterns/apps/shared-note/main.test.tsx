@@ -11,13 +11,10 @@ import {
   equals,
   type FieldAnchors,
   FS,
-  handler,
   NAME,
   pattern,
-  type RepresentsCurrentUser,
   TESTS,
   TILE_UI,
-  type TrustedActionWrite,
   UI,
   Writable,
 } from "commonfabric";
@@ -36,6 +33,8 @@ import {
   propsOf,
   propValue,
   readValue,
+  setBound,
+  styleOf,
 } from "../../tools/test-support/vnode-helpers.ts";
 import SharedNote, {
   type NoteProfile,
@@ -43,47 +42,14 @@ import SharedNote, {
   type StoredComment,
 } from "./main.tsx";
 import { normalizePresenceParticipantName } from "./participant-name.ts";
+import {
+  profileGesture,
+  type TestProfile,
+  writeOwnProfile,
+} from "./test-profile.ts";
 
 const MARKDOWN =
   "---\ntitle: Preserve this\n---\n# Team 😀\n\n- [ ] task\n\n```ts\nconst x = `${literal}`;\n```\n";
-
-/** The reviewed surface and action a person writes their own profile from. */
-const PROFILE_SURFACE = "SharedNoteTestProfileSurface";
-const PROFILE_ACTION = "SharedNoteTestWriteProfile";
-
-/** The gesture writing a profile takes. */
-const profileGesture = { surface: PROFILE_SURFACE, action: PROFILE_ACTION };
-
-/**
- * A stand-in for a viewer's `#profile`, which a pattern test cannot resolve:
- * a profile of the person who wrote it, as a Fabric profile is, and which
- * only `writeOwnProfile` writes, from its reviewed surface.
- */
-type TestProfile = RepresentsCurrentUser<
-  TrustedActionWrite<
-    NoteProfile,
-    typeof writeOwnProfile,
-    typeof PROFILE_ACTION,
-    typeof PROFILE_SURFACE
-  >
->;
-
-/** What `writeOwnProfile` is bound to. */
-interface ProfileWriteState {
-  /** The profile to write. */
-  profile: Writable<TestProfile>;
-
-  /** The name to write into it. */
-  name: string;
-}
-
-/** Writes `name` into `profile`, as its owner does. */
-const writeOwnProfile = handler<unknown, ProfileWriteState>((
-  _event,
-  { profile, name },
-) => {
-  profile.set({ name } as TestProfile);
-});
 
 /**
  * A `cf-selection-change` event for `quote` at `from`, from an editor whose
@@ -101,14 +67,6 @@ const selectionAt = (value: string, from: number, quote: string) => ({
 const selectionIn = (body: string, quote: string) =>
   selectionAt(body, body.indexOf(quote), quote);
 
-/** The `display` an element shown or hidden through its style takes. */
-const displayOf = (node: unknown): unknown =>
-  readValue((propValue(node, "style") as { display?: unknown })?.display);
-
-/** The place among its siblings an element takes through its style. */
-const orderOf = (node: unknown): unknown =>
-  readValue((propValue(node, "style") as { order?: unknown })?.order);
-
 /** The row of the comment whose body is `text`. */
 const rowOf = (root: unknown, text: string): unknown =>
   innermostNode(
@@ -120,6 +78,14 @@ const rowOf = (root: unknown, text: string): unknown =>
 /** The panel's one set of actions, which work on the selected comment. */
 const actionsOf = (root: unknown): unknown =>
   findNodeById(root, "shared-note-comment-actions");
+
+/** Whether the actions are ordered directly after the row of the comment
+ * whose body is `text`. */
+const actionsFollow = (root: unknown, text: string): boolean => {
+  const rowOrder = styleOf(rowOf(root, text), "order");
+  return typeof rowOrder === "number" &&
+    styleOf(actionsOf(root), "order") === rowOrder + 1;
+};
 
 /** A mark the editor is asked to draw, from one anchor to another. */
 type Highlight = {
@@ -168,24 +134,6 @@ const rangeIn = (
 /** How many comments `anchors` holds both anchors of. */
 const anchoredCount = (anchors: FieldAnchors | undefined): number =>
   Object.keys(anchors ?? {}).filter((id) => id.endsWith(":from")).length;
-
-/** The cell a control binds under `prop`, as a `$value` or `$checked`. */
-function boundCell<T>(control: unknown, prop: string): Writable<T>;
-function boundCell(control: unknown, prop: string): unknown {
-  const cell = propsOf(control)?.[prop];
-  if (cell === undefined) throw new Error(`the control binds no ${prop}`);
-  return cell;
-}
-
-/** Writes `value` into the cell a field binds as its `$value`. */
-const typeInto = (field: unknown, value: string): void => {
-  boundCell<string>(field, "$value").set(value);
-};
-
-/** Checks the box a `cf-checkbox` binds as its `$checked`. */
-const check = (box: unknown): void => {
-  boundCell<boolean>(box, "$checked").set(true);
-};
 
 export default pattern(() => {
   const subject = SharedNote({ title: "Team notes", content: MARKDOWN });
@@ -367,18 +315,21 @@ export default pattern(() => {
   const assert_selection_enables_comment = assert(() =>
     commentDisabled(note[UI]) === false &&
     commentDisabled(guest[UI]) === true &&
-    displayOf(findNodeById(note[UI], "shared-note-composer")) === "none"
+    styleOf(findNodeById(note[UI], "shared-note-composer"), "display") ===
+      "none"
   );
   // Each write lands in its own step: a click in the same step as the write
   // of the draft it reads would read the draft as it was.
   const action_open_composer = action(() => clickButton(note[UI], "Comment"));
   const assert_composer_open = assert(() =>
-    displayOf(findNodeById(note[UI], "shared-note-composer")) === "flex" &&
+    styleOf(findNodeById(note[UI], "shared-note-composer"), "display") ===
+      "flex" &&
     !hasText(findNodeById(note[UI], "shared-note-composer"), QUOTE)
   );
   const action_type_comment = action(() =>
-    typeInto(
+    setBound(
       findNodeById(note[UI], "shared-note-comment-draft"),
+      "$value",
       "Needs a date",
     )
   );
@@ -393,7 +344,8 @@ export default pattern(() => {
       comment.replies.get().length === 0 &&
       equals(comment.authorProfile, adaProfile) &&
       range?.from === quoteFrom && range?.to === quoteFrom + QUOTE.length &&
-      displayOf(findNodeById(note[UI], "shared-note-composer")) === "none";
+      styleOf(findNodeById(note[UI], "shared-note-composer"), "display") ===
+        "none";
   });
   const assert_editor_marks_the_comment = assert(() => {
     const highlights = highlightsOf(note[UI]);
@@ -459,13 +411,15 @@ export default pattern(() => {
       findNodeById(borrowed[UI], "shared-note-comment-notice"),
       "Choose a Fabric profile of your own",
     ) &&
-    displayOf(findNodeById(borrowed[UI], "shared-note-composer")) === "none"
+    styleOf(findNodeById(borrowed[UI], "shared-note-composer"), "display") ===
+      "none"
   );
   const assert_stale_selection_refused = assert(() =>
     listed(comments.get()).length === 1 &&
     anchoredCount(note.commentAnchors) === 1 &&
     commentDisabled(note[UI]) === true &&
-    displayOf(findNodeById(note[UI], "shared-note-composer")) === "none"
+    styleOf(findNodeById(note[UI], "shared-note-composer"), "display") ===
+      "none"
   );
   // An agent comments on text it names, which the body holds once.
   const AGENT_QUOTE = "Preserve this";
@@ -491,10 +445,9 @@ export default pattern(() => {
   const assert_row_selected = assert(() =>
     highlightsOf(note[UI])?.find((h) => h.kind === "active")?.id ===
       listed(comments.get()).find((c) => c.body === "Agent note")?.id &&
-    displayOf(actionsOf(note[UI])) === "flex" &&
-    orderOf(actionsOf(note[UI])) ===
-      (orderOf(rowOf(note[UI], "Agent note")) as number) + 1 &&
-    displayOf(actionsOf(guest[UI])) === "none"
+    styleOf(actionsOf(note[UI]), "display") === "flex" &&
+    actionsFollow(note[UI], "Agent note") &&
+    styleOf(actionsOf(guest[UI]), "display") === "none"
   );
   const action_click_highlight = action(() =>
     fireEvent(editorOf(note[UI]), "oncf-highlight-click", {
@@ -505,12 +458,12 @@ export default pattern(() => {
   const assert_highlight_selects_its_comment = assert(() =>
     highlightsOf(note[UI])?.find((h) => h.kind === "active")?.id ===
       listed(comments.get())[0].id &&
-    orderOf(actionsOf(note[UI])) ===
-      (orderOf(rowOf(note[UI], "Needs a date")) as number) + 1
+    actionsFollow(note[UI], "Needs a date")
   );
   const action_type_reply = action(() =>
-    typeInto(
+    setBound(
       findNodeByProp(actionsOf(note[UI]), "aria-label", "Reply"),
+      "$value",
       "Dated it",
     )
   );
@@ -540,8 +493,9 @@ export default pattern(() => {
     })
   );
   const action_type_reply_under_a_borrowed_profile = action(() =>
-    typeInto(
+    setBound(
       findNodeByProp(actionsOf(borrowed[UI]), "aria-label", "Reply"),
+      "$value",
       "Not mine",
     )
   );
@@ -554,10 +508,10 @@ export default pattern(() => {
       findNodeById(borrowed[UI], "shared-note-comment-notice"),
       "Choose a Fabric profile of your own",
     ) &&
-    boundCell<string>(
+    propValue(
         findNodeByProp(actionsOf(borrowed[UI]), "aria-label", "Reply"),
         "$value",
-      ).get() === "Not mine"
+      ) === "Not mine"
   );
   // A verb rewrites the commented text: the anchor covers the replacement,
   // and the row names neither the author's quote nor the text now.
@@ -588,18 +542,20 @@ export default pattern(() => {
   );
   const assert_resolved_comment_hidden = assert(() =>
     listed(comments.get())[0]?.resolved.get() === true &&
-    displayOf(rowOf(note[UI], "Needs a date")) === "none" &&
-    displayOf(actionsOf(note[UI])) === "none" &&
+    styleOf(rowOf(note[UI], "Needs a date"), "display") === "none" &&
+    styleOf(actionsOf(note[UI]), "display") === "none" &&
     highlightsOf(note[UI])?.length === 1
   );
   const action_show_resolved = action(() =>
-    check(findElement(note[UI], "cf-checkbox"))
+    setBound(findElement(note[UI], "cf-checkbox"), "$checked", true)
   );
   const assert_resolved_comment_shown = assert(() =>
-    displayOf(rowOf(note[UI], "Needs a date")) === "flex" &&
-    displayOf(actionsOf(note[UI])) === "flex" &&
-    displayOf(findNode(actionsOf(note[UI]), isButton("Reopen"))) === "flex" &&
-    displayOf(findNode(actionsOf(note[UI]), isButton("Resolve"))) === "none"
+    styleOf(rowOf(note[UI], "Needs a date"), "display") === "flex" &&
+    styleOf(actionsOf(note[UI]), "display") === "flex" &&
+    styleOf(findNode(actionsOf(note[UI]), isButton("Reopen")), "display") ===
+      "flex" &&
+    styleOf(findNode(actionsOf(note[UI]), isButton("Resolve")), "display") ===
+      "none"
   );
   const action_reopen_by_verb = action(() =>
     note.reopenComment.send({ id: listed(comments.get())[0].id })
@@ -621,7 +577,7 @@ export default pattern(() => {
     return agent?.resolved.get() === true && range !== undefined &&
       content.get().slice(range.from, range.to) === AGENT_QUOTE &&
       !highlightsOf(note[UI])?.some((h) => h.id === agent.id) &&
-      displayOf(rowOf(note[UI], "Agent note")) === "flex" &&
+      styleOf(rowOf(note[UI], "Agent note"), "display") === "flex" &&
       hasText(rowOf(note[UI], "Agent note"), AGENT_QUOTE) &&
       !hasText(rowOf(note[UI], "Agent note"), "text no longer in note");
   });
@@ -655,7 +611,11 @@ export default pattern(() => {
     note.prependLine.send({ text: "> Pinned" })
   );
   const action_type_heading_comment = action(() =>
-    typeInto(findNodeById(note[UI], "shared-note-comment-draft"), "Title?")
+    setBound(
+      findNodeById(note[UI], "shared-note-comment-draft"),
+      "$value",
+      "Title?",
+    )
   );
   const action_post_heading_comment = action(() =>
     clickButton(note[UI], "Post")
@@ -687,7 +647,8 @@ export default pattern(() => {
   );
   const assert_moved_selection_refused = assert(() =>
     commentDisabled(note[UI]) === true &&
-    displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
+    styleOf(findNodeById(note[UI], "shared-note-composer"), "display") ===
+      "none" &&
     !listed(comments.get()).some((c) => c.status === "draft")
   );
   const action_editor_restates_the_selection = action(() =>
@@ -698,7 +659,11 @@ export default pattern(() => {
     )
   );
   const action_type_pinned_comment = action(() =>
-    typeInto(findNodeById(note[UI], "shared-note-comment-draft"), "Why pin?")
+    setBound(
+      findNodeById(note[UI], "shared-note-comment-draft"),
+      "$value",
+      "Why pin?",
+    )
   );
   const action_post_pinned_comment = action(() =>
     clickButton(note[UI], "Post")
@@ -720,7 +685,8 @@ export default pattern(() => {
     clickButton(note[UI], "Comment")
   );
   const assert_range_from_before_the_edit_refused = assert(() =>
-    displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
+    styleOf(findNodeById(note[UI], "shared-note-composer"), "display") ===
+      "none" &&
     hasText(
       findNodeById(note[UI], "shared-note-comment-notice"),
       "The note changed under your selection",
@@ -732,7 +698,8 @@ export default pattern(() => {
     const range = rangeIn(note.commentAnchors, pinned?.id);
     return range !== undefined &&
       content.get().slice(range.from, range.to) === PINNED &&
-      displayOf(findNodeById(note[UI], "shared-note-composer")) === "none";
+      styleOf(findNodeById(note[UI], "shared-note-composer"), "display") ===
+        "none";
   });
   // The person selects other text while the composer is open: the composer
   // stays on the text it was opened on, which its anchors hold, and the post
@@ -756,7 +723,7 @@ export default pattern(() => {
   );
   const assert_composer_keeps_its_selection = assert(() => {
     const composer = findNodeById(note[UI], "shared-note-composer");
-    return displayOf(composer) === "flex" &&
+    return styleOf(composer, "display") === "flex" &&
       highlightsOf(note[UI])?.some((h) =>
           h.kind === "active" &&
           listed(comments.get()).some((c) =>
@@ -770,13 +737,20 @@ export default pattern(() => {
     const drafted = listed(comments.get()).find((c) => c.status === "draft");
     return drafted !== undefined && drafted.body === "" &&
       drafted.quote === HEADING &&
-      displayOf(findNodeByProp(guest[UI], "data-comment-id", drafted.id)) ===
+      styleOf(
+          findNodeByProp(guest[UI], "data-comment-id", drafted.id),
+          "display",
+        ) ===
         "none" &&
       !highlightsOf(guest[UI])?.some((h) => h.id === drafted.id) &&
       commentDisabled(note[UI]) === true;
   });
   const action_type_second_look = action(() =>
-    typeInto(findNodeById(note[UI], "shared-note-comment-draft"), "Again?")
+    setBound(
+      findNodeById(note[UI], "shared-note-comment-draft"),
+      "$value",
+      "Again?",
+    )
   );
   const action_post_second_look = action(() => clickButton(note[UI], "Post"));
   const assert_post_lands_on_the_composer_text = assert(() => {
@@ -791,7 +765,8 @@ export default pattern(() => {
   );
   const action_cancel_composer = action(() => clickButton(note[UI], "Cancel"));
   const assert_cancel_removes_the_anchor = assert(() =>
-    displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
+    styleOf(findNodeById(note[UI], "shared-note-composer"), "display") ===
+      "none" &&
     anchoredCount(note.commentAnchors) === listed(comments.get()).length &&
     !listed(comments.get()).some((c) => c.status === "draft")
   );
@@ -806,7 +781,7 @@ export default pattern(() => {
     const drafted = listed(comments.get()).find((c) => c.status === "draft");
     const row = findNodeByProp(otherTab[UI], "data-comment-id", drafted?.id);
     return drafted !== undefined && drafted.quote !== "" &&
-      displayOf(row) === "flex" && hasText(row, drafted.quote) &&
+      styleOf(row, "display") === "flex" && hasText(row, drafted.quote) &&
       !hasText(row, "text no longer in note");
   });
   const action_continue_in_another_tab = action(() =>
@@ -823,8 +798,9 @@ export default pattern(() => {
     )
   );
   const action_type_in_another_tab = action(() =>
-    typeInto(
+    setBound(
       findNodeById(otherTab[UI], "shared-note-comment-draft"),
+      "$value",
       "From tab two",
     )
   );
@@ -832,7 +808,11 @@ export default pattern(() => {
     clickButton(otherTab[UI], "Post")
   );
   const action_type_in_first_tab = action(() =>
-    typeInto(findNodeById(note[UI], "shared-note-comment-draft"), "Tab one")
+    setBound(
+      findNodeById(note[UI], "shared-note-comment-draft"),
+      "$value",
+      "Tab one",
+    )
   );
   const action_post_in_first_tab = action(() => clickButton(note[UI], "Post"));
   const assert_first_tab_post_refused = assert(() => {
@@ -841,7 +821,8 @@ export default pattern(() => {
     );
     return posted !== undefined && posted.status === "posted" &&
       !listed(comments.get()).some((c) => c.body === "Tab one") &&
-      displayOf(findNodeById(note[UI], "shared-note-composer")) === "flex" &&
+      styleOf(findNodeById(note[UI], "shared-note-composer"), "display") ===
+        "flex" &&
       hasText(
         findNodeById(note[UI], "shared-note-comment-notice"),
         "posted or discarded in another tab",
@@ -855,7 +836,8 @@ export default pattern(() => {
     listed(comments.get()).some((c) =>
       c.body === "From tab two" && c.status === "posted"
     ) &&
-    displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
+    styleOf(findNodeById(note[UI], "shared-note-composer"), "display") ===
+      "none" &&
     anchoredCount(note.commentAnchors) === listed(comments.get()).length
   );
   // A draft discarded in another tab takes its anchor with it, and the first
@@ -897,7 +879,8 @@ export default pattern(() => {
     clickButton(note[UI], "Cancel")
   );
   const assert_composer_closed_after_discard = assert(() =>
-    displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
+    styleOf(findNodeById(note[UI], "shared-note-composer"), "display") ===
+      "none" &&
     listed(comments.get()).some((c) => c.body === "From tab two")
   );
 

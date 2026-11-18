@@ -95,6 +95,8 @@ const observeTurn = async (
           fabricSessionFactory: () =>
             Promise.resolve({
               pieces: {
+                // Released when the transport's input ends.
+                runtime: { dispose: () => Promise.resolve() },
                 getSpace: () =>
                   "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
                 getDefaultPattern: () =>

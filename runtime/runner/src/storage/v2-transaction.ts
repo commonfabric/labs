@@ -1206,6 +1206,12 @@ export class V2StorageTransaction implements IStorageTransaction {
   #previousDocument?: RecentDocument;
 
   /**
+   * Where `write()` and `writeBatch()` report each write that arrives without
+   * the write chokepoint's mark: every sink `reportUnmarkedWrites()` added.
+   */
+  #unmarkedWriteSinks: ((address: IMemorySpaceAddress) => void)[] = [];
+
+  /**
    * Complete the transaction, keeping its result and releasing the state that
    * only an open transaction needs: the materialized branches, the read and
    * write activity, and the cached reactivity log. Those are consumed while
@@ -2443,6 +2449,7 @@ export class V2StorageTransaction implements IStorageTransaction {
         address,
         options?.delete === true ? undefined : value,
       );
+      for (const sink of this.#unmarkedWriteSinks) sink(address);
     }
     return this.#writeWithinBranch(
       ready.ok,
@@ -2453,9 +2460,16 @@ export class V2StorageTransaction implements IStorageTransaction {
     );
   }
 
+  /** @inheritDoc */
+  reportUnmarkedWrites(sink: (address: IMemorySpaceAddress) => void): void {
+    this.#unmarkedWriteSinks.push(sink);
+  }
+
   writeBatch(
     writes: Iterable<ITransactionWriteRequest>,
+    options?: IWriteOptions,
   ): Result<Unit, WriterError | WriteError> {
+    const marked = passedWriteChokepoint(options);
     let run: ITransactionWriteRequest[] = [];
     let runKey: string | undefined;
 
@@ -2468,14 +2482,21 @@ export class V2StorageTransaction implements IStorageTransaction {
       if (ready.error) {
         return { error: ready.error };
       }
-      // A batch request carries no options, so it carries no mark either. The
-      // whole run is checked before any of it is applied.
+      // A batch request carries no options, so it carries no mark, and the
+      // whole run is checked before any of it is applied. The batch's own
+      // mark says only that the chokepoint saw each write, which is what an
+      // unmarked batch's writes are reported for lacking.
       for (const write of run) {
         this.#refuseUnmarkedMemberChange(
           ready.ok,
           write.address,
           write.delete === true ? undefined : write.value,
         );
+      }
+      if (!marked) {
+        for (const sink of this.#unmarkedWriteSinks) {
+          for (const write of run) sink(write.address);
+        }
       }
       const result = this.#writeBatchRun(address.space, ready.ok, run);
       run = [];
@@ -3225,7 +3246,17 @@ export class V2StorageTransaction implements IStorageTransaction {
       return { error: validation.error };
     }
 
-    const promise = this.#runSplitCommits(commits, options);
+    // A later space's writes reach its replica only once the server has
+    // answered for the spaces before it, and until then a read of that space
+    // does not see them. The storage manager tracks the commit until the
+    // last space's writes are in its replica, for a reader that must see all
+    // of them: the event that runs next (scheduler-v2 §7.5).
+    const applied = Promise.withResolvers<void>();
+    if (commits.length > 1) {
+      this.#storage.trackMultiSpaceCommitApplying?.(applied.promise);
+    }
+    const promise = this.#runSplitCommits(commits, applied.resolve, options);
+    void promise.then(() => applied.resolve(), () => applied.resolve());
     this.#state = { status: "pending", promise };
     try {
       const result = await promise;
@@ -3282,8 +3313,14 @@ export class V2StorageTransaction implements IStorageTransaction {
     return ordered;
   }
 
+  /**
+   * Commits each of `commits` to its space in turn, stopping at the first
+   * failure, and calls `handedOver` once the last one's writes are in its
+   * replica.
+   */
   async #runSplitCommits(
     commits: { space: MemorySpace; native: NativeStorageCommit }[],
+    handedOver: () => void,
     options?: NativeCommitOptions,
   ): Promise<Result<Unit, StorageTransactionRejected>> {
     for (let i = 0; i < commits.length; i++) {
@@ -3312,7 +3349,10 @@ export class V2StorageTransaction implements IStorageTransaction {
       // space and everything after it are left uncommitted.
       try {
         endLocalReadValidationStretch();
-        const result = await commitNative(native, this, options);
+        // The replica takes the writes before the call first yields.
+        const committed = commitNative(native, this, options);
+        if (i === commits.length - 1) handedOver();
+        const result = await committed;
         if (result.error) {
           multiSpaceCommitLogger.error(
             "multi-space-commit-failed",

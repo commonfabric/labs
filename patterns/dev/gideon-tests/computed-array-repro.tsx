@@ -11,22 +11,10 @@ import {
 } from "commonfabric";
 
 /**
- * MINIMAL BUG REPRODUCTION
- *
- * Bug: computed() returning array with onClick handler "sticks" empty
- *
- * Root cause: When computed() returns JSX array containing onClick handlers,
- * and the array becomes empty (e.g. filtering to no results), the UI
- * permanently shows empty even when the computed should return items again.
- *
- * To reproduce:
- * 1. Add some "Pending" items
- * 2. Switch to "Done" tab (shows empty - no done items)
- * 3. Switch back to "All" or "Pending" tab
- * 4. BUG: Items don't reappear!
- *
- * Workaround: Use items.map() with computed style to hide/show instead of
- * computed() returning filtered array.
+ * A computed() that returns a filtered array of JSX rows, each with an onClick
+ * handler. Filtering to no rows ("Done" while every item is pending) and then
+ * back to "All" or "Pending" puts the rows back in the view tree the pattern
+ * returns; its test reads that tree, not the DOM rendered from it.
  */
 
 type Status = "pending" | "done";
@@ -81,7 +69,6 @@ export default pattern<Input, Output>(({ items }) => {
               Filter: {filter} | Total: {computed(() => items.get().length)}
             </p>
 
-            {/* BUG: This breaks after visiting empty tab */}
             {computed(() =>
               (filter.get() === "all"
                 ? items.get().filter((i) => i != null)

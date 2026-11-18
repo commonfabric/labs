@@ -55,6 +55,12 @@ Working references:
 
 ## Component Reference
 
+The attribute names below are the components' HTML attributes. In pattern JSX a
+prop sets the property, so write the camel-case property name: `default-size` is
+`defaultSize`, `button-text` is `buttonText`. Only `data-*`, `aria-*` and event
+props (`oncf-change`) keep a hyphen; any other hyphenated prop sets nothing, and
+the compiler warns of it.
+
 ### 1. cf-button
 
 **Purpose**: Interactive button element **Tag**: `<cf-button>` **Attributes**:
@@ -485,20 +491,23 @@ await input.pressSequentially("user@example.com");
 
 **Purpose**: Tabbed interface container **Tag**: `<cf-tabs>` **Attributes**:
 
-- `default-value` - string (initially active tab)
+- `value` - string, the active tab; a property only, with no attribute (bind a
+  cell with `$value`)
 - `orientation` - "horizontal" | "vertical" **Events**:
 - `cf-change` - Fired on tab change with detail: `{ value }` **Slots**: Default
   slot for cf-tab-list and cf-tab-panel elements **Example**:
 
-```html
-<cf-tabs default-value="tab1">
+In a pattern, where `value` sets the property:
+
+```tsx
+<cf-tabs value="tab1">
   <cf-tab-list>
     <cf-tab value="tab1">Tab 1</cf-tab>
     <cf-tab value="tab2">Tab 2</cf-tab>
   </cf-tab-list>
   <cf-tab-panel value="tab1">Content 1</cf-tab-panel>
   <cf-tab-panel value="tab2">Content 2</cf-tab-panel>
-</cf-tabs>
+</cf-tabs>;
 ```
 
 ### 22. cf-tab-list
@@ -602,8 +611,9 @@ Default slot for cf-tab elements
   where there is not:
   `<cf-resizable-panel-group direction="horizontal" stackBelow={768}>`
   **Events**:
-- `cf-resize` - Fired on resize with detail: `{ panels }` **Slots**: Default
-  slot for panels and handles
+- `cf-resize` - Fired on the group itself (it does not bubble) when a person
+  resizes its panels, with detail `{ sizes }`: each panel's percentage, in
+  document order **Slots**: Default slot for panels and handles
 
 ### 30. cf-resizable-panel
 
@@ -832,7 +842,8 @@ automatically on its own.
     </cf-grid>
   </cf-card>
 
-  <cf-tabs default-value="overview">
+  <!-- The active tab is the value property, which has no attribute. -->
+  <cf-tabs>
     <cf-tab-list>
       <cf-tab value="overview">Overview</cf-tab>
       <cf-tab value="analytics">Analytics</cf-tab>

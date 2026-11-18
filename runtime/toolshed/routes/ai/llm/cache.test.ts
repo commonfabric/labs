@@ -11,11 +11,9 @@ import type { LanguageModel } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 
 import { CACHE_DIR, requestsCaching } from "./cache.ts";
-import router from "./llm.index.ts";
-import { MODELS } from "./models.ts";
-import createApp from "@/lib/create-app.ts";
-
-const app = createApp().route("/", router);
+import { diskResponseCache } from "./llm.handlers.ts";
+import { createLLMRouter } from "./llm.router.ts";
+import { registryWith } from "@/test/fixtures/llm-models.ts";
 
 const MOCK_MODEL_NAME = "mock:cache-model";
 
@@ -67,51 +65,40 @@ async function cachedFiles(): Promise<Set<string>> {
 }
 
 /**
- * Registers `model` under a name `findModel` resolves, runs `body`, then takes
- * the registration back out and removes whatever `body` left in the response
- * cache.
+ * Runs `body` with a poster for routes serving `model` alone over the disk
+ * cache, then removes whatever `body` left in the response cache.
  */
 async function withMockModel<T>(
   model: LanguageModel,
-  body: () => Promise<T>,
+  body: (post: (requestBody: unknown) => Promise<Posted>) => Promise<T>,
 ): Promise<T> {
-  MODELS[MOCK_MODEL_NAME] = {
-    model,
-    name: MOCK_MODEL_NAME,
-    capabilities: {
-      contextWindow: 1000,
-      maxOutputTokens: 100,
-      streaming: true,
-      systemPrompt: true,
-      stopSequences: true,
-      prefill: false,
-      images: false,
-      reasoning: false,
-    },
-    aliases: [],
+  const router = createLLMRouter({
+    models: registryWith(MOCK_MODEL_NAME, model),
+    cache: diskResponseCache,
+  });
+  const post = async (requestBody: unknown): Promise<Posted> => {
+    const response = await router.request("/api/ai/llm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    });
+    return {
+      status: response.status,
+      content: (await response.json()).content,
+    };
   };
   const before = await cachedFiles();
   try {
-    return await body();
+    return await body(post);
   } finally {
-    delete MODELS[MOCK_MODEL_NAME];
     for (const name of await cachedFiles()) {
       if (!before.has(name)) await Deno.remove(`${CACHE_DIR}/${name}`);
     }
   }
 }
 
-/** Posts a body and returns the status and the message content it carried. */
-async function post(
-  requestBody: unknown,
-): Promise<{ status: number; content: unknown }> {
-  const response = await app.request("/api/ai/llm", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(requestBody),
-  });
-  return { status: response.status, content: (await response.json()).content };
-}
+/** The status of a response and the message content it carried. */
+type Posted = { status: number; content: unknown };
 
 describe("cache", () => {
   describe("requestsCaching()", () => {
@@ -134,7 +121,7 @@ describe("cache", () => {
 
     it("answers an identical second request without asking the model again", async () => {
       const { model, asked } = countingModel();
-      await withMockModel(model, async () => {
+      await withMockModel(model, async (post) => {
         const request = {
           model: MOCK_MODEL_NAME,
           messages: [{ role: "user", content: `Hi ${crypto.randomUUID()}` }],
@@ -150,7 +137,7 @@ describe("cache", () => {
 
     it("asks the model again for a request that sets `cache` to `false`", async () => {
       const { model, asked } = countingModel();
-      await withMockModel(model, async () => {
+      await withMockModel(model, async (post) => {
         const request = {
           model: MOCK_MODEL_NAME,
           messages: [{ role: "user", content: `Hi ${crypto.randomUUID()}` }],

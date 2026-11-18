@@ -1294,4 +1294,48 @@ describe("invites", () => {
       await f.close();
     }
   });
+  describe("parseInviteOperation()", () => {
+    const inviteId = "A".repeat(22);
+
+    it("returns `null` for a body that is not a record", () => {
+      for (const body of [null, "", [], 7]) {
+        expect(parseInviteOperation("list", body)).toBeNull();
+        expect(parseInviteOperation("revoke", body)).toBeNull();
+      }
+    });
+    it("returns `null` for an operation it does not name", () => {
+      expect(parseInviteOperation("delete", { inviteId })).toBeNull();
+      expect(parseInviteOperation(undefined, {})).toBeNull();
+    });
+    it("returns a revocation naming exactly one invitation", () => {
+      expect(parseInviteOperation("revoke", { inviteId })).toEqual({
+        operation: "revoke",
+        body: { inviteId },
+      });
+      expect(parseInviteOperation("revoke", {})).toBeNull();
+      expect(parseInviteOperation("revoke", { inviteId: 7 })).toBeNull();
+      expect(parseInviteOperation("revoke", { inviteId, code: "B" }))
+        .toBeNull();
+    });
+    it("returns a receipts query for every invitation or for one", () => {
+      expect(parseInviteOperation("receipts", {})).toEqual({
+        operation: "receipts",
+        body: {},
+      });
+      expect(parseInviteOperation("receipts", { inviteId })).toEqual({
+        operation: "receipts",
+        body: { inviteId },
+      });
+      expect(parseInviteOperation("receipts", { inviteId: 7 })).toBeNull();
+      expect(parseInviteOperation("receipts", { inviteId, did: "x" }))
+        .toBeNull();
+    });
+    it("returns a listing only for an empty body", () => {
+      expect(parseInviteOperation("list", {})).toEqual({
+        operation: "list",
+        body: {},
+      });
+      expect(parseInviteOperation("list", { inviteId })).toBeNull();
+    });
+  });
 });
