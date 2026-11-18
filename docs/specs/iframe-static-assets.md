@@ -2,14 +2,15 @@
 
 ## Status
 
-Parts 1 to 6 are built, and part 7 is proposed. The document covers files that ship with a pattern: images, fonts,
-and audio. Files people add while using a pattern are out of scope.
+Parts 1 to 6 are built. Part 7 is a proposal whose details are open. The
+document covers files that ship with a pattern: images, fonts, and audio. Files
+people add while using a pattern are out of scope.
 
-## The problem
+## Constraints
 
 An iframe guest (`docs/common/ai/iframe-pattern-guide.md`) draws its own page,
 and a page often needs an image, a font, or a sound that the pattern's author
-supplies. Three facts constrain how a guest can get one.
+supplies. Three facts constrain how a guest gets one.
 
 **The guest's policy admits few sources.** The guest runs under a Content
 Security Policy that the embedding page sets. Labs' policy is `CSP` in
@@ -31,28 +32,27 @@ URLs, and neither admits `fetch()` of a `data:` URL, because that is a
 `createImageBitmap()`, `FontFace`, or Web Audio's `decodeAudioData()`, since
 no fetch directive governs that.
 
-**Data files hold text.** A pattern attaches files with `dataFile()`
-(`DataFileFunction` in `base/api/index.ts`). `decodeDataFile` in
-`base/text/src/utf8.ts` decodes every attached file as strict UTF-8 and refuses
-one that is not, so a PNG cannot be attached today.
+**A source package holds text.** A pattern attaches files with `dataFile()`
+(`DataFileFunction` in `base/api/index.ts`), and each is stored in the
+program's source package, which holds text. Part 2 is how a binary file is
+stored there.
 
 **A JSX prop is stored with every instance.** Setup writes a piece's result
 document from the pattern's result template (`#nextResultProjection` in
 `runtime/runner/src/runner.ts`), and a string passed as a JSX prop is written
 into that document whole, unless part 1 applies to it. An iframe pattern passes
 its guest as `src={dataFile("./guest.html")}` and
-`script={dataFile("./guest.js")}`. Written inline, as for
-`patterns/examples/iframe-verb-list/`, whose `guest.js` is 137 KB, each further
-instance adds 147 KB of revision data, and the commit log holds the same again.
-The program's source set already holds one copy of each file, as a code
-document (`docs/specs/content-addressed-schemas.md`, "Code documents"), shared
-by every piece in the space. Images passed the same way would add each image
-to every piece.
+`script={dataFile("./guest.js")}`. Written inline, a 137 KB `guest.js`, which
+is the size of `patterns/examples/iframe-verb-list/`'s, adds 147 KB of
+revision data to each further instance, and the commit log holds the same
+again. The program's source set holds one copy of each file, as a code document
+(`docs/specs/content-addressed-schemas.md`, "Code documents"), shared by every
+piece in the space. Images written inline would add each image to every piece.
 
 ## Design
 
-Seven parts. The first stands on its own and removes the per-instance copy of
-every guest that reads its files with `dataFile()`.
+Seven parts. The first stands on its own: it stores every guest that reads its
+files with `dataFile()` once per space rather than once per piece.
 
 1. A string a `dataFile` reader returns is stored in a result document as a
    link to its code document.
@@ -66,7 +66,7 @@ every guest that reads its files with `dataFile()`.
 6. `scripts/write-iframe-wrapper.ts` writes the guest as two data files and
    generates the `assets` prop.
 7. A client writes large data files ahead of the program, so assets are bounded
-   per file rather than per program.
+   per file rather than per program. Not built.
 
 The author's side, end to end, for a pattern whose `assets/` directory holds
 `glaze.png`, `menu.woff2`, and `bell.mp3`:
@@ -105,6 +105,7 @@ const bell = await audio.decodeAudioData(fabric.asset("bell").bytes().buffer);
 
 A guest whose document only shows assets needs no script at all: the
 substitution in part 4 happens before the document is parsed.
+`patterns/examples/iframe-donut-menu/` is a complete example.
 
 ## 1. Data-file strings are stored by reference
 
@@ -115,9 +116,8 @@ The code document is staged in the same transaction with
 `runtime/runner/src/storage/extended-storage-transaction.ts`, which derives the
 id from the content and skips the write once the server has confirmed the
 document exists. For `dataFile()` the document is the one the source set
-already holds. For a string built when it is read, such as an SVG file's
-`data:` URL, the first piece set up in a space writes it and every later piece
-links to it.
+holds. For a string built when it is read, such as an SVG file's `data:` URL,
+the first piece set up in a space writes it and every later piece links to it.
 
 - **Which strings.** The readers record each string they return in the
   engine's `DataFileStrings` (`runtime/runner/src/data-file-strings.ts`), keyed
@@ -126,10 +126,9 @@ links to it.
   much. The rule applies to the result projection only. A computed value
   derived from a data file is written by its computation, inline.
 - **Why it is keyed to `dataFile`.** A code document carries no CFC envelope.
-  Program files are already stored that way, so linking to one exposes nothing
-  the space did not already hold unlabeled. A rule that moved every long
-  string into a code document would take labeled values out from under their
-  labels.
+  Program files are stored that way, so linking to one exposes nothing the
+  space does not hold unlabeled. A rule that moved every long string into a
+  code document would take labeled values out from under their labels.
 - **Reading.** Readers of the result document follow the link as they follow
   any sigil link, and the commit boundary refuses a code document whose
   content does not hash to its id. A render read returns a linked prop as a
@@ -143,19 +142,18 @@ links to it.
   store, so a stored link compares equal to the link a later setup builds. A
   piece whose stored projection holds the string inline differs from the new
   projection, and its next setup rewrites it with the link.
-- **CFC.** The change alters stored bytes and relies on two rules
-  `content-addressed-schemas.md` already states: a code document carries no
-  envelope, and a link to one in a labeled record records no link-write policy
-  input. The expected classification under
-  `docs/development/cfc-spec-correspondence.md` is a host arrangement, which
-  the implementing pull request confirms.
+- **CFC.** Under `docs/development/cfc-spec-correspondence.md` this is a host
+  arrangement: it changes stored bytes, and rests on two rules
+  `content-addressed-schemas.md` states, that a code document carries no
+  envelope and that a link to one in a labeled record records no link-write
+  policy input.
 
 ## 2. Binary data files and `dataFile.url()`
 
 ### Media types
 
-A closed table maps an extension to a media type and says how the file is
-stored:
+A closed table in `base/text/src/data-file.ts` maps an extension to a media
+type and says how the file is stored:
 
 | Extensions | Media type | Stored as |
 | --- | --- | --- |
@@ -180,52 +178,51 @@ into an attribute, a CSS `url()`, or JSON as it is.
 
 ### Attaching
 
-`decodeDataFile` gains the branch: a file whose extension the table stores as a
-`data:` URL is stored as `data:<media type>;base64,<bytes>`, and every other
-file is decoded as strict UTF-8, as now. Every reader of a local or served data
-file already goes through it: the three in `base/js-compiler/program.ts` and
-the one in `runtime/runner/src/harness/patterns-route.deno.ts`. Because the
-stored form is text, code documents, identity hashing (a data document is
-hashed as a leaf over its stored contents and name), the compile cache, the CLI
-and `setsrc` are unchanged.
+`decodeDataFile` stores a file whose extension the table stores as a `data:`
+URL as `data:<media type>;base64,<bytes>`, and decodes every other file as
+strict UTF-8, refusing one that is not valid UTF-8 by name. Every reader of a
+local, served, or fetched data file goes through it: the three in
+`base/js-compiler/program.ts` and the one in
+`runtime/runner/src/harness/patterns-route.deno.ts`. Because the stored form is
+text, code documents, identity hashing (a data document is hashed as a leaf
+over its stored contents and name), the compile cache, the CLI, and `setsrc`
+treat a binary file as any other.
 
-Whatever writes a source package back to disk inverts the encoding.
-`writeSourcePackage` in `runtime/cli/lib/piece.ts`, which `cf piece getsrc`
-uses, writes each file with `Deno.writeTextFile`; it writes a file the table
-stores as a `data:` URL as its decoded bytes instead. The inverse lives beside
-`decodeDataFile`, so a `getsrc` followed by a `setsrc` attaches the same bytes.
+Whatever writes a source package back to disk inverts the encoding with
+`encodeDataFile`, beside `decodeDataFile`. `writeSourcePackage` in
+`runtime/cli/lib/piece.ts`, which `cf piece getsrc` uses, writes each file as
+the bytes it returns, a binary file's decoded bytes among them, so a `getsrc`
+followed by a `setsrc` attaches the same bytes.
 
 ### Size
 
-Nothing here caps a file on its own. What bounds assets is the request that
-carries the program. Under server execution, `upload` and `setsrc` send the
-whole program in one request, which takes at most 8 MiB, and 4 MiB on a
-connection through the memory router; the client refuses a larger one with
+Nothing caps a file on its own. What bounds assets is the request that carries
+the program. Under server execution, `upload` and `setsrc` send the whole
+program in one request, which takes at most 8 MiB, and 4 MiB on a connection
+through the memory router; the client refuses a larger one with
 `payload-too-large` before sending
 (`docs/features/server-pattern-lifecycle.md`). A binary file counts at four
 thirds of its size, so on a routed deployment a program's code and assets
 together have room for about 3 MiB of image, font, and audio bytes. Part 7
-turns that into a bound per file.
+would turn that into a bound per file.
 
 ### Reading
 
-- `dataFile(path)` returns a text file's contents, as now. On a file the table
-  stores as a `data:` URL it throws, naming the file and `dataFile.url()`.
+- `dataFile(path)` returns a text file's contents. On a file the table stores
+  as a `data:` URL it throws, naming the file and `dataFile.url()`.
 - `dataFile.url(path)` returns a base64 `data:` URL for any file in the table:
   the stored string for a binary file, and a URL built from the text for SVG. A
   file outside the table throws, listing the table.
 
-`DataFileFunction` becomes a function with `url` and `urls` members (part 3).
-The builder's placeholder in `runtime/runner/src/builder/factory.ts` and the
+`DataFileFunction` is a function with `url` and `urls` members (part 3). The
+builder's placeholder in `runtime/runner/src/builder/factory.ts` and the
 per-module reader in `dataFileBinding`
-(`runtime/runner/src/sandbox/module-record-compiler.ts`) each gain them, and
-`deno task gen-commonfabric-types` regenerates the declarations the pattern
-compiler reads.
+(`runtime/runner/src/sandbox/module-record-compiler.ts`) both implement them.
 
-The compile-time scan attaches the files a module's source names. It already
-recognizes `dataFile("…")` and `ns.dataFile("…")` with a string literal
-(`dataFileReadPath` in `base/js-compiler/typescript/resolver.ts`); it also
-recognizes `.url("…")` and `.urls("…")` on either.
+The compile-time scan attaches the files a module's source names. It recognizes
+`dataFile("…")` and `ns.dataFile("…")` with a string literal, and `.url("…")`
+and `.urls("…")` on either (`dataFileRead` in
+`base/js-compiler/typescript/resolver.ts`).
 
 ## 3. `dataFile.urls()`: a directory of assets
 
@@ -293,12 +290,12 @@ same. `cf-asset:` is therefore reserved in a guest's document; prose that needs
 those characters writes the colon as `&#58;`.
 
 The substitution is plain text, made before anything parses the document. Two
-other places were considered and do not work. The outer frame parses the
-document but deliberately never serializes it again, since `DOMParser` parses
-with scripting disabled and serializing changes `<noscript>` content
-(`presentedDocument` in `base/iframe-sandbox/src/outer-frame-script.js`). A
-script in the guest that rewrote references would run after the parser had
-already tried to load them, and each attempt would be a policy violation.
+other places do not work. The outer frame parses the document but deliberately
+never serializes it again, since `DOMParser` parses with scripting disabled and
+serializing changes `<noscript>` content (`presentedDocument` in
+`base/iframe-sandbox/src/outer-frame-script.js`). A script in the guest that
+rewrote references would run after the parser had already tried to load them,
+and each attempt would be a policy violation.
 
 **It hands the guest the record.** The host writes it into the document right
 after its doctype, ahead of every script, as an element that is not executed,
@@ -314,7 +311,7 @@ guest's initial `pull()`.
 
 ## 5. The guest's `fabric.asset()`
 
-`FabricClient` in `base/iframe-sandbox/src/guest.ts` gains:
+`FabricClient` in `base/iframe-sandbox/src/guest.ts` has:
 
 ```ts
 // Shown for illustration only.
@@ -351,11 +348,10 @@ WebGL texture without an element.
 ## 6. The wrapper generator
 
 `scripts/write-iframe-wrapper.ts` writes the guest the way hand-written
-patterns hold it, so that part 1 reaches it. A string literal in the wrapper,
-which is how the guest could otherwise travel, is not a `dataFile` string, and
-each piece would store the whole guest. Ring Loops is built with the
-generator, in labs and in Loom, and so are three of Loom's foundation
-patterns.
+patterns hold it, so that part 1 reaches it. A string literal in the wrapper is
+not a `dataFile` string, and each piece would store the whole guest. Ring Loops
+is built with the generator, in labs and in Loom, and so are three of Loom's
+foundation patterns.
 
 - It writes the bundle to `guest.js` beside the wrapper, and the wrapper reads
   it with `dataFile()` and passes it as `script`.
@@ -368,7 +364,9 @@ patterns.
 - Each file it writes is refused when it exists already, unless `--force`, and
   is replaced through a rename, so a forced run never writes through a link
   into a source file. It refuses before writing anything when an output would
-  replace a source file.
+  replace a source file. Two wrappers generated into one directory share its
+  `guest.js` and `guest.html`, so each generated pattern has a directory of its
+  own.
 - `IFRAME_PATTERN` takes `assets`: a directory path, which the wrapper passes
   as `dataFile.urls(path)`, or a record from a name to a file path, which it
   passes as `dataFile.url(path)` for each. Paths are relative to the contract.
@@ -377,18 +375,18 @@ patterns.
 
 ## 7. Assets beyond one request
 
-A data document is a code document: content-addressed, verified against its id
-when the server stores it, and written with an idempotent blind write. A
-client can therefore write each data document larger than some threshold in a
-request of its own before the program, and send the program with a reference
-to that document in place of the file's contents. The server reads a file sent
-that way from the document the reference names, after checking that the space
-holds it.
+Not built. A data document is a code document: content-addressed, verified
+against its id when the server stores it, and written with an idempotent blind
+write. So a client could write each data document larger than some threshold in
+a request of its own before the program, and send the program with a reference
+to that document in place of the file's contents, and the server would read a
+file sent that way from the document the reference names, after checking that
+the space holds it.
 
-Each asset is then bounded by one request, about 3 MiB of bytes on a routed
-deployment, and a program's assets together are not bounded by the program's
-request. A single file larger than one request would need a document stored in
-parts, which this spec does not propose.
+Each asset would then be bounded by one request, about 3 MiB of bytes on a
+routed deployment, and a program's assets together would not be bounded by the
+program's request. A single file larger than one request would need a document
+stored in parts, which this spec does not propose.
 
 This needs a change to the program a lifecycle request carries, which
 `docs/features/server-pattern-lifecycle.md` describes, and to the path a client
@@ -407,6 +405,9 @@ uses when it writes a source set itself. The details are open.
   asset's name, and the runtime refuses both as keys of a stored record
   (`isUnsafeObjectKey` in `base/js-values/src/types.ts`), so a view whose
   `assets` holds one is refused when setup stores it.
+- **Testing a guest that reads assets in Deno.** `openGuestPage()` in
+  `patterns/tools/test-support/iframe-guest.ts` loads `guest.html` as written,
+  with no assets in it, so such a guest is tested in a browser.
 
 ## Alternatives considered
 
@@ -435,13 +436,7 @@ uses when it writes a source set itself. The details are open.
 ## Open questions
 
 - How `runtime/fuse` presents a binary data file in a piece's source: as its
-  decoded bytes, or read-only in its stored form. It presents and accepts text
-  today.
+  decoded bytes, or read-only in its stored form. It presents and accepts a
+  data file's stored text.
 - Part 7's threshold, and how a lifecycle request names a file it does not
   carry.
-
-## Remaining work
-
-Part 7, once its open questions are settled. It changes the program a
-lifecycle request carries, so `docs/features/server-pattern-lifecycle.md`
-changes with it.

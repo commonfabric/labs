@@ -652,8 +652,8 @@ TypeScript. Its stored bytes are text: a binary media file, decided by its
 extension, is stored as a base64 `data:` URL (`decodeDataFile` in
 `base/text/src/data-file.ts`). Both namespaces are reserved against authored
 imports. The compiled
-set carries the same data documents under `kind: "data"`, with the authored
-bytes as their `code`, so a warm load has everything the pattern needs without
+set carries the same data documents under `kind: "data"`, with their stored
+text as their `code`, so a warm load has everything the pattern needs without
 reading the source set. Cold recovery preserves source-package links on every
 module that owns them, including when the requested pattern is a child of that
 module. Recompilation resolves those attached sources and partitions those data
@@ -1215,9 +1215,8 @@ index's restart-stable `action` column,
 - Import-graph discovery, including `export * from` and inline import types,
   and the `dataFile()` reads that decide which module owns a data file's edge:
   [`scanModuleDeclarations`][c5], one parse per module, shared across a
-  compile through [`scanModules`][c3]. [`collectImportSpecifiers`][c5],
-  [`collectDataFileNames`][c5], and [`collectDataDirectoryNames`][c5] each
-  return one part of that scan.
+  compile through [`scanModules`][c3]. [`collectImportSpecifiers`][c5] and
+  [`collectDataReads`][c5] each return one half of that scan.
 - Record assembly and the warm-load rebuild: [`compileSourcesToRecords`][c7],
   [`deriveModuleRecordFields`][c7], [`buildRecordsFromCompiled`][c7].
 - Loading: [`openModuleGraph`][c6], [`loadModuleGraph`][c6] and

@@ -122,8 +122,9 @@ pattern. That call is the whole declaration: `setsrc`, `check`, `test` and
 follow what the source imports. Nothing names the file a second time on a
 command line.
 
-A data file is stored verbatim beside the source. Deployment never parses,
-type-checks, or compiles it, and no pattern can import it. It must be UTF-8
+A data file is stored beside the source, and `cf piece getsrc` returns it byte
+for byte. Deployment never parses, type-checks, or compiles it, and no pattern
+can import it. It must be UTF-8
 text, or an image, a font, or a sound that `dataFile.url()` reads (below), and
 it must sit inside the deployment root, which the CLI infers to cover the main
 entry, every test entry, and every data file. Like a test entry, a data file is

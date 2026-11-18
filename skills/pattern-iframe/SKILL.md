@@ -69,9 +69,10 @@ What the guides cannot leave to judgment:
 - An image, a font, or a sound the pattern ships is a file in its directory,
   handed to `cf-iframe` as `assets={dataFile.urls("./assets")}`. `guest.html`
   refers to one as `cf-asset:<name>`, and the guest's script reads one with
-  `fabric.asset(name)`. The guest's policy refuses a CDN or host URL, a `blob:`
-  URL, and `fetch()`; "Images and other assets" in
-  `docs/common/ai/iframe-pattern-guide.md` has the rest.
+  `fabric.asset(name)`. A `data:` URL is the one image source every embedding's
+  policy admits; a CDN URL, a `blob:` URL, and `fetch()` of a `data:` URL are
+  refused. "Images and other assets" in `docs/common/ai/iframe-pattern-guide.md`
+  has the rest.
 
 `patterns/examples/iframe-verb-list/` is the smallest complete example, with a
 verb; `patterns/showcase/iframe-signal-atlas/` adds a per-user SQLite database

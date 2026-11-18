@@ -513,10 +513,11 @@ game's art.
 ## Images and other assets
 
 A pattern ships an image, a font, or a sound as a file beside `main.tsx` and
-hands it to the guest through `cf-iframe`'s `assets`. The guest's Content
-Security Policy admits images and fonts from `data:` URLs and from no host the
-guest could name, and an embedding page may hold it to `data:` alone, so an
-asset reaches the guest as a `data:` URL:
+hands it to the guest through `cf-iframe`'s `assets`. The page embedding the
+guest sets its Content Security Policy, and `data:` URLs are the one image
+source every embedding admits: labs' policy also admits images from the host's
+origin, and Loom's admits nothing else. So an asset reaches the guest as a
+`data:` URL:
 
 ```tsx
 // Shown for illustration only.
@@ -1118,7 +1119,10 @@ In this repository, test the guest with a `guest.test.ts` beside it.
 guest into its `guest.html` in Deno and serves it in-memory cells and presence
 rooms through the real bridge, so the test drives the document and reads back
 what the guest wrote. `patterns/examples/iframe-cursor-canvas/guest.test.ts` is
-a complete example.
+a complete example. `openGuestPage()` loads `guest.html` as it is written, with
+no assets in it, so a guest that reads assets is tested in a browser instead:
+`patterns/integration/iframe-donut-menu.test.ts` deploys one and reads its
+frame.
 
 Launch a repository pattern against local servers from the repository root.
 Start the servers first:

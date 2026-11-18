@@ -314,8 +314,8 @@ every authored test entry. Each `setsrc` describes a complete new source
 revision, so omitting the flags drops those test roots from that revision.
 
 A file that is not code — a fixture, a lookup table, a list of names — ships and
-is recovered with the source. Its bytes are stored verbatim: never parsed,
-type-checked, compiled, or importable, and the pattern reads one with
+is recovered with the source, byte for byte. It is never parsed, type-checked,
+compiled, or importable, and the pattern reads one with
 `dataFile("./data/cities.json")` from `commonfabric`. That call is the
 declaration, and its path resolves against the module that reads it, the way an
 import specifier does. Store the file where the call points and `new`, `setsrc`,

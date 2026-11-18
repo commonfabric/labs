@@ -36,9 +36,9 @@ deno task cf piece link ... editor-id/items viewer-id/items
   that reads it, the way an import specifier does, and that call is the
   declaration: every command that builds the program from local files —
   `setsrc`, `check`, `test`, `dev` — attaches what the source names, the way it
-  already follows what the source imports. The bytes are stored verbatim, never
-  parsed, compiled, or importable, and come back from `cf piece getsrc` with
-  the rest of the package. A file named this way must be on disk where the call
+  already follows what the source imports. The file is never parsed, compiled,
+  or importable, and comes back byte for byte from `cf piece getsrc` with the
+  rest of the package. A file named this way must be on disk where the call
   resolves to, or the build refuses and says which module asked for it. An
   image, a font, or a sound is read with `dataFile.url(path)` as a `data:` URL,
   and every one in a directory with `dataFile.urls(directory)`; see

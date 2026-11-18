@@ -3262,9 +3262,9 @@ export interface DataFileFunction {
   /**
    * Reads an attached data file as a base64 `data:` URL carrying its media
    * type, such as `data:image/png;base64,…`: the form an image, a font, or a
-   * sound takes in an iframe guest, whose Content Security Policy admits
-   * `data:` URLs and no host (see `cf-iframe`'s `assets`). `path` resolves as
-   * for `dataFile()`.
+   * sound takes in an iframe guest, since `data:` URLs are the one image source
+   * every embedding's Content Security Policy admits (see `cf-iframe`'s
+   * `assets`). `path` resolves as for `dataFile()`.
    *
    * The media type comes from the file's extension: `.png`, `.jpg`, `.jpeg`,
    * `.gif`, `.webp`, `.avif`, `.svg`, `.woff2`, `.woff`, `.ttf`, `.otf`,
