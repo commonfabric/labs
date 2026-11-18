@@ -15,10 +15,13 @@
 //
 // What deliberately does NOT live here:
 // - the START of the root and its runnability repair pair (the cold-start
-//   setup repair and `healDefaultRootByRollForward`) — client-side today,
-//   stage 2's gate: the ON client's creation retirement must not ship
-//   until the repair pair moves (design §2; this stage's report records
-//   the gate);
+//   setup repair and `healDefaultRootByRollForward`) — client-side, which
+//   is why a client that starts roots still creates one where it finds
+//   none: only its start repairs an aged root. A client that replicates
+//   views starts no root and so runs neither; it creates no root from a
+//   system source either, and waits for this ensure to link one
+//   (`spaceRootLinked`, which `PiecesController.ensureDefaultPattern`
+//   awaits);
 // - FRESHNESS. Following a root's origin is the ordinary piece
 //   reconciliation, and that runs on the piece's START: a user's open on a
 //   client that runs the piece (`SourceReconciler.reconcile`, called from
