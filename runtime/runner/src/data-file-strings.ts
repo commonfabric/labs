@@ -7,9 +7,10 @@ import { createSigilLinkFromParsedLink } from "./link-utils.ts";
 import type { MemorySpace } from "./runtime.ts";
 
 /**
- * Shortest string stored by reference. A link to a code document takes about
- * as many characters as a string a little under this length, so a shorter one
- * stays inline.
+ * Shortest string stored by reference. A link takes about 170 characters, and
+ * the code document it names is one more document for every read of the
+ * result to load, so a string well under a kilobyte saves too little to pay
+ * for that.
  */
 const SHORTEST_LINKED = 1024;
 
@@ -68,6 +69,11 @@ export class DataFileStrings {
     } else {
       this.#codeDocumentIds.put(text, null);
     }
+  }
+
+  /** Forgets every recorded string. */
+  clear(): void {
+    this.#codeDocumentIds.clear();
   }
 
   /**

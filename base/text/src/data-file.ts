@@ -186,17 +186,25 @@ function mediaTypeEntry(name: string): MediaTypeEntry | undefined {
 /**
  * Helper for the functions above, which returns the base64 that `contents`, a
  * binary media file's stored contents, carries after its `data:` URL prefix.
- * Throws, naming the file, when `contents` is not a `data:` URL of `mediaType`.
+ * Throws, naming the file, when `contents` is not a `data:` URL of `mediaType`
+ * holding padded base64.
  */
 function base64Of(contents: string, name: string, mediaType: string): string {
   const prefix = dataUrlPrefix(mediaType);
-  if (!contents.startsWith(prefix)) {
+  if (
+    !contents.startsWith(prefix) ||
+    (contents.length - prefix.length) % 4 !== 0 ||
+    !BASE64.test(contents.slice(prefix.length))
+  ) {
     throw new Error(
       `Data file \`${name}\` does not hold an \`${mediaType}\` \`data:\` URL.`,
     );
   }
   return contents.slice(prefix.length);
 }
+
+/** Padded standard base64, as `encodeBase64()` writes it. */
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 
 /** Helper for the functions above, which starts a base64 `data:` URL. */
 function dataUrlPrefix(mediaType: string): string {

@@ -34,9 +34,10 @@ for (const donut of MENU) {
   button.textContent = donut.name;
   button.disabled = true;
   button.addEventListener("click", () => {
-    choose(donut.id).catch((failure) => {
-      error.textContent = describeFailure(failure);
-    });
+    choose(donut.id).then(
+      () => (error.textContent = ""),
+      (failure) => (error.textContent = describeFailure(failure)),
+    );
   });
   buttons.set(donut.id, button);
   item.append(image, button);
@@ -80,7 +81,9 @@ function show(value: IframeStateData | undefined): void {
   canvas.dataset.favorite = favorite ?? "";
   draw(favorite).then(
     (drawn) => {
-      if (drawn) canvas.dataset.drawn = favorite ?? "";
+      if (!drawn) return;
+      canvas.dataset.drawn = favorite ?? "";
+      error.textContent = "";
     },
     (failure) => (error.textContent = describeFailure(failure)),
   );

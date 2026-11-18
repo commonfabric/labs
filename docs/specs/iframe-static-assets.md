@@ -122,9 +122,11 @@ the first piece set up in a space writes it and every later piece links to it.
 - **Which strings.** The readers record each string they return in the
   engine's `DataFileStrings` (`runtime/runner/src/data-file-strings.ts`), keyed
   by content. The projection write looks up each string leaf of at least 1,024
-  characters; a shorter one stays inline, since a link would cost about as
-  much. The rule applies to the result projection only. A computed value
-  derived from a data file is written by its computation, inline.
+  characters; a shorter one stays inline, since a link of about 170 characters
+  and one more document for every read of the result to load cost more than a
+  string well under a kilobyte saves. The rule applies to the result projection
+  only. A computed value derived from a data file is written by its
+  computation, inline.
 - **Why it is keyed to `dataFile`.** A code document carries no CFC envelope.
   Program files are stored that way, so linking to one exposes nothing the
   space does not hold unlabeled. A rule that moved every long string into a
