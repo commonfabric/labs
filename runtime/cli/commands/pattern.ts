@@ -28,9 +28,13 @@ import {
   rollbackLines,
 } from "../lib/pattern-history.ts";
 import {
+  type DeployedSource,
   entrySlot,
   lineageForEntry,
   type SlotSources,
+  versionJson,
+  versionLine,
+  type VersionOutcome,
 } from "../lib/pattern-versions.ts";
 import {
   chooseProfile,
@@ -47,7 +51,12 @@ import {
   type PublishReport,
   publishReportLines,
 } from "../lib/pattern-publish.ts";
-import { loadPieces, type SpaceConfig } from "../lib/piece.ts";
+import {
+  loadPieces,
+  readRunningPattern,
+  type RunningPattern,
+  type SpaceConfig,
+} from "../lib/piece.ts";
 import { render } from "../lib/render.ts";
 import { absPath } from "../lib/utils.ts";
 import {
@@ -57,8 +66,10 @@ import {
   rethrowAsNotMember,
 } from "./pattern-index.ts";
 import {
+  parsePieceOptions,
   parseSpaceOptions,
   type PieceCLIOptions,
+  recordVersionInIndex,
   targetOptions,
 } from "./piece.ts";
 
@@ -465,6 +476,60 @@ export async function rollback(
   });
 }
 
+/** What `cf pattern checkpoint` reaches; the real piece and index by default. */
+export interface CheckpointDeps {
+  readRunning?: typeof readRunningPattern;
+  recordVersion?: (deployed: DeployedSource) => Promise<VersionOutcome>;
+  render?: typeof render;
+}
+
+/**
+ * `cf pattern checkpoint`: keeps what a piece runs now as a private version
+ * of `entry`'s lineage, which the sharing setting never shares on its own.
+ * It deploys nothing, so a pattern made with `--no-index-version` deploys is
+ * kept once a change is finished. Exits 1 when no version was kept, since the
+ * person asked for one.
+ */
+export async function checkpoint(
+  options: PieceCLIOptions & { json?: boolean },
+  entry: string,
+  {
+    readRunning = readRunningPattern,
+    recordVersion,
+    render: out = render,
+  }: CheckpointDeps = {},
+): Promise<void> {
+  const config = parsePieceOptions(options);
+  const running: RunningPattern = await readRunning(config);
+  const outcome = await (recordVersion ??
+    ((deployed) => recordVersionInIndex(config.identity, deployed)))({
+      entry: absPath(entry),
+      program: running.program,
+      patternId: () => Promise.resolve(running.patternId),
+      piece: { space: running.space, id: running.id },
+      keepPrivate: true,
+    });
+  if (options.json) {
+    out(versionJson(outcome), { json: true });
+  } else {
+    out(checkpointLine(outcome));
+  }
+  if (outcome.status !== "recorded") Deno.exitCode = 1;
+}
+
+/** What a checkpoint came to, in one line; a version not kept says why. */
+export const checkpointLine = (outcome: VersionOutcome): string => {
+  switch (outcome.status) {
+    case "recorded":
+      return versionLine(outcome) ?? "";
+    case "not-joined":
+      return "No version kept: this machine has not joined a pattern index (cf index join).";
+    case "skipped":
+    case "failed":
+      return `No version kept: ${outcome.reason}.`;
+  }
+};
+
 export async function unshare(
   options: IndexCLIOptions,
   entry: string,
@@ -692,6 +757,30 @@ export const pattern = new Command()
           "Restore version 3 of ./bins.tsx.",
         ),
     ).action(rollback),
+  )
+  /* pattern checkpoint */
+  .command(
+    "checkpoint",
+    targetOptions(
+      new Command()
+        .description(
+          "Keep what a piece runs now as a private version of a pattern, " +
+            "without deploying it: the sharing setting never shares it on " +
+            "its own; cf pattern share does. Pairs with deploys made with " +
+            "--no-index-version, keeping one version when a change is done.",
+        )
+        .arguments("<entry:string>")
+        .option(
+          "-c,--cell, --piece <cell:string>",
+          "The piece whose pattern to keep.",
+        )
+        .option("--json", "Print the outcome as JSON, for an agent to read.")
+        .example(
+          cliText("cf pattern checkpoint ./bins.tsx --cell <piece>"),
+          "Keep the pattern <piece> runs as a private version of ./bins.tsx.",
+        ),
+      { global: false },
+    ).action(checkpoint),
   )
   /* pattern unshare */
   .command(
