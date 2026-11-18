@@ -6364,6 +6364,9 @@ export class SpaceServer implements TransactionSealDestination {
     // the piece, so the serving runtime seeds the viewer's instances here,
     // once per (root, pair) in a tenure; without it the viewer's first
     // write into such a cell creates the instance holding that one field.
+    // A narrower cell with no default is owed its `result` back-link alone,
+    // which every instance of a derived internal cell carries; without it
+    // the viewer's own later start of the piece is left to write it.
     // Awaited ahead of the arrival re-arm, so a node re-run for the
     // arriving demander reads the seeded instance instead of running once
     // more when the seed lands.

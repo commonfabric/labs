@@ -411,6 +411,15 @@ confirmed READ-only space membership can resume persisted output without
 writing the viewer's absent scoped defaults. Their schema defaults remain
 readable; an explicit write still requires write access.
 
+Every actor instance of a pattern-owned cell carries the `result` back-link to
+its owning result cell, as the cell's other instances do. A setup writes it onto
+the instances it runs under. A serving runtime, when a viewer's demand for the
+piece arrives, writes it onto the viewer's instance of each such cell narrower
+than its result that lacks it, whether or not the cell declares a default, in
+the transaction that seeds the viewer's defaults. A computation's first write
+into the viewer's instance then lands beside the back-link, and the viewer's
+own later start of the piece finds nothing of it to write.
+
 Pattern argument setup materializes missing declared scoped properties even
 when the caller supplies the argument object through a Cell reference. The
 redirect stays at the input slot so existing child bindings follow subsequent

@@ -99,6 +99,15 @@ const OWNED_DRAFT_PATTERN = [
   "});",
 ].join("\n");
 
+/** A piece owning a derivation declared per user, which has no default. */
+const OWNED_PER_USER_PATTERN = [
+  "import { computed, pattern, PerUser } from 'commonfabric';",
+  "export default pattern<{ n?: number }, { mine: string }>(({ n }) => {",
+  "  const mine = computed((): PerUser<string> => 'mine:' + String(n ?? 0));",
+  "  return { mine };",
+  "});",
+].join("\n");
+
 /** A per-user wish into the viewer's Home, and a reader of its result: the
  * reader's instance for a user follows the wish's per-user state store. */
 const WISH_TAG = "fan_out_wish_profile";
@@ -248,6 +257,17 @@ const instanceHolds = (
   [...rowsUnder(engine, scopeKey).values()].some((value) =>
     JSON.stringify(value ?? null).includes(needle)
   );
+
+/** How many authored commits have written the document `id` under `scopeKey`. */
+const authoredWritesOf = (
+  engine: Engine.Engine,
+  id: string,
+  scopeKey: string,
+): number =>
+  (engine.database.prepare(
+    `SELECT COUNT(*) AS n FROM revision r JOIN "commit" c ON c.seq = r.commit_seq
+     WHERE r.id = :id AND r.scope_key = :scope_key AND c.class = 'authored'`,
+  ).get({ id, scope_key: scopeKey }) as { n: number }).n;
 
 const basisKeys = (engine: Engine.Engine): Set<string> =>
   new Set(
@@ -707,6 +727,62 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
       value,
     ) => JSON.stringify(value ?? null).includes('"title":"B"'));
     expect(drafts).toEqual([{ title: "B", members: "" }]);
+    setup.cancel();
+  });
+
+  it("(o) a user who arrives watching a piece owning a per-user derivation finds their instance of it carrying its `result` back-link, so their own start of the piece writes none of it", async () => {
+    // Every document the graph writes keeps its `result` back-link to the
+    // piece that owns it, and a per-user instance is a document of its
+    // own. Bob's runtime runs none of the pattern when he arrives, so the
+    // serving loop's computation creates his instance. Without the
+    // back-link there, Bob's own start of the piece is left to write it,
+    // and that start's commit carries every read the start made.
+
+    const setup = await standUp({
+      names: { arg: "fo-o-arg", result: "fo-o-result" },
+      pattern: OWNED_PER_USER_PATTERN,
+      clients: [aliceSigner],
+    });
+    const { engine } = setup;
+    const bob = await setup.watchRoot(bobSigner);
+    const bobKey = setup.userKey(bobSigner);
+    /** Bob's instance of the derivation, once it holds a value. */
+    const bobsInstance = () =>
+      [...rowsUnder(engine, bobKey).keys()].find((id) =>
+        id.startsWith("computed:") &&
+        JSON.stringify(
+          Engine.read(engine, { id, scopeKey: bobKey } as never)?.value ??
+            null,
+        ).includes('"mine:1"')
+      );
+    await awaitAdmitted(server, () => bobsInstance() !== undefined);
+    const id = bobsInstance()!;
+    expect(
+      Engine.read(engine, { id, scopeKey: bobKey } as never)?.result,
+    ).toBeDefined();
+
+    // Bob's runtime then runs the piece itself, starting it once the
+    // transaction that runs it commits, as a client instantiating it does.
+    // That start finds his instance whole and commits no write to it.
+    const commitsBefore = authoredWritesOf(engine, id, bobKey);
+    const arg = bob.getCell<Record<string, unknown>>(space, "fo-o-arg");
+    const root = bob.getCell<Record<string, unknown>>(
+      space,
+      "fo-o-result",
+      setup.compiled.resultSchema,
+    );
+    await arg.sync();
+    await root.sync();
+    const tx = bob.edit();
+    tx.tx.immediate = true;
+    (tx.tx as { deferRunnerStartUntilCommit?: boolean })
+      .deferRunnerStartUntilCommit = true;
+    bob.run(tx, setup.compiled, arg, root);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await bob.idle();
+    await bob.storageManager.synced();
+    expect(bob.runner.isRunning(root)).toBe(true);
+    expect(authoredWritesOf(engine, id, bobKey)).toBe(commitsBefore);
     setup.cancel();
   });
 

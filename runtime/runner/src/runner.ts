@@ -1493,6 +1493,22 @@ function ownedCellOwesSeed(
 }
 
 /**
+ * Whether `link`, a cell an instance in a piece's tree owns, is owed its
+ * `result` back-link alone by a demander's arrival: it is scoped narrower
+ * than its owning instance's result cell, `ownerScope`, and declares no
+ * default, so no seed writes its instance. Every instance of a derived
+ * internal cell carries that back-link, as a setup writes it for the
+ * instance it runs under.
+ */
+function ownedCellOwesBackLink(
+  link: NormalizedFullLink,
+  ownerScope: CellScope,
+): boolean {
+  return !ownedCellOwesSeed(link, ownerScope) &&
+    scopeRank(link.scope) > scopeRank(ownerScope);
+}
+
+/**
  * Whether the gate before the start of a piece a resume pre-sync has named
  * takes the record of `link`, a cell an instance in the piece's tree owns,
  * for the cell; the owning instance's result cell is at `ownerScope`. It does
@@ -9010,6 +9026,25 @@ export class Runner {
   }
 
   /**
+   * Whether the document `link` names holds a `result` back-link, read
+   * through `readTx` as a presence probe.
+   */
+  #backLinkPresent(
+    readTx: IExtendedStorageTransaction,
+    link: NormalizedFullLink,
+  ): boolean {
+    return readTx.readOrThrow(
+      {
+        space: link.space,
+        id: link.id,
+        path: ["result"],
+        ...(link.scope !== undefined && { scope: link.scope }),
+      },
+      { meta: PRESENCE_PROBE_READ },
+    ) !== undefined;
+  }
+
+  /**
    * Whether a swap of `resultCell` to `pattern` would read a document this
    * replica lacks: the argument document `argumentLink` names, which the
    * swap's setup reads whole, or an owned cell the stored manifest lists —
@@ -11339,14 +11374,18 @@ export class Runner {
    * Fills the absent actor instances of the defaults `instances` declare at
    * a scope narrower than that of the instance's result, each in a
    * transaction of its own (`#prepareCellsForRunningPattern` says why),
-   * under `identity` and while `isCurrent` holds. Returns whether every one
-   * was verified or seeded.
+   * under `identity` and while `isCurrent` holds. With `backLinks`, it also
+   * writes the `result` back-link onto each instance of the instance's other
+   * cells scoped narrower than its result that holds none
+   * (`ownedCellOwesBackLink()`), in the same transaction. Returns whether
+   * every one was verified or seeded.
    */
   async #seedOwedDefaults(
     instances: readonly ResumePatternInstance[],
     identity: ScopeKeyIdentity | undefined,
     isCurrent: () => boolean,
     allowReadOnly?: boolean,
+    backLinks = false,
   ): Promise<boolean> {
     let defaultsPrepared = true;
     const readOnlySpaces = new Map<MemorySpace, boolean>();
@@ -11357,7 +11396,8 @@ export class Runner {
       const owed: {
         descriptor: NonNullable<Pattern["derivedInternalCells"]>[number];
         derivedLink: NormalizedFullLink;
-        schemaDefault: JSONValue;
+        // `undefined` for a cell owed its back-link alone.
+        schemaDefault: JSONValue | undefined;
       }[] = [];
       for (const descriptor of instance.pattern.derivedInternalCells ?? []) {
         const derivedLink = getDerivedInternalCellLink(
@@ -11370,7 +11410,7 @@ export class Runner {
         const schemaDefault = isObjectOrArray(descriptor.schema)
           ? descriptor.schema.default
           : undefined;
-        if (schemaDefault === undefined) continue;
+        if (schemaDefault === undefined && !backLinks) continue;
         if (!isCurrent()) return false;
         if (allowReadOnly && !this.#runtime.servingPosture) {
           let readOnly = readOnlySpaces.get(derivedLink.space);
@@ -11465,6 +11505,22 @@ export class Runner {
             )
           ) {
             defaultsPrepared = false;
+            continue;
+          }
+          if (schemaDefault === undefined) {
+            // Owed its back-link alone: a computation writes the instance's
+            // value, and no seed does. Probed for presence, as a value is
+            // below.
+            if (
+              derived.getMetaRaw("result", {
+                meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+              }) !== undefined
+            ) continue;
+            recordRuntimeOwnedStore(tx, owner, derivedLink);
+            setResultCell(
+              derived,
+              owner.asSchema(instance.pattern.resultSchema),
+            );
             continue;
           }
           // A presence probe, not a read of the value: a sibling already
@@ -12716,12 +12772,16 @@ export class Runner {
    * runtime runs none of the pattern never starts the piece, so a serving
    * runtime seeds the viewer's instances when the viewer's demand arrives;
    * the viewer's first write into such a cell then lands beside the other
-   * defaults rather than standing in for the whole value. Each owed cell is
-   * probed in the instance `identity` resolves it to, and loaded first when
-   * neither the replica nor the store read-through can say whether it holds
-   * a value; the cells found absent are seeded, one transaction per piece
-   * instance (`#seedOwedDefaults`). Returns whether every owed default was
-   * verified or seeded. A piece not running here, or whose pattern pointer
+   * defaults rather than standing in for the whole value. A cell scoped
+   * narrower than its owner that declares no default is owed its `result`
+   * back-link alone (`ownedCellOwesBackLink()`), which a setup writes onto
+   * the instance it runs under and nothing else writes onto the viewer's:
+   * with it, the viewer's own start of the piece finds that instance whole.
+   * Each owed cell is probed in the instance `identity` resolves it to, and
+   * loaded first when neither the replica nor the store read-through can say
+   * whether it holds what it is owed; the cells found lacking are seeded,
+   * one transaction per piece instance (`#seedOwedDefaults`). Returns whether
+   * every owed cell was verified or seeded. A piece not running here, or whose pattern pointer
    * this runtime cannot read, seeds nothing and returns `false`.
    */
   async seedOwedDefaultsFor(
@@ -12778,25 +12838,38 @@ export class Runner {
         const derived = getDerivedInternalCell(instance.resultCell, descriptor);
         const derivedLink = derived.getAsNormalizedFullLink();
         // A demander without a session owes no session instance.
+        const owesDefault = ownedCellOwesSeed(derivedLink, ownerScope);
         if (
-          !ownedCellOwesSeed(derivedLink, ownerScope) ||
+          !(owesDefault || ownedCellOwesBackLink(derivedLink, ownerScope)) ||
           !canResolveScopeKey(derivedLink.scope, identity)
         ) continue;
-        if (this.#documentPresent(readTx, derivedLink)) continue;
+        // A cell owed a default is owed it while it holds no value, and one
+        // owed its back-link alone while it holds no back-link.
+        const owed = (tx: IExtendedStorageTransaction) =>
+          owesDefault
+            ? !this.#documentPresent(tx, derivedLink)
+            : !this.#backLinkPresent(tx, derivedLink);
+        if (!owed(readTx)) continue;
         if (!this.#storeReportedAbsent(derivedLink, identity)) {
           // The store may hold a value the replica has not loaded; the
           // probe after the load reads what arrived.
           await this.#syncFamilyCell(derived, identity);
           if (!isCurrent()) return false;
           readTx = this.#familyReadTx(identity);
-          if (this.#documentPresent(readTx, derivedLink)) continue;
+          if (!owed(readTx)) continue;
         }
         owesSeed = true;
       }
       if (owesSeed) seeds.push(instance);
     }
     if (seeds.length === 0) return true;
-    return await this.#seedOwedDefaults(seeds, identity, isCurrent);
+    return await this.#seedOwedDefaults(
+      seeds,
+      identity,
+      isCurrent,
+      undefined,
+      true,
+    );
   }
 
   /**
