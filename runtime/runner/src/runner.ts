@@ -15418,6 +15418,41 @@ export class Runner {
     return { resultCell, cancelDeferredStart };
   }
 
+  /**
+   * On a serving runtime, writes the `result` back-link to `resultCell`, the
+   * result of the piece `pattern` sets up, onto each instance this run writes
+   * of one of `pattern`'s derived internal cells scoped narrower than
+   * `resultCell`, where the instance holds none, in the transaction `tx` that
+   * writes its value. Every instance of a derived internal cell carries that
+   * back-link (`docs/specs/space-model/4-cells.md`). A setup writes it onto
+   * the instances it runs under, and a served run for a demander writes the
+   * demander's instance, which no setup there has run under, so the
+   * instance's first value carries it. `writes` is what the node writes.
+   */
+  #writeServedBackLinks(
+    tx: IExtendedStorageTransaction,
+    pattern: Pattern,
+    resultCell: Cell<any>,
+    writes: readonly NormalizedFullLink[],
+  ): void {
+    if (!this.#runtime.servingPosture) return;
+    const descriptors = pattern.derivedInternalCells;
+    if (!descriptors?.length || writes.length === 0) return;
+    const ownerScope = resultCell.getAsNormalizedFullLink().scope;
+    const written = new Set(writes.map(({ space, id }) => `${space}/${id}`));
+    for (const descriptor of descriptors) {
+      const derived = getDerivedInternalCell(resultCell, descriptor, tx);
+      const { space, id, scope } = derived.getAsNormalizedFullLink();
+      if (
+        scopeRank(scope) <= scopeRank(ownerScope) ||
+        !written.has(`${space}/${id}`) ||
+        derived.getMetaRaw("result", { meta: PRESENCE_PROBE_READ }) !==
+          undefined
+      ) continue;
+      setResultCell(derived, resultCell.asSchema(pattern.resultSchema));
+    }
+  }
+
   #writeJavaScriptActionResult(
     tx: IExtendedStorageTransaction,
     resultSchema: JSONSchema | undefined,
@@ -16237,7 +16272,7 @@ export class Runner {
               return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
             }
             const normalized = normalizeSandboxResult(result, name);
-            return this.#writeJavaScriptActionResult(
+            const written = this.#writeJavaScriptActionResult(
               tx,
               module.resultSchema,
               normalized.value,
@@ -16250,6 +16285,8 @@ export class Runner {
               previousResultCellRef,
               tx.getNarrowestReadScope(),
             );
+            this.#writeServedBackLinks(tx, pattern, resultCell, writes);
+            return written;
           } finally {
             logger.timeEnd("action", "postRun");
           }

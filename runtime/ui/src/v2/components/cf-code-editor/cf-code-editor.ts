@@ -365,6 +365,11 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   it. See `docs/margin.md`.
  *
  * @fires cf-change - Fired when content changes with detail: { value, oldValue, language }
+ * @fires cf-edit - Fired when the viewer edits the document, with detail
+ *   `{ value }`, the whole document after the edit. Never fired for a change
+ *   another collaborator made, one the bound cell pushed, one the editor
+ *   rewrote itself (a renamed mention), or in a read-only editor; `cf-change`
+ *   fires for those too.
  * @fires cf-focus - Fired on focus
  * @fires cf-blur - Fired on blur
  * @fires cf-collaboration-reconcile - Fired when an epoch changes while local
@@ -2079,6 +2084,9 @@ export class CFCodeEditor extends BaseElement {
       } else {
         this.setValue(value);
       }
+      // `cf-change` also tells what the bound cell pushes, another member's
+      // edit among it; this tells only what the viewer typed.
+      this.emit("cf-edit", { value });
     }
     this._updateMentionedFromContent(value);
     this._setupPieceNameSubscriptions();
