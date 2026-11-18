@@ -3254,8 +3254,9 @@ export type CompileAndRunFunction = <T = any, S = any>(
  * cannot fail part-way, and it returns the same bytes on every load of a given
  * source revision. A path naming no attached data file throws.
  *
- * A binary media file (an image, a font, or a sound, by its extension) has no
- * text, and reading one this way throws; read it with `dataFile.url()`.
+ * A binary media file (an image other than SVG, a font, or a sound, by its
+ * extension) has no text, and reading one this way throws; read it with
+ * `dataFile.url()`. An SVG is text, and this returns its markup.
  */
 export interface DataFileFunction {
   /** Reads the text of the attached data file `path` names. */
@@ -4518,6 +4519,50 @@ export type SpaceMembersFunction = (
 ) => SpaceMemberList | undefined;
 
 export declare const spaceMembers: SpaceMembersFunction;
+
+/**
+ * One member of a social space, as `joinSpaceMembers()` returns it, with the
+ * profiles of type `P` that are their own.
+ */
+export interface SpaceMemberOf<P> {
+  /** The principal's DID, as the space's access list names it. */
+  principal: DID;
+
+  /** The level the access list's entry for `principal` grants. */
+  level: SpaceGrantLevel;
+
+  /**
+   * The roster's profiles that are `principal`'s own, each once, in the order
+   * the roster first lists them, and empty for a member with none there. A
+   * reader that shows one face for the member shows the first.
+   */
+  profiles: P[];
+}
+
+/**
+ * Returns the members of a social space whose access list is `list` and whose
+ * roster is `roster`: one for each principal `list` names, sorted by DID,
+ * each with the profiles on `roster` whose owner, as `ownerOf` returns it, is
+ * that principal. `list`'s `anyone` names no one, so it adds no member, and a
+ * profile `ownerOf` returns no owner for, or an owner `list` does not name,
+ * is left out. `undefined` while `list` is, so a reader can tell "not known
+ * yet" from "nobody".
+ *
+ * Two profiles `keyOf` returns the same key for are one profile, counted
+ * once; a profile it returns no key for is the same as nothing but itself.
+ * In pattern code, `ownerOf` is `profileOwnerOf` and `keyOf` is `equalsKey`,
+ * so a profile counts toward a member exactly when it counts as theirs
+ * anywhere else; it can then be called where those can. It reads nothing
+ * itself, so it does no more than `ownerOf` and `keyOf` do.
+ */
+export type JoinSpaceMembersFunction = <P>(
+  roster: readonly P[],
+  list: SpaceMemberList | undefined,
+  ownerOf: (profile: P) => DID | undefined,
+  keyOf: (profile: P) => string | undefined,
+) => SpaceMemberOf<P>[] | undefined;
+
+export declare const joinSpaceMembers: JoinSpaceMembersFunction;
 
 /**
  * Returns the DID of the space `target`'s value lives in, after following any

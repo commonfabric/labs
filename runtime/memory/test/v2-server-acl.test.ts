@@ -48,6 +48,7 @@ const ALICE = "did:key:z6Mk-acl-alice";
 const BOB = "did:key:z6Mk-acl-bob";
 const CAROL = "did:key:z6Mk-acl-carol";
 const SERVICE = "did:key:z6Mk-acl-service";
+const PEER = "did:key:z6Mk-acl-peer";
 const TEST_AUDIENCE = "did:key:z6Mk-acl-test-audience";
 
 /**
@@ -114,6 +115,7 @@ const createAclServer = (
     mode: "off" | "observe" | "enforce";
     serviceDids?: readonly string[];
     delegatingDids?: readonly string[];
+    isDelegatingPeer?: (principal: string) => boolean;
   },
 ) =>
   new Server({
@@ -3490,6 +3492,93 @@ describe("v2-server-acl", () => {
         } finally {
           await server.close();
         }
+      });
+
+      describe("for a principal `isDelegatingPeer` names", () => {
+        it("refuses the bound session's reads with `SessionRevokedError` once `isDelegatingPeer` stops naming its principal", async () => {
+          const peers = new Set([PEER]);
+          const server = createAclServer("memory://acl-ow31-peer-read", {
+            mode: "enforce",
+            isDelegatingPeer: (principal) => peers.has(principal),
+          });
+          const space = "did:key:z6Mk-acl-ow31-peer-space-1";
+          await initializeSpaceAcl(server, space, { [ALICE]: "OWNER" });
+          const peer = await connect(server);
+          try {
+            const bound = await openSession(peer, space, PEER, {
+              actingAs: "space-owner",
+            });
+            expectExists(bound.ok, bound.error?.message);
+            const listed = await graphQuery(
+              peer,
+              space,
+              bound.ok.sessionId,
+              "of:x",
+            );
+            expectExists(listed.ok, listed.error?.message);
+
+            peers.delete(PEER);
+            const unlisted = await graphQuery(
+              peer,
+              space,
+              bound.ok.sessionId,
+              "of:x",
+            );
+
+            expect(unlisted.ok).toBeUndefined();
+            expect(unlisted.error?.name).toBe("SessionRevokedError");
+          } finally {
+            await server.close();
+          }
+        });
+
+        it("revokes the bound session instead of sending its watch's next frame once `isDelegatingPeer` stops naming its principal", async () => {
+          const peers = new Set([PEER]);
+          const server = createAclServer("memory://acl-ow31-peer-watch", {
+            mode: "enforce",
+            isDelegatingPeer: (principal) => peers.has(principal),
+          });
+          const space = "did:key:z6Mk-acl-ow31-peer-space-2";
+          await initializeSpaceAcl(server, space, { [ALICE]: "OWNER" });
+          const peer = await connect(server);
+          try {
+            const bound = await openSession(peer, space, PEER, {
+              actingAs: "space-owner",
+            });
+            expectExists(bound.ok, bound.error?.message);
+            const watchedId = "of:doc:peer-watch";
+            await peer.connection.receive(encodeMemoryBoundary({
+              type: "session.watch.set",
+              requestId: nextRequestId("peer-watch"),
+              space,
+              sessionId: bound.ok.sessionId,
+              watches: [{
+                id: "doc",
+                kind: "graph",
+                query: {
+                  roots: [{
+                    id: watchedId,
+                    selector: { path: [], schema: false },
+                  }],
+                },
+              }],
+            }));
+            expectExists(assertResponse(shiftMessage(peer.messages)).ok);
+
+            peers.delete(PEER);
+            await server.writeDocument(space, watchedId, { changed: true });
+            await peer.connection.refreshDirty(space);
+
+            expect(peer.messages).toEqual([{
+              type: "session/revoked",
+              space,
+              sessionId: bound.ok.sessionId,
+              reason: "unauthorized",
+            }]);
+          } finally {
+            await server.close();
+          }
+        });
       });
     });
 

@@ -61,22 +61,26 @@ scripts. An empty `src` is no guest, and runs no script. A change to either
 reloads the guest.
 
 `assets`, when set, holds the guest's static files: a record from a name
-matching `[A-Za-z0-9_-]+` to a base64 `data:` URL, the one image source every
-guest policy admits. The element refuses any other record with a `TypeError`.
-Each `cf-asset:<name>` in `src` is replaced with that asset's URL in the text,
-before anything parses the document, so a reference works wherever a URL does:
-`<img src="cf-asset:glaze">`, `url(cf-asset:glaze)` in a style, or an author's
-own `@font-face`. A name runs to the first character outside its grammar, so it
-ends at an attribute's quote or a `url()`'s parenthesis. `script` is not
-searched. A reference to a name the record lacks stays in the document, and the
-element reports it as a `common-iframe-error` naming the reference and the names
-the record holds; the guest loads all the same. `cf-asset:` is therefore
-reserved in a guest's document, and text that needs those characters writes the
-colon as `&#58;`. The element also writes the record into the document, right
-after its doctype and ahead of every script, as a
+matching `[A-Za-z0-9_-]+` to a base64 `data:` URL, the one image source the
+sandbox's policy admits in every host. A document that declares a policy of its
+own must allow `data:` images too. The element refuses any other record with a
+`TypeError`. Each `cf-asset:<name>` in `src` is replaced with that asset's URL
+in the text, before anything parses the document, so a reference works wherever
+a URL does: `<img src="cf-asset:glaze">`, `url(cf-asset:glaze)` in a style, or
+an author's own `@font-face`. A name runs to the first character outside its
+grammar, so it ends at an attribute's quote or a `url()`'s parenthesis. `script`
+is not searched. A reference to a name the record lacks stays in the document,
+and the element reports it as a `common-iframe-error` naming the reference and
+the names the record holds; the guest loads all the same. `cf-asset:` is
+therefore reserved in a guest's document, and text that needs those characters
+writes the colon as `&#58;`. The element also writes the record into the
+document, right after its doctype and ahead of every script, as a
 `<script type="application/json" data-cf-assets>` element, which the guest reads
 with `fabric.asset()` ([Assets](#assets)). A change to `assets` reloads the
-guest; assigning a record that holds the same names and URLs does not.
+guest; assigning a record that holds the same names and URLs does not. A host
+that loads a guest some other way, such as a guest's Deno test, assembles the
+same document with `guestDocument(src, script, assets)`, and lists the names
+`src` refers to that `assets` lacks with `missingAssets(src, assets)`.
 
 A resource has a `kind`, optional schema and description, and only the
 operations the host supplies. A cell capability follows the runtime's Cell

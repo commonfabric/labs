@@ -220,11 +220,13 @@ named principal who has no entry, combines the two. The `*` entry adds no one
 to it. It is a property of the space, the same for every pattern in it.
 `memberSet()` in the shared social-space code
 (`patterns/system/social-space/member-set.ts`) joins it from the access list and
-the roster. A client reads a space's members from the member set its root
-offers, as `members`, rather than from any one room in it. The Loom root and
-the system default app offer it, and so does a FabriChat room in a space of its
-own, which is that root. Until a space offers one, a reader shows the
-participants as claims.
+the roster with `joinSpaceMembers()`, the join a host applies too, through
+`spaceMembersAt()` ([space access](../../features/space-access.md#pairing-members-with-their-profiles)),
+so a member set reads the same wherever it is computed. A client reads a space's
+members from the member set its root offers, as `members`, rather than from any
+one room in it. The Loom root and the system default app offer it, and so does a
+FabriChat room in a space of its own, which is that root. Until a space offers
+one, a reader shows the participants as claims.
 
 With a member set:
 

@@ -356,8 +356,8 @@ asynchronous `preload()` or `create()`, so decode the images before creating
 the game, `const glaze = await fabric.asset("glaze").image()`, and add each in
 `create()`: an image with `this.textures.addImage("glaze", glaze)`, a sprite
 sheet with `this.textures.addSpriteSheet("hero", hero, { frameWidth: 32,
-frameHeight: 32 })` so that its frames exist. Decode a sound from
-`fabric.asset(name).bytes()` with Web Audio. See
+frameHeight: 32 })` so that its frames exist. Decode a sound with Web Audio,
+`await audio.decodeAudioData(fabric.asset(name).bytes().buffer)`. See
 [Images and other assets](./iframe-pattern-guide.md#images-and-other-assets).
 
 ## Use operations that match player intent
