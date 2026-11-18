@@ -7,6 +7,7 @@
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { githubRepositoryPage } from "./blame.ts";
 import type { GitQuery } from "./push.ts";
+import type { BeginStep } from "./tasklog.ts";
 
 /** The repository a pull request for the pushed branch goes to, and the
  * branches it merges. */
@@ -76,26 +77,26 @@ export interface MergeRequest {
 /** Creates and merges pull requests. */
 export interface PullRequestService {
   /**
-   * Creates the pull request `request` describes, writing with `write` what
+   * Creates the pull request `request` describes, showing with `step` what
    * it waits for, and resolves with the new pull request's address. Rejects
    * with the reason when it cannot, or when `signal` aborts.
    */
   create(
     request: CreateRequest,
-    write: (text: string) => void,
+    step: BeginStep,
     signal: AbortSignal,
   ): Promise<string>;
 
   /**
-   * Merges the pull request `request` describes, writing with `write` what
-   * it waits for, and resolves with a message that says it merged. Rejects
-   * with the reason when it cannot, or when `signal` aborts.
+   * Merges the pull request `request` describes, showing with `step` what it
+   * waits for, and resolves once it has merged. Rejects with the reason when
+   * it cannot, or when `signal` aborts.
    */
   merge(
     request: MergeRequest,
-    write: (text: string) => void,
+    step: BeginStep,
     signal: AbortSignal,
-  ): Promise<string>;
+  ): Promise<void>;
 }
 
 /** The statuses with which GitHub says a request itself cannot succeed, so
@@ -107,6 +108,7 @@ const FINAL_STATUSES: ReadonlySet<number> = new Set([404, 405, 409, 422]);
  * gives. */
 export class GitHubRefusal extends Error {
   #status: number;
+  #reason: string;
 
   /** GitHub refused with `status`, replying `reply`, which is JSON that may
    * give a message and a list of errors, each with a message of its own. */
@@ -129,12 +131,27 @@ export class GitHubRefusal extends Error {
           : []
       )
       : [];
+    const parts = [message, ...errors].filter((m) => m !== "");
     // The parts are joined as sentences, and whoever reports the refusal
     // ends the last of them.
-    const reason = [message, ...errors].map((m) => m.replace(/\.+$/, ""))
+    const sentences = parts.map((m) => m.replace(/\.+$/, ""))
       .filter((m) => m !== "").join(". ");
-    super(`GitHub answered ${status}${reason === "" ? "" : `: ${reason}`}`);
+    super(
+      `GitHub answered ${status}${sentences === "" ? "" : `: ${sentences}`}`,
+    );
     this.#status = status;
+    this.#reason = parts.join("\n");
+  }
+
+  /** The status GitHub answered with. */
+  get status(): number {
+    return this.#status;
+  }
+
+  /** The reason GitHub's reply gave, a message per line as GitHub wrote
+   * each, or "" when it gave none. */
+  get reason(): string {
+    return this.#reason;
   }
 
   /** Whether making the same request again could get another answer. */
@@ -403,7 +420,7 @@ export function githubApi(
       }
       return known;
     },
-    create: async ({ repository, ...fields }, _write, signal) => {
+    create: async ({ repository, ...fields }, _step, signal) => {
       const reply = await call(
         "POST",
         `/repos/${repository}/pulls`,
@@ -416,14 +433,13 @@ export function githubApi(
       }
       return url;
     },
-    merge: async ({ repository, number, method, sha }, _write, signal) => {
+    merge: async ({ repository, number, method, sha }, _step, signal) => {
       await call(
         "PUT",
         `/repos/${repository}/pulls/${number}/merge`,
         signal,
         JSON.stringify({ merge_method: method, sha }),
       );
-      return `Merged ${pullRequestUrl(repository, number)}`;
     },
   };
 }
