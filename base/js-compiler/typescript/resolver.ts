@@ -123,7 +123,7 @@ export interface ModuleDeclarations {
 
   /**
    * The directory each `dataFile.urls()` call names, as written. These are the
-   * calls {@link collectDataDirectoryNames} finds, before it resolves them.
+   * directories {@link collectDataReads} finds, before it resolves them.
    */
   readonly dataDirectories: readonly string[];
 }
@@ -197,27 +197,29 @@ export function collectDataFileNames(
   source: Source,
   target: ts.ScriptTarget,
 ): string[] {
-  if (!mayReadDataFiles(source)) return [];
-  return scanSource(source, target, true).dataFiles.map((path) =>
-    resolveDeclaredDataFile(path, source)
-  );
+  return collectDataReads(source, target).files;
 }
 
 /**
- * Returns the data directories `source` declares, as the paths its
- * `dataFile.urls()` calls name, each resolved against `source` as
- * {@link collectDataFileNames} resolves a file. A directory declares the
- * assets it holds (see `dataFileAssets` in `@commonfabric/text/data-file`),
- * which whoever lists the directory attaches.
+ * Returns what `source` declares it reads, from one parse: the data files its
+ * `dataFile()` and `dataFile.url()` calls name, as
+ * {@link collectDataFileNames} returns them, and the data directories its
+ * `dataFile.urls()` calls name, each resolved against `source` the same way. A
+ * directory declares the assets it holds (see `dataFileAssets` in
+ * `@commonfabric/text/data-file`), which whoever lists the directory attaches.
  */
-export function collectDataDirectoryNames(
+export function collectDataReads(
   source: Source,
   target: ts.ScriptTarget,
-): string[] {
-  if (!mayReadDataFiles(source)) return [];
-  return scanSource(source, target, true).dataDirectories.map((path) =>
-    resolveDeclaredDataFile(path, source)
-  );
+): { files: string[]; directories: string[] } {
+  if (!mayReadDataFiles(source)) return { files: [], directories: [] };
+  const { dataFiles, dataDirectories } = scanSource(source, target, true);
+  return {
+    files: dataFiles.map((path) => resolveDeclaredDataFile(path, source)),
+    directories: dataDirectories.map((path) =>
+      resolveDeclaredDataFile(path, source)
+    ),
+  };
 }
 
 /**

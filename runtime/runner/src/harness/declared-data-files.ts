@@ -58,11 +58,14 @@ export async function attachDeclaredDataFiles(
   const declaredBy = new Map<string, string>();
   for (const file of program.files) {
     if (alreadyAttached.has(file.name)) continue;
-    const declared = declarations.get(file.name);
-    for (const name of declaredDataFiles(file, declared)) {
+    const { files, directories } = declaredDataReads(
+      file,
+      declarations.get(file.name),
+    );
+    for (const name of files) {
       if (!declaredBy.has(name)) declaredBy.set(name, file.name);
     }
-    for (const directory of declaredDataDirectories(file, declared)) {
+    for (const directory of directories) {
       if (resolver.listDataFiles === undefined) {
         throw new Error(
           `"${file.name}" reads the data directory "${directory}", which ` +
@@ -157,10 +160,13 @@ export function sourcePackageOwners(
         name: storedNameFor(module.name),
         contents: module.contents,
       };
-      const declared = program.declarations?.get(module.name);
+      const { files, directories } = declaredDataReads(
+        read,
+        program.declarations?.get(module.name),
+      );
       const names = [
-        ...declaredDataFiles(read, declared),
-        ...declaredDataDirectories(read, declared).flatMap((directory) => [
+        ...files,
+        ...directories.flatMap((directory) => [
           ...dataFileAssets(directory, dataByStoredName.keys()).values(),
         ]),
       ];
@@ -195,36 +201,22 @@ export function sourcePackageOwners(
 }
 
 /**
- * Helper for the two functions above, which returns the data-file names
- * `module` declares, resolved against its name. `declared` is the module's
- * scan, when the caller holds one; without it the module is parsed here.
+ * Helper for the two functions above, which returns the data files and the
+ * data directories `module` declares, resolved against its name. `declared` is
+ * the module's scan, when the caller holds one; without it the module is
+ * parsed here, once.
  */
-function declaredDataFiles(
+function declaredDataReads(
   module: Source,
   declared: ModuleDeclarations | undefined,
-): string[] {
+): { files: string[]; directories: string[] } {
   if (declared === undefined) {
-    const { collectDataFileNames, TARGET } = compilerStack();
-    return collectDataFileNames(module, TARGET);
+    const { collectDataReads, TARGET } = compilerStack();
+    return collectDataReads(module, TARGET);
   }
-  return declared.dataFiles.map((path) =>
-    resolveDeclaredDataFile(path, module)
-  );
-}
-
-/**
- * Like `declaredDataFiles()`, except that it returns the data directories
- * `module` declares with `dataFile.urls()`.
- */
-function declaredDataDirectories(
-  module: Source,
-  declared: ModuleDeclarations | undefined,
-): string[] {
-  if (declared === undefined) {
-    const { collectDataDirectoryNames, TARGET } = compilerStack();
-    return collectDataDirectoryNames(module, TARGET);
-  }
-  return declared.dataDirectories.map((path) =>
-    resolveDeclaredDataFile(path, module)
-  );
+  const resolve = (path: string) => resolveDeclaredDataFile(path, module);
+  return {
+    files: declared.dataFiles.map(resolve),
+    directories: declared.dataDirectories.map(resolve),
+  };
 }

@@ -9,6 +9,10 @@
 
 import { debugStr } from "@commonfabric/data-model";
 import { isPlainObject } from "@commonfabric/js-values/types";
+import {
+  ASSET_NAME_CHARACTERS,
+  isAssetName,
+} from "@commonfabric/text/data-file";
 
 /** A record from an asset's name to its base64 `data:` URL. */
 export type AssetRecord = Readonly<Record<string, string>>;
@@ -22,10 +26,10 @@ export const ASSETS_ATTRIBUTE = "data-cf-assets";
  * reference ends at the quote of an attribute or the parenthesis of a CSS
  * `url()`.
  */
-const ASSET_REFERENCE = /cf-asset:([A-Za-z0-9_-]+)/g;
-
-/** An asset's name. */
-const ASSET_NAME = /^[A-Za-z0-9_-]+$/;
+const ASSET_REFERENCE = new RegExp(
+  `cf-asset:([${ASSET_NAME_CHARACTERS}]+)`,
+  "g",
+);
 
 /**
  * A base64 `data:` URL: a media type, any parameters, and the bytes in base64
@@ -65,7 +69,7 @@ export function toAssetRecord(value: unknown): AssetRecord {
   }
   const entries: [string, string][] = [];
   for (const [name, url] of Object.entries(value)) {
-    if (!ASSET_NAME.test(name)) {
+    if (!isAssetName(name)) {
       throw new TypeError(
         debugStr`The asset name $quote${name} does not match ` +
           "`[A-Za-z0-9_-]+`.",

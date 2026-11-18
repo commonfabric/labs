@@ -93,10 +93,10 @@ describe("data-file", () => {
 
   describe("decodeDataFile()", () => {
     it("returns the text of valid UTF-8, keeping a leading byte order mark", () => {
-      const bytes = new TextEncoder().encode("﻿café \u{1f369}");
+      const bytes = new TextEncoder().encode("\ufeffcafé \u{1f369}");
 
       expect(decodeDataFile(bytes, "menu.txt")).toBe(
-        "﻿café \u{1f369}",
+        "\ufeffcafé \u{1f369}",
       );
     });
 
@@ -127,7 +127,7 @@ describe("data-file", () => {
     });
 
     it("returns the UTF-8 bytes of a text file", () => {
-      const text = "﻿café \u{1f369}";
+      const text = "\ufeffcafé \u{1f369}";
 
       expect(encodeDataFile(text, "menu.txt")).toEqual(
         new TextEncoder().encode(text),
@@ -156,6 +156,12 @@ describe("data-file", () => {
       const url = dataFileUrl("<svg>é</svg>", "logo.svg");
 
       expect(url).toBe("data:image/svg+xml;base64,PHN2Zz7DqTwvc3ZnPg==");
+    });
+
+    it("throws for a binary media file whose contents are not its `data:` URL", () => {
+      expect(() => dataFileUrl("not a url", "glaze.png")).toThrow(
+        "Data file `glaze.png` does not hold an `image/png` `data:` URL.",
+      );
     });
 
     it("throws listing the table for a file outside it", () => {

@@ -3,6 +3,8 @@
  * Calls may begin before port handoff and settle once the host is ready.
  */
 
+import { decodeBase64 } from "@std/encoding/base64";
+
 import {
   cloneIfNecessary,
   debugStr,
@@ -946,16 +948,6 @@ function guestAsset(url: string): GuestAsset {
     },
     bitmap: () => createImageBitmap(blob()),
   });
-}
-
-/** Decodes `base64`, which `assetUrlParts()` has admitted, into new bytes. */
-function decodeBase64(base64: string): Uint8Array<ArrayBuffer> {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index++) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
 }
 
 /**

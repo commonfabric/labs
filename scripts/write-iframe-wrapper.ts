@@ -18,16 +18,10 @@ import {
 } from "@std/path";
 
 import { build } from "@commonfabric/felt";
-import { dataFileMediaType } from "@commonfabric/text/data-file";
+import { dataFileMediaType, isAssetName } from "@commonfabric/text/data-file";
 
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const RESERVED_RESOURCES = new Set(["input", "state", "output"]);
-
-/**
- * What an asset's name may be: what `cf-iframe`'s `cf-asset:` references match,
- * and what `dataFile.urls()` keys a directory's assets by.
- */
-const ASSET_NAME = /^[A-Za-z0-9_-]+$/;
 
 /** The file the guest's bundle is written to, beside the wrapper. */
 const GUEST_SCRIPT_FILE = "guest.js";
@@ -163,7 +157,7 @@ function assetsConfig(value: unknown): AssetsConfig | undefined {
   }
   const files: Record<string, string> = Object.create(null);
   for (const [name, path] of Object.entries(value)) {
-    if (!ASSET_NAME.test(name)) {
+    if (!isAssetName(name)) {
       throw new TypeError(
         `Asset name ${
           JSON.stringify(name)

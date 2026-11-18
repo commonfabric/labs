@@ -27,8 +27,8 @@ export {
   transformCfDirective,
 } from "@commonfabric/ts-transformers";
 export {
-  collectDataDirectoryNames,
   collectDataFileNames,
+  collectDataReads,
   collectImportSpecifiers,
   getTypeScriptEnvironmentTypes,
   scanModuleDeclarations,

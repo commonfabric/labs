@@ -90,21 +90,16 @@ export function decodeDataFile(bytes: Uint8Array, name: string): string {
 export function encodeDataFile(contents: string, name: string): Uint8Array {
   const entry = mediaTypeEntry(name);
   if (entry?.binary !== true) return new TextEncoder().encode(contents);
-  const prefix = dataUrlPrefix(entry.mediaType);
-  if (!contents.startsWith(prefix)) {
-    throw new Error(
-      `Data file \`${name}\` does not hold an \`${entry.mediaType}\` ` +
-        "`data:` URL.",
-    );
-  }
-  return decodeBase64(contents.slice(prefix.length));
+  return decodeBase64(base64Of(contents, name, entry.mediaType));
 }
 
 /**
  * Returns the stored `contents` of the file `name` names as a base64 `data:`
  * URL: a binary media file's contents as they are, and a text file's UTF-8
  * bytes encoded under its media type. Throws, listing the known extensions,
- * for a file the table has no media type for.
+ * for a file the table has no media type for, and for a binary media file whose
+ * contents are not a `data:` URL of its own media type: a program that did not
+ * pass through {@link decodeDataFile} can carry one.
  */
 export function dataFileUrl(contents: string, name: string): string {
   const entry = mediaTypeEntry(name);
@@ -115,14 +110,29 @@ export function dataFileUrl(contents: string, name: string): string {
         `extensions: ${known.join(", ")}.`,
     );
   }
-  if (entry.binary) return contents;
+  if (entry.binary) {
+    base64Of(contents, name, entry.mediaType);
+    return contents;
+  }
   return `${dataUrlPrefix(entry.mediaType)}${
     encodeBase64(new TextEncoder().encode(contents))
   }`;
 }
 
-/** What an asset's name may be: what `cf-iframe`'s `cf-asset:` references match. */
-const ASSET_NAME = /^[A-Za-z0-9_-]+$/;
+/**
+ * The characters an asset's name is made of. A name is one or more of them:
+ * what `dataFile.urls()` keys a file by, what `cf-iframe`'s `assets` admits,
+ * and what a `cf-asset:` reference in a guest's document runs to.
+ */
+export const ASSET_NAME_CHARACTERS = "A-Za-z0-9_-";
+
+/** An asset's name, whole. */
+const ASSET_NAME = new RegExp(`^[${ASSET_NAME_CHARACTERS}]+$`);
+
+/** Returns whether `name` is an asset's name. */
+export function isAssetName(name: string): boolean {
+  return ASSET_NAME.test(name);
+}
 
 /**
  * Returns the assets the directory `directory` holds, among the root-relative
@@ -147,7 +157,7 @@ export function dataFileAssets(
     if (mediaTypeEntry(name) === undefined) continue;
     const base = name.slice(slash + 1);
     const asset = base.slice(0, base.lastIndexOf("."));
-    if (!ASSET_NAME.test(asset)) {
+    if (!isAssetName(asset)) {
       throw new Error(
         `Data file \`${name}\` has no asset name: \`${asset}\` holds ` +
           "characters other than letters, digits, `_`, and `-`.",
@@ -171,6 +181,21 @@ function mediaTypeEntry(name: string): MediaTypeEntry | undefined {
   const dot = base.lastIndexOf(".");
   if (dot <= 0) return undefined;
   return MEDIA_TYPES.get(base.slice(dot + 1).toLowerCase());
+}
+
+/**
+ * Helper for the functions above, which returns the base64 that `contents`, a
+ * binary media file's stored contents, carries after its `data:` URL prefix.
+ * Throws, naming the file, when `contents` is not a `data:` URL of `mediaType`.
+ */
+function base64Of(contents: string, name: string, mediaType: string): string {
+  const prefix = dataUrlPrefix(mediaType);
+  if (!contents.startsWith(prefix)) {
+    throw new Error(
+      `Data file \`${name}\` does not hold an \`${mediaType}\` \`data:\` URL.`,
+    );
+  }
+  return contents.slice(prefix.length);
 }
 
 /** Helper for the functions above, which starts a base64 `data:` URL. */

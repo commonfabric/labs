@@ -4,10 +4,7 @@
  * from `piece.ts`, whose other commands should not load the compiler.
  */
 
-import {
-  collectDataDirectoryNames,
-  collectDataFileNames,
-} from "@commonfabric/js-compiler";
+import { collectDataReads } from "@commonfabric/js-compiler";
 import { TARGET } from "@commonfabric/js-compiler/typescript";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import { dataFileAssets } from "@commonfabric/text/data-file";
@@ -29,15 +26,17 @@ export function undeclaredDataFiles(program: RuntimeProgram): string[] {
   // A data file is never parsed. One already attached sits in `files` like any
   // other entry, and its bytes may happen to read as a `dataFile()` call.
   const attached = new Set(program.dataFiles ?? []);
-  const sources = program.files.filter((file) => !attached.has(file.name));
-  const declared = new Set([
-    ...sources.flatMap((file) => collectDataFileNames(file, TARGET)),
-    ...sources.flatMap((file) =>
-      collectDataDirectoryNames(file, TARGET).flatMap((directory) => [
-        ...dataFileAssets(directory, attached).values(),
-      ])
-    ),
-  ]);
+  const declared = new Set<string>();
+  for (const file of program.files) {
+    if (attached.has(file.name)) continue;
+    const { files, directories } = collectDataReads(file, TARGET);
+    for (const name of files) declared.add(name);
+    for (const directory of directories) {
+      for (const name of dataFileAssets(directory, attached).values()) {
+        declared.add(name);
+      }
+    }
+  }
   return [...attached].filter((name) => !declared.has(name));
 }
 

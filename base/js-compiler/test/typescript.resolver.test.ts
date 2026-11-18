@@ -1,8 +1,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
-  collectDataDirectoryNames,
   collectDataFileNames,
+  collectDataReads,
   collectImportSpecifiers,
   resolveProgram,
   scanModuleDeclarations,
@@ -465,9 +465,9 @@ describe("typescript/resolver.ts", () => {
     });
   });
 
-  describe("collectDataDirectoryNames", () => {
+  describe("collectDataReads", () => {
     const directoriesIn = (name: string, contents: string) =>
-      collectDataDirectoryNames({ name, contents }, TARGET);
+      collectDataReads({ name, contents }, TARGET).directories;
 
     it("reads the directory a call to dataFile's `urls` member names", () => {
       expect(directoriesIn(
