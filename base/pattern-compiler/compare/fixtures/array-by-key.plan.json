@@ -3,7 +3,7 @@
     "module": "compare/fixtures/array-by-key.tsx",
     "patterns": [
       {
-        "line": 31,
+        "line": 37,
         "name": "RepoRow",
         "plan": {
           "argumentSchema": "unhashed:schema/0",
@@ -336,7 +336,7 @@
         "unsupported": []
       },
       {
-        "line": 77,
+        "line": 83,
         "name": "default",
         "plan": {
           "argumentSchema": "unhashed:schema/0",
@@ -1030,7 +1030,7 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key.tsx",
-                "start": 2806
+                "start": 2817
               },
               "bodies": [
                 0
@@ -1049,7 +1049,7 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key.tsx",
-                "start": 2850
+                "start": 2861
               },
               "bodies": [
                 1
@@ -1066,7 +1066,7 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key.tsx",
-                "start": 3080
+                "start": 3091
               },
               "bodies": [],
               "entry": "map",
@@ -1087,7 +1087,7 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key.tsx",
-                "start": 3285
+                "start": 3296
               },
               "bodies": [],
               "entry": "filter",
@@ -1108,7 +1108,7 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key.tsx",
-                "start": 3323
+                "start": 3334
               },
               "bodies": [],
               "entry": "map",
@@ -1143,7 +1143,7 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key.tsx",
-                "start": 3397
+                "start": 3408
               },
               "bodies": [],
               "entry": "map",
@@ -1163,7 +1163,7 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key.tsx",
-                "start": 3621
+                "start": 3632
               },
               "bodies": [],
               "entry": "filter",
@@ -1183,7 +1183,7 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key.tsx",
-                "start": 3647
+                "start": 3658
               },
               "bodies": [],
               "entry": "map",
@@ -1203,7 +1203,7 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key.tsx",
-                "start": 3760
+                "start": 3771
               },
               "bodies": [],
               "entry": "filter",
@@ -1224,7 +1224,7 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key.tsx",
-                "start": 3798
+                "start": 3809
               },
               "bodies": [],
               "entry": "map",
@@ -1311,6 +1311,9 @@
               "constraints": [],
               "interim": "repos",
               "kept": false,
+              "keyFields": [
+                "id"
+              ],
               "path": [],
               "template": {
                 "by": {
@@ -1441,6 +1444,9 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
+              "keyFields": [
+                "id"
+              ],
               "path": [],
               "template": {
                 "body": {
@@ -1468,6 +1474,9 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
+              "keyFields": [
+                "id"
+              ],
               "path": [
                 "*"
               ],
@@ -1685,6 +1694,9 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
+              "keyFields": [
+                "id"
+              ],
               "path": [],
               "template": {
                 "body": {
@@ -1712,6 +1724,9 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
+              "keyFields": [
+                "id"
+              ],
               "path": [
                 "*"
               ],

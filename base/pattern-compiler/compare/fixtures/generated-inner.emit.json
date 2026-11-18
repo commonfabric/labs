@@ -451,6 +451,9 @@
               "constraints": [],
               "interim": "items",
               "kept": false,
+              "keyFields": [
+                "title"
+              ],
               "path": [],
               "template": {
                 "by": {

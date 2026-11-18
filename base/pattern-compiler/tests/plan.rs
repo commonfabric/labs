@@ -3969,6 +3969,108 @@ export const P = pattern<{
     );
 }
 
+/// PL §8, question 149: the key fields go with a plain array generated
+/// from scratch to a reader that is compiled in, by whichever way the
+/// caller gives the array: a record held in a variable, a spread of
+/// such a record, and a second pattern compiled in between, which
+/// passes its parameter on. Each `map` is that of `Rows`, over the
+/// output of the `lift`. `Outer` is given an array of plain values in
+/// place the same way, whose collection is over the slot.
+#[test]
+fn the_key_fields_reach_a_reader_through_a_variable_a_spread_and_a_second_pattern() {
+    let analysis = program(
+        r#"import { lift, pattern, type ArrayByKey } from "commonfabric";
+interface Repo { id: number; name: string; stars: number }
+const fetched = lift((input: { names: string[] }): ArrayByKey<Repo, "id"> =>
+  input.names.map((name, index) => ({ id: index, name, stars: 1 })));
+const Rows = pattern<{ repos: Repo[] }>(({ repos }) => ({
+  names: repos.map((repo) => repo.name),
+}));
+const Outer = pattern<{ repos: Repo[] }>(({ repos }) => ({
+  inner: Rows({ repos }),
+}));
+export const P = pattern<{ names: string[]; saved: ArrayByKey<Repo, "id"> }>(
+  ({ names, saved }) => {
+    const repos = fetched({ names });
+    const held = { repos };
+    return {
+      variable: Rows(held),
+      spread: Rows({ ...held }),
+      between: Outer({ repos }),
+      betweenInPlace: Outer({ repos: saved }),
+    };
+  },
+);
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let fields: Vec<(String, String)> = collections_of(&plan)
+        .into_iter()
+        .map(|(_, source, fields, _)| (source, fields))
+        .collect();
+    let keyed = |source: &str| (source.to_string(), r#"["id"]"#.to_string());
+    assert_eq!(
+        fields,
+        [
+            keyed("output"),
+            keyed("output"),
+            keyed("output"),
+            keyed("slot"),
+        ]
+    );
+}
+
+/// Ruling Z54: a plain array generated from scratch that is given whole
+/// to an instance of its own is given as a link to the stored output
+/// with the array schema. The plan holds no schema of an output, so the
+/// record of the output has a copy of the key fields that the type of
+/// its value declares, as `Collection.keyFields` is a copy. `repos` is
+/// what a `lift` returns whole under a type that declares the key, and
+/// `plain` what one returns under a plain array type.
+#[test]
+fn an_output_has_the_key_fields_that_the_type_of_its_value_declares() {
+    let analysis = program(
+        r#"import { lift, pattern, type ArrayByKey } from "commonfabric";
+interface Repo { id: number; name: string; stars: number }
+const fetched = lift((input: { names: string[] }): ArrayByKey<Repo, "id"> =>
+  input.names.map((name, index) => ({ id: index, name, stars: 1 })));
+const copied = lift((input: { names: string[] }): Repo[] =>
+  input.names.map((name, index) => ({ id: index, name, stars: 1 })));
+const Rows = pattern<{ repos: Repo[] }>(({ repos }) => ({
+  names: repos.map((repo) => repo.name),
+}));
+export const P = pattern<{ names: string[] }>(({ names }) => {
+  const repos = fetched({ names });
+  const plain = copied({ names });
+  return {
+    made: Rows.asInstance()({ repos }),
+    madePlain: Rows.asInstance()({ repos: plain }),
+  };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let outputs: Vec<(String, String)> = plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .filter(|output| output["interim"].is_string())
+        .map(|output| {
+            (
+                output["interim"].as_str().unwrap_or("").to_string(),
+                output["keyFields"].to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        outputs,
+        [
+            ("repos".to_string(), r#"["id"]"#.to_string()),
+            ("plain".to_string(), "null".to_string()),
+        ]
+    );
+}
+
 /// Ruling Z49 (PL §1.3, "The key belongs to the array"): an element
 /// that is put into a second array has the key that the second array
 /// declares, or none. `copied` and `renamed` are plain arrays generated

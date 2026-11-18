@@ -810,6 +810,10 @@
               "constraints": [],
               "interim": "entries",
               "kept": false,
+              "keyFields": [
+                "a:b",
+                "tag"
+              ],
               "path": [],
               "template": {
                 "by": {
@@ -842,6 +846,10 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
+              "keyFields": [
+                "a:b",
+                "tag"
+              ],
               "path": [],
               "template": {
                 "body": {
@@ -869,6 +877,10 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
+              "keyFields": [
+                "a:b",
+                "tag"
+              ],
               "path": [
                 "*"
               ],
@@ -966,6 +978,10 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
+              "keyFields": [
+                "a:b",
+                "tag"
+              ],
               "path": [],
               "template": {
                 "body": {
@@ -993,6 +1009,10 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
+              "keyFields": [
+                "a:b",
+                "tag"
+              ],
               "path": [
                 "*"
               ],

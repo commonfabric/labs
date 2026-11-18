@@ -5447,7 +5447,14 @@ describe("a reader typed as a plain array that is given an array with a declared
   };
   type Row = { name: string; stars: number; noted: string };
   type Result = Record<
-    "inPlace" | "scratch" | "derived" | "none" | "made" | "madeScratch",
+    | "inPlace"
+    | "scratch"
+    | "derived"
+    | "none"
+    | "made"
+    | "madeScratch"
+    | "madeDerived"
+    | "madeKept",
     { rows: Row[] }
   >;
   const result = (instance: Instance) => instance.result() as Result;
@@ -5469,7 +5476,7 @@ describe("a reader typed as a plain array that is given an array with a declared
     return instance.dispatch();
   };
   const [IN_PLACE, SCRATCH, DERIVED, NONE] = [0, 1, 2, 3];
-  const [MADE, MADE_SCRATCH] = [0, 1];
+  const [MADE, MADE_SCRATCH, MADE_DERIVED, MADE_KEPT] = [0, 1, 2, 3];
 
   it("gives the collection of a reader that is compiled in the key fields of the array given, in the plan", async () => {
     const instance = await start();
@@ -5490,6 +5497,9 @@ describe("a reader typed as a plain array that is given an array with a declared
       ["map", "collection", undefined],
       // Over an array that declares no key.
       ["map", "slot", undefined],
+      // The two results that are given whole to an instance of its own.
+      ["filter", "output", ["id"]],
+      ["filter", "slot", ["id"]],
     ]);
   });
 
@@ -5581,20 +5591,76 @@ describe("a reader typed as a plain array that is given an array with a declared
     );
   });
 
-  it("keys the rows of an instance called through `asInstance()` by the whole value where its argument holds a plain array generated from scratch and no link", async () => {
+  it("gives an instance called through `asInstance()` a plain array generated from scratch as a link to the stored output with the array schema, and keys its rows by the declared field", async () => {
     const instance = await start();
     instance.result();
 
-    // The argument holds the values, so no schema with the keyword is
-    // on the way to the array.
+    // Ruling Z54: the argument holds no value of the array. The link
+    // names the document of the output, and its schema has the keyword.
     expect(
       instance.store.docs.get(made(instance, MADE_SCRATCH).argument)?.value,
     ).toEqual({
-      repos: [repo(1, "ab", 2), repo(2, "cde", 3)],
+      repos: {
+        $link: {
+          doc: instance.outputDocument(0),
+          path: [],
+          schema: { type: "array", keyFields: ["id"] },
+        },
+      },
+    });
+    expect(instance.store.docs.get(instance.outputDocument(0))).toEqual({
+      kind: "output",
+      value: [repo(1, "ab", 2), repo(2, "cde", 3)],
     });
     expect(keysOf(made(instance, MADE_SCRATCH), 0)).toEqual(
+      sorted([1, 2].map((id) => byFields(instance, { id }))),
+    );
+    expect(result(instance).madeScratch.rows).toMatchObject([
+      { name: "ab", stars: 2, noted: "" },
+      { name: "cde", stars: 3, noted: "" },
+    ]);
+    // The row keeps its state when the computation returns the element
+    // with another value of a member that is no key field.
+    expect(
+      note(instance, made(instance, MADE_SCRATCH).id, ["rows"], 1, "mine")
+        .map(({ committed }) => committed),
+    ).toEqual([true]);
+    instance.writeArgument(["bonus"], 5);
+    expect(result(instance).madeScratch.rows).toMatchObject([
+      { name: "ab", stars: 7, noted: "" },
+      { name: "cde", stars: 8, noted: "mine" },
+    ]);
+    expect(keysOf(made(instance, MADE_SCRATCH), 0)).toEqual(
+      sorted([1, 2].map((id) => byFields(instance, { id }))),
+    );
+  });
+
+  it("gives an instance called through `asInstance()` the result of another per-element construct as the assembled values and the links it holds", async () => {
+    const instance = await start();
+    instance.result();
+
+    // Over a plain array generated from scratch and over plain values
+    // in place alike, the argument holds the values of the elements that
+    // the `filter` passes on.
+    const scratch = instance.store.docs.get(
+      made(instance, MADE_DERIVED).argument,
+    )?.value as { repos: unknown[] };
+    const kept = instance.store.docs.get(made(instance, MADE_KEPT).argument)
+      ?.value as { repos: unknown[] };
+    expect(scratch.repos).toEqual([repo(1, "ab", 2), repo(2, "cde", 3)]);
+    expect(kept.repos).toEqual([repo(7, "s", 1), repo(8, "t", 2)]);
+    // The argument holds the values and no link to an array, so no
+    // schema is on the way and the rows are keyed by the whole value.
+    expect(keysOf(made(instance, MADE_DERIVED), 0)).toEqual(
       sorted(
         [repo(1, "ab", 2), repo(2, "cde", 3)].map((value) =>
+          whole(instance, value)
+        ),
+      ),
+    );
+    expect(keysOf(made(instance, MADE_KEPT), 0)).toEqual(
+      sorted(
+        [repo(7, "s", 1), repo(8, "t", 2)].map((value) =>
           whole(instance, value)
         ),
       ),

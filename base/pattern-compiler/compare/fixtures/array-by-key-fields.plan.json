@@ -3,7 +3,7 @@
     "module": "compare/fixtures/array-by-key-fields.tsx",
     "patterns": [
       {
-        "line": 16,
+        "line": 22,
         "name": "RepoRow",
         "plan": {
           "argumentSchema": "unhashed:schema/0",
@@ -362,7 +362,7 @@
         "unsupported": []
       },
       {
-        "line": 60,
+        "line": 66,
         "name": "default",
         "plan": {
           "argumentSchema": "unhashed:schema/0",
@@ -518,7 +518,7 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key-fields.tsx",
-                "start": 1930
+                "start": 1941
               },
               "bodies": [
                 0
@@ -538,7 +538,7 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key-fields.tsx",
-                "start": 2008
+                "start": 2019
               },
               "bodies": [],
               "entry": "filter",
@@ -559,7 +559,7 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key-fields.tsx",
-                "start": 2046
+                "start": 2057
               },
               "bodies": [],
               "entry": "map",
@@ -594,7 +594,7 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key-fields.tsx",
-                "start": 2126
+                "start": 2137
               },
               "bodies": [],
               "entry": "map",
@@ -637,6 +637,10 @@
               "constraints": [],
               "interim": "repos",
               "kept": false,
+              "keyFields": [
+                "name",
+                "owner"
+              ],
               "path": [],
               "template": {
                 "by": {
@@ -669,6 +673,10 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
+              "keyFields": [
+                "name",
+                "owner"
+              ],
               "path": [],
               "template": {
                 "body": {
@@ -696,6 +704,10 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
+              "keyFields": [
+                "name",
+                "owner"
+              ],
               "path": [
                 "*"
               ],

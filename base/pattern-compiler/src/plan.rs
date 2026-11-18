@@ -1887,13 +1887,6 @@ impl<'a> Emitter<'_, '_, 'a> {
                     ) {
                         self.literal_keys.insert(key.to_string());
                     }
-                    if let (false, Some(key), Place::Record(fields)) =
-                        (property.computed, static_key_name(&property.key), &argument)
-                    {
-                        if let Some(place) = fields.get(key) {
-                            self.note_key_fields(&property.value, place);
-                        }
-                    }
                     let value = self
                         .resolver
                         .constant_value(self.module, &property.value, 0);
@@ -2106,6 +2099,10 @@ impl<'a> Emitter<'_, '_, 'a> {
         let span = unwrap(expression).span();
         let before = (self.values.len(), self.state_cells.len());
         let place = self.eval_inner(expression, hint);
+        // The key fields go with the computed value from wherever an
+        // expression of a type that declares them denotes it, so a
+        // reader finds them by whichever way the value reaches it.
+        self.note_key_fields(expression, &place);
         self.facts.expression(
             (span.start, span.end),
             crate::emit::ExprFact {
@@ -4179,11 +4176,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                                     Some(function) => {
                                         self.bind_inline(function, BodyKind::InlineHandler, &name)
                                     }
-                                    None => {
-                                        let place = self.eval(expression, &format!("@{name}"));
-                                        self.note_key_fields(expression, &place);
-                                        place
-                                    }
+                                    None => self.eval(expression, &format!("@{name}")),
                                 },
                                 None => Place::Const,
                             }
@@ -6262,6 +6255,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 if let (Some(collection), true) = (value.passes, below.is_empty()) {
                     output.insert("passesCollection".to_string(), json!(collection));
+                }
+                // `Output.keyFields`: a copy of the key fields that the
+                // type of the value declares with `ArrayByKey`. The plan
+                // holds no schema of an output, and the runtime writes
+                // the keyword into the schema of a link to the stored
+                // output (ruling Z54).
+                if let Some(fields) = self.value_keys.get(&(value.order, below.to_vec())) {
+                    output.insert("keyFields".to_string(), fields.clone());
                 }
                 if let Some(template) = &value.template {
                     output.insert("template".to_string(), template.clone());

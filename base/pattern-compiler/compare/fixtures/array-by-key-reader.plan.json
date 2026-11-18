@@ -390,7 +390,7 @@
         "unsupported": []
       },
       {
-        "line": 59,
+        "line": 61,
         "name": "default",
         "plan": {
           "argumentSchema": "unhashed:schema/0",
@@ -620,6 +620,22 @@
               },
               "name": "Rows#2",
               "within": []
+            },
+            {
+              "asInstance": true,
+              "callee": {
+                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
+              },
+              "name": "Rows#3",
+              "within": []
+            },
+            {
+              "asInstance": true,
+              "callee": {
+                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
+              },
+              "name": "Rows#4",
+              "within": []
             }
           ],
           "closures": [],
@@ -702,7 +718,7 @@
                 "collection": 2,
                 "op": "fold"
               },
-              "name": "filter",
+              "name": "filter#1",
               "source": {
                 "output": 0
               },
@@ -755,13 +771,73 @@
                   "site": "Rows"
                 }
               ]
+            },
+            {
+              "construct": "filter",
+              "keyFields": [
+                "id"
+              ],
+              "membership": {
+                "body": {
+                  "by": {
+                    "expression": true
+                  },
+                  "inputs": [
+                    {
+                      "op": "slot",
+                      "slot": 22
+                    },
+                    {
+                      "op": "const"
+                    }
+                  ],
+                  "op": "derive"
+                },
+                "collection": 5,
+                "op": "fold"
+              },
+              "name": "filter#2",
+              "source": {
+                "output": 0
+              },
+              "within": []
+            },
+            {
+              "construct": "filter",
+              "keyFields": [
+                "id"
+              ],
+              "membership": {
+                "body": {
+                  "by": {
+                    "expression": true
+                  },
+                  "inputs": [
+                    {
+                      "op": "slot",
+                      "slot": 24
+                    },
+                    {
+                      "op": "const"
+                    }
+                  ],
+                  "op": "derive"
+                },
+                "collection": 6,
+                "op": "fold"
+              },
+              "name": "filter#3",
+              "source": {
+                "slot": 3
+              },
+              "within": []
             }
           ],
           "cones": [
             {
               "at": {
                 "file": "compare/fixtures/array-by-key-reader.tsx",
-                "start": 1862
+                "start": 2025
               },
               "bodies": [
                 0
@@ -828,7 +904,7 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key-reader.tsx",
-                "start": 2007
+                "start": 2170
               },
               "bodies": [],
               "entry": "filter",
@@ -896,7 +972,7 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key-reader.tsx",
-                "start": 2081
+                "start": 2244
               },
               "bodies": [],
               "entry": "Rows",
@@ -926,7 +1002,7 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key-reader.tsx",
-                "start": 2135
+                "start": 2298
               },
               "bodies": [],
               "entry": "Rows",
@@ -970,6 +1046,132 @@
             {
               "at": {
                 "file": "compare/fixtures/array-by-key-reader.tsx",
+                "start": 2391
+              },
+              "bodies": [],
+              "entry": "filter",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                22,
+                23
+              ],
+              "within": [
+                {
+                  "element": 5
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key-reader.tsx",
+                "start": 2345
+              },
+              "bodies": [],
+              "entry": "Rows",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "child": 2,
+                    "kind": "argument",
+                    "path": [
+                      "repos"
+                    ]
+                  },
+                  "template": {
+                    "body": {
+                      "by": {
+                        "expression": true
+                      },
+                      "inputs": [
+                        {
+                          "op": "slot",
+                          "slot": 22
+                        },
+                        {
+                          "op": "const"
+                        }
+                      ],
+                      "op": "derive"
+                    },
+                    "collection": 5,
+                    "op": "fold"
+                  }
+                }
+              ]
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key-reader.tsx",
+                "start": 2486
+              },
+              "bodies": [],
+              "entry": "filter",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                24,
+                25
+              ],
+              "within": [
+                {
+                  "element": 6
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key-reader.tsx",
+                "start": 2440
+              },
+              "bodies": [],
+              "entry": "Rows",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "child": 3,
+                    "kind": "argument",
+                    "path": [
+                      "repos"
+                    ]
+                  },
+                  "template": {
+                    "body": {
+                      "by": {
+                        "expression": true
+                      },
+                      "inputs": [
+                        {
+                          "op": "slot",
+                          "slot": 24
+                        },
+                        {
+                          "op": "const"
+                        }
+                      ],
+                      "op": "derive"
+                    },
+                    "collection": 6,
+                    "op": "fold"
+                  }
+                }
+              ]
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key-reader.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -977,7 +1179,7 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                22
+                26
               ],
               "within": [],
               "writes": []
@@ -992,7 +1194,37 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                23
+                27
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key-reader.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                28
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key-reader.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                29
               ],
               "within": [],
               "writes": []
@@ -1008,6 +1240,22 @@
                 "kind": "output",
                 "output": 0
               }
+            },
+            {
+              "from": 8,
+              "to": 9,
+              "via": {
+                "kind": "output",
+                "output": 23
+              }
+            },
+            {
+              "from": 10,
+              "to": 11,
+              "via": {
+                "kind": "output",
+                "output": 25
+              }
             }
           ],
           "operations": [],
@@ -1017,6 +1265,9 @@
               "constraints": [],
               "interim": "repos",
               "kept": false,
+              "keyFields": [
+                "id"
+              ],
               "path": [],
               "template": {
                 "by": {
@@ -1205,6 +1456,9 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
+              "keyFields": [
+                "id"
+              ],
               "path": [],
               "template": {
                 "body": {
@@ -1231,6 +1485,9 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
+              "keyFields": [
+                "id"
+              ],
               "path": [
                 "*"
               ],
@@ -1399,7 +1656,99 @@
               }
             },
             {
-              "cone": 9,
+              "collection": 5,
+              "cone": 8,
+              "constraints": [],
+              "interim": "filter",
+              "kept": false,
+              "keyFields": [
+                "id"
+              ],
+              "path": [],
+              "template": {
+                "body": {
+                  "by": {
+                    "expression": true
+                  },
+                  "inputs": [
+                    {
+                      "op": "slot",
+                      "slot": 22
+                    },
+                    {
+                      "op": "const"
+                    }
+                  ],
+                  "op": "derive"
+                },
+                "collection": 5,
+                "op": "fold"
+              }
+            },
+            {
+              "cone": 8,
+              "constraints": [],
+              "interim": "filter",
+              "kept": false,
+              "keyFields": [
+                "id"
+              ],
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 23
+              }
+            },
+            {
+              "collection": 6,
+              "cone": 10,
+              "constraints": [],
+              "interim": "filter",
+              "kept": false,
+              "keyFields": [
+                "id"
+              ],
+              "path": [],
+              "template": {
+                "body": {
+                  "by": {
+                    "expression": true
+                  },
+                  "inputs": [
+                    {
+                      "op": "slot",
+                      "slot": 24
+                    },
+                    {
+                      "op": "const"
+                    }
+                  ],
+                  "op": "derive"
+                },
+                "collection": 6,
+                "op": "fold"
+              }
+            },
+            {
+              "cone": 10,
+              "constraints": [],
+              "interim": "filter",
+              "kept": false,
+              "keyFields": [
+                "id"
+              ],
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 25
+              }
+            },
+            {
+              "cone": 15,
               "constraints": [],
               "kept": true,
               "path": [
@@ -1407,11 +1756,35 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 22
+                "slot": 26
               }
             },
             {
-              "cone": 9,
+              "cone": 15,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "madeDerived"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 27
+              }
+            },
+            {
+              "cone": 15,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "madeKept"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 28
+              }
+            },
+            {
+              "cone": 15,
               "constraints": [],
               "kept": true,
               "path": [
@@ -1419,7 +1792,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 23
+                "slot": 29
               }
             }
           ],
@@ -1654,10 +2027,66 @@
               "schema": "unhashed:schema/4"
             },
             {
+              "observes": "value",
+              "path": [
+                "stars"
+              ],
+              "root": {
+                "collection": 5,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 5,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/6"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "stars"
+              ],
+              "root": {
+                "collection": 6,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 6,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/6"
+            },
+            {
               "observes": "identity",
               "path": [],
               "root": {
                 "child": 0,
+                "kind": "child"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "child": 2,
+                "kind": "child"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "child": 3,
                 "kind": "child"
               }
             },

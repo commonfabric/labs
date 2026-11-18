@@ -52,8 +52,10 @@ interface Input {
 // `filter`, in each of which `Rows` is compiled in. `made` and
 // `madeScratch` give the same two arrays to an instance of `Rows` that
 // is called through `asInstance()`, which reads its argument through a
-// link. `loose` declares no key, so its rows are keyed by the whole
-// value. `ArrayByKey` is no member of today's `commonfabric`, so the
+// link. `madeDerived` and `madeKept` give such an instance the result of
+// a `filter`, over the plain array generated from scratch and over the
+// plain values in place. `loose` declares no key, so its rows are keyed
+// by the whole value. `ArrayByKey` is no member of today's `commonfabric`, so the
 // executor's tests run this fixture and it is not compared with today's
 // runtime.
 export default pattern<Input>(({ names, bonus, saved, loose }) => {
@@ -65,5 +67,11 @@ export default pattern<Input>(({ names, bonus, saved, loose }) => {
     none: Rows({ repos: loose }),
     made: Rows.asInstance()({ repos: saved }),
     madeScratch: Rows.asInstance()({ repos }),
+    madeDerived: Rows.asInstance()({
+      repos: repos.filter((repo) => repo.stars > 0),
+    }),
+    madeKept: Rows.asInstance()({
+      repos: saved.filter((repo) => repo.stars > 0),
+    }),
   };
 });

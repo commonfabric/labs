@@ -100,6 +100,13 @@ export type Plan = {
      * output has the element table of that collection.
      */
     passesCollection?: number;
+    /**
+     * The key fields that the type of the output's value declares with
+     * `ArrayByKey`, in the order of their names: a copy, as that of a
+     * collection, since the plan holds no schema of an output (ruling
+     * Z54).
+     */
+    keyFields?: string[];
     kept: boolean;
     interim?: string;
   }[];
@@ -761,7 +768,14 @@ export class Host {
       }
       throw new Unsupported("an output that no value function computes");
     }
-    return this.value(value);
+    const held = this.value(value);
+    if (Array.isArray(held)) {
+      instance.returnedWhole.set(held, {
+        output: index,
+        context: this.context,
+      });
+    }
+    return held;
   }
 
   /** The value a value function computes, by the value's number. */
@@ -1096,6 +1110,15 @@ export class Instance {
     stepCone: number;
     step: (host: Host) => unknown;
   }>();
+  /**
+   * The output that each array is the whole value of, with the element
+   * keys it was read under: what a value function returned for an
+   * output, by the identity of the array.
+   */
+  readonly returnedWhole = new WeakMap<
+    object,
+    { output: number; context: Context }
+  >();
   /** The function of the argument of each child instance, by the child. */
   readonly #childArguments = new Map<number, (host: Host) => unknown>();
   /**
@@ -1676,7 +1699,9 @@ export class Instance {
    * the link, which is the element over an array of references. A path
    * bound to a plain value in place, which the body names by a
    * reference by key, holds the value, and so does a path bound to a
-   * value of the result of another per-element construct.
+   * value of the result of another per-element construct. A path bound
+   * to a plain array generated from scratch, given whole, holds a link
+   * to the stored output with the array schema (ruling Z54).
    */
   #childResult(child: number): Lazy {
     const record = this.plan.children?.[child];
@@ -1718,7 +1743,9 @@ export class Instance {
               );
               return named.path.some(isKeySegment) ? host.v(value) : value;
             }
-            if (Array.isArray(value)) return value.map(given);
+            if (Array.isArray(value)) {
+              return this.#linkToOutput(value) ?? value.map(given);
+            }
             if (isRecord(value)) {
               return Object.fromEntries(
                 Object.entries(value).map((
@@ -1781,6 +1808,25 @@ export class Instance {
         },
         within,
       );
+  }
+
+  /**
+   * The reference to the stored output that an array is the whole value
+   * of, for a plain array generated from scratch (ruling Z54): the
+   * document of the output, under the schema of an array with the key
+   * fields that the record of the output holds, so that a reader that
+   * resolves the link learns them (ruling Z52). Nothing for another
+   * array.
+   */
+  #linkToOutput(array: readonly unknown[]): Ref | undefined {
+    const from = this.returnedWhole.get(array);
+    if (from === undefined) return undefined;
+    const place = this.#generated(from.output, array, from.context);
+    if (place === undefined) return undefined;
+    const { keyFields } = this.plan.outputs[from.output];
+    return place.withSchema(
+      keyFields === undefined ? undefined : { type: "array", keyFields },
+    );
   }
 
   /**
