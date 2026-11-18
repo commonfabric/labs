@@ -43,7 +43,9 @@ type MarkLinkPredicate = (
  * A link is named by what it shows: its authored `label` when it carries one,
  * and otherwise the `[NAME]` of the cell it points at. It counts as resolved
  * once it holds that cell and its button has been laid out. A link that is
- * still forming shows a name and has resolved nothing.
+ * still forming shows a name and has resolved nothing. A labelled link
+ * resolves only when acted on, so a matching one that holds no cell yet is
+ * asked to resolve, as a press would, and is marked on a later pass.
  */
 const markCellLink: MarkLinkPredicate = (
   probe,
@@ -57,8 +59,19 @@ const markCellLink: MarkLinkPredicate = (
       label?: string;
       _name?: string;
       _resolvedCell?: unknown;
+      resolveTarget?: () => Promise<unknown>;
+      __resolving?: Promise<unknown>;
     };
-    if ((link.label ?? link._name) !== targetLabel || !link._resolvedCell) {
+    if ((link.label ?? link._name) !== targetLabel) continue;
+    if (!link._resolvedCell) {
+      // A labelled link resolves nothing until it is acted on (see
+      // `cf-cell-link`'s `resolveTarget()`). Ask it to, as a press would, and
+      // find it resolved on a later pass.
+      if (link.resolveTarget && !link.__resolving) {
+        link.__resolving = link.resolveTarget().finally(() => {
+          link.__resolving = undefined;
+        });
+      }
       continue;
     }
     const chip = link.shadowRoot?.querySelector("cf-chip");
@@ -94,8 +107,10 @@ const markCardOpenLink: MarkLinkPredicate = (
       label?: string;
       _name?: string;
       _resolvedCell?: unknown;
+      resolveTarget?: () => Promise<unknown>;
+      __resolving?: Promise<unknown>;
     };
-    if ((link.label ?? link._name) !== "Open" || !link._resolvedCell) continue;
+    if ((link.label ?? link._name) !== "Open") continue;
 
     let card: Element | undefined;
     let current: Node | null = link;
@@ -109,6 +124,17 @@ const markCardOpenLink: MarkLinkPredicate = (
         (root instanceof ShadowRoot ? root.host : null);
     }
     if (!card || !probe.deepText(card).includes(cardTitle)) continue;
+    if (!link._resolvedCell) {
+      // A labelled link resolves nothing until it is acted on (see
+      // `cf-cell-link`'s `resolveTarget()`). Ask it to, as a press would, and
+      // find it resolved on a later pass.
+      if (link.resolveTarget && !link.__resolving) {
+        link.__resolving = link.resolveTarget().finally(() => {
+          link.__resolving = undefined;
+        });
+      }
+      continue;
+    }
 
     const chip = link.shadowRoot?.querySelector("cf-chip");
     const button = chip?.shadowRoot?.querySelector("button");
@@ -142,9 +168,21 @@ const markResolvedCellLink = (
         id(): string;
         ref(): { scope?: string; path: readonly unknown[] };
       };
+      resolveTarget?: () => Promise<unknown>;
+      __resolving?: Promise<unknown>;
     };
     const cell = link._resolvedCell;
-    if (!cell) continue;
+    if (!cell) {
+      // A labelled link resolves nothing until it is acted on (see
+      // `cf-cell-link`'s `resolveTarget()`). Ask it to, as a press would, and
+      // find it resolved on a later pass.
+      if (link.resolveTarget && !link.__resolving) {
+        link.__resolving = link.resolveTarget().finally(() => {
+          link.__resolving = undefined;
+        });
+      }
+      continue;
+    }
     const ref = cell.ref();
     if (
       cell.space() !== targetSpace ||

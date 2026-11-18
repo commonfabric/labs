@@ -112,6 +112,60 @@ describe("topics-navigation-helpers", () => {
       ]);
     });
 
+    it("asks a labelled link that has resolved nothing to resolve, then clicks it", async () => {
+      await page.evaluate(() => {
+        document.body.replaceChildren();
+        const clicks: string[] = [];
+        let requests = 0;
+        const pieceId = "of:fid1:on-demand";
+        const link = Object.assign(document.createElement("cf-cell-link"), {
+          label: "Open",
+          _resolvedCell: undefined as unknown,
+          resolveTarget() {
+            requests++;
+            return new Promise((resolve) =>
+              setTimeout(() => {
+                link._resolvedCell = {
+                  space: () => "did:key:space",
+                  id: () => pieceId,
+                  ref: () => ({ scope: "space", path: [] }),
+                };
+                resolve(link._resolvedCell);
+              }, 20)
+            );
+          },
+        });
+        const linkRoot = link.attachShadow({ mode: "open" });
+        const chip = document.createElement("cf-chip");
+        const chipRoot = chip.attachShadow({ mode: "open" });
+        const button = document.createElement("button");
+        button.textContent = "Open";
+        button.addEventListener("click", () => clicks.push(pieceId));
+        chipRoot.append(button);
+        linkRoot.append(chip);
+        document.body.append(link);
+
+        Object.assign(globalThis, {
+          commonfabric: { viewSettled: () => Promise.resolve() },
+          __topicsNavigationResult: () => ({ clicks, requests }),
+        });
+      });
+
+      const returned = await clickCellLink(page, "Open");
+      const result = await page.evaluate(() =>
+        (globalThis as typeof globalThis & {
+          __topicsNavigationResult: () => {
+            clicks: string[];
+            requests: number;
+          };
+        }).__topicsNavigationResult()
+      );
+
+      expect(returned).toBe("of:fid1:on-demand");
+      expect(result.clicks).toEqual(["of:fid1:on-demand"]);
+      expect(result.requests).toBeGreaterThanOrEqual(1);
+    });
+
     it("revalidates after a surviving link's box settles", async () => {
       await page.evaluate(() => {
         document.body.replaceChildren();

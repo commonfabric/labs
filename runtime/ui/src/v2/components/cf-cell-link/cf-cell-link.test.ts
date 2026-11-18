@@ -57,9 +57,9 @@ describe("CFCellLink", () => {
       globalThis.removeEventListener("cf-navigate", listener);
     }
   });
-  it("warns, naming the link, and navigates nowhere on a click before the link resolves", () => {
+  it("warns, naming the link, and navigates nowhere on a click before an unlabelled link resolves", () => {
     const element = new CFCellLink() as any;
-    element.label = "Team chat";
+    element._name = "Team chat";
     element.cell = {
       ref: () => ({
         space: "did:key:home",
@@ -873,6 +873,50 @@ function pointer(type: string, x: number, y: number, pointerId = 1): Event {
   });
 }
 
+/**
+ * The reads `element`-side code makes of `cell` from now on: each
+ * `resolveAsCell()`, and each `asSchema()`, through which both following a
+ * link's target and asking for its `[NAME]` go.
+ */
+function countReads(cell: CellHandle): {
+  resolutions: number;
+  schemaReads: number;
+} {
+  const reads = { resolutions: 0, schemaReads: 0 };
+  const resolveAsCell = cell.resolveAsCell.bind(cell);
+  const asSchema = cell.asSchema.bind(cell);
+  Object.assign(cell, {
+    resolveAsCell: () => {
+      reads.resolutions++;
+      return resolveAsCell();
+    },
+    asSchema: (schema: Parameters<CellHandle["asSchema"]>[0]) => {
+      reads.schemaReads++;
+      return asSchema(schema);
+    },
+  });
+  return reads;
+}
+
+/**
+ * The piece ids navigated to while `act()` runs and once what it started
+ * has settled, for a click whose target is resolved by the click.
+ */
+async function navigatedToOnceSettled(act: () => void): Promise<string[]> {
+  const seen: string[] = [];
+  const listener = (event: Event) =>
+    seen.push((event as CustomEvent).detail.pieceId);
+  globalThis.addEventListener("cf-navigate", listener);
+  try {
+    act();
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  } finally {
+    globalThis.removeEventListener("cf-navigate", listener);
+  }
+  return seen;
+}
+
 /** The piece ids navigated to while `act()` runs. */
 function navigatedTo(act: () => void): string[] {
   const seen: string[] = [];
@@ -1049,6 +1093,157 @@ describe("CFCellLink in a document", () => {
       document.body.append(element);
 
       expect(await shownText(element)).toBe("Archive #123456");
+    });
+  });
+
+  describe("a labelled link", () => {
+    /** A cell holding a link to `target`: it resolves to `target`. */
+    function linkTo(...targets: CellHandle[]): CellHandle {
+      const queue = [...targets];
+      return Object.assign(pieceCell("of:fid1:row-000000"), {
+        resolveAsCell: () =>
+          Promise.resolve(queue.length > 1 ? queue.shift()! : queue[0]),
+      });
+    }
+
+    it("reads nothing of its target while it is shown", async () => {
+      const cell = linkTo(pieceCell("of:fid1:topic-111111", "Inbox"));
+      const reads = countReads(cell);
+
+      const element = await cellLink({ label: "Open", cell });
+
+      expect(await shownText(element)).toBe("Open");
+      expect(reads).toEqual({ resolutions: 0, schemaReads: 0 });
+    });
+
+    it("resolves when clicked, and opens where its link points", async () => {
+      const cell = linkTo(pieceCell("of:fid1:topic-111111", "Inbox"));
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+
+      expect(await navigatedToOnceSettled(() => chip(element).click()))
+        .toEqual(["of:fid1:topic-111111"]);
+    });
+
+    it("opens where its link points at each click, not where it pointed before", async () => {
+      const cell = linkTo(
+        pieceCell("of:fid1:topic-111111"),
+        pieceCell("of:fid1:topic-222222"),
+      );
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+
+      expect(await navigatedToOnceSettled(() => chip(element).click()))
+        .toEqual(["of:fid1:topic-111111"]);
+      expect(await navigatedToOnceSettled(() => chip(element).click()))
+        .toEqual(["of:fid1:topic-222222"]);
+    });
+
+    it("resolves once for a press and the click that follows it", async () => {
+      const cell = linkTo(pieceCell("of:fid1:topic-111111"));
+      const reads = countReads(cell);
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+
+      const opened = await navigatedToOnceSettled(() => {
+        chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
+        chip(element).click();
+      });
+
+      expect(opened).toEqual(["of:fid1:topic-111111"]);
+      expect(reads.resolutions).toBe(1);
+    });
+
+    it("never asks for its target's name, even once resolved", async () => {
+      const target = pieceCell("of:fid1:topic-111111", "Inbox");
+      const targetReads = countReads(target);
+      const element = await cellLink({
+        label: "Open",
+        cell: linkTo(target),
+        isStatic: true,
+      });
+
+      expect(await element.resolveTarget()).toBe(target);
+      expect(await shownText(element)).toBe("Open");
+      expect(targetReads.schemaReads).toBe(0);
+    });
+
+    it("drags its target once its press has resolved it", async () => {
+      const target = draggableCell({ $NAME: "Inbox" });
+      const element = await cellLink({ label: "Open", cell: linkTo(target) });
+      await shownText(element);
+
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
+      await settle();
+      document.dispatchEvent(pointer("pointermove", 20, 20));
+
+      expect(isDragging()).toBe(true);
+      expect(getCurrentDrag()!.cell).toBe(target);
+    });
+
+    it("follows its target and shows its name once it loses its label", async () => {
+      const cell = pieceCell("of:fid1:piece-123456", "Inbox");
+      const reads = countReads(cell);
+      const element = await cellLink({ label: "Open", cell });
+      expect(await shownText(element)).toBe("Open");
+
+      element.label = undefined;
+
+      expect(await shownText(element)).toBe("Inbox #123456");
+      expect(reads.resolutions).toBe(1);
+    });
+
+    it("warns, naming the link, when the click resolves nothing", async () => {
+      const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+        resolveAsCell: () => Promise.reject(new Error("boom")),
+      });
+      const element = await cellLink({ label: "Team chat", cell });
+      await shownText(element);
+      const warnings: unknown[][] = [];
+      const originalWarn = console.warn;
+      console.warn = (...args: unknown[]) => warnings.push(args);
+      let opened: string[] = [];
+      try {
+        const logged = await errorsLogged(async () => {
+          opened = await navigatedToOnceSettled(() => chip(element).click());
+        });
+        expect(logged.map((call) => call[0])).toEqual([
+          "Failed to resolve cell:",
+        ]);
+      } finally {
+        console.warn = originalWarn;
+      }
+
+      expect(opened).toEqual([]);
+      expect(warnings).toEqual([[
+        "cf-cell-link: the click opens nothing: the link names no cell to open.",
+        {
+          label: "Team chat",
+          cell: {
+            space: "did:key:test-space",
+            id: "of:fid1:row-000000",
+            scope: "space",
+            path: [],
+          },
+        },
+      ]]);
+    });
+
+    it("opens nothing for a click that resolves after it is detached", async () => {
+      const pending = deferred<CellHandle>();
+      const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+        resolveAsCell: () => pending.promise,
+      });
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+
+      const opened = await navigatedToOnceSettled(() => {
+        chip(element).click();
+        element.remove();
+        pending.resolve(pieceCell("of:fid1:topic-111111"));
+      });
+
+      expect(opened).toEqual([]);
     });
   });
 
