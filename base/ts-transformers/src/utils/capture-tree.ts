@@ -282,15 +282,6 @@ export function buildHierarchicalParamsValue(
     );
   }
 
-  if (assignments.length === 0 && node.expression) {
-    return createCaptureAccessExpression(
-      rootName,
-      node.path,
-      factory,
-      node.expression,
-    );
-  }
-
   return factory.createObjectLiteralExpression(
     assignments,
     assignments.length > 0,

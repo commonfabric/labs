@@ -11,6 +11,7 @@
   },
   "exports": {
     "./framework-result-keys": "./src/framework-result-keys.ts",
+    "./jsx-prop-names": "./src/jsx-prop-names.ts",
     "./sandbox-contract": "./src/sandbox-contract.ts"
   }
 }

@@ -275,19 +275,28 @@ const hollowedPayload = (marker: HollowedPayload): string =>
   encodeMemoryBoundary(marker as FabricValue);
 
 /**
+ * The text of an encoded marker `probe` up to and including the name of its
+ * `bytes` member.
+ *
+ * @throws Error when `probe` holds no `bytes` member.
+ */
+export const hollowedMarkerPrefixOf = (probe: string): string => {
+  const at = probe.indexOf('"bytes":');
+  if (at < 0) throw new Error("the hollowed-payload marker did not encode");
+  return probe.slice(0, at + '"bytes":'.length);
+};
+
+/**
  * Every hollowed payload begins with this text: the codec writes members in
  * key order, so the marker's first member is fixed, and a stored payload is a
  * marker if and only if it starts this way. Derived from the codec rather
  * than spelled out, so a codec change cannot leave a marker unrecognized.
  */
-export const HOLLOWED_MARKER_PREFIX = (() => {
-  const probe = hollowedPayload({
+export const HOLLOWED_MARKER_PREFIX = hollowedMarkerPrefixOf(
+  hollowedPayload({
     hollowed: { hash: "", bytes: 0, commitSeq: 0, runId: "" },
-  });
-  const at = probe.indexOf('"bytes":');
-  if (at < 0) throw new Error("the hollowed-payload marker did not encode");
-  return probe.slice(0, at + '"bytes":'.length);
-})();
+  }),
+);
 
 /** Whether a stored commit payload is a hollowing marker rather than a
  * client commit. */
@@ -1084,8 +1093,8 @@ export const compactStore = async (
     const tx = <T>(fn: () => T): T => db.transaction(fn).immediate();
 
     // 1. The compaction commit, at the next seq, with the run's plan as its
-    //    payload (I4). The branch head advances to it so the head read keeps
-    //    using the head statement.
+    //    payload (I4). The branch head advances to it, so the branch's
+    //    history reaches the revisions the run writes at that seq.
     const commitSeq = tx(() => {
       const seq = db.prepare(
         `SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM "commit"`,

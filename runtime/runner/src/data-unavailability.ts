@@ -14,6 +14,7 @@ import type { Runtime } from "./runtime.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
 import { linkResolutionProbe } from "./storage/reactivity-log.ts";
 import { isCellLink } from "./link-utils.ts";
+import { unlessCyclic } from "./link-resolution.ts";
 
 const definedValueSchema = internSchema({
   not: { type: "undefined" },
@@ -147,9 +148,14 @@ export function selectUnavailableInput(
         const source = path.length === 0
           ? resolution.base
           : resolution.base.key(...path);
-        const status = getCellWithStatus(
-          source.asSchema(definedValueSchema).withTx(resolution.tx),
+        const status = unlessCyclic(() =>
+          getCellWithStatus(
+            source.asSchema(definedValueSchema).withTx(resolution.tx),
+          )
         );
+        // A cycle names no value. Let the builtin apply its own contract for
+        // that input instead of inventing an availability state for it.
+        if (status === undefined) return;
         if ("error" in status) {
           const unavailable = dataUnavailableFromTransformFailure(status);
           if (unavailable === undefined) return;

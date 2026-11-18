@@ -37,6 +37,7 @@ import SuggestionHistory, {
 type MinimalPiece = {
   [NAME]?: string;
   isHidden?: boolean;
+  isJournal?: boolean;
 };
 
 type PiecesListInput = void;
@@ -44,26 +45,21 @@ type PiecesListInput = void;
 // Pattern returns only UI, no data outputs (only symbol properties)
 export interface PiecesListOutput {
   [key: string]: unknown;
+  [NAME]: string;
   [UI]: VNode;
   backlinksIndex: {
     mentionable: MentionablePiece[] | undefined;
   };
   sidebarUI?: unknown;
-  fabUI: unknown;
+  fabUI: VNode;
   pieceRegistry: MentionablePiece[];
+  suggestionHistory: SuggestionHistoryEntry[];
   addPiece: Stream<{ piece: Writable<MentionablePiece> }>;
+  recordSuggestion: Stream<SuggestionHistoryEntry>;
+  pinToChat: Stream<{ path: string; name: string; accumulate: boolean }>;
 }
 
-const _visit = handler<
-  Record<string, never>,
-  { piece: Writable<MinimalPiece> }
->(
-  (_, state) => {
-    return navigateTo(state.piece);
-  },
-);
-
-export const removePiece = handler<
+const removePiece = handler<
   Record<string, never>,
   {
     piece: Writable<MinimalPiece>;
@@ -139,18 +135,20 @@ const menuQuickCapture = handler<
   return navigateTo(quickCapture);
 });
 
-// Menu: Daily Journal (singleton)
-export const menuDailyJournal = handler<
+// Menu: Daily Journal (singleton). Opens the registered journal, or creates
+// one and registers it, so the next press opens the same journal.
+const menuDailyJournal = handler<
   void,
   { menuOpen: Writable<boolean>; pieceRegistry: Writable<MinimalPiece[]> }
 >((_, { menuOpen, pieceRegistry }) => {
   menuOpen.set(false);
-  const pieces = pieceRegistry.get();
-  const existing = pieces.find((piece: any) => piece?.isJournal === true);
+  const existing = pieceRegistry.get().find((piece) => piece?.isJournal);
   if (existing) {
-    return navigateTo(existing as any);
+    return navigateTo(existing);
   }
-  return navigateTo(DailyJournal({ title: "Daily Journal" }));
+  const journal = DailyJournal({ title: "Daily Journal" });
+  pieceRegistry.addUnique(journal);
+  return navigateTo(journal);
 });
 
 // Handler: Add a piece to the registry if not already present.
@@ -462,7 +460,7 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
                   <cf-cell-link $cell={gridView} />
                 </cf-hstack>
 
-                <cf-table full-width hover>
+                <cf-table fullWidth hover>
                   <tbody>
                     {visiblePieces.map((piece) => {
                       const isNotebook = computed(() => {

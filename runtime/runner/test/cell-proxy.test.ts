@@ -9,6 +9,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import { isCellResult } from "../src/query-result-proxy.ts";
 import { JSONSchema } from "../src/builder/types.ts";
+import { isSigilLink } from "../src/link-types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { txToReactivityLog } from "../src/scheduler.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -91,6 +92,31 @@ describe("createProxy", () => {
 
     // The record itself comes back as plain data.
     expect(x).toEqual({ $alias: { path: ["y"] } });
+  });
+
+  it("reads only the `/` member when asked whether a view is a link", async () => {
+    // A view lists its keys by reading each member, so a link check that
+    // listed keys before looking at `/` would depend on every member of the
+    // value it was asked about.
+    const c = runtime.getCell<{ a: number; b: { c: number } }>(
+      space,
+      "reads only the / member when asked whether a view is a link",
+      undefined,
+      tx,
+    );
+    c.set({ a: 1, b: { c: 2 } });
+    await tx.commit().settled;
+    tx = runtime.edit();
+
+    const proxy = c.getAsQueryResult([], tx);
+    const readsBefore = txToReactivityLog(tx).reads.length;
+    expect(isSigilLink(proxy)).toBe(false);
+
+    const readPaths = txToReactivityLog(tx).reads.slice(readsBefore).map((
+      read,
+    ) => read.path);
+    expect(readPaths.length).toBeGreaterThan(0);
+    expect(readPaths.filter((path) => path[1] !== "/")).toEqual([]);
   });
 
   it("should handle nested cells", () => {

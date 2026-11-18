@@ -179,6 +179,15 @@ describe("cfc-piece-creator", () => {
     expect(await storedCreator(result)).toBe(alice.did());
   });
 
+  it("records nothing on a piece whose run declines attribution", async () => {
+    const result = await createPiece(client, alice.did(), {
+      run: { attributeInitialization: false },
+    });
+
+    expect(result.getMetaRaw("creator")).toBeUndefined();
+    expect(await storedCreator(result)).toBeUndefined();
+  });
+
   it("records nothing while the flag is off", async () => {
     const legacy = connect(alice, { pieceCreatorRecord: false });
     const result = await createPiece(legacy, alice.did());

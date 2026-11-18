@@ -3,12 +3,71 @@
  * logical target of the read or the transaction's read-policy checks.
  */
 import { isUnavailable } from "@commonfabric/data-model/availability";
+import {
+  resolveScopeKey,
+  type ScopeKeyIdentity,
+} from "@commonfabric/memory/v2";
+import { normalizeCellScope } from "../scope.ts";
+import { transactionLayers } from "./reactivity-log.ts";
 
 import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
   IReadOptions,
 } from "./interface.ts";
+
+type UnavailableReadObservation = {
+  readonly address: IMemorySpaceAddress;
+  readonly scopeKey: string;
+};
+
+const unavailableReads = new WeakMap<object, UnavailableReadObservation[]>();
+
+/** The scope instance a diagnostic read belongs to, when its identity is known. */
+export function availabilityReadScopeKey(
+  tx: object,
+  address: IMemorySpaceAddress,
+): string | undefined {
+  if (address.scopeKey !== undefined) return address.scopeKey;
+  const scope = normalizeCellScope(address.scope);
+  if (scope === "space") return "space";
+  for (const layer of transactionLayers(tx)) {
+    const identity = (layer as { scopeKeyIdentity?: ScopeKeyIdentity })
+      .scopeKeyIdentity;
+    if (identity !== undefined && typeof identity !== "function") {
+      return resolveScopeKey(scope, identity);
+    }
+  }
+  return undefined;
+}
+
+/** Records an actual coverage miss, which has no successful read invariant. */
+export function recordUnavailableRead(
+  tx: object,
+  address: IMemorySpaceAddress,
+): void {
+  const scopeKey = availabilityReadScopeKey(tx, address);
+  if (scopeKey === undefined) return;
+  const layers = [...transactionLayers(tx)];
+  const observations = layers.map((layer) => unavailableReads.get(layer))
+    .find((value) => value !== undefined) ?? [];
+  observations.push({
+    address: { ...address, path: [...address.path] },
+    scopeKey,
+  });
+  for (const layer of layers) unavailableReads.set(layer, observations);
+}
+
+/** Failed readiness observations retained for comparisons after commit. */
+export function unavailableReadObservations(
+  tx: object,
+): readonly UnavailableReadObservation[] {
+  for (const layer of transactionLayers(tx)) {
+    const observations = unavailableReads.get(layer);
+    if (observations !== undefined) return observations;
+  }
+  return [];
+}
 
 /** Returns a native unavailable ancestor when it prevents a child value read. */
 export function readAvailabilityValue(

@@ -1008,29 +1008,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/cfc-chat-demo-submit-input-break.md",
   },
   {
-    // Each `Panel` kind gains an optional `addedBy` DID. The proof does not
-    // apply the open-object evolution allowance inside a union branch, so a
-    // stored panel whose `addedBy` held a non-string reads as a refused
-    // alternative.
-    pattern: "system/loom/main.tsx",
-    baselines: [
-      "20260920T232507Z-_ewvPy8qDJYL47km",
-      "20260922T052256Z--2Q9ESzxSenSTer9",
-    ],
-    paths: [
-      "argument.panels[]",
-      // The paths from here on are recorded in
-      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
-      // recorded change each one comes from.
-      "argument.presentation.focusedPanel",
-      "argument.presentation.stagedPanels[]",
-    ],
-    reason:
-      "a Loom panel's new optional addedBy reads as a narrowed union branch under baselines that never had the property" +
-      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
-    record: "docs/history/loom-panel-added-by-break.md",
-  },
-  {
     // Each `Panel` kind's `addedBy` gains the `admitPanel` write contract and
     // the runtime's `authored-by` label as its type, which the proof reads as
     // a narrowed union branch, and the narrowed `Panel` reaches the `before`
@@ -1223,7 +1200,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     pattern: "system/fabrichat/manager.tsx",
     baselines: ["20261002T164437Z-O47ebJ7gn-iAk7TA"],
     paths: [
-      "argument.requests.*",
       "result.$VIEWS.chats.rooms",
       // The paths from here on are recorded in
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
@@ -1233,11 +1209,18 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `fabrichat-outgoing-notices-per-user-break.md` records.
       "result.$VIEWS.chats.outgoingNotices",
       "result.outgoingNotices",
+      // The room links, handles that declare nothing of the room, which
+      // `fabrichat-room-handles-break.md` records.
+      "result.$VIEWS.chats.direct.*.room",
+      "result.$VIEWS.chats.requests.*",
+      "result.direct.*.room",
+      "result.requests.*",
     ],
     reason:
       "a manager's room link now types the room's `messages`, which the recorded link left open; every stored room link is to a room output whose `messages` the new type admits" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
-      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)" +
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
     record: "docs/history/fabrichat-room-link-messages-break.md",
   },
   {
@@ -1259,7 +1242,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261008T210909Z-Kyy64jL0hYC-5p6Q",
     ],
     paths: [
-      "argument.requests.*",
       "result.$VIEWS.chats.rooms",
       // The paths from here on are recorded in
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
@@ -1269,11 +1251,18 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `fabrichat-outgoing-notices-per-user-break.md` records.
       "result.$VIEWS.chats.outgoingNotices",
       "result.outgoingNotices",
+      // The room links, handles that declare nothing of the room, which
+      // `fabrichat-room-handles-break.md` records.
+      "result.$VIEWS.chats.direct.*.room",
+      "result.$VIEWS.chats.requests.*",
+      "result.direct.*.room",
+      "result.requests.*",
     ],
     reason:
       "a manager's index entry now types `revision`, and a refused outcome `code`, which the recorded outcomes left open; no stored request outcome holds either" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
-      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)" +
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
     record: "docs/history/fabrichat-index-revision-break.md",
   },
   {
@@ -1297,7 +1286,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261010T083035Z-Mp5ZALK-A2rUfm_u",
     ],
     paths: [
-      "argument.requests.*",
       "result.$VIEWS.chats.rooms",
       "result.$VIEWS.chats.requests.*",
       // The paths from here on are recorded in
@@ -1309,11 +1297,16 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `fabrichat-outgoing-notices-per-user-break.md` records.
       "result.$VIEWS.chats.outgoingNotices",
       "result.outgoingNotices",
+      // The room links, handles that declare nothing of the room, which
+      // `fabrichat-room-handles-break.md` records.
+      "result.$VIEWS.chats.direct.*.room",
+      "result.direct.*.room",
     ],
     reason:
       "a manager's room link now types the room's `roster`, which the recorded link left open; every stored room link is to a room output with no `roster` or with a list of profile links, which the new type admits" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
-      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)" +
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
     record: "docs/history/fabrichat-room-link-roster-break.md",
   },
   {
@@ -1333,7 +1326,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: [
       "result.$VIEWS.chats.rooms",
       "result.$VIEWS.chats.people",
-      "argument.requests.*",
       // The paths from here on are recorded in
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
       // recorded change each one comes from.
@@ -1345,11 +1337,16 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `fabrichat-outgoing-notices-per-user-break.md` records.
       "result.$VIEWS.chats.outgoingNotices",
       "result.outgoingNotices",
+      // The room links, handles that declare nothing of the room, which
+      // `fabrichat-room-handles-break.md` records.
+      "result.$VIEWS.chats.direct.*.room",
+      "result.direct.*.room",
     ],
     reason:
       "a manager's rooms and people declare the per-session scope they are derived in; nothing is stored at either path for a reader to refuse" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
-      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)" +
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
     record: "docs/history/fabrichat-view-scopes-break.md",
   },
   {
@@ -1380,7 +1377,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261024T002137Z-_xficjXREAbKWap9",
     ],
     paths: [
-      "argument.requests.*",
       "result.$VIEWS.chats.people",
       // The paths from here on are recorded in
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
@@ -1392,11 +1388,24 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `fabrichat-outgoing-notices-per-user-break.md` records.
       "result.$VIEWS.chats.outgoingNotices",
       "result.outgoingNotices",
+      // The room links, handles that declare nothing of the room, which
+      // `fabrichat-room-handles-break.md` records.
+      "result.$VIEWS.chats.direct.*.room",
+      "result.$VIEWS.chats.requests.*",
+      "result.$VIEWS.chats.roomMembership[].container",
+      "result.$VIEWS.chats.roomMembership[].room",
+      "result.$VIEWS.chats.rooms[].room",
+      "result.direct.*.room",
+      "result.requests.*",
+      "result.roomMembership[].container",
+      "result.roomMembership[].room",
+      "result.rooms[].room",
     ],
     reason:
       "a room's policy states `maxAttachments`, an optional number, where its schema took any value; no stored policy holds the key" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
-      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)" +
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
     record: "docs/history/fabrichat-max-attachments-break.md",
   },
   {
@@ -1433,11 +1442,18 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `fabrichat-outgoing-notices-per-user-break.md` records.
       "result.chatManager.$VIEWS.chats.outgoingNotices",
       "result.chatManager.outgoingNotices",
+      // The room links, handles that declare nothing of the room, which
+      // `fabrichat-room-handles-break.md` records.
+      "result.chatManager.$VIEWS.chats.direct.*.room",
+      "result.chatManager.$VIEWS.chats.requests.*",
+      "result.chatManager.direct.*.room",
+      "result.chatManager.requests.*",
     ],
     reason:
       "home's chat manager's rooms declare the per-session scope they are derived in; a home rolled forward still delivers them, and nothing is stored at that path for a reader to refuse" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
-      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)" +
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
     record: "docs/history/fabrichat-view-scopes-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -1467,11 +1483,16 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `fabrichat-outgoing-notices-per-user-break.md` records.
       "result.chatManager.$VIEWS.chats.outgoingNotices",
       "result.chatManager.outgoingNotices",
+      // The room links, handles that declare nothing of the room, which
+      // `fabrichat-room-handles-break.md` records.
+      "result.chatManager.$VIEWS.chats.direct.*.room",
+      "result.chatManager.direct.*.room",
     ],
     reason:
       "home's chat manager's rooms and people declare the per-session scope they are derived in; a home rolled forward still delivers them, and nothing is stored at either path for a reader to refuse" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
-      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)" +
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
     record: "docs/history/fabrichat-view-scopes-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -1502,11 +1523,18 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `fabrichat-outgoing-notices-per-user-break.md` records.
       "result.chatManager.$VIEWS.chats.outgoingNotices",
       "result.chatManager.outgoingNotices",
+      // The room links, handles that declare nothing of the room, which
+      // `fabrichat-room-handles-break.md` records.
+      "result.chatManager.$VIEWS.chats.direct.*.room",
+      "result.chatManager.$VIEWS.chats.requests.*",
+      "result.chatManager.direct.*.room",
+      "result.chatManager.requests.*",
     ],
     reason:
       "home's chat manager's rooms declare the per-session scope they are derived in, and its default profile moved under a slot cell as the slot break records; a home rolled forward still delivers both" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
-      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)" +
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
     record: "docs/history/fabrichat-view-scopes-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -1530,7 +1558,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261011T170652Z-2XdZAneyCTt2Teex",
     ],
     paths: [
-      "argument.requests.*",
       "result.$VIEWS.chats.requests.*",
       "result.$VIEWS.chats.people",
       "result.requests.*",
@@ -1544,11 +1571,16 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `fabrichat-outgoing-notices-per-user-break.md` records.
       "result.$VIEWS.chats.outgoingNotices",
       "result.outgoingNotices",
+      // The room links, handles that declare nothing of the room, which
+      // `fabrichat-room-handles-break.md` records.
+      "result.$VIEWS.chats.direct.*.room",
+      "result.direct.*.room",
     ],
     reason:
       "a manager's request outcome now types `delivery`, and a refused one the `shared-inbox` code, which the recorded outcomes left open; no stored request outcome holds either" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
-      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)" +
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
     record: "docs/history/fabrichat-add-member-offer-break.md",
   },
   {
@@ -1578,11 +1610,16 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `fabrichat-outgoing-notices-per-user-break.md` records.
       "result.chatManager.$VIEWS.chats.outgoingNotices",
       "result.chatManager.outgoingNotices",
+      // The room links, handles that declare nothing of the room, which
+      // `fabrichat-room-handles-break.md` records.
+      "result.chatManager.$VIEWS.chats.direct.*.room",
+      "result.chatManager.direct.*.room",
     ],
     reason:
       "home's chat manager's request outcomes now type `delivery`, and a refused one the `shared-inbox` code, and its rooms declare the per-session scope they are derived in; a home rolled forward still delivers both" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
-      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)" +
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
     record: "docs/history/fabrichat-add-member-offer-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -1617,11 +1654,16 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `fabrichat-outgoing-notices-per-user-break.md` records.
       "result.chatManager.$VIEWS.chats.outgoingNotices",
       "result.chatManager.outgoingNotices",
+      // The room links, handles that declare nothing of the room, which
+      // `fabrichat-room-handles-break.md` records.
+      "result.chatManager.$VIEWS.chats.direct.*.room",
+      "result.chatManager.direct.*.room",
     ],
     reason:
       "home's chat manager's request outcomes now type `delivery`, and a refused one the `shared-inbox` code, which the recorded outcomes left open; a home rolled forward still delivers them" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
-      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)" +
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
     record: "docs/history/fabrichat-add-member-offer-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -1659,8 +1701,20 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.deleteMessage.message.reactions[]",
       "result.$VIEWS.room.deleteReaction.message.reactions[]",
       "result.$VIEWS.room.editMessage.message.reactions[]",
-      "result.$VIEWS.room.messages.closeWindow",
-      "result.$VIEWS.room.messages.windows",
+      "result.$VIEWS.room.messages.closeWindow.root.earlierVersions",
+      "result.$VIEWS.room.messages.closeWindow.root.reactions[]",
+      "result.$VIEWS.room.messages.closeWindow.root.replyTo.message",
+      "result.$VIEWS.room.messages.openWindow.root.earlierVersions",
+      "result.$VIEWS.room.messages.openWindow.root.reactions[]",
+      "result.$VIEWS.room.messages.openWindow.root.replyTo.message",
+      "result.$VIEWS.room.messages.windows.*",
+      "result.messages.closeWindow.root.earlierVersions",
+      "result.messages.closeWindow.root.reactions[]",
+      "result.messages.closeWindow.root.replyTo.message",
+      "result.messages.openWindow.root.earlierVersions",
+      "result.messages.openWindow.root.reactions[]",
+      "result.messages.openWindow.root.replyTo.message",
+      "result.messages.windows.*",
       "result.$VIEWS.room.messages.latest.messages[].reactions[]",
       "result.$VIEWS.room.obliterateMessage.message.reactions[]",
       "result.$VIEWS.room.sendMessage.message.reactions[]",
@@ -1668,8 +1722,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.deleteMessage.message.reactions[]",
       "result.deleteReaction.message.reactions[]",
       "result.editMessage.message.reactions[]",
-      "result.messages.closeWindow",
-      "result.messages.windows",
       "result.messages.latest.messages[].reactions[]",
       "result.obliterateMessage.message.reactions[]",
       "result.sendMessage.message.reactions[]",
@@ -1685,7 +1737,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.editMessage.requestId",
       "result.$VIEWS.room.editMessage.version",
       "result.$VIEWS.room.editMessage.message.earlierVersions",
-      "result.$VIEWS.room.messages.openWindow",
       "result.$VIEWS.room.messages.latest.messages[].earlierVersions",
       "result.$VIEWS.room.obliterateMessage.requestId",
       "result.$VIEWS.room.obliterateMessage.version",
@@ -1705,7 +1756,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.editMessage.requestId",
       "result.editMessage.version",
       "result.editMessage.message.earlierVersions",
-      "result.messages.openWindow",
       "result.messages.latest.messages[].earlierVersions",
       "result.obliterateMessage.requestId",
       "result.obliterateMessage.version",
@@ -1751,7 +1801,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its activity log is gone; rooms holding the keyed records are left behind" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
       "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md" +
-      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)",
+      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)" +
+      "; the session's windows, which the room offers again, name messages in the shape the break gives every message",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -1797,8 +1848,20 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.deleteMessage.message.reactions[]",
       "result.$VIEWS.room.deleteReaction.message.reactions[]",
       "result.$VIEWS.room.editMessage.message.reactions[]",
-      "result.$VIEWS.room.messages.closeWindow",
-      "result.$VIEWS.room.messages.windows",
+      "result.$VIEWS.room.messages.closeWindow.root.earlierVersions",
+      "result.$VIEWS.room.messages.closeWindow.root.reactions[]",
+      "result.$VIEWS.room.messages.closeWindow.root.replyTo.message",
+      "result.$VIEWS.room.messages.openWindow.root.earlierVersions",
+      "result.$VIEWS.room.messages.openWindow.root.reactions[]",
+      "result.$VIEWS.room.messages.openWindow.root.replyTo.message",
+      "result.$VIEWS.room.messages.windows.*",
+      "result.messages.closeWindow.root.earlierVersions",
+      "result.messages.closeWindow.root.reactions[]",
+      "result.messages.closeWindow.root.replyTo.message",
+      "result.messages.openWindow.root.earlierVersions",
+      "result.messages.openWindow.root.reactions[]",
+      "result.messages.openWindow.root.replyTo.message",
+      "result.messages.windows.*",
       "result.$VIEWS.room.messages.latest.messages[].reactions[]",
       "result.$VIEWS.room.obliterateMessage.message.reactions[]",
       "result.$VIEWS.room.sendMessage.message.reactions[]",
@@ -1806,8 +1869,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.deleteMessage.message.reactions[]",
       "result.deleteReaction.message.reactions[]",
       "result.editMessage.message.reactions[]",
-      "result.messages.closeWindow",
-      "result.messages.windows",
       "result.messages.latest.messages[].reactions[]",
       "result.obliterateMessage.message.reactions[]",
       "result.sendMessage.message.reactions[]",
@@ -1823,7 +1884,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.editMessage.requestId",
       "result.$VIEWS.room.editMessage.version",
       "result.$VIEWS.room.editMessage.message.earlierVersions",
-      "result.$VIEWS.room.messages.openWindow",
       "result.$VIEWS.room.messages.latest.messages[].earlierVersions",
       "result.$VIEWS.room.obliterateMessage.requestId",
       "result.$VIEWS.room.obliterateMessage.version",
@@ -1843,7 +1903,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.editMessage.requestId",
       "result.editMessage.version",
       "result.editMessage.message.earlierVersions",
-      "result.messages.openWindow",
       "result.messages.latest.messages[].earlierVersions",
       "result.obliterateMessage.requestId",
       "result.obliterateMessage.version",
@@ -1895,7 +1954,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its activity log is gone; rooms holding the keyed records are left behind" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
       "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md" +
-      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)",
+      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)" +
+      "; the session's windows, which the room offers again, name messages in the shape the break gives every message",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -1920,8 +1980,20 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.deleteMessage.message.reactions[]",
       "result.$VIEWS.room.deleteReaction.message.reactions[]",
       "result.$VIEWS.room.editMessage.message.reactions[]",
-      "result.$VIEWS.room.messages.closeWindow",
-      "result.$VIEWS.room.messages.windows",
+      "result.$VIEWS.room.messages.closeWindow.root.earlierVersions",
+      "result.$VIEWS.room.messages.closeWindow.root.reactions[]",
+      "result.$VIEWS.room.messages.closeWindow.root.replyTo.message",
+      "result.$VIEWS.room.messages.openWindow.root.earlierVersions",
+      "result.$VIEWS.room.messages.openWindow.root.reactions[]",
+      "result.$VIEWS.room.messages.openWindow.root.replyTo.message",
+      "result.$VIEWS.room.messages.windows.*",
+      "result.messages.closeWindow.root.earlierVersions",
+      "result.messages.closeWindow.root.reactions[]",
+      "result.messages.closeWindow.root.replyTo.message",
+      "result.messages.openWindow.root.earlierVersions",
+      "result.messages.openWindow.root.reactions[]",
+      "result.messages.openWindow.root.replyTo.message",
+      "result.messages.windows.*",
       "result.$VIEWS.room.messages.latest.messages[].reactions[]",
       "result.$VIEWS.room.obliterateMessage.message.reactions[]",
       "result.$VIEWS.room.sendMessage.message.reactions[]",
@@ -1929,8 +2001,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.deleteMessage.message.reactions[]",
       "result.deleteReaction.message.reactions[]",
       "result.editMessage.message.reactions[]",
-      "result.messages.closeWindow",
-      "result.messages.windows",
       "result.messages.latest.messages[].reactions[]",
       "result.obliterateMessage.message.reactions[]",
       "result.sendMessage.message.reactions[]",
@@ -1948,7 +2018,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.editMessage.requestId",
       "result.$VIEWS.room.editMessage.version",
       "result.$VIEWS.room.editMessage.message.earlierVersions",
-      "result.$VIEWS.room.messages.openWindow",
       "result.$VIEWS.room.messages.latest.messages[].earlierVersions",
       "result.$VIEWS.room.obliterateMessage.requestId",
       "result.$VIEWS.room.obliterateMessage.version",
@@ -1970,7 +2039,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.editMessage.requestId",
       "result.editMessage.version",
       "result.editMessage.message.earlierVersions",
-      "result.messages.openWindow",
       "result.messages.latest.messages[].earlierVersions",
       "result.obliterateMessage.requestId",
       "result.obliterateMessage.version",
@@ -2024,7 +2092,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its per-user act outcomes are gone; rooms holding the keyed records are left behind" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
       "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md" +
-      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)",
+      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)" +
+      "; the session's windows, which the room offers again, name messages in the shape the break gives every message",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -2073,8 +2142,20 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.deleteMessage.message.reactions[]",
       "result.$VIEWS.room.deleteReaction.message.reactions[]",
       "result.$VIEWS.room.editMessage.message.reactions[]",
-      "result.$VIEWS.room.messages.closeWindow",
-      "result.$VIEWS.room.messages.windows",
+      "result.$VIEWS.room.messages.closeWindow.root.earlierVersions",
+      "result.$VIEWS.room.messages.closeWindow.root.reactions[]",
+      "result.$VIEWS.room.messages.closeWindow.root.replyTo.message",
+      "result.$VIEWS.room.messages.openWindow.root.earlierVersions",
+      "result.$VIEWS.room.messages.openWindow.root.reactions[]",
+      "result.$VIEWS.room.messages.openWindow.root.replyTo.message",
+      "result.$VIEWS.room.messages.windows.*",
+      "result.messages.closeWindow.root.earlierVersions",
+      "result.messages.closeWindow.root.reactions[]",
+      "result.messages.closeWindow.root.replyTo.message",
+      "result.messages.openWindow.root.earlierVersions",
+      "result.messages.openWindow.root.reactions[]",
+      "result.messages.openWindow.root.replyTo.message",
+      "result.messages.windows.*",
       "result.$VIEWS.room.messages.latest.messages[].reactions[]",
       "result.$VIEWS.room.messages.threads[].root.reactions[]",
       "result.$VIEWS.room.obliterateMessage.message.reactions[]",
@@ -2083,8 +2164,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.deleteMessage.message.reactions[]",
       "result.deleteReaction.message.reactions[]",
       "result.editMessage.message.reactions[]",
-      "result.messages.closeWindow",
-      "result.messages.windows",
       "result.messages.latest.messages[].reactions[]",
       "result.messages.threads[].root.reactions[]",
       "result.obliterateMessage.message.reactions[]",
@@ -2103,7 +2182,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.editMessage.requestId",
       "result.$VIEWS.room.editMessage.version",
       "result.$VIEWS.room.editMessage.message.earlierVersions",
-      "result.$VIEWS.room.messages.openWindow",
       "result.$VIEWS.room.messages.latest.messages[].earlierVersions",
       "result.$VIEWS.room.messages.threads[].root.earlierVersions",
       "result.$VIEWS.room.obliterateMessage.requestId",
@@ -2126,7 +2204,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.editMessage.requestId",
       "result.editMessage.version",
       "result.editMessage.message.earlierVersions",
-      "result.messages.openWindow",
       "result.messages.latest.messages[].earlierVersions",
       "result.messages.threads[].root.earlierVersions",
       "result.obliterateMessage.requestId",
@@ -2183,7 +2260,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its message windows are gone; rooms holding the keyed records are left behind" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
       "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md" +
-      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)",
+      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)" +
+      "; the session's windows, which the room offers again, name messages in the shape the break gives every message",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -2561,10 +2639,21 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `fabrichat-outgoing-notices-per-user-break.md` records.
       "result.$VIEWS.chats.outgoingNotices",
       "result.outgoingNotices",
+      // The room links, handles that declare nothing of the room, which
+      // `fabrichat-room-handles-break.md` records.
+      "result.$VIEWS.chats.direct.*.room",
+      "result.$VIEWS.chats.requests.*",
+      "result.$VIEWS.chats.roomMembership[].container",
+      "result.$VIEWS.chats.roomMembership[].room",
+      "result.direct.*.room",
+      "result.requests.*",
+      "result.roomMembership[].container",
+      "result.roomMembership[].room",
     ],
     reason:
       "the manager's views derived under the reader's access are stored per user rather than per session, in documents of their own; a manager rolled forward lists its rooms" +
-      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)" +
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
     record: "docs/history/fabrichat-view-scopes-per-user-break.md",
   },
   {
@@ -2608,10 +2697,21 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `fabrichat-outgoing-notices-per-user-break.md` records.
       "result.chatManager.$VIEWS.chats.outgoingNotices",
       "result.chatManager.outgoingNotices",
+      // The room links, handles that declare nothing of the room, which
+      // `fabrichat-room-handles-break.md` records.
+      "result.chatManager.$VIEWS.chats.direct.*.room",
+      "result.chatManager.$VIEWS.chats.requests.*",
+      "result.chatManager.$VIEWS.chats.roomMembership[].container",
+      "result.chatManager.$VIEWS.chats.roomMembership[].room",
+      "result.chatManager.direct.*.room",
+      "result.chatManager.requests.*",
+      "result.chatManager.roomMembership[].container",
+      "result.chatManager.roomMembership[].room",
     ],
     reason:
       "home's chat manager's views derived under the reader's access are stored per user rather than per session; a home rolled forward lists its chats" +
-      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)" +
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
     record: "docs/history/fabrichat-view-scopes-per-user-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -2633,9 +2733,22 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: [
       "result.$VIEWS.chats.outgoingNotices",
       "result.outgoingNotices",
+      // The room links, handles that declare nothing of the room, which
+      // `fabrichat-room-handles-break.md` records.
+      "result.$VIEWS.chats.direct.*.room",
+      "result.$VIEWS.chats.requests.*",
+      "result.$VIEWS.chats.roomMembership[].container",
+      "result.$VIEWS.chats.roomMembership[].room",
+      "result.$VIEWS.chats.rooms[].room",
+      "result.direct.*.room",
+      "result.requests.*",
+      "result.roomMembership[].container",
+      "result.roomMembership[].room",
+      "result.rooms[].room",
     ],
     reason:
-      "the manager's outgoing notices, derived under the reader's access, are declared per user as the value behind them is stored; a manager rolled forward lists them",
+      "the manager's outgoing notices, derived under the reader's access, are declared per user as the value behind them is stored; a manager rolled forward lists them" +
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
     record: "docs/history/fabrichat-outgoing-notices-per-user-break.md",
   },
   {
@@ -2650,9 +2763,22 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: [
       "result.chatManager.$VIEWS.chats.outgoingNotices",
       "result.chatManager.outgoingNotices",
+      // The room links, handles that declare nothing of the room, which
+      // `fabrichat-room-handles-break.md` records.
+      "result.chatManager.$VIEWS.chats.direct.*.room",
+      "result.chatManager.$VIEWS.chats.requests.*",
+      "result.chatManager.$VIEWS.chats.roomMembership[].container",
+      "result.chatManager.$VIEWS.chats.roomMembership[].room",
+      "result.chatManager.$VIEWS.chats.rooms[].room",
+      "result.chatManager.direct.*.room",
+      "result.chatManager.requests.*",
+      "result.chatManager.roomMembership[].container",
+      "result.chatManager.roomMembership[].room",
+      "result.chatManager.rooms[].room",
     ],
     reason:
-      "home's chat manager's outgoing notices, derived under the reader's access, are declared per user as the value behind them is stored; a home rolled forward lists them",
+      "home's chat manager's outgoing notices, derived under the reader's access, are declared per user as the value behind them is stored; a home rolled forward lists them" +
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
     record: "docs/history/fabrichat-outgoing-notices-per-user-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -2740,18 +2866,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/package-layout-module-identity-break.md",
   },
   {
-    // The collection view's ready branch gains the `deleted` lists, optional
-    // since a Home older than them produces none. The proof does not apply
-    // the open-object evolution allowance inside a union branch, so the
-    // branch reads as narrowed, as the Loom root's optional `addedBy` did.
-    pattern: "system/shared-space/shared-space-collection.tsx",
-    baselines: ["20261013T060316Z-c-EAbZTKJzYV9I3w"],
-    paths: ["argument.view"],
-    reason:
-      "the collection view's ready branch gains optional `deleted` lists, which the proof reads as a narrowed union branch under a baseline that never had the property",
-    record: "docs/history/shared-space-collection-deleted-lists-break.md",
-  },
-  {
     // A placement's `state` gains `"deleted"`, which the specification adds
     // for a room whose space is deleted and asks clients to show as such. A
     // published enum that grows is a value an older reader never admitted,
@@ -2775,5 +2889,87 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     reason:
       "the placement's state the adapter re-exports gains `deleted` for a room whose space is deleted, a value the specification adds and no older reader's enum admitted",
     record: "docs/history/fabrichat-placement-deleted-state-break.md",
+  },
+  {
+    // The manager's room links become handles that declare nothing of the
+    // room, against the baselines no other entry names.
+    pattern: "system/fabrichat/manager.tsx",
+    baselines: [
+      "20261024T225740Z-FEJJ-fCjXaitwVrk",
+      "20261025T161339Z-J50T5PCn-_x_96OQ",
+      "20261103T232111Z-WI0DoWHlDvsdqAUJ",
+    ],
+    paths: [
+      "result.$VIEWS.chats.deletedRooms[].room",
+      "result.$VIEWS.chats.direct.*.room",
+      "result.$VIEWS.chats.outgoingNotices[].room",
+      "result.$VIEWS.chats.requests.*",
+      "result.$VIEWS.chats.roomMembership[].container",
+      "result.$VIEWS.chats.roomMembership[].room",
+      "result.$VIEWS.chats.rooms[].room",
+      "result.deletedRooms[].room",
+      "result.direct.*.room",
+      "result.outgoingNotices[].room",
+      "result.requests.*",
+      "result.roomMembership[].container",
+      "result.roomMembership[].room",
+      "result.rooms[].room",
+    ],
+    reason:
+      "the manager's room links are handles that declare nothing of the room, so reading the list loads no room; each record holds the same link, and a reader declaring the room's shape reads it as before",
+    record: "docs/history/fabrichat-room-handles-break.md",
+  },
+  {
+    // The manager's room links become handles that declare nothing of the
+    // room, against the baselines no other entry names.
+    pattern: "system/home/home.tsx",
+    baselines: [
+      "20261024T225743Z-b8wm1uzUC0LCsSLT",
+      "20261025T230945Z-fGqQfLEUBo2NVBxh",
+      "20261026T012334Z-dFuwoNMi16dVg-7y",
+      "20261026T191703Z-rf7KTi0R2qFCKGP8",
+      "20261027T085406Z-IpR0Y6wziJ4-8Okh",
+      "20261029T043453Z-JvnR8NHkYzsGQj0m",
+      "20261101T231412Z-DI2Dv_sTwMyM0odb",
+      "20261103T004951Z-YjF832RNw8dEpIq8",
+      "20261103T232115Z-yuH4X-xPwoYbMWDi",
+      "20261104T011014Z-EZrmgm8t6mn3wc10",
+      "20261104T052226Z-h_22FjOJmq99TGHY",
+      "20261104T063436Z-jxgbGkoTPTe3inht",
+      "20261104T063658Z-Qu5VbE7R-YZoTRHI",
+      "20261104T083752Z-vfDPOo3zXqnloDkA",
+      "20261104T211840Z-tStGPZkDpJ8byaId",
+      "20261104T213946Z-RfcPnPdhpV0y2L1i",
+      "20261109T183946Z-RbcB-5BTNXNab5Hx",
+      "20261109T195523Z-wYp5JB3I3DXY4y9s",
+      "20261109T230108Z-ARdTLVq89voJNUiU",
+      "20261110T005249Z-limIp5d_imp8k6IF",
+      "20261110T191000Z-9DFXhrR8-iPde6xe",
+    ],
+    paths: [
+      "result.chatManager.$VIEWS.chats.deletedRooms[].room",
+      "result.chatManager.$VIEWS.chats.direct.*.room",
+      "result.chatManager.$VIEWS.chats.outgoingNotices[].room",
+      "result.chatManager.$VIEWS.chats.requests.*",
+      "result.chatManager.$VIEWS.chats.roomMembership[].container",
+      "result.chatManager.$VIEWS.chats.roomMembership[].room",
+      "result.chatManager.$VIEWS.chats.rooms[].room",
+      "result.chatManager.deletedRooms[].room",
+      "result.chatManager.direct.*.room",
+      "result.chatManager.outgoingNotices[].room",
+      "result.chatManager.requests.*",
+      "result.chatManager.roomMembership[].container",
+      "result.chatManager.roomMembership[].room",
+      "result.chatManager.rooms[].room",
+    ],
+    reason:
+      "the manager's room links are handles that declare nothing of the room, so reading the list loads no room; each record holds the same link, and a reader declaring the room's shape reads it as before",
+    record: "docs/history/fabrichat-room-handles-break.md",
+    requiredPatternOverride: {
+      rulingBy: "Dan",
+      on: "2026-11-11",
+      reason:
+        "This changes a type parameter in a way that makes it possible to avoid sending large amounts of unnecessary data. It doesn't affect the actual stored data, so it's a safe change.",
+    },
   },
 ];

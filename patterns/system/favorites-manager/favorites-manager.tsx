@@ -21,7 +21,7 @@ import {
 // (`cf-tags` renders `item.userTags`). Declaring `tag: string` required made
 // every post-#4197 row fail validation; requiring `tags` would fail every
 // pre-#4197 row the same way. Omitting both is what accepts all of them.
-type Favorite = {
+export type Favorite = {
   cell: Writable<{ [NAME]?: string }>;
   userTags: Writable<string[]>;
   spaceName?: string;
@@ -30,7 +30,7 @@ type Favorite = {
   id?: string;
 };
 
-const onRemoveFavorite = handler<
+export const onRemoveFavorite = handler<
   Record<string, never>,
   {
     favorites: Writable<Array<Favorite> | Default<[]>>;
@@ -53,7 +53,7 @@ const onRemoveFavorite = handler<
   favorites.set(favorites.get().filter((f) => !f.cell.equals(item)));
 });
 
-const onUpdateUserTags = handler<
+export const onUpdateUserTags = handler<
   { detail: { tags: string[] } },
   { userTags: Writable<string[]> }
 >(({ detail }, { userTags }) => {

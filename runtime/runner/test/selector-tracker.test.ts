@@ -162,6 +162,41 @@ describe("SelectorTracker", () => {
       expect(existingSelector1).toEqual(standardInitialSelector);
     });
 
+    it("returns a tracked selector whose schema at the path differs from the new one only by its `$defs`", () => {
+      const address: BaseMemoryAddress = {
+        id: "of:defs-insensitive-doc",
+        type: "application/json",
+      };
+      const { promise } = Promise.withResolvers<Result<Unit, Error>>();
+      const tracked = {
+        path: [],
+        schema: {
+          type: "object",
+          properties: { label: { type: "string" } },
+        },
+      } as const satisfies { path: string[]; schema: JSONSchema };
+      selectorTracker.add(address, tracked, promise);
+
+      const [superset, supersetPromise] = selectorTracker
+        .getSupersetSelector(address, {
+          path: ["label"],
+          schema: { type: "string", $defs: { Unused: { type: "number" } } },
+        });
+      expect(superset).toEqual({
+        path: [],
+        schema: SelectorTracker.getStandardSchema(tracked.schema),
+      });
+      expect(supersetPromise).toBe(promise);
+
+      // A schema that differs in more than its `$defs` is not covered.
+      expect(
+        selectorTracker.getSupersetSelector(address, {
+          path: ["label"],
+          schema: { type: "number", $defs: { Unused: { type: "number" } } },
+        })[0],
+      ).toBeUndefined();
+    });
+
     it("does not treat selectors for the same id in different scopes as supersets", () => {
       const userAddress: BaseMemoryAddress = {
         id: "of:scoped-selector-doc",
@@ -188,6 +223,21 @@ describe("SelectorTracker", () => {
       );
 
       expect(existingSelector).toBeUndefined();
+    });
+  });
+
+  describe("add", () => {
+    it("tracks nothing for a selector without a schema", () => {
+      const address: BaseMemoryAddress = {
+        id: "of:schemaless-doc",
+        type: "application/json",
+      };
+      const pending = Promise.resolve({ ok: {} } as Result<Unit, Error>);
+      selectorTracker.add(address, { path: [] }, pending);
+      expect(selectorTracker.has(address)).toBe(false);
+
+      selectorTracker.add(address, { path: [], schema: true }, pending);
+      expect(selectorTracker.has(address)).toBe(true);
     });
   });
 

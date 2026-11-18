@@ -207,11 +207,13 @@ describe("wish commit-failure reporting", () => {
   /**
    * Seed the state document with an envelope the wish's own candidate cannot
    * merge with, run the wish against it, and hand back what the document
-   * reads once the refusal has been reported.
+   * reads once the refusal has been reported. `seedFields` are further
+   * fields the seeded state holds.
    */
   const refusedWishReport = async (
     seedSchema: JSONSchema,
     withUILink: boolean,
+    seedFields: Record<string, unknown> = {},
   ) => {
     // Learn the state document's address: it is derived from the space, the
     // pattern and the result cell, so a throwaway runtime names the same one.
@@ -243,6 +245,7 @@ describe("wish commit-failure reporting", () => {
       state.set({
         result: { name: "Bob" },
         candidates: [{ name: "Bob" }],
+        ...seedFields,
         ...(withUILink
           ? {
             [UI]: {
@@ -288,7 +291,9 @@ describe("wish commit-failure reporting", () => {
         [key: string]: unknown;
       } | undefined;
     const cancel = state.sink(() => {
-      if (readState()?.error !== undefined) settled.resolve();
+      const error = readState()?.error;
+      // An `error` the seed already held is not the report.
+      if (error !== undefined && error !== seedFields.error) settled.resolve();
     });
     try {
       await runWish(runtime);
@@ -349,6 +354,17 @@ describe("wish commit-failure reporting", () => {
     expect(value.result).toEqual({ name: "Bob" });
   });
 
+  it("replaces a stored no-match code with failed, so the state does not say nothing matched beside a failure", async () => {
+    const { reports, value } = await refusedWishReport(
+      ambiguousWishShapedSchema,
+      true,
+      { error: "No profile exists yet", errorCode: "no-match" },
+    );
+    expect(reports.filter((line) => line.includes("Can't report"))).toEqual([]);
+    expect(String(value.error)).toMatch(/divergent anyOf|commit-prep/);
+    expect(value.errorCode).toBe("failed");
+  });
+
   it("retries a transient refusal of the error report and preserves the refused result", async () => {
     const replica = storageManager.open(space).replica;
     const commitNative = replica.commitNative!;
@@ -398,6 +414,44 @@ describe("wish commit-failure reporting", () => {
       expect(value.candidates).toEqual([{ name: "Bob" }]);
     } finally {
       replica.commitNative = commitNative;
+      runtime.stampServerRun = stampServerRun;
+    }
+  });
+
+  it("prints the refusal, and why it went unreported, when the report itself throws", async () => {
+    // A throw out of the report's own transaction is not a refusal the report
+    // can retry or name in the document, so the console is the one place the
+    // refusal and the throw are both said.
+    const stampServerRun = runtime.stampServerRun;
+    const prepareTxForCommit = runtime.prepareTxForCommit;
+    const reportTransactions = new WeakSet<object>();
+    runtime.stampServerRun = (tx, info) => {
+      stampServerRun.call(runtime, tx, info);
+      if (info.actionId.startsWith("wish/commit-failure-ui/")) {
+        reportTransactions.add(tx);
+      }
+    };
+    runtime.prepareTxForCommit = (tx) => {
+      if (reportTransactions.has(tx)) {
+        throw new Error("report preparation crashed");
+      }
+      return prepareTxForCommit.call(runtime, tx);
+    };
+    try {
+      const { reports, value } = await refusedWishReport(
+        ambiguousWishShapedSchema,
+        true,
+      );
+      const unreported = reports.filter((line) =>
+        line.includes("Can't report")
+      );
+      expect(unreported.length).toBe(1);
+      expect(unreported[0]).toMatch(/divergent anyOf|commit-prep/);
+      expect(unreported[0]).toContain("report preparation crashed");
+      expect(value.error).toBeUndefined();
+      expect(value.result).toEqual({ name: "Bob" });
+    } finally {
+      runtime.prepareTxForCommit = prepareTxForCommit;
       runtime.stampServerRun = stampServerRun;
     }
   });

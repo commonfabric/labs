@@ -92,6 +92,29 @@ Deno.test({
   },
 });
 
+Deno.test({
+  name:
+    "syncCidReferences: the build define opts the runtime in, and a deployment's posture does not",
+  permissions: { read: true },
+  async fn() {
+    const on = await withPatchedGlobals({
+      $API_URL: "http://shell.test/",
+      $EXPERIMENTAL_SYNC_CID_REFERENCES: "true",
+    }, importFreshEnvModule);
+    expect(on.experimentalForDeployment({}).syncCidReferences).toBe(true);
+    const unset = await withPatchedGlobals({
+      $API_URL: "http://shell.test/",
+      $EXPERIMENTAL_SYNC_CID_REFERENCES: undefined,
+    }, importFreshEnvModule);
+    // The option is the client's own, so a deployment that publishes it
+    // turns nothing on.
+    expect(
+      unset.experimentalForDeployment({ syncCidReferences: true })
+        .syncCidReferences,
+    ).toBeUndefined();
+  },
+});
+
 /**
  * Runs `fn` with a page at `http://shell.test` whose deployment element
  * carries `tag` (none when undefined), its `fetch` returning `responses` in

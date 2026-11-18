@@ -1,6 +1,6 @@
 import * as ts from "typescript";
 
-import { getEnclosingFunctionLikeDeclaration } from "./function-predicates.ts";
+const ANY_OR_UNKNOWN = ts.TypeFlags.Any | ts.TypeFlags.Unknown;
 
 const nodeTextCache = new WeakMap<ts.Node, string>();
 const syntheticNodePrinter = ts.createPrinter();
@@ -28,15 +28,11 @@ export function getNodeText(node: ts.Node): string {
   // Check both: no source file OR synthetic node (pos=-1)
   if (!sourceFile || node.pos === -1) {
     // Synthetic node - use printer
-    try {
-      text = syntheticNodePrinter.printNode(
-        ts.EmitHint.Unspecified,
-        node,
-        syntheticNodeSourceFile,
-      );
-    } catch {
-      text = `<error printing ${ts.SyntaxKind[node.kind]}>`;
-    }
+    text = syntheticNodePrinter.printNode(
+      ts.EmitHint.Unspecified,
+      node,
+      syntheticNodeSourceFile,
+    );
   } else {
     // The sanctioned getText() call: guarded by the synthetic check above, and
     // passes the source file (the form the no-node-get-text lint rule allows).
@@ -153,7 +149,7 @@ function shouldUseInitializerTypeFallback(
   if (!type || !ts.isIdentifier(node)) {
     return false;
   }
-  return (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0;
+  return (type.flags & ANY_OR_UNKNOWN) !== 0;
 }
 
 function getIdentifierValueDeclaration(
@@ -209,25 +205,12 @@ function getInitializerTypeFallback(
     (originalInitializer !== initializer
       ? typeRegistry?.get(originalInitializer)
       : undefined);
-  if (
-    registryType &&
-    (registryType.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) === 0
-  ) {
+  if (registryType && !(registryType.flags & ANY_OR_UNKNOWN)) {
     return registryType;
   }
 
-  try {
-    const initializerType = checker.getTypeAtLocation(initializer);
-    if (
-      (initializerType.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) === 0
-    ) {
-      return initializerType;
-    }
-  } catch {
-    // Fall through to undefined
-  }
-
-  return undefined;
+  const initializerType = checker.getTypeAtLocation(initializer);
+  return initializerType.flags & ANY_OR_UNKNOWN ? undefined : initializerType;
 }
 
 /**
@@ -236,21 +219,13 @@ function getInitializerTypeFallback(
 function resolveBaseType(
   expression: ts.Expression,
   checker: ts.TypeChecker,
-): ts.Type | undefined {
-  let baseType = checker.getTypeAtLocation(expression);
-  if (baseType.flags & ts.TypeFlags.Any) {
-    const baseSymbol = checker.getSymbolAtLocation(expression);
-    if (baseSymbol) {
-      const resolved = checker.getTypeOfSymbolAtLocation(
-        baseSymbol,
-        expression,
-      );
-      if (resolved) {
-        baseType = resolved;
-      }
-    }
-  }
-  return baseType;
+): ts.Type {
+  const baseType = checker.getTypeAtLocation(expression);
+  if (!(baseType.flags & ts.TypeFlags.Any)) return baseType;
+  const baseSymbol = checker.getSymbolAtLocation(expression);
+  return baseSymbol
+    ? checker.getTypeOfSymbolAtLocation(baseSymbol, expression)
+    : baseType;
 }
 
 /**
@@ -264,7 +239,6 @@ export function getMemberSymbol(
     const direct = checker.getSymbolAtLocation(expression.name);
     if (direct) return direct;
     const baseType = resolveBaseType(expression.expression, checker);
-    if (!baseType) return undefined;
     return baseType.getProperty(expression.name.text);
   }
 
@@ -274,7 +248,6 @@ export function getMemberSymbol(
     ts.isStringLiteralLike(expression.argumentExpression)
   ) {
     const baseType = resolveBaseType(expression.expression, checker);
-    if (!baseType) return undefined;
     return baseType.getProperty(expression.argumentExpression.text);
   }
 
@@ -445,79 +418,6 @@ export function isOptionalMemberSymbol(
 ): boolean {
   const symbol = getMemberSymbol(expression, checker);
   return symbol !== undefined && isOptionalSymbol(symbol);
-}
-
-export function isFunctionParameter(
-  node: ts.Identifier,
-  checker: ts.TypeChecker,
-): boolean {
-  // Handle synthetic nodes: if the node doesn't have a source file, we can't traverse parent chain safely
-  // Synthetic identifiers from map closure transformation (like `discount`, `element`) are treated as
-  // opaque parameters, not regular function parameters
-  if (!node.getSourceFile()) {
-    return false;
-  }
-
-  const symbol = checker.getSymbolAtLocation(node);
-  if (symbol) {
-    const declarations = symbol.getDeclarations();
-    if (declarations && declarations.some((decl) => ts.isParameter(decl))) {
-      for (const decl of declarations) {
-        if (!ts.isParameter(decl)) continue;
-        const parent = decl.parent;
-        if (
-          ts.isFunctionExpression(parent) ||
-          ts.isArrowFunction(parent) ||
-          ts.isFunctionDeclaration(parent) ||
-          ts.isMethodDeclaration(parent)
-        ) {
-          if (isBuilderOwnedFunctionLike(parent)) {
-            return false;
-          }
-        }
-        return true;
-      }
-    }
-  }
-
-  const parent = node.parent;
-  if (parent && ts.isParameter(parent) && parent.name === node) {
-    return true;
-  }
-
-  const containingFunction = getEnclosingFunctionLikeDeclaration(node);
-
-  if (containingFunction && containingFunction.parameters) {
-    for (const param of containingFunction.parameters) {
-      if (
-        param.name && ts.isIdentifier(param.name) &&
-        param.name.text === node.text
-      ) {
-        if (isBuilderOwnedFunctionLike(containingFunction)) {
-          return false;
-        }
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
-function isBuilderOwnedFunctionLike(func: ts.FunctionLikeDeclaration): boolean {
-  let callExpr: ts.Node = func;
-  while (callExpr.parent && !ts.isCallExpression(callExpr.parent)) {
-    callExpr = callExpr.parent;
-  }
-
-  if (!callExpr.parent || !ts.isCallExpression(callExpr.parent)) {
-    return false;
-  }
-
-  const funcName = getNodeText(callExpr.parent.expression);
-  return funcName.includes("pattern") ||
-    funcName.includes("handler") ||
-    funcName.includes("lift");
 }
 
 /**

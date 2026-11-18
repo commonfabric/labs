@@ -136,7 +136,7 @@ export const SummaryIndexPresentation = pattern<
             {filteredCount} of {entryCount} pieces
           </span>
 
-          <cf-table full-width>
+          <cf-table fullWidth>
             <tbody>
               {filtered.map((entry) => (
                 <tr>

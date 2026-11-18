@@ -501,3 +501,238 @@ Deno.test("a panel marked in the same turn the group starts stacking still turns
   expect(page.handle.dataset.orientation).toBe("vertical");
   expect(page.first.style.display).toBe("none");
 });
+
+Deno.test("a group nested in a panel sizes its own panels, and the outer group sizes only its own", async () => {
+  using outer = built("horizontal");
+  const inner = new CFResizablePanelGroup();
+  inner.direction = "vertical";
+  const top = new CFResizablePanel();
+  top.setAttribute("default-size", "30");
+  const innerHandle = new CFResizableHandle();
+  const bottom = new CFResizablePanel();
+  bottom.setAttribute("default-size", "70");
+  inner.append(top, innerHandle, bottom);
+  outer.first.append(inner);
+  document.body.append(outer.group);
+  await laidOut(outer.group);
+  await inner.updateComplete;
+
+  expect(outer.first.style.width).toBe("36%");
+  expect(outer.second.style.width).toBe("64%");
+  expect(top.style.height).toBe("30%");
+  expect(bottom.style.height).toBe("70%");
+  expect(top.style.width).toBe("");
+  expect(bottom.style.width).toBe("");
+  expect(innerHandle.dataset.orientation).toBe("vertical");
+  expect(top.getBoundingClientRect().width).toBe(
+    outer.first.getBoundingClientRect().width,
+  );
+
+  // A size change in the inner group is the inner group's alone.
+  top.defaultSize = 40;
+  await laidOut(outer.group);
+  expect(top.style.height).toBe("40%");
+  expect(top.style.width).toBe("");
+  expect(outer.first.style.width).toBe("36%");
+
+  // The outer handle moves the outer panels and leaves the inner ones be.
+  outer.handle.focus();
+  await pressKey("ArrowRight");
+  expect(outer.first.style.width).toBe("37%");
+  expect(top.style.height).toBe("40%");
+  expect(top.style.width).toBe("");
+});
+
+/** A `display: contents` span holding `children`, as the renderer wraps the
+ * items of an array. */
+function wrapped(...children: HTMLElement[]): HTMLSpanElement {
+  const span = document.createElement("span");
+  span.style.display = "contents";
+  span.append(...children);
+  return span;
+}
+
+Deno.test("panels and a handle wrapped in an element, as an array's items are, belong to the group and lay out as direct children do", async () => {
+  const group = new CFResizablePanelGroup();
+  group.style.width = "400px";
+  group.style.height = "400px";
+  const first = new CFResizablePanel();
+  first.defaultSize = 25;
+  const handle = new CFResizableHandle();
+  const second = new CFResizablePanel();
+  second.defaultSize = 75;
+  group.append(wrapped(first, handle), wrapped(second));
+  document.body.append(group);
+  try {
+    await laidOut(group);
+    expect(first.style.width).toBe("25%");
+    expect(first.getBoundingClientRect().height).toBe(400);
+    expect(handle.getBoundingClientRect().width).toBe(6);
+    handle.focus();
+    await pressKey("ArrowRight");
+    expect(first.style.width).toBe("26%");
+  } finally {
+    group.remove();
+  }
+});
+
+Deno.test("a wrapped panel removed with its wrapper leaves the group, and the rest return to their defaults", async () => {
+  using page = built("horizontal");
+  const third = new CFResizablePanel();
+  third.defaultSize = 20;
+  const handle2 = new CFResizableHandle();
+  const wrapper = wrapped(handle2, third);
+  page.group.append(wrapper);
+  document.body.append(page.group);
+  await laidOut(page.group);
+  expect(third.style.width).toBe("20%");
+
+  wrapper.remove();
+  await laidOut(page.group);
+  expect(third.style.width).toBe("");
+  expect(third.dataset.orientation).toBe(undefined);
+  page.handle.focus();
+  await pressKey("ArrowRight");
+  expect(page.first.style.width).toBe("37%");
+  expect(page.second.style.width).toBe("63%");
+});
+
+Deno.test("a size change in a nested group leaves a drag in the outer group going", async () => {
+  using outer = built("horizontal");
+  const inner = new CFResizablePanelGroup();
+  inner.direction = "vertical";
+  const top = new CFResizablePanel();
+  const bottom = new CFResizablePanel();
+  inner.append(top, new CFResizableHandle(), bottom);
+  outer.first.append(inner);
+  document.body.append(outer.group);
+  await laidOut(outer.group);
+
+  outer.handle.dispatchEvent(
+    new MouseEvent("mousedown", { bubbles: true, clientX: 144, clientY: 10 }),
+  );
+  top.defaultSize = 40;
+  await laidOut(outer.group);
+  expect(outer.group.classList.contains("resizing")).toBe(true);
+  document.dispatchEvent(
+    new MouseEvent("mousemove", { clientX: 184, clientY: 10 }),
+  );
+  document.dispatchEvent(new MouseEvent("mouseup"));
+  expect(outer.first.style.width).toBe("46%");
+  expect(top.style.height).toBe("40%");
+});
+
+Deno.test("a nested group's resize is heard on that group alone", async () => {
+  using outer = built("horizontal");
+  const inner = new CFResizablePanelGroup();
+  inner.direction = "vertical";
+  const innerHandle = new CFResizableHandle();
+  inner.append(new CFResizablePanel(), innerHandle, new CFResizablePanel());
+  outer.first.append(inner);
+  document.body.append(outer.group);
+  await laidOut(outer.group);
+
+  const heard: EventTarget[] = [];
+  outer.group.addEventListener("cf-resize", (e) => heard.push(e.target!));
+  inner.addEventListener("cf-resize", (e) => heard.push(e.target!));
+  innerHandle.focus();
+  await pressKey("ArrowDown");
+  expect(heard).toEqual([inner]);
+});
+
+Deno.test("a press on a nested group's handle starts no drag in the outer group", async () => {
+  using outer = built("horizontal");
+  const inner = new CFResizablePanelGroup();
+  inner.direction = "vertical";
+  const innerHandle = new CFResizableHandle();
+  inner.append(new CFResizablePanel(), innerHandle, new CFResizablePanel());
+  outer.first.append(inner);
+  document.body.append(outer.group);
+  await laidOut(outer.group);
+
+  innerHandle.dispatchEvent(
+    new MouseEvent("mousedown", { bubbles: true, clientX: 10, clientY: 200 }),
+  );
+  expect(inner.classList.contains("resizing")).toBe(true);
+  expect(outer.group.classList.contains("resizing")).toBe(false);
+  document.dispatchEvent(new MouseEvent("mouseup"));
+});
+
+Deno.test("a handle taken out of the group no longer starts a drag in it", async () => {
+  using page = await mounted("horizontal");
+  page.handle.remove();
+  document.body.append(page.handle);
+  try {
+    page.handle.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, clientX: 144, clientY: 10 }),
+    );
+    expect(page.group.classList.contains("resizing")).toBe(false);
+  } finally {
+    page.handle.remove();
+  }
+});
+
+Deno.test("a handle moves the nearest panel on each side of it, and one at an end moves nothing", async () => {
+  using page = built("horizontal");
+  const leading = new CFResizableHandle();
+  page.group.prepend(leading);
+  document.body.append(page.group);
+  await laidOut(page.group);
+  leading.focus();
+  await pressKey("ArrowRight");
+  expect(page.first.style.width).toBe("36%");
+  page.handle.focus();
+  await pressKey("ArrowRight");
+  expect(page.first.style.width).toBe("37%");
+  expect(page.second.style.width).toBe("63%");
+});
+
+Deno.test("a handle that leaves takes none of the group's orientation with it", async () => {
+  using page = await mounted("horizontal");
+  page.handle.remove();
+  expect(page.handle.dataset.orientation).toBe(undefined);
+  expect(page.handle.hasAttribute("aria-orientation")).toBe(false);
+});
+
+Deno.test("a member moved to another group belongs to that group alone", async () => {
+  using a = await mounted("horizontal");
+  using b = await mounted("vertical");
+  b.group.append(a.second);
+  await laidOut(b.group);
+  expect(a.second.style.width).toBe("");
+  expect(a.second.dataset.orientation).toBe("vertical");
+  expect(a.second.style.height).not.toBe("");
+  a.handle.focus();
+  await pressKey("ArrowRight");
+  expect(a.first.style.width).toBe("36%");
+});
+
+Deno.test("a group taken out and put back with its panels lays them out again", async () => {
+  using page = await mounted("horizontal");
+  page.group.remove();
+  document.body.append(page.group);
+  await laidOut(page.group);
+  expect(page.first.style.width).toBe("36%");
+  page.handle.focus();
+  await pressKey("ArrowRight");
+  expect(page.first.style.width).toBe("37%");
+});
+
+Deno.test("a handle at an end steps aside with the hidden panel beside it", async () => {
+  using page = built("horizontal");
+  page.group.stackBelow = 500;
+  const trailing = new CFResizableHandle();
+  page.group.append(trailing);
+  page.second.hideWhenStacked = true;
+  document.body.append(page.group);
+  await laidOut(page.group);
+  expect(page.second.style.display).toBe("none");
+  expect(trailing.style.display).toBe("none");
+});
+
+Deno.test("a handle leaving keeps the size its author gave it", async () => {
+  using page = await mounted("vertical");
+  page.handle.style.height = "12px";
+  page.handle.remove();
+  expect(page.handle.style.height).toBe("12px");
+});

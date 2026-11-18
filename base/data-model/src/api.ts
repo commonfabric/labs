@@ -436,6 +436,16 @@ export interface FabricHashConstructor {
 export declare const FabricHash: FabricHashConstructor;
 
 /**
+ * The state of a `FabricKeyPair` that holds material, which is also its
+ * encoded form: the algorithm name, and the two keys' bytes.
+ */
+export type KeyPairState = {
+  readonly algorithm: string;
+  readonly publicKey: FabricBytes;
+  readonly privateKey: FabricBytes;
+};
+
+/**
  * An immutable asymmetric key pair.
  *
  * An instance either holds handles -- two `CryptoKey`s, whose material this
@@ -449,6 +459,12 @@ export interface FabricKeyPair extends FabricPrimitive {
 
   readonly algorithm: string;
   readonly hasMaterial: boolean;
+
+  /**
+   * The state, a frozen record of the algorithm name and the two keys' bytes.
+   * Throws when this instance holds handles.
+   */
+  readonly state: KeyPairState;
 
   /**
    * A `CryptoKeyPair` holding this instance's two keys. The record is a new
@@ -484,37 +500,6 @@ export interface FabricKeyPairConstructor {
 export declare const FabricKeyPair: FabricKeyPairConstructor;
 
 /**
- * An immutable regular expression.
- *
- * The pattern is held as a flavor / source / flags triple rather than as a
- * JS `RegExp`, so that flavors with no JS representation can still be
- * carried. `value` reconstitutes a JS `RegExp` where one exists.
- */
-export interface FabricRegExp extends FabricPrimitive {
-  /** @inheritDoc */
-  readonly schemaType: "FabricRegExp";
-
-  readonly source: string;
-  readonly flags: string;
-  readonly flavor: string;
-
-  /**
-   * A fresh JS `RegExp` equivalent to this value, returned anew on each
-   * call so the internal instance is never aliased out. Throws for a flavor
-   * with no JS `RegExp` representation.
-   */
-  readonly value: RegExp;
-}
-
-export interface FabricRegExpConstructor {
-  new (regex: RegExp): FabricRegExp;
-  new (flavor: string, source: string, flags: string): FabricRegExp;
-  prototype: FabricRegExp;
-}
-
-export declare const FabricRegExp: FabricRegExpConstructor;
-
-/**
  * Why a `FabricUnavailable` stands where data would otherwise be. The two
  * transient reasons say the data is on its way; `error` says producing it
  * failed; `obsolete` says the output is no longer served. Only `error`
@@ -536,10 +521,43 @@ export type UnavailableErrorKind =
   | "provider"
   | "sync";
 
-/** Native availability members shared by accepted marker implementations. */
+/**
+ * The state of a `FabricUnavailable`, which is also its encoded form: the
+ * reason; for the `error` reason the kind; and the message when one is
+ * stored. A field that has nothing to say is absent rather than `null`, so
+ * that the state of a transient reason is exactly the reason.
+ */
+export type UnavailableState =
+  /** A transient reason, which carries nothing else. */
+  | { readonly reason: "pending" | "syncing" }
+  /** A retired output, with optional migration guidance. */
+  | { readonly reason: "obsolete"; readonly message?: string }
+  /**
+   * The `error` reason, with its kind, and its message when one is stored,
+   * which a message equal to the kind's default never is.
+   */
+  | {
+    readonly reason: "error";
+    readonly errorKind: UnavailableErrorKind;
+    readonly message?: string;
+  };
+
+/**
+ * A marker standing in for data that is not available, saying why. It holds
+ * no data of its own: its reason, error kind, and diagnostic text are the
+ * whole of what it says. Only `error` carries a kind. Both terminal reasons
+ * may carry a message; errors supply their kind's default when none was
+ * given, while obsolete guidance is optional. Transient reasons carry neither.
+ */
 export interface FabricUnavailableBase extends FabricPrimitive {
   /** @inheritDoc */
   readonly schemaType: "FabricUnavailable";
+
+  /**
+   * The state, a frozen record: the reason, the kind when there is one, and
+   * the message when one is stored.
+   */
+  readonly state: UnavailableState;
 
   /** Why the data is unavailable. */
   readonly reason: UnavailableReason;
@@ -568,8 +586,8 @@ export interface FabricUnavailableBase extends FabricPrimitive {
   isSyncing(): boolean;
 
   /**
-   * Whether the reason is `error`, narrowing `errorKind` and `message`
-   * to the non-`null` values the `error` reason always carries.
+   * Whether the reason is `error`, narrowing `errorKind` and `message` to the
+   * non-`null` values the `error` reason always carries.
    */
   isError(): this is {
     readonly errorKind: UnavailableErrorKind;
@@ -662,7 +680,6 @@ export type ConcreteFabricPrimitive =
   | FabricEpochNsec
   | FabricHash
   | FabricKeyPair
-  | FabricRegExp
   | FabricUnavailable;
 
 /**

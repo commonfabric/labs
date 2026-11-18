@@ -1,5 +1,7 @@
 import {
   computed,
+  hasError,
+  type JSXElement,
   NAME,
   pattern,
   resultOf,
@@ -14,14 +16,24 @@ type SummaryIndexResult = {
   search: { pattern: unknown; extraParams: { entries: SummaryIndexEntry[] } };
 };
 
-export default pattern<Record<string, never>>((_) => {
-  const query = new Writable("");
+export interface SummaryIndexBrowserInput {
+  /** The index entries to list. */
+  entries: SummaryIndexEntry[];
 
-  const summaryWish = wish<SummaryIndexResult>({
-    query: "#summaryIndex",
-  });
-  const { entries } = resultOf(summaryWish.result);
+  /** Text an entry's name or summary has to contain to be listed. */
+  query: Writable<string>;
+}
 
+export interface SummaryIndexTesterOutput {
+  [NAME]: string;
+  [UI]: JSXElement;
+}
+
+/** Lists summary index entries, filtered by the query typed above them. */
+export const SummaryIndexBrowser = pattern<
+  SummaryIndexBrowserInput,
+  SummaryIndexTesterOutput
+>(({ entries, query }) => {
   const filtered = computed(() => {
     const q = query.get().toLowerCase().trim();
     if (!q) return entries;
@@ -62,7 +74,7 @@ export default pattern<Record<string, never>>((_) => {
             </span>
           </cf-vstack>
 
-          <cf-table full-width>
+          <cf-table fullWidth>
             <thead>
               <tr>
                 <th>Name</th>
@@ -92,3 +104,14 @@ export default pattern<Record<string, never>>((_) => {
     ),
   };
 });
+
+export default pattern<Record<string, never>, SummaryIndexTesterOutput>(
+  (_) => {
+    const index = wish<SummaryIndexResult>({ query: "#summaryIndex" });
+    const indexResult = resultOf(index.result);
+    const entries = computed(() =>
+      hasError(index.result) ? [] : indexResult.entries ?? []
+    );
+    return SummaryIndexBrowser({ entries, query: new Writable("") });
+  },
+);

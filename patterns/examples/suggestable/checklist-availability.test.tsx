@@ -29,7 +29,7 @@ export default pattern(() => {
   });
   return {
     [TESTS]: [
-      { assertion: assert(() => subject.items[0].label === "First step") },
+      { assertion: assert(() => subject.items[0]?.label === "First step") },
       {
         assertion: assert(() =>
           textContent(subject[UI]).includes("First step")
@@ -109,7 +109,7 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           subject.pending === false &&
-          subject.items[0].label === "Recovered step"
+          subject.items[0]?.label === "Recovered step"
         ),
       },
       {

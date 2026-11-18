@@ -40,11 +40,16 @@ import type { Runtime } from "../runtime.ts";
 import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
+  createDocumentReadiness,
+  DocumentPending,
+} from "../document-readiness.ts";
+import {
   computeInputHashFromValue,
   selectUnavailableFetchInput,
   writeUnavailableFetchResult,
 } from "./fetch-utils.ts";
 import { ownedCell, ownedStoreLinks } from "./runtime-owned-store.ts";
+import { scopedCell } from "./scope-policy.ts";
 
 /**
  * How long a `fetching` cache entry left by another replica is believed before
@@ -301,6 +306,7 @@ export function fetchProgram(
     cache: { fetchProgram: { cache: cause } },
   };
   const bindings = new Map<CellScope, ProgramCells>();
+  const readiness = createDocumentReadiness(runtime, addCancel);
   const inFlight = new Map<string, ProgramResolution>();
   const claimIds = new Map<string, string>();
   const claimNamespace = crypto.randomUUID();
@@ -504,6 +510,22 @@ export function fetchProgram(
     const outputScope = tx.getNarrowestReadScope();
     const runIdentity = waveRunContextOf(tx)?.scopeKeyIdentity;
     const identity = runIdentity === undefined ? undefined : { ...runIdentity };
+    // A cold cache is not an idle request. Confirm it before staging a claim
+    // or publishing Pending over a result another runtime already completed.
+    if (requestSnapshot?.url) {
+      const cacheCell = scopedCell(
+        runtime,
+        tx,
+        runtime.getCell(parentCell.space, stores.cache, cacheSchema, tx),
+        outputScope,
+      );
+      try {
+        readiness.requireDocument(cacheCell, tx);
+      } catch (error) {
+        if (error instanceof DocumentPending) return;
+        throw error;
+      }
+    }
     const cells = cellsFor(tx, outputScope);
     const { pending, result, error, cache } = cells;
     if (unavailableInput !== undefined) {
@@ -664,12 +686,14 @@ export function fetchProgram(
             runtime.trackAsyncWork(
               settleAbandonedRequest(
                 runtime,
-                "fetchProgram",
-                effectKey,
+                {
+                  builtinId: "fetchProgram",
+                  effectKey,
+                  identity,
+                  scope: outputScope,
+                  attributeToBuiltin: true,
+                },
                 (settleTx) => {
-                  if (identity !== undefined) {
-                    settleTx.tx.scopeKeyIdentity = identity;
-                  }
                   const entry = cache.withTx(settleTx).get()?.[inputHash];
                   const ownsFields = entry === undefined ||
                     entry.state.type === "idle";
@@ -686,6 +710,18 @@ export function fetchProgram(
                   }
                   // A refusal may publish only while its inputs still select this
                   // cache. Other requests retain their own result and binding.
+                  //
+                  // TODO(danfuzz): A request refused over a labeled URL should
+                  // leave a request over a URL the ceiling admits free to go
+                  // out, as the `llm` builtins' endings do. This read of the
+                  // inputs, and the read of the cache above, put the URL's
+                  // label on everything this ending writes, the cache entry
+                  // included, and the node's next run reads the whole cache and
+                  // takes the label into its request, so the new URL is refused
+                  // as well. Ending it means deciding ownership from an
+                  // in-memory record rather than the inputs, and the next run
+                  // reading only its own cache entry. The test pinning today's
+                  // outcome is in `served-effect-refusal-rerun.test.ts`.
                   settleTx.resetNarrowestReadScope();
                   const current = snapshotFetchProgramInputs(
                     inputsCell.withTx(settleTx),
@@ -744,6 +780,7 @@ export function fetchProgram(
   };
   return {
     action,
+    onActionRegistered: readiness.onActionRegistered,
     storeWrites: ownedStoreLinks(runtime, parentCell, Object.values(stores)),
   };
 }

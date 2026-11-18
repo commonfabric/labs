@@ -29,7 +29,6 @@ import {
 } from "./expression-rewrite/rewrite-helpers.ts";
 import {
   addBindingTargetSymbols,
-  classifyOpaquePathTerminalCall,
   collectLocalOpaqueRootSymbols,
   getOpaqueAccessInfo,
   isOpaqueOriginCall,
@@ -45,7 +44,11 @@ import {
   classifyUnsupportedExpressionSiteCallRoot,
 } from "./expression-site-policy.ts";
 import { getCellKind } from "./cell-type.ts";
-import { createPropertyName } from "../utils/identifiers.ts";
+import { getGetCallReceiver } from "./call-root-support.ts";
+import {
+  createPropertyName,
+  extractBindingNames,
+} from "../utils/identifiers.ts";
 
 const KNOWN_PATH_TERMINAL_METHODS = new Set([
   "set",
@@ -259,13 +262,13 @@ function rewriteTrackedOpaquePatternBody(
   const activeOpaqueRoots = new Set(opaqueRoots);
   const scopeStack: Map<string, boolean>[] = [];
 
-  const enterScope = (): void => {
-    scopeStack.push(new Map<string, boolean>());
-  };
-
-  const exitScope = (): void => {
-    const scope = scopeStack.pop();
-    if (!scope) return;
+  // Runs `fn` in a fresh binding scope, then restores the opaque state of
+  // every name a binding in that scope shadowed.
+  const inScope = <T>(fn: () => T): T => {
+    const scope = new Map<string, boolean>();
+    scopeStack.push(scope);
+    const result = fn();
+    scopeStack.pop();
     for (const [name, wasOpaque] of scope) {
       if (wasOpaque) {
         activeOpaqueRoots.add(name);
@@ -273,6 +276,7 @@ function rewriteTrackedOpaquePatternBody(
         activeOpaqueRoots.delete(name);
       }
     }
+    return result;
   };
 
   const setBindingOpaqueState = (
@@ -553,35 +557,17 @@ function rewriteTrackedOpaquePatternBody(
   const maybeWrapCellGetJsxCall = (
     expression: ts.CallExpression,
   ): ts.Expression | undefined => {
-    if (classifyOpaquePathTerminalCall(expression) !== "get") {
+    const receiver = getGetCallReceiver(expression);
+    if (!receiver || !shouldWrapDirectJsxExpression(expression)) {
       return undefined;
     }
 
-    if (!shouldWrapDirectJsxExpression(expression)) {
-      return undefined;
-    }
-
-    const callee = expression.expression;
-    if (
-      !ts.isPropertyAccessExpression(callee) &&
-      !ts.isElementAccessExpression(callee)
-    ) {
-      return undefined;
-    }
-
-    let receiverIsCellLike = !!getTrackedOpaqueAccessInfo(callee.expression);
-    if (!receiverIsCellLike) {
-      try {
-        const receiverType = context.checker.getTypeAtLocation(
-          callee.expression,
-        );
-        receiverIsCellLike = getCellKind(receiverType, context.checker) !==
-          undefined;
-      } catch {
-        receiverIsCellLike = false;
-      }
-    }
-
+    const receiverIsCellLike = !!getTrackedOpaqueAccessInfo(receiver) ||
+      getCellKind(
+          context.checker.getTypeAtLocation(receiver),
+          context.checker,
+        ) !==
+        undefined;
     if (!receiverIsCellLike) {
       return undefined;
     }
@@ -746,10 +732,9 @@ function rewriteTrackedOpaquePatternBody(
     }
 
     if (ts.isBlock(node) && node !== body) {
-      enterScope();
-      const rewritten = visitEachChildWithJsx(node, visit, context.tsContext);
-      exitScope();
-      return rewritten;
+      return inScope(() =>
+        visitEachChildWithJsx(node, visit, context.tsContext)
+      );
     }
 
     if (ts.isVariableStatement(node)) {
@@ -867,19 +852,12 @@ function rewriteTrackedOpaquePatternBody(
         return visited;
       }
 
-      if (ts.isPropertyAccessExpression(visited)) {
-        const parentCall = callTargetParents.get(node);
-        const unsupportedCallRoot = parentCall
-          ? classifyUnsupportedExpressionSiteCallRoot(
-            parentCall,
-            context,
-            analyze,
-          )
-          : undefined;
-
-        if (
-          KNOWN_PATH_TERMINAL_METHODS.has(visited.name.text) && parentCall
-        ) {
+      // A member access in callee position is a method call, whether the
+      // method is named with a property access or a static element key.
+      const parentCall = callTargetParents.get(node);
+      const methodName = info.path[info.path.length - 1];
+      if (parentCall && typeof methodName === "string") {
+        if (KNOWN_PATH_TERMINAL_METHODS.has(methodName)) {
           if (info.path.length <= 1) {
             return visited;
           }
@@ -891,29 +869,26 @@ function rewriteTrackedOpaquePatternBody(
             context.factory,
           );
           const rewrittenMethod = context.factory
-            .createPropertyAccessExpression(
-              rewrittenReceiver,
-              visited.name.text,
-            );
+            .createPropertyAccessExpression(rewrittenReceiver, methodName);
           registerReplacement(rewrittenMethod, visited, context);
           return rewrittenMethod;
         }
 
-        if (parentCall) {
-          if (
-            unsupportedCallRoot === "unsupported-receiver-method"
-          ) {
-            return visited;
-          }
-
+        if (
+          classifyUnsupportedExpressionSiteCallRoot(
+            parentCall,
+            context,
+            analyze,
+          ) !== "unsupported-receiver-method"
+        ) {
           reportOnce(
             visited,
             "computation",
             "Method calls on opaque pattern values are not lowerable. " +
-              notLowerableMethodRemedy(visited.name.text),
+              notLowerableMethodRemedy(methodName),
           );
-          return visited;
         }
+        return visited;
       }
 
       if (info.path.length > 0) {
@@ -934,32 +909,12 @@ function rewriteTrackedOpaquePatternBody(
         analyze,
       );
       if (unsupportedCallRoot === "unsupported-receiver-method") {
-        const reactiveContext = context.getReactiveContext(visited);
-        const methodName = calleeMethodName(visited);
-        const isWrite = methodName !== undefined &&
-          WRITE_METHODS.has(methodName);
-        if (
-          reactiveContext.kind === "pattern" &&
-          (reactiveContext.owner === "pattern" ||
-            reactiveContext.owner === "render") &&
-          !reactiveContext.inJsxExpression
-        ) {
-          reportOnce(
-            visited,
-            "receiver-method",
-            isWrite
-              ? "Writes to pattern inputs are not supported directly in pattern bodies. " +
-                notLowerableMethodRemedy(methodName)
-              : "Method calls on reactive values are not yet supported directly in non-JSX pattern bodies. Move this call into computed(() => ...), module-scope lift(), or another safe wrapper.",
-          );
-        } else {
-          reportOnce(
-            visited,
-            "receiver-method",
-            "Method calls on opaque pattern values are not lowerable. " +
-              notLowerableMethodRemedy(methodName),
-          );
-        }
+        reportOnce(
+          visited,
+          "receiver-method",
+          "Method calls on opaque pattern values are not lowerable. " +
+            notLowerableMethodRemedy(calleeMethodName(visited)),
+        );
       }
 
       if (isWildcardTraversalCall(visited, context.checker)) {
@@ -999,20 +954,11 @@ function rewriteTrackedOpaquePatternBody(
     return visited;
   };
 
-  enterScope();
-  if (ts.isBlock(body)) {
-    const rewrittenBody = visitEachChildWithJsx(
-      body,
-      visit,
-      context.tsContext,
-    ) as ts.Block;
-    exitScope();
-    return rewrittenBody;
-  }
-
-  const rewrittenExpr = visit(body) as ts.Expression;
-  exitScope();
-  return rewrittenExpr;
+  return inScope(() =>
+    ts.isBlock(body)
+      ? visitEachChildWithJsx(body, visit, context.tsContext) as ts.Block
+      : visit(body) as ts.Expression
+  );
 }
 
 /**
@@ -1044,18 +990,11 @@ function rewriteNestedLiftAppliedCallbackBodies(
       visited,
       context.checker,
     );
-    if (!liftAppliedArgs) return visited;
-    const { callback: callbackArg } = liftAppliedArgs;
-
-    // The callback lives on the inner lift call (lift(cb)(input)). When
-    // getLiftAppliedInputAndCallback succeeds the inner call is always present
-    // — both gate on the outer call's callee being a CallExpression — so
-    // getLiftAppliedInnerCall is non-undefined here.
+    // The callback lives on the inner lift call (lift(cb)(input)), which is
+    // present whenever getLiftAppliedInputAndCallback succeeds.
     const innerCall = getLiftAppliedInnerCall(visited);
-    const callbackHostArgs = innerCall
-      ? innerCall.arguments
-      : visited.arguments;
-    const callbackIndex = callbackHostArgs.indexOf(callbackArg);
+    if (!liftAppliedArgs || !innerCall) return visited;
+    const { callback: callbackArg } = liftAppliedArgs;
 
     let processedBody = rewriteNestedLiftAppliedCallbackBodies(
       callbackArg.body,
@@ -1067,10 +1006,11 @@ function rewriteNestedLiftAppliedCallbackBodies(
       processedBody,
       context,
     );
-    const localOpaqueRoots = new Set<string>();
-    for (const parameter of callbackArg.parameters) {
-      collectBindingNames(parameter.name, localOpaqueRoots);
-    }
+    const localOpaqueRoots = new Set(
+      callbackArg.parameters.flatMap((parameter) =>
+        extractBindingNames(parameter.name)
+      ),
+    );
 
     processedBody = rewriteTrackedOpaquePatternBody(
       processedBody,
@@ -1113,32 +1053,17 @@ function rewriteNestedLiftAppliedCallbackBodies(
     // the body reads.
     setParentPointers(newCallback);
 
-    if (innerCall) {
-      const newInnerArgs = [...innerCall.arguments];
-      newInnerArgs[callbackIndex] = newCallback;
-      const newInnerCall = context.factory.updateCallExpression(
-        innerCall,
-        innerCall.expression,
-        innerCall.typeArguments,
-        newInnerArgs,
-      );
-      const updatedCall = context.factory.updateCallExpression(
-        visited,
-        newInnerCall,
-        visited.typeArguments,
-        visited.arguments,
-      );
-      setParentPointers(updatedCall, visited.parent);
-      return updatedCall;
-    }
-
-    const args = [...visited.arguments];
-    args[callbackIndex] = newCallback;
+    const newInnerCall = context.factory.updateCallExpression(
+      innerCall,
+      innerCall.expression,
+      innerCall.typeArguments,
+      innerCall.arguments.map((arg) => arg === callbackArg ? newCallback : arg),
+    );
     const updatedCall = context.factory.updateCallExpression(
       visited,
-      visited.expression,
+      newInnerCall,
       visited.typeArguments,
-      args,
+      visited.arguments,
     );
     setParentPointers(updatedCall, visited.parent);
     return updatedCall;
@@ -1280,8 +1205,10 @@ function rewriteInlineReactiveOriginChains(
     const unwrappedInitializer = unwrapExpression(declaration.initializer);
     if (ts.isIdentifier(unwrappedInitializer)) return undefined;
     if (ts.isCallExpression(unwrappedInitializer)) return undefined;
-    // Static property and element segments form a destructuring path; a
-    // dynamic key cannot identify a binding statically.
+    // The initializer must be a chain of member accesses bottoming on an
+    // opaque-origin call. An element access joins it only with a static key,
+    // as in `wish(...)["result"]` or `wish(...)[0]`; a computed key has no
+    // place in a destructure pattern, so `collectInlineOpaqueChain` skips it.
     if (
       !ts.isPropertyAccessExpression(unwrappedInitializer) &&
       !ts.isElementAccessExpression(unwrappedInitializer)
@@ -1299,7 +1226,6 @@ function rewriteInlineReactiveOriginChains(
       chain.segments,
       factory,
     );
-    if (!wrappedBinding) return undefined;
     // Preserve cast/paren wrappers at the root of the chain so type
     // information that downstream passes rely on (schema injection)
     // stays intact. Non-null assertions on the call itself or inside the
@@ -1377,7 +1303,6 @@ function collectInlineOpaqueChain(
     segments.unshift(segment);
     current = stripSyntacticWrappers(current.expression);
   }
-  if (segments.length === 0) return undefined;
   // `current` is now the call (possibly still wrapped in casts/satisfies).
   // Inspect the unwrapped form to verify it's an opaque source call, but
   // return `current` unchanged so any preserved wrappers stay attached.
@@ -1410,10 +1335,6 @@ function stripSyntacticWrappers(expression: ts.Expression): ts.Expression {
       current = current.expression;
       continue;
     }
-    if (ts.isPartiallyEmittedExpression(current)) {
-      current = current.expression;
-      continue;
-    }
     return current;
   }
 }
@@ -1439,15 +1360,12 @@ function getStaticAccessKey(
  * keys [seg0, seg1, ..., segN] running from outer to inner (segment closest
  * to the call is seg0), produce the wrapped destructure pattern:
  *   { seg0: { seg1: { ... { segN: <inner> } } } }
- *
- * Returns undefined if the inner binding is incompatible (e.g. has a default
- * initializer that we can't safely preserve in this transformation).
  */
 function wrapBindingPatternInDestructureChain(
   inner: ts.BindingName,
   segments: readonly string[],
   factory: ts.NodeFactory,
-): ts.BindingName | undefined {
+): ts.BindingName {
   let current: ts.BindingName = inner;
   for (let i = segments.length - 1; i >= 0; i--) {
     const key = segments[i];
@@ -1586,20 +1504,4 @@ function isDirectReactiveOriginCallReceiver(
   const receiver = unwrapExpression(access.expression);
   return (ts.isCallExpression(receiver) || ts.isNewExpression(receiver)) &&
     isOpaqueOriginCall(receiver, context);
-}
-
-function collectBindingNames(
-  name: ts.BindingName,
-  names: Set<string>,
-): void {
-  if (ts.isIdentifier(name)) {
-    names.add(name.text);
-    return;
-  }
-  for (const element of name.elements) {
-    if (ts.isOmittedExpression(element)) {
-      continue;
-    }
-    collectBindingNames(element.name, names);
-  }
 }

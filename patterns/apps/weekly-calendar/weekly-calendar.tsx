@@ -67,6 +67,7 @@ interface Input {
 }
 
 export interface Output {
+  [NAME]: string;
   [UI]: VNode;
   title: string;
   events: EventPiece[];
@@ -144,44 +145,37 @@ const STYLES = {
 const formatDatePST = (d: Date): string =>
   d.toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
 
-// `nowMs` is the current time in epoch milliseconds (the caller reads #now in a
-// lift, or Date.now() in a handler/action).
+// `nowMs` is the current time in epoch milliseconds, from the `#now/300` wish.
 const getTodayDate = (nowMs: number): string => formatDatePST(new Date(nowMs));
 
+// Calendar dates are YYYY-MM-DD strings. Their arithmetic runs on UTC noon,
+// so neither the host's time zone nor a daylight-saving change can move a
+// date to its neighbor.
+export const parseDate = (date: string): Date => new Date(date + "T12:00:00Z");
+const formatDate = (d: Date): string => d.toISOString().slice(0, 10);
+
+export const addDays = (date: string, days: number): string => {
+  const d = parseDate(date);
+  d.setUTCDate(d.getUTCDate() + days);
+  return formatDate(d);
+};
+
+/** The Monday of the week holding `date`. */
 const getWeekStart = (date: string): string => {
-  const d = new Date(date + "T12:00:00-08:00");
-  const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-  d.setDate(diff);
-  return formatDatePST(d);
+  const day = parseDate(date).getUTCDay();
+  return addDays(date, day === 0 ? -6 : 1 - day);
 };
 
-const addDays = (date: string, days: number): string => {
-  const d = new Date(date + "T12:00:00-08:00");
-  d.setDate(d.getDate() + days);
-  return formatDatePST(d);
-};
+const getWeekDates = (start: string, count: number): string[] =>
+  Array.from({ length: count }, (_, i) => addDays(start, i));
 
-const getWeekDates = (start: string, count: number): string[] => {
-  const dates: string[] = [];
-  const d = new Date(start + "T12:00:00-08:00");
-  for (let i = 0; i < count; i++) {
-    const nd = new Date(d);
-    nd.setDate(d.getDate() + i);
-    dates.push(formatDatePST(nd));
-  }
-  return dates;
-};
-
-const formatDateHeader = (date: string): string => {
-  const d = new Date(date + "T12:00:00-08:00");
-  return d.toLocaleDateString("en-US", {
-    timeZone: "America/Los_Angeles",
+export const formatDateHeader = (date: string): string =>
+  parseDate(date).toLocaleDateString("en-US", {
+    timeZone: "UTC",
     weekday: "short",
     month: "short",
     day: "numeric",
   });
-};
 
 // ============ TIME HELPERS ============
 
@@ -234,7 +228,7 @@ export const createEventHandler = handler<
   void,
   {
     newEventTitle: Writable<string>;
-    newEventDate: Writable<string>;
+    newEventDate: Cell<string>;
     newEventStartTime: Writable<string>;
     newEventEndTime: Writable<string>;
     newEventColor: Writable<string>;
@@ -279,7 +273,7 @@ export const createEventAndContinue = handler<
   void,
   {
     newEventTitle: Writable<string>;
-    newEventDate: Writable<string>;
+    newEventDate: Cell<string>;
     newEventStartTime: Writable<string>;
     newEventEndTime: Writable<string>;
     newEventColor: Writable<string>;
@@ -375,32 +369,30 @@ const WeeklyCalendar = pattern<Input, Output>(
     });
     const pieceRegistry = resultOf(pieceRegistryWish.result);
 
-    // Reactive #now for date defaults; dependent computations remain
-    // unavailable until it resolves because the ambient clock is not readable
-    // from the pattern body.
-    const nowCell = wish<number>({ query: "#now" });
+    const nowCell = wish<number>({ query: "#now/300" });
     const nowCellValue = resultOf(nowCell.result);
-
-    // Navigation State
-    const startDate = new Cell("");
-    computed(() => {
+    const todayDate = computed(() => {
       const nowMs = nowCellValue;
-      if (startDate.get() === "") {
-        startDate.set(getWeekStart(getTodayDate(nowMs)));
-      }
+      return getTodayDate(nowMs);
     });
-    const visibleDays = new Cell(7);
 
-    // Create Form State
+    // Navigation State. `startDate` holds the first day the user moved to,
+    // or "" to follow today: its week in the week view, the day itself in the
+    // day view.
+    const startDate = new Cell("");
+    const visibleDays = new Cell(7);
+    const shownStart = computed(() => {
+      const chosen = startDate.get();
+      if (chosen !== "" || todayDate === "") return chosen;
+      return visibleDays.get() === 1 ? todayDate : getWeekStart(todayDate);
+    });
+
+    // Create Form State. `newEventDate` holds a date the user picked, or ""
+    // for today.
     const showNewEventPrompt = new Writable<boolean>(false);
     const newEventTitle = new Writable<string>("");
     const newEventDate = new Writable<string>("");
-    computed(() => {
-      const nowMs = nowCellValue;
-      if (newEventDate.get() === "") {
-        newEventDate.set(getTodayDate(nowMs));
-      }
-    });
+    const shownNewEventDate = computed(() => newEventDate.get() || todayDate);
     const newEventStartTime = new Writable<string>("09:00");
     const newEventEndTime = new Writable<string>("10:00");
     const newEventColor = new Writable<string>(COLORS[0]);
@@ -433,33 +425,32 @@ const WeeklyCalendar = pattern<Input, Output>(
     });
     const hours = buildHours();
     const weekDates = computed(() => {
-      const s = startDate.get();
-      return s === "" ? [] : getWeekDates(s, 7);
-    });
-    const todayDate = computed(() => {
-      const nowMs = nowCellValue;
-      return getTodayDate(nowMs);
+      return shownStart === "" ? [] : getWeekDates(shownStart, 7);
     });
 
     // Navigation Actions (using action for internal logic)
     const goPrev = action(() => {
-      startDate.set(addDays(startDate.get(), -visibleDays.get()));
+      if (shownStart !== "") {
+        startDate.set(addDays(shownStart, -visibleDays.get()));
+      }
     });
 
     const goNext = action(() => {
-      startDate.set(addDays(startDate.get(), visibleDays.get()));
+      if (shownStart !== "") {
+        startDate.set(addDays(shownStart, visibleDays.get()));
+      }
     });
 
-    const goToday = action(() => {
-      const today = getTodayDate(Date.now());
-      startDate.set(visibleDays.get() === 1 ? today : getWeekStart(today));
-    });
+    const goToday = action(() => startDate.set(""));
 
     // View Mode Actions
     const setDayView = action(() => visibleDays.set(1));
     const setWeekView = action(() => visibleDays.set(7));
 
     // Form helpers
+    const onNewEventDateChange = action((e: { detail: { value: string } }) => {
+      newEventDate.set(e?.detail?.value ?? "");
+    });
     const onStartTimeChange = action((e: { detail: { value: string } }) => {
       const newStart = e?.detail?.value;
       if (newStart) {
@@ -649,7 +640,8 @@ const WeeklyCalendar = pattern<Input, Output>(
                 <div>
                   <label style={STYLES.label}>Date</label>
                   <cf-input
-                    $value={newEventDate}
+                    value={shownNewEventDate}
+                    oncf-change={onNewEventDateChange}
                     type="date"
                     style={{ width: "100%" }}
                   />
@@ -724,7 +716,7 @@ const WeeklyCalendar = pattern<Input, Output>(
                   style={STYLES.button.base}
                   onClick={createEventAndContinue({
                     newEventTitle,
-                    newEventDate,
+                    newEventDate: shownNewEventDate,
                     newEventStartTime,
                     newEventEndTime,
                     newEventColor,
@@ -740,7 +732,7 @@ const WeeklyCalendar = pattern<Input, Output>(
                   style={STYLES.button.primary}
                   onClick={createEventHandler({
                     newEventTitle,
-                    newEventDate,
+                    newEventDate: shownNewEventDate,
                     newEventStartTime,
                     newEventEndTime,
                     newEventColor,
@@ -960,9 +952,8 @@ const WeeklyCalendar = pattern<Input, Output>(
                       );
 
                       const current = events.get();
-                      const evtId = (evt as any)?.eventId;
                       const evtIdx = current.findIndex(
-                        (a: any) => a?.eventId === evtId,
+                        (a) => a?.eventId === evt?.eventId,
                       );
                       if (evtIdx < 0) return;
 
@@ -1090,7 +1081,7 @@ const WeeklyCalendar = pattern<Input, Output>(
                   {events.map((evt, evtIndex) => {
                     // Compute position and visibility
                     const styles = computed(() => {
-                      const weekStart = startDate.get();
+                      const weekStart = shownStart;
                       const visibleCount = visibleDays.get();
                       const evtDate = evt.date;
 
@@ -1104,9 +1095,8 @@ const WeeklyCalendar = pattern<Input, Output>(
 
                       if (!evtDate || !weekStart) return hidden;
 
-                      const startMs = new Date(weekStart + "T00:00:00")
-                        .getTime();
-                      const evtMs = new Date(evtDate + "T00:00:00").getTime();
+                      const startMs = parseDate(weekStart).getTime();
+                      const evtMs = parseDate(evtDate).getTime();
                       if (isNaN(startMs) || isNaN(evtMs)) return hidden;
 
                       const dayOffset = Math.floor(

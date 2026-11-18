@@ -130,7 +130,10 @@ import {
   DEFAULT_SUBAGENT_PROFILE,
   PATTERN_AUTHOR_SUBAGENT_PROFILE,
 } from "../src/contracts/subagent.ts";
-import { readHarnessTaskOutcome } from "../src/contracts/task-outcome.ts";
+import {
+  type HarnessTaskOutcome,
+  readHarnessTaskOutcome,
+} from "../src/contracts/task-outcome.ts";
 import { parseHostMountSpecs } from "../src/host-mounts.ts";
 import {
   argvHolds,
@@ -141,6 +144,11 @@ import {
   refuseFlagsWithoutValue,
   refuseUndeclaredFlags,
 } from "../src/cli-flags.ts";
+import {
+  type CfHarnessSignalListeners,
+  registerCfHarnessSignalHandler,
+  signalExitCode,
+} from "../src/cli.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
 import {
   checkInputCellSpec,
@@ -165,7 +173,6 @@ import {
 } from "../src/interactive-chat-service.ts";
 import { OpenAICodexResponsesClient } from "../src/model/openai-codex-responses.ts";
 import {
-  cacheHarnessPatternIndexClientFactory,
   createHarnessPatternIndexClientFactory,
   type HarnessPatternIndexClientFactory,
 } from "../src/pattern-index/factory.ts";
@@ -213,7 +220,6 @@ import {
   listAllConsoleRuns,
   readConsoleRun,
   readConsoleRunArtifact,
-  readConsoleRunFamilyGraph,
   readConsoleRunFlow,
   readConsoleToolOutput,
 } from "./run-store.ts";
@@ -319,7 +325,7 @@ const DEFAULT_FABRIC_API_URL = "http://localhost:8000";
 const DEFAULT_FABRIC_CFC_POSTURE: CfcPosture = "max-enforcement";
 
 /** How often the stream publishes a liveness tick, in milliseconds. */
-const PING_INTERVAL_MS = 15_000;
+export const PING_INTERVAL_MS = 15_000;
 
 /**
  * The owner every credential this server reads is filed under. `local` is the
@@ -347,7 +353,6 @@ const CONSOLE_CREDENTIAL_OWNER = {
 const INDEX_FUNCTIONS = [
   "searchPatterns",
   "listPatterns",
-  "listEvents",
   "getPattern",
 ] as const;
 
@@ -377,13 +382,6 @@ const callPatternIndex = (
       return client.searchPatterns(patternIndexSearchRequest(body));
     case "listPatterns":
       return client.listPatterns();
-    case "listEvents":
-      return client.listEvents({
-        ...(typeof body.patternId === "string"
-          ? { patternId: body.patternId }
-          : {}),
-        ...(typeof body.limit === "number" ? { limit: body.limit } : {}),
-      });
     case "getPattern":
       return client.getPattern({ patternId: body.patternId as string });
   }
@@ -566,6 +564,12 @@ interface ConsoleConfig extends HarnessSessionConfig {
   sessionDbPath?: string;
 
   /**
+   * The directory the built pages are served from: the felt build under this
+   * module's `dist/` where absent.
+   */
+  pageRoot?: string;
+
+  /**
    * System prompt seeded into every console session, read from the file named
    * by `--system-prompt-file`. Absent, a session runs with no system message,
    * which is this surface's default: the parent's only standing guidance is
@@ -608,6 +612,15 @@ const requiredUrl = (value: string, flag: string): string => {
     throw new Error(`${flag} must be a valid URL: ${value}`);
   }
   return value;
+};
+
+/** A port to listen on: `0`, for one the system picks, up to 65535. */
+const listenPort = (value: string, flag: string): number => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65_535) {
+    throw new Error(`${flag} must be a port from 0 to 65535: ${value}`);
+  }
+  return parsed;
 };
 
 const positiveInteger = (value: string, flag: string): number => {
@@ -757,10 +770,15 @@ export const parseConsoleArgs = (args: readonly string[]) => {
  * is set for a console that takes no such default, and names whoever started
  * it and has to name the runtime: a console launched for a Loom instance
  * serves on the runtime Loom chose for that instance, or not at all.
+ * `signals` is where the console's SIGINT and SIGTERM listeners go, and
+ * `exit` ends the process once a signal has stopped the console; the running
+ * process's own when absent.
  */
 export interface ConsoleHost extends SandboxProcess {
   platform?: SandboxPlatform;
   sandboxRuntimeNamedBy?: string;
+  signals?: CfHarnessSignalListeners;
+  exit?: (code: number) => void;
 }
 
 /**
@@ -809,9 +827,9 @@ export const resolveConsoleConfig = async (
     nonEmpty(env.CF_HARNESS_CONSOLE_SYSTEM_PROMPT_FILE);
 
   const port = flag("port") !== undefined
-    ? positiveInteger(flag("port")!, "--port")
+    ? listenPort(flag("port")!, "--port")
     : nonEmpty(env.CF_HARNESS_CONSOLE_PORT) !== undefined
-    ? positiveInteger(env.CF_HARNESS_CONSOLE_PORT!, "CF_HARNESS_CONSOLE_PORT")
+    ? listenPort(env.CF_HARNESS_CONSOLE_PORT!, "CF_HARNESS_CONSOLE_PORT")
     : DEFAULT_PORT;
 
   const dataDir = resolve(
@@ -1128,7 +1146,7 @@ const CONSOLE_PROMPT_SLOT = createCliPromptSlotBinding({
  * preflighted so an unconnected harness is a startup failure rather than a
  * turn that fails after the page said it had started.
  */
-const resolveModelOptions = async (
+export const resolveConsoleModelOptions = async (
   config: ConsoleConfig,
   env: Record<string, string | undefined>,
 ): Promise<CreateHarnessPromptLoopOptions> => {
@@ -1555,12 +1573,18 @@ const boundedBodyText = async (
   return text + decoder.decode();
 };
 
+/** The answer to a request for a stream once the server has ended them. */
+const stoppingResponse = (): Response =>
+  Response.json({ error: "the console is stopping" }, { status: 503 });
+
 /** The live event fan-out, and the routes that read and write through it. */
 export class ConsoleServer {
   readonly #clients = new Set<StreamClient>();
 
   /** Each running turn's browser host channel, by turn id. */
   readonly #browserHosts = new Map<string, ConsoleBrowserHost>();
+  /** Whether {@link endStreams} has run, after which no stream opens. */
+  #streamsEnded = false;
   readonly #config: ConsoleConfig;
   /** The client features this console serves, as launched. */
   readonly #clientFeatures: readonly HarnessClientFeature[];
@@ -1593,8 +1617,9 @@ export class ConsoleServer {
    * reason.
    *
    * The index client is the other way round: it reads the fabric identity from
-   * disk to sign with, so it is built lazily, cached once healthy, and handed
-   * in by a test that has no keyfile to read.
+   * disk to sign with, so it is built lazily, afresh for each use (it carries
+   * the member's chain as of its building; each run's engine keeps its own
+   * for the run), and handed in by a test that has no keyfile to read.
    */
   constructor(
     config: ConsoleConfig,
@@ -1616,9 +1641,10 @@ export class ConsoleServer {
           config.fabricSession.identityKeyPath,
         )
         : undefined);
-    this.#patternIndexClientFactory = factory === undefined
-      ? undefined
-      : cacheHarnessPatternIndexClientFactory(factory);
+    // Not cached for the console's life: a client carries the member's chain
+    // as of its building, and the console outlives a chain's renewal, a
+    // join, and a root move. Each run's engine keeps its own for the run.
+    this.#patternIndexClientFactory = factory;
     this.#health = health ?? createConsoleHealth(
       config,
       undefined,
@@ -1657,62 +1683,106 @@ export class ConsoleServer {
       this.#fanOut(envelope);
       return Promise.resolve();
     }
-    const held = (this.#heldFanOut ?? Promise.resolve())
-      .then(async () => this.#fanOut(await this.#consoleEnvelope(envelope)));
+    // An envelope queues behind the one before it however that one's read
+    // went: a failure is its own caller's to report, and holds back nothing
+    // broadcast after it.
+    const fanOut = () => this.#fanOutConsoleEnvelope(envelope);
+    const held = (this.#heldFanOut ?? Promise.resolve()).then(fanOut, fanOut);
     this.#heldFanOut = held;
-    void held.finally(() => {
+    const release = () => {
       if (this.#heldFanOut === held) {
         this.#heldFanOut = undefined;
       }
-    });
+    };
+    void held.then(release, release);
     return held;
   }
 
+  /**
+   * Writes `envelope` to the streams, and rejects, for the caller to report,
+   * when a completed turn's result cannot be read. The streams are told the
+   * turn ended all the same: a page told nothing would show the turn running
+   * until it was reloaded.
+   */
+  async #fanOutConsoleEnvelope(
+    envelope: HarnessChatEventEnvelope,
+  ): Promise<void> {
+    const { sent, failure } = await this.#consoleEnvelope(envelope);
+    this.#fanOut(sent);
+    if (failure !== undefined) throw failure.error;
+  }
+
+  /**
+   * What the streams are sent for `envelope`: a completed turn's with its
+   * result attached. Where that result cannot be read, `failure` says why,
+   * and the envelope still ends the turn, with a result saying that there is
+   * no more to show.
+   */
   async #consoleEnvelope(
     envelope: HarnessChatEventEnvelope,
-  ): Promise<HarnessChatEventEnvelope> {
+  ): Promise<{ sent: HarnessChatEventEnvelope; failure?: { error: unknown } }> {
     if (envelope.event.kind !== "turn_completed") {
-      return envelope;
+      return { sent: envelope };
     }
-    const result = await this.#readTurnResult(
-      envelope.sessionId,
-      envelope.event.turnId,
-    ) ?? {
-      ...(envelope.event.outcome === "question"
-        ? { outcome: "question" as const, question: envelope.event.question }
-        : envelope.event.outcome === "gave-up"
-        ? { outcome: "gave-up" as const, reason: envelope.event.reason }
-        : envelope.event.outcome === "completed"
-        ? {
-          outcome: "completed" as const,
-          ...(envelope.event.answer !== undefined
-            ? { answer: envelope.event.answer }
-            : {}),
-          ...(envelope.event.actions !== undefined
-            ? { actions: envelope.event.actions }
-            : {}),
-        }
-        : { outcome: "completed" as const }),
+    const completed = envelope.event;
+    const closing = (
+      result: ConsoleTurnResult,
+      outcome: HarnessTaskOutcome,
+    ): HarnessChatEventEnvelope => {
+      const event: ConsoleTurnCompletedEvent = {
+        ...completed,
+        ...outcome,
+        result,
+      };
+      return { ...envelope, event };
+    };
+    const resultBase = {
       sessionId: envelope.sessionId,
       continuable: this.#sessionContinuable(envelope.sessionId),
       pieces: [],
       looms: [],
       spaceName: this.#config.fabricSession.space,
-      finalText: envelope.event.finalText ?? "",
+      finalText: completed.finalText ?? "",
     };
-    const taskOutcome = readHarnessTaskOutcome(result);
-    if (taskOutcome === undefined) {
-      throw new Error("console result contains an invalid task outcome");
+    try {
+      const result = await this.#readTurnResult(
+        envelope.sessionId,
+        completed.turnId,
+      ) ?? {
+        ...(completed.outcome === "question"
+          ? { outcome: "question" as const, question: completed.question }
+          : completed.outcome === "gave-up"
+          ? { outcome: "gave-up" as const, reason: completed.reason }
+          : completed.outcome === "completed"
+          ? {
+            outcome: "completed" as const,
+            ...(completed.answer !== undefined
+              ? { answer: completed.answer }
+              : {}),
+            ...(completed.actions !== undefined
+              ? { actions: completed.actions }
+              : {}),
+          }
+          : { outcome: "completed" as const }),
+        ...resultBase,
+      };
+      const taskOutcome = readHarnessTaskOutcome(result);
+      if (taskOutcome === undefined) {
+        throw new Error("console result contains an invalid task outcome");
+      }
+      return { sent: closing(result, taskOutcome) };
+    } catch (error) {
+      const unread: HarnessTaskOutcome = {
+        outcome: "gave-up",
+        reason: `the console could not read this turn's result: ${
+          describeFailure(error)
+        }`,
+      };
+      return {
+        sent: closing({ ...unread, ...resultBase }, unread),
+        failure: { error },
+      };
     }
-    const event: ConsoleTurnCompletedEvent = {
-      ...envelope.event,
-      ...taskOutcome,
-      result,
-    };
-    return {
-      ...envelope,
-      event,
-    };
   }
 
   #sessionContinuable(sessionId: string): boolean {
@@ -1768,6 +1838,23 @@ export class ConsoleServer {
         continue;
       }
       this.#write(client, envelope);
+    }
+  }
+
+  /**
+   * Ends every event stream and browser host channel, and answers any later
+   * request for one with 503. A server stopping waits for its responses to
+   * finish, and a stream left open would hold it for as long as its page
+   * stayed open, including one a request read just before stopping opens.
+   */
+  endStreams(): void {
+    this.#streamsEnded = true;
+    for (const client of this.#clients) {
+      client.controller.close();
+    }
+    this.#clients.clear();
+    for (const turnId of [...this.#browserHosts.keys()]) {
+      this.#closeBrowserHost(turnId);
     }
   }
 
@@ -2005,10 +2092,16 @@ export class ConsoleServer {
    * the agent runner's.
    */
   async #run(url: URL): Promise<Response> {
-    const [runId, kind, name, ...rest] = url.pathname
-      .slice("/api/runs/".length)
-      .split("/")
-      .map(decodeURIComponent);
+    let segments: string[];
+    try {
+      segments = url.pathname
+        .slice("/api/runs/".length)
+        .split("/")
+        .map(decodeURIComponent);
+    } catch {
+      return new Response("not found", { status: 404 });
+    }
+    const [runId, kind, name, ...rest] = segments;
     if (runId === undefined || runId === "" || rest.length > 0) {
       return new Response("not found", { status: 404 });
     }
@@ -2023,22 +2116,15 @@ export class ConsoleServer {
         ? new Response("not found", { status: 404 })
         : Response.json(detail);
     }
-    // `flow` and `graph` take no name, so a trailing segment is a URL this
-    // server does not serve rather than one to answer anyway.
-    if ((kind === "flow" || kind === "graph") && name !== undefined) {
-      return new Response("not found", { status: 404 });
-    }
+    // `flow` takes no name, so a trailing segment is a URL this server does
+    // not serve rather than one to answer anyway.
     if (kind === "flow") {
-      const flow = await readConsoleRunFlow(root, runId);
+      const flow = name === undefined
+        ? await readConsoleRunFlow(root, runId)
+        : undefined;
       return flow === undefined
         ? new Response("not found", { status: 404 })
         : Response.json(flow);
-    }
-    if (kind === "graph") {
-      const graph = await readConsoleRunFamilyGraph(root, runId);
-      return graph === undefined
-        ? new Response("not found", { status: 404 })
-        : Response.json(graph);
     }
     if (name === undefined || name === "") {
       return new Response("not found", { status: 404 });
@@ -2059,6 +2145,11 @@ export class ConsoleServer {
    * One file of the built pages. They are a felt build under `dist/`, so a
    * server started before `deno task console:build` has nothing to serve and
    * says which command produces it rather than answering an empty 404.
+   *
+   * `pathname` is a parsed URL's, whose dot segments the parser has already
+   * resolved, encoded or not, and which is read as written, not decoded: an
+   * encoded `/` stays part of a file name. So the path it names cannot climb
+   * out of the page root.
    */
   async #asset(pathname: string): Promise<Response> {
     const live = LIVE_PATH.test(pathname);
@@ -2068,10 +2159,10 @@ export class ConsoleServer {
       : live
       ? "live.html"
       : pathname.slice(1);
-    if (relativePath.split("/").some((segment) => segment === "..")) {
-      return new Response("not found", { status: 404 });
-    }
-    const path = join(moduleDir, "dist", relativePath);
+    const path = join(
+      this.#config.pageRoot ?? join(moduleDir, "dist"),
+      relativePath,
+    );
     try {
       const body = await Deno.readFile(path);
       return new Response(body, {
@@ -2349,6 +2440,9 @@ export class ConsoleServer {
     const read = await this.#browserHostRequest(request);
     if (read.refusal !== undefined) {
       return read.refusal;
+    }
+    if (this.#streamsEnded) {
+      return stoppingResponse();
     }
     const stream = read.host.attach();
     if (stream === undefined) {
@@ -2640,6 +2734,9 @@ export class ConsoleServer {
    * lost, and written in sequence order once the backfill has been sent.
    */
   #events(url: URL): Response {
+    if (this.#streamsEnded) {
+      return stoppingResponse();
+    }
     const sessionId = url.searchParams.get("sessionId") ?? undefined;
     let afterSequence: number | undefined;
     try {
@@ -2687,21 +2784,29 @@ export class ConsoleServer {
       ...(sessionId !== undefined ? { sessionId } : {}),
       afterSequence,
     }).then(async (replay) => {
+      // A result that cannot be read is reported, and the page is told the
+      // turn ended all the same, as it is live: ending the stream instead
+      // would end it again for every reconnection, before any later event.
+      const write = async (envelope: HarnessChatEventEnvelope) => {
+        const { sent, failure } = await this.#consoleEnvelope(envelope);
+        if (failure !== undefined) {
+          console.error(describeFailure(failure.error));
+        }
+        this.#write(client, sent);
+      };
       for (const envelope of envelopesAfter(replay.events, afterSequence)) {
-        this.#write(client, await this.#consoleEnvelope(envelope));
+        await write(envelope);
       }
       for (const envelope of envelopesAfter(client.pending, afterSequence)) {
-        this.#write(client, await this.#consoleEnvelope(envelope));
+        await write(envelope);
       }
       client.pending.length = 0;
       client.ready = true;
     }).catch((error: unknown) => {
       this.#clients.delete(client);
-      try {
-        client.controller.error(error);
-      } catch {
-        // The browser closed the stream first; nothing left to report to.
-      }
+      // A stream the browser closed first takes the error without throwing,
+      // and reports it to no one.
+      client.controller.error(error);
     });
   }
 
@@ -2849,6 +2954,91 @@ export const consoleStartupBanner = (
   `  agent runs: ${config.agentRunsRoot ?? "(not read)"}\n`,
 ];
 
+/** A console that is serving, as {@link startConsoleServer} returns it. */
+export interface ConsoleServing {
+  /** Where it listens: the port the system picked, for a port of `0`. */
+  readonly addr: Deno.NetAddr;
+
+  /**
+   * Stops serving, and resolves once {@link closeConsole} has canceled every
+   * running turn, let it settle, released its Fabric runtimes, and closed the
+   * session store. SIGINT and SIGTERM stop serving the same way, and then end
+   * the process with the signal's exit status.
+   */
+  shutdown(): Promise<void>;
+}
+
+/**
+ * Cancels every running turn, the way a person's cancel does, reporting a
+ * cancel that fails rather than rejecting.
+ */
+const cancelRunningTurns = async (
+  service: Pick<HarnessInteractiveChatService, "status" | "cancelTurn">,
+): Promise<void> => {
+  const canceled = await Promise.allSettled(
+    service.status().sessions.flatMap((session) =>
+      session.status === "turn_running"
+        ? [
+          service.cancelTurn(
+            "console-shutdown",
+            session.sessionId,
+            session.activeTurnId,
+            "process_interrupted",
+          ),
+        ]
+        : []
+    ),
+  );
+  for (const outcome of canceled) {
+    if (outcome.status === "rejected") {
+      console.error(describeFailure(outcome.reason));
+    }
+  }
+};
+
+/**
+ * What a console does once it has stopped serving. Every running turn is
+ * canceled and settles first, since a turn writes to the session store as it
+ * ends; then the sessions' Fabric runtimes, which hold sessions open with the
+ * fabric, are released, and only then is the store closed. A cancel, a
+ * release or a store close that fails is reported, as a request that fails
+ * is, rather than thrown at a caller that may not be waiting for it.
+ */
+export const closeConsole = async (
+  service: Pick<
+    HarnessInteractiveChatService,
+    "status" | "cancelTurn" | "releaseFabricRuntimes"
+  >,
+  sessionStore?: Pick<HarnessChatSessionStore, "close">,
+): Promise<void> => {
+  // A turn left running would hold the store open for as long as it ran.
+  await cancelRunningTurns(service);
+  for (
+    const close of [
+      () => service.releaseFabricRuntimes(),
+      () => sessionStore?.close?.(),
+    ]
+  ) {
+    try {
+      await close();
+    } catch (error) {
+      console.error(describeFailure(error));
+    }
+  }
+};
+
+/**
+ * Answers `request` with the server `ready` settles on, or refuses it once
+ * `ready` says there will be none. The refusal is quiet: the failed start is
+ * its caller's to report, once, rather than once per request that waited.
+ */
+export const answerWhenReady = async (
+  ready: Promise<Pick<ConsoleServer, "handle"> | undefined>,
+  request: Request,
+): Promise<Response> =>
+  await (await ready)?.handle(request) ??
+    new Response("the console did not start", { status: 503 });
+
 /**
  * Builds the service and starts serving. The fabric session and the pattern
  * index reach the engine as resolved configuration on the base prompt-loop
@@ -2860,6 +3050,9 @@ export const consoleStartupBanner = (
  * throws; only then, where `args` ask for help, it prints the usage instead
  * and serves nothing. `host` says what applies where `env` names no sandbox
  * runtime, as it does for `resolveConsoleConfig()`.
+ *
+ * Returns the console it serves, or `undefined` where it printed the usage
+ * instead.
  */
 export const startConsoleServer = async (
   args: readonly string[] = Deno.args,
@@ -2867,71 +3060,133 @@ export const startConsoleServer = async (
   cwd: string = Deno.cwd(),
   launchHealth?: ConsoleObservedLaunchHealth,
   host: ConsoleHost = {},
-): Promise<void> => {
+): Promise<ConsoleServing | undefined> => {
   // A flag with no value first: the `-h` it leaves behind is not a question.
   refuseFlagsWithoutValue(args, CONSOLE_STRING_FLAGS);
   const help = consoleHelpText(args);
   if (help !== undefined) {
     console.log(help);
-    return;
+    return undefined;
   }
-  const config = await resolveConsoleConfig(args, env, cwd, host);
-  for (const directory of consoleDataDirectories(config)) {
+  const resolved = await resolveConsoleConfig(args, env, cwd, host);
+  for (const directory of consoleDataDirectories(resolved)) {
     await Deno.mkdir(directory, { recursive: true });
   }
-  const modelOptions = await resolveModelOptions(config, env);
-  const sessionStore = config.sessionDbPath === undefined
-    ? undefined
-    : await openSessionStore(config.sessionDbPath);
+  const modelOptions = await resolveConsoleModelOptions(resolved, env);
 
-  const indexFactory = config.patternIndex === undefined
-    ? undefined
-    : cacheHarnessPatternIndexClientFactory(
-      createHarnessPatternIndexClientFactory(
-        config.patternIndex,
-        config.fabricSession.identityKeyPath,
-      ),
-    );
-
-  const server = new ConsoleServer(
-    config,
-    (onEvent) =>
-      createHarnessInteractiveChatService(
-        createConsoleInteractiveServiceOptions(
-          config,
-          modelOptions,
-          onEvent,
-          sessionStore,
-        ),
-      ),
-    indexFactory,
-    createConsoleHealth(
-      config,
-      launchHealth,
-      modelOptions,
-      env,
-      indexFactory,
-      host,
-    ),
-  );
-  await server.service.initializeFromStore();
-
-  const beat = setInterval(() => server.ping(), PING_INTERVAL_MS);
-  Deno.serve({
+  // The server binds before anything else starts, so that the port a server
+  // given port 0 listens on is the one its host gate, health report and
+  // banner name. A request that arrives while the session store is still
+  // being read waits for the server that is to answer it, and is refused if
+  // there is to be none: the start's failure is its caller's to report.
+  const ready = Promise.withResolvers<ConsoleServer | undefined>();
+  const httpServer = Deno.serve({
     hostname: HOSTNAME,
-    port: config.port,
-    onListen: () => {
-      for (const line of consoleStartupBanner(config)) {
-        console.log(line);
-      }
-    },
+    port: resolved.port,
+    // The banner below says where it listens, once it can answer.
+    onListen: () => {},
     onError: (error) => {
       console.error(describeFailure(error));
       return new Response("internal error", { status: 500 });
     },
-  }, (request) => server.handle(request)).finished.finally(() => {
+  }, (request) => answerWhenReady(ready.promise, request));
+  const { port } = httpServer.addr;
+  const config = {
+    ...resolved,
+    port,
+    healthFacts: resolved.healthFacts.map((fact) =>
+      fact.name === "port" ? { ...fact, value: String(port) } : fact
+    ),
+  };
+  let sessionStore: HarnessChatSessionStore | undefined;
+  let server: ConsoleServer;
+  try {
+    sessionStore = config.sessionDbPath === undefined
+      ? undefined
+      : await openSessionStore(config.sessionDbPath);
+    // Built afresh per use, as in the constructor: see there.
+    const indexFactory = config.patternIndex === undefined
+      ? undefined
+      : createHarnessPatternIndexClientFactory(
+        config.patternIndex,
+        config.fabricSession.identityKeyPath,
+      );
+    server = new ConsoleServer(
+      config,
+      (onEvent) =>
+        createHarnessInteractiveChatService(
+          createConsoleInteractiveServiceOptions(
+            config,
+            modelOptions,
+            onEvent,
+            sessionStore,
+          ),
+        ),
+      indexFactory,
+      createConsoleHealth(
+        config,
+        launchHealth,
+        modelOptions,
+        env,
+        indexFactory,
+        host,
+      ),
+    );
+    await server.service.initializeFromStore();
+  } catch (error) {
+    ready.resolve(undefined);
+    await httpServer.shutdown();
+    await sessionStore?.close?.();
+    throw error;
+  }
+  ready.resolve(server);
+  for (const line of consoleStartupBanner(config)) {
+    console.log(line);
+  }
+
+  const beat = setInterval(() => server.ping(), PING_INTERVAL_MS);
+  // New connections are refused first, so no stream opens after the open
+  // ones are ended. Running turns are canceled before the streams end, since
+  // ending them closes the browser hosts a turn may be acting through; a turn
+  // that a request still being answered starts is canceled once serving has
+  // finished.
+  const stop = async () => {
+    const stopping = httpServer.shutdown();
+    const canceling = cancelRunningTurns(server.service);
+    server.endStreams();
+    await Promise.all([stopping, canceling]);
+  };
+  // Ctrl-C, or a supervisor's SIGTERM, stops serving as `shutdown()` does,
+  // so the session store is closed rather than abandoned, and then ends the
+  // process as the signal would have. The listeners go at once, so that a
+  // second signal, sent because shutting down takes too long, ends the
+  // process the way it would have without them.
+  const exit = host.exit ?? ((code: number) => Deno.exit(code));
+  const unregisterSignals = registerCfHarnessSignalHandler(
+    ["SIGINT", "SIGTERM"],
+    async (signal) => {
+      unregisterSignals();
+      try {
+        await stop();
+        await closed;
+      } finally {
+        exit(signalExitCode(signal));
+      }
+    },
+    host.signals,
+  );
+  const closed = httpServer.finished.then(() => {
     clearInterval(beat);
+    unregisterSignals();
+    return closeConsole(server.service, sessionStore);
   });
+  return {
+    addr: httpServer.addr,
+    shutdown: async () => {
+      await stop();
+      await closed;
+    },
+  };
 };
 
 // Running the file serves; importing it (the tests do) serves nothing.

@@ -42,6 +42,9 @@ export default pattern(() => {
                         type: "unknown"
                     }
                 },
+                errorCode: {
+                    $ref: "#/$defs/WishErrorCode"
+                },
                 $UI: {
                     $ref: "https://commonfabric.org/schemas/vnode.json"
                 }
@@ -64,6 +67,9 @@ export default pattern(() => {
                         type: "unknown"
                     }
                 },
+                errorCode: {
+                    $ref: "#/$defs/WishErrorCode"
+                },
                 $UI: {
                     $ref: "https://commonfabric.org/schemas/vnode.json"
                 }
@@ -73,6 +79,9 @@ export default pattern(() => {
     },
     required: ["profile", "bare"],
     $defs: {
+        WishErrorCode: {
+            "enum": ["no-match", "failed"]
+        },
         UnavailableVariant: {
             anyOf: [{
                     $ref: "#/$defs/IsPending"

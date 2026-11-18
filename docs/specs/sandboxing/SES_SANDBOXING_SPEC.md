@@ -2126,11 +2126,13 @@ only execute it by re-evaluating its source inside the dedicated SES callback
 Compartment described in Section 4.2. That fallback is not a blessing path and
 must intentionally discard host closure state.
 
-The module-body verifier also treats TypeScript's canonical default-import
-normalization rebinding as part of the accepted grammar:
-`local = __importDefault(local)` when `local` is already the module's import
-binding for that dependency. This statement is a normalization step over
-an already-verified import edge, not new capability acquisition.
+The module-body verifier accepts TypeScript's default-import normalization
+only in the form the compiler emits, inline in the import declaration:
+`const local = __importDefault(require("dep"))`, and only while the module
+declares no `__importDefault` of its own. A separate rebinding statement such
+as `local = __importDefault(local)` is rejected as top-level executable code:
+nothing in it ties the callee to the canonical helper, so it could call any
+function the module declares.
 
 Namespace-import normalization via `local = __importStar(local)` is
 intentionally not supported in v1. That transform introduces additional

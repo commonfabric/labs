@@ -9,9 +9,22 @@ import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-op
 import { getLogger } from "@commonfabric/logger";
 
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
-import { setCompileCacheRuntimeVersionForTesting } from "../src/compilation-cache/cell-cache.ts";
+import {
+  setCompileCacheRuntimeVersionForTesting,
+  sourceDocKey,
+} from "../src/compilation-cache/cell-cache.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import type { FabricValue } from "@commonfabric/data-model";
+import type { URI } from "../src/sigil-types.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  storedFields,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
+import { captureLogs } from "./support/captured-logs.ts";
 import {
   type Options,
   type SessionFactory,
@@ -93,7 +106,7 @@ const PROGRAM: RuntimeProgram = {
 const logger = getLogger("pattern-manager");
 
 /** How often `logger` has logged `key` at `level` since `counter` was called. */
-const counter = (key: string, level: "debug" | "error") => {
+const counter = (key: string, level: "debug" | "info" | "error") => {
   const read = () => logger.countsByKey[key]?.[level] ?? 0;
   const base = read();
   return () => read() - base;
@@ -180,7 +193,8 @@ describe("pattern-manager", () => {
     it("copies nothing into a space the session may only read, and logs the refusal quietly, once", async () => {
       const reader = await readerWithCompiledProgram("READ");
       const errors = errorCounter();
-      const refused = counter("closure-copy-refused", "debug");
+      const refused = counter("closure-copy-refused", "info");
+      using logs = captureLogs("pattern-manager");
 
       expect(await reader.load()).toBe(reader.compiled);
       await reader.runtime.patternManager.flushCompileCacheWrites();
@@ -189,6 +203,21 @@ describe("pattern-manager", () => {
 
       expect(refused()).toBe(1);
       expect(errors()).toBe(0);
+      const entry = reader.runtime.patternManager.getArtifactEntryRef(
+        reader.compiled,
+      )!;
+      const issued = logs.textsOf("closure-replication-issued");
+      expect(issued).toHaveLength(1);
+      const ticket = issued[0]!.match(/ ticket=(\d+) /)?.[1];
+      expect(issued[0]).toBe(
+        `entry=${entry.identity} from=${reader.home} to=${reader.shared} ` +
+          `ticket=${ticket} trigger=load-from-memory`,
+      );
+      const [refusal] = logs.textsOf("closure-copy-refused");
+      expect(refusal).toContain(
+        `entry=${entry.identity} from=${reader.home} to=${reader.shared} ` +
+          `ticket=${ticket}`,
+      );
     });
 
     it("logs a copy that fails for any other reason as a failed replication", async () => {
@@ -202,7 +231,7 @@ describe("pattern-manager", () => {
         "compile-cache-writeback-failed",
         "error",
       );
-      const refused = counter("closure-copy-refused", "debug");
+      const refused = counter("closure-copy-refused", "info");
 
       expect(await reader.load()).toBe(reader.compiled);
       await reader.runtime.patternManager.flushCompileCacheWrites();
@@ -219,7 +248,7 @@ describe("pattern-manager", () => {
       const reader = await readerWithCompiledProgram("READ");
       const errors = errorCounter();
       const failed = counter("closure-replication-failed", "error");
-      const refused = counter("closure-copy-refused", "debug");
+      const refused = counter("closure-copy-refused", "info");
 
       reader.runtime.patternManager.replicatePatternToSpace(
         reader.compiled,
@@ -238,19 +267,27 @@ describe("pattern-manager", () => {
     // The write-back logs a refusal for want of a grant at debug and leaves
     // its caller to report it; a compile reports it by failing.
 
-    const compileInto = async () => {
+    /** Compiles `PROGRAM` into the space, and returns how many errors it
+     * logged and the texts it logged under `refusedKey`. */
+    const compileInto = async (refusedKey: string) => {
       const reader = await readerOf("READ");
       const errors = errorCounter();
+      using logs = captureLogs("pattern-manager");
       await expect(
         reader.runtime.patternManager.compilePattern(PROGRAM, {
           space: reader.shared,
         }),
       ).rejects.toMatchObject({ name: "AuthorizationError" });
-      return errors();
+      return { errors: errors(), refusals: logs.textsOf(refusedKey) };
     };
 
     it("rejects with the space's refusal, and logs no error", async () => {
-      expect(await compileInto()).toBe(0);
+      const { errors, refusals } = await compileInto(
+        "compile-cache-writeback-refused",
+      );
+      expect(errors).toBe(0);
+      expect(refusals).toHaveLength(1);
+      expect(refusals[0]).toMatch(/^entry=\S+ /);
     });
 
     it("rejects with the space's refusal, and logs no error, when it caches source alone", async () => {
@@ -259,10 +296,93 @@ describe("pattern-manager", () => {
 
       const restore = setCompileCacheRuntimeVersionForTesting(undefined);
       try {
-        expect(await compileInto()).toBe(0);
+        const { errors, refusals } = await compileInto(
+          "source-cache-writeback-refused",
+        );
+        expect(errors).toBe(0);
+        expect(refusals).toHaveLength(1);
+        expect(refusals[0]).toMatch(/^entry=\S+ /);
       } finally {
         restore();
       }
+    });
+  });
+
+  describe("a stamped closure whose repair the store refuses for want of write access", () => {
+    it("is repaired at a later load, once the session may write", async () => {
+      // The refusal is for this session's access, which can change while the
+      // session runs, so it is not remembered as a refusal of the records.
+
+      const { runtime: owner } = open(
+        await Identity.fromPassphrase("stamp repair access owner"),
+      );
+      const space = await owner.createSpace();
+      const compiled = await owner.patternManager.compilePattern(PROGRAM, {
+        space,
+      });
+      await owner.patternManager.flushCompileCacheWrites();
+      const identity = owner.patternManager.getArtifactEntryRef(compiled)!
+        .identity;
+      const id = owner.getCell(space, sourceDocKey(identity))
+        .getAsNormalizedFullLink().id as URI;
+      const address = { space, scope: "space" as const, id, path: [] };
+      const stamp = owner.edit();
+      writeSeedEnvelopeDoc(stamp, space);
+      const stored = storedFields(stamp, address) as {
+        cfc?: { labelMap: { entries: FabricValue[] } };
+      };
+      const cfc = stored.cfc ?? {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: { version: 1, entries: [] },
+      };
+      const reader = (await Identity.fromPassphrase("stamp repair reader"))
+        .did();
+      seedStoredEnvelope(stamp, address, {
+        ...stored,
+        cfc: {
+          ...cfc,
+          labelMap: {
+            ...cfc.labelMap,
+            entries: [...cfc.labelMap.entries, {
+              path: [],
+              origin: "derived",
+              observes: "value",
+              label: { confidentiality: [reader] },
+            }],
+          },
+        },
+      } as unknown as FabricValue);
+      expect((await stamp.commit().settled).error).toBeUndefined();
+      await owner.storageManager.synced();
+      const atoms = () => {
+        const tx = owner.edit();
+        try {
+          return (readStoredCfcMetadata(tx, address)?.labelMap.entries ?? [])
+            .flatMap((entry) => entry.label.confidentiality ?? []);
+        } finally {
+          tx.abort();
+        }
+      };
+      const refusal = Object.assign(new Error("the session may not write"), {
+        name: "AuthorizationError",
+      });
+      const { runtime, factory } = open(
+        await Identity.fromPassphrase("stamp repair access owner"),
+      );
+      factory.failIn = (target) => target === space ? refusal : undefined;
+
+      await runtime.patternManager.prepareSourceClosureVerification(space, [
+        identity,
+      ]);
+      expect(atoms()).toEqual([reader]);
+      factory.failIn = undefined;
+      await runtime.patternManager.prepareSourceClosureVerification(space, [
+        identity,
+      ]);
+      await owner.getCell(space, sourceDocKey(identity)).sync();
+
+      expect(atoms()).toEqual([]);
     });
   });
 });

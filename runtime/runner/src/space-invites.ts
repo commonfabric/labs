@@ -9,6 +9,7 @@ import {
   createInviteCredentials,
   inviteCodeVerifier,
   type InviteMetadata,
+  type InvitePreview,
   type InviteRedemption,
   normalizeInviteHost,
   type RedeemReceipt,
@@ -24,18 +25,30 @@ export {
   buildInviteLink,
   createInviteCredentials,
   INVITE_ACCESS,
+  INVITE_LINK_SCHEME,
   inviteCodeVerifier,
   isInviteAccess,
+  isInviteName,
+  isInvitePreviewName,
+  isInviteProfileSuggestion,
   normalizeInviteHost,
   parseInviteLink,
   SPACE_INVITE_CAPABILITY,
   SpaceInviteError,
 } from "@commonfabric/memory/space-invites";
+export {
+  buildSpaceLink,
+  parseSpaceLink,
+  SpaceLinkError,
+} from "@commonfabric/memory/space-links";
+export type { SpaceLink } from "@commonfabric/memory/space-links";
 export type {
   CreateInvite,
   InviteAccess,
   InviteLink,
   InviteMetadata,
+  InvitePreview,
+  InviteProfileSuggestion,
   InviteRedemption,
   RedeemReceipt,
 } from "@commonfabric/memory/space-invites";
@@ -58,7 +71,15 @@ function usesHttpAfter(error: unknown): boolean {
 
 /** Creation settings with optional credentials for an exact retry. */
 export type CreateSpaceInviteOptions =
-  & Pick<CreateInvite, "access" | "ttlSeconds" | "maxUses">
+  & Pick<
+    CreateInvite,
+    | "access"
+    | "ttlSeconds"
+    | "maxUses"
+    | "suggestedProfile"
+    | "spaceName"
+    | "issuerName"
+  >
   & { inviteId?: string; code?: string };
 
 /** A failed creation attempt retaining caller-only credentials for an exact retry. */
@@ -158,6 +179,15 @@ export class SpaceInviteClient {
       access: options.access,
       ttlSeconds: options.ttlSeconds,
       ...(options.maxUses === undefined ? {} : { maxUses: options.maxUses }),
+      ...(options.suggestedProfile === undefined
+        ? {}
+        : { suggestedProfile: options.suggestedProfile }),
+      ...(options.spaceName === undefined
+        ? {}
+        : { spaceName: options.spaceName }),
+      ...(options.issuerName === undefined
+        ? {}
+        : { issuerName: options.issuerName }),
     };
     try {
       const metadata = await this.issue(request);
@@ -173,6 +203,15 @@ export class SpaceInviteClient {
           ...(request.maxUses === undefined
             ? {}
             : { maxUses: request.maxUses }),
+          ...(request.suggestedProfile === undefined
+            ? {}
+            : { suggestedProfile: request.suggestedProfile }),
+          ...(request.spaceName === undefined
+            ? {}
+            : { spaceName: request.spaceName }),
+          ...(request.issuerName === undefined
+            ? {}
+            : { issuerName: request.issuerName }),
           ...credentials,
         },
       );
@@ -189,6 +228,15 @@ export class SpaceInviteClient {
         access: request.access,
         ttlSeconds: request.ttlSeconds,
         ...(request.maxUses === undefined ? {} : { maxUses: request.maxUses }),
+        ...(request.suggestedProfile === undefined
+          ? {}
+          : { suggestedProfile: request.suggestedProfile }),
+        ...(request.spaceName === undefined
+          ? {}
+          : { spaceName: request.spaceName }),
+        ...(request.issuerName === undefined
+          ? {}
+          : { issuerName: request.issuerName }),
       },
     });
   }
@@ -216,6 +264,24 @@ export class SpaceInviteClient {
       }
     }
     return await this.#request("redeem", request);
+  }
+
+  /**
+   * Reads, as the signer, what the invitation shows before it is redeemed:
+   * its access, the names its issuer gave the space and themself, and the
+   * profile its issuer suggests. Consumes no use. Always a signed HTTP
+   * request, even when this client holds a session or has redeemed, so it
+   * works for one still deciding whether to redeem, who has no session. A
+   * service whose capability lacks `preview` answers
+   * `invite-service-unsupported`.
+   *
+   * @throws SpaceInviteError with the service's code when the service refuses
+   *   it, `invite-unavailable` for every reason the invitation cannot be read.
+   */
+  preview(
+    request: { inviteId: string; code: string },
+  ): Promise<InvitePreview> {
+    return this.#request("preview", request);
   }
 
   /** Lists active metadata visible to the current explicit owner. */

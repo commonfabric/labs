@@ -148,33 +148,11 @@ export class MentionController implements ReactiveController {
    * Get filtered mentions based on current query
    */
   getFilteredMentions(): CellHandle<Mentionable>[] {
-    const handle = this._mentionableTyped ?? this._mentionable;
-    if (!handle) {
-      return [];
-    }
-
-    // A list the worker refuses offers no mentions.
-    const mentionableArray = valueForDisplay(handle);
-    if (!Array.isArray(mentionableArray) || mentionableArray.length === 0) {
-      return [];
-    }
-
     const query = this._state.query.toLowerCase();
-
-    const filtered: CellHandle<Mentionable>[] = [];
-    for (let i = 0; i < mentionableArray.length; i++) {
-      // Use .key(i) to get Cell reference, preserving cell-ness
-      const mentionCell = handle.key(i);
-
-      // Only call .get() to read the name for filtering
-      const name = mentionCell.get()?.[NAME];
-
-      if (!query || name?.toLowerCase().includes(query)) {
-        filtered.push(mentionCell);
-      }
-    }
-
-    return filtered;
+    // Only the name is read, to filter by; each mention stays a cell.
+    return this.readMentionables().filter((mention) =>
+      !query || mention.get()?.[NAME]?.toLowerCase().includes(query)
+    );
   }
 
   /**
@@ -422,20 +400,10 @@ export class MentionController implements ReactiveController {
 
     // A list the worker refuses offers no mentions.
     const mentionableArray = valueForDisplay(handle);
-    if (!Array.isArray(mentionableArray) || mentionableArray.length === 0) {
-      return [];
-    }
+    if (!Array.isArray(mentionableArray)) return [];
 
     // Use .key(i) to preserve cell-ness of items
-    const mentions: CellHandle<Mentionable>[] = [];
-    for (let i = 0; i < mentionableArray.length; i++) {
-      const mentionCell = handle.key(i);
-      if (mentionCell) {
-        mentions.push(mentionCell);
-      }
-    }
-
-    return mentions;
+    return mentionableArray.map((_, i) => handle.key(i));
   }
 
   /**

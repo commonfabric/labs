@@ -67,10 +67,15 @@ import { type ACL, isCapability } from "@commonfabric/memory/acl";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import { listenServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
+import type { ExperimentalOptions } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
+import {
+  answerForwardedLLMRequest,
+  type LLMForwardedRequest,
+} from "./llm-mock.ts";
 import type { ServedQuiescence } from "./served-settle.ts";
 import type {
   TestResult,
@@ -87,6 +92,7 @@ import type {
   WorkerResponse,
 } from "./multi-user-test-worker.ts";
 import { patternTestExperimentalOptions } from "./pattern-test-experimental-options.ts";
+import { isParticipantEntry, participantPatternOf } from "./require-pattern.ts";
 import {
   type RuntimeErrorExpectation,
   unmetRuntimeErrorExpectation,
@@ -108,50 +114,48 @@ export interface MultiUserDescriptorMeta {
 
 /**
  * Recognize a multi-user descriptor (default export with a `participants`
- * record of pattern factories or `{ pattern, user?, access? }` entries).
+ * record of patterns or `{ pattern, user?, access? }` entries).
  * Returns the orchestration metadata, or undefined for ordinary
  * single-runtime tests.
  *
- * @throws If a participant declares an `access` that is not a
- *   `SpaceAccessLevel`.
+ * @throws If a participant names a function that is not a pattern, or
+ *   declares an `access` that is not a `SpaceAccessLevel`.
  */
 export function multiUserDescriptorMeta(
   defaultExport: unknown,
 ): MultiUserDescriptorMeta | undefined {
   if (
     !isObjectOrArray(defaultExport) ||
-    typeof (defaultExport as { participants?: unknown }).participants !==
-      "object"
+    !isObjectOrArray(defaultExport.participants)
   ) {
     return undefined;
   }
-  const raw = (defaultExport as { participants: Record<string, unknown> })
-    .participants;
-  const participants: MultiUserParticipantSpec[] = [];
-  for (const [name, entry] of Object.entries(raw)) {
-    if (typeof entry === "function") {
-      participants.push({ name, user: name });
-    } else if (
-      isObjectOrArray(entry) &&
-      typeof (entry as { pattern?: unknown }).pattern === "function"
-    ) {
-      const { user, access } = entry as { user?: unknown; access?: unknown };
-      if (access !== undefined && !isSpaceAccessLevel(access)) {
-        throw new Error(
-          debugStr`Participant \`${name}\` declares access $quote${access}, ` +
-            "which is not one of `OWNER`, `WRITE`, `READ`, or `none`",
-        );
-      }
-      participants.push({
-        name,
-        user: typeof user === "string" ? user : name,
-        ...(access === undefined ? {} : { access }),
-      });
-    } else {
-      return undefined;
-    }
+  // Every entry's shape decides whether this is a descriptor at all, before
+  // any one entry's pattern or `access` is checked.
+  const entries = Object.entries(defaultExport.participants);
+  if (
+    entries.length === 0 ||
+    !entries.every(([, entry]) => isParticipantEntry(entry))
+  ) {
+    return undefined;
   }
-  return participants.length > 0 ? { participants } : undefined;
+  const participants = entries.map(([name, entry]) => {
+    participantPatternOf(name, entry);
+    const { user, access }: { user?: unknown; access?: unknown } =
+      isObjectOrArray(entry) ? entry : {};
+    if (access !== undefined && !isSpaceAccessLevel(access)) {
+      throw new Error(
+        debugStr`Participant \`${name}\` declares access $quote${access}, ` +
+          "which is not one of `OWNER`, `WRITE`, `READ`, or `none`",
+      );
+    }
+    return {
+      name,
+      user: typeof user === "string" ? user : name,
+      ...(access === undefined ? {} : { access }),
+    };
+  });
+  return { participants };
 }
 
 /** Whether `value` is a level a participant may declare. */
@@ -200,7 +204,65 @@ export function participantAccess(
   return levels;
 }
 
-class ParticipantWorker {
+/** The storage server a run's participants share. */
+export interface ParticipantServer {
+  readonly url: URL;
+  close(): Promise<void>;
+
+  /**
+   * What answers a participant's request to wait for the serving loop, on the
+   * server-execution arm; on the other arm there is no loop and no request.
+   */
+  readonly servedQuiescence: ServedQuiescence | undefined;
+}
+
+/**
+ * Starts the storage server for the arm `experimental` resolves to. On the
+ * server-execution arm it has a serving loop beside it, as a toolshed running
+ * that arm has, so the events the participants commit are served, and
+ * {@link ParticipantServer.servedQuiescence} waits for that loop. Either way it
+ * is given no access list.
+ *
+ * A participant worker resolves its arm from the same environment, so it is
+ * paired with a server this starts: a worker on the server-execution arm asks
+ * its parent to wait for a serving loop, and a server without one has nothing
+ * that could answer.
+ */
+export async function startParticipantServer(
+  experimental: ExperimentalOptions,
+): Promise<ParticipantServer> {
+  if (experimental.serverExecution) {
+    const serving = await listenServingMemoryServer({
+      apiUrl: new URL(import.meta.url),
+      experimental,
+      // On this thread whatever the environment selects for a toolshed, as
+      // the single-runtime runner's loop is.
+      worker: false,
+    });
+    return {
+      url: serving.url,
+      close: () => serving.close(),
+      servedQuiescence: () => serving.host.host!.whenQuiescent(),
+    };
+  }
+  const server = StandaloneMemoryServer.start({
+    // The posture of a toolshed whose runtimes run the participants' flags
+    // (INV-16).
+    namesInstances: () => namesInstancesByDefault(experimental),
+  });
+  return {
+    url: server.url,
+    close: () => server.close(),
+    servedQuiescence: undefined,
+  };
+}
+
+/**
+ * One participant's worker, and the request/response protocol the
+ * orchestrator drives it over. On the server-execution arm it also answers
+ * the worker's requests to wait for the serving loop.
+ */
+export class ParticipantWorker {
   readonly name: string;
   #worker: Worker;
   #lifetimeLock?: string;
@@ -213,7 +275,8 @@ class ParticipantWorker {
 
   /**
    * `servedQuiescence` answers the worker's requests to wait for the serving
-   * loop, which runs here, beside the storage server.
+   * loop, which runs here, beside the storage server. The language-model
+   * requests the worker forwards are answered by this process's responder.
    */
   constructor(
     name: string,
@@ -227,9 +290,18 @@ class ParticipantWorker {
     );
     this.#worker.onmessage = (
       event: MessageEvent<
-        WorkerResponse | WorkerLifetimeNotice | WorkerQuiescenceRequest
+        | WorkerResponse
+        | WorkerLifetimeNotice
+        | WorkerQuiescenceRequest
+        | LLMForwardedRequest
       >,
     ) => {
+      if ("llmRequest" in event.data) {
+        answerForwardedLLMRequest(event.data).then((answer) =>
+          this.#worker.postMessage(answer)
+        );
+        return;
+      }
       if ("lifetimeLock" in event.data) {
         this.#lifetimeLock = event.data.lifetimeLock;
         return;
@@ -240,9 +312,17 @@ class ParticipantWorker {
           this.#worker.postMessage(
             { quiescenceAnswer, ...body } satisfies WorkerQuiescenceAnswer,
           );
-        // Only a worker on the server-execution arm asks, and its orchestrator
-        // is on that arm too.
-        servedQuiescence!().then(
+        // Only a worker on the server-execution arm asks. One paired with a
+        // server that has no serving loop is told so, rather than left to
+        // wait for an answer nothing would send.
+        if (servedQuiescence === undefined) {
+          answer({
+            error: `participant "${name}" runs on the server-execution arm, ` +
+              "but its storage server has no serving loop to wait for",
+          });
+          return;
+        }
+        servedQuiescence().then(
           (reached) => answer({ reached }),
           (error: unknown) => answer({ error: String(error) }),
         );
@@ -355,34 +435,14 @@ export async function runMultiUserTestPattern(
   const nonIdempotent: string[] = [];
   let runResult: TestRunResult | undefined;
 
-  const experimental = patternTestExperimentalOptions(Deno.env.get);
-  let server: { readonly url: URL; close(): Promise<void> } | undefined;
-  let servedQuiescence: ServedQuiescence | undefined;
+  let server: ParticipantServer | undefined;
   const participants: ParticipantState[] = [];
   const workers: ParticipantWorker[] = [];
 
   try {
-    // On the server-execution arm the storage server has a serving loop
-    // beside it, as a toolshed running that arm has, so the events the
-    // participants commit are served. Like the plain server, it is given no
-    // access list.
-    if (experimental.serverExecution) {
-      const serving = await listenServingMemoryServer({
-        apiUrl: new URL(import.meta.url),
-        experimental,
-        // On this thread whatever the environment selects for a toolshed,
-        // as the single-runtime runner's loop is.
-        worker: false,
-      });
-      server = serving;
-      servedQuiescence = () => serving.host.host!.whenQuiescent();
-    } else {
-      server = StandaloneMemoryServer.start({
-        // The posture of a toolshed whose runtimes run the participants'
-        // flags (INV-16).
-        namesInstances: () => namesInstancesByDefault(experimental),
-      });
-    }
+    server = await startParticipantServer(
+      patternTestExperimentalOptions(Deno.env.get),
+    );
     const identities = new Map<string, Identity>();
     for (const spec of meta.participants) {
       if (!identities.has(spec.user)) {
@@ -413,13 +473,17 @@ export async function runMultiUserTestPattern(
     // Sequential init: the first worker materializes the shared setup
     // instance (and the wish("#default") seed); the rest resume it.
     for (const [index, spec] of meta.participants.entries()) {
-      const worker = new ParticipantWorker(spec.name, (error) => {
-        // The failed worker may be idle while another participant is waiting.
-        // Reject every worker's requests so that failure reaches the active
-        // await, including during initialization, and cleanup can proceed.
-        // Every worker is terminated again, and waited for, on the way out.
-        for (const worker of workers) void worker.terminate(error);
-      }, servedQuiescence);
+      const worker = new ParticipantWorker(
+        spec.name,
+        (error) => {
+          // The failed worker may be idle while another participant is waiting.
+          // Reject every worker's requests so that failure reaches the active
+          // await, including during initialization, and cleanup can proceed.
+          // Every worker is terminated again, and waited for, on the way out.
+          for (const worker of workers) void worker.terminate(error);
+        },
+        server.servedQuiescence,
+      );
       workers.push(worker);
       try {
         const init = await worker.call("init", {
@@ -717,9 +781,7 @@ export async function runMultiUserTestPattern(
       nonIdempotent,
       consoleErrors: [],
       consoleWarnings: [],
-      error: error instanceof Error
-        ? `${error.message}\n${error.stack ?? ""}`
-        : String(error),
+      error: formatError(error),
     };
   } finally {
     let teardownError: Error | undefined;

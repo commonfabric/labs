@@ -182,12 +182,20 @@ export function invokeReactiveAction(state: {
   }
 }
 
-export function startReactiveActionCommit(state: {
+/**
+ * Prepares `state.tx` for commit, runs `beforeCommit` on the prepared
+ * transaction, and starts the commit. Returns what `beforeCommit` returned
+ * beside the commit's settlement.
+ */
+export function startReactiveActionCommit<T>(state: {
   readonly runtime: Runtime;
   readonly tx: IExtendedStorageTransaction;
-}, options: {
-  readonly beforeCommit?: () => void;
-} = {}): ReturnType<IExtendedStorageTransaction["commit"]>["settled"] {
+}, beforeCommit: () => T): {
+  readonly prepared: T;
+  readonly settled: ReturnType<
+    IExtendedStorageTransaction["commit"]
+  >["settled"];
+} {
   logger.timeStart("scheduler", "run", "commit");
   try {
     state.runtime.prepareTxForCommit(state.tx);
@@ -206,10 +214,10 @@ export function startReactiveActionCommit(state: {
       state.tx.abort(error);
     }
   }
-  options.beforeCommit?.();
-  const commitPromise = state.tx.commit().settled;
+  const prepared = beforeCommit();
+  const settled = state.tx.commit().settled;
   logger.timeEnd("scheduler", "run", "commit");
-  return commitPromise;
+  return { prepared, settled };
 }
 
 export function watchReactiveActionCommit(state: {
@@ -573,6 +581,10 @@ export interface SchedulerActionRunState {
   readonly maybeAutoDebounce: (action: Action) => void;
   readonly markActionHasRun: (action: Action) => void;
   readonly markNodeHasRun: (action: Action) => void;
+
+  /** Notes that `action` finished a run that was not withdrawn
+   * (`Scheduler.watchProducedDocument()`). */
+  readonly noteProduced?: (action: Action) => void;
   readonly handleError: (error: Error, action: Action) => void;
   readonly resubscribe: (action: Action, log: ReactivityLog) => void;
   readonly markInvalid: (action: Action, options?: MarkInvalidOptions) => void;
@@ -945,7 +957,7 @@ export async function runSchedulerAction(
 /** B7: the causes a fanned-out instance run carries as its CFC trigger
  * reads — those that dirtied ITS instance (a keyed cause resolving on the
  * instance identity's own chain) plus every untargeted one. */
-function causesForInstance(
+export function causesForInstance(
   causes: readonly IMemorySpaceAddress[],
   instance: FanOutInstance,
 ): IMemorySpaceAddress[] {
@@ -1095,12 +1107,24 @@ function finalizeSchedulerAction(
   }
 
   try {
-    if (args.error) {
+    // A served run that read a scoped instance the serving loop has not
+    // produced yet is withdrawn at its commit, below, whatever it derived
+    // from that absence; a throw is one more thing it derived from it, so it
+    // is withdrawn with the run rather than reported. The run's read of the
+    // instance stays subscribed, and a throw once the instance is produced is
+    // reported as any other.
+    if (args.error && args.tx.tx.unproducedScopedInstance === undefined) {
       logger.error("schedule-error", () => [
         `[RUN] Action failed: ${args.actionId}`,
         `Error: ${args.error}`,
       ]);
       state.handleError(normalizeThrownError(args.error), args.action);
+    } else if (args.error) {
+      logger.debug("schedule-withdrawn-error", () => [
+        `[RUN] Action threw after reading a scoped instance not yet ` +
+        `produced, withdrawn: ${args.actionId}`,
+        `Error: ${args.error}`,
+      ]);
     }
   } finally {
     finalizeReactiveActionCommit(state, args, elapsed);
@@ -1248,7 +1272,6 @@ function finalizeReactiveActionCommit(
   // reactive functions based on it will be retriggered. But also, the
   // retry logic below will have re-scheduled this action, so
   // topological sorting should move it before the dependencies.
-  let log: ReactivityLog | undefined;
   // Captured at commit kickoff (after prepareTxForCommit populates the CFC
   // outbox, before the async flush clears it): does this commit have
   // asynchronous post-commit work that `settled()` must wait on?
@@ -1297,43 +1320,39 @@ function finalizeReactiveActionCommit(
       );
     }
   }
-  const commitPromise = startReactiveActionCommit({
+  const { prepared: log, settled: commitPromise } = startReactiveActionCommit({
     runtime: state.runtime,
     tx: args.tx,
-  }, {
-    beforeCommit: () => {
-      log = txToReactivityLog(args.tx);
-      if (validateLocalReadBasisForCommit(args.tx) !== undefined) return;
-      warnOnWriteSurfaceViolations(state, args, log);
-      echoRun = state.captureRemoteEcho(args.tx, log, args.invalidCauses);
-      hasPostCommitEffects = args.tx.hasPendingPostCommitEffects();
-      if (args.fanOutRun !== undefined) {
-        // The DISCOVERY half of stage B's ratchet (design §B3): the run's
-        // narrowest read scope — the transaction's ratchet, complete once
-        // the body and its result write ran (the write path's diff-base
-        // read at the narrower instance and identity consumption ratchet
-        // it too) — is what this node has LEARNED. Read here, at commit
-        // kickoff, before the asynchronous seal: a seal the wave refuses
-        // still leaves the lesson (the retry runs at the moved ratchet).
-        // The run's key at the (possibly moved) ratchet is marked clean
-        // — unless a cause dirtied its stamped key while it ran — and
-        // keeps this committed log for the union subscription (B7).
-        fanOutRunFinished(args.fanOutRun.state, args.fanOutRun.instance, {
-          discovered: normalizeCellScope(args.tx.getNarrowestReadScope()),
-          startGen: args.fanOutRun.startGen,
-          log,
-        });
-      }
-    },
+  }, () => {
+    const log = txToReactivityLog(args.tx);
+    if (validateLocalReadBasisForCommit(args.tx) !== undefined) return log;
+    warnOnWriteSurfaceViolations(state, args, log);
+    echoRun = state.captureRemoteEcho(args.tx, log, args.invalidCauses);
+    hasPostCommitEffects = args.tx.hasPendingPostCommitEffects();
+    if (args.fanOutRun !== undefined) {
+      // The DISCOVERY half of stage B's ratchet (design §B3): the run's
+      // narrowest read scope — the transaction's ratchet, complete once
+      // the body and its result write ran (the write path's diff-base
+      // read at the narrower instance and identity consumption ratchet
+      // it too) — is what this node has LEARNED. Read here, at commit
+      // kickoff, before the asynchronous seal: a seal the wave refuses
+      // still leaves the lesson (the retry runs at the moved ratchet).
+      // The run's key at the (possibly moved) ratchet is marked clean
+      // — unless a cause dirtied its stamped key while it ran — and
+      // keeps this committed log for the union subscription (B7).
+      fanOutRunFinished(args.fanOutRun.state, args.fanOutRun.instance, {
+        discovered: normalizeCellScope(args.tx.getNarrowestReadScope()),
+        startGen: args.fanOutRun.startGen,
+        log,
+      });
+    }
+    return log;
   });
   // The commit's own validations stood on the one just before it. A commit
   // that handed nothing over can still have changed what that one proved,
   // through its commit callbacks for one, so the check below makes its own.
   endLocalReadValidationStretch();
   if (parkUnavailableRun(state, args)) return;
-  if (!log) {
-    throw new Error("scheduler action commit did not build a reactivity log");
-  }
   // Track the effect layer as in-flight async builtin work so
   // `runtime.settled()` waits for the post-commit outbox flush (the sqlite
   // query RPC + writeback; also the barrier that guarantees a
@@ -1486,6 +1505,20 @@ function finalizeReactiveActionCommit(
         fanOutRun.instance.key,
     );
   const owner = fanOutRun === undefined ? node : instanceRecord;
+  // Whether the run finished without being withdrawn. For a JavaScript
+  // derivation, which writes its whole result in its run, that means it has
+  // produced its output, whatever it wrote: a served reader of an instance it
+  // left absent reads that absence as the instance's state
+  // (`Scheduler.owesScopedInstance()`, which ignores the flag on a builtin,
+  // whose output can land after its run returns). A withdrawn run read
+  // something it could not take as state, so what it left is not its output.
+  // A run that was not withdrawn also wakes whoever watches the documents it
+  // writes (`Scheduler.watchProducedDocument()`): one that left its instance
+  // absent commits no write there to wake them otherwise.
+  if (refused === undefined && unproduced === undefined) {
+    if (owner !== undefined) owner.produced = true;
+    state.noteProduced?.(args.action);
+  }
   const registrationToken = args.registrationToken;
   // Sealing is not durable acceptance. A withdrawn contribution can have read
   // an unchanged field through another contribution's pending document; rolling
@@ -1521,7 +1554,8 @@ function finalizeReactiveActionCommit(
                 fanOutRun.instance.key,
             ) === instanceRecord;
     };
-    const superseded = outcome.error?.supersededOutputs;
+    const superseded = outcome.error?.supersededOutputs ??
+      outcome.ok?.supersededOutputs;
     let owed: boolean | Promise<boolean> =
       outcome.error?.readDependencyWithdrawn === true &&
       outcome.error?.waveWithdrawalCause === "contribution-dropped";
@@ -1626,10 +1660,6 @@ export function schedulerImplementationFingerprint(
     telemetry?.moduleName,
   ].filter((part): part is string => !!part).join(":") || `action:${actionId}`;
   return `action:${telemetryId}:${actionId}`;
-}
-
-export function schedulerRuntimeFingerprint(): string {
-  return "runner:scheduler:v3";
 }
 
 function recordOptionalActionRunDiagnostics(

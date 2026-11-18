@@ -510,6 +510,82 @@ cascade layer, so any rule of the guest's own overrides it whatever its
 specificity; reserve that for a look the pattern deliberately owns, such as a
 game's art.
 
+## Images and other assets
+
+A pattern ships an image, a font, or a sound as a file beside `main.tsx` and
+hands it to the guest through `cf-iframe`'s `assets`. The page embedding the
+guest sets its Content Security Policy, and `data:` URLs are the one image
+source every embedding admits: labs' policy also admits images from the host's
+origin, and Loom's admits nothing else. So an asset reaches the guest as a
+`data:` URL:
+
+```tsx
+// Shown for illustration only.
+const ASSETS = dataFile.urls("./assets");
+
+<cf-iframe
+  src={GUEST_HTML}
+  script={GUEST_SCRIPT}
+  assets={ASSETS}
+  $context={{ state }}
+/>;
+```
+
+`dataFile.urls("./assets")` reads every image, font, and sound directly inside
+`assets/`, keyed by its file name without the extension, so `assets/glazed.png`
+is the asset `glazed`. `dataFile.url("./logo.svg")` reads one file, for a record
+written out by hand: `assets={{ logo: dataFile.url("./logo.svg") }}`. The
+extensions both read, and how such a file is attached and stored, are in
+[the tutorial](../../tutorial/06-workflow.md). An asset's name is letters,
+digits, `_`, and `-`, other than `__proto__` and `constructor`, which setup
+refuses as keys of the record it stores. An asset whose URL runs to 1,024
+characters or more is stored once in the space and shared by every piece in
+it, as `guest.html` and `guest.js` are; a smaller one is stored inline in each
+piece.
+
+The guest's document refers to an asset as `cf-asset:<name>`. The host replaces
+each reference with the asset's URL before the document is parsed, so a
+reference works wherever a URL does in `guest.html`, including an `<img>`, a CSS
+`url()`, and an `@font-face` of the guest's own:
+
+```html
+<img id="logo" src="cf-asset:logo" alt="">
+<style>
+  @font-face {
+    font-family: "Menu";
+    src: url(cf-asset:menu) format("woff2");
+  }
+</style>
+```
+
+A reference to a name the pattern did not hand over stays as it is, and
+`cf-iframe` reports it. `guest.js` is not searched, so the guest's script reads
+an asset with `fabric.asset(name)`:
+
+```ts
+// Shown for illustration only.
+const glazed = fabric.asset("glazed");
+image.src = glazed.url; // an element the script builds
+context.drawImage(await glazed.image(), 0, 0); // a 2D canvas, most engines
+const bitmap = await glazed.bitmap(); // createImageBitmap(), a WebGL texture
+document.fonts.add(new FontFace("Menu", fabric.asset("menu").bytes()));
+const bell = await audio.decodeAudioData(fabric.asset("bell").bytes().buffer);
+```
+
+`fabric.asset()` reads the assets the host wrote into the document, so it is
+synchronous and needs no `pull()`. It returns the asset's `mediaType`, `size`,
+and `url`, and decodes its bytes on `bytes()`, `blob()`, `text()`, `image()`,
+and `bitmap()`. It never fetches the URL, which the policy refuses. A name the
+document carries no asset for throws, listing the names it does carry.
+
+Two limits. The policy admits no `<audio>` or `<video>` element, so a sound
+plays through Web Audio from `bytes()`, and a video has no route. And assets
+travel with the program: a server-execution upload sends the whole program in
+one request, which takes at most 4 MiB through the memory router, a binary file
+counting at four thirds of its size.
+[Static assets for iframe guests](../../specs/iframe-static-assets.md) is the
+design. `patterns/examples/iframe-donut-menu/` is a complete example.
+
 ## Optional SQLite
 
 Create the database in the pattern body with `sqliteDatabase()`, put it in the
@@ -1040,6 +1116,24 @@ deno task cf check patterns/examples/iframe-quick-notes/main.tsx --no-run
 
 If the pattern is intentionally outside the repository, pass its directory as
 `--root`; otherwise the CLI uses the repository as its source boundary.
+
+In this repository, test the guest with a `guest.test.ts` beside it.
+`openGuestPage()` from `patterns/tools/test-support/iframe-guest.ts` loads the
+guest into its `guest.html` in Deno and serves it in-memory cells and presence
+rooms through the real bridge, so the test drives the document and reads back
+what the guest wrote. `patterns/examples/iframe-cursor-canvas/guest.test.ts` is
+a complete example. A guest that reads assets is handed them as the option
+`assets`. `readAssets()` from the same file reads the pattern's `assets/`
+directory the way `dataFile.urls()` does, and `openGuestPage()` puts the record
+into `guest.html` the way the host does, so `cf-asset:` references and
+`fabric.asset()` work in the test as they do in the frame. The simulated
+document draws nothing, so a test of a guest that draws on a canvas replaces
+the canvas's drawing context with a stand-in, as
+`patterns/examples/iframe-donut-menu/guest.test.ts` does. The simulated
+document applies no Content Security Policy, so whether the frame loads each
+asset under the guest's policy is a browser test's question:
+`patterns/integration/iframe-donut-menu.test.ts` deploys the same guest and
+reads its frame.
 
 Launch a repository pattern against local servers from the repository root.
 Start the servers first:

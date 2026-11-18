@@ -156,6 +156,26 @@ describe("InputTimingController — throttle", () => {
     expect(calls).toEqual(["first", "second"]);
   });
 
+  it("runs only the latest call queued for the trailing edge, once", () => {
+    const ctrl = new InputTimingController(createMockHost(), {
+      strategy: "throttle",
+      delay: 100,
+    });
+    const calls: string[] = [];
+
+    ctrl.schedule(() => calls.push("first"));
+    time.tick(40);
+    ctrl.schedule(() => calls.push("second"));
+    time.tick(20);
+    ctrl.schedule(() => calls.push("third"));
+    expect(calls).toEqual(["first"]);
+
+    time.tick(40);
+    expect(calls).toEqual(["first", "third"]);
+    time.tick(200);
+    expect(calls).toEqual(["first", "third"]);
+  });
+
   it("leading:false suppresses leading edge", () => {
     const ctrl = new InputTimingController(createMockHost(), {
       strategy: "throttle",

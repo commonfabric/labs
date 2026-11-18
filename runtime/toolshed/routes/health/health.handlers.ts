@@ -1,4 +1,5 @@
 import { z } from "zod";
+import env from "@/env.ts";
 import { resolveGitSha } from "@/lib/build-info.ts";
 import type { AppRouteHandler } from "@/lib/types.ts";
 import type {
@@ -19,10 +20,9 @@ import {
   getSlowQueries,
 } from "@commonfabric/memory/v2/server";
 import { getServingLoopStats } from "@commonfabric/runner/executor/stats";
+import type { CollectedWorkerMemory } from "@commonfabric/runner/executor/serving-worker-host";
 import {
-  type CollectedMemory,
   collectedMemory as collectThisThread,
-  garbageCollectorExposed,
 } from "@commonfabric/runner/collected-memory";
 import { serverExecutionHost } from "@/lib/server-execution.ts";
 import {
@@ -40,23 +40,28 @@ export const HealthResponseSchema = z.object({
 });
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 
-const GIT_SHA = resolveGitSha();
-
 /** Header carrying the same commit as the body's `gitSha`. Clients that only
  * need liveness + version (the cf CLI) read this instead of the body, so
  * their health probe completes at headers-arrival — a stalled or truncated
  * body cannot delay them. */
 export const GIT_SHA_HEADER = "x-cf-git-sha";
 
-export const index: AppRouteHandler<IndexRoute> = (c) => {
-  const response: HealthResponse = {
-    status: "OK",
-    timestamp: Date.now(),
-    gitSha: GIT_SHA,
+/** The `/_health` handler of a server running the commit `gitSha`. */
+export function healthIndex(
+  gitSha: string | null,
+): AppRouteHandler<IndexRoute> {
+  return (c) => {
+    const response: HealthResponse = {
+      status: "OK",
+      timestamp: Date.now(),
+      gitSha,
+    };
+    if (gitSha !== null) c.header(GIT_SHA_HEADER, gitSha);
+    return c.json(response, HttpStatusCodes.OK);
   };
-  if (GIT_SHA !== null) c.header(GIT_SHA_HEADER, GIT_SHA);
-  return c.json(response, HttpStatusCodes.OK);
-};
+}
+
+export const index = healthIndex(resolveGitSha());
 
 const serverStartTimestamp = Date.now();
 
@@ -106,9 +111,9 @@ export const stats: AppRouteHandler<StatsRoute> = (c) => {
 /**
  * The serving loop's realm's loggers: the worker's where the loop runs
  * there, which `stats` cannot read, and this process's own where the loop
- * runs on this thread. The answer waits for the realm's turn; a worker
- * between a failure and its replacement answers nothing, and the route says
- * so rather than wait for the replacement.
+ * runs on this thread. Where the loop runs in several workers, the answer is
+ * what their realms logged taken together, with what the realm of each
+ * worker closed in order had logged. The answer waits for each realm's turn.
  */
 export const servingLoopRealm: AppRouteHandler<ServingLoopRealmRoute> = async (
   c,
@@ -135,28 +140,29 @@ export const servingLoopRealm: AppRouteHandler<ServingLoopRealmRoute> = async (
 /** The answer that says why the serving loop's worker did not answer. */
 function notServing(error: unknown): { error: string } {
   return {
-    error: "The serving loop's worker is not serving: " +
+    error: "The serving loop's workers are not serving: " +
       describeFailure(error),
   };
 }
 
 /**
- * Collects the serving loop's worker, where the loop runs in one, and then
- * this thread, and reports what each still holds.
+ * Collects the serving loop's workers, where the loop runs in them, and
+ * then this thread, and reports what each still holds: the workers one by
+ * one with the spaces placed on each, and taken together.
  */
 export const collectedMemory: AppRouteHandler<CollectedMemoryRoute> = async (
   c,
 ) => {
   c.header("Cache-Control", "no-store");
-  if (!garbageCollectorExposed()) {
+  if (!env.EXPOSE_GC) {
     return c.json(
       { error: "This server was started without EXPOSE_GC=true" },
       HttpStatusCodes.NOT_FOUND,
     );
   }
-  let servingLoopWorker: CollectedMemory | undefined;
+  let servingLoopWorkers: CollectedWorkerMemory[] | undefined;
   try {
-    servingLoopWorker = await serverExecutionHost()?.collectedWorkerMemory();
+    servingLoopWorkers = await serverExecutionHost()?.collectedWorkerMemory();
   } catch (error) {
     return c.json(notServing(error), HttpStatusCodes.SERVICE_UNAVAILABLE);
   }
@@ -164,7 +170,19 @@ export const collectedMemory: AppRouteHandler<CollectedMemoryRoute> = async (
     {
       timestamp: Date.now(),
       mainThread: collectThisThread(),
-      ...(servingLoopWorker === undefined ? {} : { servingLoopWorker }),
+      ...(servingLoopWorkers === undefined ? {} : {
+        servingLoopWorker: {
+          heapUsed: servingLoopWorkers.reduce(
+            (sum, worker) => sum + worker.heapUsed,
+            0,
+          ),
+          external: servingLoopWorkers.reduce(
+            (sum, worker) => sum + worker.external,
+            0,
+          ),
+        },
+        servingLoopWorkers,
+      }),
     },
     HttpStatusCodes.OK,
   );

@@ -265,9 +265,6 @@ export class CFFileDownload extends BaseElement {
   @state()
   private accessor _downloaded = false;
 
-  @state()
-  private accessor _downloading = false;
-
   private _resetTimeout?: ReturnType<typeof setTimeout>;
 
   // Autosave state
@@ -362,9 +359,27 @@ export class CFFileDownload extends BaseElement {
   }
 
   /**
-   * Create a Blob from the data, optionally decoding base64
+   * Returns a Blob of `data`, decoded from base64 when `base64` is set, and
+   * throws when it is larger than `MAX_FILE_SIZE`.
    */
   private _createBlob(data: string): Blob {
+    const blob = this.#decodeBlob(data);
+    if (blob.size > CFFileDownload.MAX_FILE_SIZE) {
+      throw new Error(
+        `File size (${
+          Math.round(blob.size / 1024 / 1024)
+        }MB) exceeds maximum allowed (${
+          Math.round(CFFileDownload.MAX_FILE_SIZE / 1024 / 1024)
+        }MB)`,
+      );
+    }
+    return blob;
+  }
+
+  /**
+   * Create a Blob from the data, optionally decoding base64
+   */
+  #decodeBlob(data: string): Blob {
     if (this.base64) {
       try {
         // Trim whitespace that may be present in base64 data from various sources
@@ -399,7 +414,9 @@ export class CFFileDownload extends BaseElement {
       const currentData = this._getDataValue();
       if (currentData !== this._lastSavedData) {
         this._isDirty = true;
-        this._scheduleAutosave();
+        // A removed element saves nothing; `connectedCallback()` schedules
+        // the save if it is added back.
+        if (this.isConnected) this._scheduleAutosave();
       }
     }
   }
@@ -409,18 +426,23 @@ export class CFFileDownload extends BaseElement {
     // Add visibility change listener for auto-save on tab switch
     document.addEventListener("visibilitychange", this._handleVisibilityChange);
     globalThis.addEventListener("beforeunload", this._handleBeforeUnload);
+    // Removal cancelled the save pending then, so an element added back
+    // schedules it again.
+    if (this._isDirty) this._scheduleAutosave();
   }
 
   override disconnectedCallback() {
     super.disconnectedCallback();
-    if (this._resetTimeout) {
-      clearTimeout(this._resetTimeout);
-    }
+    // The feedback ends here rather than when its timers would have fired, so
+    // an element moved elsewhere in the document comes back idle.
+    clearTimeout(this._resetTimeout);
+    this._downloaded = false;
+    clearTimeout(this._notAvailableTooltipTimeout);
+    this._showNotAvailableTooltip = false;
+    this.classList.remove("shake");
     if (this._autosaveTimer) {
       clearTimeout(this._autosaveTimer);
-    }
-    if (this._notAvailableTooltipTimeout) {
-      clearTimeout(this._notAvailableTooltipTimeout);
+      this._autosaveTimer = null;
     }
     // Remove event listeners
     document.removeEventListener(
@@ -512,17 +534,6 @@ export class CFFileDownload extends BaseElement {
     try {
       const blob = this._createBlob(data);
 
-      // Check file size limit to prevent hanging on huge files
-      if (blob.size > CFFileDownload.MAX_FILE_SIZE) {
-        throw new Error(
-          `File size (${
-            Math.round(blob.size / 1024 / 1024)
-          }MB) exceeds maximum allowed (${
-            Math.round(CFFileDownload.MAX_FILE_SIZE / 1024 / 1024)
-          }MB)`,
-        );
-      }
-
       // Generate timestamped filename
       const timestamp = new Date()
         .toISOString()
@@ -543,22 +554,15 @@ export class CFFileDownload extends BaseElement {
       await writable.write(blob);
       await writable.close();
 
-      // Update state - check if data changed during save (race condition)
-      const currentData = this._getDataValue();
+      // Mark what was saved as clean. Data that changed during the write
+      // differs from `_lastSavedData`, so the render these changes cause
+      // finds it dirty in `updated()` and schedules another save.
       this._lastSavedData = data;
       this._isSavingAutosave = false;
-
-      if (currentData !== data) {
-        // Data changed during save, keep dirty and reschedule
-        this._isDirty = true;
-        this._scheduleAutosave();
-      } else {
-        this._isDirty = false;
-        // Clear timer since we just saved and data is current
-        if (this._autosaveTimer) {
-          clearTimeout(this._autosaveTimer);
-          this._autosaveTimer = null;
-        }
+      this._isDirty = false;
+      if (this._autosaveTimer) {
+        clearTimeout(this._autosaveTimer);
+        this._autosaveTimer = null;
       }
 
       this.emit("cf-autosave-success", {
@@ -591,6 +595,7 @@ export class CFFileDownload extends BaseElement {
     }
 
     this._autosaveTimer = setTimeout(() => {
+      this._autosaveTimer = null;
       this._performAutosave();
     }, CFFileDownload.AUTOSAVE_INTERVAL);
   }
@@ -617,8 +622,8 @@ export class CFFileDownload extends BaseElement {
     e.preventDefault();
     e.stopPropagation();
 
-    // Guard against rapid clicks and disabled state
-    if (this.disabled || this._downloading) return;
+    // Guard against a click that lands before the button renders disabled
+    if (this.disabled) return;
 
     const mouseEvent = e as MouseEvent;
     const isOptionClick = mouseEvent.altKey;
@@ -660,23 +665,9 @@ export class CFFileDownload extends BaseElement {
       return;
     }
 
-    // Set downloading state to prevent rapid clicks
-    this._downloading = true;
-
     try {
       // Create blob from data
       const blob = this._createBlob(data);
-
-      // Check file size limit
-      if (blob.size > CFFileDownload.MAX_FILE_SIZE) {
-        throw new Error(
-          `File size (${
-            Math.round(blob.size / 1024 / 1024)
-          }MB) exceeds maximum allowed (${
-            Math.round(CFFileDownload.MAX_FILE_SIZE / 1024 / 1024)
-          }MB)`,
-        );
-      }
 
       const url = URL.createObjectURL(blob);
 
@@ -696,7 +687,6 @@ export class CFFileDownload extends BaseElement {
 
       // Update state for visual feedback
       this._downloaded = true;
-      this._downloading = false;
 
       this.emit("cf-download-success", {
         filename,
@@ -712,7 +702,6 @@ export class CFFileDownload extends BaseElement {
         this._downloaded = false;
       }, this.feedbackDuration);
     } catch (error) {
-      this._downloading = false;
       this.emit("cf-download-error", {
         error: error as Error,
         filename,
@@ -753,9 +742,6 @@ export class CFFileDownload extends BaseElement {
     if (this._autosaveEnabled) {
       title = this._getAutosaveTooltip();
       ariaLabel = title;
-    } else if (this._downloading) {
-      title = "Downloading...";
-      ariaLabel = "Downloading file";
     } else if (this._downloaded) {
       title = "Downloaded!";
       ariaLabel = "File downloaded";
@@ -770,8 +756,6 @@ export class CFFileDownload extends BaseElement {
     // Determine icon
     const icon = this._autosaveEnabled
       ? "\uD83D\uDD04" // 🔄
-      : this._downloading
-      ? "\u23F3" // ⏳
       : this._downloaded
       ? "\u2713" // ✓
       : "\u2B07"; // ⬇
@@ -781,8 +765,6 @@ export class CFFileDownload extends BaseElement {
       ? this._isSavingAutosave
         ? "\uD83D\uDD04 Saving..."
         : "\uD83D\uDD04 Auto-save"
-      : this._downloading
-      ? "\u23F3 Downloading..."
       : this._downloaded
       ? "\u2713 Downloaded!"
       : "\u2B07 Download";
@@ -805,7 +787,7 @@ export class CFFileDownload extends BaseElement {
       <cf-button
         variant="${this.variant || "secondary"}"
         size="${this.size || "md"}"
-        ?disabled="${this.disabled || !hasData || this._downloading}"
+        ?disabled="${this.disabled || !hasData}"
         @click="${this._handleClick}"
         title="${title}"
         aria-label="${ariaLabel}"

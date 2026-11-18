@@ -53,8 +53,7 @@ function analyzeType(value: any, state: AnalyzeTypeState): JSONSchema {
 
     const cell = state.runtime?.getCellFromLink(link);
     if (!cell) {
-      // Shouldn't happen: We have a cell link but its link doesn't correspond
-      // to a cell.
+      // There is no runtime to resolve the link to a cell with.
 
       // Returning `true` (the JSON Schema "accept anything" literal) is now
       // type-legal here: `analyzeType()` returns `JSONSchema`, which is
@@ -64,9 +63,9 @@ function analyzeType(value: any, state: AnalyzeTypeState): JSONSchema {
       // them changes generated schemas that reach storage, which makes it a
       // migration rather than a cleanup.
       //
-      // TODO(danfuzz): Decide whether this branch should `throw` instead. It is
-      // reached only when a cell link resolves to no cell, which is a
-      // "shouldn't happen" -- returning an accept-anything schema hides it.
+      // TODO(danfuzz): Decide whether this branch should `throw` instead.
+      // Returning an accept-anything schema hides that the link was not
+      // analyzed.
       return emptySchemaObject();
     }
 

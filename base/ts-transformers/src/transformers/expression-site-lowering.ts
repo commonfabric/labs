@@ -29,10 +29,8 @@ import {
 import type { AnalyzeFn } from "./expression-rewrite/types.ts";
 import type { ExpressionContainerKind } from "./expression-site-types.ts";
 import { createLiftAppliedCall } from "./builtins/lift-applied.ts";
-import {
-  classifyOpaquePathTerminalCall,
-  isLocalOpaqueOriginBindingReference,
-} from "./opaque-roots.ts";
+import { isLocalOpaqueOriginBindingReference } from "./opaque-roots.ts";
+import { getGetCallReceiver } from "./call-root-support.ts";
 
 interface RewriteExpressionSiteParams {
   readonly expression: ts.Expression;
@@ -134,27 +132,6 @@ function markSyntheticReactiveCollectionDeclarationIfNeeded(
   context.markSyntheticReactiveCollectionDeclaration(rewritten);
 }
 
-function getTerminalGetReceiver(
-  expression: ts.Expression,
-): ts.Expression | undefined {
-  if (
-    !ts.isCallExpression(expression) ||
-    classifyOpaquePathTerminalCall(expression) !== "get"
-  ) {
-    return undefined;
-  }
-
-  const callee = expression.expression;
-  if (
-    !ts.isPropertyAccessExpression(callee) &&
-    !ts.isElementAccessExpression(callee)
-  ) {
-    return undefined;
-  }
-
-  return callee.expression;
-}
-
 function getEnclosingZeroArgInlineIifeCall(
   node: ts.Node,
 ): ts.CallExpression | undefined {
@@ -204,7 +181,9 @@ function rewriteDirectCellGetInitializer(
     return undefined;
   }
 
-  const receiver = getTerminalGetReceiver(expression);
+  const receiver = ts.isCallExpression(expression)
+    ? getGetCallReceiver(expression)
+    : undefined;
   if (!receiver) {
     return undefined;
   }
@@ -317,7 +296,6 @@ export function rewriteExpressionSite(
     context,
     analyze,
     reactiveContextKind: contextInfo.kind,
-    inSafeContext: contextInfo.kind === "compute",
     containerKind,
     preferInputBoundWrappers,
   });
@@ -370,13 +348,8 @@ export function rewriteOwnedPreClosureJsxExpressionSite(
   } = params;
 
   const contextInfo = context.getReactiveContext(expression);
-  const inSafeContext = contextInfo.kind === "compute";
   const analysis = analyze(expression);
   const hasLogicalOps = containsLogicalBinaryOperator(expression);
-
-  if (inSafeContext) {
-    return undefined;
-  }
 
   if (!analysis.requiresRewrite && !hasLogicalOps) {
     return undefined;
@@ -404,7 +377,6 @@ export function rewriteOwnedPreClosureJsxExpressionSite(
     context,
     analyze,
     reactiveContextKind: contextInfo.kind,
-    inSafeContext,
     containerKind: "jsx-expression",
     preferInputBoundWrappers,
   });
@@ -495,7 +467,6 @@ export function rewriteHelperOwnedExpressionSites<T extends ts.Node>(
           context,
           analyze,
           reactiveContextKind: "pattern",
-          inSafeContext: false,
           containerKind,
           preferInputBoundWrappers: true,
         });

@@ -1,4 +1,6 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
 import {
   type OpenAIChatCompletionAttemptDiagnostic,
   OpenAICompatibleGatewayClient,
@@ -434,4 +436,54 @@ Deno.test("OpenAICompatibleGatewayClient surfaces 401s in no-auth mode without i
     Error,
     "chat completion request failed (401, unauthenticated caller mode was used; gateway or upstream credentials rejected the request): organization rejected",
   );
+});
+
+describe("openai-client", () => {
+  describe("OpenAICompatibleGatewayClient", () => {
+    describe("createChatCompletion()", () => {
+      it("rejects with the signal's reason without fetching when already aborted", async () => {
+        let fetches = 0;
+        const client = new OpenAICompatibleGatewayClient({
+          baseUrl: "https://gateway.test/",
+          authMode: "none",
+          fetchFn: () => {
+            fetches += 1;
+            return Promise.resolve(Response.json({ ok: true }));
+          },
+        });
+        const controller = new AbortController();
+        const reason = new Error("canceled before the request");
+        controller.abort(reason);
+
+        await expect(
+          client.createChatCompletion({ model: "gpt-5.4", messages: [] }, {
+            signal: controller.signal,
+          }),
+        ).rejects.toBe(reason);
+        expect(fetches).toBe(0);
+      });
+
+      it("returns the response when the attempt observer throws", async () => {
+        const client = new OpenAICompatibleGatewayClient({
+          baseUrl: "https://gateway.test/",
+          authMode: "none",
+          fetchFn: () => Promise.resolve(Response.json({ ok: true })),
+        });
+        let observed = 0;
+
+        const response = await client.createChatCompletion(
+          { model: "gpt-5.4", messages: [] },
+          {
+            onChatCompletionAttempt: () => {
+              observed += 1;
+              throw new Error("observer failed");
+            },
+          },
+        );
+
+        expect(await response.json()).toEqual({ ok: true });
+        expect(observed).toBe(1);
+      });
+    });
+  });
 });

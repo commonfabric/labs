@@ -10,6 +10,7 @@ import {
 import { isCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { isCommonFabricAvailabilityType } from "@commonfabric/schema-generator/availability-brand";
 import type { TransformationContext } from "../core/context.ts";
+import { unwrapAssertCapture } from "../utils/expression.ts";
 import {
   AVAILABILITY_REASONS,
   type AvailabilityObservation,
@@ -20,18 +21,7 @@ import {
 export function unwrapAvailabilityExpression(
   expression: ts.Expression,
 ): ts.Expression {
-  let current = expression;
-  while (
-    ts.isParenthesizedExpression(current) ||
-    ts.isAsExpression(current) ||
-    ts.isTypeAssertionExpression(current) ||
-    ts.isSatisfiesExpression(current) ||
-    ts.isNonNullExpression(current) ||
-    ts.isPartiallyEmittedExpression(current)
-  ) {
-    current = current.expression;
-  }
-  return current;
+  return unwrapAssertCapture(expression);
 }
 
 function valueSymbolAtIdentifier(

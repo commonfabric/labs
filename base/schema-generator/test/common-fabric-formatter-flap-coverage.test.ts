@@ -113,7 +113,7 @@ describe("Common Fabric formatter flap coverage", () => {
         new SchemaGenerator().generateSchema(type, checker),
       );
 
-      const save = schema.properties?.save as any;
+      const save = asObjectSchema(schema.properties?.save);
       expect(save.type).toBe("string");
       expect(save.ifc?.uiContract).toEqual({
         helper: "UiAction",
@@ -158,7 +158,7 @@ describe("Common Fabric formatter flap coverage", () => {
         new SchemaGenerator().generateSchema(type, checker),
       );
 
-      const save = schema.properties?.save as any;
+      const save = asObjectSchema(schema.properties?.save);
       expect(save.type).toBe("string");
       expect(save.ifc?.uiContract).toEqual({
         helper: "UiAction",
@@ -201,7 +201,7 @@ describe("Common Fabric formatter flap coverage", () => {
         new SchemaGenerator().generateSchema(type, checker),
       );
 
-      const body = schema.properties?.body as any;
+      const body = asObjectSchema(schema.properties?.body);
       expect(body.type).toBe("string");
       expect(body.ifc?.confidentiality).toEqual([
         { kind: "prompt-influence", allowed: false, owner: null },
@@ -272,7 +272,7 @@ describe("Common Fabric formatter flap coverage", () => {
         wrapperNode,
         undefined,
         schemaHints,
-      ) as Record<string, any>;
+      );
 
       expect(result).toEqual({
         type: "array",
@@ -307,7 +307,7 @@ describe("Common Fabric formatter flap coverage", () => {
         wrapperNode,
         undefined,
         schemaHints,
-      ) as Record<string, any>;
+      );
 
       expect(result).toEqual({
         type: "array",
@@ -347,7 +347,7 @@ describe("Common Fabric formatter flap coverage", () => {
         wrapperNode,
         undefined,
         schemaHints,
-      ) as Record<string, any>;
+      );
 
       expect(result).toEqual({
         type: "object",

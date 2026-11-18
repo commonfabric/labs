@@ -62,6 +62,17 @@ describe("view-equality", () => {
     expect(fabricAwareEqualThroughViews({ a: [1] }, { a: [2] })).toBe(false);
   });
 
+  it("compares an object it meets again against each of its partners", () => {
+    const shared = { n: 1 };
+
+    expect(
+      fabricAwareEqualThroughViews([shared, shared], [{ n: 1 }, { n: 1 }]),
+    ).toBe(true);
+    expect(
+      fabricAwareEqualThroughViews([shared, shared], [{ n: 1 }, { n: 2 }]),
+    ).toBe(false);
+  });
+
   it("decides a view of a stored `FabricError` as the stored instance", () => {
     const cell = holding(
       "view-of-error",

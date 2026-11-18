@@ -74,6 +74,7 @@
     "spaceDeleted",
     "spaceMembers",
     "spaceOf",
+    "spaceOfLink",
     "sqliteDatabase",
     "str",
     "table",
@@ -117,6 +118,7 @@
     "UnavailableObservationKind",
     "UnavailableReason",
     "UnavailableVariant",
+    "UnavailableState",
     "VNode"
   ],
   "collections": [],
@@ -215,7 +217,6 @@
     "FabricMount",
     "FabricNativeWrapper",
     "FabricRef",
-    "FabricRegExp",
     "FabricValueLayer",
     "FabricValuePlus",
     "Fact",

@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
+import type { MemorySpace } from "@commonfabric/memory/interface";
 import {
   type Cell,
   type IExtendedStorageTransaction,
@@ -26,6 +27,12 @@ const owner = await Identity.fromPassphrase("profile picture owner");
 const visitor = await Identity.fromPassphrase("profile picture visitor");
 const profileSpace = (await Identity.fromPassphrase("profile picture space"))
   .did();
+const visitorSpace =
+  (await Identity.fromPassphrase("profile picture visitor's space")).did();
+// Where the pattern showing the owner's face runs, as a chat room showing its
+// members' faces runs in a space of its own.
+const readerSpace =
+  (await Identity.fromPassphrase("profile picture reader's space")).did();
 const route = "/api/patterns/system/profile-home/profile-home.tsx";
 // A complete profile source from before the profile had a `picture` field.
 const previous = Deno.readTextFileSync(
@@ -124,16 +131,23 @@ describe("profile picture ownership", () => {
     return runtime;
   };
 
-  /** Creates the owner's profile from `source`, as the served source. */
-  const createProfile = async (source: string) => {
+  /**
+   * Creates a profile from `source`, as the served source, in `space` with a
+   * runtime acting as `identity`, and returns that runtime and the profile.
+   */
+  const startProfile = async (
+    identity: Identity,
+    space: MemorySpace,
+    source: string,
+  ) => {
     await serve(source);
-    runtime = open(owner);
+    const runtime = open(identity);
     const tx = runtime.edit();
     const pattern = await runtime.patternManager.compilePattern({
       main: route,
       files: [{ name: route, contents: source }],
-    }, { space: profileSpace, tx });
-    profile = runtime.getCell<Profile>(profileSpace, "profile");
+    }, { space, tx });
+    const profile = runtime.getCell<Profile>(space, "profile");
     runtime.runner.run(tx, pattern, { initialName: "Saved name" }, profile, {
       sourceOrigin: systemPatternSource("system/profile-home/profile-home.tsx"),
     });
@@ -141,6 +155,12 @@ describe("profile picture ownership", () => {
     expect((await tx.commit().settled).error).toBeUndefined();
     await profile.pull();
     await runtime.settled();
+    return { runtime, profile };
+  };
+
+  /** Creates the owner's profile from `source`, as the served source. */
+  const createProfile = async (source: string) => {
+    ({ runtime, profile } = await startProfile(owner, profileSpace, source));
   };
 
   /** Moves the profile to `source`, as a release does. */
@@ -190,18 +210,19 @@ describe("profile picture ownership", () => {
 
   /**
    * The face `profileFace()` finds on the profile, as the probe pattern
-   * started on the first call shows it, with the picture as its bytes.
+   * started in another space on the first call shows it, with the picture as
+   * its bytes.
    */
   const faceShown = async () => {
     if (face === undefined) {
       const tx = runtime.edit();
       const probe = await runtime.patternManager.compilePattern(faceProbe, {
-        space: profileSpace,
+        space: readerSpace,
         tx,
       });
       const result = runtime.getCell<
         { face: { picture?: FabricBytes; avatar?: string } }
-      >(profileSpace, "face-probe", undefined, tx);
+      >(readerSpace, "face-probe", undefined, tx);
       runtime.runner.run(tx, probe, { profile }, result);
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit().settled).error).toBeUndefined();
@@ -221,16 +242,18 @@ describe("profile picture ownership", () => {
   };
 
   /**
-   * Sets the picture to `bytes`, or clears it for `"clear"`, through the
-   * profile's own writer from `writer`, and returns the message of the error
-   * its commit failed with, if it failed.
+   * Sets the picture of `on`, the owner's profile unless given, to `bytes`,
+   * or clears it for `"clear"`, through the profile's own writer from
+   * `writer`, and returns the message of the error its commit failed with, if
+   * it failed.
    */
   const setPicture = async (
     writer: Runtime,
     bytes: number[] | "clear",
+    on: Cell<Profile> = profile,
   ): Promise<string | undefined> => {
     const cell = writer.getCellFromLink<Profile>(
-      profile.getAsNormalizedFullLink(),
+      on.getAsNormalizedFullLink(),
     );
     await cell.sync();
     const settled = Promise.withResolvers<IExtendedStorageTransaction>();
@@ -395,6 +418,41 @@ describe("profile picture ownership", () => {
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit().settled).error).toBeUndefined();
 
+      expect(await faceShown()).toEqual({});
+    });
+
+    it("credits no one, and shows no face, for a picture a visitor redirects to one its owner set in another space", async () => {
+      // The owner sets the picture of the visitor's profile, in the
+      // visitor's space, so that its bytes are labeled as the owner's.
+      const theirs = await startProfile(visitor, visitorSpace, current);
+      expect(await setPicture(runtime, [5, 5, 5], theirs.profile))
+        .toBeUndefined();
+      await theirs.profile.pull();
+      expect(
+        representsPrincipalSubjects(
+          cfcLabelViewForResolvedTarget(theirs.profile.key("picture"))
+            ?.entries ?? [],
+        ),
+      ).toEqual([owner.did()]);
+
+      // The visitor, whom the owner's profile space lets write, points the
+      // owner's picture at those bytes.
+      const owners = theirs.runtime.getCellFromLink<Profile>(
+        profile.getAsNormalizedFullLink(),
+      );
+      await owners.sync();
+      const ownersPicture = owners.key("picture").resolveAsCell();
+      await ownersPicture.sync();
+      const tx = theirs.runtime.edit();
+      tx.writeValueOrThrow(
+        ownersPicture.getAsNormalizedFullLink(),
+        theirs.profile.key("picture").resolveAsCell().getAsWriteRedirectLink(),
+      );
+      theirs.runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      expect(await picture()).toEqual([5, 5, 5]);
+
+      expect(await pictureWriter()).toBeUndefined();
       expect(await faceShown()).toEqual({});
     });
 

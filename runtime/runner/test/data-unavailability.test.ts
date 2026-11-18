@@ -935,6 +935,30 @@ describe("JavaScript-node data unavailability", () => {
     expectUnavailable(structuralOutput, "pending");
   });
 
+  it("passes a policy-authorized foreign root marker through an opaque guard input", async () => {
+    const target = runtime.getCell(
+      remoteSpace,
+      `foreign guard ${nextResultId++}`,
+    );
+    const tx = runtime.edit();
+    target.withTx(tx).setRaw(UNAVAILABLE_PENDING);
+    await tx.commit().settled;
+    let calls = 0;
+    const output = await runValueNode({
+      argument: { value: target.getAsLink() },
+      moduleType: "javascript-availability",
+      argumentSchema: { type: "unknown" },
+      resultSchema: { type: "boolean" },
+      unavailableInputPolicy: [{ path: [], reasons: ["pending"] }],
+      implementation: (value) => {
+        calls++;
+        return isUnavailable(value) && value.reason === "pending";
+      },
+    });
+    expect(calls).toBe(1);
+    expect(output).toBe(true);
+  });
+
   it("propagates initial unavailable values through legacy schema modes", async () => {
     for (const argumentSchema of [undefined, false] as const) {
       let calls = 0;

@@ -89,9 +89,11 @@ import {
   commitSetThreadTitle,
   commitSetTitle,
   commitThreadSend,
+  commitWindow,
   type ComposerAttachment,
   type ComposerCell,
   type ComposerState,
+  dismissRemoval,
   dropAttachment,
   FABRICHAT_POLICY,
   isOwnerOf,
@@ -106,9 +108,11 @@ import {
   NO_MESSAGE_RIGHTS,
   ownersMayObliterateIn,
   prepareAttach,
+  removalRequestId,
   type RepliedMessage,
   rightsOf,
   type RoomStreamEvent,
+  type RoomWindowEvent,
   type SetThreadTitleEvent,
   type SetTitleEvent,
   type StoredAbout,
@@ -117,6 +121,8 @@ import {
   TITLE_KEY,
   type TitlesCell,
   viewKeyOf,
+  type WindowsCell,
+  type WindowsValue,
 } from "./room-records.tsx";
 import {
   bodyText,
@@ -899,8 +905,8 @@ export interface MessageFacts {
    */
   authors: ProfileCell[];
 
-  /** The room's messages as the view offers them. */
-  list: ChatMessageList;
+  /** What the view offers of the room's messages, besides its windows. */
+  list: ChatMessageListFacts;
 }
 
 /**
@@ -1038,8 +1044,8 @@ export interface ChatThreadSummary {
   hasOlder: boolean;
 }
 
-/** A room's messages: facts, the newest, and its threads. */
-export interface ChatMessageList {
+/** What a room derives from its messages: facts, the newest, its threads. */
+export interface ChatMessageListFacts {
   /**
    * How many messages the room holds, obliterated tombstones included, and
    * those it can't read left out (see `messageEntries()`).
@@ -1075,6 +1081,24 @@ export interface ChatMessageList {
    * in a thread. A room shows how many there are; 0 in a room with none.
    */
   legacyReplies: number;
+}
+
+/**
+ * A room's messages: what it derives from them, and this session's windows
+ * onto them.
+ */
+export interface ChatMessageList extends ChatMessageListFacts {
+  /**
+   * This session's open windows onto the messages, by the `windowId` its
+   * client chose (`ChatMessageWindow.md`); absent until the first opens.
+   */
+  windows: PerSession<WindowsCell>;
+
+  /** Opens a window, or moves one already open. */
+  openWindow: Stream<RoomWindowEvent>;
+
+  /** Closes a window. */
+  closeWindow: Stream<RoomWindowEvent>;
 }
 
 /** Who is reading a room. */
@@ -1398,12 +1422,24 @@ export interface FabriChatRoomCoreOutput extends ChatRoomOutput {
   threadComposerSend: Stream<RoomStreamEvent>;
 }
 
+/** A file taken out of a composer whose removal the store refused. */
+interface UnremovedFile {
+  /** The request that added the file. */
+  requestId: string;
+
+  /** What the composer says of it: its name, and why it wasn't removed. */
+  text: string;
+}
+
 /** What one file a composer is attaching renders. */
 interface AttachingFileInput {
   /** The file, as the request adding it to the space's store. */
   file: ComposerAttachment;
 
-  /** The space's file store, which records the request's outcome. */
+  /**
+   * The space's file store, which records the request's outcome, and which
+   * the file's remove control removes the entry from.
+   */
   store: Cell<FileStoreOutput> | undefined;
 
   /** The session's composer state, which the file's remove control changes. */
@@ -1413,7 +1449,7 @@ interface AttachingFileInput {
 /**
  * One file the composer is attaching: its name, whether the store has added
  * it yet, under which name, or why it refused it, and a control that takes it
- * out of the next send.
+ * out of the next send and removes its entry from the store.
  */
 const FabriChatAttachingFile = pattern<AttachingFileInput, { [UI]: VNode }>(
   ({ file, store, composer }) => {
@@ -1439,7 +1475,11 @@ const FabriChatAttachingFile = pattern<AttachingFileInput, { [UI]: VNode }>(
           <cf-button
             size="sm"
             variant="ghost"
-            onClick={dropAttachment({ composer, requestId: file.requestId })}
+            onClick={dropAttachment({
+              composer,
+              store,
+              requestId: file.requestId,
+            })}
           >
             Remove
           </cf-button>
@@ -1570,6 +1610,11 @@ export const FabriChatRoomCore = pattern<
     self,
   });
   const alsoToMain = new Writable.perSession(false);
+  // A room's stored result can hold a writer claim at `messages/windows`
+  // naming `commitWindow`, which a release keeps; see `commitWindow`. Its
+  // place in the result fixes the cell's identity, the one such a room's
+  // stored result links.
+  const windows = new Writable.perSession<WindowsValue>();
 
   // Everything the room derives from its messages, in one walk (see
   // `MessageFacts`).
@@ -1871,6 +1916,23 @@ export const FabriChatRoomCore = pattern<
   const attachingFiles = computed((): PerSession<ComposerAttachment[]> =>
     composer.get()?.attaching ?? []
   );
+  // The files taken out of this session's composer whose removal the store
+  // refused for a reason other than finding no entry, each with that reason,
+  // each removal's outcome read by its id alone.
+  const unremovedFiles = computed((): PerSession<UnremovedFile[]> =>
+    (composer.get()?.takenOut ?? []).flatMap((file) => {
+      if (file.removing !== true) return [];
+      const outcome = spaceFileStore?.key("requests").key(
+        removalRequestId(file.requestId),
+      ).get() as FileRequestOutcome | undefined;
+      return outcome?.status === "refused" && outcome.code !== "not-found"
+        ? [{
+          requestId: file.requestId,
+          text: `${file.name} stays in this chat's files: ${outcome.reason}`,
+        }]
+        : [];
+    })
+  );
   const threadComposers = threadComposerRoots.map((root) =>
     FabriChatThreadComposer({
       root,
@@ -1947,7 +2009,17 @@ export const FabriChatRoomCore = pattern<
     participantEntries: participantEntriesForUser,
     participantPrincipals: participantPrincipalsForUser,
     addParticipant: join,
-    messages: facts.list,
+    messages: {
+      count: facts.list.count,
+      oldestAt: facts.list.oldestAt,
+      newestAt: facts.list.newestAt,
+      latest: facts.list.latest,
+      threads: facts.list.threads,
+      legacyReplies: facts.list.legacyReplies,
+      windows,
+      openWindow: commitWindow({ op: "open", messages, windows }),
+      closeWindow: commitWindow({ op: "close", messages, windows }),
+    },
     canSend: canSendForSession,
     viewer: viewerForSession,
     messageRights: messageRightsForSession,
@@ -2098,6 +2170,21 @@ export const FabriChatRoomCore = pattern<
               store={spaceFileStore}
               composer={composer}
             />
+          ))}
+          {unremovedFiles.map((file) => (
+            <cf-hstack gap="1" align="center">
+              <cf-text variant="caption">{file.text}</cf-text>
+              <cf-button
+                size="sm"
+                variant="ghost"
+                onClick={dismissRemoval({
+                  composer,
+                  requestId: file.requestId,
+                })}
+              >
+                Dismiss
+              </cf-button>
+            </cf-hstack>
           ))}
           <cf-file-input
             multiple

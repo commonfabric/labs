@@ -8,11 +8,22 @@ import {
   wish,
 } from "commonfabric";
 
+type Profile = { initialNameApplied?: string };
+
+/** The name shown for the viewer: the name their profile was created with,
+ * then their profile name, then a placeholder when they have no profile. */
+export const displayNameFor = (
+  profile: Profile | undefined,
+  profileName: string | undefined,
+): string => profile?.initialNameApplied ?? profileName ?? "No profile";
+
+/** The status line for the viewer's profile name. */
+export const statusFor = (profileName: string | undefined): string =>
+  profileName ? `Profile: ${profileName}` : "No profile";
+
 export default pattern(
   () => {
-    const profileWish = wish<{ initialNameApplied?: string }>({
-      query: "#profile",
-    });
+    const profileWish = wish<Profile>({ query: "#profile" });
     const profileNameWish = wish<string>({ query: "#profileName" });
     const profile = hasError(profileWish.result)
       ? undefined
@@ -20,12 +31,8 @@ export default pattern(
     const profileName = hasError(profileNameWish.result)
       ? undefined
       : resultOf(profileNameWish.result);
-    const displayName = computed(() =>
-      profile?.initialNameApplied ?? profileName ?? "No profile"
-    );
-    const status = computed(() =>
-      profileName ? `Profile: ${profileName}` : "No profile"
-    );
+    const displayName = computed(() => displayNameFor(profile, profileName));
+    const status = computed(() => statusFor(profileName));
     return {
       [NAME]: "Shared Profile Demo",
       [UI]: (

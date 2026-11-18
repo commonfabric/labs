@@ -9,6 +9,7 @@
  * - hasBacklinks computed
  * - Edge cases: regular markdown links, special characters, missing checkboxes, empty content
  * - sourceNoteRef and goToEdit action
+ * - The rendered heading and backlink chips
  *
  * Run: deno task cf test patterns/system/notes/note-md.test.tsx --verbose
  */
@@ -19,8 +20,18 @@ import {
   NAME,
   pattern,
   TESTS,
+  UI,
   Writable,
 } from "commonfabric";
+import {
+  findElement,
+  findNodeByProp,
+  hasExactText,
+  hasText,
+  innermostNode,
+  isElement,
+  styleOf,
+} from "../../tools/test-support/vnode-helpers.ts";
 import NoteMd from "./note-md.tsx";
 import Note from "./note.tsx";
 import { type MentionRefMap, type NotePiece } from "./schemas.tsx";
@@ -52,6 +63,12 @@ const seedReference = handler<void, {
   references.key(key).set({ destination, modifiedTitle: false });
   held.set(destination);
 });
+/** The section listing backlinks: the innermost `div` holding its caption. */
+const backlinksSection = (root: unknown): unknown =>
+  innermostNode(
+    root,
+    (node) => isElement(node, "div") && hasText(node, "Linked from:"),
+  );
 
 export default pattern(() => {
   // Writable content cell for basic testing
@@ -261,6 +278,13 @@ export default pattern(() => {
     content: new Writable("Direct content"),
   });
 
+  // === Instance with a backlink and no title ===
+  const linker = Note({ title: "Linker", content: "", isHidden: false });
+  const mdBacklinked = NoteMd({
+    note: { title: "", content: "Linked to", backlinks: [linker] },
+    content: new Writable("Linked to"),
+  });
+
   // ==========================================================================
   // Actions
   // ==========================================================================
@@ -463,6 +487,18 @@ export default pattern(() => {
     () => md.hasBacklinks === false,
   );
 
+  // A backlink shows the section, with a chip naming the piece that links.
+  const assert_backlink_chip_shown = assert(() =>
+    mdBacklinked.hasBacklinks === true &&
+    styleOf(backlinksSection(mdBacklinked[UI]), "display") === "block" &&
+    findNodeByProp(mdBacklinked[UI], "label", "📝 Linker") !== undefined
+  );
+
+  // A note with no title is headed as untitled.
+  const assert_untitled_heading = assert(() =>
+    hasExactText(findElement(mdBacklinked[UI], "cf-heading"), "Untitled Note")
+  );
+
   // ==========================================================================
   // Assertions - Edge cases - wiki-links
   // ==========================================================================
@@ -598,6 +634,8 @@ export default pattern(() => {
 
       // === hasBacklinks computed ===
       { assertion: assert_no_backlinks_initially },
+      { assertion: assert_backlink_chip_shown },
+      { assertion: assert_untitled_heading },
 
       // === Edge cases - wiki-links ===
       { assertion: assert_regular_links_passthrough },
@@ -639,5 +677,13 @@ export default pattern(() => {
     mdWhitespace,
     mdWithSource,
     mdWithoutSource,
+    mdBacklinked,
+    // With server execution on, a navigation an action's event makes is a
+    // cascade hop, which the client does not enact ahead of the server, and
+    // the runtime warns `optimistic-navigate-skipped`. Sending `goToEdit` as a
+    // step of its own instead loses the event to the instance with a source
+    // note ("no handler registered ... after starting its piece"). The flag
+    // is a boolean, so it cannot be pinned to that warning.
+    allowConsoleWarnings: true,
   };
 });

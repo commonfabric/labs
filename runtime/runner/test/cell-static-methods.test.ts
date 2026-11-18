@@ -392,6 +392,37 @@ describe("Cell Static Methods", () => {
         expect(cell.get()).toEqual(value);
       });
     });
+
+    it("throws for a query-result view in the value, naming its path", () => {
+      withinHandlerContext(runtime, space, tx, () => {
+        const held = runtime.getCell<{ n: number }>(
+          space,
+          "static-data-view",
+          undefined,
+          tx,
+        );
+        held.set({ n: 1 });
+
+        expect(() => Cell.of({ outer: { view: held.getAsQueryResult() } }))
+          .toThrow(
+            "found a reactive value (CellResult) at path 'outer.view'",
+          );
+        expect(Cell.of({ outer: { view: { n: 1 } } }).get()).toEqual({
+          outer: { view: { n: 1 } },
+        });
+      });
+    });
+
+    it("throws while a module is evaluated, which holds no runtime", () => {
+      const frame = pushFrame({ moduleEvaluation: true });
+      try {
+        expect(() => Cell.of(42)).toThrow(
+          "Can't invoke Cell.of() outside of a pattern/handler/lift context",
+        );
+      } finally {
+        popFrame(frame);
+      }
+    });
   });
 
   describe("Cell.for()", () => {
@@ -452,6 +483,17 @@ describe("Cell Static Methods", () => {
         const cell = Cell.for("my-cause").asSchema(schema);
         expect(cell).toBeDefined();
       });
+    });
+
+    it("throws while a module is evaluated, which holds no runtime", () => {
+      const frame = pushFrame({ moduleEvaluation: true });
+      try {
+        expect(() => Cell.for("my-cause")).toThrow(
+          "Can't invoke Cell.for() outside of a pattern/handler/lift context",
+        );
+      } finally {
+        popFrame(frame);
+      }
     });
   });
 

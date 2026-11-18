@@ -247,6 +247,49 @@ describe("reactive retries", () => {
     });
   }
 
+  describe("a run that keeps meeting stale-basis rejections", () => {
+    // Every hundredth such rejection of one action is logged as an error.
+
+    async function rejectOnce(initialOffBudgetRetries: number) {
+      const errors: unknown[][] = [];
+      const originalError = console.error;
+      console.error = (...args: unknown[]) => errors.push(args);
+      try {
+        const r = await runWatcher("ConflictError", 0, {
+          initialOffBudgetRetries,
+        });
+        return {
+          r,
+          logged: errors.filter((call) =>
+            call.includes("reactive-retry-not-converging")
+          ),
+        };
+      } finally {
+        console.error = originalError;
+      }
+    }
+
+    it("logs that the action is not converging at the hundredth", async () => {
+      const { r, logged } = await rejectOnce(99);
+
+      expect(r.offBudgetRetries.get(r.action)).toBe(100);
+      expect(logged.map((call) => call.at(-1))).toEqual([
+        "reactive action test-action re-queued 100 times on a stale-basis " +
+        "rejection without converging; its subscription may never deliver " +
+        "the awaited value",
+      ]);
+      expect(r.queued).toBe(1);
+    });
+
+    it("logs nothing at the ninety-ninth", async () => {
+      const { r, logged } = await rejectOnce(98);
+
+      expect(r.offBudgetRetries.get(r.action)).toBe(99);
+      expect(logged).toEqual([]);
+      expect(r.queued).toBe(1);
+    });
+  });
+
   it(
     "does not retry a terminal reactive rejection and clears the retry budget",
     async () => {

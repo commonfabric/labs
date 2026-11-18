@@ -30,11 +30,6 @@ import {
 } from "../contracts/skill.ts";
 
 const SKILL_FILE_NAME = "SKILL.md";
-const MAX_SKILL_SCAN_DEPTH = 6;
-const MAX_SKILL_SCAN_DIRECTORIES = 2000;
-const MAX_SKILL_RESOURCE_SCAN_DEPTH = 8;
-const MAX_SKILL_RESOURCE_SCAN_DIRECTORIES = 1000;
-const MAX_SKILL_RESOURCE_FILES = 2000;
 const TEXT_DETECTION_SAMPLE_BYTES = 8192;
 const EXCLUDED_SKILL_DIRS = new Set([
   ".git",
@@ -45,10 +40,58 @@ const EXCLUDED_SKILL_DIRS = new Set([
 ]);
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+const SKILL_SCAN_LIMIT_NAMES = [
+  "skillDepth",
+  "skillDirectories",
+  "resourceDepth",
+  "resourceDirectories",
+  "resourceFiles",
+] as const;
+
+/**
+ * How far a skill scan goes. Past each bound the scan stops that branch, or
+ * stops altogether for a count, and records a diagnostic saying so.
+ */
+export type HarnessSkillScanLimits = Record<
+  typeof SKILL_SCAN_LIMIT_NAMES[number],
+  number
+>;
+
+/** The bounds a skill scan keeps to unless it is given others. */
+export const DEFAULT_SKILL_SCAN_LIMITS: HarnessSkillScanLimits = {
+  skillDepth: 6,
+  skillDirectories: 2000,
+  resourceDepth: 8,
+  resourceDirectories: 1000,
+  resourceFiles: 2000,
+};
+
+/**
+ * Returns `limits`, throwing for any that is missing or not a positive
+ * integer: a bound that is missing, `NaN` or `Infinity` would bound nothing,
+ * and one that is not a whole number would read as another.
+ */
+function checkScanLimits(
+  limits: HarnessSkillScanLimits,
+): HarnessSkillScanLimits {
+  for (const name of SKILL_SCAN_LIMIT_NAMES) {
+    const value = limits[name];
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new RangeError(
+        `skill scan limit ${name} must be a positive integer, not ${value}`,
+      );
+    }
+  }
+  return limits;
+}
+
 export interface DiscoverHarnessSkillsOptions {
   skillsRoot: string;
   sandboxSkillsRoot?: string;
   generatedAt?: string;
+
+  /** Bounds to scan within in place of {@link DEFAULT_SKILL_SCAN_LIMITS}. */
+  scanLimits?: HarnessSkillScanLimits;
 }
 
 export interface LoadHarnessSkillContextOptions {
@@ -231,21 +274,10 @@ const sha256BytesDigest = async (content: Uint8Array): Promise<string> => {
 const sha256Digest = async (content: string): Promise<string> =>
   await sha256BytesDigest(new TextEncoder().encode(content));
 
-const pathExists = async (path: string): Promise<boolean> => {
-  try {
-    await Deno.stat(path);
-    return true;
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
-      return false;
-    }
-    throw error;
-  }
-};
-
 const collectSkillFiles = async (
   skillsRoot: string,
   resolvedSkillsRoot: string,
+  limits: HarnessSkillScanLimits,
 ): Promise<{ skillFiles: string[]; diagnostics: HarnessSkillDiagnostic[] }> => {
   const skillFiles: string[] = [];
   const diagnostics: HarnessSkillDiagnostic[] = [];
@@ -274,29 +306,48 @@ const collectSkillFiles = async (
       return;
     }
     directoriesVisited += 1;
-    if (directoriesVisited > MAX_SKILL_SCAN_DIRECTORIES) {
+    if (directoriesVisited > limits.skillDirectories) {
       diagnostics.push(createDiagnostic({
         severity: "warning",
         code: "scan-limit-exceeded",
         detail:
-          `Stopped scanning skills after ${MAX_SKILL_SCAN_DIRECTORIES} directories.`,
+          `Stopped scanning skills after ${limits.skillDirectories} directories.`,
         path: dir,
       }));
       return;
     }
-    if (depth > MAX_SKILL_SCAN_DEPTH) {
+    if (depth > limits.skillDepth) {
       diagnostics.push(createDiagnostic({
         severity: "warning",
         code: "max-depth-exceeded",
         detail:
-          `Skipped skill scan path beyond max depth ${MAX_SKILL_SCAN_DEPTH}.`,
+          `Skipped skill scan path beyond max depth ${limits.skillDepth}.`,
         path: dir,
       }));
       return;
     }
-    if (await pathExists(join(dir, SKILL_FILE_NAME))) {
-      skillFiles.push(join(dir, SKILL_FILE_NAME));
+    // A probe of the one name that matters, not the listing, decides whether
+    // this directory is a skill, so a directory that may be entered but not
+    // listed still yields its skill. A directory that cannot be searched or
+    // listed is a diagnostic like any other rather than the end of the whole
+    // scan.
+    const unreadable = (error: unknown) =>
+      diagnostics.push(createDiagnostic({
+        severity: "warning",
+        code: "unreadable-directory",
+        detail: describeFailure(error),
+        path: dir,
+      }));
+    const skillPath = join(dir, SKILL_FILE_NAME);
+    try {
+      await Deno.lstat(skillPath);
+      skillFiles.push(skillPath);
       return;
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) {
+        unreadable(error);
+        return;
+      }
     }
     let entries: Deno.DirEntry[];
     try {
@@ -305,12 +356,7 @@ const collectSkillFiles = async (
         entries.push(entry);
       }
     } catch (error) {
-      diagnostics.push(createDiagnostic({
-        severity: "warning",
-        code: "unreadable-directory",
-        detail: describeFailure(error),
-        path: dir,
-      }));
+      unreadable(error);
       return;
     }
     entries.sort((a, b) => a.name.localeCompare(b.name));
@@ -468,6 +514,7 @@ const collectSkillResources = async (
     sandboxSkillsRoot: string;
     skillDir: string;
     resolvedSkillDir: string;
+    limits: HarnessSkillScanLimits;
   },
 ): Promise<{
   resources: HarnessSkillResourceRecord[];
@@ -510,22 +557,22 @@ const collectSkillResources = async (
     }
     visitedDirectories.add(resolvedDir);
     directoriesVisited += 1;
-    if (directoriesVisited > MAX_SKILL_RESOURCE_SCAN_DIRECTORIES) {
+    if (directoriesVisited > options.limits.resourceDirectories) {
       diagnostics.push(createDiagnostic({
         severity: "warning",
         code: "resource-scan-limit-exceeded",
         detail:
-          `Stopped scanning skill resources after ${MAX_SKILL_RESOURCE_SCAN_DIRECTORIES} directories.`,
+          `Stopped scanning skill resources after ${options.limits.resourceDirectories} directories.`,
         path: dir,
       }));
       return;
     }
-    if (depth > MAX_SKILL_RESOURCE_SCAN_DEPTH) {
+    if (depth > options.limits.resourceDepth) {
       diagnostics.push(createDiagnostic({
         severity: "warning",
         code: "resource-max-depth-exceeded",
         detail:
-          `Skipped skill resource scan path beyond max depth ${MAX_SKILL_RESOURCE_SCAN_DEPTH}.`,
+          `Skipped skill resource scan path beyond max depth ${options.limits.resourceDepth}.`,
         path: dir,
       }));
       return;
@@ -580,12 +627,12 @@ const collectSkillResources = async (
         continue;
       }
       filesVisited += 1;
-      if (filesVisited > MAX_SKILL_RESOURCE_FILES) {
+      if (filesVisited > options.limits.resourceFiles) {
         diagnostics.push(createDiagnostic({
           severity: "warning",
           code: "resource-file-limit-exceeded",
           detail:
-            `Stopped indexing skill resources after ${MAX_SKILL_RESOURCE_FILES} files.`,
+            `Stopped indexing skill resources after ${options.limits.resourceFiles} files.`,
           path: entryPath,
         }));
         return;
@@ -681,9 +728,13 @@ export const discoverHarnessSkills = async (
   if (!rootInfo.isDirectory) {
     throw new Error(`skills root must be a directory: ${skillsRoot}`);
   }
+  const limits = checkScanLimits(
+    options.scanLimits ?? DEFAULT_SKILL_SCAN_LIMITS,
+  );
   const { skillFiles, diagnostics: scanDiagnostics } = await collectSkillFiles(
     skillsRoot,
     resolvedSkillsRoot,
+    limits,
   );
   for (const diagnostic of scanDiagnostics) diagnostics.push(diagnostic);
   const skills: HarnessSkillRecord[] = [];
@@ -790,6 +841,7 @@ export const discoverHarnessSkills = async (
         sandboxSkillsRoot,
         skillDir,
         resolvedSkillDir,
+        limits,
       });
     for (const diagnostic of resourceDiagnostics) {
       recordDiagnostics.push(diagnostic);

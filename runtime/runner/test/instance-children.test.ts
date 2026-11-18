@@ -245,6 +245,30 @@ describe("instance-children", () => {
       expect(result.aCount).toBe(9);
     });
 
+    it("runs the first well-formed child its parent's `instanceChildren` records for it, past malformed entries and a later repeat of its name", async () => {
+      // The recorded child names no scope, which reads as `space`. Were it
+      // skipped too, `a` would carry over the child holding 7.
+      const cell = await deployedParent(
+        "malformed-entries",
+        NAMED,
+        DEPLOYED_TWO,
+      );
+      const { space, id } = positionalChild(cell, 1).getAsNormalizedFullLink();
+      await writeMeta(cell, {
+        instanceChildren: [
+          "a",
+          { name: 7, child: { space, id } },
+          { name: "a", child: { space } },
+          { name: "a", child: { space, id } },
+          entry("a", positionalChild(cell, 0)),
+        ],
+      });
+
+      const result = await update(cell, NAMED);
+
+      expect(result.aCount).toBe(9);
+    });
+
     it("carries over the child the pattern its parent last set up gives it, when its parent's `instanceChildren` records none for it", async () => {
       const cell = await deployedParent(
         "no-recorded-child",

@@ -31,11 +31,16 @@ import { type Cell, sendEvent } from "../src/cell.ts";
 import type {
   DID,
   IExtendedStorageTransaction,
+  ISpaceReplica,
   MemorySpace,
   URI,
 } from "../src/storage/interface.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
-import { ArrivalLog, awaitAdmitted } from "./support/serving-waits.ts";
+import {
+  ArrivalLog,
+  awaitAdmitted,
+  awaitReplica,
+} from "./support/serving-waits.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { selectForeignStaleInstances } from "../src/executor/space-server.ts";
 import {
@@ -66,6 +71,8 @@ import { resolveSpaceRootPattern } from "../src/ensure-space-root.ts";
 import { inSpaceRootCause } from "../src/in-space-root-cause.ts";
 import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import { parseLink } from "../src/link-utils.ts";
+import { toURI } from "../src/uri-utils.ts";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   newSharedServer,
   TEST_MEMORY_SERVER_AUTH,
@@ -92,6 +99,16 @@ class SharedServerStorageManager extends EmulatedStorageManager {
     return super.connectTo(server, options) as SharedServerStorageManager;
   }
 }
+
+// The entries `replica` holds in the stream sidecar `sidecarId`.
+const sidecarEntries = (
+  replica: Pick<ISpaceReplica, "getDocument">,
+  sidecarId: string,
+): readonly unknown[] => {
+  const sidecar = replica.getDocument?.(toURI(sidecarId), "space")?.value;
+  const entries = isObjectNotArray(sidecar) ? sidecar.entries : undefined;
+  return Array.isArray(entries) ? entries : [];
+};
 
 const homeSigner = await Identity.fromPassphrase("cross-space home");
 const homeSpace = homeSigner.did() as MemorySpace;
@@ -3604,5 +3621,208 @@ export default pattern<
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("commits a served `.inSpace()` create on its first attempt when the next event on its stream arrives while its new space closes", async () => {
+    // A served `.inSpace()` create closes the new space first and the home
+    // space after, and checks the home space's documents again once the new
+    // space's close returns. Among them is the create stream's sidecar,
+    // where the delivery marks the entry it handles. The client fires the
+    // second create in that window, which appends to the sidecar: an entry
+    // added after the last, every earlier one as it was. Refused for it, the
+    // first create's commit failed with its new space already written, and
+    // the event ran again later, behind the second when the drain had
+    // queued that one already: the Home profile picker then listed two
+    // profiles in the opposite order from their creation.
+    const servingRuntimes = new Map<MemorySpace, Runtime>();
+    // The error of every event handler commit a serving runtime reports.
+    const commitErrors: string[] = [];
+    onServingRuntime = (runtime) => {
+      servingRuntimes.set(runtime.storageManager.servingHomeSpace!, runtime);
+      runtime.telemetry.addEventListener("telemetry", (event) => {
+        if (!(event instanceof CustomEvent)) return;
+        const detail: unknown = event.detail;
+        const marker = isObjectNotArray(detail) ? detail.marker : undefined;
+        if (
+          isObjectNotArray(marker) &&
+          marker.type === "scheduler.event.commit" &&
+          typeof marker.error === "string"
+        ) {
+          commitErrors.push(marker.error);
+        }
+      });
+      return Promise.resolve();
+    };
+    clientManager = SharedServerStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+      experimental: { serverExecution: true },
+    });
+    const compiled = await clientRuntime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+import { action, pattern, type Stream, type Writable } from "commonfabric";
+const Room = pattern<{ title: string }, { title: string }>(
+  ({ title }) => ({ title }),
+);
+export default pattern<
+  { rooms: Writable<unknown[]> },
+  { create: Stream<{ title: string }> }
+>(({ rooms }) => ({
+  create: action(({ title }: { title: string }) => {
+    rooms.push(Room.inSpace(undefined)({ title }));
+  }),
+}));`,
+      }],
+    }, { space: homeSpace });
+    const argument = clientRuntime.getCell<{ rooms: unknown[] }>(
+      homeSpace,
+      "in-space-order-argument",
+    );
+    const result = clientRuntime.getCell<{ create: unknown }>(
+      homeSpace,
+      "in-space-order-result",
+      compiled.resultSchema,
+    );
+    await Promise.all([argument.sync(), result.sync()]);
+    const seed = clientRuntime.edit();
+    argument.withTx(seed).set({ rooms: [] });
+    clientRuntime.run(seed, compiled, argument, result);
+    expect((await seed.commit().settled).error).toBeUndefined();
+    await clientManager.synced();
+    const create = result.key("create").resolveAsCell();
+    const stream = create.getAsNormalizedFullLink();
+    const sidecarId = streamEntriesDocId({
+      id: stream.id,
+      path: [...stream.path],
+      scope: stream.scope,
+    });
+
+    // The new space's close asks the memory server whether the acting user
+    // may write it, and the home space's check waits on the answer. The
+    // second create fires there, and the answer comes once the serving
+    // runtime's replica holds its entry.
+    const probe = server.foreignWriteAuthorityFor.bind(server);
+    let firstRoomSpace: string | undefined;
+    server.foreignWriteAuthorityFor = async (space, principal) => {
+      if (firstRoomSpace === undefined && space !== homeSpace) {
+        firstRoomSpace = space;
+        create.send({ title: "second" });
+        await clientManager.synced();
+        const serving = servingRuntimes.get(homeSpace)!;
+        const replica = serving.storageManager.open(homeSpace).replica;
+        await awaitReplica(
+          serving.storageManager,
+          () => sidecarEntries(replica, sidecarId).length === 2,
+        );
+      }
+      return await probe(space, principal);
+    };
+    host = newHost();
+
+    create.send({ title: "first" });
+    const engine = await server.engineForSpace(homeSpace);
+    const rooms = (): unknown[] =>
+      (readDoc(engine, { id: argument.getAsNormalizedFullLink().id })
+        ?.value as { rooms?: unknown[] } | undefined)?.rooms ?? [];
+    await awaitAdmitted(server, () => rooms().length === 2);
+    // The first create's home writes landed with the space its close made,
+    // on its first attempt.
+    expect(firstRoomSpace).toBeDefined();
+    expect(parseLink(rooms()[0])!.space).toBe(firstRoomSpace);
+    expect(commitErrors).toEqual([]);
+    const titles = await Promise.all(
+      rooms().map((room) =>
+        clientRuntime.getCellFromLink(parseLink(room)!).key("title").asSchema({
+          type: "string",
+        }).pull()
+      ),
+    );
+    expect(titles).toEqual(["first", "second"]);
+  });
+
+  it("refuses a transaction that read a stream's whole entries log once an event is appended to it, and commits one that read only an entry it held", async () => {
+    // No serving loop runs, so nothing but the client's own appends changes
+    // the stream's sidecar.
+    clientManager = SharedServerStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+      experimental: { serverExecution: true },
+    });
+    const compiled = await clientRuntime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+import { action, pattern, type Stream } from "commonfabric";
+export default pattern<Record<string, never>, { fire: Stream<{ n: number }> }>(
+  () => ({ fire: action((_: { n: number }) => {}) }),
+);`,
+      }],
+    }, { space: homeSpace });
+    const argument = clientRuntime.getCell<Record<string, never>>(
+      homeSpace,
+      "sidecar-reads-argument",
+    );
+    const result = clientRuntime.getCell<{ fire: unknown }>(
+      homeSpace,
+      "sidecar-reads-result",
+      compiled.resultSchema,
+    );
+    await Promise.all([argument.sync(), result.sync()]);
+    const seed = clientRuntime.edit();
+    argument.withTx(seed).set({});
+    clientRuntime.run(seed, compiled, argument, result);
+    expect((await seed.commit().settled).error).toBeUndefined();
+    const fire = result.key("fire").resolveAsCell();
+    const stream = fire.getAsNormalizedFullLink();
+    const sidecarId = toURI(streamEntriesDocId({
+      id: stream.id,
+      path: [...stream.path],
+      scope: stream.scope,
+    }));
+    const replica = clientManager.open(homeSpace).replica;
+    fire.send({ n: 1 });
+    await clientManager.synced();
+    await awaitReplica(
+      clientManager,
+      () => sidecarEntries(replica, sidecarId).length === 1,
+    );
+
+    const log = { space: homeSpace, scope: "space" as const, id: sidecarId };
+    const wholeLog = clientRuntime.edit();
+    wholeLog.readValueOrThrow({ ...log, path: ["entries"] });
+    wholeLog.writeValueOrThrow({
+      ...log,
+      id: "of:sidecar-reads-whole",
+      path: [],
+    }, { v: 1 });
+    const heldEntry = clientRuntime.edit();
+    heldEntry.readValueOrThrow({ ...log, path: ["entries", "0"] });
+    heldEntry.writeValueOrThrow({
+      ...log,
+      id: "of:sidecar-reads-held",
+      path: [],
+    }, { v: 1 });
+
+    fire.send({ n: 2 });
+    await clientManager.synced();
+    await awaitReplica(
+      clientManager,
+      () => sidecarEntries(replica, sidecarId).length === 2,
+    );
+
+    expect((await wholeLog.commit().settled).error?.name).toBe(
+      "StorageTransactionInconsistent",
+    );
+    expect((await heldEntry.commit().settled).error).toBeUndefined();
   });
 });

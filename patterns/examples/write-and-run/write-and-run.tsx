@@ -3,6 +3,7 @@
 import {
   type AsyncResult,
   compileAndRun,
+  compileDiagnosticsOf,
   computed,
   Default,
   generateText,
@@ -20,6 +21,10 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
+import {
+  type CompileDiagnostic,
+  compileFailure,
+} from "../compiler/compile-failure.ts";
 
 interface Input {
   prompt: string | Default<"Create a simple counter">;
@@ -53,9 +58,10 @@ export const WriteAndRunStatus = pattern<
     generatedRequest: AsyncResult<string>;
     // Matches the compiler's open-ended generated-pattern result boundary.
     compileRequest: any;
+    diagnostics?: CompileDiagnostic[];
   },
   { [UI]: VNode; error?: string }
->(({ generatedRequest, compileRequest }) => {
+>(({ generatedRequest, compileRequest, diagnostics }) => {
   const observedCompileRequest = observeAvailability(compileRequest);
 
   const isGenerating = computed(() =>
@@ -72,12 +78,15 @@ export const WriteAndRunStatus = pattern<
       ? false
       : isPending(observedCompileRequest) || isSyncing(observedCompileRequest)
   );
-  const compileFailed = hasError(observedCompileRequest);
   const compileError = computed(() =>
-    hasError(observedCompileRequest)
-      ? observedCompileRequest.message
-      : undefined
+    compileFailure(
+      hasError(observedCompileRequest)
+        ? observedCompileRequest.message
+        : undefined,
+      diagnostics,
+    )
   );
+  const compileFailed = computed(() => !!compileError);
   const isReady = computed(() =>
     !isPending(observedCompileRequest) && !isSyncing(observedCompileRequest) &&
     !hasError(observedCompileRequest)
@@ -200,7 +209,12 @@ Generate ONLY the TypeScript code, no explanations or markdown.`;
   const compileRequest = compileAndRun(compileParams);
   const compiledPiece = resultOf(compileRequest);
 
-  const status = WriteAndRunStatus({ generatedRequest, compileRequest });
+  const diagnostics = compileDiagnosticsOf(compileRequest);
+  const status = WriteAndRunStatus({
+    generatedRequest,
+    compileRequest,
+    diagnostics,
+  });
   const hasCode = computed(() => !!generated);
   const isReady = computed(() =>
     !isPending(compileRequest) && !isSyncing(compileRequest) &&

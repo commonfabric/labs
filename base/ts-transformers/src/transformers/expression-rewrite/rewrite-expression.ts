@@ -12,7 +12,10 @@ import type {
   EmitterContext,
   RewriteParams,
 } from "./types.ts";
-import { isArrayMethodReceiverExpression } from "./rewrite-helpers.ts";
+import {
+  hasSyntheticComputeCallbackAncestor,
+  isArrayMethodReceiverExpression,
+} from "./rewrite-helpers.ts";
 import {
   emitBinaryExpression,
   emitCallExpression,
@@ -48,23 +51,6 @@ function isSameReactiveContextBoundary(
   const targetInfo = context.getReactiveContext(target);
   return sourceInfo.kind === targetInfo.kind &&
     sourceInfo.owner === targetInfo.owner;
-}
-
-function hasSyntheticComputeCallbackAncestor(
-  node: ts.Node,
-  context: RewriteParams["context"],
-): boolean {
-  let current = node.parent;
-  while (current) {
-    if (
-      (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) &&
-      context.isSyntheticComputeCallback(current)
-    ) {
-      return true;
-    }
-    current = current.parent;
-  }
-  return false;
 }
 
 function isInsideKnownSafeCallbackWrapper(
@@ -103,7 +89,6 @@ function rewriteChildExpressions(
   analyze: AnalyzeFn,
   reactiveContextKind: RewriteParams["reactiveContextKind"],
   containerKind: RewriteParams["containerKind"],
-  inSafeContext?: boolean,
   preferInputBoundWrappers?: boolean,
 ): ts.Expression {
   const visitor = (child: ts.Node): ts.Node => {
@@ -133,7 +118,6 @@ function rewriteChildExpressions(
               analyze,
               reactiveContextKind,
               containerKind,
-              inSafeContext,
               preferInputBoundWrappers,
             )
           );
@@ -170,7 +154,6 @@ function rewriteChildExpressions(
           analyze,
           reactiveContextKind,
           containerKind,
-          inSafeContext,
           preferInputBoundWrappers,
         });
         if (result) {
@@ -191,7 +174,6 @@ function rewriteChildExpressions(
 export function rewriteExpression(
   params: RewriteParams,
 ): ts.Expression | undefined {
-  const inSafeContext = params.inSafeContext ?? false;
   const reactiveContextKind = params.reactiveContextKind ?? "neutral";
   const preferInputBoundWrappers = params.preferInputBoundWrappers ?? false;
   const emitterContext: EmitterContext = {
@@ -202,7 +184,6 @@ export function rewriteExpression(
         params.analyze,
         reactiveContextKind,
         params.containerKind,
-        inSafeContext,
         preferInputBoundWrappers,
       );
     },
@@ -220,7 +201,6 @@ export function rewriteExpression(
           params.analyze,
           reactiveContextKind,
           params.containerKind,
-          inSafeContext,
           preferInputBoundWrappers,
         );
       }
@@ -234,7 +214,6 @@ export function rewriteExpression(
           analyze: params.analyze,
           reactiveContextKind,
           containerKind: params.containerKind,
-          inSafeContext,
           preferInputBoundWrappers,
         }) ?? rewriteChildExpressions(
           node,
@@ -242,7 +221,6 @@ export function rewriteExpression(
           params.analyze,
           reactiveContextKind,
           params.containerKind,
-          inSafeContext,
           preferInputBoundWrappers,
         );
       }
@@ -253,12 +231,10 @@ export function rewriteExpression(
         params.analyze,
         reactiveContextKind,
         params.containerKind,
-        inSafeContext,
         preferInputBoundWrappers,
       );
     },
     ...params,
-    inSafeContext,
     preferInputBoundWrappers,
     reactiveContextKind,
     containerKind: params.containerKind,

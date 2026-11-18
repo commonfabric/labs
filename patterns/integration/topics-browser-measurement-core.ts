@@ -124,15 +124,17 @@ export function locateLift(
 
 /**
  * Returns the function the compiled module `js` passes to the lift declared as
- * `const <name> = (0, <alias>.lift)(<function>, ...)` or
- * `exports.<name> = (0, <alias>.lift)(<function>, ...)`. The text is what the
- * function's `toString()` returns, so a running action's preview is its first
+ * `const <name> = (0, <alias>.lift)(<function>, ...)`, the form the compiler
+ * emits for an authored `const <name> = lift(<function>)`, or as
+ * `exports.<name> = (0, <alias>.lift)(<function>, ...)`, the form it emits
+ * where the authored declaration is exported. The text is what the function's
+ * `toString()` returns, so a running action's preview is its first
  * {@link PREVIEW_LENGTH} characters. `js` is parsed as JavaScript, so a
  * bracket, a declaration, or a `/` inside a string, a template literal, a
  * regular expression, or a comment is read as part of that literal or comment.
  *
- * @throws If `js` holds no such binding or more than one; `source` names
- *   the module in the message.
+ * @throws If `js` holds no such declaration or more than one, counting both
+ *   forms together; `source` names the module in the message.
  */
 export function compiledLiftText(
   js: string,
@@ -143,8 +145,9 @@ export function compiledLiftText(
   const found = liftArguments(parsed, name, isCompiledLiftCallee, true);
   if (found.length !== 1) {
     throw new Error(
-      `Expected one compiled lift binding for \`${name}\` in ${source}, ` +
-        `found ${found.length}`,
+      `Expected one compiled \`const ${name} = (0, <alias>.lift)(<function>` +
+        `, ...)\` or \`exports.${name} = (0, <alias>.lift)(<function>, ...)\` ` +
+        `declaration in ${source}, found ${found.length}`,
     );
   }
   return js.slice(found[0].getStart(parsed), found[0].getEnd());
@@ -588,38 +591,39 @@ function parse(
 /**
  * Helper for the lookups above, which returns the first argument of every
  * `const <name> = <callee>(...)` declaration in `parsed` whose callee
- * `isLift` accepts, in source order. With `includeNamedExports`, an
- * `exports.<name> = <callee>(...)` assignment also supplies a binding.
- * A call with no argument supplies none.
+ * `isLift` accepts, in source order. A declaration whose call has no argument
+ * is not one of them. With `exported`, an `exports.<name> = <callee>(...)`
+ * assignment counts as a declaration too: compiled, an exported `const` has no
+ * declaration of its own, only that assignment. The `exports.<name> = void 0`
+ * the compiler hoists above it assigns no call, so it is not one of them.
  */
 function liftArguments(
   parsed: ts.SourceFile,
   name: string,
   isLift: (callee: ts.Expression) => boolean,
-  includeNamedExports = false,
+  exported = false,
 ): ts.Expression[] {
   const found: ts.Expression[] = [];
   const visit = (node: ts.Node): void => {
-    let initializer: ts.Expression | undefined;
     if (
       ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) &&
-      node.name.text === name
+      node.name.text === name && node.initializer !== undefined &&
+      ts.isCallExpression(node.initializer) &&
+      isLift(node.initializer.expression) &&
+      node.initializer.arguments.length > 0
     ) {
-      initializer = node.initializer;
+      found.push(node.initializer.arguments[0]);
     } else if (
-      includeNamedExports && ts.isBinaryExpression(node) &&
+      exported && ts.isBinaryExpression(node) &&
       node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
       ts.isPropertyAccessExpression(node.left) &&
       ts.isIdentifier(node.left.expression) &&
-      node.left.expression.text === "exports" && node.left.name.text === name
+      node.left.expression.text === "exports" &&
+      ts.isIdentifier(node.left.name) && node.left.name.text === name &&
+      ts.isCallExpression(node.right) && isLift(node.right.expression) &&
+      node.right.arguments.length > 0
     ) {
-      initializer = node.right;
-    }
-    if (
-      initializer !== undefined && ts.isCallExpression(initializer) &&
-      isLift(initializer.expression) && initializer.arguments.length > 0
-    ) {
-      found.push(initializer.arguments[0]);
+      found.push(node.right.arguments[0]);
     }
     ts.forEachChild(node, visit);
   };

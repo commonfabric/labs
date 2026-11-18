@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { HARNESS_RUN_DEPTHS } from "../src/contracts/run-depth.ts";
 import {
+  classifiedShape,
   PROMPT_SECTIONS,
   type PromptSection,
   type RunShape,
@@ -132,5 +133,28 @@ describe("prompt sections", () => {
         depth: "deep",
       }),
     ).toEqual(["material-bar", "critique"]);
+  });
+
+  describe("classifiedShape()", () => {
+    it("returns the tags and domains of a classification at the run's depth", () => {
+      expect(
+        classifiedShape({ tags: ["find"], domains: ["fabric"] }, "deep"),
+      ).toEqual({
+        tags: new Set(["find"]),
+        domains: new Set(["fabric"]),
+        depth: "deep",
+      });
+    });
+
+    it("returns no domains for a classification recorded before tasks had them", () => {
+      const shape = classifiedShape({ tags: ["find"] }, "standard");
+
+      expect(shape).toEqual({ tags: new Set(["find"]), depth: "standard" });
+      expect("domains" in shape).toBe(false);
+    });
+
+    it("returns only the depth for a run that was never classified", () => {
+      expect(classifiedShape(undefined, "quick")).toEqual({ depth: "quick" });
+    });
   });
 });

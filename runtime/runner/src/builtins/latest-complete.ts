@@ -2,13 +2,18 @@ import {
   isUnavailable,
   UNAVAILABLE_PENDING,
 } from "@commonfabric/data-model/availability";
-import { cloneIfNecessary, type FabricValue } from "@commonfabric/data-model";
+import type { FabricValue } from "@commonfabric/data-model";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
-import { type Cell, getCellWithStatus } from "../cell.ts";
+import {
+  type Cell,
+  type CellLinkInput,
+  convertCellsToLinks,
+  getCellWithStatus,
+} from "../cell.ts";
 import { selectDataUnavailable } from "../data-unavailability.ts";
 import { toMemorySpaceAddress } from "../link-types.ts";
-import type { NormalizedFullLink } from "../link-types.ts";
+import { KeepAsCell, type NormalizedFullLink } from "../link-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import type { Action } from "../scheduler.ts";
 import { narrowestScope } from "../scope.ts";
@@ -72,7 +77,7 @@ export function latestComplete(
     );
 
     let complete = false;
-    let snapshot: unknown;
+    let snapshot: FabricValue;
     if (isUnavailable(raw)) {
       // The topology probe above is deliberately non-consuming. Record the
       // actual marker read so the action is subscribed to its replacement.
@@ -83,7 +88,11 @@ export function latestComplete(
         "ok" in status && selectDataUnavailable(status.ok) === undefined
       ) {
         complete = true;
-        snapshot = cloneIfNecessary(status.ok, { frozen: false });
+        snapshot = convertCellsToLinks(status.ok as CellLinkInput, {
+          includeSchema: true,
+          keepAsCell: KeepAsCell.All,
+          doNotConvertCellResults: true,
+        });
       }
     }
 
@@ -119,7 +128,7 @@ export function latestComplete(
     }
 
     if (complete) {
-      result.withTx(tx).setRawUntyped(snapshot as FabricValue, true);
+      result.withTx(tx).setRawUntyped(snapshot, true);
     } else if (!outputInitialized) {
       result.withTx(tx).setRawUntyped(UNAVAILABLE_PENDING, true);
     }

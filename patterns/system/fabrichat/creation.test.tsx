@@ -121,13 +121,6 @@ const codeOf = (
   return outcome?.status === "refused" ? outcome.code ?? "none" : "none";
 };
 
-/** What a room says of its messages through the link a manager lists. */
-const linkedCount = (room: ChatIndexEntry["room"] | undefined): string => {
-  const messages = room?.get()?.messages;
-  return `count:${messages?.count ?? "none"} ` +
-    `newestAt:${messages?.newestAt ?? "none"}`;
-};
-
 /** An empty shared-space catalog, as a manager lists its rooms from. */
 const emptyCatalog = () =>
   Writable.of<SharedSpaceCatalogStorage>({ entries: {}, offers: {} });
@@ -446,8 +439,7 @@ export default pattern(() => {
           group.rooms.length === 1 &&
           recipientsOf(groupNotices) === CAROL &&
           group.rooms[0]?.kind === "group" &&
-          group.rooms[0]?.room.key("about").get()?.kind === "group" &&
-          group.rooms[0]?.room.key("about").get()?.title === "Team" &&
+          group.rooms[0]?.title === "Team" &&
           !equals(group.rooms[0]?.room, directHeld.key("room"))
         ),
       },
@@ -456,13 +448,6 @@ export default pattern(() => {
         assertion: assert(() =>
           entriesOf(groupCatalog).length === 1 &&
           entriesOf(groupCatalog)[0]?.title === "Team"
-        ),
-      },
-      // The link carries where the conversation stands, which a new room has
-      // no messages of.
-      {
-        assertion: assert(() =>
-          linkedCount(group.rooms[0]?.room) === "count:0 newestAt:none"
         ),
       },
       // A request already decided changes nothing when it arrives again.
@@ -479,7 +464,7 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           group.rooms.length === 1 &&
-          group.rooms[0]?.room.key("about").get()?.title === "Team" &&
+          group.rooms[0]?.title === "Team" &&
           recipientsOf(groupNotices) === CAROL &&
           spaceAccessOf(roomOf(groupRequests, "g-1"), CAROL) === "OWNER" &&
           spaceAccessOf(roomOf(groupRequests, "g-1"), BOB) === "none"

@@ -266,6 +266,16 @@ describe("space-host", () => {
         memoryUrl: new URL("https://router.example/"),
       });
     });
+
+    it("throws for an API URL that does not parse, whatever the value", () => {
+      const error = captureError(() =>
+        readMemoryUrl("https://router.example", "not a URL")
+      );
+      expect(error).toBeInstanceOf(TypeError);
+      expect(error).not.toBeInstanceOf(SpaceHostValidationError);
+      expect(readMemoryUrl("https://router.example", "https://api.example"))
+        .toEqual({ memoryUrl: new URL("https://router.example/") });
+    });
   });
 
   describe("readHttpOrigin", () => {

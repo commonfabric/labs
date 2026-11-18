@@ -99,14 +99,9 @@ export class ACLManager {
   }
 
   async remove(user: ACLUser): Promise<ACL> {
-    const acl = await this.get();
-    if (acl === null) {
-      throw new Error("No ACL initialized for space.");
-    }
+    await this.get();
     return await this.#write((current) => {
-      if (current === null) {
-        throw new Error("No ACL initialized for space.");
-      }
+      if (current === null) throw new Error("No ACL initialized for space.");
       const { [user]: _removed, ...rest } = current;
       return rest;
     });
@@ -125,19 +120,7 @@ export class ACLManager {
    */
   async delete(by: DID): Promise<void> {
     await this.get();
-    try {
-      await this.#commit((tx) =>
-        writeDeletionTombstone(tx, this.#spaceDid, by)
-      );
-    } catch (error) {
-      // `editWithRetry` reports what the write throws as the reason of the
-      // abort it wraps it in, so the refusal is rethrown as itself, for a
-      // caller to tell apart.
-      const reason =
-        ((error as Error).cause as { reason?: unknown } | undefined)
-          ?.reason;
-      throw reason instanceof SpaceMembersRemainError ? reason : error;
-    }
+    await this.#commit((tx) => writeDeletionTombstone(tx, this.#spaceDid, by));
   }
 
   async #write(mutate: (current: ACL | null) => ACL): Promise<ACL> {
@@ -151,14 +134,26 @@ export class ACLManager {
 
   /**
    * Helper for {@link #write} and {@link delete}, which commits `write`,
-   * retrying it on a conflict, and returns what it wrote.
+   * retrying it on a conflict, and returns what it wrote. What the last
+   * attempt of `write` throws is rethrown as itself, for a caller to tell
+   * apart.
    */
   async #commit<T>(write: (tx: IExtendedStorageTransaction) => T): Promise<T> {
     // `editWithRetry` reruns `write` after catching up from a conflict, so
     // every attempt re-reads the list and derives the replacement from it,
     // and a retry merges with the winning list instead of replaying a stale,
     // precomputed whole-document value over it.
-    const result = await this.#runtime.editWithRetry(write);
+    let thrown: { error: unknown } | undefined;
+    const result = await this.#runtime.editWithRetry((tx) => {
+      thrown = undefined;
+      try {
+        return write(tx);
+      } catch (error) {
+        thrown = { error };
+        throw error;
+      }
+    });
+    if (thrown !== undefined) throw thrown.error;
     if (result.error) {
       const error = new Error(result.error.message, { cause: result.error });
       error.name = result.error.name;
@@ -213,7 +208,6 @@ export function writeAcl(
  */
 export class SpaceMembersRemainError extends Error {
   override readonly name = "SpaceMembersRemainError";
-  readonly #others: readonly string[];
 
   /** Constructs an instance for `space`, whose list also names `others`. */
   constructor(space: DID, others: readonly string[]) {
@@ -221,12 +215,6 @@ export class SpaceMembersRemainError extends Error {
       `Only the sole member of ${space} may delete it; its access list also ` +
         `names ${others.join(", ")}`,
     );
-    this.#others = others;
-  }
-
-  /** The principals besides the deleting one that the list names. */
-  get others(): readonly string[] {
-    return this.#others;
   }
 }
 

@@ -4,6 +4,7 @@ export {
   type AuthoredSource,
   type AuthoredSourceLookup,
   CompilationError,
+  type CompilationErrorFields,
   type CompilationErrorType,
   CompilerError,
   type DiagnosticMessageTransformer,

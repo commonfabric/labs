@@ -1,36 +1,32 @@
 import { hashOf } from "@commonfabric/data-model";
 import type {
   AuthoredSourceLookup,
+  CompiledTypeScriptModule,
   ModuleDeclarations,
   Program,
   ProgramResolver,
   Source,
   SourceMap,
   TypeScriptCompiler,
-  TypeScriptCompilerOptions,
 } from "@commonfabric/js-compiler";
 import { InMemoryProgram } from "@commonfabric/js-compiler/program";
 import {
   composeBundleSourceMap,
   identitySourceMap,
+  parseSourceMap,
 } from "@commonfabric/js-compiler/source-map";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isPrimitive } from "@commonfabric/js-values/types";
 import type { StaticCache } from "@commonfabric/static";
-import type {
-  BuilderSourceSiteOptions,
-  BuilderSourceSitesV1,
-  PatternCoverageOptions,
-} from "@commonfabric/ts-transformers";
-import {
-  findFirstContentLineIndex,
-  PATTERN_COVERAGE_GLOBAL,
-} from "@commonfabric/ts-transformers/runtime-contract";
+import type { BuilderSourceSitesV1 } from "@commonfabric/ts-transformers";
+import { PATTERN_COVERAGE_GLOBAL } from "@commonfabric/ts-transformers/runtime-contract";
 import { getLogger } from "@commonfabric/logger";
 
 import { namesInstances } from "../builder/instance-name.ts";
 import { isTrustedBuilderArtifact } from "../builder/pattern-metadata.ts";
 import { makeFrame, runInFrame } from "../builder/pattern.ts";
 import { validateCfcPolicyArtifactManifest } from "../cfc/policy.ts";
+import { DataFileStrings } from "../data-file-strings.ts";
 import type { PatternCoverageCollector } from "../pattern-coverage.ts";
 import type { MemorySpace, Runtime } from "../runtime.ts";
 import {
@@ -60,7 +56,6 @@ import {
   computeFabricModuleIdentities,
   dataFileSpecifier,
   FABRIC_MOUNT_ROOT,
-  type FabricMount,
   type SourcePackageIdentity,
   sourceRootSpecifier,
 } from "../sandbox/module-record-compiler.ts";
@@ -85,6 +80,15 @@ import {
 } from "./deferred-compiler-stack.ts";
 import { ExecutableRegistry } from "./executable-registry.ts";
 import { FabricAwareResolver } from "./fabric-resolver.ts";
+import {
+  authoredSourceForCompile,
+  compileModulesHere,
+  coverageFilenameFor,
+  type LocalCompileHooks,
+  type ModuleCompileRequest,
+  storedFilenameFor,
+  stripModuleIdPrefix,
+} from "./module-compile.ts";
 import {
   type ModuleImportEdges,
   resolveModuleImports,
@@ -134,9 +138,10 @@ function deterministicCompileStep<T>(step: () => T): T {
 
 /**
  * {@link deterministicCompileStep} for a step that yields to the event loop
- * between its stages (the interleaved compile driver): the rejection is the
- * failure to classify, and the same stack-depth reasoning applies at each
- * resumption.
+ * between its stages (the interleaved compile driver) or runs elsewhere (a
+ * compile worker): the rejection is the failure to classify, and the same
+ * stack-depth reasoning applies at each resumption. A failure of the place a
+ * step ran, marked by `markPlaceCompileFailure()`, stays unclassified.
  */
 async function deterministicCompileStepAsync<T>(
   step: () => Promise<T>,
@@ -223,12 +228,6 @@ class RootedProgramResolver implements ProgramResolver {
     return source;
   }
 
-  resolveDataFile(name: string): Promise<Source | undefined> {
-    return this.#inner.resolveDataFile
-      ? this.#inner.resolveDataFile(name)
-      : this.#inner.resolveSource(name);
-  }
-
   resolveSource(identifier: string): Promise<Source | undefined> {
     return this.#inner.resolveSource(identifier);
   }
@@ -244,8 +243,8 @@ function reachableModuleSpecifiers(
     const specifier = pending.pop()!;
     if (reachable.has(specifier)) continue;
     reachable.add(specifier);
-    const record = records.get(specifier);
-    if (record === undefined) continue;
+    // A verified graph holds a record for its entry and every import target.
+    const record = records.get(specifier)!;
     for (const importSpecifier of record.imports) {
       pending.push(resolveRecordImport(record, importSpecifier));
     }
@@ -341,13 +340,9 @@ function sourcePackageImports(
   if (owner === undefined) return [];
   const imports: CacheableModule["imports"] = [];
   for (const rootPath of owner.rootPaths) {
-    const rootIdentity = identityByPath.get(rootPath);
-    if (rootIdentity === undefined) {
-      throw new Error(`Source root '${rootPath}' has no module identity.`);
-    }
     imports.push({
       specifier: sourceRootSpecifier(storedNameFor(rootPath)),
-      targetIdentity: rootIdentity,
+      targetIdentity: requiredIdentity(identityByPath, rootPath),
     });
   }
   for (const dataPath of owner.dataPaths ?? []) {
@@ -396,9 +391,8 @@ export class Engine extends EventTarget {
 
   #sesRuntime: SESRuntime | undefined;
 
-  #nextEvalId = 0;
-
   readonly #executableRegistry = new ExecutableRegistry();
+  readonly #dataFileStrings = new DataFileStrings();
 
   readonly #consoleShim = createSafeConsoleGlobal(new Console(this));
   readonly #patternCoverageByGraph = new WeakMap<
@@ -438,6 +432,14 @@ export class Engine extends EventTarget {
         return outerThis.#sesRuntime;
       },
     };
+  }
+
+  /**
+   * The strings the `dataFile` readers of programs this engine loads have
+   * returned, which setup stores in a result document by reference.
+   */
+  get dataFileStrings(): DataFileStrings {
+    return this.#dataFileStrings;
   }
 
   /**
@@ -497,15 +499,26 @@ export class Engine extends EventTarget {
     return await attachDeclaredDataFiles(resolved, program);
   }
 
-  /** Resolve the module closure an entry's imports reach. */
+  /**
+   * Resolve the module closure an entry's imports reach. Resolution only
+   * scans imports, so it takes the resolver from the compiler stack without
+   * building this engine's compiler, whose TypeScript environment types a
+   * runtime that compiles elsewhere would otherwise hold for nothing. The
+   * options are the ones `TypeScriptCompiler.resolveProgram()` passes.
+   */
   async #resolveModules(
     program: ProgramResolver,
   ): Promise<RuntimeProgram> {
-    const { compiler } = await this.#getCompilerInternals();
+    const { resolveProgram, TARGET } = await ensureCompilerStack();
     logger.timeStart("resolve");
     try {
-      return await compiler.resolveProgram(program, {
-        runtimeModules: Engine.runtimeModuleNames(),
+      return await resolveProgram(program, {
+        unresolvedModules: {
+          type: "allow",
+          identifiers: Engine.runtimeModuleNames(),
+        },
+        resolveUnresolvedModuleTypes: true,
+        target: TARGET,
       });
     } finally {
       logger.timeEnd("resolve");
@@ -609,7 +622,7 @@ export class Engine extends EventTarget {
       const mounts = fabricResolver?.mounts() ?? [];
       const specifierAliases = fabricResolver?.specifierAliases() ?? new Map();
       const resolvedPins = fabricResolver?.resolvedPins() ?? [];
-      const resolvedFiles = uniqueSourcesByName(resolvedProgram.files);
+      const resolvedFiles = resolvedProgram.files;
       // For compilation, fabric mounts need the helper import too (they are
       // fetched as authored source — see the identity fix below). Authored
       // modules are already injected by `pretransformProgramForModules`.
@@ -637,19 +650,6 @@ export class Engine extends EventTarget {
           file.name.startsWith(FABRIC_MOUNT_ROOT)
         ),
       ];
-      const patternCoverage = patternCoverageOptionsForCompile(
-        options.patternCoverage,
-        {
-          id,
-          mounts,
-          sourceFiles: authoredCompileSources,
-        },
-      );
-      const builderSourceSites = builderSourceSiteOptionsForCompile({
-        id,
-        mounts,
-        sourceFiles: authoredCompileSources,
-      });
       const storedNameFor = (name: string) =>
         storedFilenameFor(name, id, mounts);
       const pristineModules = pristineModuleSources(
@@ -699,7 +699,7 @@ export class Engine extends EventTarget {
             ],
           })
           : undefined);
-      const cached = patternCoverage !== undefined &&
+      const cached = options.patternCoverage !== undefined &&
           cachedCandidate !== undefined &&
           !cachedArtifactsIncludePatternCoverage(cachedCandidate)
         ? undefined
@@ -708,8 +708,8 @@ export class Engine extends EventTarget {
         moduleFiles.every((f) => cached.has(identityByPath.get(f.name)!));
 
       const precompiledBodies = new Map<string, string>();
-      // Carry per-module source maps so the ESM loader can compose a per-load
-      // bundle map for authored error-stack coordinates.
+      // Carry per-module source maps so error stacks map back to authored
+      // coordinates.
       const precompiledSourceMaps = new Map<string, SourceMap>();
       const precompiledBuilderSourceSites = new Map<
         string,
@@ -753,59 +753,27 @@ export class Engine extends EventTarget {
           }
         }
       } else {
-        const { compiler } = await this.#getCompilerInternals();
-        // A cold compile is a seconds-long CPU-bound pipeline. In the browser
-        // runtime worker a synchronous run wedges the event loop and stalls
-        // every queued IPC delivery until it finishes (measured as
-        // runner.loop/workerLag ≈ the whole compile), and on a serving runtime
-        // it stalls every other space and the worker's heartbeat, so there we
-        // drive the per-module interleaved variant to bound the stall to the
-        // longest single module step. In Deno batch compiles (cf test, CLI)
-        // nothing latency-sensitive shares the loop, so the yields would be
-        // pure overhead (~2x wall) — run the synchronous driver instead.
-        // Both drain the same generator, so the emitted output is identical.
-        // `compileResolvedToRecordGraph` makes the same choice for the
-        // by-identity recompile.
-        const compileOptions: TypeScriptCompilerOptions = {
-          noCheck: options.noCheck,
-          runtimeModules: Engine.runtimeModuleNames(),
+        const modules = await this.#compileModules({
+          program: resolvedForCompile,
+          authoredSources: authoredCompileSources,
+          id,
+          mounts,
+          moduleIdentities: identityByPath,
           specifierAliases,
-          getTransformedProgram: options.getTransformedProgram
-            ? (nextProgram) => options.getTransformedProgram?.(nextProgram)
-            : undefined,
-          diagnosticMessageTransformer: compilerStack()
-            .createReactiveErrorTransformer(options.verboseErrors),
-          authoredSource: authoredSourceForCompile({
-            id,
-            mounts,
-            sourceFiles: authoredCompileSources,
-          }),
-          beforeTransformers: (program) => {
-            const pipeline = new (compilerStack()
-              .CommonFabricTransformerPipeline)({
-              instanceNames: namesInstances(this.#ctRuntime.experimental),
-              patternCoverage,
-              builderSourceSites,
-              moduleIdentities: identityByPath,
-              // Writer identities record authored paths: unmap the engine's
-              // per-load `/<id>` prefix (and mount paths) before spelling.
-              canonicalWriterIdentityFile: (name) =>
-                storedFilenameFor(name, id, mounts),
-            });
-            return {
-              factories: pipeline.toFactories(program),
-              getDiagnostics: () => pipeline.getDiagnostics(),
-              getBuilderSourceSites: () => pipeline.getBuilderSourceSites(),
-              getPolicyManifests: () => pipeline.getPolicyManifests(),
-            };
-          },
-        };
-        const modules = this.#interleaveCompile
-          ? await compiler.compileToModulesInterleaved(
-            resolvedForCompile,
-            compileOptions,
-          )
-          : compiler.compileToModules(resolvedForCompile, compileOptions);
+          storedSource: false,
+          noCheck: options.noCheck ?? false,
+          diagnosticMessages: options.verboseErrors
+            ? "reactive-verbose"
+            : "reactive",
+          instanceNames: namesInstances(this.#ctRuntime.experimental),
+        }, {
+          ...(options.patternCoverage === undefined
+            ? {}
+            : { patternCoverage: options.patternCoverage }),
+          ...(options.getTransformedProgram === undefined
+            ? {}
+            : { getTransformedProgram: options.getTransformedProgram }),
+        });
 
         // Every authored source must have an emitted body; a missing one would
         // otherwise be silently dropped and only fail later at import.
@@ -859,6 +827,7 @@ export class Engine extends EventTarget {
         // A `dataFile()` path resolves against the reading module's stored
         // name, so a read lands in the same space `dataFiles` is keyed by.
         storedNameFor,
+        dataFileStrings: this.#dataFileStrings,
       });
       if (options.patternCoverage) {
         this.#patternCoverageByGraph.set(graph, options.patternCoverage);
@@ -949,7 +918,7 @@ export class Engine extends EventTarget {
         const identity = identityByPath.get(file.name)!;
         const sourceMap = precompiledSourceMaps.get(file.name);
         const emittedBody = precompiledBodies.get(file.name);
-        const patternCoverageSpans = patternCoverage === undefined ||
+        const patternCoverageSpans = options.patternCoverage === undefined ||
             emittedBody === undefined
           ? undefined
           : options.patternCoverage?.spansForFile(
@@ -982,12 +951,16 @@ export class Engine extends EventTarget {
         const record = specifier === undefined
           ? undefined
           : graph.records.get(specifier);
+        const sourceImports = isData
+          ? undefined
+          : declarations.get(file.name)?.imports;
         return {
           identity,
           filename: storedFilenameFor(file.name, id, mounts),
           source: file.contents,
           js: isData ? file.contents : (emittedBody ?? ""),
           ...(isData ? { isData: true } : {}),
+          ...(sourceImports === undefined ? {} : { sourceImports }),
           ...(sourceMap === undefined ? {} : { sourceMap }),
           ...(record === undefined ? {} : { importSpecs: [...record.imports] }),
           ...(emittedBody === undefined ||
@@ -1066,15 +1039,22 @@ export class Engine extends EventTarget {
     const unioned = new Map<string, Source>();
     const mains: string[] = [];
     const batchIds: string[] = [];
-    const authoredSources: AuthoredSourceLookup[] = [];
+    // Keyed by `batchIdOf()`, whose `undefined` names no program.
+    const authoredSourceById = new Map<
+      string | undefined,
+      AuthoredSourceLookup
+    >();
     for (const program of programs) {
       const id = computeId(program);
       batchIds.push(id);
-      authoredSources.push(authoredSourceForCompile({
-        id,
-        mounts: [],
-        sourceFiles: partitionDataFiles(program).codeFiles,
-      }));
+      authoredSourceById.set(
+        `/${id}`,
+        authoredSourceForCompile({
+          id,
+          mounts: [],
+          sourceFiles: partitionDataFiles(program).codeFiles,
+        }),
+      );
       const mapped = pretransformProgramForModules(program, id);
       const resolver = new EngineProgramResolver(
         { ...mapped, files: partitionDataFiles(mapped).codeFiles },
@@ -1084,7 +1064,7 @@ export class Engine extends EventTarget {
         resolver,
         mapped.sourceRoots ?? [],
       );
-      for (const file of uniqueSourcesByName(resolved.files)) {
+      for (const file of resolved.files) {
         if (!unioned.has(file.name)) unioned.set(file.name, file);
       }
       mains.push(mapped.main);
@@ -1104,13 +1084,8 @@ export class Engine extends EventTarget {
       .compileToModulesCollecting(merged, {
         runtimeModules: Engine.runtimeModuleNames(),
         // Each lookup knows only its own program's `/<id>` prefix.
-        authoredSource: (fileName) => {
-          for (const lookup of authoredSources) {
-            const authored = lookup(fileName);
-            if (authored !== undefined) return authored;
-          }
-          return undefined;
-        },
+        authoredSource: (fileName) =>
+          authoredSourceById.get(batchIdOf(fileName))?.(fileName),
         beforeTransformers: runTransform
           ? (program) => {
             const moduleIdentities = new Map(
@@ -1148,7 +1123,6 @@ export class Engine extends EventTarget {
     const verified = new Map<string, number>();
     if (runTransform) {
       for (const [name, body] of modules) {
-        if (name.endsWith(".d.ts")) continue;
         const at = performance.now();
         try {
           verifyCompiledModuleBody(body.js, name);
@@ -1162,20 +1136,17 @@ export class Engine extends EventTarget {
       }
     }
 
-    // A file's `/<id>` prefix is the first path segment of its name, so the
-    // program it belongs to is one lookup rather than a scan of the batch.
-    // The injected `cfc.ts` helper carries no prefix and belongs to none of
-    // them, which is why an unmatched name is passed over. Verifying a body
-    // is per-file work like checking and emitting one, so it is charged
-    // alongside them rather than left in what the sum does not reach.
-    const mainById = new Map(
+    // The injected `cfc.ts` helper belongs to no program of the batch, which
+    // is why an unmatched name is passed over. Verifying a body is per-file
+    // work like checking and emitting one, so it is charged alongside them
+    // rather than left in what the sum does not reach.
+    const mainById = new Map<string | undefined, string>(
       batchIds.map((id, index) => [`/${id}`, programs[index]!.main]),
     );
     const durations = new Map<string, number>();
     for (const spent of [fileDurations, verified]) {
       for (const [name, ms] of spent) {
-        const cut = name.indexOf("/", 1);
-        const main = cut === -1 ? undefined : mainById.get(name.slice(0, cut));
+        const main = mainById.get(batchIdOf(name));
         if (main === undefined) continue;
         durations.set(main, (durations.get(main) ?? 0) + ms);
       }
@@ -1208,6 +1179,11 @@ export class Engine extends EventTarget {
    * addressable — and writable-back — under the new runtimeVersion. Returns the
    * `CacheableModule[]` (feed to {@link evaluateCachedModules}) + entry identity.
    * `entryFilename` is the entry module's normalized path.
+   *
+   * `precompiledModulesFor`, where given and the compile is not instrumented
+   * for coverage, is asked for the modules once their identities are known; a
+   * set holding every module skips the type-check, transform and emit step.
+   * Those bodies are verified when they are evaluated, as compiled ones are.
    */
   async compileResolvedToRecordGraph(
     resolvedFiles: Source[],
@@ -1218,9 +1194,13 @@ export class Engine extends EventTarget {
       sourceRoots?: readonly string[];
       dataFiles?: readonly string[];
       sourcePackages?: readonly SourcePackageIdentity[];
+      precompiledModulesFor?:
+        TypeScriptHarnessProcessOptions["precompiledModulesFor"];
     } = {},
   ): Promise<{ modules: CacheableModule[]; entryIdentity: string }> {
-    const { compiler } = await this.#getCompilerInternals();
+    // The scan and the helper injection below parse, and the first
+    // classified step must follow an `await`.
+    await ensureCompilerStack();
     assertNoReservedFabricPaths(resolvedFiles);
     // A child can reach package attachments owned by another module. Their
     // original owners are part of the content identity of the whole closure.
@@ -1299,7 +1279,7 @@ export class Engine extends EventTarget {
     );
     const mounts = fabricResolver?.mounts() ?? [];
     const specifierAliases = fabricResolver?.specifierAliases() ?? new Map();
-    const resolvedProgramFiles = uniqueSourcesByName(resolvedProgram.files);
+    const resolvedProgramFiles = resolvedProgram.files;
     // Fabric mounts are fetched as authored source; inject the helper for
     // compilation (authored entry modules were injected before resolve above).
     const resolvedForCompile = {
@@ -1353,75 +1333,38 @@ export class Engine extends EventTarget {
     // Instrumenting does not disturb the identity check below: identity hashes
     // the authored source, not the emitted JS. The paths here are prefix-free,
     // so coverage names them without an `/<id>` prefix to strip.
-    const patternCoverage = patternCoverageOptionsForCompile(
-      options.patternCoverage,
-      {
-        id: undefined,
-        mounts,
-        sourceFiles: pristineSourceFiles,
-      },
-    );
-    const builderSourceSites = builderSourceSiteOptionsForCompile({
-      id: undefined,
-      mounts,
-      sourceFiles: pristineSourceFiles,
-    });
-
-    const compileOptions: TypeScriptCompilerOptions = {
-      runtimeModules: Engine.runtimeModuleNames(),
-      specifierAliases,
-      // These bytes are durable stored source nobody can re-author;
-      // authoring-hygiene diagnostics (a now-unused @ts-expect-error) must
-      // not brick the reload (CT-1916).
-      storedSource: true,
-      authoredSource: authoredSourceForCompile({
-        id: undefined,
-        mounts,
-        sourceFiles: pristineSourceFiles,
-      }),
-      beforeTransformers: (program) => {
-        const pipeline = new (compilerStack()
-          .CommonFabricTransformerPipeline)({
-          instanceNames: namesInstances(this.#ctRuntime.experimental),
-          patternCoverage,
-          builderSourceSites,
-          // The transformer-level twin of `storedSource` above: pattern
-          // shape gates (opaque reserved result keys, `unknown` result
-          // fields) demote to warnings here, so a rule added after these
-          // bytes were admitted cannot brick their reload. The identity
-          // check below already guarantees this compile reconstructs
-          // rather than admits.
-          storedSource: true,
-          moduleIdentities: identityByPath,
-          // Names on this path are already stored-shaped (no `/<id>`
-          // prefix); only mount paths need unmapping to authored spellings.
-          canonicalWriterIdentityFile: (name) =>
-            storedFilenameFor(name, undefined, mounts),
-        });
-        return {
-          factories: pipeline.toFactories(program),
-          getDiagnostics: () => pipeline.getDiagnostics(),
-          getBuilderSourceSites: () => pipeline.getBuilderSourceSites(),
-          getPolicyManifests: () => pipeline.getPolicyManifests(),
-        };
-      },
-    };
-    // The same driver choice as `compileToRecordGraph`, for the same reason:
-    // after a runtime-version bump this is the compile the browser worker runs
-    // for every pattern it reloads by identity, often several programs in a
-    // row, and a synchronous run would stall every queued IPC delivery for a
-    // whole program at a time. Interleaved, the stall is bounded by a single
-    // module's step. The deterministic-failure classification covers the
-    // rejection the way it covers the synchronous throw.
-    const emitted = this.#interleaveCompile
-      ? await deterministicCompileStepAsync(() =>
-        compiler.compileToModulesInterleaved(
-          resolvedForCompile,
-          compileOptions,
-        )
+    //
+    // These bytes are durable stored source nobody can re-author, so
+    // `storedSource` keeps authoring-hygiene diagnostics (a now-unused
+    // `@ts-expect-error`, CT-1916) and pattern shape gates added after the
+    // bytes were admitted from bricking their reload. The identity check below
+    // already guarantees this compile reconstructs rather than admits. The
+    // deterministic-failure classification covers whatever the compile throws.
+    const precompiled = options.patternCoverage === undefined
+      ? await precompiledModulesOf(
+        moduleFiles,
+        identityByPath,
+        identityByPath.get(entryFilename)!,
+        options.precompiledModulesFor,
       )
-      : deterministicCompileStep(() =>
-        compiler.compileToModules(resolvedForCompile, compileOptions)
+      : undefined;
+    const emitted = precompiled ??
+      await deterministicCompileStepAsync(() =>
+        this.#compileModules({
+          program: resolvedForCompile,
+          authoredSources: pristineSourceFiles,
+          mounts,
+          moduleIdentities: identityByPath,
+          specifierAliases,
+          storedSource: true,
+          noCheck: false,
+          diagnosticMessages: "typescript",
+          instanceNames: namesInstances(this.#ctRuntime.experimental),
+        }, {
+          ...(options.patternCoverage === undefined
+            ? {}
+            : { patternCoverage: options.patternCoverage }),
+        })
       );
     for (const file of moduleFiles) {
       if (!emitted.has(file.name)) {
@@ -1442,7 +1385,7 @@ export class Engine extends EventTarget {
     const modules: CacheableModule[] = pristineSourceFiles.map((file) => {
       const out = emitted.get(file.name);
       const identity = identityByPath.get(file.name)!;
-      const patternCoverageSpans = patternCoverage === undefined ||
+      const patternCoverageSpans = options.patternCoverage === undefined ||
           out === undefined
         ? undefined
         : options.patternCoverage?.spansForFile(
@@ -1465,12 +1408,16 @@ export class Engine extends EventTarget {
         ? undefined
         : validatePolicyManifestsForModule(identity, out.policyManifests);
       const isData = dataFileSet.has(file.name);
+      const sourceImports = isData
+        ? undefined
+        : declarations.get(file.name)?.imports;
       return {
         identity,
         filename: storedFilenameFor(file.name, undefined, mounts),
         source: file.contents,
         js: isData ? file.contents : (out?.js ?? ""),
         ...(isData ? { isData: true } : {}),
+        ...(sourceImports === undefined ? {} : { sourceImports }),
         ...(out?.sourceMap === undefined ? {} : { sourceMap: out.sourceMap }),
         ...(out?.builderSourceSites === undefined
           ? {}
@@ -1532,7 +1479,6 @@ export class Engine extends EventTarget {
   ): Promise<EvaluateResult> {
     const prefix = `/${id}`;
     return this.#evaluateGraph(graph, mainSpecifier, {
-      evalIdPrefix: id,
       fileNameForPath: (path) =>
         path.startsWith(prefix) ? path.slice(prefix.length) : path,
       filesForExports: program.files,
@@ -1560,7 +1506,6 @@ export class Engine extends EventTarget {
     graph: CompiledModuleGraph,
     mainSpecifier: string,
     ctx: {
-      evalIdPrefix: string;
       fileNameForPath(path: string): string;
       filesForExports: Source[];
       dataFilesForExports?: string[];
@@ -1569,13 +1514,6 @@ export class Engine extends EventTarget {
     // Evaluations of this engine can overlap, so this is not a named timer.
     const evaluationStart = performance.now();
     try {
-      // Per-evaluation id, used ONLY to key this evaluation's synthetic
-      // source-map names (`${evalId}.js`). The former "verified load id" —
-      // which scoped CFC identity and registry partitions to a load — is gone
-      // (PR E2): identity flows through the content-addressed provenance
-      // recorded below.
-      const evalId = `${ctx.evalIdPrefix}:esm:${this.#nextEvalId++}`;
-
       const patternCoverage = this.#patternCoverageByGraph.get(graph);
       const globals = createModuleCompartmentGlobals({
         console: this.#consoleShim,
@@ -1583,21 +1521,22 @@ export class Engine extends EventTarget {
           ? { [PATTERN_COVERAGE_GLOBAL]: patternCoverage.sandboxGlobal() }
           : {}),
       });
-      // Register a composed bundle source map for `${evalId}.js` so that a
-      // stack coordinate from this evaluation maps back to authored source.
-      // Its consumers are error mapping for throws escaping module evaluation
-      // or invocation, plus scheduler action diagnostics.
-      // Full module path per specifier.
-      const sourceNameBySpecifier = new Map<string, string>();
-      for (const [name, specifier] of graph.specifierByPath) {
-        sourceNameBySpecifier.set(specifier, name);
-      }
-      // Composition + registration are DEFERRED (CT-1819): composing these
-      // maps is a per-segment VLQ transcode over every module (~16-22ms per
-      // cold boot post-#4455/#4460), while error mapping only asks for one
-      // after a throw. Providers capture per-module line counts and raw maps,
-      // never compiled bodies, so the closures retain KBs, not bundle text;
-      // each is one-shot and dropped after first use.
+      // Register each module's map under its eval `//# sourceURL` (its
+      // sanitized source name), which names the module's frame in a stack, so
+      // that a stack coordinate from this evaluation maps back to authored
+      // source. Its consumers are error mapping for throws escaping module
+      // evaluation or invocation, plus scheduler action diagnostics. Those
+      // coordinates are eval-relative, hence the one-line shift for the
+      // factory wrapper.
+      //
+      // Each map is registered lazily: shifting one transcodes every VLQ
+      // segment in it, while error mapping asks for a module's map only after
+      // a throw. A provider captures the module's line count and raw map, never
+      // its compiled body, and runs at most once.
+      //
+      // A module with no authored map, such as a cached body that retained
+      // none, gets an identity map keyed on its source name, so its frame
+      // still names the module rather than a raw compiled coordinate.
       const lineCountBySpecifier = new Map<string, number>();
       for (const [specifier, body] of graph.compiledBodies) {
         lineCountBySpecifier.set(
@@ -1606,39 +1545,6 @@ export class Engine extends EventTarget {
         );
       }
       const moduleSourceMaps = graph.moduleSourceMaps;
-      const bundleEntries = [...graph.compiledBodies.keys()].map(
-        (specifier) => {
-          const source = sourceNameBySpecifier.get(specifier);
-          const bodyLineCount = lineCountBySpecifier.get(specifier)!;
-          return { specifier, source, bodyLineCount };
-        },
-      );
-      this.#getSESRuntime().loadSourceMapLazy(
-        `${evalId}.js`,
-        () =>
-          composeBundleSourceMap(
-            bundleEntries.map(({ specifier, source, bodyLineCount }) => ({
-              bodyLineCount,
-              map: moduleSourceMaps.get(specifier) ??
-                (source !== undefined
-                  ? identitySourceMap(bodyLineCount, source)
-                  : undefined),
-              source,
-            })),
-            `${evalId}.js`,
-          ),
-      );
-      // ALSO register each module's map under its eval `//# sourceURL` (its
-      // sanitized source name). Browsers surface the per-module eval frame in
-      // `new Error().stack` rather than the bundle frame, so it needs a map of
-      // its own. Those coordinates are eval-relative, hence the factory-wrapper
-      // line shift (`(function (...) {\n` = +1).
-      //
-      // When no authored map exists for a module (the warm/cached record load \u2014
-      // `buildRecordsFromCompiled` populates `moduleSourceMaps` only for cached
-      // bodies that retained one), fall back to an IDENTITY map keyed on the
-      // module's per-module source `name`, so the frame is still re-labeled with
-      // the module source name instead of a raw bundle coordinate.
       for (const [name, specifier] of graph.specifierByPath) {
         const sourceUrl = name.replace(/[\r\n\u2028\u2029]/g, "_");
         const bodyLineCount = lineCountBySpecifier.get(specifier) ?? 1;
@@ -1654,6 +1560,12 @@ export class Engine extends EventTarget {
       }
 
       const MODULE_SPECIFIER_PREFIX = "cf:module/";
+      // Full module path per specifier, which names each module's timing.
+      const sourceNameBySpecifier = new Map<string, string>();
+      for (const [name, specifier] of graph.specifierByPath) {
+        sourceNameBySpecifier.set(specifier, name);
+      }
+
       // One frame for the whole graph: a cell holds the frame it was made under,
       // and a module's cells reach the modules that import it. The frame goes on
       // the stack only while a module runs, because other runtimes read that
@@ -1725,11 +1637,7 @@ export class Engine extends EventTarget {
           // Only object/function exports are sub-pattern candidates. Skip the
           // `__esModule` flag and primitives, which would otherwise collide in
           // this value-keyed map (e.g. every module's `true`).
-          if (exportName === "__esModule") continue;
-          if (typeof value !== "object" && typeof value !== "function") {
-            continue;
-          }
-          if (value === null) continue;
+          if (exportName === "__esModule" || isPrimitive(value)) continue;
           exportsByValue.set(value, {
             main: fileName,
             mainExport: exportName,
@@ -1919,6 +1827,7 @@ export class Engine extends EventTarget {
     }
     const graph = buildRecordsFromCompiled(modules, {
       runtimeModules: runtimeModulesOption,
+      dataFileStrings: this.#dataFileStrings,
     });
 
     // The cached bodies carry the coverage probes from the compile that emitted
@@ -1977,15 +1886,9 @@ export class Engine extends EventTarget {
       }
     }
     const mainSpecifier = `cf:module/${entryIdentity}`;
-    if (!graph.records.has(mainSpecifier)) {
-      throw new Error(
-        `Cached closure is missing the entry module ${mainSpecifier}`,
-      );
-    }
     verifyModuleGraph(graph.records, mainSpecifier);
 
     return this.#evaluateGraph(graph, mainSpecifier, {
-      evalIdPrefix: entryIdentity,
       fileNameForPath: (path) => path, // already normalized
       filesForExports: options.sourceFiles ?? [],
       ...(options.dataFiles === undefined
@@ -2069,6 +1972,36 @@ export class Engine extends EventTarget {
   }
 
   /**
+   * Helper for the compile entries, which runs the type-check, transform and
+   * emit step of `request`: on the runtime's `moduleCompiler` where it has
+   * one, unless `hooks` hold something only this realm can run, and here
+   * otherwise. A cold compile is a seconds-long CPU-bound pipeline. In the
+   * browser runtime worker a synchronous run stalls every queued IPC delivery
+   * until it finishes, and on a serving runtime it stalls every other space
+   * and the worker's heartbeat, so there it runs on the interleaved driver,
+   * which bounds the stall to the longest single module step. Batch compiles
+   * in Deno (`cf test`, the CLI) share the loop with nothing, so they run the
+   * synchronous driver. Both emit the same modules.
+   */
+  async #compileModules(
+    request: ModuleCompileRequest,
+    hooks: LocalCompileHooks,
+  ): Promise<Map<string, CompiledTypeScriptModule>> {
+    const elsewhere = this.#ctRuntime.moduleCompiler;
+    if (
+      elsewhere !== undefined && hooks.patternCoverage === undefined &&
+      hooks.getTransformedProgram === undefined
+    ) {
+      return await elsewhere.compile(request);
+    }
+    const { compiler } = await this.#getCompilerInternals();
+    return await compileModulesHere(compiler, request, {
+      ...hooks,
+      interleave: this.#interleaveCompile,
+    });
+  }
+
+  /**
    * Clean up resources held by the engine.
    * Clears accumulated source maps and other state to prevent memory leaks.
    */
@@ -2079,8 +2012,8 @@ export class Engine extends EventTarget {
     this.#sesRuntime = undefined;
     this.#runtimeInternals = undefined;
     this.#compilerInternals = undefined;
-    this.#nextEvalId = 0;
     this.#executableRegistry.clear();
+    this.#dataFileStrings.clear();
   }
 
   #getSESRuntime(): SESRuntime {
@@ -2111,6 +2044,17 @@ function validatePolicyManifestsForModule(
     }
     return artifact;
   });
+}
+
+/**
+ * The `/<id>` prefix of a file `typeCheckBatch()` compiled, which is the first
+ * path segment of its name, so the program it belongs to is one lookup rather
+ * than a scan of the batch. A name of one segment, such as the injected
+ * `cfc.ts` helper's, carries none.
+ */
+function batchIdOf(name: string): string | undefined {
+  const cut = name.indexOf("/", 1);
+  return cut === -1 ? undefined : name.slice(0, cut);
 }
 
 function computeId(program: RuntimeProgram): string {
@@ -2224,80 +2168,6 @@ function injectMountSources(files: readonly Source[]): Source[] {
   });
 }
 
-// The line shift `transformInjectHelperModule` applies to a file's authored
-// content, mirroring its decision order. Injection puts the one-line helper
-// import ahead of the first content line and appends an `h` shim after the last
-// (base/ts-transformers/src/core/cf-helpers.ts); only the leading import
-// moves the authored lines, so an injected file shifts by exactly one line.
-// Three kinds of file reach the compiler unchanged and keep their authored
-// lines: a declaration file, which the injector skips; a stored legacy
-// envelope, whose authored bytes already carry the helper import (tolerated
-// only on the storage-fed paths — `checkCFHelperVar` rejects those bytes on
-// every authoring path); and a file with no content line to inject ahead of.
-export function helperInjectionLineOffset(file: Source): number {
-  if (file.name.endsWith(".d.ts")) return 0;
-  const { isLegacyInjectedEnvelope } = compilerStack();
-  if (isLegacyInjectedEnvelope(file.contents)) return 0;
-  if (findFirstContentLineIndex(file.contents.split("\n")) === null) return 0;
-  return -1;
-}
-
-/**
- * Normalizes transformer source sites from helper-injected compiler inputs to
- * authored coordinates before the sidecar leaves the compile boundary.
- */
-function builderSourceSiteOptionsForCompile(params: {
-  id: string | undefined;
-  mounts: readonly FabricMount[];
-  sourceFiles: readonly Source[];
-}): BuilderSourceSiteOptions {
-  const sourceInfo = new Map(
-    params.sourceFiles.map((file) => [
-      coverageFilenameFor(file.name, params.id, params.mounts),
-      {
-        lineOffset: helperInjectionLineOffset(file),
-        lineCount: lineCountOf(file.contents),
-      },
-    ]),
-  );
-  return {
-    mapSite: (sourceFileName, site) => {
-      const fileName = coverageFilenameFor(
-        sourceFileName,
-        params.id,
-        params.mounts,
-      );
-      const info = sourceInfo.get(fileName);
-      if (info === undefined) return undefined;
-      const line = site.line + info.lineOffset;
-      if (line < 1 || line > info.lineCount) return undefined;
-      return { ...site, line };
-    },
-  };
-}
-
-/**
- * The authored bytes behind each helper-injected compiler input, so that a
- * compile diagnostic names the line the author wrote and quotes its text.
- */
-function authoredSourceForCompile(params: {
-  id: string | undefined;
-  mounts: readonly FabricMount[];
-  sourceFiles: readonly Source[];
-}): AuthoredSourceLookup {
-  const authored = new Map(
-    params.sourceFiles.map((file) => [
-      coverageFilenameFor(file.name, params.id, params.mounts),
-      {
-        contents: file.contents,
-        lineOffset: helperInjectionLineOffset(file),
-      },
-    ]),
-  );
-  return (fileName) =>
-    authored.get(coverageFilenameFor(fileName, params.id, params.mounts));
-}
-
 /**
  * Removes the loader's collision-disambiguation/mount prefix from a debug
  * source path. Both hot fabric paths (`/~cf/<entry-id>/main.tsx`) and cached
@@ -2311,50 +2181,49 @@ function authoredDebugSourcePath(path: string): string {
   return pathStart < 0 ? path : identityAndPath.slice(pathStart);
 }
 
-// Pattern coverage runs after helper injection. This maps spans back to the
-// authored file and skips spans from helper code added around the source.
-function patternCoverageOptionsForCompile(
-  collector: PatternCoverageCollector | undefined,
-  params: {
-    id: string | undefined;
-    mounts: readonly FabricMount[];
-    // The AUTHORED bytes per file — what the offsets are measured against.
-    sourceFiles: readonly Source[];
-  },
-): PatternCoverageOptions | undefined {
-  if (collector === undefined) return undefined;
-
-  const sourceInfo = new Map(
-    params.sourceFiles.map((file) => [
-      coverageFilenameFor(file.name, params.id, params.mounts),
-      {
-        lineOffset: helperInjectionLineOffset(file),
-        lineCount: lineCountOf(file.contents),
-      },
-    ]),
-  );
-  const unknownSourceInfo = {
-    lineOffset: 0,
-    lineCount: Number.POSITIVE_INFINITY,
-  };
-
-  return {
-    fileName: (sourceFileName) =>
-      coverageFilenameFor(sourceFileName, params.id, params.mounts),
-    mapSpan: (span) => {
-      const info = sourceInfo.get(span.fileName) ?? unknownSourceInfo;
-
-      const startLine = span.startLine + info.lineOffset;
-      if (startLine < 1 || startLine > info.lineCount) return undefined;
-
-      return {
-        ...span,
-        startLine,
-        endLine: Math.min(span.endLine + info.lineOffset, info.lineCount),
-      };
-    },
-    registerSpan: (span) => collector.registerSpan(span),
-  };
+/**
+ * Helper for `compileResolvedToRecordGraph()`, which asks `precompiledModulesFor`
+ * for `moduleFiles` by identity and returns their bodies as a compile emits
+ * them, by file name, or `undefined` unless every module is held.
+ */
+async function precompiledModulesOf(
+  moduleFiles: readonly Source[],
+  identityByPath: ReadonlyMap<string, string>,
+  entryIdentity: string,
+  precompiledModulesFor:
+    | TypeScriptHarnessProcessOptions["precompiledModulesFor"]
+    | undefined,
+): Promise<Map<string, CompiledTypeScriptModule> | undefined> {
+  if (precompiledModulesFor === undefined) return undefined;
+  const identities: string[] = [];
+  for (const file of moduleFiles) {
+    const identity = identityByPath.get(file.name);
+    if (identity === undefined) return undefined;
+    identities.push(identity);
+  }
+  const held = await precompiledModulesFor({
+    entryIdentity,
+    identities: [...new Set(identities)],
+  });
+  if (held === undefined) return undefined;
+  const emitted = new Map<string, CompiledTypeScriptModule>();
+  for (const [index, file] of moduleFiles.entries()) {
+    const artifact = held.get(identities[index]);
+    if (artifact === undefined) return undefined;
+    emitted.set(file.name, {
+      js: artifact.js,
+      ...(artifact.sourceMap === undefined
+        ? {}
+        : { sourceMap: parseSourceMap(JSON.stringify(artifact.sourceMap)) }),
+      ...(artifact.builderSourceSites === undefined
+        ? {}
+        : { builderSourceSites: artifact.builderSourceSites }),
+      ...(artifact.policyManifests === undefined
+        ? {}
+        : { policyManifests: artifact.policyManifests }),
+    });
+  }
+  return emitted;
 }
 
 function cachedArtifactsIncludePatternCoverage(
@@ -2364,38 +2233,6 @@ function cachedArtifactsIncludePatternCoverage(
     if (!Array.isArray(artifact.patternCoverageSpans)) return false;
   }
   return true;
-}
-
-function lineCountOf(source: string): number {
-  return source.split(/\r\n|\r|\n/).length;
-}
-
-function coverageFilenameFor(
-  name: string,
-  id: string | undefined,
-  mounts: readonly FabricMount[],
-): string {
-  // Mount paths carry the imported module identity. The coverage collector keys
-  // spans by file name and span id, and span ids restart for each source file.
-  if (name.startsWith(FABRIC_MOUNT_ROOT)) return name;
-  return storedFilenameFor(name, id, mounts);
-}
-
-function uniqueSourcesByName(files: readonly Source[]): Source[] {
-  const byName = new Map<string, Source>();
-  for (const file of files) {
-    const previous = byName.get(file.name);
-    if (previous !== undefined) {
-      if (previous.contents !== file.contents) {
-        throw new Error(
-          `Conflicting resolved source contents for '${file.name}'`,
-        );
-      }
-      continue;
-    }
-    byName.set(file.name, file);
-  }
-  return [...byName.values()];
 }
 
 function cacheableImportsFor(
@@ -2411,18 +2248,15 @@ function cacheableImportsFor(
   }));
   const fabric = (edges?.externalDeps ?? [])
     .filter(isFabricImportSpecifier)
-    .map((specifier) => {
-      const target = specifierAliases.get(specifier);
-      if (target === undefined) {
-        throw new Error(
-          `unresolved fabric specifier '${specifier}' survived compile`,
-        );
-      }
-      return {
-        specifier,
-        targetIdentity: requiredIdentity(identityByPath, target),
-      };
-    });
+    .map((specifier) => ({
+      specifier,
+      // Resolution refuses an import it cannot resolve, and
+      // `FabricAwareResolver` aliases every fabric specifier it resolves.
+      targetIdentity: requiredIdentity(
+        identityByPath,
+        specifierAliases.get(specifier)!,
+      ),
+    }));
   return [...internal, ...fabric];
 }
 
@@ -2435,28 +2269,4 @@ function requiredIdentity(
     throw new Error(`No module identity computed for '${path}'`);
   }
   return identity;
-}
-
-function storedFilenameFor(
-  name: string,
-  id: string | undefined,
-  mounts: readonly FabricMount[],
-): string {
-  for (const mount of mounts) {
-    const prefix = `${FABRIC_MOUNT_ROOT}${mount.entryIdentity}`;
-    if (name.startsWith(`${prefix}/`)) {
-      return name.slice(prefix.length);
-    }
-  }
-  return id === undefined ? name : stripModuleIdPrefix(name, id);
-}
-
-/**
- * Strip the whole-program `/<id>` prefix from a resolved module path to recover
- * the normalized authored path (e.g. `/<id>/main.tsx` → `/main.tsx`). Modules
- * resolved without the prefix (the injected `cfc.ts` helper) are returned as-is.
- */
-function stripModuleIdPrefix(name: string, id: string): string {
-  const prefix = `/${id}`;
-  return name.startsWith(`${prefix}/`) ? name.slice(prefix.length) : name;
 }

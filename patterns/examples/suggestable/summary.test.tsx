@@ -5,6 +5,7 @@ import {
   FabricUnavailable,
   type IsObsolete,
   type IsSyncing,
+  NAME,
   pattern,
   TESTS,
   UI,
@@ -24,6 +25,8 @@ export default pattern(() => {
   });
 
   const assert_built = assert(() => subject != null);
+  // Without a topic it names itself generically.
+  const assert_generic_name = assert(() => subject[NAME] === "Summary");
   const assert_no_topic = assert(() => subject.topic === "");
   const assert_not_pending = assert(() => subject.pending === false);
   const assert_no_summary = assert(() => subject.summary === "");
@@ -37,6 +40,7 @@ export default pattern(() => {
   return {
     [TESTS]: [
       { assertion: assert_built },
+      { assertion: assert_generic_name },
       { assertion: assert_no_topic },
       { assertion: assert_not_pending },
       { assertion: assert_no_summary },

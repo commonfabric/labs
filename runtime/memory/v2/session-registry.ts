@@ -149,6 +149,22 @@ export type SessionState = {
    * per open, in every access-list mode. */
   servingBinding?: true;
 
+  /** Whether the session is a serving loop's own, not a client's: its
+   * latest open came over a connection from the process that holds this
+   * server, declared the serving binding (a serving runtime of another
+   * process), or declared that it is not demand
+   * (`SessionDescriptor.demand`). A client signed with the same key as the
+   * serving loop is still a client. Fresh per open, in every access-list
+   * mode. */
+  servingOwn?: true;
+
+  /** Whether the session's latest open declared that it is not demand
+   * (`SessionDescriptor.demand`). Such a session is not client demand on
+   * any server, whoever signed it, where a serving loop's own session of
+   * another kind is left out only by the server whose loop it belongs to
+   * (`isServingSessionOf()`). Fresh per open, in every access-list mode. */
+  notDemand?: true;
+
   /** Client report supplied by the latest admitted open. */
   client?: ClientInfo;
 
@@ -176,6 +192,20 @@ export type SessionState = {
   capabilityPrincipal?: string;
 
   /**
+   * The issuers of the proof chain this session's latest open presented,
+   * root first. Fresh per open, like `capabilityPrincipal`.
+   */
+  chainIssuers?: readonly string[];
+
+  /**
+   * The person this session's activity is attributed to, which its spans
+   * record as `enduser.id`, or `undefined` for a session that stands for no
+   * person. The server decides it when the session opens, and again when a
+   * commit changes the space's access list.
+   */
+  person?: string;
+
+  /**
    * Set when the opening connection's client advertised `elidedVerdicts`:
    * its replica promotes a layer the verdict elides to the document its
    * transaction computed rather than folding it, so the engine may elide a
@@ -200,6 +230,10 @@ export type SessionLifecycleEvent =
     readonly sessionId: string;
     readonly principal?: string;
     readonly readCeiling?: SessionReadCeiling;
+    /** See `SessionState.servingOwn`. */
+    readonly servingOwn?: true;
+    /** See `SessionState.notDemand`. */
+    readonly notDemand?: true;
   }
   | {
     readonly kind: "detached";
@@ -214,6 +248,8 @@ export type SessionLifecycleEvent =
   };
 
 type OpenSessionState = {
+  /** The state the registry now holds for the session. */
+  state: SessionState;
   sessionId: string;
   sessionToken: SessionToken;
   serverSeq: number;
@@ -243,7 +279,29 @@ const openedEvent = (session: SessionState): SessionLifecycleEvent => ({
   ...(session.readCeiling === undefined
     ? {}
     : { readCeiling: session.readCeiling }),
+  ...(session.servingOwn === true ? { servingOwn: true } : {}),
+  ...(session.notDemand === true ? { notDemand: true } : {}),
 });
+
+/**
+ * Whether the serving loop of `principal` leaves `session` out of client
+ * demand: the session is one of that loop's own
+ * (`SessionState.servingOwn`, signed by `principal`), or it declared that it
+ * is not demand (`SessionState.notDemand`), whoever signed it. A session of
+ * that principal from a client that made no such declaration, and any
+ * session when `principal` is `undefined`, is not left out.
+ */
+export const isServingSessionOf = (
+  session: {
+    readonly principal?: string;
+    readonly servingOwn?: true;
+    readonly notDemand?: true;
+  },
+  principal: string | undefined,
+): boolean =>
+  principal !== undefined &&
+  (session.notDemand === true ||
+    (session.servingOwn === true && session.principal === principal));
 
 export class SessionRegistry {
   readonly #ttlMs: number;
@@ -283,12 +341,14 @@ export class SessionRegistry {
   /**
    * The events that would bring an observer installed now up to date: an
    * `opened` for every session held, followed by a `detached` for each one
-   * whose connection is gone.
+   * whose connection is gone. Given `space`, the events of that space's
+   * sessions alone.
    */
-  snapshot(): SessionLifecycleEvent[] {
+  snapshot(space?: string): SessionLifecycleEvent[] {
     this.#prune();
     const events: SessionLifecycleEvent[] = [];
     for (const session of this.#sessions.values()) {
+      if (space !== undefined && session.space !== space) continue;
       events.push(openedEvent(session));
       if (session.expiresAt !== null) {
         events.push({
@@ -312,6 +372,8 @@ export class SessionRegistry {
     routed = false,
     elidedVerdicts = false,
     capabilityPrincipal?: string,
+    inProcess = false,
+    chainIssuers?: readonly string[],
   ): OpenSessionState {
     this.#prune();
     const sessionId = session.sessionId ?? crypto.randomUUID();
@@ -367,7 +429,7 @@ export class SessionRegistry {
         existing.ownerConnectionId !== ownerConnectionId
       ? existing.ownerConnectionId
       : undefined;
-    this.#sessions.set(key, {
+    const state: SessionState = {
       id: sessionId,
       space,
       sessionToken,
@@ -438,12 +500,20 @@ export class SessionRegistry {
       ...(session.actingAs === "space-owner"
         ? { servingBinding: true as const }
         : {}),
+      ...(inProcess || session.actingAs === "space-owner" ||
+          session.demand === false
+        ? { servingOwn: true as const }
+        : {}),
+      ...(session.demand === false ? { notDemand: true as const } : {}),
       // Fresh per open, like the binding: the chain THIS open presented.
       ...(capabilityPrincipal !== undefined ? { capabilityPrincipal } : {}),
+      ...(chainIssuers !== undefined ? { chainIssuers } : {}),
       ...(elidedVerdicts ? { elidedVerdicts: true } : {}),
-    });
-    this.#observer?.(openedEvent(this.#sessions.get(key)!));
+    };
+    this.#sessions.set(key, state);
+    this.#observer?.(openedEvent(state));
     return {
+      state,
       sessionId,
       sessionToken,
       serverSeq,
@@ -464,22 +534,6 @@ export class SessionRegistry {
    */
   peek(space: string, sessionId: string): SessionState | undefined {
     return this.#sessions.get(sessionKey(space, sessionId));
-  }
-
-  hasOpenSessionForPrincipal(
-    space: string,
-    principal: string | undefined,
-  ): boolean {
-    this.#prune();
-    for (const session of this.#sessions.values()) {
-      if (
-        session.space === space &&
-        session.principal === principal
-      ) {
-        return true;
-      }
-    }
-    return false;
   }
 
   sessionsForSpace(space: string): SessionState[] {

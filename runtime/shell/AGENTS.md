@@ -2,7 +2,8 @@
 
 The browser-based shell: a Lit web-component application that hosts the piece
 runtime and gives a user a way to move around their spaces. Entry point is
-`src/index.ts`.
+`src/index.ts`, which runs the startup sequence, `bootShell()` in
+`src/lib/boot.ts`, with the real page.
 
 ## Facts that will bite you
 
@@ -27,7 +28,7 @@ runtime and gives a user a way to move around their spaces. Entry point is
 - `XRootView` owns every write to `AppState`, through `setView`, `setIdentity`
   and `setConfig`. `src/lib/app-state.ts` names the part of that surface a
   caller outside the element sees as `ShellApp`: the shell's `Navigation` takes
-  one, and `src/index.ts` publishes the root element on `globalThis.app` under
+  one, and `bootShell()` publishes the root element on `globalThis.app` under
   that type, which is how integration tests drive the page. That publication is
   the last step of bootstrap, after the key store opens and `Navigation` is
   installed, so a page that has fired `load` has not necessarily reached it. A

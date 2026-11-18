@@ -6,13 +6,17 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   isObsolete,
+  isPending,
   isUnavailable,
   UNAVAILABLE_PENDING,
   UNAVAILABLE_SYNCING,
   unavailableError,
   unavailableObsolete,
 } from "@commonfabric/data-model/availability";
-import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import {
+  FabricBytes,
+  FabricEpochNsec,
+} from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
@@ -39,6 +43,15 @@ function textOf(value: unknown): string {
   if (typeof value !== "object" || value === null) return "";
   const node = value as Record<string, unknown>;
   return textOf(node.$UI) + textOf(node.children);
+}
+
+/** Finds a native pending marker in a rendered slot of the view tree. */
+function hasPendingViewSlot(value: unknown): boolean {
+  if (isPending(value)) return true;
+  if (isCell(value)) return hasPendingViewSlot(value.get());
+  if (Array.isArray(value)) return value.some(hasPendingViewSlot);
+  if (!isObjectNotArray(value)) return false;
+  return hasPendingViewSlot(value.$UI) || hasPendingViewSlot(value.children);
 }
 
 /** Finds rendered elements without importing authored pattern modules. */
@@ -73,10 +86,12 @@ describe("optional-wish-availability", () => {
   let controlled: Map<string, Cell<unknown>>;
   let errors: unknown[];
   let observers: (() => void)[];
+  let wishQueries: (string | undefined)[];
 
   beforeEach(() => {
     errors = [];
     observers = [];
+    wishQueries = [];
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: StorageManager.emulate({ as: signer }),
@@ -102,6 +117,7 @@ describe("optional-wish-availability", () => {
             },
           } as const;
           const { query } = inputs.asSchema<{ query?: string }>(schema).get();
+          if (ref === "wish") wishQueries.push(query);
           const isControlled = ref === "wish"
             ? query !== undefined &&
               [...controlled.keys()].some((key) =>
@@ -470,102 +486,101 @@ describe("optional-wish-availability", () => {
     expect(textOf(subject.key("$UI"))).not.toContain("Kept journal entry");
   });
 
-  it("reports failed catalog roots separately without hiding healthy rooms and clears the diagnostic on recovery", async () => {
-    const healthySpace = (await Identity.fromPassphrase("healthy catalog root"))
-      .did();
-    const failedSpace = (await Identity.fromPassphrase("failed catalog root"))
-      .did();
-    const healthyRoot = runtime.getCell(space, "healthy root");
-    const failedRoot = runtime.getCell(space, "failed root");
-    const healthyRoom = runtime.getCell(space, "healthy room");
-    const recoveredRoom = runtime.getCell(space, "recovered room");
+  it("waits for a pending summary index and renders its entries after recovery", async () => {
+    const index = runtime.getCell(space, "summary index result");
+    const piece = runtime.getCell(space, "summary index piece");
+    await runtime.editWithRetry((tx) => {
+      index.withTx(tx).setRaw(UNAVAILABLE_PENDING);
+      piece.withTx(tx).set({
+        $NAME: "Donuts",
+        summary: "Choose glazed donuts",
+      });
+    });
+    controlled.set("#summaryIndex", index);
+    const tester = await instantiate(
+      "examples/summary-index-tester/summary-index-tester.tsx",
+    );
+    expect(tester.key("$NAME").get()).toBe("Summary Index Tester");
+    expect(hasPendingViewSlot(tester.key("$UI"))).toBe(true);
+    expect(textOf(tester.key("$UI"))).not.toContain("Index: 0 entries");
+    await runtime.editWithRetry((tx) =>
+      index.withTx(tx).set({
+        entries: [{ piece, name: "Donuts", summary: "Choose glazed donuts" }],
+        search: { pattern: {}, extraParams: { entries: [] } },
+      })
+    );
+    await runtime.idle();
+    expect(tester.key("$NAME").get()).toBe("Summary Index Tester");
+    expect(textOf(tester.key("$UI"))).toContain("Index: 1 entries");
+    expect(textOf(tester.key("$UI"))).toContain("Choose glazed donuts");
+  });
+
+  it("lists recorded membership metadata without discovering or reading catalog roots, regardless of their availability", async () => {
+    const catalogSpace = (await Identity.fromPassphrase("catalog root")).did();
+    const root = runtime.getCell(space, "catalog root");
     const catalog = runtime.getCell(space, "catalog");
     await runtime.editWithRetry((tx) => {
-      healthyRoom.withTx(tx).set({ about: { kind: "group", title: "Donuts" } });
-      recoveredRoom.withTx(tx).set({
-        about: { kind: "group", title: "Glaze" },
-      });
-      healthyRoot.withTx(tx).set({ chatRoom: healthyRoom });
-      failedRoot.withTx(tx).setRaw(unavailableError("Root refused", "network"));
+      root.withTx(tx).set({ about: { kind: "group", title: "Donuts" } });
       catalog.withTx(tx).set({
-        entries: Object.fromEntries(
-          [healthySpace, failedSpace].map((
-            did,
-          ) => [did, {
-            space: did,
+        entries: {
+          [catalogSpace]: {
+            space: catalogSpace,
             host: "http://localhost:8000",
             kind: "photo-album",
             state: "saved",
             revision: "1:initial",
             since: 1,
-          }]),
-        ),
+          },
+        },
         offers: {},
       });
     });
-    controlled.set(`#default:${healthySpace}`, healthyRoot);
-    controlled.set(`#default:${failedSpace}`, failedRoot);
+    controlled.set(`#default:${catalogSpace}`, root);
     const manager = await instantiate("system/fabrichat/manager.tsx", {
       sharedSpaceCatalog: catalog,
     }, "FabriChatManagerCore");
-    const rooms = manager.key("rooms").asSchema<{ room: Cell<unknown> }[]>({
+    const rooms = manager.key("rooms").asSchema<
+      { room: Cell<unknown>; title: string }[]
+    >({
       type: "array",
-      items: { type: "object", properties: { room: { asCell: ["cell"] } } },
+      items: {
+        type: "object",
+        properties: { room: { asCell: ["cell"] }, title: { type: "string" } },
+      },
     });
-    observers.push(
-      rooms.sink(() => {}),
-      manager.key("discoveryErrors").sink(() => {}),
+    observers.push(rooms.sink(() => {}));
+    await runtime.idle();
+    expect(rooms.get()).toEqual([]);
+    await runtime.editWithRetry((tx) =>
+      manager.key("roomMembership").withTx(tx).set([{
+        room: root,
+        kind: "group",
+        title: "Recorded conversation",
+        since: new FabricEpochNsec(1n),
+        state: "saved",
+        revision: "membership:1",
+      }])
     );
     await runtime.idle();
     expect(rooms.get()).toHaveLength(1);
-    expect(rooms.get()[0].room.equals(healthyRoom)).toBe(true);
-    expect(manager.key("discoveryErrors").get()).toEqual([{
-      space: failedSpace,
-      message: "Root refused",
-      kind: "network",
-    }]);
-    for (const waiting of [UNAVAILABLE_PENDING, UNAVAILABLE_SYNCING]) {
-      await runtime.editWithRetry((tx) =>
-        failedRoot.withTx(tx).setRaw(waiting)
-      );
-      await runtime.idle();
-      expect(manager.key("discoveryErrors").get()).toEqual([]);
-      expect(rooms.get()).toHaveLength(1);
-      expect(rooms.get()[0].room.equals(healthyRoom)).toBe(true);
-    }
-    await runtime.editWithRetry((tx) =>
-      failedRoot.withTx(tx).setRaw(
+    expect(rooms.get()[0].title).toBe("Recorded conversation");
+    expect(rooms.get()[0].room.equals(root)).toBe(true);
+    for (
+      const value of [
+        unavailableError("Root refused", "network"),
+        UNAVAILABLE_PENDING,
+        UNAVAILABLE_SYNCING,
         unavailableObsolete("Use the new catalog root."),
-      )
-    );
-    await runtime.idle();
-    expect(rooms.get()).toHaveLength(1);
-    expect(rooms.get()[0].room.equals(healthyRoom)).toBe(true);
-    expect(manager.key("discoveryErrors").get()).toEqual([{
-      space: failedSpace,
-      message: "Use the new catalog root.",
-      kind: "obsolete",
-    }]);
-    await runtime.editWithRetry((tx) =>
-      failedRoot.withTx(tx).setRaw(unavailableObsolete(""))
-    );
-    await runtime.idle();
-    expect(manager.key("discoveryErrors").get()).toEqual([{
-      space: failedSpace,
-      message: "This catalog root is no longer served.",
-      kind: "obsolete",
-    }]);
-    await runtime.editWithRetry((tx) =>
-      failedRoot.withTx(tx).set({ chatRoom: recoveredRoom })
-    );
-    await runtime.idle();
-    expect(manager.key("discoveryErrors").get()).toEqual([]);
-    expect(rooms.get()).toHaveLength(2);
-    expect(rooms.get().some((entry) => entry.room.equals(healthyRoom))).toBe(
-      true,
-    );
-    expect(rooms.get().some((entry) => entry.room.equals(recoveredRoom))).toBe(
-      true,
-    );
+        unavailableObsolete(""),
+        { about: { kind: "group", title: "Recovered root" } },
+      ]
+    ) {
+      await runtime.editWithRetry((tx) => root.withTx(tx).setRaw(value));
+      await runtime.idle();
+      expect(rooms.get()).toHaveLength(1);
+      expect(rooms.get()[0].title).toBe("Recorded conversation");
+      expect(rooms.get()[0].room.equals(root)).toBe(true);
+      expect(wishQueries).not.toContain("#default");
+    }
   });
 });

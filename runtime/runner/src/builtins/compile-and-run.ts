@@ -343,56 +343,58 @@ export function compileAndRun(
     // Capture requestId for this compilation run
     const thisRequestId = requestId;
 
+    // Named rather than written inline at the call, so that each callback's
+    // lines are its own (docs/development/COVERAGE.md, "A line two callbacks
+    // share").
+    const reportCompileFailure = async (err: unknown) => {
+      // Only process this error if the request hasn't been superseded
+      if (requestId !== thisRequestId) return;
+      if (abortController?.signal.aborted) return;
+
+      await runtime.editWithRetry((asyncTx) => {
+        if (requestId !== thisRequestId) return;
+        if (abortController?.signal.aborted) return;
+        // Extract structured errors if this is a CompilerError
+        if (err instanceof CompilerError) {
+          const structuredErrors = err.errors.map((e) => ({
+            line: e.line ?? 1,
+            column: e.column ?? 1,
+            message: e.message,
+            type: e.type,
+            file: e.file,
+          }));
+          errors.withTx(asyncTx).set(structuredErrors);
+          result.withTx(asyncTx).setRawUntyped(
+            compileUnavailable(err.message),
+            true,
+          );
+        } else {
+          const message = err instanceof Error
+            ? err.message + (err.stack ? "\n" + err.stack : "")
+            : String(err);
+          error.withTx(asyncTx).set(message);
+          result.withTx(asyncTx).setRawUntyped(
+            compileUnavailable(message),
+            true,
+          );
+        }
+      });
+    };
+    const clearPending = async () => {
+      // Only update pending if this is still the current request
+      if (requestId !== thisRequestId) return;
+      // Always clear pending state, even if cancelled, to avoid stuck state
+
+      await runtime.editWithRetry((asyncTx) => {
+        if (requestId !== thisRequestId) return;
+        pending.withTx(asyncTx).set(false);
+      });
+    };
+
     const compilePromise = runtime.patternManager
       .compileOrGetPattern(program, parentCell.space)
-      .catch(
-        async (err) => {
-          // Only process this error if the request hasn't been superseded
-          if (requestId !== thisRequestId) return;
-          if (abortController?.signal.aborted) return;
-
-          await runtime.editWithRetry((asyncTx) => {
-            if (requestId !== thisRequestId) return;
-            if (abortController?.signal.aborted) return;
-
-            // Extract structured errors if this is a CompilerError
-            if (err instanceof CompilerError) {
-              const structuredErrors: CompileDiagnostic[] = err.errors.map(
-                (e) => ({
-                  line: e.line ?? 1,
-                  column: e.column ?? 1,
-                  message: e.message,
-                  type: e.type,
-                  file: e.file,
-                }),
-              );
-              errors.withTx(asyncTx).set(structuredErrors);
-              result.withTx(asyncTx).setRawUntyped(
-                compileUnavailable(err.message),
-                true,
-              );
-            } else {
-              const message = err instanceof Error
-                ? err.message + (err.stack ? "\n" + err.stack : "")
-                : String(err);
-              error.withTx(asyncTx).set(message);
-              result.withTx(asyncTx).setRawUntyped(
-                compileUnavailable(message),
-                true,
-              );
-            }
-          });
-        },
-      ).finally(async () => {
-        // Only update pending if this is still the current request
-        if (requestId !== thisRequestId) return;
-        // Always clear pending state, even if cancelled, to avoid stuck state
-
-        await runtime.editWithRetry((asyncTx) => {
-          if (requestId !== thisRequestId) return;
-          pending.withTx(asyncTx).set(false);
-        });
-      });
+      .catch(reportCompileFailure)
+      .finally(clearPending);
 
     const work = compilePromise.then((pattern) => {
       // Only run the result if this is still the current request
@@ -405,9 +407,11 @@ export function compileAndRun(
         // how we pass input into the builtin.
 
         // The instantiation is the builtin's, in a continuation of its
-        // action: no principal's act attributes what its setup initializes.
+        // action: no principal's act attributes what its setup initializes,
+        // and its transaction holds none of the reads that chose the program.
         runtime.runSynced(result, pattern, input.get(), {
           attributeInitialization: false,
+          runtimeStarted: true,
         });
         runtime.editWithRetry((asyncTx) => {
           result.withTx(asyncTx).key("isHidden").set(true);
@@ -641,10 +645,25 @@ function compileAndRunServed(
         runtime.trackAsyncWork(
           settleAbandonedRequest(
             runtime,
-            "compileAndRun",
-            effectKey,
+            {
+              builtinId: "compileAndRun",
+              effectKey,
+              identity,
+              scope: pending.getAsNormalizedFullLink().scope ?? "space",
+              attributeToBuiltin: true,
+            },
             (settleTx) => {
-              settleTx.tx.scopeKeyIdentity = identity;
+              // TODO(danfuzz): This read of the program, which decides
+              // whether the request is still the target's, puts the program's
+              // label in the ending's join, and so stamps it on everything
+              // the ending writes, the memo's request hash included. The
+              // node's next run reads the memo and takes the label into its
+              // request. Deciding from an in-memory record of the latest
+              // run's program would lose the guarantee that this ending never
+              // lands over a program that replaced it; an ending that read no
+              // input and recorded no hash would end the carry-over, as the
+              // `llm` builtins' does. The tests pinning today's outcomes are
+              // in `served-effect-refusal-rerun.test.ts`.
               const current = snapshotQueryResult(
                 inputs.asSchema<RuntimeProgram>(programSchema).withTx(settleTx)
                   .get(),

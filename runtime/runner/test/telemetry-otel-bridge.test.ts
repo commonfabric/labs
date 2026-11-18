@@ -157,6 +157,18 @@ describe("createRuntimeTelemetryOtelBridge", () => {
     expect(meterCalls[0].attributes?.["ct.commit.terminal"]).toBe("completed");
   });
 
+  it("counts handler invocations with the handler's pattern attributes", () => {
+    bridge.handleMarker(marker({
+      type: "scheduler.invocation",
+      handlerInfo: { patternName: "lunch-poll", moduleName: "vote" },
+    }));
+    expect(meterCalls).toEqual([{
+      instrument: "ct.scheduler.invocations",
+      value: 1,
+      attributes: { "ct.pattern": "lunch-poll", "ct.module": "vote" },
+    }]);
+  });
+
   it("records every preflight phase and a retroactive span", () => {
     bridge.handleMarker(marker({
       type: "scheduler.event.preflight",
@@ -193,6 +205,27 @@ describe("createRuntimeTelemetryOtelBridge", () => {
     expect(spans[0].ended).toBe(true);
     expect(spans[0].endTime! - spans[0].startTime!).toBe(15);
     expect(spans[0].attributes["ct.handler_id"]).toBe("h-1");
+    expect(spans[0].status).toBeUndefined();
+  });
+
+  it("marks the preflight span of a failed preflight as errored", () => {
+    bridge.handleMarker(marker({
+      type: "scheduler.event.preflight",
+      handlerId: "h-1",
+      populateMs: 1,
+      txToLogMs: 0,
+      depCommitMs: 0,
+      collectMs: 0,
+      scheduleMs: 0,
+      readCount: 0,
+      shallowReadCount: 0,
+      dirtyDependencyCount: 0,
+      stats: { workSetAddCount: 0, reverseDependencyEdgeCount: 0 },
+      error: "stale read",
+    }));
+    expect(spans).toHaveLength(1);
+    expect(spans[0].ended).toBe(true);
+    expect(spans[0].status?.message).toBe("stale read");
   });
 
   it("opens a span on storage push start and closes it on complete", () => {
@@ -214,6 +247,22 @@ describe("createRuntimeTelemetryOtelBridge", () => {
     expect(
       meterCalls.some((c) => c.instrument === "ct.storage.op.duration_ms"),
     ).toBe(true);
+  });
+
+  it("closes a storage pull span without an error on complete", () => {
+    bridge.handleMarker(marker({
+      id: "op-3",
+      type: "storage.pull.start",
+      operation: "sync",
+    }));
+    expect(spans[0].ended).toBe(false);
+
+    bridge.handleMarker(marker({ id: "op-3", type: "storage.pull.complete" }));
+    expect(spans[0].name).toBe("storage.pull");
+    expect(spans[0].ended).toBe(true);
+    expect(spans[0].status).toBeUndefined();
+    const ops = meterCalls.filter((c) => c.instrument === "ct.storage.ops");
+    expect(ops[0].attributes?.["ct.storage.error"]).toBe(false);
   });
 
   it("marks a storage pull error span as errored", () => {

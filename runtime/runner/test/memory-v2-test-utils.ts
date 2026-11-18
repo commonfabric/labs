@@ -1,7 +1,11 @@
 import { assertEquals } from "@std/assert";
-import type { FabricValue } from "@commonfabric/data-model";
+import {
+  type FabricValue,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import {
+  type ClientMessage,
   decodeMemoryBoundary,
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
@@ -11,6 +15,7 @@ import {
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { parseClientMessage } from "@commonfabric/memory/v2/server";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { newLoopbackServer } from "../src/storage/v2-emulate.ts";
 import type {
@@ -20,6 +25,7 @@ import type {
 import {
   type Options as V2Options,
   type SessionFactory,
+  SpaceReplica,
   StorageManager as V2StorageManager,
 } from "../src/storage/v2.ts";
 
@@ -127,6 +133,133 @@ export function testPrincipalSessionOpenAuthFactory(
   });
 }
 
+/**
+ * Mounts `space` over `transport`, authorized for `signer` by
+ * `testPrincipalSessionOpenAuthFactory()`, and returns the client and the
+ * session.
+ */
+export async function mountOver(
+  transport: MemoryV2Client.Transport,
+  space: MemorySpace,
+  signer?: Signer,
+  mountOptions: MemoryV2Client.MountOptions = {},
+): Promise<{
+  client: MemoryV2Client.Client;
+  session: MemoryV2Client.SpaceSession;
+}> {
+  const client = await MemoryV2Client.connect({
+    instanceNames: namesInstancesByDefault(),
+    transport,
+  });
+  const session = await client.mount(
+    space,
+    mountOptions,
+    testPrincipalSessionOpenAuthFactory(signer),
+  );
+  return { client, session };
+}
+
+/** The options a `SpaceReplica` is constructed with. */
+type SpaceReplicaOptions = ConstructorParameters<typeof SpaceReplica>[0];
+
+/**
+ * Constructs a replica of `options.space` acting as `options.as`, whose
+ * sessions `options.createSession` opens. An option `options` leaves out
+ * takes its default: no settings, a subscription that ignores what it is
+ * sent, no local session documents, the signer's own identity in the session
+ * `test-replica-session`, route generation 0, no replay dependencies, and a
+ * watch of a document on its own that succeeds without asking the session.
+ */
+export const newSpaceReplica = (
+  options:
+    & Pick<SpaceReplicaOptions, "as" | "space" | "createSession">
+    & Partial<SpaceReplicaOptions>,
+): SpaceReplica =>
+  new SpaceReplica({
+    ...options,
+    settings: options.settings ?? {},
+    subscription: options.subscription ?? { next: () => {} },
+    localSessionDocuments: options.localSessionDocuments ?? (() => false),
+    scopeKeyIdentity: options.scopeKeyIdentity ??
+      (() => ({
+        principal: options.as.did(),
+        sessionId: "test-replica-session",
+      })),
+    routeState: options.routeState ?? { generation: 0 },
+    routeGeneration: options.routeGeneration ?? 0,
+    syncReplayDependencies: options.syncReplayDependencies ??
+      (() => Promise.resolve(undefined)),
+    watchDocument: options.watchDocument ??
+      (() => Promise.resolve({ ok: {} })),
+  });
+
+/**
+ * Holds the responses a client receives to its requests of one type, while
+ * `holding` is set, over the transports `wrap()` returns.
+ */
+export class ResponseHolder {
+  /** Whether responses to the requests wait for `release()`. */
+  holding = false;
+
+  /** How many of the requests the client has sent. */
+  sent = 0;
+
+  readonly #firstSent = Promise.withResolvers<void>();
+  readonly #firstHeld = Promise.withResolvers<void>();
+
+  /** Resolves when the client first sends one of the requests. */
+  readonly firstSent = this.#firstSent.promise;
+
+  /** Resolves when a response is first held. */
+  readonly firstHeld = this.#firstHeld.promise;
+
+  readonly #type: ClientMessage["type"];
+  readonly #requestIds = new Set<string>();
+  #held: (() => void)[] = [];
+
+  /** Constructs an instance holding the responses to requests of `type`. */
+  constructor(type: ClientMessage["type"]) {
+    this.#type = type;
+  }
+
+  /** Delivers the held responses, and holds no more. */
+  release(): void {
+    this.holding = false;
+    for (const deliver of this.#held.splice(0)) deliver();
+  }
+
+  /** Returns `inner` with the responses to the requests held. */
+  wrap(inner: MemoryV2Client.Transport): MemoryV2Client.Transport {
+    return {
+      ...inner,
+      send: (payload) => {
+        const sent = parseClientMessage(payload, { commitLabelTableV1: true });
+        if (sent?.type === this.#type) {
+          this.sent += 1;
+          this.#firstSent.resolve();
+          if ("requestId" in sent) this.#requestIds.add(sent.requestId);
+        }
+        return inner.send(payload);
+      },
+      setReceiver: (next) =>
+        inner.setReceiver((payload) => {
+          const received = decodeMemoryBoundary(payload);
+          if (
+            this.holding && isFabricPlainObject(received) &&
+            received.type === "response" &&
+            typeof received.requestId === "string" &&
+            this.#requestIds.has(received.requestId)
+          ) {
+            this.#held.push(() => next(payload));
+            this.#firstHeld.resolve();
+            return;
+          }
+          next(payload);
+        }),
+    };
+  }
+}
+
 export class NotificationRecorder implements IStorageNotification {
   notifications: StorageNotification[] = [];
   onNotification?: (notification: StorageNotification) => void;
@@ -221,6 +354,17 @@ export abstract class ScriptedSessionTransport
   /** Called for each hello before hello.ok goes out (e.g. count connections). */
   protected onHello(_helloCount: number): void {}
 
+  /**
+   * What the response to the `openCount`th session.open (counting from 1)
+   * adds: whether it `resumed` the session the client names, rather than
+   * replacing it, and the catch-up `sync` a resume carries.
+   */
+  protected sessionOpened(
+    _openCount: number,
+  ): { resumed?: true; sync?: SessionSync } {
+    return {};
+  }
+
   /** Flags advertised on hello.ok — override to script an older server
    * (e.g. one without `pendingReadStacks`) or a newer one. Scripted
    * transports do NOT advertise `verdictCatchUpMarkers` by default: a
@@ -278,6 +422,7 @@ export abstract class ScriptedSessionTransport
             sessionId: message.session?.sessionId ?? this.#script.sessionId,
             serverSeq: this.openServerSeq(),
             sessionOpen: this.#sessionOpen,
+            ...this.sessionOpened(this.#sessionOpenCount),
           },
         });
         return;

@@ -652,6 +652,14 @@ Existing first-run deferral may prevent many syncing values from being
 observable, but it is not a substitute for this distinction at every read
 boundary.
 
+Idempotency diagnostics compare runs over the same input basis. A linked read
+whose coverage is missing records its exact scoped address. If the replay can
+read that address and neither run wrote an overlapping path, the readiness
+transition is an external input change, not nondeterminism. An authored
+`Syncing` value alone supplies no such evidence. Repeated failed reads,
+unrelated new reads, and self-written inputs remain subject to the ordinary
+idempotency comparison.
+
 ### Precedence and tie-breaking
 
 When more than one unaccepted input is unavailable, the selected reason is:
@@ -1059,6 +1067,11 @@ cell with normal scope and CFC derivation. On unavailable, synchronizing, or
 schema-invalid input it performs no write once a snapshot exists. A valid
 authored `undefined` must remain distinguishable from a failed read when the
 stripped schema admits `undefined`.
+
+Nested Cell handles remain references to the same cells. The snapshot copies
+the surrounding values, not a handle's contents, and persists those handles
+as links with their schemas. An unavailable value behind an opaque handle
+does not make the surrounding snapshot incomplete.
 
 The node's result cell is the sole persisted snapshot. The output binding points
 to that cell; there is no second hidden cache. Rehydration distinguishes an

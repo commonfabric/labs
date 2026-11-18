@@ -20,11 +20,24 @@ What the failure probe contains, and where each piece lives:
 - **Fill phase ledger** (`__cfFillDiag`, in
   [`cfc-browser-helpers.ts`](../../../patterns/integration/cfc-browser-helpers.ts))
   — per-selector progress through the fill (settled → found → visible → filled
-  → committed), naming the exact await that hung. A fill on a page that never
-  exposes `commonfabric.viewSettled` stops at the settle and says so.
+  → committed), naming the exact await that hung, with how many attempts the
+  fill made and when its first and latest began. A fill on a page that never
+  exposes `commonfabric.viewSettled` stops at the settle and says so, and one
+  waiting on its two steps of page progress says `awaiting-frame`. A step is
+  an animation frame where the page is rendered and a turn of the event loop
+  where it is not (`ProbeApi.nextFrame`), since a page that is not rendered
+  produces no frames; the probe reports the page's `visibilityState` and
+  `hasFocus()` beside it.
 - **Host/bound-cell state** (`readCfInputProbe`, same file) — whether the
   `cf-input` host has a bound cell and a pending commit, alongside DOM
-  value/visibility/disabled.
+  value/visibility/disabled. Where nothing matches the selector, it lists the
+  ids the page holds instead, through shadow roots, sorted and at most
+  `PRESENT_IDS_MAX`, with their count, so a missing field says how far the
+  view around it rendered. The failure message renders this probe at `xlong`,
+  and its console tail after it as plain lines, one per entry, so that no cut
+  of the probe reaches the tail. The tail is the page's last 40 console
+  entries, each cut to 400 characters by the page, so older entries are not
+  in it.
 - **Main-thread pending IPC** (`RuntimeClient.getPendingRequests()`,
   [`runtime-client.ts`](../../../runtime/runtime-client/src/runtime-client.ts))
   — the runtime-client requests still awaiting a worker response; works even
@@ -43,11 +56,26 @@ Everything above is the test process's account. The server's own is the
 Toolshed log, and which half of the machinery ran the suite decides where it
 comes from. A lane (`tasks/ci-lane.ts`) opens the server as a capability and
 prints the end of that capability's log on its own output when the lane
-fails. A lane whose tests or capabilities failed inside a job keeps the work
-directory the log was written in, under the job's temporary directory
-(`RUNNER_TEMP`), where a workflow step can upload it. In every other case
-the directory goes when the lane ends. The workflow jobs that predate the
-lanes upload the same file as an artifact, named for the job that wrote it.
+fails. A lane inside a job whose tests or capabilities failed, or that excused
+the failure of a test held back as flaky, keeps the work directory the log was
+written in, under the job's temporary directory (`RUNNER_TEMP`), and the job
+uploads it as its `lane-kept` artifact. In every other case the directory
+goes when the lane ends. The workflow jobs that predate the lanes upload the
+same file as an artifact, named for the job that wrote it.
+
+With server execution on, a fresh runtime, such as the server's, loads a piece
+created in another space (`.inSpace()`) from that space, and can do so only once
+the pattern's program has been copied there; the session that created the piece
+can load it without that copy. The Toolshed log records each copy the server
+makes out of another space as `closure-replication-issued`, with its source and
+target spaces and a ticket number, and then one line with the same ticket saying
+how it ended: `closure-replication-committed` once its writes have been
+accepted, `closure-replication-failed`, or `closure-copy-refused` for a copy a
+load started into a space the session may only read. A serving wave can still
+withdraw a write it accepted, which it logs as
+`compile-cache-writeback-withdrawn` with the entry and the space. A space whose
+piece never runs shows in that log whether its copy was never issued, was issued
+and never ended, failed, was refused, or was withdrawn.
 
 Local full-stack repro for CI-only integration failures (see
 [LOCAL_DEV_SERVERS](../LOCAL_DEV_SERVERS.md) for the dev-server details):

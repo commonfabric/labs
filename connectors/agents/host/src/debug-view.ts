@@ -639,10 +639,11 @@ async function registerDebugPiece(
     );
   }
   let supersededPiecesStopped = false;
-  const stopPreceding = async (): Promise<void> => {
-    if (precedingPiece === undefined) return;
-    await stopAndDrainPieces(manager, [precedingPiece]);
-  };
+  const stopPreceding = (): Promise<void> =>
+    stopAndDrainPieces(
+      manager,
+      precedingPiece === undefined ? [] : [precedingPiece],
+    );
   const rollbackForAbort = async (): Promise<void> => {
     const abortSignal = signal;
     if (!abortSignal?.aborted) return;

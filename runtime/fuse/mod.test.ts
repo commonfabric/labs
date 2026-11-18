@@ -1,21 +1,22 @@
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import {
   announceSupervisorState,
+  createSupervisorStatusWriter,
+  DEFAULT_CFC_XATTR_NAMESPACE,
+  defaultCfcWritebackStatePath,
+  parseCfcXattrNamespace,
+} from "./mod.ts";
+import {
   appendDecodedJsonPath,
   bufferForNoHandleTruncate,
   cfcWritebackXattrResultErrno,
-  createSupervisorStatusWriter,
   decodeFuseNamespaceName,
   decodeSourceWriteText,
-  DEFAULT_CFC_XATTR_NAMESPACE,
-  defaultCfcWritebackStatePath,
   disconnectedWriteErrno,
   isConnectionWriteFailure,
-  parseCfcXattrNamespace,
   rootSpaceLookupNames,
   sourceRelPathToTreeSegments,
-  writeUnavailableErrno,
-} from "./mod.ts";
+} from "./operations.ts";
 import { finalizeCommittedSourceWrite } from "./source-write-finalize.ts";
 import { HandleMap } from "./handles.ts";
 import {
@@ -32,7 +33,7 @@ import {
 import darwinPlatform from "./platform-darwin.ts";
 import { darwinLibfusePaths } from "./library-paths.ts";
 import linuxPlatform from "./platform-linux.ts";
-import { EACCES, EINVAL, EROFS, FILE_MODE_RW } from "./platform.ts";
+import { EINVAL, EROFS, FILE_MODE_RW } from "./platform.ts";
 import { FsTree } from "./tree.ts";
 
 function env(values: Record<string, string | undefined>) {
@@ -57,18 +58,6 @@ function assertAppearsBefore(
     earlierIndex < laterIndex,
     `expected ${earlier} to appear before ${later}`,
   );
-}
-
-function assertAppearsBeforeAfter(
-  source: string,
-  after: string,
-  earlier: string,
-  later: string,
-  label: string,
-): void {
-  const start = source.indexOf(after);
-  assert(start >= 0, `${label}: missing section marker: ${after}`);
-  assertAppearsBefore(source.slice(start), earlier, later, label);
 }
 
 Deno.test("CFC xattr namespace defaults to both and rejects unknown values", () => {
@@ -164,56 +153,6 @@ Deno.test("source writeback re-encodes decoded source relpaths for tree lookup",
   );
 });
 
-Deno.test("source writeback retains attached test roots", async () => {
-  const source = await Deno.readTextFile(new URL("./mod.ts", import.meta.url));
-  const sourceWriteback = source.slice(
-    source.indexOf('if (writeTarget?.kind === "source")'),
-  );
-
-  assert(
-    sourceWriteback.includes("sourceRoots: program.sourceRoots"),
-    "source writeback must pass the recovered source roots to setPattern",
-  );
-});
-
-Deno.test("source writeback retains attached data files", async () => {
-  const source = await Deno.readTextFile(new URL("./mod.ts", import.meta.url));
-  const sourceWriteback = source.slice(
-    source.indexOf('if (writeTarget?.kind === "source")'),
-  );
-
-  assert(
-    sourceWriteback.includes("dataFiles: program.dataFiles"),
-    "source writeback must pass the recovered data files to setPattern",
-  );
-});
-
-Deno.test("source writeback finalizes its receipt and persists every warning", async () => {
-  // Finalizing rebuilds `.src` and mints a fresh empty `error.log`, so the
-  // receipt goes into the operation performing that rebuild. The outer flush
-  // then persists the finalizer's complete diagnostic, which retains both
-  // failures when the running-piece refresh and the projection fail. Read from
-  // the source because driving the flush needs a mounted filesystem, in the
-  // same way as the two cases above.
-  const source = await Deno.readTextFile(new URL("./mod.ts", import.meta.url));
-  const sourceWriteback = source.slice(
-    source.indexOf('if (writeTarget?.kind === "source")'),
-  );
-
-  assert(
-    sourceWriteback.includes(
-      "bridge.finalizeSourceWritePath(writeTarget.target, receipt)",
-    ),
-    "source writeback must hand the update receipt to the finalize",
-  );
-  assert(
-    sourceWriteback.includes(
-      "finalized.logWarning",
-    ),
-    "source writeback must persist the complete post-commit diagnostic",
-  );
-});
-
 Deno.test("source projection failures after commit become warnings, not rejected writes", async () => {
   const receipt = {
     status: "committed" as const,
@@ -279,110 +218,10 @@ Deno.test("no-handle truncate opens only the bounded target prefix", () => {
   assertEquals(bufferForNoHandleTruncate(content, 0).length, 0);
 });
 
-Deno.test("writeUnavailableErrno reports read-only filesystem while disconnected", () => {
-  assertEquals(writeUnavailableErrno({ disconnected: true }), EROFS);
-  assertEquals(writeUnavailableErrno({ disconnected: false }), EACCES);
-  assertEquals(writeUnavailableErrno(null), EACCES);
-});
-
 Deno.test("disconnectedWriteErrno only rejects degraded writes", () => {
   assertEquals(disconnectedWriteErrno({ disconnected: true }), EROFS);
   assertEquals(disconnectedWriteErrno({ disconnected: false }), null);
   assertEquals(disconnectedWriteErrno(undefined), null);
-});
-
-Deno.test("mutating callbacks reject disconnected writes before optimistic mutation", async () => {
-  const source = await Deno.readTextFile(new URL("./mod.ts", import.meta.url));
-  const mutationGuards = [
-    [
-      "open callback",
-      'logOp("open"',
-      "if (failIfDisconnectedWrite(req)) return;",
-      "const fh = handles.open(",
-    ],
-    [
-      "write callback",
-      'logOp("write"',
-      "const errno = disconnectedWriteErrno(bridge);",
-      "!handles.write(fh, data, off)",
-    ],
-    [
-      "flushHandle",
-      "async function flushHandle",
-      "const disconnectedErrno = disconnectedWriteErrno(bridge);",
-      'if (writeTarget?.kind === "handler")',
-    ],
-    [
-      "flush callback",
-      'logOp("flush"',
-      "const errno = disconnectedWriteErrno(bridge);",
-      "fuse.symbols.fuse_reply_err(req, 0);\n      console.log(`[write-trace] flush-fire fh=${fh}`);",
-    ],
-    [
-      "release callback",
-      'logOp("release"',
-      "const errno = disconnectedWriteErrno(bridge);",
-      "fuse.symbols.fuse_reply_err(req, 0);\n        let flushPromise",
-    ],
-    [
-      "setattr",
-      'logOp("setattr"',
-      "if ((sizeChange || metadataChange) && failIfDisconnectedWrite(req))",
-      "applyPreparedExistingWrite",
-    ],
-    [
-      "setxattr",
-      'logOp("setxattr"',
-      "if (failIfDisconnectedWrite(req)) return;\n      const name = readCString(namePtr);",
-      "cfcWritebacks.setPreparedXattr",
-    ],
-    [
-      "removexattr",
-      'logOp("removexattr"',
-      "if (failIfDisconnectedWrite(req)) return;\n      const name = readCString(namePtr);",
-      "cfcWritebacks.deleteAllForIno",
-    ],
-    [
-      "create",
-      "const parentPath = bridge.resolveWritePath(parent);",
-      'if (failIfDisconnectedWrite(req)) return;\n      if (!authorizeCreateCfcWrite(parent, "create", name))',
-      "tree.addFile(parent, name",
-    ],
-    [
-      "mkdir",
-      'logOp("mkdir"',
-      'if (failIfDisconnectedWrite(req)) return;\n      if (!authorizeCreateCfcWrite(parent, "mkdir", name))',
-      "tree.addDir(parent, name",
-    ],
-    [
-      "unlink",
-      "parentPath ??= bridge.resolveWritePath(parent);",
-      'if (failIfDisconnectedWrite(req)) return;\n      authorization ??= authorizeNamespaceCfcWrite(parent, "unlink", name);',
-      "tree.removeChild(parent, name)",
-    ],
-    [
-      "rmdir",
-      'logOp("rmdir"',
-      'if (failIfDisconnectedWrite(req)) return;\n      authorization ??= authorizeNamespaceCfcWrite(parent, "rmdir", name);',
-      "tree.removeChild(parent, name)",
-    ],
-    [
-      "rename",
-      'logOp("rename"',
-      "if (failIfDisconnectedWrite(req)) return;\n      renameAuthorization ??= authorizeRenameCfcWrite",
-      "tree.rename(oldParent, oldName, newParent, newName)",
-    ],
-    [
-      "symlink",
-      "const symlinkCb",
-      "if (failIfDisconnectedWrite(req)) return;\n\n      let authorization = undefined",
-      "tree.addSymlink(parent, name, target)",
-    ],
-  ] as const;
-
-  for (const [label, marker, guard, mutation] of mutationGuards) {
-    assertAppearsBeforeAfter(source, marker, guard, mutation, label);
-  }
 });
 
 Deno.test("mounted is announced only after the session loop and signal handlers", async () => {
@@ -412,63 +251,6 @@ Deno.test("mounted is announced only after the session loop and signal handlers"
     "const result = await sessionLoop;",
     "mounted is announced before the session loop is awaited",
   );
-});
-
-Deno.test("write-trace lines the FUSE integration suite reads keep their shape", async () => {
-  const source = await Deno.readTextFile(new URL("./mod.ts", import.meta.url));
-
-  // `runtime/cli/integration/fuse-exec.sh` asserts that truncating a path
-  // disarms an already-open descriptor by reading these three lines out of the
-  // daemon log. It resolves the handle from the `write` line, requires the
-  // `release` line to report the handle disarmed, and requires no `flush-fire`
-  // line for that handle. That last check is satisfied by a line being absent,
-  // so rewording it turns the check into a no-op that still passes. Pin the
-  // shapes here, where a reword fails and names what it broke.
-  const tracedLines = [
-    "console.log(`[write-trace] write fh=${fh} size=${sz} offset=${off}`);",
-    "console.log(`[write-trace] flush-fire fh=${fh}`);",
-    "[write-trace] release fh=${fh} dirty=${handle.dirty} flushing=${handle.flushing} pending=${",
-  ];
-
-  for (const line of tracedLines) {
-    assert(
-      source.includes(line),
-      `mod.ts no longer emits the trace line fuse-exec.sh reads: ${line}`,
-    );
-  }
-
-  // The release line is only a verdict because it reports the handle's state as
-  // releaseCb found it. Tracing it after the flush decision would report state
-  // that decision had already changed.
-  assertAppearsBeforeAfter(
-    source,
-    'logOp("release"',
-    "[write-trace] release fh=${fh} dirty=${handle.dirty}",
-    "if (handle && handleHasPendingChanges(handle) && bridge) {",
-    "release trace precedes the flush decision",
-  );
-});
-
-Deno.test("namespace write failures use shared outage accounting", async () => {
-  const source = await Deno.readTextFile(new URL("./mod.ts", import.meta.url));
-
-  for (
-    const operation of [
-      "create",
-      "mkdir",
-      "unlink",
-      "rmdir",
-      "rename",
-      "symlink",
-    ]
-  ) {
-    assert(
-      source.includes(
-        `recordAsyncWriteFailure(\"${operation} write error\", e);`,
-      ),
-      `missing shared outage accounting for ${operation}`,
-    );
-  }
 });
 
 Deno.test("connection write failure classifier recognizes backend outages", () => {
@@ -581,7 +363,6 @@ Deno.test("mount fuse args apply noattrcache to FUSE-T mounts only", () => {
     const [os, provider] of [
       ["linux", "linux-libfuse"],
       ["darwin", "macfuse"],
-      ["darwin", "unknown"],
     ] as const
   ) {
     assertEquals(
@@ -633,20 +414,17 @@ Deno.test("FUSE-T mounts default to a one-second attrcache-timeout", () => {
     }),
     ["fuse_ct", "-o", "noattrcache"],
   );
-  // macFUSE rejects the option, so no default is applied there, and an
-  // unresolved provider gets no default either.
-  for (const provider of ["macfuse", "unknown"] as const) {
-    assertEquals(
-      buildMountFuseArgs({
-        os: "darwin",
-        provider,
-        allowOther: false,
-        cfcWritebackXattrs: false,
-        noattrcache: false,
-      }),
-      ["fuse_ct"],
-    );
-  }
+  // macFUSE rejects the option, so no default is applied there.
+  assertEquals(
+    buildMountFuseArgs({
+      os: "darwin",
+      provider: "macfuse",
+      allowOther: false,
+      cfcWritebackXattrs: false,
+      noattrcache: false,
+    }),
+    ["fuse_ct"],
+  );
 });
 
 Deno.test("mount fuse args apply attrcache-timeout to FUSE-T mounts only", () => {
@@ -776,23 +554,6 @@ Deno.test("mount cache options surface an out-of-range timeout", () => {
       resolveMountCacheOptions({ noattrcache: false, attrcacheTimeout: "-1" }),
     Error,
     "Invalid --attrcache-timeout value",
-  );
-});
-
-Deno.test("platform provider reports the implementation openFuse loaded", () => {
-  // Neither platform's library is opened by unit tests, so both report the
-  // pre-openFuse state. buildMountFuseArgs treats that as "not FUSE-T".
-  assertEquals(darwinPlatform.provider(), "unknown");
-  assertEquals(linuxPlatform.provider(), "unknown");
-  assertEquals(
-    buildMountFuseArgs({
-      os: "darwin",
-      provider: darwinPlatform.provider(),
-      allowOther: false,
-      cfcWritebackXattrs: false,
-      noattrcache: false,
-    }),
-    ["fuse_ct"],
   );
 });
 

@@ -37,7 +37,7 @@ import {
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
 import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
-import { LRUCache } from "@commonfabric/collections/cache";
+import { BoundedKeyMap, LRUCache } from "@commonfabric/collections/cache";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { StagedMap } from "@commonfabric/collections/staged-map";
 
@@ -85,6 +85,7 @@ import {
 } from "./immutable-cell.ts";
 import { type LastNode, readMaybeLink } from "./link-resolution.ts";
 import {
+  assertStoredValuePath,
   type IMemorySpaceValueAddress,
   isSigilLink,
   isWriteRedirectLink,
@@ -118,6 +119,7 @@ import {
   type ReadError,
   type StorageTransactionStatus,
   type TransactionCommitReceipt,
+  type TransactionReactivityLog,
   type WriteError,
   type WriterError,
 } from "./storage/interface.ts";
@@ -125,6 +127,7 @@ import {
   excludeReadFromConflict,
   ignoreReadForScheduling,
   linkResolutionProbe,
+  reactivityLogFromActivities,
 } from "./storage/reactivity-log.ts";
 import { resolve } from "./storage/transaction/attestation.ts";
 import { readAvailabilityValue } from "./storage/read-availability.ts";
@@ -186,20 +189,26 @@ export type IMemorySpaceValueAttestation = IMemorySpaceAttestation & {
 // re-walking the schema tree.
 // Capped to prevent unbounded growth in long-running servers.
 const INTERN_CACHE_MAX = 10_000;
-const _mergeSchemaOptionCache = new Map<string, JSONSchema>();
-const _combineSchemaCache = new Map<string, JSONSchema>();
+const _mergeSchemaOptionCache = new BoundedKeyMap<string, JSONSchema>(
+  INTERN_CACHE_MAX,
+);
+const _combineSchemaCache = new BoundedKeyMap<string, JSONSchema>(
+  INTERN_CACHE_MAX,
+);
 // combineSchemaForLink's minting arms only (a carried `default` builds a new
 // schema); its pass-through arms return existing references uncached.
-const _combineLinkSchemaCache = new Map<string, JSONSchema>();
-const _mergeSchemaFlagsCache = new Map<string, JSONSchema>();
+const _combineLinkSchemaCache = new BoundedKeyMap<string, JSONSchema>(
+  INTERN_CACHE_MAX,
+);
+const _mergeSchemaFlagsCache = new BoundedKeyMap<string, JSONSchema>(
+  INTERN_CACHE_MAX,
+);
 
 function internSet(
-  cache: Map<string, JSONSchema>,
+  cache: BoundedKeyMap<string, JSONSchema>,
   key: string,
   value: JSONSchema,
 ): JSONSchema {
-  if (cache.size >= INTERN_CACHE_MAX) cache.clear();
-
   const result = internSchema(value);
   cache.set(key, result);
   return result;
@@ -348,20 +357,24 @@ function schemaMemoLinkKey(link: NormalizedFullLink | undefined): string {
  * (interning only substitutes the canonical instance of an equal schema).
  *
  * Keyed on content (injective `pathKey()` encodings) plus cached schema
- * hashes (`hashSchema()`), in one module-level capped `Map`: callers
+ * hashes (`hashSchema()`), in one module-level `BoundedKeyMap`: callers
  * like `#traversePointerWithSchema` mint a fresh selector object per call
  * (only its `schema` is identity-stable), so a cache rooted on selector
  * identity would never hit, and every miss would mint yet another distinct
  * frozen selector for downstream code to full-hash. Memoization requires
  * both schemas to be `isMemoizableSchemaInput` (immutable identities, hash
  * cached after first touch); otherwise the exact un-memoized computation
- * runs. The capped string-keyed `Map` follows the `_combineSchemaCache`
+ * runs. The bounded string-keyed map follows the `_combineSchemaCache`
  * precedent for bounding growth.
  */
-const _linkHopSelectorCache = new Map<string, SchemaPathSelector>();
+const _linkHopSelectorCache = new BoundedKeyMap<string, SchemaPathSelector>(
+  INTERN_CACHE_MAX,
+);
 
 /** See `BaseObjectTraverser.#internCoverageSelector()`. */
-const _coverageSelectorCache = new Map<string, SchemaPathSelector>();
+const _coverageSelectorCache = new BoundedKeyMap<string, SchemaPathSelector>(
+  INTERN_CACHE_MAX,
+);
 
 function narrowAndCombineSelectorForLink(
   docPath: readonly string[],
@@ -407,12 +420,7 @@ function narrowAndCombineSelectorForLink(
     narrowedLinkSchema,
   );
   const interned = internPathSelector(narrowed);
-  if (key !== undefined) {
-    if (_linkHopSelectorCache.size >= INTERN_CACHE_MAX) {
-      _linkHopSelectorCache.clear();
-    }
-    _linkHopSelectorCache.set(key, interned);
-  }
+  if (key !== undefined) _linkHopSelectorCache.set(key, interned);
   return interned;
 }
 
@@ -422,32 +430,12 @@ const EMPTY_PROPERTIES_MARKER: JSONSchema = Object.freeze(
 const MISSING_PROPERTY_MARKER: JSONSchema = Object.freeze(
   { $comment: "missingProperty" },
 );
-let _schemaAtPathCache = new WeakMap<
-  JSONSchemaObj,
-  Map<string, JSONSchema>
->();
-// Derivations can embed registry content resolved through external refs, so
-// a registry clear (last lease out) swaps the cache — a resolution success
-// must not outlive its lease epoch.
-onSchemaRegistryClear(() => {
-  _schemaAtPathCache = new WeakMap();
-});
-
 /**
- * Memoized, canonicalizing wrapper around
  * `ContextualFlowControl.schemaAtPath()` for the hot traversal seams (object
- * properties, array items). The core method now symbolically memoizes its
- * common boolean-default derivations; this seam also covers the marker-object
- * variant used below, which is intentionally outside that cache. It returns one
- * interned (canonical, deep-frozen) result per (schema identity, path, marker
- * variant), so downstream identity-keyed hash caches (most notably the
- * `traverseWithSchema` memo) hit.
- *
- * Only memoizes when `schema` is a memoizable input (interned or deep-frozen
- * — see `isMemoizableSchemaInput()`), so the identity key cannot go stale.
- * (`schemaAtPath()` is deterministic — `ContextualFlowControl` carries no
- * instance state — so a module-level cache across cfc instances is sound.)
- * Mutable input falls back to the exact un-memoized computation.
+ * properties, array items). For a deep-frozen `schema` the core method keeps
+ * one interned result per (schema identity, path, default pair), the marker
+ * pair below included, so downstream identity-keyed hash caches (most notably
+ * the `traverseWithSchema` memo) hit.
  *
  * `markers` selects the `$comment` marker pair `#traverseObjectWithSchema`
  * uses to detect properties it should not descend into.
@@ -457,39 +445,15 @@ function schemaAtPathCanonical(
   path: readonly string[],
   markers = false,
 ): JSONSchema {
-  const compute = () =>
-    markers
-      ? ContextualFlowControl.schemaAtPath(
-        schema,
-        path,
-        undefined,
-        EMPTY_PROPERTIES_MARKER,
-        MISSING_PROPERTY_MARKER,
-      )
-      : ContextualFlowControl.schemaAtPath(schema, path);
-  if (typeof schema === "boolean" || !isMemoizableSchemaInput(schema)) {
-    return compute();
-  }
-  let byPath = _schemaAtPathCache.get(schema);
-  if (byPath === undefined) {
-    byPath = new Map();
-    _schemaAtPathCache.set(schema, byPath);
-  }
-  const key = (markers ? "m|" : "d|") + pathKey(path);
-  const cached = byPath.get(key);
-  if (cached !== undefined) return cached;
-  // Marker-bearing calls return freshly-spread tops over the (deep-frozen,
-  // since `schema` is interned) children. Default calls may already be the
-  // core method's canonical result; interning is idempotent in that case.
-  const missesBefore = externalResolutionMissCount();
-  const result = internSchema(compute());
-  // Populate only when no `cid:` resolution missed while computing: a
-  // derivation computed over a hole must not outlive the documents'
-  // arrival.
-  if (externalResolutionMissCount() !== missesBefore) return result;
-  if (byPath.size >= INTERN_CACHE_MAX) byPath.clear();
-  byPath.set(key, result);
-  return result;
+  return markers
+    ? ContextualFlowControl.schemaAtPath(
+      schema,
+      path,
+      undefined,
+      EMPTY_PROPERTIES_MARKER,
+      MISSING_PROPERTY_MARKER,
+    )
+    : ContextualFlowControl.schemaAtPath(schema, path);
 }
 
 type PlainPrimitiveType =
@@ -706,41 +670,30 @@ function prepareAnyOfBranch(
   };
   if (ContextualFlowControl.isFalseSchema(option)) return rejected;
   const merged = mergeSchemaOption(restSchema, option);
-  if (typeof merged === "boolean") {
+  const hasAsCell = SchemaObjectTraverser.hasAsCell(merged);
+  const resolved = typeof merged !== "boolean" && "$ref" in merged
+    ? resolveSchemaRefsCanonical(merged)
+    : merged;
+  if (typeof resolved === "boolean") {
     // canBranchMatch's first check: boolean schemas decide immediately.
     return {
       optionIsFalse: false,
       merged,
-      constant: merged,
-      hasAsCell: false,
+      constant: resolved,
+      hasAsCell,
       types: undefined,
       required: undefined,
     };
-  }
-  const hasAsCell = SchemaObjectTraverser.hasAsCell(merged);
-  let resolved: JSONSchema | undefined = merged;
-  if ("$ref" in merged) {
-    resolved = resolveSchemaRefsCanonical(merged);
-    if (typeof resolved === "boolean") {
-      return {
-        optionIsFalse: false,
-        merged,
-        constant: resolved,
-        hasAsCell,
-        types: undefined,
-        required: undefined,
-      };
-    } else if (resolved === undefined) {
-      // Unresolved $ref: pass the prefilter; traversal complains properly.
-      return {
-        optionIsFalse: false,
-        merged,
-        constant: true,
-        hasAsCell,
-        types: undefined,
-        required: undefined,
-      };
-    }
+  } else if (resolved === undefined) {
+    // Unresolved $ref: pass the prefilter; traversal complains properly.
+    return {
+      optionIsFalse: false,
+      merged,
+      constant: true,
+      hasAsCell,
+      types: undefined,
+      required: undefined,
+    };
   }
   const types = resolved.type !== undefined
     ? (Array.isArray(resolved.type) ? resolved.type : [resolved.type])
@@ -1091,9 +1044,9 @@ function declaresAsCellMemoized(schema: JSONSchemaObj): boolean {
 }
 
 /**
- * Whether `schema` declares a handle at its root, itself or through the
- * definition its root `$ref` names. A union whose every option declares a
- * handle is a handle as well (`SchemaObjectTraverser.hasAsCell()`), but which
+ * Whether `schema` declares a handle (`SchemaObjectTraverser.hasAsCell()`) at
+ * its root, itself or through the definition its root `$ref` names. A union
+ * whose every option declares a handle is a handle as well, but which
  * option's handle turns on the value, so the union's branches are traversed
  * and their merge mints it.
  *
@@ -1102,7 +1055,11 @@ function declaresAsCellMemoized(schema: JSONSchemaObj): boolean {
  * carries no handle of its own is read through.
  */
 function declaresHandleAtRoot(schema: JSONSchema | undefined): boolean {
-  if (!isObjectNotArray(schema)) return false;
+  if (
+    !isObjectNotArray(schema) || !SchemaObjectTraverser.hasAsCell(schema)
+  ) {
+    return false;
+  }
   if (ContextualFlowControl.getAsCellValues(schema).length > 0) return true;
   return typeof schema.$ref === "string" &&
     ContextualFlowControl.getAsCellValues(resolveRootRefForStructure(schema))
@@ -1504,33 +1461,6 @@ export const coveringSelector = (
   }
   return undefined;
 };
-
-export class CycleTracker<K> {
-  #partial: Set<K>;
-  #expectCycles: boolean;
-  constructor(expectCycles = false) {
-    this.#expectCycles = expectCycles;
-    this.#partial = new Set<K>();
-  }
-  include(k: K, context?: unknown): Disposable | null {
-    if (this.#partial.has(k)) {
-      if (!this.#expectCycles) {
-        logger.warn("traverse", () => [
-          "Cycle Detected!",
-          k,
-          context,
-        ]);
-      }
-      return null;
-    }
-    this.#partial.add(k);
-    return {
-      [Symbol.dispose]: () => {
-        this.#partial.delete(k);
-      },
-    };
-  }
-}
 
 /**
  * Cycle tracker for more complex objects with multiple parts.
@@ -1957,6 +1887,10 @@ export class ManagedStorageTransaction implements IStorageTransaction {
     return { status: "ready", journal: this.journal };
   }
 
+  getReactivityLog(): TransactionReactivityLog {
+    return reactivityLogFromActivities(this.journal.activity());
+  }
+
   read(
     address: IMemorySpaceAddress,
     options?: IReadOptions,
@@ -2191,25 +2125,24 @@ export function mergeAnyOfMatches<T>(
 }
 
 /**
- * Convert an IMemoryAddress to a NormalizedFullLink.
- *
- * The address must start with "value", or we won't be able to generate this link.
+ * Convert an IMemoryAddress to a NormalizedFullLink. The address's path
+ * starts with "value" (`StoredValuePath`), which the link's path leaves off.
  */
 function getNormalizedLink(
   address: IMemorySpaceValueAddress,
   schema?: JSONSchema,
 ): NormalizedFullLink {
-  if (address.path.length === 0 || address.path[0] !== "value") {
-    throw new Error("Unable to create link to non-value address");
-  }
-  const { space, id, path } = address;
-  return pinImmutableCell({
-    space,
+  const { space, id } = address;
+  const scope = address.scope ?? "space";
+  const path = address.path.slice(1);
+  // Every link crossing builds two of these links, so each arm is a whole
+  // literal: a spread in an object literal copies its source member by member.
+  return pinImmutableCell(
+    schema === undefined
+      ? { space, id, scope, path }
+      : { space, id, scope, path, schema },
     id,
-    scope: address.scope ?? "space",
-    path: path.slice(1),
-    ...(schema !== undefined && { schema }),
-  }, id);
+  );
 }
 
 // Value traversed must be a DAG, though it may have aliases or cell links
@@ -2380,113 +2313,103 @@ export abstract class BaseObjectTraverser {
       // that is read back through here), so unlike the schema-`default`
       // paths it cannot fail loudly yet: the instance leafs through whole.
       return doc.value;
-    } else if (isObjectOrArray(doc.value)) {
-      // First, see if we need special handling
-      if (isSigilLink(doc.value)) {
-        // Check coverage before getAtPath/followPointer adds this link target
-        // to schemaTracker.
-        const alreadyTracked = this.traverseCells &&
-          this.isLinkedDocumentCovered(doc, DEFAULT_SELECTOR);
-        const link = parseLink(doc.value, doc.address);
-        const [redirDoc, _redirSelector] = this.getDocAtPath(
-          doc,
-          [],
-          DEFAULT_SELECTOR,
-          "writeRedirect",
-        );
-        this.tx.read(redirDoc.address, READ_FOR_SCHEDULING);
-        if (redirDoc.value === undefined) {
-          logger.debug(
-            "traverse",
-            () => [
-              "getAtPath returned undefined value for",
-              doc,
-            ],
-          );
-          return null;
-        }
-        // If the target doc was already tracked before this traversal,
-        // skip re-traversing it (followPointer already loaded and tracked it)
-        // We can only do this in the querySchema version.
-        // For validateAndTransform, we need the returned value, so we can't
-        // optmize this out. We can tell based on traverseCells.
-        if (
-          this.traverseCells && alreadyTracked &&
-          doc.address.id !== redirDoc.address.id
-        ) {
-          return null;
-        }
-        // our item link should point to the target of the last redirect
-        itemLink = getNormalizedLink(redirDoc.address, true);
-        // We can follow all the links, since we don't need to track cells
-        const [valueDoc, _] = this.getDocAtPath(redirDoc, [], DEFAULT_SELECTOR);
-        this.tx.read(valueDoc.address, READ_FOR_SCHEDULING);
-        // Same entry gate as followPointer: an unresolvable ref names a
-        // corrupt or malformed declaration (the loader logs it), and such
-        // a declaration selects nothing.
-        const linkSchemaCollected = link?.schema === undefined ||
-          loadExternalSchemaDocs(
-            this.tx,
-            doc.address,
-            link.schema,
-            this.context,
-          );
-        return this.traverseLinkedDoc(
-          valueDoc,
-          linkSchemaCollected ? link?.schema : false,
-          defaultValue,
-          itemLink,
-        );
-      } else {
-        const newValue: Record<string, FabricValue> = {};
-        using t = this.tracker.include(doc.value, true, newValue, doc);
-        if (t === null) {
-          return this.tracker.getExisting(doc.value, true);
-        }
-        const entries = Object.entries(doc.value as JSONObject).map((
-          [k, v],
-        ) => {
-          const itemDoc = {
-            address: {
-              ...doc.address,
-              path: appendToPath(doc.address.path, k),
-            },
-            value: v,
-          };
-          const val = this.traverseDAG(
-            itemDoc,
-            !isUnavailable(defaultValue) &&
-              isWalkableObjectNotArray(defaultValue)
-              ? (defaultValue as JSONObject)[k]
-              : undefined,
-          )!;
-          return [k, val];
-        });
-        // We copy the contents of our result into newValue so that if we have
-        // a cycle, we can return newValue before we actually populate it.
-        for (const [k, v] of entries) {
-          if (typeof k === "string") {
-            newValue[k] = v;
-          }
-        }
-        // Our link is based on the last link in the chain and not the first.
-        const newLink = itemLink ?? getNormalizedLink(doc.address, true);
-        const recordResult = this.objectCreator.createObject(newLink, newValue);
-        if (defaultValue === undefined) {
-          const memoKey = itemLink
-            ? addressKey(scopedAddressForKey(doc.address)) + "|" +
-              addressKey(itemLink)
-            : addressKey(scopedAddressForKey(doc.address));
-          this.dagMemo.set(memoKey, recordResult);
-        }
-        return recordResult;
-      }
-    } else {
-      logger.error(
-        "traverse-error",
-        () => ["Encountered unexpected object: ", doc.value],
+    } else if (isSigilLink(doc.value)) {
+      // Check coverage before getAtPath/followPointer adds this link target
+      // to schemaTracker.
+      const link = parseLink(doc.value, doc.address);
+      const alreadyTracked = this.traverseCells &&
+        this.isLinkedDocumentCovered(doc.address, link, DEFAULT_SELECTOR);
+      const [redirDoc, _redirSelector] = this.getDocAtPath(
+        doc,
+        [],
+        DEFAULT_SELECTOR,
+        "writeRedirect",
       );
-      return null;
+      this.tx.read(redirDoc.address, READ_FOR_SCHEDULING);
+      if (redirDoc.value === undefined) {
+        logger.debug(
+          "traverse",
+          () => [
+            "getAtPath returned undefined value for",
+            doc,
+          ],
+        );
+        return null;
+      }
+      // If the target doc was already tracked before this traversal,
+      // skip re-traversing it (followPointer already loaded and tracked it)
+      // We can only do this in the querySchema version.
+      // For validateAndTransform, we need the returned value, so we can't
+      // optmize this out. We can tell based on traverseCells.
+      if (
+        this.traverseCells && alreadyTracked &&
+        doc.address.id !== redirDoc.address.id
+      ) {
+        return null;
+      }
+      // our item link should point to the target of the last redirect
+      itemLink = getNormalizedLink(redirDoc.address, true);
+      // We can follow all the links, since we don't need to track cells
+      const [valueDoc, _] = this.getDocAtPath(redirDoc, [], DEFAULT_SELECTOR);
+      this.tx.read(valueDoc.address, READ_FOR_SCHEDULING);
+      // Same entry gate as followPointer: an unresolvable ref names a
+      // corrupt or malformed declaration (the loader logs it), and such
+      // a declaration selects nothing.
+      const linkSchemaCollected = link?.schema === undefined ||
+        loadExternalSchemaDocs(
+          this.tx,
+          doc.address,
+          link.schema,
+          this.context,
+        );
+      return this.traverseLinkedDoc(
+        valueDoc,
+        linkSchemaCollected ? link?.schema : false,
+        defaultValue,
+        itemLink,
+      );
+    } else {
+      const newValue: Record<string, FabricValue> = {};
+      using t = this.tracker.include(doc.value, true, newValue, doc);
+      if (t === null) {
+        return this.tracker.getExisting(doc.value, true);
+      }
+      const entries = Object.entries(doc.value as JSONObject).map((
+        [k, v],
+      ) => {
+        const itemDoc = {
+          address: {
+            ...doc.address,
+            path: appendToPath(doc.address.path, k),
+          },
+          value: v,
+        };
+        const val = this.traverseDAG(
+          itemDoc,
+          isWalkableObjectNotArray(defaultValue)
+            ? (defaultValue as JSONObject)[k]
+            : undefined,
+        )!;
+        return [k, val];
+      });
+      // We copy the contents of our result into newValue so that if we have
+      // a cycle, we can return newValue before we actually populate it.
+      for (const [k, v] of entries) {
+        if (typeof k === "string") {
+          newValue[k] = v;
+        }
+      }
+      // Our link is based on the last link in the chain and not the first.
+      const newLink = itemLink ?? getNormalizedLink(doc.address, true);
+      const recordResult = this.objectCreator.createObject(newLink, newValue);
+      if (defaultValue === undefined) {
+        const memoKey = itemLink
+          ? addressKey(scopedAddressForKey(doc.address)) + "|" +
+            addressKey(itemLink)
+          : addressKey(scopedAddressForKey(doc.address));
+        this.dagMemo.set(memoKey, recordResult);
+      }
+      return recordResult;
     }
   }
 
@@ -2524,14 +2447,15 @@ export abstract class BaseObjectTraverser {
     }
   }
 
+  /**
+   * Whether the schema tracker already covers what `selector`, met at
+   * `address`, reaches through `link`, the link stored there.
+   */
   protected isLinkedDocumentCovered(
-    doc: IMemorySpaceValueAttestation,
+    address: IMemorySpaceValueAddress,
+    link: NormalizedFullLink,
     selector: SchemaPathSelector,
   ): boolean {
-    const link = parseLink(doc.value, doc.address);
-    if (link?.id === undefined) {
-      return false;
-    }
     // OFF-ARM NEUTRALITY (stage E, deliberate): coverage is only ever
     // consulted for links that DECLARE a scope. The pre-stage-E key here
     // interpolated `link.scope` raw, so an unscoped link produced an
@@ -2551,7 +2475,7 @@ export abstract class BaseObjectTraverser {
     }
 
     const targetSelector = narrowAndCombineSelectorForLink(
-      doc.address.path,
+      address.path,
       selector,
       ["value", ...(link.path as readonly string[])],
       link.schema,
@@ -2567,7 +2491,7 @@ export abstract class BaseObjectTraverser {
       this.#internCoverageSelector(targetSelector),
     );
     if (covering === undefined) return false;
-    this.context.onTrackedDoc?.(key, covering, doc.address, "covered");
+    this.context.onTrackedDoc?.(key, covering, address, "covered");
     return true;
   }
 
@@ -2610,26 +2534,20 @@ export abstract class BaseObjectTraverser {
     const interned = internPathSelector(
       selector.schema === undefined ? { ...selector, schema } : selector,
     );
-    if (_coverageSelectorCache.size >= INTERN_CACHE_MAX) {
-      _coverageSelectorCache.clear();
-    }
     _coverageSelectorCache.set(cacheKey, interned);
     return interned;
   }
 
   /**
-   * Traverse a document reached by following a link. The base implementation
-   * always uses traverseDAG; subclasses may override to switch to a
-   * schema-aware traversal when the link carries a schema.
+   * Traverse a document reached by following a link, under the schema the
+   * link carries, if any.
    */
-  protected traverseLinkedDoc(
+  protected abstract traverseLinkedDoc(
     doc: IMemorySpaceValueAttestation,
-    _linkSchema: JSONSchema | undefined,
+    linkSchema: JSONSchema | undefined,
     defaultValue: FabricValue,
     itemLink: NormalizedFullLink | undefined,
-  ): FabricValue {
-    return this.traverseDAG(doc, defaultValue, itemLink);
-  }
+  ): FabricValue;
 }
 
 /**
@@ -3833,194 +3751,191 @@ function _combineSchemaUncached(
     return mergeSchemaFlags(parentSchema, linkSchema);
   } else if (ContextualFlowControl.isTrueSchema(linkSchema)) {
     return mergeSchemaFlags(linkSchema, parentSchema);
-  } else if (isObjectOrArray(linkSchema) && isObjectOrArray(parentSchema)) {
+  }
+  if (
+    schemaTypesAreDisjoint(parentSchema.type, linkSchema.type)
+  ) return false;
+  const narrowedType = narrowSubtypeIntersection(
+    parentSchema.type,
+    linkSchema.type,
+  );
+  if (linkSchema.type === "object" && parentSchema.type === "object") {
+    // A property required by either intersected schema remains required.
+    const {
+      required: parentRequired,
+      $defs: parentDefs,
+      ...parentSchemaRest
+    } = parentSchema;
+    const { required: linkRequired, $defs: linkDefs, ...linkSchemaRest } =
+      linkSchema;
+    const required = parentRequired || linkRequired
+      ? [...new Set([...(parentRequired ?? []), ...(linkRequired ?? [])])]
+      : undefined;
+    const mergedDefs = { ...linkDefs, ...parentDefs };
+    // When combining these object types, if they both have properties,
+    // we only want to include any properties that they both have.
+    // If only one has properties, we will use that set
+    // If neither have properties, since that enables all, we will leave
+    // that alone.
+    // Our additionalProperties default is based on whether we we have defined
+    // properties
+    // If one schema has a property defined, and another schema has an
+    // additionalProperties that covers that, we use the defined property
+    // and don't pick up flags like asCell from additionalProperties.
+    // Conceptually, this mirrors how TypeScript maps any & T ,
+    // i.e. true + a link, yields T, interestingly. but
+    // { foo?: string } & { bar?: string } is allowing both foo and bar.
+    // this allows polymorphism (when caller asks for it), but stops
+    // schemaless queries from exploding.
+    const parentAdditionalProperties = parentSchema.additionalProperties ??
+      ((parentSchema.properties === undefined) || undefined);
+    const linkAdditionalProperties = linkSchema.additionalProperties ??
+      ((linkSchema.properties === undefined) || undefined);
     if (
-      schemaTypesAreDisjoint(parentSchema.type, linkSchema.type)
-    ) return false;
-    const narrowedType = narrowSubtypeIntersection(
-      parentSchema.type,
-      linkSchema.type,
-    );
-    if (linkSchema.type === "object" && parentSchema.type === "object") {
-      // A property required by either intersected schema remains required.
-      const {
-        required: parentRequired,
-        $defs: parentDefs,
-        ...parentSchemaRest
-      } = parentSchema;
-      const { required: linkRequired, $defs: linkDefs, ...linkSchemaRest } =
-        linkSchema;
-      const required = parentRequired || linkRequired
-        ? [...new Set([...(parentRequired ?? []), ...(linkRequired ?? [])])]
-        : undefined;
-      const mergedDefs = { ...linkDefs, ...parentDefs };
-      // When combining these object types, if they both have properties,
-      // we only want to include any properties that they both have.
-      // If only one has properties, we will use that set
-      // If neither have properties, since that enables all, we will leave
-      // that alone.
-      // Our additionalProperties default is based on whether we we have defined
-      // properties
-      // If one schema has a property defined, and another schema has an
-      // additionalProperties that covers that, we use the defined property
-      // and don't pick up flags like asCell from additionalProperties.
-      // Conceptually, this mirrors how TypeScript maps any & T ,
-      // i.e. true + a link, yields T, interestingly. but
-      // { foo?: string } & { bar?: string } is allowing both foo and bar.
-      // this allows polymorphism (when caller asks for it), but stops
-      // schemaless queries from exploding.
-      const parentAdditionalProperties = parentSchema.additionalProperties ??
-        ((parentSchema.properties === undefined) || undefined);
-      const linkAdditionalProperties = linkSchema.additionalProperties ??
-        ((linkSchema.properties === undefined) || undefined);
-      if (
-        parentSchema.properties === undefined &&
-        parentAdditionalProperties !== undefined &&
-        ContextualFlowControl.isTrueSchema(parentAdditionalProperties)
-      ) {
-        const additionalProperties =
-          linkSchema.additionalProperties !== undefined
-            ? mergeSchemaFlags(
-              parentAdditionalProperties,
-              linkSchema.additionalProperties,
-            )
-            : parentAdditionalProperties;
-        // Need to keep the flags from parent schema here
-        // We'll also be explicit about additionalProperties and required
-        return mergeSchemaFlags(parentSchema, {
-          ...linkSchemaRest,
-          additionalProperties,
-          ...(required && { required }),
-          ...(Object.keys(mergedDefs).length && { $defs: mergedDefs }),
-        });
-      } else if (
-        linkSchema.properties === undefined &&
-        linkAdditionalProperties !== undefined &&
-        ContextualFlowControl.isTrueSchema(linkAdditionalProperties)
-      ) {
-        if (parentSchema.additionalProperties !== undefined) {
-          return {
-            ...parentSchemaRest,
-            additionalProperties: mergeSchemaFlags(
-              linkAdditionalProperties,
-              parentSchema.additionalProperties,
-            ),
-            ...(required && { required }),
-            ...(Object.keys(mergedDefs).length && { $defs: mergedDefs }),
-          };
-        }
+      parentSchema.properties === undefined &&
+      parentAdditionalProperties !== undefined &&
+      ContextualFlowControl.isTrueSchema(parentAdditionalProperties)
+    ) {
+      const additionalProperties = linkSchema.additionalProperties !== undefined
+        ? mergeSchemaFlags(
+          parentAdditionalProperties,
+          linkSchema.additionalProperties,
+        )
+        : parentAdditionalProperties;
+      // Need to keep the flags from parent schema here
+      // We'll also be explicit about additionalProperties and required
+      return mergeSchemaFlags(parentSchema, {
+        ...linkSchemaRest,
+        additionalProperties,
+        ...(required && { required }),
+        ...(Object.keys(mergedDefs).length && { $defs: mergedDefs }),
+      });
+    } else if (
+      linkSchema.properties === undefined &&
+      linkAdditionalProperties !== undefined &&
+      ContextualFlowControl.isTrueSchema(linkAdditionalProperties)
+    ) {
+      if (parentSchema.additionalProperties !== undefined) {
         return {
           ...parentSchemaRest,
+          additionalProperties: mergeSchemaFlags(
+            linkAdditionalProperties,
+            parentSchema.additionalProperties,
+          ),
           ...(required && { required }),
           ...(Object.keys(mergedDefs).length && { $defs: mergedDefs }),
         };
       }
-      // Both objects may have properties
-      const mergedSchemaProperties: Record<string, JSONSchema> = {};
-      if (linkSchema.properties !== undefined) {
-        for (const [key, value] of Object.entries(linkSchema.properties)) {
-          if (
-            parentSchema.properties !== undefined &&
-            parentSchema.properties[key] !== undefined
-          ) {
-            mergedSchemaProperties[key] = combineSchema(
-              parentSchema.properties[key],
-              value,
-            );
-          } else if (parentAdditionalProperties === undefined) {
-            // we have parentSchema.properties, but nothing for this property
-            // so just use the linkSchema's value
-            mergedSchemaProperties[key] = value;
-          } else {
-            mergedSchemaProperties[key] = combineSchema(
-              parentAdditionalProperties!,
-              value,
-            );
-          }
-        }
-      }
-      if (parentSchema.properties !== undefined) {
-        for (const [key, value] of Object.entries(parentSchema.properties)) {
-          if (
-            linkSchema.properties !== undefined &&
-            linkSchema.properties[key] !== undefined
-          ) {
-            continue; // already handled
-          } else if (linkAdditionalProperties === undefined) {
-            // we have linkSchema.properties, but nothing for this property
-            // so just use the parentSchema's value
-            mergedSchemaProperties[key] = value;
-          } else {
-            mergedSchemaProperties[key] = combineSchema(
-              value,
-              linkAdditionalProperties,
-            );
-          }
-        }
-      }
       return {
-        type: "object",
-        ...linkSchema,
-        ...parentSchema,
-        properties: mergedSchemaProperties,
+        ...parentSchemaRest,
         ...(required && { required }),
         ...(Object.keys(mergedDefs).length && { $defs: mergedDefs }),
       };
-    } else if (linkSchema.type === "array" && parentSchema.type === "array") {
-      const {
-        prefixItems: parentPrefixItems,
-        ...parentSchemaWithoutPrefixItems
-      } = parentSchema;
-      const {
-        prefixItems: linkPrefixItems,
-        ...linkSchemaWithoutPrefixItems
-      } = linkSchema;
-      const mergedDefs = { ...linkSchema.$defs, ...parentSchema.$defs };
-      const mergedSchemaItems = parentSchema.items === undefined
-        ? linkSchema.items
-        : linkSchema.items === undefined
-        ? parentSchema.items
-        : combineSchema(parentSchema.items, linkSchema.items);
-      const prefixItemCount = Math.max(
-        parentPrefixItems?.length ?? 0,
-        linkPrefixItems?.length ?? 0,
-      );
-      const mergedPrefixItems = Array.from(
-        { length: prefixItemCount },
-        (_, index): JSONSchema => {
-          const parentItem = parentPrefixItems?.[index] ?? parentSchema.items;
-          const linkItem = linkPrefixItems?.[index] ?? linkSchema.items;
-          return parentItem === undefined
-            ? linkItem ?? true
-            : linkItem === undefined
-            ? parentItem
-            : combineSchema(parentItem, linkItem);
-        },
-      );
-      return {
-        ...linkSchemaWithoutPrefixItems,
-        ...parentSchemaWithoutPrefixItems,
-        type: "array",
-        ...(mergedPrefixItems.length > 0 && {
-          prefixItems: mergedPrefixItems,
-        }),
-        ...(mergedSchemaItems !== undefined && { items: mergedSchemaItems }),
-        ...(Object.keys(mergedDefs).length && { $defs: mergedDefs }),
-      };
-    } else {
-      // this isn't great, but at least grab the flags from parent schema
-      // Merge $defs from the two schema, with parent taking priority
-      const mergedDefs = { ...linkSchema.$defs, ...parentSchema.$defs };
-      // In this case, we use the link for flags, but generally use the parent
-      // since the object types may be different
-      return mergeSchemaFlags(linkSchema, {
-        ...parentSchema,
-        ...(narrowedType !== undefined && { type: narrowedType }),
-        ...(Object.keys(mergedDefs).length && { $defs: mergedDefs }),
-      });
     }
+    // Both objects may have properties
+    const mergedSchemaProperties: Record<string, JSONSchema> = {};
+    if (linkSchema.properties !== undefined) {
+      for (const [key, value] of Object.entries(linkSchema.properties)) {
+        if (
+          parentSchema.properties !== undefined &&
+          parentSchema.properties[key] !== undefined
+        ) {
+          mergedSchemaProperties[key] = combineSchema(
+            parentSchema.properties[key],
+            value,
+          );
+        } else if (parentAdditionalProperties === undefined) {
+          // we have parentSchema.properties, but nothing for this property
+          // so just use the linkSchema's value
+          mergedSchemaProperties[key] = value;
+        } else {
+          mergedSchemaProperties[key] = combineSchema(
+            parentAdditionalProperties!,
+            value,
+          );
+        }
+      }
+    }
+    if (parentSchema.properties !== undefined) {
+      for (const [key, value] of Object.entries(parentSchema.properties)) {
+        if (
+          linkSchema.properties !== undefined &&
+          linkSchema.properties[key] !== undefined
+        ) {
+          continue; // already handled
+        } else if (linkAdditionalProperties === undefined) {
+          // we have linkSchema.properties, but nothing for this property
+          // so just use the parentSchema's value
+          mergedSchemaProperties[key] = value;
+        } else {
+          mergedSchemaProperties[key] = combineSchema(
+            value,
+            linkAdditionalProperties,
+          );
+        }
+      }
+    }
+    return {
+      type: "object",
+      ...linkSchema,
+      ...parentSchema,
+      properties: mergedSchemaProperties,
+      ...(required && { required }),
+      ...(Object.keys(mergedDefs).length && { $defs: mergedDefs }),
+    };
+  } else if (linkSchema.type === "array" && parentSchema.type === "array") {
+    const {
+      prefixItems: parentPrefixItems,
+      ...parentSchemaWithoutPrefixItems
+    } = parentSchema;
+    const {
+      prefixItems: linkPrefixItems,
+      ...linkSchemaWithoutPrefixItems
+    } = linkSchema;
+    const mergedDefs = { ...linkSchema.$defs, ...parentSchema.$defs };
+    const mergedSchemaItems = parentSchema.items === undefined
+      ? linkSchema.items
+      : linkSchema.items === undefined
+      ? parentSchema.items
+      : combineSchema(parentSchema.items, linkSchema.items);
+    const prefixItemCount = Math.max(
+      parentPrefixItems?.length ?? 0,
+      linkPrefixItems?.length ?? 0,
+    );
+    const mergedPrefixItems = Array.from(
+      { length: prefixItemCount },
+      (_, index): JSONSchema => {
+        const parentItem = parentPrefixItems?.[index] ?? parentSchema.items;
+        const linkItem = linkPrefixItems?.[index] ?? linkSchema.items;
+        return parentItem === undefined
+          ? linkItem ?? true
+          : linkItem === undefined
+          ? parentItem
+          : combineSchema(parentItem, linkItem);
+      },
+    );
+    return {
+      ...linkSchemaWithoutPrefixItems,
+      ...parentSchemaWithoutPrefixItems,
+      type: "array",
+      ...(mergedPrefixItems.length > 0 && {
+        prefixItems: mergedPrefixItems,
+      }),
+      ...(mergedSchemaItems !== undefined && { items: mergedSchemaItems }),
+      ...(Object.keys(mergedDefs).length && { $defs: mergedDefs }),
+    };
+  } else {
+    // this isn't great, but at least grab the flags from parent schema
+    // Merge $defs from the two schema, with parent taking priority
+    const mergedDefs = { ...linkSchema.$defs, ...parentSchema.$defs };
+    // In this case, we use the link for flags, but generally use the parent
+    // since the object types may be different
+    return mergeSchemaFlags(linkSchema, {
+      ...parentSchema,
+      ...(narrowedType !== undefined && { type: narrowedType }),
+      ...(Object.keys(mergedDefs).length && { $defs: mergedDefs }),
+    });
   }
-  return linkSchema;
 }
 
 // docPath is where we found the pointer and are doing this work. It should
@@ -4224,6 +4139,12 @@ interface PositionRounds {
 function isMatch(result: TraverseResult<FabricValue> | undefined): boolean {
   return result !== undefined && result.error === undefined;
 }
+
+/**
+ * The document an ordinary array-item link names: one in the source's space
+ * and scope, read at its root.
+ */
+type ArrayItemLinkTarget = IMemorySpaceValueAddress & { scope: CellScope };
 
 export class SchemaObjectTraverser<V extends FabricValue>
   extends BaseObjectTraverser {
@@ -4541,9 +4462,6 @@ export class SchemaObjectTraverser<V extends FabricValue>
             ? { ok: this.#traversePrimitive(nextDoc, nextSelector.schema) }
             : fail(TRAVERSE_FAILURES.undefinedLink);
         }
-      }
-      if (!deepEqual(nextDoc.address.path, nextSelector!.path)) {
-        throw new Error("New doc path doesn't match selector path");
       }
       // our link should point to the target of the last redirect
       link = getNormalizedLink(nextDoc.address, nextSelector?.schema);
@@ -5117,10 +5035,13 @@ export class SchemaObjectTraverser<V extends FabricValue>
     // whatever is there, whatever shape it has: the declaration names a
     // reference rather than a value, so a stored string is as opaque as a
     // stored object, and one uniform answer is what lets a reader test,
-    // compare and pass on any of them the same way. A link is exempt — it is
-    // followed first, because the reference is to what it names and not to the
-    // link. Answering here descends into nothing, so it is also not part of a
-    // cycle and registers nothing with the tracker.
+    // compare and pass on any of them the same way. A link within the space
+    // is exempt — it is followed first, because the reference is to what it
+    // names and not to the link. A link into another space at a position
+    // typed `unknown` alone is answered without being followed, by
+    // `#traversePointerWithSchema()`, naming its target. Answering here
+    // descends into nothing, so it is also not part of a cycle and registers
+    // nothing with the tracker.
     const jsonType = getJsonType(doc.value);
     if (
       jsonType !== null && !isSigilLink(doc.value) &&
@@ -5166,7 +5087,12 @@ export class SchemaObjectTraverser<V extends FabricValue>
       this.tx.read(doc.address, READ_FOR_SCHEDULING);
       // When traversing a pointer, use the unresolved schema, so we have
       // the same values in the schema tracker.
-      return this.#traversePointerWithSchema(doc, schema, link);
+      return this.#traversePointerWithSchema(
+        doc,
+        parseLink(doc.value, doc.address),
+        schema,
+        link,
+      );
     } else if (Array.isArray(doc.value)) {
       const valid = this.#isValidType(schemaObj, "array");
       if (valid === TypeValidity.False) {
@@ -5395,7 +5321,10 @@ export class SchemaObjectTraverser<V extends FabricValue>
 
     const newValue: Record<string, FabricValue> = {};
     const newLink = link ?? getNormalizedLink(doc.address, plan.schema);
-    for (const propKey of Object.keys(doc.value)) {
+    // `for...in` reads the keys off the object's own enumeration cache, where
+    // `Object.keys()` would copy them into an array per object.
+    for (const propKey in doc.value) {
+      if (!Object.hasOwn(doc.value, propKey)) continue;
       const propValue = doc.value[propKey];
       const childPlan = plan.properties.get(propKey);
       if (childPlan === undefined) {
@@ -5445,7 +5374,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
   #plainArrayItemLinkTarget(
     doc: IMemorySpaceValueAttestation,
     selector: SchemaPathSelector,
-  ): IMemorySpaceValueAddress | undefined {
+  ): ArrayItemLinkTarget | undefined {
     if (
       this.traverseCells || selector.schema === undefined ||
       preparePlainSchemaPlan(selector.schema) === undefined ||
@@ -5459,7 +5388,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
   #ordinaryArrayItemLinkTarget(
     value: FabricValue,
     source: IMemorySpaceValueAddress,
-  ): IMemorySpaceValueAddress | undefined {
+  ): ArrayItemLinkTarget | undefined {
     const link = parseLink(value, source);
     const sourceScope = source.scope ?? "space";
     if (
@@ -5509,13 +5438,11 @@ export class SchemaObjectTraverser<V extends FabricValue>
   #reportMissingPlainArrayItemLink(
     doc: IMemorySpaceValueAttestation,
     selector: SchemaPathSelector,
-    target: IMemorySpaceValueAddress,
+    target: ArrayItemLinkTarget,
   ): void {
-    const link = parseLink(doc.value, doc.address);
-    if (link === undefined) return;
     reportMissingLinkTarget(
       this.context,
-      link,
+      { space: target.space, id: target.id, scope: target.scope, path: [] },
       { path: target.path, schema: selector.schema },
       doc.address.space,
       { id: doc.address.id, scope: doc.address.scope },
@@ -5536,7 +5463,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
   ):
     | {
       sourceAddresses: readonly IMemorySpaceValueAddress[];
-      targets: readonly IMemorySpaceValueAddress[];
+      targets: readonly ArrayItemLinkTarget[];
     }
     | undefined {
     const itemPlan = itemSchema === undefined
@@ -5551,7 +5478,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
     }
 
     const sourceAddresses: IMemorySpaceValueAddress[] = [];
-    const targets: IMemorySpaceValueAddress[] = [];
+    const targets: ArrayItemLinkTarget[] = [];
     for (let index = 0; index < docArray.length; index++) {
       if (!(index in docArray)) continue;
       const item = docArray[index];
@@ -5685,8 +5612,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
         // reading through it needs the target.
         if (
           isUnknownCellSchema(curSelector.schema) &&
-          !isWriteRedirectLink(item) &&
-          elementLink !== undefined
+          !isWriteRedirectLink(item)
         ) {
           this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
           const cellLink = getNextCellLink(
@@ -5704,20 +5630,19 @@ export class SchemaObjectTraverser<V extends FabricValue>
         // The element hop is a crossing whichever machinery dereferences
         // it — including the prepared fast path below, which bypasses
         // followPointer — so the seam runs here.
-        if (elementLink !== undefined) {
-          markIfcBearingLinkCrossing(
-            this.tx,
-            curDoc.address.space,
-            elementLink.schema,
-            elementLink.id,
-          );
-        }
+        markIfcBearingLinkCrossing(
+          this.tx,
+          curDoc.address.space,
+          elementLink.schema,
+          elementLink.id,
+        );
         if (this.traverseCells) {
           const alreadyTracked = this.isLinkedDocumentCovered(
-            curDoc,
+            curDoc.address,
+            elementLink,
             curSelector,
           );
-          if (alreadyTracked && elementLink?.id !== doc.address.id) {
+          if (alreadyTracked && elementLink.id !== doc.address.id) {
             this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
             arrayObj[index] = null;
             return;
@@ -5856,9 +5781,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // declare the handles declares none there: it is traversed below, and the
       // merge of its branches mints the handle.
       if (
-        !this.traverseCells &&
-        SchemaObjectTraverser.hasAsCell(curSelector.schema) &&
-        declaresHandleAtRoot(curSelector.schema)
+        !this.traverseCells && declaresHandleAtRoot(curSelector.schema)
       ) {
         // For my cell link, curDoc currently points to the last
         // redirect target, but we want cell properties to be based on the
@@ -5998,9 +5921,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // the handles declares none there: it is traversed below, and the merge
       // of its branches mints the handle.
       if (
-        !this.traverseCells &&
-        SchemaObjectTraverser.hasAsCell(propSchema) &&
-        declaresHandleAtRoot(propSchema) &&
+        !this.traverseCells && declaresHandleAtRoot(propSchema) &&
         !isSigilLink(propValue)
       ) {
         // Intentionally treat asCell/asStream as an opaque boundary in
@@ -6175,36 +6096,53 @@ export class SchemaObjectTraverser<V extends FabricValue>
 
   /**
    * Traverses a pointer. This just has a schema, since `doc.address.path`
-   * should match `selector.path`. The `doc.value` should be a primitive cell
-   * link, and we've already done a non-recursive read on it.
+   * should match `selector.path`. The `doc.value` is the primitive cell link
+   * `pointerLink` parses, and we've already done a non-recursive read on it.
    */
   #traversePointerWithSchema(
     doc: IMemorySpaceValueAttestation,
+    pointerLink: NormalizedFullLink,
     schema: JSONSchema,
     link?: NormalizedFullLink,
   ): TraverseResult<FabricValue> {
     this.traversePointerCalls++;
     const selector = { path: doc.address.path, schema };
     const alreadyTracked = this.traverseCells &&
-      this.isLinkedDocumentCovered(doc, selector);
+      this.isLinkedDocumentCovered(doc.address, pointerLink, selector);
 
     // Opaque handles preserve their link directly. An unknown-valued
     // handle also preserves an ordinary link: transferring its address needs
     // no target read authority. Write redirects still resolve the local slot.
     const asCellValues = ContextualFlowControl.getAsCellValues(schema);
-    const pointerLink = parseLink(doc.value, doc.address);
     if (
       ContextualFlowControl.getAsCellKind(asCellValues.at(0)) === "opaque" ||
-      (isUnknownCellSchema(schema) && !isWriteRedirectLink(doc.value) &&
-        pointerLink !== undefined)
+      (isUnknownCellSchema(schema) && !isWriteRedirectLink(doc.value))
     ) {
       const cellLink = getNextCellLink(this.tx, this.context, doc, schema);
       return { ok: this.objectCreator.createObject(cellLink, undefined) };
     }
+    // A link into another space found at a position typed `unknown` without
+    // `asCell` is not followed, by a read or by a query-shaped walk: it is
+    // the form an unknown-valued handle takes once a link's schema is
+    // stripped of its `asCell` (`sanitizeSchemaForLinks()`), and the position
+    // declares nothing of the target to read or select. A read there answers
+    // the opaque presence an `unknown` position answers for whatever is
+    // there, naming the target as the link does, without loading it; a
+    // reader that reads through it loads the target then.
+    if (
+      pointerLink.space !== doc.address.space &&
+      !isWriteRedirectLink(doc.value) && isUnknownValueSchema(schema)
+    ) {
+      const targetLink = getNextCellLink(this.tx, this.context, doc, schema);
+      return {
+        ok: this.objectCreator.createOpaquePresence?.(targetLink) ??
+          this.objectCreator.createObject(targetLink, undefined),
+      };
+    }
 
     if (
       this.traverseCells && alreadyTracked &&
-      pointerLink?.id !== doc.address.id
+      pointerLink.id !== doc.address.id
     ) {
       return { ok: null };
     }
@@ -6544,8 +6482,8 @@ function schemaTypeIncludesObject(type: JSONSchemaObj["type"]): boolean {
  *
  * Presence is the whole check: property sub-schemas are NOT enforced
  * against a primitive's accessor values, so
- * `{type: "object", properties: {source: {type: "number"}}}` matches a
- * `FabricRegExp` even though its `source` is a string. Schemas generated
+ * `{type: "object", properties: {length: {type: "string"}}}` matches a
+ * `FabricBytes` even though its `length` is a number. Schemas generated
  * from the real class types cannot express that mismatch, so enforcement
  * would only ever act on hand-written schemas; until that is worth the
  * accessor walk, shape errors of this kind pass validation.
@@ -6595,10 +6533,26 @@ export function getJsonType(value: unknown): JSONSchemaTypes | null {
     : getPlainJsonType(value);
 }
 
+/** `schema` with its references resolved, or `undefined` for a boolean one. */
+function schemaWithRefsResolved(
+  schema: JSONSchema | undefined,
+): JSONSchema | undefined {
+  if (!isObjectOrArray(schema)) return undefined;
+  return resolveSchemaRefsCanonical(schema);
+}
+
+/**
+ * Whether `schema`, its references resolved, types its position `unknown` and
+ * nothing else: a union naming `unknown` beside other types decides by them.
+ */
+function isUnknownValueSchema(schema: JSONSchema | undefined): boolean {
+  const resolved = schemaWithRefsResolved(schema);
+  return isObjectOrArray(resolved) && resolved.type === "unknown";
+}
+
 /** Returns whether a schema requests a cell handle with no declared value shape. */
 export function isUnknownCellSchema(schema: JSONSchema | undefined): boolean {
-  if (!isObjectOrArray(schema)) return false;
-  const resolved = resolveSchemaRefsCanonical(schema);
+  const resolved = schemaWithRefsResolved(schema);
   return isObjectOrArray(resolved) &&
     (resolved.type === "unknown" ||
       (Array.isArray(resolved.type) && resolved.type.includes("unknown"))) &&
@@ -6705,17 +6659,35 @@ function getNextCellLink(
   return getNormalizedLink(doc.address, schema);
 }
 
-// helper function - since path starts with value, the new array will too
+/**
+ * Returns `path` followed by `part`, in an array of exactly that length.
+ * Array spread leaves spare capacity in the copy, and a read journal keeps
+ * every path the traversal records until its transaction ends.
+ */
 function appendToPath(path: StoredValuePath, part: string): StoredValuePath {
-  return [...path, part] as StoredValuePath;
+  const result = new Array<string>(path.length + 1);
+  for (let index = 0; index < path.length; index++) {
+    result[index] = path[index];
+  }
+  result[path.length] = part;
+  assertStoredValuePath(result);
+  return result;
 }
 
-// helper function - since path starts with value, the new array will too
+/** Like `appendToPath()`, for several parts. */
 function appendPartsToPath(
   path: StoredValuePath,
-  parts: string[],
+  parts: readonly string[],
 ): StoredValuePath {
-  return [...path, ...parts] as StoredValuePath;
+  const result = new Array<string>(path.length + parts.length);
+  for (let index = 0; index < path.length; index++) {
+    result[index] = path[index];
+  }
+  for (let index = 0; index < parts.length; index++) {
+    result[path.length + index] = parts[index];
+  }
+  assertStoredValuePath(result);
+  return result;
 }
 
 /**
@@ -6730,45 +6702,95 @@ interface TypeReading {
   readonly valueType: JSONSchemaTypes;
 
   /**
-   * What the reading keeps about the branch lists it reads as an `allOf`,
-   * from the first it reads. One array of options can be both an `allOf` and
-   * an `anyOf`, and comes to something different as each, so each way keeps
-   * its own. A schema with no `allOf`, `anyOf` or `oneOf` is read without
-   * either.
+   * The branch lists the reading has read, by their options, from the first
+   * it reads. A schema with no `allOf`, `anyOf` or `oneOf` is read without
+   * any.
    */
-  allOf?: BranchListReading;
+  lists?: Map<readonly JSONSchema[], BranchListReading>;
 
-  /** Likewise, for the lists it reads as an `anyOf` or a `oneOf`. */
-  anyOf?: BranchListReading;
+  /** Whether the current round reached a list again while it was open. */
+  reachedAgain: boolean;
 }
 
-/** What a `TypeReading` keeps about the branch lists it reads. */
+/**
+ * What a `TypeReading` keeps about one array of options, read as one
+ * combinator against one set of definitions. One array can be read both as an
+ * `allOf` and as an `anyOf`, and against more than one set of definitions,
+ * where a union with no definitions to hand its options holds options that
+ * carry definitions of their own. It comes to something different each way,
+ * so each way keeps its own, chained through `next`.
+ */
 interface BranchListReading {
-  /** The branch lists being read further up. */
-  readonly open: ByReading<true>;
+  readonly combinator: BranchCombinator;
+  readonly definitions: JSONSchemaObj["$defs"];
 
-  /** What each branch list read in the current round came to. */
-  readonly validities: ByReading<TypeValidity>;
+  /** The same options read another way. */
+  next: BranchListReading | undefined;
+
+  /** Whether the list is being read further up. */
+  open: boolean;
+
+  /** What the list came to in the current round, once read. */
+  validity: TypeValidity | undefined;
 
   /**
-   * What stands in for a branch list reached again while it is being read
-   * further up: what it came to in the round before. A list with none matches
-   * nothing.
+   * What stands in for the list where it is reached again while open: what it
+   * came to in the round before. A list with none matches nothing.
    */
-  readonly standIns: ByReading<TypeValidity>;
+  standIn: TypeValidity | undefined;
 
-  /**
-   * The branch lists, each with the definitions it is read against, reached
-   * again in the current round while they were being read further up.
-   */
-  readonly reachedAgain: [readonly JSONSchema[], unknown][];
+  /** Whether the current round reached the list again while it was open. */
+  reachedAgain: boolean;
 }
+
+/**
+ * `schemaTypeValidity()` verdicts for memoizable schemas, by value type. A
+ * verdict reached through an external reference embeds registry content, so
+ * the registry clear swaps the cache.
+ */
+let _typeValidities = new WeakMap<
+  JSONSchemaObj,
+  Map<JSONSchemaTypes, TypeValidity>
+>();
+
+onSchemaRegistryClear(() => {
+  _typeValidities = new WeakMap();
+});
 
 /**
  * Canonical schema/type matching (extracted from SchemaObjectTraverser so the
  * write path can share it): whether a schema can match a value of the given
  * type name, with the same $ref resolution and allOf/anyOf/oneOf handling the
  * read-side validation uses.
+ *
+ * The verdict is kept per schema identity where the schema is memoizable. A
+ * verdict reached while an external resolution missed is not kept, since the
+ * document can still arrive.
+ */
+function schemaTypeValidity(
+  schema: JSONSchema,
+  valueType: JSONSchemaTypes,
+): TypeValidity {
+  if (typeof schema === "boolean" || !isMemoizableSchemaInput(schema)) {
+    return readTypeValidity(schema, valueType);
+  }
+  let byType = _typeValidities.get(schema);
+  const cached = byType?.get(valueType);
+  if (cached !== undefined) return cached;
+  const missesBefore = externalResolutionMissCount();
+  const validity = readTypeValidity(schema, valueType);
+  if (externalResolutionMissCount() === missesBefore) {
+    if (byType === undefined) {
+      byType = new Map();
+      _typeValidities.set(schema, byType);
+    }
+    byType.set(valueType, validity);
+  }
+  return validity;
+}
+
+/**
+ * Like {@link schemaTypeValidity}, without the memo.
  *
  * A schema that reaches itself again through a `$ref` — a union whose handle
  * branch names the union — presents one of its branch lists again, since
@@ -6789,44 +6811,49 @@ interface BranchListReading {
  * in for it is the least fixed point, and each list can move up only twice, so
  * the rounds number at most one more than twice the lists reached again.
  */
-function schemaTypeValidity(
+function readTypeValidity(
   schema: JSONSchema,
   valueType: JSONSchemaTypes,
 ): TypeValidity {
-  const reading: TypeReading = { valueType };
+  const reading: TypeReading = { valueType, reachedAgain: false };
   for (;;) {
     const validity = typeValidityWithin(schema, reading);
-    if (listsSettled(reading.allOf) && listsSettled(reading.anyOf)) {
-      return validity;
-    }
-    startNextRound(reading.allOf);
-    startNextRound(reading.anyOf);
+    if (!reading.reachedAgain || listsSettled(reading)) return validity;
+    startNextRound(reading);
   }
 }
 
-/**
- * Whether every branch list `lists` reached again came to what stood in for
- * it, as a reading that read no list this way trivially has.
- */
-function listsSettled(lists: BranchListReading | undefined): boolean {
-  return lists === undefined ||
-    lists.reachedAgain.every(([options, definitions]) =>
-      readingEntry(lists.validities, options, definitions) ===
-        (readingEntry(lists.standIns, options, definitions) ??
-          TypeValidity.False)
-    );
-}
-
-/** Lets what each list in `lists` came to stand in for it in the next round. */
-function startNextRound(lists: BranchListReading | undefined): void {
-  if (lists === undefined) return;
-  for (const [options, byDefinitions] of lists.validities) {
-    for (const [definitions, listValidity] of byDefinitions) {
-      setReadingEntry(lists.standIns, options, definitions, listValidity);
+/** Whether every list reached again came to what stood in for it. */
+function listsSettled(reading: TypeReading): boolean {
+  for (const first of reading.lists?.values() ?? []) {
+    for (
+      let list: BranchListReading | undefined = first;
+      list;
+      list = list.next
+    ) {
+      if (
+        list.reachedAgain &&
+        list.validity !== (list.standIn ?? TypeValidity.False)
+      ) return false;
     }
   }
-  lists.validities.clear();
-  lists.reachedAgain.length = 0;
+  return true;
+}
+
+/** Lets what each list came to stand in for it in the next round. */
+function startNextRound(reading: TypeReading): void {
+  for (const first of reading.lists?.values() ?? []) {
+    for (
+      let list: BranchListReading | undefined = first;
+      list;
+      list = list.next
+    ) {
+      if (list.validity !== undefined) list.standIn = list.validity;
+      list.validity = undefined;
+      list.reachedAgain = false;
+    }
+  }
+  reading.reachedAgain = false;
 }
 
 /** What `schema` comes to for the reading's value type, within `reading`. */
@@ -6932,33 +6959,37 @@ function branchListValidity(
   definitions: JSONSchemaObj["$defs"],
   reading: TypeReading,
 ): TypeValidity {
-  let lists = reading[combinator];
-  if (lists === undefined) {
-    lists = {
-      open: new Map(),
-      validities: new Map(),
-      standIns: new Map(),
-      reachedAgain: [],
+  reading.lists ??= new Map();
+  const first = reading.lists.get(options);
+  let list = first;
+  while (
+    list !== undefined &&
+    (list.combinator !== combinator || list.definitions !== definitions)
+  ) list = list.next;
+  if (list === undefined) {
+    list = {
+      combinator,
+      definitions,
+      next: first,
+      open: false,
+      validity: undefined,
+      standIn: undefined,
+      reachedAgain: false,
     };
-    reading[combinator] = lists;
+    reading.lists.set(options, list);
   }
-  const known = readingEntry(lists.validities, options, definitions);
-  if (known !== undefined) return known;
-  if (readingEntry(lists.open, options, definitions)) {
-    lists.reachedAgain.push([options, definitions]);
-    return readingEntry(lists.standIns, options, definitions) ??
-      TypeValidity.False;
+  if (list.validity !== undefined) return list.validity;
+  if (list.open) {
+    list.reachedAgain = true;
+    reading.reachedAgain = true;
+    return list.standIn ?? TypeValidity.False;
   }
-  setReadingEntry(lists.open, options, definitions, true);
-  try {
-    const listValidity = combinator === "allOf"
-      ? everyOptionValidity(options, definitions, reading)
-      : someOptionValidity(options, definitions, reading);
-    setReadingEntry(lists.validities, options, definitions, listValidity);
-    return listValidity;
-  } finally {
-    lists.open.get(options)?.delete(definitions);
-  }
+  list.open = true;
+  list.validity = combinator === "allOf"
+    ? everyOptionValidity(options, definitions, reading)
+    : someOptionValidity(options, definitions, reading);
+  list.open = false;
+  return list.validity;
 }
 
 /** What an `allOf` over `options` comes to: unknown & T => T. */

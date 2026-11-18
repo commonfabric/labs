@@ -1,5 +1,7 @@
 import {
   compileAndRun,
+  compileDiagnosticsOf,
+  computed,
   Default,
   handler,
   hasError,
@@ -10,6 +12,7 @@ import {
   UI,
   Writable,
 } from "commonfabric";
+import { compileFailure } from "./compile-failure.ts";
 
 type Input = {
   code:
@@ -54,6 +57,14 @@ export default pattern<Input>(({ code }) => {
   });
   const result = resultOf(compileRequest);
 
+  const diagnostics = compileDiagnosticsOf(compileRequest);
+  const problem = computed(() =>
+    compileFailure(
+      hasError(compileRequest) ? compileRequest.message : undefined,
+      diagnostics,
+    )
+  );
+
   return {
     [NAME]: "My First Compiler",
     [UI]: (
@@ -62,20 +73,11 @@ export default pattern<Input>(({ code }) => {
           value={code}
           language="text/x.typescript"
           oncf-change={updateCode({ code })}
-          //errors={errors}
         />
-        {hasError(compileRequest)
-          ? (
-            <b>
-              fix the error: {compileRequest.message}
-            </b>
-          )
+        {problem
+          ? <b>fix the error: {problem}</b>
           : (
-            <cf-button
-              onClick={visit({ result })}
-            >
-              Navigate To Piece
-            </cf-button>
+            <cf-button onClick={visit({ result })}>Navigate To Piece</cf-button>
           )}
       </div>
     ),

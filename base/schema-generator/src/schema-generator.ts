@@ -1,6 +1,7 @@
 import ts from "typescript";
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { forEachSchema } from "@commonfabric/data-model-schema/schema-walk";
 
 const SYNTHETIC_AVAILABILITY_TYPE_NAMES = new Set([
   "FabricUnavailable",
@@ -95,7 +96,6 @@ import { getCellWrapperInfo } from "./typescript/cell-brand.ts";
 import {
   bindWrittenArgument,
   readBoundTypeNode,
-  usesParameterUnreachably,
 } from "./type-parameter-bindings.ts";
 import {
   detectWrapperViaNode,
@@ -106,7 +106,6 @@ import {
   instantiatedValueType,
   resolveWrapperNode,
   soleNonNullishMember,
-  type TypeWithInternals,
   withoutTypeNode,
 } from "./type-utils.ts";
 import { extractDocFromType } from "./doc-utils.ts";
@@ -149,7 +148,7 @@ import {
  * structurally (see `#analyzeLibraryAliasReference`). A cell read prints its
  * type through `Readonly<…>`; the others are what authored types reach for.
  */
-const LIBRARY_ALIAS_NAMES = new Set([
+const LIBRARY_ALIAS_NAMES = [
   "Readonly",
   "Partial",
   "Required",
@@ -159,7 +158,14 @@ const LIBRARY_ALIAS_NAMES = new Set([
   "Array",
   "ReadonlyArray",
   "Record",
-]);
+] as const;
+
+/** `name` as one of `LIBRARY_ALIAS_NAMES`, or `undefined` where it is none. */
+function libraryAliasName(
+  name: string,
+): typeof LIBRARY_ALIAS_NAMES[number] | undefined {
+  return LIBRARY_ALIAS_NAMES.find((alias) => alias === name);
+}
 
 /**
  * How many readings of one type under bindings that write the same arguments
@@ -547,7 +553,6 @@ const LIBRARY_WRAPPER_NAMES = new Set([
 /** Whether a type node is `null` or `undefined`, what `NonNullable` removes. */
 function isNullishTypeNode(node: ts.TypeNode): boolean {
   return node.kind === ts.SyntaxKind.UndefinedKeyword ||
-    node.kind === ts.SyntaxKind.NullKeyword ||
     (ts.isLiteralTypeNode(node) &&
       node.literal.kind === ts.SyntaxKind.NullKeyword);
 }
@@ -1984,7 +1989,7 @@ function mapsBoundParameter(
   }
   const objectFlags = (type as ts.ObjectType).objectFlags ?? 0;
   if ((objectFlags & ts.ObjectFlags.Mapped) === 0) return false;
-  const aliasArguments = (type as TypeWithInternals).aliasTypeArguments;
+  const aliasArguments = type.aliasTypeArguments;
   if (
     aliasArguments?.some((argument) =>
       mentionsBoundParameter(argument, bound, checker, new Set())
@@ -2022,7 +2027,7 @@ function mentionsBoundParameter(
       false;
   if (type.isUnionOrIntersection()) return mentions(type.types);
   const objectFlags = (type as ts.ObjectType).objectFlags ?? 0;
-  return mentions((type as TypeWithInternals).aliasTypeArguments) ||
+  return mentions(type.aliasTypeArguments) ||
     ((objectFlags & ts.ObjectFlags.Reference) !== 0 &&
       mentions(checker.getTypeArguments(type as ts.TypeReference)));
 }
@@ -3840,10 +3845,6 @@ export class SchemaGenerator {
     let base: MutableJSONSchema;
 
     if (shouldPromoteRoot && namedKey) {
-      // Ensure root is present in definitions
-      if (!definitions[namedKey]) {
-        definitions[namedKey] = schema;
-      }
       // A recursive scope wrapper's definition is stored without its scope,
       // which each reference to it carries instead (`#formatType()`), the
       // root's among them.
@@ -4134,7 +4135,9 @@ export class SchemaGenerator {
   /**
    * Recursively scan a schema fragment to collect referenced definition names
    * and return the minimal subset of definitions required to resolve them,
-   * including transitive dependencies.
+   * including transitive dependencies. Only schema positions are scanned
+   * (`forEachSchema()`), so a `$ref` key in data, such as a `default` value,
+   * references nothing.
    */
   #collectReferencedDefinitions(
     fragment: MutableJSONSchema,
@@ -4145,27 +4148,18 @@ export class SchemaGenerator {
 
     const enqueueFromRef = (ref: string) => {
       const prefix = "#/$defs/";
-      if (typeof ref === "string" && ref.startsWith(prefix)) {
+      if (ref.startsWith(prefix)) {
         const name = ref.slice(prefix.length);
         if (name) needed.add(name);
       }
     };
 
-    const scan = (node: unknown) => {
-      if (!node || typeof node !== "object") return;
-      if (Array.isArray(node)) {
-        for (const item of node) scan(item);
-        return;
-      }
-      const obj = node as Record<string, unknown>;
-      for (const [k, v] of Object.entries(obj)) {
-        if (k === "$ref" && typeof v === "string") enqueueFromRef(v);
-        // Skip descending into existing $defs blocks to avoid pulling in
-        // already-attached subsets recursively
-        if (k === "$defs" || k === "definitions") continue;
-        scan(v);
-      }
-    };
+    const scan = (schema: MutableJSONSchema) =>
+      forEachSchema(schema, (node) => {
+        if (isObjectOrArray(node) && typeof node.$ref === "string") {
+          enqueueFromRef(node.$ref);
+        }
+      }, { includeUnused: true });
 
     // Find initial set of needed names from the fragment
     scan(fragment);
@@ -4174,7 +4168,6 @@ export class SchemaGenerator {
     const stack: string[] = Array.from(needed);
     while (stack.length > 0) {
       const name = stack.pop()!;
-      if (visited.has(name)) continue;
       visited.add(name);
       const def = allDefs[name];
       if (!def) continue;
@@ -4236,23 +4229,16 @@ export class SchemaGenerator {
             continue;
           }
 
-          // Get the property type - check typeRegistry first, then resolve from node
-          let propType: ts.Type;
-          if (typeRegistry && typeRegistry.has(member.type)) {
-            propType = typeRegistry.get(member.type)!;
-          } else {
-            propType = checker.getTypeFromTypeNode(member.type);
-          }
+          const propType = typeRegistry?.get(member.type) ??
+            checker.getTypeFromTypeNode(member.type);
 
+          // A member type deferring a bound parameter, such as a conditional
+          // over one, is read at `instantiatedPropType` by `formatChildType()`.
           const instantiatedPropType = instantiatedPropertyType(
             context.instantiatedAs,
             propName,
             checker,
           );
-          if (
-            instantiatedPropType &&
-            usesParameterUnreachably(member.type, checker)
-          ) propType = instantiatedPropType;
           const callable = classifyCallableProperty(
             instantiatedPropType ?? context.printedFrom?.(member.type) ??
               propType,
@@ -4300,14 +4286,9 @@ export class SchemaGenerator {
           // no source-positioned declarations to read JSDoc from, so there
           // is nothing to propagate. If we ever route declaration-bearing
           // nodes through this path, JSDoc propagation should be added.
-          let valueType: ts.Type;
-          if (typeRegistry && typeRegistry.has(member.type)) {
-            valueType = typeRegistry.get(member.type)!;
-          } else {
-            valueType = checker.getTypeFromTypeNode(member.type);
-          }
           const valueSchema = this.formatChildType(
-            valueType,
+            typeRegistry?.get(member.type) ??
+              checker.getTypeFromTypeNode(member.type),
             context,
             member.type,
             instantiatedValueType(context.instantiatedAs, checker),
@@ -4661,8 +4642,6 @@ export class SchemaGenerator {
         return { type: "number" };
       case ts.SyntaxKind.BooleanKeyword:
         return { type: "boolean" };
-      case ts.SyntaxKind.NullKeyword:
-        return { type: "null" };
       case ts.SyntaxKind.UndefinedKeyword:
         // undefined isn't normally part of JSON Schema, but we include it as a special case
         return { type: "undefined" };
@@ -5286,7 +5265,7 @@ export class SchemaGenerator {
   ): boolean {
     return ts.isTypeReferenceNode(typeNode) &&
       ts.isIdentifier(typeNode.typeName) &&
-      LIBRARY_ALIAS_NAMES.has(typeNode.typeName.text) &&
+      libraryAliasName(typeNode.typeName.text) !== undefined &&
       (typeNode.typeArguments?.length ?? 0) > 0 &&
       this.#isLibraryDeclaredName(
         typeNode,
@@ -5506,8 +5485,8 @@ export class SchemaGenerator {
     context: GenerationContext,
   ): MutableJSONSchema | undefined {
     if (!ts.isIdentifier(typeNode.typeName)) return undefined;
-    const name = typeNode.typeName.text;
-    if (!LIBRARY_ALIAS_NAMES.has(name)) return undefined;
+    const name = libraryAliasName(typeNode.typeName.text);
+    if (name === undefined) return undefined;
     const args = typeNode.typeArguments;
     if (args === undefined || args.length === 0) return undefined;
     if (
@@ -5662,7 +5641,6 @@ export class SchemaGenerator {
         };
       }
     }
-    return undefined;
   }
 
   /**

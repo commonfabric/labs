@@ -31,6 +31,7 @@ import {
   type SetupRecord,
   trackListSetupRollback,
 } from "./list-element-rollback.ts";
+import { listChildSetupBatch } from "./list-child-setup-batch.ts";
 import { listInstanceCoordinator } from "./list-instance-coordinator.ts";
 import {
   LIST_OP_CAPTURED_ARGUMENT_FIELDS,
@@ -40,7 +41,10 @@ import {
 import { resumeContainerWait } from "./list-result-container-seed.ts";
 import { issueResultContainerSetup } from "./list-result-container.ts";
 import { shouldAwaitResumedListInput } from "./list-resume-state.ts";
-import { resumeSettleRunKind } from "./resume-republish.ts";
+import {
+  resumeSettleRunKind,
+  settleOnceInputSyncs,
+} from "./resume-republish.ts";
 import { exposedResultCell } from "./scope-policy.ts";
 
 export const MAP_INPUT_SCHEMA = internSchema({
@@ -220,51 +224,41 @@ function createMapInstance(
   // re-triggers the normal reconcile via its journaled read, so it converges
   // either way.
   const awaitInputThenSettle = (inputListCell: Cell<any>): void => {
-    runtime.storageManager.trackUntilSettled(
-      syncCellForIdentity(inputListCell, identity)
-        .then(() =>
-          !active ? undefined : runtime.editWithRetry((settleTx) => {
-            if (!active || !result) return;
-            if (identity !== undefined) settleTx.tx.scopeKeyIdentity = identity;
-            // Out-of-band recovery write; the kind decision (bookkeeping
-            // on the serving posture, derivation on clients — the settle
-            // writes DERIVED content) is shared across map/filter/flatMap
-            // in resumeSettleRunKind (r3756175819).
-            runtime.stampServerRun(settleTx, {
-              actionId: `map/resume-settle/${parentCell.sourceURI}`,
-              kind: resumeSettleRunKind(runtime),
-              scopeKeyIdentity: identity,
-            });
-            // The list is read as the reconcile reads it, its membership
-            // declared onward onto the container. Only the raw list is
-            // needed here, so the slots are not resolved.
-            const { rawList: raw } = listMembershipRead(
-              settleTx,
-              inputsCell,
-              "list",
-              result,
-            );
-            if (raw === undefined || (Array.isArray(raw) && raw.length === 0)) {
-              settleTx.runWithAmbientReadMeta(
-                { ...linkResolutionProbe, ...machineryRead },
-                () =>
-                  result!.asSchema(RESULT_PRESENCE_SCHEMA).withTx(settleTx)
-                    .set([]),
-              );
-            }
-          }).then(({ error }) => {
-            if (error) {
-              logger.warn("resume-input", "settling the resumed input failed", {
-                error,
-              });
-            }
-          })
-        )
-        .catch((error) =>
-          logger.warn("resume-input", "the resumed input list sync rejected", {
-            error,
-          })
-        ),
+    settleOnceInputSyncs(
+      runtime,
+      logger,
+      syncCellForIdentity(inputListCell, identity),
+      () => active,
+      (settleTx) => {
+        if (!active || !result) return;
+        if (identity !== undefined) settleTx.tx.scopeKeyIdentity = identity;
+        // Out-of-band recovery write; the kind decision (bookkeeping
+        // on the serving posture, derivation on clients — the settle
+        // writes DERIVED content) is shared across map/filter/flatMap
+        // in resumeSettleRunKind (r3756175819).
+        runtime.stampServerRun(settleTx, {
+          actionId: `map/resume-settle/${parentCell.sourceURI}`,
+          kind: resumeSettleRunKind(runtime),
+          scopeKeyIdentity: identity,
+        });
+        // The list is read as the reconcile reads it, its membership
+        // declared onward onto the container. Only the raw list is
+        // needed here, so the slots are not resolved.
+        const { rawList: raw } = listMembershipRead(
+          settleTx,
+          inputsCell,
+          "list",
+          result,
+        );
+        if (raw === undefined || (Array.isArray(raw) && raw.length === 0)) {
+          settleTx.runWithAmbientReadMeta(
+            { ...linkResolutionProbe, ...machineryRead },
+            () =>
+              result!.asSchema(RESULT_PRESENCE_SCHEMA).withTx(settleTx)
+                .set([]),
+          );
+        }
+      },
     );
   };
 
@@ -428,9 +422,6 @@ function createMapInstance(
       throw new Error("map currently only supports arrays");
     }
 
-    // The resume batch has now been observed; later reconciles are post-resume.
-    if (list.length > 0) resumeBatchAwaitSync = false;
-
     // The whole current key set has to exist before any element is touched:
     // it is what says which children the list has stopped holding.
     const elementKeys = listElementKeys(list);
@@ -442,6 +433,7 @@ function createMapInstance(
     );
 
     const newArrayValue = new Array<any>(list.length);
+    const childSetup = listChildSetupBatch();
     for (let i = 0; i < list.length; i++) {
       // Skip sparse holes — don't create pattern runs for them
       if (!(i in list)) continue;
@@ -455,13 +447,14 @@ function createMapInstance(
           existing.needsSetup ||
           (argumentUsage.usesIndex && existing.lastIndex !== i)
         ) {
-          runtime.runner.run(
+          const started = runtime.runner.runInTransaction(
             tx,
             opPattern,
             createRunInput(list[i], i),
             existing.resultCell,
             {
               doNotUpdateOnPatternChange: true,
+              prepareScopedDefaults: true,
               awaitSyncBeforeInitialRun: elementAwaitSync,
               parentPieceRootId,
               referencedArgumentFields: LIST_OP_REFERENCED_ARGUMENT_FIELDS,
@@ -469,6 +462,10 @@ function createMapInstance(
               droppedArgumentFields,
             },
           );
+          if (started instanceof Promise) {
+            childSetup.add(started);
+            continue;
+          }
           // The whole setup, every time, because issuing it takes the debt for
           // it: an overlapping reconcile that wrote the link and has not
           // settled hands it to this one, and a partial issuance would leave
@@ -493,13 +490,14 @@ function createMapInstance(
         // long as the coordinator. A cell bound to the transaction would pin
         // the settled transaction, its journal, and everything it read.
         const resultCell = boundResultCell.withTx();
-        runtime.runner.run(
+        const started = runtime.runner.runInTransaction(
           tx,
           opPattern,
           createRunInput(list[i], i),
           resultCell,
           {
             doNotUpdateOnPatternChange: true,
+            prepareScopedDefaults: true,
             awaitSyncBeforeInitialRun: elementAwaitSync,
             parentPieceRootId,
             referencedArgumentFields: LIST_OP_REFERENCED_ARGUMENT_FIELDS,
@@ -507,6 +505,10 @@ function createMapInstance(
             droppedArgumentFields,
           },
         );
+        if (started instanceof Promise) {
+          childSetup.add(started);
+          continue;
+        }
         linkElementCell(boundResultCell);
         const entry = { resultCell, lastIndex: i, needsSetup: false };
         elementRuns.set(elementKey, entry);
@@ -514,6 +516,11 @@ function createMapInstance(
         newArrayValue[i] = exposedResultCell(runtime, tx, resultCell);
       }
     }
+    const pendingSetup = childSetup.retry();
+    if (pendingSetup !== undefined) return pendingSetup;
+    // The batch is processed only once no child is left to load: the fresh
+    // pass a load asks for is still the resume pass, and its children wait.
+    if (list.length > 0) resumeBatchAwaitSync = false;
     probeScoped(() => resultWithLog.set(newArrayValue));
   };
 

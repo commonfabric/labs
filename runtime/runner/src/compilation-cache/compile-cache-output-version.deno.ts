@@ -258,12 +258,17 @@ export async function compileCorpusVariants(
 
 /**
  * The compile-cache version the compiler in the repository at `repoRoot`
- * earns: `cf/esm-compile/` followed by the output fingerprint of its corpus.
+ * earns: `cf/esm-compile/` followed by the output fingerprint of the corpus
+ * `entries` under its `CORPUS_DIR`.
  */
 export async function computeCompilerOutputVersion(
   repoRoot: string,
   epoch: number = COMPILE_CACHE_EPOCH,
+  entries: readonly string[] = CORPUS_ENTRIES,
 ): Promise<string> {
-  const compiled = await compileCorpusVariants(join(repoRoot, CORPUS_DIR));
+  const compiled = await compileCorpusVariants(
+    join(repoRoot, CORPUS_DIR),
+    entries,
+  );
   return versionOfFingerprint(outputFingerprintOf(compiled, epoch));
 }

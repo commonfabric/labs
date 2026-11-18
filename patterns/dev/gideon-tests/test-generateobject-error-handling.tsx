@@ -31,6 +31,7 @@ import {
   pattern,
   resultOf,
   UI,
+  type VNode,
 } from "commonfabric";
 
 interface ProductIdea {
@@ -43,7 +44,12 @@ export interface Input {
   userInput: string | Default<"a self-watering plant pot">;
 }
 
-export default pattern<Input, Input>(({ userInput }) => {
+export interface Output extends Input {
+  [NAME]: string;
+  [UI]: VNode;
+}
+
+export default pattern<Input, Output>(({ userInput }) => {
   const ideaRequest = generateObject<ProductIdea>({
     prompt: userInput,
     system:
@@ -53,7 +59,6 @@ export default pattern<Input, Input>(({ userInput }) => {
 
   // Error message as string for display
   const errorMessage = hasError(ideaRequest) ? ideaRequest.message : null;
-
   return {
     [NAME]: "GenerateObject Error Handling Test",
     [UI]: (

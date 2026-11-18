@@ -22,7 +22,11 @@ import {
 } from "../src/transformers/type-shrinking.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callSchemas, collect, parseModule } from "./transformed-ast.ts";
-import { transformFiles } from "./utils.ts";
+import {
+  createInMemoryProgram,
+  transformFiles,
+  validateSource,
+} from "./utils.ts";
 
 //
 // Structural inspection of printed type nodes.
@@ -230,6 +234,94 @@ function createParamSummary(
   };
 }
 
+/** What `shrinkInput()` returns. */
+interface ShrunkInput {
+  /** The shrunk node, printed and parsed again. */
+  readonly result: ts.TypeNode;
+
+  /** The node the shrink returned, as it returned it. */
+  readonly node: ts.TypeNode;
+
+  /** The type node the alias `Input` declares. */
+  readonly authored: ts.TypeNode;
+
+  /** The messages of the diagnostics path validation reported. */
+  readonly diagnostics: readonly string[];
+}
+
+/**
+ * Shrinks the type alias `Input` that `source` declares, in a program that can
+ * import `commonfabric`, as `summary` describes a parameter of that type.
+ * Paths are validated against the type unless `validate` is `false`. With
+ * `synthetic`, the base node is a synthesized `unknown`, which sends the
+ * shrink to the type; with `untyped`, no type goes with the node.
+ */
+function shrinkInput(
+  source: string,
+  summary: CapabilityParamSummary,
+  options: {
+    readonly synthetic?: boolean;
+    readonly untyped?: boolean;
+    readonly validate?: boolean;
+    readonly mode?: "full" | "defaults_only";
+  } = {},
+): ShrunkInput {
+  const program = createInMemoryProgram({
+    "/test.ts": source,
+    "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
+  }, {
+    target: ts.ScriptTarget.ES2020,
+    module: ts.ModuleKind.ESNext,
+    strict: true,
+    noLib: true,
+  });
+  const sourceFile = program.getSourceFile("/test.ts")!;
+  const checker = program.getTypeChecker();
+  let tsContext: ts.TransformationContext | undefined;
+  ts.transform(sourceFile, [(transformation) => {
+    tsContext = transformation;
+    return (node) => node;
+  }]);
+  const context = new TransformationContext({
+    program,
+    sourceFile,
+    tsContext: tsContext!,
+    options: { state: new CrossStageState() },
+  });
+  const alias = findTypeAlias(sourceFile, "Input");
+  const node = applyShrinkAndWrap(
+    summary,
+    options.synthetic
+      ? ts.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword)
+      : alias.type,
+    options.untyped ? undefined : checker.getTypeAtLocation(alias.type),
+    false,
+    checker,
+    sourceFile,
+    ts.factory,
+    options.mode,
+    summary.capability,
+    options.validate === false ? undefined : context,
+    alias,
+  );
+  return {
+    result: parseType(printTypeNode(node, sourceFile)),
+    node,
+    authored: alias.type,
+    diagnostics: context.diagnostics.map(({ message }) => message),
+  };
+}
+
+/** The names of the members of `node`, a type literal, in order. */
+function memberNames(node: ts.TypeNode): string[] {
+  if (!ts.isTypeLiteralNode(node)) {
+    throw new Error(`Expected a type literal, not ${ts.SyntaxKind[node.kind]}`);
+  }
+  return node.members.map((member) =>
+    member.name ? member.name.getText(node.getSourceFile()) : "(unnamed)"
+  );
+}
+
 describe("applyShrinkAndWrap()", () => {
   describe("a member named by the empty string", () => {
     // A path through the member `""` narrows the shape and the cell it reaches
@@ -365,6 +457,418 @@ export default pattern<{ v: any }>(({ v }) => ({ m: l(v) }));`,
     );
 
     expect(state.printedFrom(result)).toBe(type);
+  });
+
+  describe("choosing a shrink", () => {
+    it("returns the authored node for a value read whole whose type holds an index signature", () => {
+      // The candidate built from the type holds the index signature as a
+      // member with no name, which counting the members that name a read
+      // head passes over.
+
+      const shrunk = shrinkInput(
+        `type Input = { a: string; [key: string]: string };`,
+        createParamSummary({ readPaths: [[]] }),
+      );
+
+      expect(shrunk.node).toBe(shrunk.authored);
+    });
+
+    it("keeps an authored `Array<T>` reference, shrinking its element", () => {
+      const shrunk = shrinkInput(
+        `interface Array<T> { length: number; [n: number]: T }
+         type Input = Array<{ a: string; b: string }>;`,
+        createParamSummary({ readPaths: [["0", "a"]] }),
+      );
+
+      const { result } = shrunk;
+      if (
+        !ts.isTypeReferenceNode(result) || !ts.isIdentifier(result.typeName)
+      ) {
+        throw new Error("Expected a type reference");
+      }
+      expect(result.typeName.text).toBe("Array");
+      expect(memberNames(result.typeArguments![0]!)).toEqual(["a"]);
+    });
+
+    it("shrinks to the read paths for a summary that holds no opaque paths", () => {
+      const shrunk = shrinkInput(
+        `type Input = { a: string; b: number };`,
+        {
+          name: "input",
+          capability: "opaque",
+          readPaths: [["a"]],
+          writePaths: [],
+          passthrough: false,
+          wildcard: false,
+        },
+      );
+
+      expect(memberNames(shrunk.result)).toEqual(["a"]);
+    });
+  });
+
+  describe("shrinking by type", () => {
+    it("returns the reference to a self-referential array as its own element", () => {
+      // `R` is an array of `R`, so a path that names no member of an array
+      // reaches the element with the same paths it reached the array with.
+
+      const shrunk = shrinkInput(
+        `interface Array<T> { length: number; [n: number]: T }
+         type R = R[];
+         type Input = R;`,
+        createParamSummary({ readPaths: [["x"]] }),
+        { synthetic: true, validate: false },
+      );
+
+      const { result } = shrunk;
+      if (!ts.isArrayTypeNode(result)) {
+        throw new Error("Expected an array type");
+      }
+      const element = result.elementType;
+      expect(
+        ts.isTypeReferenceNode(element) && ts.isIdentifier(element.typeName)
+          ? element.typeName.text
+          : undefined,
+      ).toBe("R");
+    });
+  });
+
+  describe("shrinking a declared reference", () => {
+    it("shrinks interfaces that extend each other to the members read", () => {
+      const shrunk = shrinkInput(
+        `interface A extends B { a: string; c: string }
+         interface B extends A { b: string }
+         type Input = A;`,
+        createParamSummary({ readPaths: [["a"]] }),
+        { validate: false },
+      );
+
+      expect(memberNames(shrunk.result)).toEqual(["a"]);
+    });
+
+    it("reads no member from an `implements` clause on an interface", () => {
+      const shrunk = shrinkInput(
+        `interface B { b: string }
+         interface A implements B { a: string; z: string }
+         type Input = A;`,
+        createParamSummary({ readPaths: [["a"], ["b"]] }),
+      );
+
+      expect(shrunk.diagnostics).toHaveLength(1);
+      expect(shrunk.diagnostics[0]).toContain("accesses '.b'");
+    });
+
+    it("leaves out a member keyed by a symbol", () => {
+      const shrunk = shrinkInput(
+        `declare const key: unique symbol;
+         type Input = { a: string; [key]: string };`,
+        createParamSummary({ readPaths: [["a"]] }),
+      );
+
+      expect(memberNames(shrunk.result)).toEqual(["a"]);
+    });
+  });
+
+  describe("validating the paths read", () => {
+    it("reports a head no member of a union holds, and not one a single member holds", () => {
+      // The union is named, so no node spells its members, and they are read
+      // from its type.
+
+      const shrunk = shrinkInput(
+        `type Either = { a: string } | { b: string };
+         type Input = Either;`,
+        createParamSummary({ readPaths: [["a"], ["c"]] }),
+      );
+
+      expect(shrunk.diagnostics).toHaveLength(1);
+      expect(shrunk.diagnostics[0]).toContain("accesses '.c' but");
+    });
+
+    it("names the element type an `Array<T>` writes in a missing-path diagnostic", () => {
+      const shrunk = shrinkInput(
+        `interface Array<T> { length: number; [n: number]: T }
+         type Input = Array<{ id: string }> | undefined;`,
+        createParamSummary({ readPaths: [["0", "id"], ["0", "missing"]] }),
+      );
+
+      expect(shrunk.diagnostics).toEqual([
+        "Parameter 'input' accesses '.missing' but type '{\n    id: string;\n}' " +
+        "does not include it. Add the missing property to the type.",
+      ]);
+    });
+
+    it("validates an element an array-like literal holds in an index signature against its type", () => {
+      const shrunk = shrinkInput(
+        `type Input = { length: number; [i: number]: { id: string } } | undefined;`,
+        createParamSummary({ readPaths: [["0", "id"], ["0", "missing"]] }),
+      );
+
+      expect(shrunk.diagnostics).toHaveLength(1);
+      expect(shrunk.diagnostics[0]).toContain("accesses '.missing' but");
+    });
+
+    it("names the element a numeric member of an array-like literal writes in a missing-path diagnostic", () => {
+      // The read of `other`, which no array holds, keeps the shrink from
+      // being an array, so the element is read from the authored literal.
+
+      const shrunk = shrinkInput(
+        `type Input = {
+           length: number;
+           0: { id: string };
+           [i: number]: { id: string; extra: number };
+         };`,
+        createParamSummary({
+          readPaths: [["0", "id"], ["0", "missing"], ["other"]],
+        }),
+      );
+
+      expect(shrunk.diagnostics).toEqual([
+        "Parameter 'input' accesses '.missing', '.other' but type " +
+        "'{\n    id: string;\n}' does not include them. Add the missing " +
+        "properties to the type.",
+      ]);
+    });
+
+    describe("a member declared on an array intersected with an object", () => {
+      /** The diagnostic messages for a lift of `fn` in a pattern. */
+      const liftDiagnostics = async (declarations: string, fn: string) => {
+        const { diagnostics } = await validateSource(
+          `/// <cts-enable />
+import { lift, pattern } from "commonfabric";
+${declarations}
+const l = lift(${fn});
+export default pattern<{ v: any }>(({ v }) => ({ m: l(v) }));`,
+          { types: COMMONFABRIC_TYPES },
+        );
+        return diagnostics.map(({ message }) => message);
+      };
+
+      it("reports nothing for the member on a self-referential array", async () => {
+        expect(
+          await liftDiagnostics(
+            "type R = R[];",
+            "(r: R & { x: string }) => r.x",
+          ),
+        ).toEqual([]);
+      });
+
+      it("reports a head neither the array nor its element holds on a self-referential array", async () => {
+        expect(
+          await liftDiagnostics(
+            "type R = R[];",
+            "(r: R & { x: string }) => r.missing",
+          ),
+        ).toEqual([
+          "Parameter 'r' accesses '.missing' but type 'R' does not include " +
+          "it. Add the missing property to the type.",
+        ]);
+      });
+
+      it("reports nothing for the member on an array of objects", async () => {
+        expect(
+          await liftDiagnostics(
+            "",
+            "(r: { id: string }[] & { total: number }) => r.total",
+          ),
+        ).toEqual([]);
+      });
+
+      it("reports nothing for the member on an array of strings", async () => {
+        expect(
+          await liftDiagnostics("", "(r: string[] & { x: string }) => r.x"),
+        ).toEqual([]);
+      });
+
+      it("reports nothing for a read of the array's own method", async () => {
+        expect(
+          await liftDiagnostics(
+            "",
+            "(r: { id: string }[] & { total: number }) => r.values",
+          ),
+        ).toEqual([]);
+      });
+
+      it("reports an element member the element does not declare, named like an array method", async () => {
+        expect(
+          await liftDiagnostics(
+            "",
+            "(r: { id: string }[] & { total: number }) => r.map((x) => x.values)",
+          ),
+        ).toEqual([
+          "Parameter 'r' accesses '.values' but type '{ id: string; }' does " +
+          "not include it. Add the missing property to the type.",
+        ]);
+      });
+    });
+  });
+
+  describe("applying defaults", () => {
+    /** A default of the string literal `value` at `path`. */
+    const stringDefault = (path: readonly string[], value: string) => ({
+      path,
+      defaultType: ts.factory.createLiteralTypeNode(
+        ts.factory.createStringLiteral(value),
+      ),
+    });
+
+    it("applies a default to a member named by the empty string", () => {
+      const shrunk = shrinkInput(
+        `type Input = { "": string; other: number };`,
+        createParamSummary({
+          readPaths: [[""]],
+          defaults: [stringDefault([""], "x")],
+        }),
+      );
+
+      const [member] = collect(shrunk.result, ts.isPropertySignature);
+      expect(member && hasQualifiedRef(member, "__cfHelpers", "Default"))
+        .toBe(true);
+    });
+
+    it("applies no default it cannot place when the node comes with no type", () => {
+      const shrunk = shrinkInput(
+        `type Input = { a: string; b: string };`,
+        createParamSummary({
+          readPaths: [["a"]],
+          defaults: [stringDefault(["missing"], "x")],
+        }),
+        { untyped: true, validate: false },
+      );
+
+      expect(memberNames(shrunk.result)).toEqual(["a"]);
+      expect(hasQualifiedRef(shrunk.result, "__cfHelpers", "Default"))
+        .toBe(false);
+    });
+
+    it("keeps an array beside a nested default whole when only defaults apply", () => {
+      const shrunk = shrinkInput(
+        `interface Array<T> { length: number; [n: number]: T }
+         type Input = { a: { list: string[]; n: string }; b: string };`,
+        createParamSummary({ defaults: [stringDefault(["a", "n"], "x")] }),
+        { mode: "defaults_only", synthetic: true, validate: false },
+      );
+
+      const a = collect(shrunk.result, ts.isPropertySignature).find((member) =>
+        ts.isIdentifier(member.name) && member.name.text === "a"
+      );
+      expect(a?.type && memberNames(a.type)).toEqual(["list", "n"]);
+    });
+
+    it("leaves the node as it is when a default's path reaches no member", () => {
+      const shrunk = shrinkInput(
+        `type Input = { a: { id: string }; b: string };`,
+        createParamSummary({
+          wildcard: true,
+          readPaths: [["a", "id"]],
+          defaults: [stringDefault(["a", "missing"], "x")],
+        }),
+        { validate: false },
+      );
+
+      expect(shrunk.node).toBe(shrunk.authored);
+    });
+
+    it("keeps a method beside the member a default is applied to", () => {
+      const shrunk = shrinkInput(
+        `type Input = { a: { id: string }; m(): void };`,
+        createParamSummary({
+          wildcard: true,
+          readPaths: [["a", "id"]],
+          defaults: [stringDefault(["a", "id"], "x")],
+        }),
+        { validate: false },
+      );
+
+      expect(memberNames(shrunk.result)).toEqual(["a", "m"]);
+      expect(hasQualifiedRef(shrunk.result, "__cfHelpers", "Default"))
+        .toBe(true);
+    });
+  });
+
+  describe("narrowing identity paths", () => {
+    // Under an identity-only root nothing is shrunk, so each member the
+    // identity paths pass over stays as it is.
+
+    it("narrows the member an identity path names, keeping methods and symbol keys", () => {
+      const shrunk = shrinkInput(
+        `declare const key: unique symbol;
+         type Input = { [key]: string; a: { id: string }; m(): void };`,
+        createParamSummary({ identityOnly: true, identityPaths: [["a"]] }),
+        { validate: false },
+      );
+
+      expect(memberNames(shrunk.result)).toEqual(["[key]", "a", "m"]);
+      const a = collect(shrunk.result, ts.isPropertySignature).find((member) =>
+        ts.isIdentifier(member.name) && member.name.text === "a"
+      );
+      expect(a?.type?.kind).toBe(ts.SyntaxKind.UnknownKeyword);
+    });
+
+    it("keeps a declared reference whose identity path reaches no member", () => {
+      const shrunk = shrinkInput(
+        `interface Item { a: { id: string }; b: string }
+         type Input = Item;`,
+        createParamSummary({
+          identityOnly: true,
+          identityPaths: [["a", "missing"]],
+        }),
+        { validate: false },
+      );
+
+      expect(shrunk.node).toBe(shrunk.authored);
+    });
+
+    it("keeps the methods and symbol keys of a declared reference it narrows a member of", () => {
+      const shrunk = shrinkInput(
+        `declare const key: unique symbol;
+         interface Item { [key]: string; a: { id: string }; m(): void }
+         type Input = Item;`,
+        createParamSummary({ identityOnly: true, identityPaths: [["a"]] }),
+        { validate: false },
+      );
+
+      expect(memberNames(shrunk.result)).toEqual(["[key]", "a", "m"]);
+    });
+
+    it("keeps a union whose identity path reaches no member", () => {
+      const shrunk = shrinkInput(
+        `type Input = { a: string } | { b: string };`,
+        createParamSummary({ identityPaths: [["missing", "id"]] }),
+        { validate: false },
+      );
+
+      expect(shrunk.node).toBe(shrunk.authored);
+    });
+  });
+
+  describe("narrowing cells", () => {
+    it("keeps a member keyed by a symbol beside a cell it narrows", () => {
+      const shrunk = shrinkInput(
+        `import type { Writable } from "commonfabric";
+         declare const key: unique symbol;
+         type Input = { [key]: string; c: Writable<{ v: string }> };`,
+        createParamSummary({ wildcard: true, readPaths: [["c", "v"]] }),
+      );
+
+      expect(memberNames(shrunk.result)).toEqual(["[key]", "c"]);
+      const c = collect(shrunk.result, ts.isPropertySignature).find((member) =>
+        ts.isIdentifier(member.name) && member.name.text === "c"
+      );
+      expect(
+        c?.type && hasQualifiedRef(c.type, "__cfHelpers", "ReadonlyCell"),
+      ).toBe(true);
+    });
+
+    it("leaves a member that can hold only `null` or `undefined` uncelled", () => {
+      const shrunk = shrinkInput(
+        `type Input = { a: null | undefined; b: string };`,
+        createParamSummary({ readPaths: [["a"], ["a", "x"], ["b"]] }),
+        { synthetic: true },
+      );
+
+      const [a] = collect(shrunk.result, ts.isPropertySignature);
+      expect(a?.type && ts.isUnionTypeNode(a.type)).toBe(true);
+    });
   });
 });
 

@@ -7,7 +7,7 @@ import type {
 import { debugStr } from "@commonfabric/data-model";
 import { isDID, isWellFormedDID } from "@commonfabric/identity/did";
 import { aclDocId, ANYONE_USER, isACL } from "@commonfabric/memory/acl";
-import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import type { ACL, MemorySpace, URI } from "@commonfabric/memory/interface";
 import { isDeletedSpaceError } from "@commonfabric/memory/v2/client";
 
 import { type Cell, unwrapCell } from "../cell.ts";
@@ -75,7 +75,7 @@ export function spaceAccess(
     principal,
     reactive,
     true,
-  );
+  )?.level;
 }
 
 /**
@@ -135,7 +135,7 @@ export function spaceAccessOf(
     principal,
     kind === "lift",
     false,
-  );
+  )?.level;
 }
 
 /**
@@ -174,19 +174,14 @@ export function spaceMembers(
   );
   if (target === undefined) return undefined;
   const space = spaceOfTarget(target, "spaceMembers(target)");
-  const level = accessLevel(runtime, tx, space, principal, reactive, true);
-  if (level === undefined || level === "none") return undefined;
-
-  // A level other than `none` comes from a well-formed list, so the check
-  // below only narrows its type.
-  const acl = aclOf(runtime, tx, space);
-  if (!isACL(acl)) return undefined;
+  const acl = accessLevel(runtime, tx, space, principal, reactive, true)
+    ?.grantedBy;
+  if (acl === undefined) return undefined;
   const principals: Record<DID, SpaceGrantLevel> = {};
   let anyone: SpaceGrantLevel | undefined;
   for (const [user, entry] of Object.entries(acl)) {
-    if (entry === undefined) continue;
     if (user === ANYONE_USER) anyone = entry;
-    else if (isDID(user)) principals[user] = entry;
+    else if (isDID(user) && entry !== undefined) principals[user] = entry;
   }
   return anyone === undefined ? { principals } : { principals, anyone };
 }
@@ -239,6 +234,43 @@ export function spaceOf(
   if ((frame!.pendingSpaceNames?.size ?? 0) > 0) return undefined;
   return unlessCyclic(() => cell.resolveAsCell())?.getAsNormalizedFullLink()
     .space;
+}
+
+/**
+ * Returns the DID of the space `target`'s own link names, without following
+ * it or any link it reaches, so that nothing in that space is read: what a
+ * pattern holding cells by link, such as a list of entries read as handles,
+ * names their spaces by. `undefined` means there is no answer yet, as for
+ * {@link spaceOf}: `target` is `undefined`, or the run has named an `inSpace()`
+ * target whose space has not resolved.
+ *
+ * @throws If called outside a handler or a reactive computation, with no
+ *   `target`, or with a `target` that is neither a cell nor `undefined`.
+ */
+export function spaceOfLink(
+  // Optional here, though the declared API requires it, so that the runtime
+  // check below has a case to catch from untyped callers.
+  ...args: [target?: unknown]
+): MemorySpace | undefined {
+  const frame = topFrame();
+  const kind = frame?.frameKind;
+  if (kind !== "lift" && kind !== "handler") {
+    throw new Error(
+      "`spaceOfLink(target)` can only be called from a handler or a " +
+        "reactive computation; a pattern body's references name no space yet.",
+    );
+  }
+  if (args.length === 0) {
+    throw new Error(
+      "`spaceOfLink()` requires a `target`: a cell whose link names a space.",
+    );
+  }
+  const [target] = args;
+
+  if (target === undefined) return undefined;
+  const cell = cellOfTarget(target, "spaceOfLink(target)");
+  if ((frame!.pendingSpaceNames?.size ?? 0) > 0) return undefined;
+  return cell.getAsNormalizedFullLink().space;
 }
 
 /**
@@ -416,8 +448,9 @@ function ownCall(name: string, args: [target?: unknown]): {
 /**
  * Helper for {@link spaceAccess} and its siblings, which returns
  * `principal`'s access to `space`, reading the space's access list through
- * `tx`. With `reactive`, a change to whether the memory server admits this
- * runtime to `space` runs the executing action again. `own` says whether
+ * `tx`, along with the list when it grants `principal` access. With
+ * `reactive`, a change to whether the memory server admits this runtime to
+ * `space` runs the executing action again. `own` says whether
  * `principal` is the one the calling code runs for, whose session this
  * runtime's may be; the session says nothing about any other principal, unless
  * the refusal says the space is deleted, which holds for all of them.
@@ -429,7 +462,7 @@ function accessLevel(
   principal: string | undefined,
   reactive: boolean,
   own: boolean,
-): SpaceAccessLevel | undefined {
+): { level: SpaceAccessLevel; grantedBy?: ACL } | undefined {
   if (principal === undefined) return undefined;
 
   const action = runtime.scheduler.executingAction;
@@ -446,17 +479,22 @@ function accessLevel(
   // refusal that says so holds whoever's session heard it, and what the
   // replica kept of the list no longer grants anything.
   const refusal = refusalOf(runtime, space);
-  if (isDeletedSpaceError(refusal)) return "none";
-  if (own && !runtime.servingPosture && refusal !== undefined) return "none";
+  if (isDeletedSpaceError(refusal)) return { level: "none" };
+  if (own && !runtime.servingPosture && refusal !== undefined) {
+    return { level: "none" };
+  }
   if (acl === undefined) return undefined;
-  const role = spaceReaderRole(isACL(acl) ? acl : undefined, principal);
-  return role === null ? "none" : LEVEL_OF_ROLE[role];
+  // A role comes only from a well-formed list.
+  const list = isACL(acl) ? acl : undefined;
+  const role = spaceReaderRole(list, principal);
+  return role === null
+    ? { level: "none" }
+    : { level: LEVEL_OF_ROLE[role], grantedBy: list };
 }
 
 /**
- * Helper for {@link accessLevel}, {@link spaceMembers} and
- * {@link spaceDeleted}, which returns the value of `space`'s access list, read
- * through `tx`: `undefined` while it has
+ * Helper for {@link accessLevel} and {@link spaceDeleted}, which returns the
+ * value of `space`'s access list, read through `tx`: `undefined` while it has
  * not arrived, and for a space that has none.
  */
 function aclOf(

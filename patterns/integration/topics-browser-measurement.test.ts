@@ -19,6 +19,7 @@ import {
   topicTitle,
 } from "./topic-board-fixture.ts";
 import { BoardSession } from "./topic-board-session.ts";
+import { WORKER_RUN_TIMING_KEY } from "./topics-browser-measurement-core.ts";
 import {
   formatTopicsSample,
   measureTopicsReads,
@@ -33,7 +34,7 @@ import {
 } from "./topics-browser-posture.ts";
 import { waitForPieceView } from "./topics-navigation-helpers.ts";
 
-/** The page globals the client-replacement cases read and write. */
+/** Page globals for runtime-client replacement and worker counter control. */
 type ReplacementGlobal = typeof globalThis & {
   /** The shell's debugging globals. */
   commonfabric?: { rt?: RuntimeClient };
@@ -43,6 +44,9 @@ type ReplacementGlobal = typeof globalThis & {
 
   /** Telemetry markers the replaced client delivered, and how to stop counting. */
   __cfReplacedClientMarkers?: { count: number; stop: () => void };
+
+  /** Function restoring the worker counter reader after a controlled sample. */
+  __cfRestoreLoggerCounts?: () => void;
 };
 
 describe("topics-browser-measurement", () => {
@@ -53,6 +57,9 @@ describe("topics-browser-measurement", () => {
    * Whether the deployment serves the board's view: its page shows what the
    * serving runtime delivers and runs no lift's module, so no sample taken on
    * it can attribute a run by position, and the samplers refuse one whole.
+   * Read whether or not the deployment declares its shell's posture: the lane
+   * serving the first-party default builds its shell with no posture define,
+   * and that shell runs whatever arm the toolshed publishes.
    */
   let servedViews: boolean;
   let program: TopicsProgram;
@@ -62,7 +69,7 @@ describe("topics-browser-measurement", () => {
   // cites the other, so the pivot has a row to build and a backlink to find.
   beforeAll(async () => {
     posture = await readTopicsBrowserPosture(env.API_URL, env.FRONTEND_URL);
-    servedViews = posture.declared && posture.servedViews;
+    servedViews = posture.servedViews;
     program = await prepareTopicsProgram();
     identity = await seedIdentity(
       `topics browser measurement ${crypto.randomUUID()}`,
@@ -184,10 +191,10 @@ describe("topics-browser-measurement", () => {
   }
 
   /**
-   * Opens the topmost topic in `on`, waiting for both topics' titles on its
+   * Opens the newest seeded topic in `on`, waiting for both topics' titles on its
    * page, and returns its index.
    */
-  async function openTopmostTopic(on: BoardSession = session): Promise<number> {
+  async function openNewestTopic(on: BoardSession = session): Promise<number> {
     const pieceId = await on.openTopic((opened) => {
       const index = topicIndexOf(opened);
       return [topicTitle(index), topicTitle(1 - index)];
@@ -239,7 +246,7 @@ describe("topics-browser-measurement", () => {
           posture,
           program,
           operation: async () => {
-            await openTopmostTopic();
+            await openNewestTopic();
             await returnToBoard();
           },
         });
@@ -261,7 +268,8 @@ describe("topics-browser-measurement", () => {
           ]),
         ).toEqual([
           ["crossrefTable", "({ sources })"],
-          ["backlinksOf", "({ table, self })"],
+          ["crossrefIndexOf", "({ rows })"],
+          ["backlinksOf", "({ table, index, self, shortName })"],
         ]);
         expect(
           sample.lifts.filter((lift) =>
@@ -317,7 +325,9 @@ describe("topics-browser-measurement", () => {
 
       checkSample(sample, () => {
         expect(sample.mayRunNothing).toBe(true);
-        expect(sample.lifts.map((lift) => lift.runs)).toEqual([0, 0]);
+        expect(sample.lifts.map((lift) => lift.runs)).toEqual(
+          program.lifts.map(() => 0),
+        );
         expect(sample.remaining.runs).toBe(sample.runsWithoutSource);
         expect(sample.graph.after.nodes).toBeGreaterThan(0);
       });
@@ -338,7 +348,7 @@ describe("topics-browser-measurement", () => {
             posture,
             program,
             operation: async () => {
-              await openTopmostTopic(fresh);
+              await openNewestTopic(fresh);
               await returnToBoard(fresh);
             },
             mayRunNothing: true,
@@ -411,7 +421,9 @@ describe("topics-browser-measurement", () => {
           // Counted apart for reporting, and still part of `remaining`, which
           // is every run the sample could not place against a named lift.
           expect(sample.remaining.runs).toBe(1);
-          expect(sample.lifts.map((lift) => lift.runs)).toEqual([0, 0]);
+          expect(sample.lifts.map((lift) => lift.runs)).toEqual(
+            program.lifts.map(() => 0),
+          );
         });
       }
 
@@ -458,7 +470,7 @@ describe("topics-browser-measurement", () => {
             posture,
             program,
             operation: async () => {
-              await openTopmostTopic(fresh);
+              await openNewestTopic(fresh);
               await returnToBoard(fresh);
             },
           }),
@@ -506,7 +518,7 @@ describe("topics-browser-measurement", () => {
             graph.nodes.map((node) => [node.id, node.stats?.runCount ?? 0]),
           );
         }, { args: [servedViews] });
-        await openTopmostTopic(fresh);
+        await openNewestTopic(fresh);
         await returnToBoard(fresh);
         const reported = await fresh.page.evaluate(
           async (runCounts: Record<string, number>, served: boolean) => {
@@ -577,7 +589,7 @@ describe("topics-browser-measurement", () => {
 
       const fresh = await openFreshSession();
       try {
-        await fresh.page.evaluate(async (served: boolean) => {
+        const setupRuns = await fresh.page.evaluate(async (served: boolean) => {
           const scope = globalThis as typeof globalThis & {
             commonfabric?: { rt?: RuntimeClient };
             __cfLeftOnRuns?: { count: number; stop: () => void };
@@ -595,12 +607,28 @@ describe("topics-browser-measurement", () => {
           await rt.setTelemetryEnabled(true);
           await rt.setReadStatsEnabled(true);
           if (served) await rt.setActionRunTraceEnabled(true);
+          // Exercise telemetry delivered before the timed interval.
+          rt.emit("telemetry", {
+            type: "scheduler.run.complete",
+            actionId: "setup",
+            durationMs: 1,
+            timeStamp: 0,
+          });
+          return counter.count;
         }, { args: [servedViews] });
+        expect(setupRuns).toBeGreaterThan(0);
         const sample = await timeTopicsOperation(fresh.page, {
           label: "open topic and return, timed",
           posture,
           operation: async () => {
-            await openTopmostTopic(fresh);
+            // The sampler has disabled telemetry before the operation starts.
+            await fresh.page.evaluate(() => {
+              const scope = globalThis as typeof globalThis & {
+                __cfLeftOnRuns?: { count: number };
+              };
+              scope.__cfLeftOnRuns!.count = 0;
+            });
+            await openNewestTopic(fresh);
             await returnToBoard(fresh);
           },
           mayRunNothing: servedViews,
@@ -640,14 +668,66 @@ describe("topics-browser-measurement", () => {
     });
 
     it("throws for an operation that runs nothing in the worker", async () => {
-      await expect(
-        timeTopicsOperation(session.page, {
-          label: "idle",
-          posture,
-          operation: () => Promise.resolve(),
-        }),
-      ).rejects.toThrow("idle: the timed operation ran nothing in the worker");
-      expect(await samplesLeftInPage()).toEqual([]);
+      // The counts are held still, so the operation reads as running nothing.
+      // A worker whose views the server serves may have timed no run yet in
+      // this session, which would leave its timing without the key the
+      // helper counts by and fail the helper for that reason instead. The
+      // held counts carry the key, as a worker's do once it has run once.
+      // The counts the client returns are frozen, so the held ones are a copy.
+      const separator = WORKER_RUN_TIMING_KEY.indexOf("/");
+      const runLogger = WORKER_RUN_TIMING_KEY.slice(0, separator);
+      const runKey = WORKER_RUN_TIMING_KEY.slice(separator + 1);
+      await session.page.evaluate(async (logger: string, key: string) => {
+        const scope: ReplacementGlobal = globalThis;
+        const rt = scope.commonfabric!.rt!;
+        const counts = await rt.getLoggerCounts();
+        const held = {
+          ...counts,
+          timing: {
+            ...counts.timing,
+            [logger]: {
+              [key]: {
+                count: 1,
+                min: 0,
+                max: 0,
+                totalTime: 0,
+                average: 0,
+                p50: 0,
+                p95: 0,
+                lastTime: 0,
+                lastTimestamp: 0,
+                slowest: [],
+                cdf: [],
+                cdfSinceBaseline: null,
+              },
+              ...counts.timing[logger],
+            },
+          },
+        };
+        const readCounts = rt.getLoggerCounts;
+        scope.__cfRestoreLoggerCounts = () => {
+          rt.getLoggerCounts = readCounts;
+        };
+        rt.getLoggerCounts = () => Promise.resolve(held);
+      }, { args: [runLogger, runKey] });
+      try {
+        await expect(
+          timeTopicsOperation(session.page, {
+            label: "idle",
+            posture,
+            operation: () => Promise.resolve(),
+          }),
+        ).rejects.toThrow(
+          "idle: the timed operation ran nothing in the worker",
+        );
+        expect(await samplesLeftInPage()).toEqual([]);
+      } finally {
+        await session.page.evaluate(() => {
+          const scope: ReplacementGlobal = globalThis;
+          scope.__cfRestoreLoggerCounts?.();
+          delete scope.__cfRestoreLoggerCounts;
+        });
+      }
     });
 
     it("throws the operation's own error, ends the interval, and leaves no sample in the page", async () => {

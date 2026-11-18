@@ -196,6 +196,24 @@ export const ui = {
   /** Body text inside a modal prompt dialog. */
   dialogText: { fg: C.fg } as Style,
 
+  /** Body text inside a modal prompt dialog that stands out from the rest,
+   * such as the viewer's own words in the task dialog, as against the text
+   * it quotes. */
+  dialogEmphasis: { fg: C.fgBright, bold: true } as Style,
+
+  /** A name, such as a branch's or a pull request's number, interpolated
+   * into the bright body text of a dialog. */
+  dialogName: { fg: C.yellow, bold: true } as Style,
+
+  /** The spinner of a step in the task dialog that is running. */
+  dialogBusy: { fg: C.cyan, bold: true } as Style,
+
+  /** The mark of a step in the task dialog that is done. */
+  dialogDone: { fg: C.green, bold: true } as Style,
+
+  /** The mark of a step in the task dialog that ended without being done. */
+  dialogFailed: { fg: C.red, bold: true } as Style,
+
   /** A Turbo Vision push-button: dark text on a green face. */
   button: { fg: C.ink, bg: C.button } as Style,
 

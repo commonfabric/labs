@@ -240,4 +240,55 @@ describe("attachDeclaredDataFiles", () => {
     );
     assertEquals(resolved.dataFiles, ["/data/sample.txt"]);
   });
+
+  describe("a declared data directory", () => {
+    const READS_ASSETS = 'import { dataFile } from "commonfabric";\n' +
+      'export default () => dataFile.urls("./assets");\n';
+
+    /** A resolver over `data` that lists its directories as well. */
+    const listing = (data: Record<string, string>): ProgramResolver => ({
+      ...withDataReader({}, data),
+      listDataFiles: (directory) => {
+        const names = Object.keys(data).filter((name) =>
+          name.slice(0, name.lastIndexOf("/")) === directory
+        );
+        return Promise.resolve(names.length === 0 ? undefined : names);
+      },
+    });
+
+    it("attaches each asset the directory holds and nothing else", async () => {
+      const result = await attachDeclaredDataFiles(
+        program(READS_ASSETS),
+        listing({
+          "/assets/glaze.png": "data:image/png;base64,AA==",
+          "/assets/logo.svg": "<svg/>",
+          "/assets/notes.md": "# notes",
+        }),
+      );
+
+      assertEquals(result.dataFiles, ["/assets/glaze.png", "/assets/logo.svg"]);
+    });
+
+    it("refuses a directory the resolver cannot list", async () => {
+      await assertRejects(
+        () =>
+          attachDeclaredDataFiles(
+            program(READS_ASSETS),
+            withDataReader({}, {}),
+          ),
+        Error,
+        '"/main.tsx" reads the data directory "/assets", which this ' +
+          "program's source cannot list.",
+      );
+    });
+
+    it("refuses a directory the program does not contain", async () => {
+      await assertRejects(
+        () => attachDeclaredDataFiles(program(READS_ASSETS), listing({})),
+        Error,
+        '"/main.tsx" reads the data directory "/assets", which this ' +
+          "program does not contain.",
+      );
+    });
+  });
 });

@@ -36,10 +36,7 @@ export class VerbTierMarkTransformer extends Transformer {
     const visit = (node: ts.Node): ts.Node => {
       if (ts.isCallExpression(node)) {
         const kind = detectCallKind(node, checker);
-        if (
-          kind?.kind === "builder" && kind.builderName === "pattern" &&
-          node.arguments.length >= 3
-        ) {
+        if (kind?.kind === "builder" && kind.builderName === "pattern") {
           const updated = markPatternResultSchema(
             node,
             moduleConsts,
@@ -80,8 +77,9 @@ function markPatternResultSchema(
   checker: ts.TypeChecker,
   factory: ts.NodeFactory,
 ): ts.CallExpression | undefined {
-  const callbackArg = node.arguments[0];
-  const resultSchemaArg = node.arguments[node.arguments.length - 1];
+  // The result schema is the last of the callback and two schemas; a call
+  // without both schemas has nothing to mark.
+  const [callbackArg, , resultSchemaArg] = node.arguments;
   if (!callbackArg || !resultSchemaArg) return undefined;
 
   const callback = unwrapExpr(callbackArg);

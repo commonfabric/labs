@@ -13,7 +13,7 @@ workloads, byte-identical across arms, adjacent runs, counters over
 latencies, no latency quoted above load ~5, causation by ablation.
 
 The executor and its two execution postures are implemented in the current
-repository. The first-party default is OFF; explicit `true` selects ON.
+repository. The first-party default is ON; explicit `false` selects OFF.
 OW28's served `compileAndRun` path and scoped child lifecycle have direct
 acceptance coverage. The coverage register tracks the Phase 7 gate evidence
 and independently scoped follow-ups.
@@ -37,9 +37,17 @@ records the current dispositions; the
 records the omission evidence and the bounded status investigation.
 The first-party default and flip records belong to the
 [`serverExecution` registry](../development/EXPERIMENTAL_OPTIONS.md#serverexecution).
-The ON soak is paused. A renewed ON rollout follows the Phase 7 gate
-dispositions and the owner's rollout decision; the flip record alone does not
-establish current readiness.
+The default is ON again since 2026-11-11 and the ON soak runs on main; the
+post-soak removal PR (Phase 7 task 2) retires the flag and the OFF path.
+
+**Delta 2026-11-11 (the re-FLIP): `SERVER_EXECUTION_DEFAULT_ENABLED` →
+`true` by the owner's rollout decision, as the data-only change the
+2026-09-02 hygiene provides for: the constant plus current-status prose, with
+no workflow, test, or role edit. The two-arm lanes resolve `default` = ON and
+`opposite` = OFF (the explicit-`false` guard on the opposite-built shell,
+with the `server-execution-off` record variant). Explicit `false` selects
+OFF per deployment and is the rollback lever. The ON soak resumes at this
+change's merge.**
 
 **Delta 2026-10-31 (the verbs on the space's memory session): under ON, a
 lifecycle verb travels only as a `pattern.lifecycle` memory request on the
@@ -509,12 +517,12 @@ load walk, COMMITTING NOTHING in the recovery arm. Not #6208's
 re-commit retry (census-proved non-convergent, closed — its
 `isStaleConfirmedReadConflict` discriminator and
 `awaitCommitRetryReadiness` extraction are cherry-picked as live
-pieces of this build); not the old refuse-to-start. ON-only (the
-coordinator's conservative default; OFF byte-identical, pinned —
-under OFF the refusal means another CLIENT raced and cross-tab mutex
-semantics own that story). OW62 is RE-FRAMED from adopt-not-start to
-START-WITHOUT-COMMIT (clients start speculatively; server-state
-wins); its remaining open piece is the stage-2
+pieces of this build); not the old refuse-to-start. Both arms:
+under OFF the refusal means another client, a second tab of the same
+user among them, set the piece up first, and the client that lost
+needs the piece's context as much. OW62 is RE-FRAMED from
+adopt-not-start to START-WITHOUT-COMMIT (clients start speculatively;
+server-state wins); its remaining open piece is the stage-2
 unmaterialized-fallback question. Binding sentence: serving-loop.md
 §3d's RULED 2026-08-24 refusal-arm paragraph; full record: the
 register's OW45 CATCH-UP-AND-START block (ruling + owner model

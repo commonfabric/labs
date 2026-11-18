@@ -11,32 +11,6 @@ import type {
 import type { NodeRegistry } from "./node-record.ts";
 import type { Action, ReactivityLog } from "./types.ts";
 
-export function collectTransitiveEffects(state: {
-  readonly dependents: WeakMap<Action, Set<Action>>;
-  readonly effects: ReadonlySet<Action>;
-}, action: Action): Action[] {
-  const visited = new Set<Action>();
-  const effects: Action[] = [];
-
-  const visit = (current: Action) => {
-    if (visited.has(current)) return;
-    visited.add(current);
-
-    if (state.effects.has(current)) {
-      effects.push(current);
-    }
-
-    const dependents = state.dependents.get(current);
-    if (!dependents) return;
-    for (const dependent of dependents) {
-      visit(dependent);
-    }
-  };
-
-  visit(action);
-  return effects;
-}
-
 export function mapsEqual(
   a: Map<string, FabricValue>,
   b: Map<string, FabricValue>,
@@ -279,7 +253,7 @@ type CycleComponent = {
  * at the cost of the edges leaving them. Either way a break is bounded by
  * the cycle it fell in and not by the work set.
  */
-class CycleBreaks {
+export class CycleBreaks {
   /**
    * The actions unplaced at construction. An action's index is its place
    * here.
@@ -372,8 +346,9 @@ class CycleBreaks {
       const action = this.#actions[index];
       this.#firstTarget[index] = targets.length;
       for (const neighbor of graph.get(action) ?? []) {
-        const target = this.#indices.get(neighbor);
-        if (target === undefined) continue;
+        // An action is visited only once every action with an edge to it
+        // has been, so the target of an unvisited action's edge is unvisited.
+        const target = this.#indices.get(neighbor)!;
         targets.push(target);
         this.#firstSource[target + 1]++;
       }

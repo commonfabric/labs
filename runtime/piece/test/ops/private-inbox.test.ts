@@ -27,11 +27,13 @@ const identity = await Identity.fromPassphrase("private inbox adoption");
 /** A principal other than the test's, to own a foreign inbox's space. */
 const someoneElse = (await Identity.fromPassphrase("someone else")).did();
 
-// A Home pattern reduced to the fields the host reads and the stream it sends,
-// whose handler records what it is sent: the inbox to adopt, the inbox to
+// A Home pattern reduced to the fields the host reads and the streams it sends,
+// whose ensure records what it is sent: the inbox to adopt, the inbox to
 // replace, the deciding profile, and the refusal, its reason and inbox. `defaultProfile` is a slot
-// holding the default under `profile`, as Home's is. The handler throws while
-// `failEnsure` is set.
+// holding the default under `profile`, as Home's is. The ensure throws while
+// `failEnsure` is set. Its `createOwnPrivateInbox` counts its runs in
+// `createdOwn`, and throws while `failCreate` is set; `order` names each
+// stream's runs in the order they happened.
 const program: RuntimeProgram = {
   main: "/home.tsx",
   files: [{
@@ -44,6 +46,19 @@ type Pointer = { piece?: Cell<{ name?: string }> };
 type Named = { piece?: Cell<{ inbox?: Pointer }> };
 
 type Refused = { reason?: string; piece?: Cell<{ name?: string }> };
+
+const createOwnPrivateInbox = handler<
+  Record<string, never>,
+  {
+    createdOwn: Writable<number>;
+    order: Writable<string[]>;
+    failCreate: Writable<boolean>;
+  }
+>((_event, { createdOwn, order, failCreate }) => {
+  if (failCreate.get()) throw new Error("Home fails the creation");
+  createdOwn.set(createdOwn.get() + 1);
+  order.push("create");
+});
 
 const ensurePrivateInbox = handler<
   {
@@ -59,10 +74,12 @@ const ensurePrivateInbox = handler<
     decidedBy: Writable<Named>;
     refused: Writable<Refused>;
     failEnsure: Writable<boolean>;
+    order: Writable<string[]>;
   }
->((event, { ensured, adopted, replaced, decidedBy, refused, failEnsure }) => {
+>((event, { ensured, adopted, replaced, decidedBy, refused, failEnsure, order }) => {
   if (failEnsure.get()) throw new Error("Home fails the ensure");
   ensured.set(ensured.get() + 1);
+  order.push("ensure");
   adopted.set(event?.adopt === undefined ? {} : { piece: event.adopt });
   replaced.set(event?.replace ?? []);
   decidedBy.set(event?.from === undefined ? {} : { piece: event.from });
@@ -91,6 +108,10 @@ export default pattern(() => {
   const decidedBy = new Writable<Named>({}).for("decidedBy");
   const refused = new Writable<Refused>({}).for("refused");
   const failEnsure = new Writable(false).for("failEnsure");
+  const ownPrivateInbox = new Writable<Pointer>({}).for("ownPrivateInbox");
+  const createdOwn = new Writable(0).for("createdOwn");
+  const failCreate = new Writable(false).for("failCreate");
+  const order = new Writable<string[]>([]).for("order");
   return {
     privateInbox,
     profiles,
@@ -103,6 +124,10 @@ export default pattern(() => {
     decidedBy,
     refused,
     failEnsure,
+    ownPrivateInbox,
+    createdOwn,
+    failCreate,
+    order,
     ensurePrivateInbox: ensurePrivateInbox({
       ensured,
       adopted,
@@ -110,6 +135,12 @@ export default pattern(() => {
       decidedBy,
       refused,
       failEnsure,
+      order,
+    }),
+    createOwnPrivateInbox: createOwnPrivateInbox({
+      createdOwn,
+      order,
+      failCreate,
     }),
   };
 });`,
@@ -954,6 +985,76 @@ describe("ensurePrivateInboxOf()", () => {
         "inbox-adoption-acl-mismatch",
       );
       expect(await replacedSent()).toEqual([]);
+    });
+  });
+
+  describe("Home's own inbox", () => {
+    /** Sets Home's `field` to `value`. */
+    async function setHome(field: string, value: unknown): Promise<void> {
+      await runtime.editWithRetry((tx) =>
+        home.withTx(tx).key(field as never).set(value as never)
+      );
+    }
+
+    /** The names of Home's streams' runs, in the order they happened. */
+    async function order(): Promise<string[]> {
+      return await home.key("order" as never).pull() as string[];
+    }
+
+    it("has Home create its own inbox, and waits for that, before the ensure when Home holds none", async () => {
+      await listProfiles([await profilePointingAt(undefined)]);
+
+      await ensurePrivateInboxOf(runtime, home, identity.did());
+
+      expect(home.key("order" as never).get()).toEqual(["create", "ensure"]);
+    });
+
+    it("has Home create its own inbox before an ensure naming an inbox to replace", async () => {
+      await setHome("privateInbox", { piece: await inboxHomeDidNotMake() });
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("replace");
+      expect(await order()).toEqual(["create", "ensure"]);
+    });
+
+    it("rejects, sending no ensure, when Home's creation of its own inbox fails", async () => {
+      await listProfiles([await profilePointingAt(undefined)]);
+      await setHome("failCreate", true);
+
+      await expect(ensurePrivateInboxOf(runtime, home, identity.did()))
+        .rejects.toThrow("Home fails the creation");
+      await runtime.idle();
+      expect(await home.key("ensured" as never).pull()).toBe(0);
+    });
+
+    it("has Home create none when it has an inbox of its own", async () => {
+      await listProfiles([await profilePointingAt(undefined)]);
+      await setHome("ownPrivateInbox", { piece: await usableInbox() });
+
+      await ensure();
+
+      expect(await order()).toEqual(["ensure"]);
+    });
+
+    it("has Home create none for an ensure naming an inbox to adopt", async () => {
+      await listProfiles([await profilePointingAt(await usableInbox())]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("adopt");
+      expect(await order()).toEqual(["ensure"]);
+    });
+
+    it("has Home create none while it keeps the inbox it holds", async () => {
+      const inbox = await usableInbox();
+      await setHome("privateInbox", { piece: inbox });
+      await listProfiles([await profilePointingAt(inbox)]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("held");
+      expect(await order()).toEqual(["ensure"]);
     });
   });
 

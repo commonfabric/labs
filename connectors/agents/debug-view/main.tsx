@@ -874,7 +874,7 @@ function rawDataProvenanceUi(
         >
           <cf-heading
             level={4}
-            no-margin
+            noMargin
             style={{ display: "inline-block" }}
           >
             Where this data comes from
@@ -1851,7 +1851,7 @@ const DebugView = pattern<DebugInput, DebugOutput>(
                           {status}
                         </cf-badge>
                       </cf-hstack>
-                      <cf-table full-width>
+                      <cf-table fullWidth>
                         <tbody>
                           <tr>
                             <th>Started</th>
@@ -1926,7 +1926,7 @@ const DebugView = pattern<DebugInput, DebugOutput>(
                   <cf-card>
                     <cf-vstack gap="2">
                       <cf-heading level={4}>Sources</cf-heading>
-                      <cf-table full-width hover>
+                      <cf-table fullWidth hover>
                         <thead>
                           <tr>
                             <th>Source</th>
@@ -1971,7 +1971,7 @@ const DebugView = pattern<DebugInput, DebugOutput>(
                   <cf-card>
                     <cf-vstack gap="2">
                       <cf-heading level={4}>Fabric cells</cf-heading>
-                      <cf-table full-width>
+                      <cf-table fullWidth>
                         <tbody>
                           {computed(() =>
                             cellRows(health).map((
@@ -1993,7 +1993,7 @@ const DebugView = pattern<DebugInput, DebugOutput>(
                   <cf-card>
                     <cf-vstack gap="2">
                       <cf-heading level={4}>Session indexes</cf-heading>
-                      <cf-table full-width>
+                      <cf-table fullWidth>
                         <thead>
                           <tr>
                             <th>Index</th>
@@ -2108,7 +2108,7 @@ const DebugView = pattern<DebugInput, DebugOutput>(
                     </cf-hstack>
                   </cf-hstack>
                   <cf-card>
-                    <cf-table full-width hover>
+                    <cf-table fullWidth hover>
                       <thead>
                         <tr>
                           <th>Source</th>
@@ -2534,7 +2534,7 @@ const DebugView = pattern<DebugInput, DebugOutput>(
                           </cf-button>
                         </cf-hstack>
                       </cf-hstack>
-                      <cf-table full-width hover>
+                      <cf-table fullWidth hover>
                         <thead>
                           <tr>
                             <th>ID</th>
@@ -2590,7 +2590,7 @@ const DebugView = pattern<DebugInput, DebugOutput>(
                           </cf-button>
                         </cf-hstack>
                       </cf-hstack>
-                      <cf-table full-width hover>
+                      <cf-table fullWidth hover>
                         <thead>
                           <tr>
                             <th>Command</th>
@@ -2649,7 +2649,7 @@ const DebugView = pattern<DebugInput, DebugOutput>(
                     </cf-hstack>
                   </cf-hstack>
                   <cf-card>
-                    <cf-table full-width hover>
+                    <cf-table fullWidth hover>
                       <thead>
                         <tr>
                           <th>Time</th>

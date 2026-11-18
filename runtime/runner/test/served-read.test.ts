@@ -3,13 +3,18 @@ import { expect } from "@std/expect";
 
 import type { ViewInterest, ViewPlan } from "@commonfabric/memory/v2";
 
+import type { JSONSchema } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import type { Runtime } from "../src/runtime.ts";
 import { pullFromServer } from "../src/served-read.ts";
 
 /** A replica's view surface, whose owner and plans a case drives by hand. */
 function fixture(
-  options: { supports?: boolean; set?: () => Promise<boolean> } = {},
+  options: {
+    supports?: boolean;
+    set?: () => Promise<boolean>;
+    schema?: JSONSchema;
+  } = {},
 ) {
   const state: {
     views: ViewInterest[];
@@ -58,7 +63,7 @@ function fixture(
       id: "of:board",
       scope: "space",
       path: ["index"],
-      schema: { type: "array" },
+      schema: "schema" in options ? options.schema : { type: "array" },
     }),
   } as unknown as Cell<unknown>;
   const plan = (fields: Partial<ViewPlan>): ViewPlan => ({
@@ -88,6 +93,20 @@ describe("pullFromServer()", () => {
     }]);
     state.plans!([plan({ settled: true })]);
     await pulling;
+  });
+
+  it("registers no schema for a cell that has none or that declares a stream", async () => {
+    const stream: JSONSchema = { asCell: ["stream"] };
+    for (const schema of [undefined, stream]) {
+      const { state, runtime, cell, plan } = fixture({ schema });
+
+      const pulling = pullFromServer(runtime, cell);
+      await state.registered.promise;
+
+      expect(state.views[0].query.roots[0].selector.schema).toBe(false);
+      state.plans!([plan({ settled: true })]);
+      await pulling;
+    }
   });
 
   it("returns `true` for its own view's plan marked `settled`, and releases the view", async () => {

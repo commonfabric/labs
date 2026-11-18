@@ -90,6 +90,9 @@ export class CFButton extends BaseElement {
   @property({ attribute: false })
   accessor theme: CFTheme | undefined = undefined;
 
+  /** The aria-label `_syncAriaLabel()` last wrote, if any. */
+  #syncedAriaLabel: string | null = null;
+
   constructor() {
     super();
     this.color = "primary";
@@ -197,30 +200,22 @@ export class CFButton extends BaseElement {
 
   /**
    * Sync the host's aria-label from slotted text content, unless the
-   * author has provided their own aria-label or aria-labelledby.
+   * author has provided their own aria-label or aria-labelledby. A label
+   * other than the one this method last wrote is the author's.
    */
   private _syncAriaLabel() {
+    const label = this.getAttribute("aria-label");
     if (
       this.hasAttribute("aria-labelledby") ||
-      this._authorAriaLabel !== null
+      (label !== null && label !== this.#syncedAriaLabel)
     ) {
       return;
     }
     const text = this.textContent?.trim() || "";
     if (text) {
       this.setAttribute("aria-label", text);
+      this.#syncedAriaLabel = text;
     }
-  }
-
-  /** Stash the author's aria-label (if any) so _syncAriaLabel won't overwrite it. */
-  private get _authorAriaLabel(): string | null {
-    // If aria-label was set before we started syncing, it's the author's.
-    // After first sync, our generated value is present. We distinguish by
-    // comparing against the current textContent — if they match, it's ours.
-    const label = this.getAttribute("aria-label");
-    if (label === null) return null;
-    const text = this.textContent?.trim() || "";
-    return label !== text ? label : null;
   }
 
   override render() {
@@ -249,13 +244,9 @@ export class CFButton extends BaseElement {
     `;
   }
 
+  // A click while disabled never arrives here: the capture listener the
+  // constructor adds stops it first.
   private _handleClick(e: Event) {
-    if (this.disabled) {
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
-
     // For submit/reset types, we need to manually find the ancestor cf-form
     // because the native button in our shadow DOM can't find forms across
     // shadow DOM boundaries

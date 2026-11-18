@@ -97,6 +97,22 @@ describe("SpaceAccessWatch", () => {
         watch.rerunOnChange(spaceB, fakeAction());
         expect(storage.observers.size).toBe(1);
       });
+
+      it("registers nothing with a storage manager that reports no changes", () => {
+        const unsubscribeObservers: unknown[] = [];
+        const watch = new SpaceAccessWatch({}, {
+          invalidateAction: () => {},
+          observeUnsubscribe: (observer) => {
+            unsubscribeObservers.push(observer);
+            return () => {};
+          },
+        });
+        watch.rerunOnChange(spaceA, fakeAction());
+        watch.rerunOnChange(spaceA, fakeAction());
+
+        expect(watch.accessForTestingOnly.waiting.size).toBe(0);
+        expect(unsubscribeObservers).toEqual([]);
+      });
     });
 
     describe("rerunOnAnswer()", () => {
@@ -136,9 +152,28 @@ describe("SpaceAccessWatch", () => {
         watch.rerunOnAnswer(spaceB, fakeAction());
         watch.dispose();
         storage.answer(spaceB);
+        watch.rerunOnAnswer(spaceB, fakeAction());
+        storage.answer(spaceB);
 
         expect(invalidated).toEqual([]);
         expect(storage.answerObservers.size).toBe(0);
+        expect(watch.accessForTestingOnly.answering.size).toBe(0);
+      });
+
+      it("registers nothing with a storage manager that reports no answers", () => {
+        const unsubscribeObservers: unknown[] = [];
+        const watch = new SpaceAccessWatch({}, {
+          invalidateAction: () => {},
+          observeUnsubscribe: (observer) => {
+            unsubscribeObservers.push(observer);
+            return () => {};
+          },
+        });
+        watch.rerunOnAnswer(spaceA, fakeAction());
+        watch.rerunOnAnswer(spaceA, fakeAction());
+
+        expect(watch.accessForTestingOnly.answering.size).toBe(0);
+        expect(unsubscribeObservers).toEqual([]);
       });
     });
 

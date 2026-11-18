@@ -54,6 +54,10 @@ import { completionProviderKeys } from "../runtime/cli/lib/completion/providers.
  */
 export const NO_CANDIDATES = new Map<string, string>([
   [
+    "pattern rollback:version",
+    "a version number from the index's owner-only history (cf pattern history)",
+  ],
+  [
     "space invite redeem:invite-id",
     "an opaque invitation ID supplied with the code",
   ],
@@ -64,6 +68,11 @@ export const NO_CANDIDATES = new Map<string, string>([
   [
     "space invite receipts:invite-id",
     "an opaque ID from invitation creation or listing",
+  ],
+  ["index admit:did", "a DID being admitted; nothing here enumerates them"],
+  [
+    "index join:link",
+    "an invite link pasted from elsewhere, and a secret: never offered",
   ],
   // Values a caller brings from outside the CLI.
   ["acl set:did", "a DID being granted access; nothing here enumerates them"],
@@ -132,7 +141,15 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
     "piece follow:expect-revision",
     "the revision head the caller inspected, or none",
   ],
+  [
+    "piece setsrc:origin",
+    "a `system:` ref or fabric URL the caller names for the piece to follow",
+  ],
   ["piece new:request-key", "an opaque caller retry key"],
+  [
+    "piece new:from-index",
+    "a published pattern's id, which a pattern-index search answers",
+  ],
   [
     "ingest mint:gmail-access-token",
     "a secret; a candidate list is the wrong place",
@@ -145,6 +162,30 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
     "a DID being delegated to; nothing here enumerates them",
   ],
   ["delegation issue:expires-in", "a delegation lifetime in seconds"],
+  [
+    "pattern publish:description",
+    "prose the caller writes about their pattern",
+  ],
+  ["pattern publish:hashtags", "tags the caller coins for their pattern"],
+  ["pattern publish:keywords", "words the caller coins for their pattern"],
+  [
+    "pattern publish:remixed-from",
+    "a published pattern's id, which a pattern-index search answers",
+  ],
+  [
+    "pattern share:description",
+    "prose the caller writes about their pattern",
+  ],
+  ["pattern share:hashtags", "tags the caller coins for their pattern"],
+  ["pattern share:keywords", "words the caller coins for their pattern"],
+  [
+    "pattern share:remixed-from",
+    "a published pattern's id, which a pattern-index search answers",
+  ],
+  [
+    "pattern publish:profile",
+    "a profile space DID, which cf profile ls answers from a live home",
+  ],
   ["space invite create:max-uses", "a distinct identity count"],
   ["space invite create:shell", "a caller-selected shell origin"],
   [
@@ -245,6 +286,7 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ["url", "a browser URL; its parts complete as --api-url, --space, --piece"],
   ["app-url", "a shell origin, which is not the api-url --api-url names"],
   ["repository", "a source repository URL"],
+  ["pattern-index-url", "the base URL of a pattern index service"],
   ["model", "a model name the harness's configured provider defines"],
   [
     "main-export",

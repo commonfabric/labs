@@ -426,7 +426,8 @@ export class CFMarkdown extends BaseElement {
   @property({ attribute: false })
   accessor theme: CFTheme | undefined = undefined;
 
-  private _unsubscribe: (() => void) | null = null;
+  /** The cell whose changes redraw the element, while it is connected. */
+  #followed: { cell: CellHandle<string>; cancel: () => void } | undefined;
 
   constructor() {
     super();
@@ -447,36 +448,22 @@ export class CFMarkdown extends BaseElement {
     return this.content ?? "";
   }
 
+  override connectedCallback() {
+    super.connectedCallback();
+    this.#follow();
+  }
+
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    this.#follow();
+  }
+
   override willUpdate(
     changedProperties: Map<string | number | symbol, unknown>,
   ) {
     super.willUpdate(changedProperties);
-
-    // Handle Cell subscription before render so first render has correct value
-    if (changedProperties.has("content")) {
-      // Clean up previous subscription
-      if (this._unsubscribe) {
-        this._unsubscribe();
-        this._unsubscribe = null;
-      }
-
-      // Subscribe to new Cell if it's a Cell
-      if (this.content && isCellHandle(this.content)) {
-        const contentCell = this.content;
-        const update = () => this.requestUpdate();
-        this._unsubscribe = contentCell.subscribe(update, {
-          onRefused: update,
-        });
-        const read = contentCell.lastRead();
-        if ("unread" in read || ("value" in read && read.value === undefined)) {
-          void contentCell.sync().then(() => {
-            if (this.content === contentCell) {
-              this.requestUpdate();
-            }
-          }).catch(() => {});
-        }
-      }
-    }
+    // Before render, so that the first render reads the cell it follows.
+    this.#follow();
   }
 
   override updated(changedProperties: Map<string | number | symbol, unknown>) {
@@ -493,14 +480,6 @@ export class CFMarkdown extends BaseElement {
     },
   };
 
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    if (this._unsubscribe) {
-      this._unsubscribe();
-      this._unsubscribe = null;
-    }
-  }
-
   override render() {
     const classes = {
       "markdown-content": true,
@@ -514,5 +493,30 @@ export class CFMarkdown extends BaseElement {
         ${markdownTemplate(this._getContentValue(), this._markdownCallbacks)}
       </div>
     `;
+  }
+
+  /**
+   * Subscribes to the cell `content` holds while the element is connected,
+   * and to nothing otherwise, cancelling the subscription it held before. A
+   * newly followed cell that has read nothing yet is asked for its value.
+   */
+  #follow(): void {
+    const cell = this.isConnected && isCellHandle<string>(this.content)
+      ? this.content
+      : undefined;
+    if (cell === this.#followed?.cell) return;
+    this.#followed?.cancel();
+    const update = () => this.requestUpdate();
+    this.#followed = cell && {
+      cell,
+      cancel: cell.subscribe(update, { onRefused: update }),
+    };
+    if (!cell) return;
+    const read = cell.lastRead();
+    if ("unread" in read || ("value" in read && read.value === undefined)) {
+      void cell.sync().then(() => {
+        if (this.content === cell) this.requestUpdate();
+      }).catch(() => {});
+    }
   }
 }

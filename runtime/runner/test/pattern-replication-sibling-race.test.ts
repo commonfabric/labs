@@ -65,6 +65,9 @@ import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { compileCacheVersionOf } from "./support/compile-cache-version.ts";
 import { interceptTransaction } from "./support/intercept-transaction.ts";
 
+/** The `pattern-manager` logger levels a test here can capture. */
+type SpiedLevel = "info" | "warn" | "error";
+
 const signer = await Identity.fromPassphrase("replication sibling race test");
 const spaceA = signer.did() as MemorySpace; // where the compile lands
 const spaceB = (await Identity.fromPassphrase(
@@ -240,27 +243,24 @@ describe("closure replication: the in-flight sibling supplier race", () => {
     return captured;
   };
 
-  /** Capture the `pattern-manager` logger's WARN and ERROR lines, resolved
-   * exactly as the logger resolves them (lazy closures), invoking `onLine`
-   * synchronously per line — the in-flight-supplier step below uses that to
-   * release its compile gate the moment the replication's dry consult
-   * announces itself. Same own-property-spy-over-the-singleton shape as
-   * `captureManagerErrors` (which stays untouched: the existing steps pin
-   * against it byte-identically); both spies delegate so the lines still
-   * print. */
+  /** Capture the `pattern-manager` logger's lines at `levels` (WARN and
+   * ERROR unless told otherwise), resolved exactly as the logger resolves
+   * them (lazy closures), invoking `onLine` synchronously per line — the
+   * in-flight-supplier step below uses that to release its compile gate the
+   * moment the replication's dry consult announces itself. Same
+   * own-property-spy-over-the-singleton shape as `captureManagerErrors`
+   * (which stays untouched: the existing steps pin against it
+   * byte-identically); both spies delegate so the lines still print. */
   const captureManagerLines = async (
     body: () => Promise<void>,
-    onLine?: (
-      entry: { level: "warn" | "error"; key: string; line: string },
-    ) => void,
-  ): Promise<{ level: "warn" | "error"; key: string; line: string }[]> => {
+    onLine?: (entry: { level: SpiedLevel; key: string; line: string }) => void,
+    levels: readonly SpiedLevel[] = ["warn", "error"],
+  ): Promise<{ level: SpiedLevel; key: string; line: string }[]> => {
     const managerLogger = getLogger("pattern-manager");
-    const captured: { level: "warn" | "error"; key: string; line: string }[] =
-      [];
-    const spied = managerLogger as unknown as {
-      warn?: (key: string, ...messages: LogMessage[]) => void;
-      error?: (key: string, ...messages: LogMessage[]) => void;
-    };
+    const captured: { level: SpiedLevel; key: string; line: string }[] = [];
+    const spied = managerLogger as unknown as Partial<
+      Record<SpiedLevel, (key: string, ...messages: LogMessage[]) => void>
+    >;
     const resolveLine = (messages: LogMessage[]): string =>
       messages.flatMap((message) => {
         const resolved = typeof message === "function"
@@ -268,7 +268,7 @@ describe("closure replication: the in-flight sibling supplier race", () => {
           : message;
         return Array.isArray(resolved) ? resolved : [resolved];
       }).map(String).join(" ");
-    for (const level of ["warn", "error"] as const) {
+    for (const level of levels) {
       const real = managerLogger[level].bind(managerLogger);
       spied[level] = (key: string, ...messages: LogMessage[]) => {
         const entry = { level, key, line: resolveLine(messages) };
@@ -280,8 +280,7 @@ describe("closure replication: the in-flight sibling supplier race", () => {
     try {
       await body();
     } finally {
-      delete spied.warn;
-      delete spied.error;
+      for (const level of levels) delete spied[level];
     }
     return captured;
   };
@@ -463,6 +462,70 @@ describe("closure replication: the in-flight sibling supplier race", () => {
       }
     },
   );
+
+  it("logs each replication as issued, and as committed only once it lands", async () => {
+    // A space left without a closure says in the log whether its copy was
+    // issued and how it ended, at a level a server's log keeps.
+
+    const pattern = await runtime.patternManager.compileOrGetPattern(
+      PROGRAM,
+      spaceA,
+    );
+    const entry = runtime.patternManager.getArtifactEntryRef(pattern);
+    if (entry === undefined) throw new Error("compile produced no entry ref");
+    await runtime.patternManager.flushCompileCacheWrites();
+    // A manager that persisted nothing has no fallback origin, so its copy
+    // out of D, which holds nothing, fails.
+    const dry = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      experimental: { serverExecution: true },
+    });
+    let lines: { level: SpiedLevel; key: string; line: string }[];
+    try {
+      lines = await captureManagerLines(
+        async () => {
+          runtime.patternManager.replicatePatternToSpace(
+            pattern,
+            spaceB,
+            spaceA,
+          );
+          await runtime.patternManager.flushCompileCacheWrites();
+          dry.patternManager.replicatePatternToSpace(pattern, spaceF, spaceD);
+          await dry.patternManager.flushCompileCacheWrites();
+        },
+        undefined,
+        ["info", "error"],
+      );
+    } finally {
+      await dry.dispose();
+    }
+    await storageManager.synced();
+
+    const of = (key: string, space: string) =>
+      lines.filter((line) =>
+        line.key === key && line.line.includes(`to=${space}`)
+      );
+    const ticketOf = (line: string) => line.match(/ticket=\d+/)![0];
+    const issued = of("closure-replication-issued", spaceB);
+    expect(issued).toHaveLength(1);
+    expect(issued[0]!.level).toBe("info");
+    expect(issued[0]!.line).not.toContain("trigger=");
+    const committed = of("closure-replication-committed", spaceB);
+    expect(committed).toHaveLength(1);
+    expect(ticketOf(committed[0]!.line)).toBe(ticketOf(issued[0]!.line));
+    expect(of("closure-replication-failed", spaceB)).toEqual([]);
+    expect(of("closure-copy-refused", spaceB)).toEqual([]);
+    expect((await readableClosure(runtime, spaceB, entry.identity)).source)
+      .toContain(entry.identity);
+
+    const dryIssued = of("closure-replication-issued", spaceF);
+    expect(dryIssued).toHaveLength(1);
+    expect(of("closure-replication-committed", spaceF)).toEqual([]);
+    const failed = of("closure-replication-failed", spaceF);
+    expect(failed).toHaveLength(1);
+    expect(ticketOf(failed[0]!.line)).toBe(ticketOf(dryIssued[0]!.line));
+  });
 
   it(
     "keys the fallback by MODULE identity, not just the persist entry: " +

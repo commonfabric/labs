@@ -2,8 +2,7 @@
  * Measures client-visible `searchPatterns` against the labeled query set in
  * `pattern-index-retrieval-queries.json` and writes a report.
  *
- * Uses `listPatterns`, `searchPatterns`, and metadata-only `getPattern` reads
- * for successor resolution. It publishes nothing and records no event, so it
+ * Uses `listPatterns` and `searchPatterns` reads. It publishes nothing and records no event, so it
  * can be run against a live corpus while that corpus is being written to.
  *
  * Usage, from `runtime/cf-harness`:

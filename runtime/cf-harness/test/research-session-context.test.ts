@@ -336,6 +336,9 @@ describe("research session context", () => {
       store.database.exec(
         "ALTER TABLE chat_session DROP COLUMN held_input_names",
       );
+      store.database.exec(
+        "ALTER TABLE chat_session DROP COLUMN held_inputs",
+      );
       store.close();
       const exec = Database.prototype.exec;
       {

@@ -32,6 +32,7 @@ import {
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
   fabricAwareEqual,
+  hashStringOf,
   isKeyableObjectOrArray,
 } from "@commonfabric/data-model";
 import {
@@ -616,6 +617,8 @@ const comparableIfc = (ifc: unknown): unknown => {
       continue;
     }
     if (role === "writerAlternatives" && Array.isArray(value)) {
+      // The alternatives are a set, whose order carries no meaning, so they
+      // are compared in an order their contents decide.
       const normalized = value.map((policy) => {
         if (!isObjectNotArray(policy)) return policy;
         const writer = writerClaimWithoutVolatileIdentity(
@@ -624,7 +627,9 @@ const comparableIfc = (ifc: unknown): unknown => {
         return writer === policy.writeAuthorizedBy
           ? policy
           : { ...policy, writeAuthorizedBy: writer };
-      });
+      }).map((policy) => ({ policy, order: hashStringOf(policy) }))
+        .sort((a, b) => a.order < b.order ? -1 : a.order > b.order ? 1 : 0)
+        .map(({ policy }) => policy);
       if (normalized.some((policy, index) => policy !== value[index])) {
         changed = true;
       }
@@ -697,9 +702,13 @@ const comparableIfc = (ifc: unknown): unknown => {
  * than left to be rediscovered.
  *
  * The semantic-extension keys (`asCell`, `ifc`, `readOnly`, `scope`,
- * `writeOnly`) are compared for exact equality, with one exception: a writer
- * claim's volatile identity, in a `writeAuthorizedBy` or in each member of a
- * `writePolicyAnyOf`, is normalized out before the `ifc` comparison. That
+ * `writeOnly`) are compared for exact equality, with two exceptions, both
+ * made in the reduction `comparableIfc()` applies before the `ifc`
+ * comparison. The members of a `writePolicyAnyOf` are a set, compared in an
+ * order their contents decide, so a candidate listing them in another order
+ * declares the same contract. And a writer claim's volatile identity, in a
+ * `writeAuthorizedBy` or in each member of a `writePolicyAnyOf`, is
+ * normalized out. That
  * identity is the content-addressed module hash (`moduleIdentity`, and the
  * legacy `bundleId`), which rehashes on any edit to the authoring module,
  * together with the source-file spelling (`file`), which changes with the
@@ -2524,11 +2533,11 @@ function sourceAlternativeAcceptedBy(
  * update rather than risk accepting an incompatible one.
  *
  * A conjunct carrying only inert annotations ({@link isInertAnnotationKey})
- * constrains nothing, so a conjunction whose other conjuncts are all of that
- * kind accepts exactly what its one remaining conjunct accepts. When both
- * sides reduce that way, typically a union branch beside a base holding
- * nothing but the union's description, the two remaining conjuncts are
- * compared as whole contracts, under the evolution policy the caller allows.
+ * or definitions constrains no value. A conjunction with one remaining
+ * conjunct accepts exactly what that conjunct accepts. When both sides reduce
+ * that way, typically a union branch beside its description and definitions,
+ * the two remaining conjuncts are compared as whole contracts, under the
+ * evolution policy the caller allows.
  * Any other conjunction is proved conjunct by conjunct without that policy:
  * a field one conjunct leaves unnamed may be contracted by another.
  */
@@ -2566,7 +2575,8 @@ function schemaConjunctionSubsetIssue(
 /**
  * The one conjunct of `conjunction` that constrains values, or its only
  * conjunct, or `undefined` when neither exists. A conjunct constrains nothing
- * when it is `true` or every key it carries is an inert annotation.
+ * when it is `true` or every key it carries is an inert annotation or a
+ * definitions key. Definitions resolve through the context's owning roots.
  */
 function soleConstrainingConjunct(
   conjunction: readonly JSONSchema[],
@@ -2575,7 +2585,10 @@ function soleConstrainingConjunct(
   const constraining = conjunction.filter((conjunct) =>
     conjunct !== true &&
     (conjunct === false ||
-      !Object.keys(conjunct).every(isInertAnnotationKey))
+      !Object.keys(conjunct).every((key) =>
+        isInertAnnotationKey(key) ||
+        DEFS_KEYS.some((defsKey) => defsKey === key)
+      ))
   );
   return constraining.length === 1 ? constraining[0] : undefined;
 }

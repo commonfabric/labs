@@ -1,15 +1,10 @@
 /**
- * Test Pattern: the app patterns that had no test of their own
+ * Test Pattern: small app patterns built in an empty space
  *
  * Each of these lives in a directory of its own and is a whole small
  * application: an activity log, an agent console, a router, three chat
- * patterns built on scoped or shared profiles, a voice note, two policy demos,
- * and a regression repro kept to pin down runtime behavior. None of them had a
- * test, so nothing built any of them outside a browser.
- *
- * scope-bug-computed-vnode-blank is left out. It is a harness whose enabled
- * section exists to produce a runtime error on purpose, so a passing test
- * cannot contain it.
+ * patterns built on scoped or shared profiles, a voice note, and two policy
+ * demos.
  *
  * This builds each app, checks its name, and reads its available controls in
  * an empty space. The row-label demo also exposes the SQLite refusal that
@@ -23,7 +18,6 @@ import CfcRowLabelRecords from "../../examples/cfc-row-label-records/main.tsx";
 import VoiceNote from "../../system/notes/voice-note.tsx";
 import ProfileGroupChat from "../../examples/profile-group-chat/main.tsx";
 import Router from "../../examples/router/main.tsx";
-import ScopeReduceRepro from "../scope-bug-ct1597-reduce/main.tsx";
 import ScopedGroupChatPlainInputs from "../../examples/scoped-group-chat/main-plain-inputs.tsx";
 import SharedProfileRoster from "../../examples/shared-profile-roster/main.tsx";
 import { textContent } from "../../tools/test-support/vnode-helpers.ts";
@@ -37,7 +31,6 @@ export default pattern(() => {
   const sharedProfileRoster = SharedProfileRoster({});
   const promptInjectionDemo = CfcPromptInjectionDemo({});
   const rowLabelRecords = CfcRowLabelRecords({});
-  const scopeReduceRepro = ScopeReduceRepro({});
   const voiceNote = VoiceNote({});
 
   // ==========================================================================
@@ -56,19 +49,9 @@ export default pattern(() => {
     rowLabelRecords[NAME] === "Per-Row × Per-Column Labels (CFC Phase 3)"
   );
 
-  const assert_repro_named = assert(() =>
-    scopeReduceRepro[NAME] === "Cozy lunch poll"
-  );
-
-  const assert_profile_group_chat_renders = assert(() =>
-    textContent(profileGroupChat[UI]).length > 0
-  );
-
-  const assert_scoped_group_chat_renders = assert(() =>
-    textContent(scopedGroupChat[UI]).length > 0
-  );
-
-  const assert_shared_profile_roster_renders = assert(() =>
+  const assert_chat_apps_render = assert(() =>
+    textContent(profileGroupChat[UI]).length > 0 &&
+    textContent(scopedGroupChat[UI]).length > 0 &&
     textContent(sharedProfileRoster[UI]).length > 0
   );
 
@@ -87,24 +70,14 @@ export default pattern(() => {
       "Patient Records — composed labels"
   );
 
-  // The repro exists because a tree came back blank, so a tree with text in
-  // it is the whole of what it claims.
-  const assert_repro_renders = assert(() =>
-    textContent(scopeReduceRepro[UI]).length > 0
-  );
-
   return {
     [TESTS]: [
       { assertion: assert_apps_named },
       { assertion: assert_cfc_demos_named },
-      { assertion: assert_repro_named },
-      { assertion: assert_profile_group_chat_renders },
-      { assertion: assert_scoped_group_chat_renders },
-      { assertion: assert_shared_profile_roster_renders },
+      { assertion: assert_chat_apps_render },
       { assertion: assert_tools_render },
       { render: rowLabelRecords[UI] },
       { assertion: assert_cfc_demos_render },
-      { assertion: assert_repro_renders },
     ],
   };
 });

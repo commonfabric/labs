@@ -8,11 +8,12 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
+import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { Identity } from "@commonfabric/identity";
 
 import { type Cell, hostValueOf, sinkProjected } from "../src/cell.ts";
 import { isSigilLink } from "../src/link-types.ts";
-import { parseLink } from "../src/link-utils.ts";
+import { declareStreamSchema, parseLink } from "../src/link-utils.ts";
 import { ViewDriftError } from "../src/query-result-proxy.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -178,6 +179,50 @@ describe("hostValueOf()", () => {
     const link = parseLink(value.linked.events as never, piece);
     expect(link.id).toBe(target.getAsNormalizedFullLink().id);
     expect(link.path).toEqual(["events"]);
+  });
+
+  it("returns a link whose schema declares a stream as the link to that stream, though nothing is stored there", async () => {
+    await using docs = holder();
+    const declared = docs.runtime.getCell(
+      space,
+      "declared",
+      declareStreamSchema({ type: "number" }),
+    );
+    const piece = await docs.write("piece", {
+      declared: declared.getAsLink({ includeSchema: true }),
+      plain: docs.cell("plain").getAsLink(),
+    });
+
+    const value = hostValueOf(piece.get()) as {
+      declared: unknown;
+      plain: unknown;
+    };
+
+    expect(isSigilLink(value.declared)).toBe(true);
+    expect(parseLink(value.declared as never, piece).id).toBe(
+      declared.getAsNormalizedFullLink().id,
+    );
+    expect(value.plain).toBeUndefined();
+  });
+
+  it("returns a stored `FabricInstance` as the empty record a view over it reads as", async () => {
+    await using docs = holder();
+    const tx = docs.runtime.edit();
+    const piece = docs.cell("piece");
+    piece.withTx(tx).set({ failure: new Error("boom"), message: "boom" });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    expect(piece.getRaw()).toEqual({
+      failure: expect.any(FabricError),
+      message: "boom",
+    });
+
+    const value = hostValueOf(piece.get()) as Record<string, unknown>;
+
+    expect(value).toEqual({ failure: {}, message: "boom" });
+    expect(Object.isFrozen(value.failure)).toBe(true);
+    expect(value.failure).toEqual({
+      ...(piece.get() as { failure: object }).failure,
+    });
   });
 
   describe("as a projection of a subscription", () => {

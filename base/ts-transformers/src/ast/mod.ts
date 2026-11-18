@@ -49,14 +49,11 @@ export {
   isInRestrictedReactiveContext,
   isInsideRestrictedContext,
   isInsideSafeCallbackWrapper,
-  isInsideSafeWrapper,
   isStandaloneFunctionDefinition,
   type ReactiveContextInfo,
   type ReactiveContextKind,
   type ReactiveContextLookup,
   type ReactiveContextOwner,
-  RESTRICTED_CONTEXT_BUILDERS,
-  SAFE_WRAPPER_BUILDERS,
 } from "./reactive-context.ts";
 export * from "./normalize.ts";
 export {
@@ -77,7 +74,6 @@ export {
   getTypeAtLocationWithFallback,
   getVariableInitializer,
   hasAuthoredSourceSite,
-  isFunctionParameter,
   isMethodCall,
   isOptionalMemberSymbol,
   isSyntheticNode,
@@ -90,8 +86,6 @@ export {
 export {
   ensureTypeNodeRegistered,
   getTypeFromTypeNodeWithFallback,
-  getTypeReferenceArgument,
-  hasArrayTypeArgument,
   inferContextualType,
   inferParameterType,
   inferReturnType,

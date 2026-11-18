@@ -11,9 +11,10 @@ import {
 import { SlotLimitError } from "@commonfabric/data-model/codec-json";
 import { isRoutedIdentifier } from "./routed-parser.ts";
 import { getLogger } from "@commonfabric/logger";
+import { LRUCache } from "@commonfabric/collections/cache";
 import { StagedMap } from "@commonfabric/collections/staged-map";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
-import { metrics, SpanStatusCode, trace } from "@opentelemetry/api";
+import { metrics, type Span, SpanStatusCode, trace } from "@opentelemetry/api";
 
 import {
   type ACL,
@@ -26,6 +27,7 @@ import {
   isCapable,
   isDeletionTombstone,
 } from "../acl.ts";
+import { lookupSchemaDocument } from "../../runner/src/schema-registry.ts";
 import {
   canResolveScopeKey,
   type CellScope,
@@ -223,6 +225,7 @@ import {
   verifySessionOpenProofs,
 } from "./session-open-auth.ts";
 import {
+  isServingSessionOf,
   type SessionLifecycleEvent,
   SessionRegistry,
   type SessionState,
@@ -250,6 +253,7 @@ import {
   expandClientMessageLabels,
   hasClientMessageLabelMetadata,
 } from "./commit-label-table.ts";
+import { referenceServerMessageSchemaDocuments } from "./sync-cid-references.ts";
 import { compressServerMessageSchemas } from "./sync-schema-table.ts";
 import {
   appendWatchSetPart,
@@ -262,7 +266,7 @@ import {
   type SyncPartSession,
   wholeLimits,
 } from "./message-parts.ts";
-import { type ArmedTurn, armTurn } from "./turn.ts";
+import { type ArmedTurn, armTurn } from "@commonfabric/async/turn";
 import {
   parseViewInterests,
   parseViewQuery,
@@ -271,6 +275,7 @@ import {
 
 export { MAX_DOCUMENT_INTEREST_SESSIONS } from "./document-interests.ts";
 export {
+  isServingSessionOf,
   type SessionLifecycleEvent,
   SessionRegistry,
 } from "./session-registry.ts";
@@ -915,20 +920,14 @@ const isSpaceKeyAclGenesis = (
 /** Extract the table name from a SQLite "no such table: <name>" error, or
  *  undefined if the error is not that shape. SQLite reports the *unquoted* name,
  *  which may itself contain spaces or dots (e.g. `CREATE TABLE "my notes"`), so
- *  we take the whole remainder of the message. Only a real `main.`/`temp.`
- *  schema prefix is stripped — a bare table literally named `a.b` is preserved,
- *  so the result matches a declared-table key exactly. */
+ *  we take the whole remainder of the message. A dotted name is the table's
+ *  whole name, never a schema and a table: the statement guard refuses a
+ *  schema-qualified reference before the read, so `main.notes` here names a
+ *  table literally called `main.notes`, and the result matches a
+ *  declared-table key exactly. */
 function missingTableName(error: unknown): string | undefined {
-  const message = describeFailure(error);
-  const match = /no such table:\s*(.+)$/i.exec(message);
-  if (match === null) return undefined;
-  const ref = match[1].trim();
-  const dot = ref.indexOf(".");
-  if (dot !== -1) {
-    const schema = ref.slice(0, dot).toLowerCase();
-    if (schema === "main" || schema === "temp") return ref.slice(dot + 1);
-  }
-  return ref;
+  const match = /no such table:\s*(.+)$/i.exec(describeFailure(error));
+  return match === null ? undefined : match[1].trim();
 }
 
 /** Whether `name` matches a declared table key, using the SAME case-folding
@@ -1067,7 +1066,6 @@ type PublishFrame<M> = (message: M) => void;
 
 type TransactDecision = {
   response: ResponseMessage<Engine.AppliedCommit>;
-  postCommit?: () => Promise<void>;
 
   /** Whether the engine decided the commit, and so reported it to the
    * server's commit observer; false for one refused before reaching it. */
@@ -1232,18 +1230,24 @@ export type ServerExecutionObserver = {
    * waiting for the next input; the session-open trigger fires before
    * any watch exists). Edge-triggered and cheap; the host wakes an
    * active loop's demand pass, nothing else. `principal` is the changed
-   * session's principal (undefined for anonymous) so the host can DROP
-   * the serving runtime's OWN loopback session — the service principal's
-   * tracked-set growth is the serving graph's own reads, not client
-   * demand, and must neither wake the loop nor count in `pushGrowthWakes`
-   * (W1 review MINOR-4). `sessionId` names the changed session where the
-   * change is one session's, so a mirror of the demand set can re-read
-   * that session's share alone. */
+   * session's principal (undefined for anonymous), and `servingOwn` says
+   * whether it is a serving loop's own session (`SessionState.servingOwn`),
+   * so the host can DROP the serving runtime's OWN loopback session — the
+   * service principal's tracked-set growth is the serving graph's own
+   * reads, not client demand, and must neither wake the loop nor count in
+   * `pushGrowthWakes` (W1 review MINOR-4) — and keep a client's session
+   * signed with the service's key. `sessionId` names the changed session
+   * where the change is one session's, so a mirror of the demand set can
+   * re-read that session's share alone. `notDemand` says whether the
+   * session declared that it is not demand (`SessionState.notDemand`),
+   * which the host drops as it drops the loop's own. */
   demandChanged?: (
     space: string,
     reason?: DemandChangeReason,
     principal?: string,
     sessionId?: string,
+    servingOwn?: true,
+    notDemand?: true,
   ) => void;
 
   /**
@@ -1394,6 +1398,14 @@ export type ServerConnectOptions = {
    * process's, leaves it unset.
    */
   inProcess?: boolean;
+
+  /**
+   * The process-instance component of the lease holder the peer's host
+   * acquires under (`executionLeaseHolder`), where the peer is a serving
+   * worker started with a component of its own. Absent, the component this
+   * realm mints holders with.
+   */
+  leaseHolderInstance?: string;
 };
 
 class Connection {
@@ -1402,6 +1414,9 @@ class Connection {
   #syncSchemaTable = false;
   #syncLabelTable = false;
   #commitLabelTable = false;
+
+  /** Whether both peers advertised `syncCidReferencesV1`. */
+  #syncCidReferences = false;
 
   /**
    * The bounds a sync is split to fit, when the transport bounds its
@@ -1412,6 +1427,10 @@ class Connection {
   #admissionNotice = false;
   #elidedVerdicts = false;
   #sessions = new Map<string, SessionHandle>();
+  /** The keys of this connection's sessions that their space's deletion
+   *  revoked. A deleted space opens no session again, so a key enters once
+   *  and the set holds no more than the sessions the connection opened. */
+  #deletedSessions = new Set<string>();
   #sessionOpenChallenge: SessionOpenChallengeState | null = null;
   #routedOwns: ((space: string) => boolean) | undefined;
   #routedExpiries = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1472,6 +1491,7 @@ class Connection {
   readonly #sendRaw: Send;
   readonly #syncPartLimits: PartLimits | undefined;
   readonly #inProcess: boolean;
+  readonly #leaseHolderInstance: string | undefined;
 
   constructor(
     readonly id: string,
@@ -1480,12 +1500,14 @@ class Connection {
     routedOwns?: (space: string) => boolean,
     syncPartLimits?: PartLimits,
     inProcess = false,
+    leaseHolderInstance?: string,
   ) {
     this.#server = server;
     this.#sendRaw = sendRaw;
     this.#routedOwns = routedOwns;
     this.#syncPartLimits = syncPartLimits;
     this.#inProcess = inProcess;
+    this.#leaseHolderInstance = leaseHolderInstance;
   }
 
   /**
@@ -1570,6 +1592,15 @@ class Connection {
   /** Helper for `#send()`, which applies the negotiated table encodings. */
   #prepare(message: ServerMessage): ServerMessage {
     let prepared = message;
+    // First, so the tables below never walk a body the frame leaves out.
+    if (this.#syncCidReferences) {
+      const referenceStart = performance.now();
+      prepared = referenceServerMessageSchemaDocuments(
+        prepared,
+        lookupSchemaDocument,
+      );
+      timing.time(referenceStart, "memory", "response", "prepareReferences");
+    }
     if (this.#syncLabelTable) {
       const labelStart = performance.now();
       prepared = compressServerMessageLabels(prepared);
@@ -1657,7 +1688,7 @@ class Connection {
       this.#send({
         type: "response",
         requestId,
-        error: toError(
+        error: this.#deletedSessionRefusal(space, sessionId) ?? toError(
           "SessionRevokedError",
           "Session was revoked while the request was in flight",
         ),
@@ -1665,6 +1696,20 @@ class Connection {
       return;
     }
     this.#send(response, { space, sessionId });
+  }
+
+  /**
+   * The refusal of a command on the session `sessionId` on `space` when the
+   * space's deletion revoked that session on this connection and the
+   * connection is still routed to the space, and otherwise `null`. Every
+   * command on such a session is refused as the space is, whether it was in
+   * flight at the revocation or arrived after it (INV-15).
+   */
+  #deletedSessionRefusal(space: string, sessionId: string): V2Error | null {
+    return this.#deletedSessions.has(sessionKey(space, sessionId)) &&
+        (this.#routedOwns?.(space) ?? true)
+      ? this.#server.deletedSpaceRefusalNow(space)
+      : null;
   }
 
   addSession(
@@ -1709,6 +1754,7 @@ class Connection {
     if (!this.#sessions.delete(key) || this.#closed) {
       return;
     }
+    if (reason === "deleted") this.#deletedSessions.add(key);
     this.#server.reapAdmissionWaits();
     // A membership is admitted by the session it joined through, so losing
     // the session ends it.
@@ -1797,6 +1843,15 @@ class Connection {
    */
   get inProcess(): boolean {
     return this.#inProcess;
+  }
+
+  /**
+   * The process-instance component of the lease holder this connection's
+   * peer acquires under (`ServerConnectOptions.leaseHolderInstance`), or
+   * `undefined` for the component this realm mints holders with.
+   */
+  get leaseHolderInstance(): string | undefined {
+    return this.#leaseHolderInstance;
   }
 
   /** Whether this routed session still has its lease and fenced owner. */
@@ -1983,10 +2038,7 @@ class Connection {
   }
 
   consumeSessionOpenChallenge(challenge: SessionOpenChallenge): void {
-    if (this.#sessionOpenChallenge === null) {
-      return;
-    }
-    if (this.#sessionOpenChallenge.value === challenge.value) {
+    if (this.#sessionOpenChallenge?.value === challenge.value) {
       this.#sessionOpenChallenge.consumed = true;
     }
   }
@@ -2055,10 +2107,6 @@ class Connection {
         this.#receiveIdle = null;
       }
     }
-  }
-
-  hasPendingReceives(): boolean {
-    return this.#pendingReceives > 0;
   }
 
   /** Resolves once every frame handed over so far has been handled. */
@@ -2235,7 +2283,7 @@ class Connection {
       this.#send({
         type: "response",
         requestId,
-        error: toError(
+        error: this.#deletedSessionRefusal(space, sessionId) ?? toError(
           "SessionError",
           "Session is not open on this connection",
         ),
@@ -2343,9 +2391,8 @@ class Connection {
     for (const [value, state] of this.#challenges) {
       if (state.expiresAt <= now) this.#challenges.delete(value);
     }
-    while (this.#challenges.size >= MAX_CONNECTION_CHALLENGES) {
-      const oldest = this.#challenges.keys().next().value;
-      if (oldest === undefined) break;
+    for (const oldest of this.#challenges.keys()) {
+      if (this.#challenges.size < MAX_CONNECTION_CHALLENGES) break;
       this.#challenges.delete(oldest);
     }
     this.#challenges.set(challenge.value, {
@@ -2480,6 +2527,8 @@ class Connection {
           serverFlags?.syncPartsV1 === true
         ? this.#syncPartLimits
         : undefined;
+      this.#syncCidReferences = clientFlags?.syncCidReferencesV1 === true &&
+        serverFlags?.syncCidReferencesV1 === true;
       this.#ready = true;
       return;
     }
@@ -2950,6 +2999,14 @@ class Connection {
         // a routed host returns the request's credit to the router once this
         // handling returns. The answer goes out when the verb settles.
         const { space, sessionId, requestId } = parsed;
+        // Declared apart from the call, so its lines are its own rather than
+        // shared with the end of the answer's callback.
+        const reportFailure = (error: unknown) => {
+          console.error(
+            `memory v2: answering a \`pattern.lifecycle\` ${parsed.verb} failed`,
+            error,
+          );
+        };
         void this.#server.runPatternLifecycle(parsed).then((response) => {
           // A connection that closed while the verb ran has no one to tell.
           if (this.#closed) return;
@@ -2976,12 +3033,7 @@ class Connection {
           } finally {
             this.#answered.delete(requestId);
           }
-        }).catch((error: unknown) => {
-          console.error(
-            `memory v2: answering a \`pattern.lifecycle\` ${parsed.verb} failed`,
-            error,
-          );
-        });
+        }).catch(reportFailure);
         return;
       }
       case "served": {
@@ -3011,6 +3063,12 @@ class Connection {
         // not awaited, as a lifecycle verb is not: the frames behind it go
         // ahead, and the answer goes out when the crossing settles.
         const { space, sessionId, requestId } = parsed;
+        const reportFailure = (error: unknown) => {
+          console.error(
+            `memory v2: answering a \`served\` ${parsed.kind} failed`,
+            error,
+          );
+        };
         void this.#server.runServedRequest(parsed).then((response) => {
           if (this.#closed) return;
           try {
@@ -3032,12 +3090,7 @@ class Connection {
           } finally {
             this.#answered.delete(requestId);
           }
-        }).catch((error: unknown) => {
-          console.error(
-            `memory v2: answering a \`served\` ${parsed.kind} failed`,
-            error,
-          );
-        });
+        }).catch(reportFailure);
         return;
       }
       case "space.invite": {
@@ -3088,9 +3141,6 @@ class Connection {
     let processed = 0;
     for (const handle of this.#sessions.values()) {
       const { space: sessionSpace, sessionId } = handle;
-      if (this.#closed) {
-        return processed;
-      }
       // A session under a lease that has run out is sent nothing until the
       // lease is renewed, which evaluates it again in full.
       if (this.#leaseExpired(handle)) {
@@ -3155,7 +3205,7 @@ class Connection {
           );
         }
       };
-      let effect: SessionEffectMessage | null;
+      let effect: SessionEffectMessage | null = null;
       try {
         effect = await this.#server.syncSessionForConnection(
           space,
@@ -3181,9 +3231,10 @@ class Connection {
           error,
         );
         this.#server.markSessionForFullResync(space, sessionId);
-        continue;
       }
       if (effect !== null && !delivered) deliver(effect);
+      // Only the evaluation above yields, so this is the one point at which
+      // the connection can have closed since the loop began.
       if (this.#closed) return processed;
     }
     return processed;
@@ -3264,6 +3315,13 @@ export type PatternLifecycleCall = {
 
   /** The DID the request's session was opened as, which holds WRITE on `space`. */
   principal: string;
+
+  /**
+   * The memory session the request came on, which a session-scoped address
+   * names the instance of, as it does for the session's own reads and
+   * commits.
+   */
+  sessionId: string;
 
   verb: PatternLifecycleVerb;
 
@@ -3606,9 +3664,7 @@ export class Server {
    * changed declaration re-ensures (additive migration) with no hash-collision
    * risk.
    */
-  #ensuredSchemas = new Map<string, true>();
-
-  #ensuredSchemasMax = 4096;
+  #ensuredSchemas = new LRUCache<string, true>({ capacity: 4096 });
 
   /** The presence rooms this server relays; in memory only. */
   #presence = new PresenceRooms();
@@ -3704,6 +3760,16 @@ export class Server {
        * refuses every `space.invite`.
        */
       inviteHost?: string;
+
+      /**
+       * Whether this server advertises `syncCidReferencesV1`, delivering
+       * `cid:` schema documents by reference to a client that advertises it
+       * too (`docs/specs/content-addressed-schemas.md`, "Delivery by
+       * reference"). On unless `false`: a client takes references only when
+       * it opts in, so a server that offers them changes nothing for one
+       * that does not, and `false` is how a deployment turns them off.
+       */
+      syncCidReferences?: boolean;
 
       /**
        * Whether this server's posture names instances (INV-16): the
@@ -3951,6 +4017,7 @@ export class Server {
       spaceInvites: this.options.inviteHost !== undefined,
       routedAuthV1: false,
       routedCompressionV1: false,
+      syncCidReferencesV1: this.options.syncCidReferences !== false,
     };
   }
 
@@ -4075,6 +4142,59 @@ export class Server {
   }
 
   /**
+   * Whether `space` is a Home space as `engine` stores it: its access list
+   * names the space itself `OWNER`, and it declares no kind.
+   */
+  #isHome(engine: Engine.Engine, space: string): boolean {
+    const state = this.#aclState(engine, space);
+    return state.kind === "valid" && state.acl[space] === "OWNER" &&
+      this.#spaceKindOf(engine) === undefined;
+  }
+
+  /**
+   * Decides the person `session` stands for against `engine`'s copy of its
+   * space, and records it as `session.person`
+   * (`docs/features/active-user-counting.md`). A serving loop's own session,
+   * and a session whose principal is not a person's, stands for nobody. Any
+   * other session stands for the first person's identity among its chain's
+   * issuers, root first, and then its principal. The `*` principal, service
+   * principals, and delegating principals are not people's identities, and
+   * neither is a space's own key unless the space is a Home space or has
+   * history and no access list, which only a space older than access lists
+   * has.
+   */
+  #decidePerson(session: SessionState, engine: Engine.Engine): void {
+    const { principal, space } = session;
+    let ownKeyIsPerson: boolean | undefined;
+    const isPerson = (did: string) =>
+      did !== ANYONE_USER && !this.#isServicePrincipal(did) &&
+      !this.#isDelegatingPrincipal(did) &&
+      (did !== space || (ownKeyIsPerson ??= this.#isHome(engine, space) ||
+        (this.#aclState(engine, space).kind === "missing" &&
+          Engine.serverSeq(engine) > 0)));
+    session.person = session.servingOwn === true || principal === undefined ||
+        !isPerson(principal)
+      ? undefined
+      : [...(session.chainIssuers ?? []), principal].find(isPerson);
+  }
+
+  /**
+   * Sets the attributes that say whom `span`'s work is for, each when
+   * `session` has one: `user.did`, the principal that signed the session's
+   * open, and `enduser.id`, the person the session stands for. Attributes
+   * only accumulate on a span, so one set again after the person is decided
+   * afresh keeps an `enduser.id` it already carried.
+   */
+  #attributeSpan(span: Span, session: SessionState): void {
+    if (session.principal !== undefined && session.principal !== ANYONE_USER) {
+      span.setAttribute("user.did", session.principal);
+    }
+    if (session.person !== undefined) {
+      span.setAttribute("enduser.id", session.person);
+    }
+  }
+
+  /**
    * The space's resolved ACL OWNER, for the executor's server-side
    * space-root ensure (OW45 arm-B server-ensure stage 1, design PR
    * #6209 §4 option (b)): the ensure's creation run carries an
@@ -4136,7 +4256,8 @@ export class Server {
    * Like {@link deletedSpaceRefusal}, from the engine already open for
    * `space`, without waiting, for a request answered as it is handed over.
    * A session open on `space` has that engine open, since its open opened
-   * it; with none open, `null`.
+   * it, and the engine stays open once the space's deletion has revoked its
+   * sessions; with none open, `null`.
    */
   deletedSpaceRefusalNow(space: string): V2Error | null {
     const engine = this.#resolvedEngines.get(space);
@@ -4319,22 +4440,16 @@ export class Server {
     );
   }
 
-  async #authorizeMessage(
-    space: string,
-    principal: string | undefined,
-    requirement: Capability,
-  ): Promise<V2Error | null> {
-    // Keep off mode's historical async shape: callers await this immediate
-    // return, then independently await their read engine/evaluation. Some
-    // legacy runtime ordering depends on those two yield points.
-    if (this.#aclMode() === "off") return null;
-    const engine = await this.#openEngine(space);
-    return this.#authorizeMessageWithEngine(
-      engine,
-      space,
-      principal,
-      requirement,
-    );
+  /**
+   * The authorization of a message in `off` mode, which admits every one. The
+   * request handlers call it in that mode alone, and authorize through
+   * {@link #authorizeCurrentSessionWithEngine} in every other. It keeps off
+   * mode's historical asynchronous shape: callers await this immediate
+   * return, then independently await their read engine/evaluation. Some
+   * legacy runtime ordering depends on those two yield points.
+   */
+  #offModeAuthorization(): Promise<null> {
+    return Promise.resolve(null);
   }
 
   #assertRoutedAuthority(session: SessionState): void {
@@ -4485,20 +4600,18 @@ export class Server {
     if (this.#aclMode() === "off") return null;
 
     const aclTouched = commitTouchesAclDoc(commit.operations, space);
-    // Ordinary writes to established spaces need no genesis shape check.
-    // Their current ACL and ownership are enforced by message authorization.
-    if (!aclTouched && Engine.serverSeq(engine) !== 0) return null;
-    const state = this.#aclState(engine, space);
-
     if (!aclTouched) {
-      if (state.kind === "missing" && Engine.serverSeq(engine) === 0) {
-        return toError(
-          "AuthorizationError",
-          `Space ${space} requires an ACL genesis commit before ordinary writes`,
-        );
-      }
-      return null;
+      // Ordinary writes to established spaces need no genesis shape check.
+      // Their current ACL and ownership are enforced by message
+      // authorization.
+      if (Engine.serverSeq(engine) !== 0) return null;
+      // A space with no history has no ACL yet, so its genesis comes first.
+      return toError(
+        "AuthorizationError",
+        `Space ${space} requires an ACL genesis commit before ordinary writes`,
+      );
     }
+    const state = this.#aclState(engine, space);
 
     const shape = aclCommitShapeRefusal(space, commit);
     if (shape !== null) return shape;
@@ -4555,13 +4668,10 @@ export class Server {
           "else",
       );
     }
-    const state = this.#aclState(engine, space);
-    if (
-      state.kind === "valid" && state.acl[space] === "OWNER" &&
-      this.#spaceKindOf(engine) === undefined
-    ) {
+    if (this.#isHome(engine, space)) {
       return toError("AuthorizationError", "A Home space cannot be deleted");
     }
+    const state = this.#aclState(engine, space);
     const entries = state.kind === "valid" ? Object.entries(state.acl) : [];
     const [member, capability] = entries[0] ?? [];
     if (
@@ -4667,6 +4777,25 @@ export class Server {
         deferred.reason,
       );
     }
+  }
+
+  /**
+   * Brings the sessions on `space` up to date after a change to its access
+   * list: decides again the person each stands for, revokes those the list
+   * no longer admits, and notices the admissions it now allows.
+   * `writerSessionId` names the session whose commit made the change, as
+   * {@link #revokeDeauthorizedSessions} takes it.
+   */
+  #accessListChanged(
+    engine: Engine.Engine,
+    space: string,
+    writerSessionId?: string,
+  ): void {
+    for (const session of this.#sessions.sessionsForSpace(space)) {
+      this.#decidePerson(session, engine);
+    }
+    this.#revokeDeauthorizedSessions(engine, space, writerSessionId);
+    this.#noticeAdmissions(engine, space);
   }
 
   /**
@@ -4902,7 +5031,8 @@ export class Server {
    * parts; without it, every sync goes whole. `options.inProcess` says the
    * peer runs in this process; a connection from another process leaves it
    * unset, and the read row (protocol.md §2) treats its sessions as another
-   * process's.
+   * process's. `options.leaseHolderInstance` names the holder component of
+   * a peer that acquires leases under one of its own.
    */
   connect(
     send: Send,
@@ -4916,6 +5046,7 @@ export class Server {
       undefined,
       syncParts,
       options.inProcess === true,
+      options.leaseHolderInstance,
     );
     this.#connections.set(connection.id, connection);
     return connection;
@@ -5266,7 +5397,9 @@ export class Server {
     return await this.#withSpacePublicationLock(request.space, async () => {
       if (!(await this.#spaceStoreExists(request.space))) {
         throw new SpaceInviteError(
-          request.operation === "redeem" ? "invite-unavailable" : "not-owner",
+          request.operation === "redeem" || request.operation === "preview"
+            ? "invite-unavailable"
+            : "not-owner",
         );
       }
       const engine = await this.#openEngine(request.space);
@@ -5276,8 +5409,7 @@ export class Server {
       });
       if (commit !== undefined) {
         this.#invalidateAclCapabilities(request.space);
-        this.#revokeDeauthorizedSessions(engine, request.space);
-        this.#noticeAdmissions(engine, request.space);
+        this.#accessListChanged(engine, request.space);
         this.markSpaceDirty(request.space, [
           toDirtyKey(aclDocId(request.space)),
         ]);
@@ -5307,8 +5439,9 @@ export class Server {
       if (Engine.serverSeq(engine) === 0) {
         throw new Error("Cannot flush a space without history");
       }
-      const checkpoint = engine.database.prepare("PRAGMA wal_checkpoint(FULL)")
-        .get<{ busy: number }>();
+      const checkpoint = engine.prepare("PRAGMA wal_checkpoint(FULL)").get() as
+        | { busy: number }
+        | undefined;
       if (checkpoint?.busy !== 0) {
         throw new Error("Space durability checkpoint could not complete");
       }
@@ -5504,11 +5637,12 @@ export class Server {
       // lets a symlinked store dir produce a `..`-prefixed relative path for a
       // file that actually lives in the store — defeating the jail. With both
       // sides canonical, containment also covers the `<space>.sqlite` store
-      // files (not just `cell-*`).
-      let storeDir = Path.dirname(Path.fromFileUrl(engine.url));
-      try {
-        storeDir = await Deno.realPath(storeDir);
-      } catch { /* dir may not exist yet; fall back to the raw path */ }
+      // files (not just `cell-*`). The directory exists, since opening the
+      // engine created it, and a failure to resolve it refuses the source
+      // rather than comparing against a path that may not be canonical.
+      const storeDir = await Deno.realPath(
+        Path.dirname(Path.fromFileUrl(engine.url)),
+      );
       const rel = Path.relative(storeDir, canonical);
       const insideStore = rel === "" ||
         (!rel.startsWith("..") && !Path.isAbsolute(rel));
@@ -5707,13 +5841,13 @@ export class Server {
           // a distinct file per principal/session, so each needs its own DDL run
           // even though (space, id, schema) match.
           const key = `${space}\0${id}\0${scopeKey}\0${JSON.stringify(tables)}`;
-          if (!this.#ensuredSchemas.has(key)) {
+          if (this.#ensuredSchemas.get(key) === undefined) {
             ensureTables(
               engine.database,
               tables as Record<string, TableSchema>,
               alias,
             );
-            this.#recordSchemaEnsured(key);
+            this.#ensuredSchemas.put(key, true);
           }
         }
       }
@@ -6042,8 +6176,7 @@ export class Server {
       const applied = outcome.applied;
       const aclId = aclDocId(request.space);
       this.#invalidateAclCapabilities(request.space);
-      this.#revokeDeauthorizedSessions(engine, request.space);
-      this.#noticeAdmissions(engine, request.space);
+      this.#accessListChanged(engine, request.space);
       this.markSpaceDirty(request.space, [toDirtyKey(aclId)]);
       this.#notifyCommitAdmitted({
         space: request.space,
@@ -6150,11 +6283,7 @@ export class Server {
       : await this.#openEngine(message.space);
     {
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "READ",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -6324,11 +6453,7 @@ export class Server {
     {
       // Maps a server filesystem path into the space — operator surface.
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "OWNER",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -6570,6 +6695,7 @@ export class Server {
         (isFabricPlainObject(message.invocation) &&
           message.invocation.prf !== undefined);
       let capabilityPrincipal: string | undefined;
+      let chainIssuers: readonly string[] | undefined;
       let delegationEnd: number | undefined;
       if (presentsChain) {
         if (!this.#admitsDelegations()) {
@@ -6590,6 +6716,7 @@ export class Server {
           nowSeconds: this.nowSeconds(),
         });
         capabilityPrincipal = chain?.rootIssuer;
+        chainIssuers = chain?.issuers;
         delegationEnd = chain?.expiresAt;
       }
       // An invitation the open carries is redeemed as the open's principal
@@ -6703,6 +6830,8 @@ export class Server {
           connection.routed,
           connection.elidedVerdicts,
           capabilityPrincipal,
+          connection.inProcess,
+          chainIssuers,
         );
       } catch (error) {
         // Record the refused resume together with its session and connection.
@@ -6719,6 +6848,13 @@ export class Server {
         }
         throw error;
       }
+      this.#decidePerson(opened.state, engine);
+      const openSpan = tracer.startSpan("memory.session.open");
+      openSpan.setAttribute("space.did", message.space);
+      openSpan.setAttribute("session.id", opened.sessionId);
+      openSpan.setAttribute("session.resumed", opened.resumed === true);
+      this.#attributeSpan(openSpan, opened.state);
+      openSpan.end();
       if (connection.routed) {
         if (priorOwner !== connection.id) {
           this.#sessions.clearRoutedInterests(message.space, opened.sessionId);
@@ -6729,7 +6865,7 @@ export class Server {
           principal,
           delegationEnd,
         );
-        const admitted = this.#sessions.get(message.space, opened.sessionId)!;
+        const admitted = opened.state;
         admitted.routedAuthority = () =>
           connection.allowsRoutedSession(message.space, admitted.id);
       } else {
@@ -6977,8 +7113,8 @@ export class Server {
    * Decides a transaction under its space's publication lock.
    *
    * `publishVerdict`, when provided by a live connection, runs while the lock
-   * is held and before any post-commit bookkeeping. Fan-out for the space
-   * begins only after both steps finish and the lock is released.
+   * is held. Fan-out for the space begins only after it returns and the lock
+   * is released.
    */
   async transact(
     message: TransactRequest,
@@ -6994,26 +7130,7 @@ export class Server {
         const decision = await this.#decideTransaction(message, originating);
         engineDecided = decision.engineDecided;
         outcome = decision.response.error?.name ?? "ok";
-        let verdictError: { value: unknown } | undefined;
-        try {
-          publishVerdict?.(decision.response);
-        } catch (error) {
-          verdictError = { value: error };
-        }
-        try {
-          await decision.postCommit?.();
-        } catch (postCommitError) {
-          if (verdictError !== undefined) {
-            throw new AggregateError(
-              [verdictError.value, postCommitError],
-              "Verdict publication and post-commit bookkeeping both failed",
-            );
-          }
-          throw postCommitError;
-        }
-        if (verdictError !== undefined) {
-          throw verdictError.value;
-        }
+        publishVerdict?.(decision.response);
         return decision.response;
       } finally {
         // The elapsed span deliberately starts at the REQUEST, not at lock
@@ -7102,6 +7219,7 @@ export class Server {
       const outcome = await handler({
         space,
         principal: writer.principal,
+        sessionId,
         verb: message.verb,
         body: message.body,
       });
@@ -7628,7 +7746,6 @@ export class Server {
     message: TransactRequest,
     originating: SessionState | null,
   ): Promise<TransactDecision> {
-    let postCommit: (() => Promise<void>) | undefined;
     let engineDecided = false;
     const response = await tracer.startActiveSpan(
       "memory.transact",
@@ -7691,12 +7808,7 @@ export class Server {
             toError("SessionError", "Unknown session for space"),
           );
         }
-        if (
-          session.principal !== undefined &&
-          session.principal !== ANYONE_USER
-        ) {
-          span.setAttribute("user.did", session.principal);
-        }
+        this.#attributeSpan(span, session);
         try {
           const engine = await this.#openEngine(message.space);
           // The session may be revoked or replaced while `#openEngine()`
@@ -7979,12 +8091,8 @@ export class Server {
             // the client its marker channel is gone, so its parked accept
             // applies immediately instead of waiting for a marker no
             // detached session will ever be delivered.
-            this.#revokeDeauthorizedSessions(
-              engine,
-              message.space,
-              message.sessionId,
-            );
-            this.#noticeAdmissions(engine, message.space);
+            this.#accessListChanged(engine, message.space, message.sessionId);
+            this.#attributeSpan(span, session);
           }
           span.setAttribute("commit.seq", commit.seq);
           return {
@@ -8084,7 +8192,7 @@ export class Server {
         }
       },
     );
-    return { response, postCommit, engineDecided };
+    return { response, engineDecided };
   }
 
   async graphQuery(
@@ -8102,11 +8210,7 @@ export class Server {
       : await this.#openEngine(message.space);
     {
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "READ",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -8395,15 +8499,16 @@ export class Server {
     }
   }
 
-  /** Lists live authenticated views for the co-hosted execution planner. */
+  /** Lists live authenticated views for the co-hosted execution planner,
+   * the views of `excludePrincipal`'s serving sessions
+   * (`isServingSessionOf()`) left out. */
   viewInterestsForSpace(
     space: string,
     options: { excludePrincipal?: string } = {},
   ): readonly SessionViewInterest[] {
     return this.#sessions.sessionsForSpace(space).flatMap((session) => {
       if (
-        options.excludePrincipal !== undefined &&
-        session.principal === options.excludePrincipal
+        isServingSessionOf(session, options.excludePrincipal)
       ) return [];
       return session.views.map((view) => ({
         handle: {
@@ -8414,6 +8519,8 @@ export class Server {
           revision: view.revision,
         },
         principal: session.principal,
+        ...(session.servingOwn === true ? { servingOwn: true as const } : {}),
+        ...(session.notDemand === true ? { notDemand: true as const } : {}),
         attached: session.ownerConnectionId !== null,
         view,
         selectionGeneration: session.viewSelections.get(view.id)?.generation,
@@ -8810,11 +8917,7 @@ export class Server {
       : await this.#openEngine(message.space);
     {
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "READ",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -8892,12 +8995,8 @@ export class Server {
         if (group.length === 0) {
           for (const docKey of existing.entities.keys()) retract(docKey);
           for (const [key] of existing.missed) {
-            try {
-              const { id, scopeKey } = fromDocKey(key as QueryDocKey);
-              changedInterests.add(toDirtyKey(id, scopeKey));
-            } catch {
-              continue;
-            }
+            const { id, scopeKey } = fromDocKey(key as QueryDocKey);
+            changedInterests.add(toDirtyKey(id, scopeKey));
           }
           graphs.delete(branch);
           continue;
@@ -9007,7 +9106,7 @@ export class Server {
       this.#reconcileTrackedInterests(session, changedInterests);
       this.#touchDemand(session);
       session.lastSyncedSeq = serverSeq;
-      this.#notifyDemandChanged(message.space, "watch", session.principal);
+      this.#notifyDemandChanged(message.space, "watch", session);
       recordSlowQueryDuration(
         "session.watch.remove",
         message.space,
@@ -9107,11 +9206,7 @@ export class Server {
       : await this.#openEngine(message.space);
     {
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "READ",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -9343,7 +9438,7 @@ export class Server {
       this.#notifyDemandChanged(
         message.space,
         "watch",
-        session.principal,
+        session,
         session.id,
       );
       if (message.views !== undefined) {
@@ -9487,11 +9582,7 @@ export class Server {
       : await this.#openEngine(message.space);
     {
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "READ",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -9774,7 +9865,7 @@ export class Server {
       this.#notifyDemandChanged(
         message.space,
         "watch",
-        session.principal,
+        session,
         session.id,
       );
       recordSlowQueryDuration(
@@ -10024,7 +10115,10 @@ export class Server {
         : { principal: session.principal }),
       sessionId: session.id,
     };
-    // The session's watch ROOT keys (instance-keyed like trackedIds).
+    // The session's watch ROOT keys (instance-keyed like trackedIds): the
+    // instance a root names, or else the session's own. A session the read
+    // row admits to name an instance may be a client, of a toolshed that
+    // signs with its operator's key, so a named instance is demand too.
     const rootKeys = new Set<string>();
     for (const watch of [...session.watches, ...viewWatches(session.views)]) {
       if (watch.kind === "operation") continue;
@@ -10034,19 +10128,19 @@ export class Server {
           rootKeys.add(toDirtyKey(root.id, "space"));
           continue;
         }
-        try {
-          rootKeys.add(
-            toDirtyKey(
-              root.id,
-              resolveScopeKey(scope, {
-                principal: session.principal,
-                sessionId: session.id,
-              }),
-            ),
-          );
-        } catch {
-          // unresolvable scope: not demand for that instance
+        if (root.entityScopeKey !== undefined) {
+          rootKeys.add(toDirtyKey(root.id, root.entityScopeKey));
+          continue;
         }
+        rootKeys.add(
+          toDirtyKey(
+            root.id,
+            resolveScopeKey(scope, {
+              principal: session.principal,
+              sessionId: session.id,
+            }),
+          ),
+        );
       }
     }
     // Operation watches share session dirtiness tracking so their updates
@@ -10070,12 +10164,7 @@ export class Server {
         if (root) existing.root = true;
         return;
       }
-      let parsed: { id: string; scopeKey: ScopeKey; scope: CellScope };
-      try {
-        parsed = fromDirtyKey(dirtyKey);
-      } catch {
-        return;
-      }
+      const parsed = fromDirtyKey(dirtyKey);
       const row: DemandedInstanceRow = {
         id: parsed.id,
         scope: parsed.scope,
@@ -10335,13 +10424,8 @@ export class Server {
   ): void {
     for (const graph of graphs) {
       for (const [key] of graph.missed) {
-        let parsed: { id: string; scopeKey: ScopeKey };
-        try {
-          parsed = fromDocKey(key as QueryDocKey);
-        } catch {
-          continue;
-        }
-        trackedIds.add(toDirtyKey(parsed.id, parsed.scopeKey));
+        const { id, scopeKey } = fromDocKey(key as QueryDocKey);
+        trackedIds.add(toDirtyKey(id, scopeKey));
       }
     }
   }
@@ -10464,12 +10548,7 @@ export class Server {
       "memory.subscriber.sync",
       async (span): Promise<SessionEffectMessage | null> => {
         span.setAttribute("space.did", space);
-        if (
-          session.principal !== undefined &&
-          session.principal !== ANYONE_USER
-        ) {
-          span.setAttribute("user.did", session.principal);
-        }
+        this.#attributeSpan(span, session);
         span.setAttribute("watch.count", session.watches.length);
         try {
           const pendingCaughtUpLocalSeq = session.pendingCaughtUpLocalSeq;
@@ -10727,33 +10806,24 @@ export class Server {
               }
 
               const diffStartedAt = performance.now();
-              const filteredKeys: string[] = [];
               const upserts: SessionCacheEntry[] = [];
               try {
-                // Foreign instances reach a session only through the
-                // admission judged above (protocol.md §2's read row), the
-                // session's for its life.
+                // protocol.md §3's applicable-set filter, as
+                // defense-in-depth: a session's graph evaluates under its
+                // own identity, so an inapplicable instance here is
+                // structurally unreachable — unless the session was admitted
+                // explicit-instance reads (protocol.md §2's read row), the
+                // session's for its life, which is exempt by design (it
+                // legitimately receives every instance it named). A dropped
+                // entry is never cached as delivered: a later re-admission
+                // must still see the client's cache as NOT holding it, or
+                // the withheld update is elided forever.
+                if (!deliversForeignInstances) {
+                  deleteInapplicableEntries(updates, identity);
+                }
                 for (const [key, entry] of updates) {
                   const previous = session.entities.get(key);
                   if (!sameSnapshot(previous, entry)) {
-                    // protocol.md §3's applicable-set filter, as
-                    // defense-in-depth: a session's graph evaluates under
-                    // its own identity, so an inapplicable instance here is
-                    // structurally unreachable — unless the session was
-                    // admitted explicit-instance reads (protocol.md §2's
-                    // read row), which is exempt by design (it legitimately
-                    // receives every instance it named).
-                    if (
-                      !deliversForeignInstances &&
-                      !scopeKeyApplicableTo(entry.scopeKey, identity)
-                    ) {
-                      // Never cache a filtered entry as delivered: a later
-                      // re-admission must still see the client's cache as
-                      // NOT holding it, or the withheld update is elided
-                      // forever.
-                      filteredKeys.push(key);
-                      continue;
-                    }
                     const dirtyKey = toDirtyKey(entry.id, entry.scopeKey);
                     const origin = dirtyOrigins?.get(dirtyKey);
                     // Include the doc unless the writer provably holds it
@@ -10775,9 +10845,6 @@ export class Server {
                       upserts.push(entry);
                     }
                   }
-                }
-                for (const key of filteredKeys) {
-                  updates.delete(key);
                 }
               } finally {
                 timing.time(
@@ -10854,7 +10921,7 @@ export class Server {
                     this.#notifyDemandChanged(
                       space,
                       "push-growth",
-                      session.principal,
+                      session,
                       session.id,
                     );
                   }
@@ -11003,12 +11070,10 @@ export class Server {
           // vocabulary), so the client retracts exactly that instance and
           // its own instance survives.
           if (!deliversForeignInstances) {
-            const identity = this.#sessionScopeIdentity(session);
-            for (const [key, entry] of [...entities]) {
-              if (!scopeKeyApplicableTo(entry.scopeKey, identity)) {
-                entities.delete(key);
-              }
-            }
+            deleteInapplicableEntries(
+              entities,
+              this.#sessionScopeIdentity(session),
+            );
           }
           const delivered = {
             upserts: [] as SessionCacheEntry[],
@@ -11106,7 +11171,7 @@ export class Server {
               this.#notifyDemandChanged(
                 space,
                 "push-growth",
-                session.principal,
+                session,
                 session.id,
               );
             }
@@ -11281,15 +11346,15 @@ export class Server {
   /** Whether the space has ≥1 live client session (serving-loop.md §1's
    * ACTIVE criterion; the SpaceServer's parking policy reads it). The
    * SpaceServer's own loopback session is not a CLIENT session — the
-   * parking policy excludes the service principal, or an active space
-   * could never park. */
+   * parking policy excludes the service principal's serving sessions
+   * (`isServingSessionOf()`), or an active space could never park. A
+   * client session signed with the service's key still counts. */
   hasLiveSessionsForSpace(
     space: string,
     options: { excludePrincipal?: string } = {},
   ): boolean {
     return this.#sessions.sessionsForSpace(space).some((session) =>
-      options.excludePrincipal === undefined ||
-      session.principal !== options.excludePrincipal
+      !isServingSessionOf(session, options.excludePrincipal)
     );
   }
 
@@ -11327,22 +11392,21 @@ export class Server {
    * r3731191476): explicit-instance roots are admissible only to the
    * space's serving session and to sessions of the deployment's
    * service identity (#denyExplicitInstanceReads), both of the serving
-   * loop's own principal, and every session of that principal is
+   * loop's own principal, and every serving session of that principal is
    * EXCLUDED here (the serving loop's own reads are not client demand,
-   * from this process or routed from another). So no root that survives the exclusion can carry an
-   * explicit key — client watches cannot express one. If a later phase
-   * admits explicit-instance CLIENT demand (Phase 2's per-instance
-   * demand mapping), the record must grow the key WITH the SpaceServer
-   * side that consumes it; silently dropping it here would serve the
-   * service's own instance in place of the named one.
+   * from this process or routed from another). A client signed with the
+   * service's key survives the exclusion and may name an instance; this
+   * roots-only projection then lists the root without it, which no
+   * production caller reads. `demandForSpace` keys every row, roots
+   * included, by the instance the root names.
    */
   watchedRootsForSpace(
     space: string,
     options: {
-      /** Sessions of this principal are NOT demand (the SpaceServer's
-       * own loopback session watches whatever its graph reads; mapping
-       * those back into demand would make the loop demand its own
-       * reads, recursively). */
+      /** This principal's serving sessions (`isServingSessionOf()`) are
+       * NOT demand (the SpaceServer's own loopback session watches
+       * whatever its graph reads; mapping those back into demand would
+       * make the loop demand its own reads, recursively). */
       excludePrincipal?: string;
     } = {},
   ): Array<{
@@ -11362,8 +11426,8 @@ export class Server {
      * session for that user; two users are two). Absent only for an
      * anonymous session's space-scoped root (it names the root — the
      * structure still loads for it — but owns no instance). A session
-     * that cannot resolve a scoped root's instance (no principal on a
-     * user-scoped root) is not demand for that root. */
+     * never holds a scoped root it cannot resolve (no principal on a
+     * user-scoped root): the watch set that names one is refused. */
     identity?: { principal?: string; sessionId?: string };
   }> {
     const roots = new Map<string, {
@@ -11373,8 +11437,7 @@ export class Server {
     }>();
     for (const session of this.#sessions.sessionsForSpace(space)) {
       if (
-        options.excludePrincipal !== undefined &&
-        session.principal === options.excludePrincipal
+        isServingSessionOf(session, options.excludePrincipal)
       ) {
         continue;
       }
@@ -11409,17 +11472,10 @@ export class Server {
               : { principal: session.principal }),
             sessionId: session.id,
           };
-          let instanceKey: string;
-          try {
-            instanceKey = resolveScopeKey(scope, {
-              principal: session.principal,
-              sessionId: session.id,
-            });
-          } catch {
-            // A session that cannot resolve the scope (no principal on a
-            // user-scoped root) is not demand for that instance.
-            continue;
-          }
+          const instanceKey = resolveScopeKey(scope, {
+            principal: session.principal,
+            sessionId: session.id,
+          });
           const key = `${instanceKey}\0${root.id}\0${session.id}`;
           if (!roots.has(key)) {
             roots.set(key, {
@@ -11458,11 +11514,11 @@ export class Server {
    * identity, `root: true` on the rows that are watch ROOTS. The service
    * principal's sessions are excluded (their watches are the serving
    * graph's own reads). Anonymous sessions contribute keys but no
-   * demander (identity without principal); a session that cannot resolve
-   * a scoped root's instance is not demand for it (the tracker never
-   * keyed one for it). Roots are UNIONED in from the watch specs so a
-   * root the tracker has not (yet) keyed still carries what
-   * `watchedRootsForSpace` carried — parity with today's structure load.
+   * demander (identity without principal); a watch naming a scoped root
+   * its session cannot resolve is refused, so no session holds one. Roots
+   * are UNIONED in from the watch specs so a root the tracker has not (yet)
+   * keyed still carries what `watchedRootsForSpace` carried — parity with
+   * today's structure load.
    *
    * The flat form of `demandForSpace()`, holding the same rows in session
    * order as copies a caller may keep. It costs a pass over every row, where
@@ -11500,8 +11556,7 @@ export class Server {
     const demand: SessionDemand[] = [];
     for (const session of this.#sessions.sessionsForSpace(space)) {
       if (
-        options.excludePrincipal !== undefined &&
-        session.principal === options.excludePrincipal
+        isServingSessionOf(session, options.excludePrincipal)
       ) {
         continue;
       }
@@ -11518,7 +11573,8 @@ export class Server {
 
   /**
    * The shares of the sessions `sessionIds` name among `space`'s sessions, as
-   * `demandForSpace()` builds them, the sessions of `excludePrincipal` and
+   * `demandForSpace()` builds them, the serving sessions of
+   * `excludePrincipal` (`isServingSessionOf()`) and
    * the ids the registry no longer holds left out: what a mirror of the
    * demand set reads for the sessions whose demand it was told changed.
    */
@@ -11534,8 +11590,7 @@ export class Server {
       const session = this.#sessions.peek(space, sessionId);
       if (
         session === undefined ||
-        (options.excludePrincipal !== undefined &&
-          session.principal === options.excludePrincipal)
+        isServingSessionOf(session, options.excludePrincipal)
       ) {
         continue;
       }
@@ -11578,8 +11633,7 @@ export class Server {
     const union = new Set<string>();
     for (const session of this.#sessions.sessionsForSpace(space)) {
       if (
-        options.excludePrincipal !== undefined &&
-        session.principal === options.excludePrincipal
+        isServingSessionOf(session, options.excludePrincipal)
       ) {
         continue;
       }
@@ -11611,6 +11665,14 @@ export class Server {
         this.#notifySessionChanged(event);
       }
     }
+  }
+
+  /**
+   * The session lifecycle events that bring a mirror of `space`'s sessions
+   * up to date, as installing an observer replays them for every space.
+   */
+  sessionSnapshot(space: string): SessionLifecycleEvent[] {
+    return this.#sessions.snapshot(space);
   }
 
   /**
@@ -11726,14 +11788,21 @@ export class Server {
 
   #notifyDemandChanged(
     space: string,
-    reason: DemandChangeReason = "watch",
-    principal?: string,
+    reason: DemandChangeReason,
+    session: SessionState,
     sessionId?: string,
   ): void {
     const observer = this.#serverExecutionObserver;
     if (observer?.demandChanged === undefined) return;
     try {
-      observer.demandChanged(space, reason, principal, sessionId);
+      observer.demandChanged(
+        space,
+        reason,
+        session.principal,
+        sessionId,
+        session.servingOwn,
+        session.notDemand,
+      );
     } catch (error) {
       console.warn(
         "memory v2: server-execution observer threw on demandChanged",
@@ -11773,8 +11842,9 @@ export class Server {
    * Whether `session` is `space`'s serving session on this server: the
    * SpaceServer's own loopback session, which reached the server from this
    * process and whose principal holds the space's lease (protocol.md §2's
-   * read row). A session from another process carries the same principal, so
-   * the connection decides.
+   * read row) under the holder component its connection names. A session
+   * from another process carries the same principal, as does one from
+   * another serving worker of this process, so the connection decides.
    */
   #isServingSession(space: string, session: SessionState): boolean {
     if (session.principal === undefined) return false;
@@ -11783,7 +11853,10 @@ export class Server {
       : this.#connections.get(session.ownerConnectionId);
     return connection?.inProcess === true &&
       this.#executionLeases.holderOf(space) ===
-        executionLeaseHolder(session.principal);
+        executionLeaseHolder(
+          session.principal,
+          connection.leaseHolderInstance,
+        );
   }
 
   /**
@@ -11800,7 +11873,10 @@ export class Server {
    * in this process: a sibling process's session carries the same
    * principal over a connection that is not in process. Everyone else
    * naming a key is REJECTED; a read naming none resolves from the session
-   * as today.
+   * as today, and never reaches this method: each caller first checks
+   * `#namesExplicitInstance()` synchronously, so the unnamed path adds no
+   * microtask boundary between the request's authorization and its
+   * evaluation (the ACL revocation-race invariant).
    *
    * The one unnamed-read refusal is the serving session's foreign scoped
    * read (`#denyForeignServingScopedRead`): a session under the serving
@@ -11818,10 +11894,6 @@ export class Server {
     }>,
   ): Promise<V2Error | undefined> {
     this.#assertRoutedAuthority(session);
-    // Synchronous fast path first: a read naming NO instance adds no
-    // microtask boundary — the request's authorization and evaluation
-    // keep sharing one engine turn (the ACL revocation-race invariant).
-    let named = false;
     // The wire collapse guard, for the sessions the row refuses
     // (server-execution v2 stage A, OW17's wire leg): such a session's
     // frames and query results carry scope NAMES, so two instances of one
@@ -11843,15 +11915,14 @@ export class Server {
     let collapse: V2Error | undefined;
     const rows = [...entries];
     for (const { branch, root } of rows) {
-      if (root.entityScopeKey !== undefined) {
-        named = true;
-        if (!isScopeKey(root.entityScopeKey)) {
-          return toError(
-            "ProtocolError",
-            `malformed entity_scope_key "${root.entityScopeKey}" on read ` +
-              `root ${root.id}`,
-          );
-        }
+      if (
+        root.entityScopeKey !== undefined && !isScopeKey(root.entityScopeKey)
+      ) {
+        return toError(
+          "ProtocolError",
+          `malformed entity_scope_key "${root.entityScopeKey}" on read ` +
+            `root ${root.id}`,
+        );
       }
       if (collapse !== undefined) continue;
       const scopeName = root.scope ?? "space";
@@ -11877,7 +11948,6 @@ export class Server {
         );
       }
     }
-    if (!named) return collapse;
     if (!getServerExecutionConfig()) {
       return toError(
         "ProtocolError",
@@ -12083,13 +12153,15 @@ export class Server {
       }
     };
 
-    const queued = this.#refreshing?.then(run, run) ?? run();
-    this.#refreshing = queued.finally(() => {
-      if (this.#refreshing === queued) {
-        this.#refreshing = null;
-      }
-    });
-    await this.#refreshing;
+    const refreshing = (this.#refreshing?.then(run, run) ?? run()).finally(
+      () => {
+        if (this.#refreshing === refreshing) {
+          this.#refreshing = null;
+        }
+      },
+    );
+    this.#refreshing = refreshing;
+    await refreshing;
   }
 
   #scheduleRefresh(): void {
@@ -12134,28 +12206,11 @@ export class Server {
     maxWaitMs: number,
   ): Promise<void> {
     const deadlineMs = Date.now() + maxWaitMs;
-    while (true) {
-      const pending = [...this.#connections.values()].filter((connection) =>
-        connection.hasPendingReceives()
-      );
-      if (pending.length === 0) {
-        return;
-      }
-      if (Date.now() >= deadlineMs) {
-        return;
-      }
-      const drained = await Promise.all(
-        pending.map((connection) =>
-          connection.waitForReceiveQueueToDrain(deadlineMs)
-        ),
-      );
-      if (drained.every(Boolean)) {
-        return;
-      }
-      if (Date.now() >= deadlineMs) {
-        return;
-      }
-    }
+    await Promise.all(
+      [...this.#connections.values()].map((connection) =>
+        connection.waitForReceiveQueueToDrain(deadlineMs)
+      ),
+    );
   }
 
   #cancelScheduledRefresh(): void {
@@ -12276,8 +12331,7 @@ export class Server {
               // lands, before any frame of this turn can reach a revoked
               // session.
               const engine = await this.#openEngine(space);
-              this.#revokeDeauthorizedSessions(engine, space);
-              this.#noticeAdmissions(engine, space);
+              this.#accessListChanged(engine, space);
             }
             await tracer.startActiveSpan(
               "memory.fanout",
@@ -12419,25 +12473,6 @@ export class Server {
     }
   }
 
-  respond(payload: string): Promise<string | null> {
-    const parsed = parseClientMessage(payload);
-    if (parsed?.type === "hello") {
-      const response = respondToHello(parsed, this.memoryProtocolFlags());
-      if (response.type !== "hello.ok") {
-        return Promise.resolve(encodeMemoryBoundary(response));
-      }
-      return Promise.resolve(encodeMemoryBoundary({
-        type: "response",
-        requestId: "handshake",
-        error: toError(
-          "ProtocolError",
-          "memory Server.respond cannot issue session.open authentication metadata",
-        ),
-      }));
-    }
-    return Promise.resolve(null);
-  }
-
   /**
    * The co-hosted direct-engine access of server-execution v2
    * (serving-loop.md §1): the wave commit step's sink runs its store
@@ -12447,6 +12482,16 @@ export class Server {
    */
   engineForSpace(space: string): Promise<Engine.Engine> {
     return this.#openEngine(space);
+  }
+
+  /**
+   * Whether `space`'s store holds stream events no serving loop has
+   * delivered, read from the store as it stands (serving-loop.md §1's second
+   * ACTIVE criterion). Rejects when the store cannot be opened or read.
+   */
+  async hasUndeliveredEvents(space: string): Promise<boolean> {
+    const engine = await this.#openEngine(space);
+    return Engine.selectPendingStreamEventDocs(engine).length > 0;
   }
 
   /**
@@ -12756,20 +12801,6 @@ export class Server {
     this.#engines.set(space, opened);
     return opened;
   }
-
-  /**
-   * Records `key` in `#ensuredSchemas`, evicting the oldest entry once the
-   * map exceeds `#ensuredSchemasMax`.
-   */
-  #recordSchemaEnsured(key: string): void {
-    this.#ensuredSchemas.set(key, true);
-    if (this.#ensuredSchemas.size > this.#ensuredSchemasMax) {
-      const oldest = this.#ensuredSchemas.keys().next().value as
-        | string
-        | undefined;
-      if (oldest !== undefined) this.#ensuredSchemas.delete(oldest);
-    }
-  }
 }
 
 /**
@@ -12828,6 +12859,20 @@ function isSqliteNamedParamEntries(
 export type RejectedClientMessage = {
   type: "oversized" | "invalid";
   requestId: string;
+};
+
+/**
+ * Deletes from `entries` every entry whose instance is outside the
+ * applicable set of `identity` (protocol.md §3): the push filter a session's
+ * frames pass through unless it was admitted explicit-instance reads.
+ */
+export const deleteInapplicableEntries = (
+  entries: Map<string, { readonly scopeKey: string }>,
+  identity: ScopeKeyIdentity,
+): void => {
+  for (const [key, entry] of entries) {
+    if (!scopeKeyApplicableTo(entry.scopeKey, identity)) entries.delete(key);
+  }
 };
 
 /**
@@ -12949,6 +12994,10 @@ const parseDecodedClientMessage = (
       parsed.session.instanceNames !== undefined &&
       parsed.session.instanceNames !== true
     ) return null;
+    // Likewise only the literal `false` declares a session not demand.
+    if (
+      parsed.session.demand !== undefined && parsed.session.demand !== false
+    ) return null;
     const client = parseClientInfo(parsed.session.client) ?? undefined;
     // A malformed ceiling refuses the message: a session opened without the
     // ceiling its client asked for would read unbounded, silently.
@@ -13003,6 +13052,7 @@ const parseDecodedClientMessage = (
         ...(parsed.session.instanceNames === true
           ? { instanceNames: true as const }
           : {}),
+        ...(parsed.session.demand === false ? { demand: false as const } : {}),
         ...(invite === undefined ? {} : { invite }),
       },
       invocation: isFabricPlainObject(parsed.invocation)
@@ -13243,7 +13293,7 @@ const parseDecodedClientMessage = (
     typeof parsed.space === "string" &&
     typeof parsed.sessionId === "string" &&
     (parsed.verb === "upload" || parsed.verb === "instantiate" ||
-      parsed.verb === "setsrc") &&
+      parsed.verb === "setsrc" || parsed.verb === "follow") &&
     isFabricPlainObject(parsed.body)
   ) {
     return {
@@ -13282,12 +13332,16 @@ const parseDecodedClientMessage = (
     typeof parsed.sessionId === "string" &&
     isFabricPlainObject(parsed.invite)
   ) {
-    // Redemption is refused here: it has no session to arrive on.
+    // Redemption and preview are refused here: neither has a session to
+    // arrive on.
     const invite = parseInviteOperation(
       parsed.invite.operation,
       parsed.invite.body,
     );
-    if (invite === null || invite.operation === "redeem") return null;
+    if (
+      invite === null || invite.operation === "redeem" ||
+      invite.operation === "preview"
+    ) return null;
     return {
       type: "space.invite",
       requestId: parsed.requestId,

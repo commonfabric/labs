@@ -10,7 +10,6 @@ export type CommonFabricRuntimeExportSpec =
     category: "call";
     callKind:
       | "cell-factory"
-      | "lift-applied"
       | "ifElse"
       | "when"
       | "unless"
@@ -155,6 +154,14 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   // plain string rather than a reactive value.
   {
     exportName: "eventKey",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // Resolves its argument's links in the running computation or handler, as
+  // `equals` does, and returns a plain string or `undefined`. It builds no
+  // graph node.
+  {
+    exportName: "equalsKey",
     category: "ignored",
     reactiveOrigin: false,
   },
@@ -424,6 +431,13 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   // computation or handler that makes it.
   {
     exportName: "spaceOf",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // spaceOfLink(target) returns the DID of the space a cell's own link names,
+  // reading nothing. It builds no graph node either.
+  {
+    exportName: "spaceOfLink",
     category: "ignored",
     reactiveOrigin: false,
   },

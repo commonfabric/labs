@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 
 import type {
   SpaceAccessFunction,
+  SpaceAccessOfFunction,
   SpaceMembersFunction,
 } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -1243,6 +1244,82 @@ describe("spaceAccess()", () => {
     } finally {
       popFrame(frame);
     }
+  });
+
+  it("throws in a computation whose frame holds no runtime", () => {
+    const frame = pushFrame({
+      runtime: undefined,
+      tx: undefined,
+      frameKind: "lift",
+    });
+    try {
+      expect(() => spaceAccess(undefined)).toThrow(
+        "`spaceAccess(target)` requires an executing runtime",
+      );
+      expect(() => spaceAccessOf(undefined, bob.did())).toThrow(
+        "`spaceAccessOf(target, principal)` requires an executing runtime",
+      );
+    } finally {
+      popFrame(frame);
+    }
+  });
+
+  describe("spaceAccessOf()", () => {
+    it("returns `undefined` for a target passed as `undefined`, and a level for a cell", async () => {
+      await (await aclWriter())({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+      const runtime = clientRuntime(alice);
+      await syncAcl(runtime);
+      const frame = pushFrame({
+        runtime,
+        tx: runtime.edit(),
+        space,
+        frameKind: "lift",
+      });
+      try {
+        expect(spaceAccessOf(undefined, bob.did())).toBeUndefined();
+        expect(
+          spaceAccessOf(
+            runtime.getCell<unknown>(space, "space-access here"),
+            bob.did(),
+          ),
+        ).toBe("WRITE");
+      } finally {
+        popFrame(frame);
+      }
+    });
+
+    it("throws when called without a `target`", () => {
+      const runtime = clientRuntime(bob);
+      const frame = pushFrame({
+        runtime,
+        tx: runtime.edit(),
+        space: bob.did() as MemorySpace,
+        frameKind: "handler",
+      });
+      try {
+        // The declared type refuses this call; the runtime check is for
+        // callers the compiler never saw.
+        const declared: SpaceAccessOfFunction = spaceAccessOf;
+        // @ts-expect-error: `target` and `principal` are required.
+        expect(() => declared()).toThrow("requires a `target`");
+      } finally {
+        popFrame(frame);
+      }
+    });
+
+    it("throws in a pattern body", () => {
+      const runtime = clientRuntime(bob);
+      const { pattern } = createTrustedBuilder(runtime).commonfabric;
+      expect(() =>
+        pattern(() => {
+          spaceAccessOf(undefined, bob.did());
+          return {};
+        })
+      ).toThrow("can only be called from a handler or a reactive computation");
+    });
   });
 
   it("throws in a pattern body", () => {

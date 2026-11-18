@@ -5,6 +5,7 @@ import {
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
 import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import { pathsOverlap } from "@commonfabric/memory/v2/path";
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import {
   assertValidFabricValueLayer,
@@ -142,18 +143,6 @@ const cfcAddressFromLink = (link: NormalizedFullLink): CfcAddress => ({
   scope: link.scope,
   path: [...link.path],
 });
-
-const isPrefix = (
-  prefix: readonly string[],
-  path: readonly string[],
-): boolean =>
-  prefix.length <= path.length &&
-  prefix.every((segment, index) => segment === path[index]);
-
-const pathsOverlap = (
-  left: readonly string[],
-  right: readonly string[],
-): boolean => isPrefix(left, right) || isPrefix(right, left);
 
 const pathSegmentMatches = (left: string, right: string): boolean =>
   left === right || left === "*" || right === "*";
@@ -360,7 +349,10 @@ const hasPendingSchemaPolicyInput = (
 ): boolean => {
   const targetPath = canonicalizeLogicalPath(target.path);
   return tx.getCfcSchemaPolicyInputs(target.space, target.id).some((input) =>
-    pathsOverlap(canonicalizeLogicalPath(input.target.path), targetPath) &&
+    pathsOverlap(
+      canonicalizeLogicalPath(input.target.path),
+      targetPath,
+    ) &&
     schemaIfcOverlapsPath(
       input.schema,
       canonicalizeLogicalPath(input.target.path),
@@ -741,7 +733,8 @@ function writeWalked(
     seen: new Map(),
     nextAnchorId: anchorIds,
     anchored,
-    writtenKinds: new Map(),
+    // Only an anchored element consults what the walk wrote above it.
+    writtenKinds: anchorIds === undefined ? undefined : new Map(),
     carried,
   };
   const changes = normalizeAndDiff(
@@ -924,12 +917,12 @@ export function initializeScopedArgumentSlots(
         )
         : { ...childLink, scope: "user" as const };
       if (!target) continue;
-      let targetBlocked = false;
-      const resolvedTarget = resolveLink(runtime, tx, target, "top", {
-        onScopeBlocked: () => targetBlocked = true,
-      });
+      // A target that resolves to any other link is not this slot's own
+      // continuation: one that links elsewhere, and one whose follow a scope
+      // cap blocks, which resolves to a `data:` link holding `undefined`.
+      const resolvedTarget = resolveLink(runtime, tx, target, "top");
       if (
-        targetBlocked || resolvedTarget.pendingHopDoc ||
+        resolvedTarget.pendingHopDoc ||
         !areNormalizedLinksSame(target, resolvedTarget)
       ) continue;
       if (!present) {

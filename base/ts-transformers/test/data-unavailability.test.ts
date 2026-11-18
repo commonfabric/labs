@@ -1860,6 +1860,30 @@ Deno.test("pending error and success JSX shares one physical async capture", asy
   assertStringIncludes(output, 'path: ["request"]');
 });
 
+Deno.test("assert recordings preserve selective availability provenance and scheduler policy", async () => {
+  const output = await transformSource(
+    `
+    import { assert, isPending, observeAvailability, pattern } from "commonfabric";
+    export default pattern((input: { value: string }) => {
+      const observed = observeAvailability(input.value, "pending");
+      return { check: assert(() => isPending(observed)) };
+    });
+  `,
+    { types: { "commonfabric.d.ts": commonfabricTypes }, typeCheck: true },
+  );
+  const calls = collect(parseModule(output), ts.isCallExpression);
+  const policies = calls.filter((call) =>
+    ts.isPropertyAccessExpression(call.expression) &&
+    ts.isIdentifier(call.expression.expression) &&
+    call.expression.expression.text === "__cfHelpers" &&
+    call.expression.name.text === "lift" && call.arguments.length === 4
+  ).map((call) => literalToValue(call.arguments[3]!));
+  assertStringIncludes(output, "__cfHelpers.assertCapture(");
+  expect(policies).toContainEqual({
+    unavailableInputPolicy: [{ path: ["observed"], reasons: ["pending"] }],
+  });
+});
+
 Deno.test("a selective observation does not authorize a different reason", async () => {
   const { diagnostics } = await validateSource(`
     import {
@@ -1883,6 +1907,40 @@ Deno.test("a selective observation does not authorize a different reason", async
     true,
   );
 });
+
+for (
+  const body of [
+    "hasError(reply)",
+    'hasError(reply) || resultOf(reply) === "Hi."',
+    'hasError(reply) && reply.message?.includes("failed") === true',
+  ]
+) {
+  Deno.test(`assert recordings preserve a direct async guard: ${body}`, async () => {
+    const output = await transformSource(
+      `
+      import { assert, generateText, hasError, pattern, resultOf } from "commonfabric";
+      export default pattern(() => {
+        const reply = generateText({ prompt: "hello" });
+        return { check: assert(() => ${body}) };
+      });
+    `,
+      { types: { "commonfabric.d.ts": commonfabricTypes }, typeCheck: true },
+    );
+    const calls = collect(parseModule(output), ts.isCallExpression);
+    const policies = calls.filter((call) =>
+      ts.isPropertyAccessExpression(call.expression) &&
+      ts.isIdentifier(call.expression.expression) &&
+      call.expression.expression.text === "__cfHelpers" &&
+      call.expression.name.text === "lift" && call.arguments.length === 4
+    ).map((call) => literalToValue(call.arguments[3]!));
+    expect(policies).toContainEqual({
+      ...(body === "hasError(reply)"
+        ? {}
+        : { completeSchedulerScopeSummary: true }),
+      unavailableInputPolicy: [{ path: ["reply"], reasons: ["error"] }],
+    });
+  });
+}
 
 Deno.test("an observed computed capture survives aliasing and hoisting with aligned artifacts", async () => {
   const output = await transformSource(`

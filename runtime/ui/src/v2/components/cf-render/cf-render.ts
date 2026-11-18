@@ -28,9 +28,6 @@ import {
   openPieceMenu,
 } from "../cf-piece-menu/cf-piece-menu.ts";
 
-// Set to true to enable debug logging
-const DEBUG_LOGGING = false;
-
 /**
  * UI variants (CT-1321): the size/representation spectrum a piece can expose.
  * Each variant is an optional sibling key on the piece output, addressed by a
@@ -370,25 +367,12 @@ export class CFRender extends BaseElement {
   @state()
   private accessor _hasRendered = false;
 
-  //
-  // Debug helpers
-  //
-
-  private _instanceId = DEBUG_LOGGING
-    ? Math.random().toString(36).substring(7)
-    : "";
-  private _log(...args: unknown[]) {
-    if (DEBUG_LOGGING) {
-      console.log(`[cf-render ${this._instanceId}]`, ...args);
-    }
-  }
-
   /**
-   * Exposes the render container, generation, render entry, and link-target
-   * watch for focused tests.
+   * Lets focused tests replace the render container, and exposes the render
+   * generation, the render entry, and the link-target watch.
    */
   get accessForTestingOnly(): {
-    containerRef: Ref<HTMLDivElement>;
+    set containerRef(value: Ref<HTMLDivElement>);
     readonly linkTarget: LinkTargetWatch;
     readonly renderGeneration: number;
     renderCell(): Promise<void>;
@@ -396,10 +380,7 @@ export class CFRender extends BaseElement {
     // deno-lint-ignore no-this-alias
     const outerThis = this;
     return {
-      get containerRef() {
-        return outerThis._containerRef;
-      },
-      set containerRef(value) {
+      set containerRef(value: Ref<HTMLDivElement>) {
         outerThis._containerRef = value;
       },
       linkTarget: this.#linkTarget,
@@ -436,11 +417,6 @@ export class CFRender extends BaseElement {
 
   protected override updated(changedProperties: PropertyValues) {
     if (!this.isConnected) return;
-    this._log(
-      "updated called, changedProperties:",
-      Array.from(changedProperties.keys()),
-    );
-
     const cellChanged = changedProperties.has("cell");
     const variantChanged = changedProperties.has("variant");
 
@@ -452,7 +428,6 @@ export class CFRender extends BaseElement {
         const oldCell = changedProperties.get("cell") as CellHandle | undefined;
         // A reconnect also invalidates the cached target, even for an equal cell.
         shouldRerender ||= !oldCell || !this.cell || !oldCell.equals(this.cell);
-        this._log("cell property changed, should rerender:", shouldRerender);
 
         if (shouldRerender) {
           closePieceMenuFor(this);
@@ -467,16 +442,10 @@ export class CFRender extends BaseElement {
         const oldVariant = changedProperties.get("variant") as
           | UIVariant
           | undefined;
-        if (oldVariant !== this.variant) {
-          shouldRerender = true;
-          this._log("variant changed:", oldVariant, "->", this.variant);
-        }
+        if (oldVariant !== this.variant) shouldRerender = true;
       }
 
-      if (shouldRerender) {
-        this._log("re-rendering due to cell or variant change");
-        this._renderCell();
-      }
+      if (shouldRerender) this._renderCell();
     }
   }
 
@@ -489,9 +458,6 @@ export class CFRender extends BaseElement {
     const cancelled = () =>
       this._renderGeneration !== generation ||
       cell.runtime().signal.aborted;
-
-    const cellId = cell.id();
-    this._log(`_renderCell called: ${cellId}`);
 
     try {
       // Normalize to the size spectrum; anything unknown renders full.
@@ -513,7 +479,6 @@ export class CFRender extends BaseElement {
 
       // Full is the universal floor: render the piece's [UI] chain directly.
       if (kind === "full") {
-        this._log("rendering full [UI] into container");
         this._cleanup = this._mount(container, cell, currentTarget, generation);
         this._hasRendered = true;
         return;
@@ -528,7 +493,6 @@ export class CFRender extends BaseElement {
       const exported = await presence.sync();
       if (cancelled()) return;
       if (hasVariantValue(exported, variantKey)) {
-        this._log(`rendering exported ${variantKey}`);
         this._cleanup = this._mount(
           container,
           presence.key(variantKey),
@@ -600,16 +564,13 @@ export class CFRender extends BaseElement {
    * a cell at a path inside a document is left alone. A document at its root
    * that is not a piece rejects the start ("no pattern identity"), as does a
    * piece whose program fails to load; the worker reports the failed request,
-   * and here it only reaches the debug log, since the render shows what it
-   * can either way.
+   * and here it is dropped, since the render shows what it can either way.
    */
   #openDisplayed(piece: CellHandle): void {
     if (piece.ref().path.length > 0) return;
     const runtime = piece.runtime();
     runtime.getPiece(piece.id(), piece.space(), true, piece.ref().scope)
-      .catch((error: unknown) => {
-        this._log("opening the displayed piece failed:", error);
-      });
+      .catch(() => {});
   }
 
   /**
@@ -632,7 +593,7 @@ export class CFRender extends BaseElement {
     Object.assign(chip, { interactive: true });
     source.appendChild(chip);
     container.appendChild(source);
-    const onClick = (e: MouseEvent) => this._navigateToPiece(e);
+    const onClick = (e: MouseEvent) => this._navigateToPiece(e, cell);
     // The chip is the drag source for its piece, as a cell link is, so a drag
     // source around the `cf-render` does not start a second drag.
     const onPointerDown = (e: Event) => e.stopPropagation();
@@ -665,7 +626,7 @@ export class CFRender extends BaseElement {
     clip.appendChild(scaler);
     container.appendChild(clip);
     const inner = this._mount(scaler, piece, piece, this._renderGeneration);
-    const onClick = (e: MouseEvent) => this._navigateToPiece(e);
+    const onClick = (e: MouseEvent) => this._navigateToPiece(e, piece);
     clip.addEventListener("click", onClick);
     return () => {
       clip.removeEventListener("click", onClick);
@@ -681,12 +642,7 @@ export class CFRender extends BaseElement {
    */
   private _pieceTarget(): CellHandle | undefined {
     const cell = this._resolvedCell ?? this.cell;
-    if (!cell) return undefined;
-    try {
-      return cell.ref().path.length === 0 ? cell : undefined;
-    } catch {
-      return undefined;
-    }
+    return cell?.ref().path.length === 0 ? cell : undefined;
   }
 
   /** The deepest nested pattern root in the click path, when there is one. */
@@ -698,15 +654,8 @@ export class CFRender extends BaseElement {
     if (rendererIndex < 0) return undefined;
     return getPieceBoundary(path[0], (target) => {
       const providerIndex = path.indexOf(target.element);
-      if (
-        providerIndex < 0 || providerIndex >= rendererIndex ||
-        !isCellHandle(target.cell)
-      ) return false;
-      try {
-        return target.cell.ref().path.length === 0;
-      } catch {
-        return false;
-      }
+      return providerIndex >= 0 && providerIndex < rendererIndex &&
+        isCellHandle(target.cell) && target.cell.ref().path.length === 0;
     });
   }
 
@@ -764,12 +713,10 @@ export class CFRender extends BaseElement {
     if (this.hasUpdated) this.requestUpdate();
   }
 
-  /** Navigate to the rendered piece, as a cell link does. */
-  private _navigateToPiece(e: MouseEvent) {
+  /** Navigate to `target`, the rendered piece, as a cell link does. */
+  private _navigateToPiece(e: MouseEvent, target: CellHandle) {
     e.stopPropagation();
     try {
-      const target = this._resolvedCell ?? this.cell;
-      if (!target) return;
       const reference = target.ref();
       const view = {
         spaceDid: target.space(),
@@ -792,7 +739,6 @@ export class CFRender extends BaseElement {
 
   private _cleanupRender() {
     if (this._cleanup) {
-      this._log("cleaning up previous render");
       this._cleanup();
       this._cleanup = undefined;
     }
@@ -845,7 +791,6 @@ export class CFRender extends BaseElement {
   }
 
   override disconnectedCallback() {
-    this._log("disconnectedCallback called");
     closePieceMenuFor(this);
     this.removeEventListener("contextmenu", this._onContextMenu);
     super.disconnectedCallback();

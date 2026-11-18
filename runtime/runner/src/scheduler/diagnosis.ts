@@ -13,6 +13,10 @@ import {
   getTransactionWriteDetails,
 } from "../storage/transaction-inspection.ts";
 import { ignoreReadForScheduling } from "../storage/reactivity-log.ts";
+import {
+  availabilityReadScopeKey,
+  unavailableReadObservations,
+} from "../storage/read-availability.ts";
 import { arraysOverlap } from "../reactive-dependencies.ts";
 import { readsRuntimeSecretValue } from "../runtime-secret.ts";
 import { normalizeCellScope } from "../scope.ts";
@@ -71,6 +75,16 @@ export interface SchedulerDiagnosisControlState {
 
 export function makeAddressKey(addr: IMemorySpaceAddress): string {
   return `${addr.space}/${addr.id}/${addr.path.join("/")}`;
+}
+
+/** Physical read address, with the scope instance compared separately. */
+function sameReadAddress(
+  left: IMemorySpaceAddress,
+  right: IMemorySpaceAddress,
+): boolean {
+  return left.space === right.space && left.id === right.id &&
+    left.type === right.type && left.path.length === right.path.length &&
+    left.path.every((part, index) => part === right.path[index]);
 }
 
 function unwrapTransactionDetailValue(
@@ -258,8 +272,13 @@ function readInvariantMovedExternally(
   for (const read of log2.reads) spaces.add(read.space);
   for (const read of log2.shallowReads) spaces.add(read.space);
   const before = transactionReadInvariants(tx, spaces);
-  if (before.size === 0) return false;
   const after = transactionReadInvariants(tx2, spaces);
+  const coveredByOwnWrites = (address: IMemorySpaceAddress): boolean =>
+    [...log.writes, ...log2.writes].some((write) =>
+      write.space === address.space && write.id === address.id &&
+      normalizeCellScope(write.scope) === normalizeCellScope(address.scope) &&
+      arraysOverlap(write.path, address.path)
+    );
   for (const [key, { address, value }] of after) {
     const previous = before.get(key);
     // Only reads both runs performed are comparable.
@@ -270,12 +289,26 @@ function readInvariantMovedExternally(
     // nondeterminism, not external interference — both must stay flagged.
     // Scope participates in the match: different scopes are different
     // documents, so a write in another scope cannot have moved this read.
-    const coveredByOwnWrites = [...log.writes, ...log2.writes].some((write) =>
-      write.space === address.space && write.id === address.id &&
-      normalizeCellScope(write.scope) === normalizeCellScope(address.scope) &&
-      arraysOverlap(write.path, address.path)
-    );
-    if (!coveredByOwnWrites) return true;
+    if (!coveredByOwnWrites(address)) return true;
+  }
+  // A coverage miss cannot contribute a successful value invariant. Its exact
+  // address becoming readable is nevertheless an external input transition,
+  // unless one of these runs wrote it. Extra reads without that failed-read
+  // witness remain evidence of nondeterminism.
+  for (const failed of unavailableReadObservations(tx)) {
+    if (coveredByOwnWrites(failed.address)) continue;
+    if (
+      unavailableReadObservations(tx2).some((again) =>
+        again.scopeKey === failed.scopeKey &&
+        sameReadAddress(again.address, failed.address)
+      )
+    ) continue;
+    for (const { address } of after.values()) {
+      if (
+        sameReadAddress(address, failed.address) &&
+        availabilityReadScopeKey(tx2, address) === failed.scopeKey
+      ) return true;
+    }
   }
   return false;
 }

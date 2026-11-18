@@ -7,4 +7,4 @@ if (!customElements.get("cf-image-input")) {
 export type { CFImageInput as CFImageInputElement } from "./cf-image-input.ts";
 
 export { CFImageInput };
-export type { ExifData, ImageData } from "./cf-image-input.ts";
+export type { ImageData } from "./cf-image-input.ts";

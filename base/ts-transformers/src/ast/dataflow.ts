@@ -89,7 +89,6 @@ const mergeAnalyses = (...analyses: InternalAnalysis[]): InternalAnalysis => {
   let requires = false;
   const dataFlows: ts.Expression[] = [];
   for (const analysis of analyses) {
-    if (!analysis) continue;
     contains ||= analysis.containsReactive;
     requires ||= analysis.requiresRewrite;
     for (const dataFlow of analysis.dataFlows) dataFlows.push(dataFlow);
@@ -183,22 +182,14 @@ export function createDataFlowAnalyzer(
   };
 
   const getStaticPropertyNameText = (
-    name: ts.PropertyName,
-  ): string | undefined => {
-    if (ts.isIdentifier(name)) {
-      return name.text;
-    }
-
-    if (
+    name: ts.PropertyName | ts.BindingName,
+  ): string | undefined =>
+    ts.isIdentifier(name) ||
       ts.isStringLiteral(name) ||
       ts.isNumericLiteral(name) ||
       ts.isNoSubstitutionTemplateLiteral(name)
-    ) {
-      return name.text;
-    }
-
-    return undefined;
-  };
+      ? name.text
+      : undefined;
 
   const getStableConstAliasInitializer = (
     symbol: ts.Symbol | undefined,
@@ -749,9 +740,6 @@ export function createDataFlowAnalyzer(
         target.containsReactive &&
         leftmostIdentifierIsArrayMethodElementBinding(expression)
       ) {
-        if (originatesFromIgnored(expression.expression)) {
-          return emptyAnalysis();
-        }
         const parentId =
           context.expressionToNodeId.get(expression.expression) ?? null;
         recordDataFlow(expression, scope, parentId, true);
@@ -1091,12 +1079,9 @@ export function createDataFlowAnalyzer(
     }
 
     if (ts.isArrayLiteralExpression(expression)) {
-      const analyses = expression.elements.map((element) => {
-        if (ts.isExpression(element)) {
-          return analyzeExpression(element, scope, context);
-        }
-        return emptyAnalysis();
-      });
+      const analyses = expression.elements.map((element) =>
+        analyzeExpression(element, scope, context)
+      );
       return mergeAnalyses(...analyses);
     }
 

@@ -8,18 +8,19 @@ import { isLinkRef, linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import {
   FabricBytes,
   FabricEpochNsec,
-  FabricRegExp,
 } from "@commonfabric/data-model/fabric-primitives";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { assertSpyCalls, spy } from "@std/testing/mock";
 import {
   materializeStableArrayCells,
   planStableArrayCells,
 } from "../src/array-cell-identity.ts";
 import {
   agentOwnerSchema,
+  cellHasOwnerConfidentiality,
   cellHasOwnerProtection,
   pushStableCellGraph,
   readStableCellGraphValue,
@@ -163,7 +164,6 @@ Deno.test("stable graph writes preserve native `FabricValue`s", async () => {
       cell: root,
       value: () => ({
         date: new Date("2026-07-27T12:34:56.000Z"),
-        expression: /agent-data/gi,
         bytes: new Uint8Array([1, 2, 3]),
       }),
     }]);
@@ -173,17 +173,13 @@ Deno.test("stable graph writes preserve native `FabricValue`s", async () => {
       root,
     ) as Record<string, unknown>;
     const date = stored.date as FabricEpochNsec;
-    const expression = stored.expression as FabricRegExp;
     const bytes = stored.bytes as FabricBytes;
     assertEquals(date instanceof FabricEpochNsec, true);
-    assertEquals(expression instanceof FabricRegExp, true);
     assertEquals(bytes instanceof FabricBytes, true);
     assertEquals(
       date.value,
       BigInt(new Date("2026-07-27T12:34:56.000Z").getTime()) * 1_000_000n,
     );
-    assertEquals(expression.source, "agent-data");
-    assertEquals(expression.flags, "gi");
     assertEquals(bytes.slice(), new Uint8Array([1, 2, 3]));
   } finally {
     await runtime.dispose();
@@ -271,6 +267,20 @@ Deno.test("stable graph writes refuse populated unprotected cells", async () => 
     assertEquals(unprotectedChild.getRaw(), { exposed: "child" });
     assertEquals(confidentialOnly.getRaw(), { exposed: "confidential" });
     assertEquals(parent.getRaw(), undefined);
+    const tx = runtime.readTx();
+    assertEquals(
+      cellHasOwnerConfidentiality(tx, confidentialOnly, space),
+      true,
+    );
+    assertEquals(cellHasOwnerProtection(tx, confidentialOnly, space), false);
+    assertEquals(
+      cellHasOwnerConfidentiality(tx, confidentialOnly, "did:key:other"),
+      false,
+    );
+    assertEquals(
+      cellHasOwnerConfidentiality(tx, unprotectedRoot, space),
+      false,
+    );
   } finally {
     await runtime.dispose();
     await storageManager.close();
@@ -385,6 +395,67 @@ Deno.test("stable graph reads can preserve links in named fields", async () => {
     assertEquals(await readStableCellGraphValue(connection, parent), {
       manifest: { value: "child data" },
     });
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+Deno.test("stable graph writes open no transaction for no entries", async () => {
+  const signer = await Identity.fromPassphrase(
+    "agent connector empty graph test",
+  );
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const space = signer.did();
+  try {
+    using edit = spy(runtime, "edit");
+    await pushStableCellGraph(
+      { runtime, spaceDid: space, ownerDid: space },
+      [],
+    );
+    assertSpyCalls(edit, 0);
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+Deno.test("stable graph reads refuse a link without an id or space", async () => {
+  const signer = await Identity.fromPassphrase(
+    "agent connector incomplete link test",
+  );
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const space = signer.did();
+  const connection = { runtime, spaceDid: space, ownerDid: space };
+  try {
+    const cell = runtime.getCell(space, { graphTest: "incomplete-link" });
+    await cell.sync();
+    const tx = runtime.edit();
+    cell.withTx(tx).setRawUntyped({ child: linkRefFrom({ path: ["x"] }) });
+    const committed = await tx.commit().settled;
+    if (committed.error) throw committed.error;
+
+    await assertRejects(
+      () => readStableCellGraphValue(connection, cell),
+      Error,
+      "Stable graph contains an incomplete link",
+    );
+    assertEquals(
+      isLinkRef(
+        (await readStableCellGraphValue(connection, cell, new Map(), {
+          preserveLinkFields: new Set(["child"]),
+        }) as Record<string, unknown>).child,
+      ),
+      true,
+    );
   } finally {
     await runtime.dispose();
     await storageManager.close();

@@ -23,6 +23,7 @@ import {
   HelperOwnedExpressionSiteLoweringTransformer,
   IndirectBuilderCallbackValidationTransformer,
   JsxExpressionSiteRouterTransformer,
+  JsxPropNameValidationTransformer,
   MergeablePushValidationTransformer,
   ModuleScopeCfDataTransformer,
   ModuleScopeFunctionHardeningTransformer,
@@ -52,6 +53,7 @@ const CFC_TRANSFORMER_STAGES: readonly TransformerStage[] = [
   IndirectBuilderCallbackValidationTransformer,
   CfcPolicyAuthoringTransformer,
   CfcPolicyOfValidationTransformer,
+  JsxPropNameValidationTransformer,
   JsxExpressionSiteRouterTransformer,
   // Runs before lift lowering so it sees the authored expression: the operand
   // labels it records are the author's own source text, and the lowering that

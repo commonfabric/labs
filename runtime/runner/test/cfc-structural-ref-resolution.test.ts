@@ -30,4 +30,20 @@ describe("resolveExternalRootRefForStructure", () => {
     expect(resolved.$defs).toEqual({});
     expect((resolved.items as JSONSchemaObj).$ref).toBe("#/$defs/Row");
   });
+
+  it("drops an empty $defs whose body names no local definition", () => {
+    const document = {
+      type: "array",
+      items: { type: "string" },
+      $defs: {},
+    } as const satisfies JSONSchemaObj;
+    const hash = internSchemaAsTaggedHashString(document);
+    registerSchemaDocument(hash, document);
+
+    const resolved = resolveExternalRootRefForStructure({
+      $ref: `cid:${hash}`,
+    });
+
+    expect(resolved).toEqual({ type: "array", items: { type: "string" } });
+  });
 });

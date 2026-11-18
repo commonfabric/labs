@@ -1,4 +1,6 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   BENCHMARK_HISTORY_CACHE_DAYS,
   BENCHMARK_HISTORY_SAMPLING_VERSION,
@@ -900,6 +902,9 @@ Deno.test("runtime benchmark history removes run files that do not decode", asyn
       row(stats(1_000)),
     ),
     "941-7.run": new Uint8Array([255, 0, 0, 0, 123]),
+    // A header that is not UTF-8, and one that is JSON but not an object.
+    "941-8.run": new Uint8Array([2, 0, 0, 0, 0xff, 0xfe]),
+    "941-9.run": new Uint8Array([1, 0, 0, 0, "5".charCodeAt(0)]),
   };
   try {
     const writer = new BenchmarkHistoryStore(history);
@@ -1475,4 +1480,45 @@ Deno.test("runtime benchmark history orders runs created together by run number"
   } finally {
     await Deno.remove(directory, { recursive: true });
   }
+});
+
+describe("benchmark-history-cache", () => {
+  describe("BenchmarkHistoryStore", () => {
+    describe("instance members", () => {
+      describe("load()", () => {
+        let directory: string;
+        let history: string;
+
+        beforeEach(async () => {
+          directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
+          history = `${directory}/history`;
+        });
+
+        afterEach(async () => {
+          await Deno.remove(directory, { recursive: true });
+        });
+
+        it("rejects when its directory is a file", async () => {
+          await Deno.writeTextFile(history, "not a directory");
+
+          await expect(new BenchmarkHistoryStore(history).load()).rejects
+            .toThrow(Deno.errors.NotADirectory);
+        });
+
+        it("rejects when its legacy file cannot be read", async () => {
+          await Deno.mkdir(`${history}.json`);
+
+          await expect(new BenchmarkHistoryStore(history).load()).rejects
+            .toThrow(Deno.errors.IsADirectory);
+        });
+
+        it("rejects when a run file cannot be read", async () => {
+          await Deno.mkdir(`${history}/941-1.run`, { recursive: true });
+
+          await expect(new BenchmarkHistoryStore(history).load()).rejects
+            .toThrow(Deno.errors.IsADirectory);
+        });
+      });
+    });
+  });
 });

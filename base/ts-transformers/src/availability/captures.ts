@@ -49,10 +49,10 @@ export function availabilityPathKey(path: readonly string[]): string {
 export function parseAvailabilityCaptureExpression(
   expression: ts.Expression,
 ): ReturnType<typeof parseCaptureExpression> {
-  const parsed = parseCaptureExpression(expression);
+  const target = unwrapAvailabilityExpression(expression);
+  const parsed = parseCaptureExpression(target);
   if (parsed) return parsed;
 
-  const target = unwrapAvailabilityExpression(expression);
   if (!ts.isElementAccessExpression(target)) return undefined;
   const argument = unwrapAvailabilityExpression(target.argumentExpression);
   if (!ts.isStringLiteralLike(argument) && !ts.isNumericLiteral(argument)) {

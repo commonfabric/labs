@@ -390,7 +390,7 @@ Use exact piece names from the piece list above for fromName/toName/pieceNames.`
             ? (
               <div>
                 <h3 style={{ margin: "0 0 8px", fontSize: "15px" }}>Groups</h3>
-                <cf-table full-width>
+                <cf-table fullWidth>
                   <tbody>
                     {compoundNodes.map((node: any) => (
                       <tr>
@@ -412,7 +412,7 @@ Use exact piece names from the piece list above for fromName/toName/pieceNames.`
             : null}
 
           <h3 style={{ margin: "0", fontSize: "15px" }}>Links</h3>
-          <cf-table full-width>
+          <cf-table fullWidth>
             <tbody>
               {allEdges.map((edge) => (
                 <tr>

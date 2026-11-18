@@ -1,5 +1,6 @@
 import {
   compileAndRun,
+  compileDiagnosticsOf,
   computed,
   fetchProgram,
   type FetchProgramResult,
@@ -13,6 +14,7 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
+import { compileFailure } from "../compiler/compile-failure.ts";
 
 /**
  * Test pattern for fetchProgram builtin.
@@ -29,20 +31,15 @@ type FetchProgramTestOutput = {
 export default pattern<void, FetchProgramTestOutput>(() => {
   // URL to a simple pattern file
   const url = new Writable(
-    "https://raw.githubusercontent.com/commonfabric/labs/main/patterns/examples/counter.tsx",
+    "https://raw.githubusercontent.com/commonfabric/labs/main/patterns/examples/counter/counter.tsx",
   );
 
   // Step 1: Fetch the program from URL
   const fetchRequest = fetchProgram({ url });
-  const fetchedProgram = resultOf(fetchRequest);
-  // Preserve the legacy optional output while the direct path below uses
-  // availability to suspend until the program is ready.
-  const program = computed((): FetchProgramResult | undefined =>
-    isPending(fetchRequest) || hasError(fetchRequest)
-      ? undefined
-      : fetchedProgram
+  const program = resultOf(fetchRequest);
+  const fetchPending = computed(() =>
+    hasError(fetchRequest) ? false : isPending(fetchRequest)
   );
-  const fetchPending = computed(() => isPending(fetchRequest));
   const fetchError = computed(() =>
     hasError(fetchRequest) ? fetchRequest.message : undefined
   );
@@ -50,15 +47,29 @@ export default pattern<void, FetchProgramTestOutput>(() => {
   // Step 2: Compile and run the fetched program
   // Explicitly map program fields to compileAndRun params
   const compileParams = computed(() => ({
-    files: fetchedProgram.files,
-    main: fetchedProgram.main,
+    files: program.files,
+    main: program.main,
     input: { value: 10 },
   }));
-  const compileRequest = compileAndRun(compileParams);
+  const compileRequest = compileAndRun<
+    { value: number },
+    Record<string, unknown>
+  >(compileParams);
   const result = resultOf(compileRequest);
-  const compilePending = computed(() => isPending(compileRequest));
-  const compileError = computed(() =>
-    hasError(compileRequest) ? compileRequest.message : undefined
+  const shownResult = computed(() =>
+    isPending(compileRequest) || hasError(compileRequest)
+      ? undefined
+      : resultOf(compileRequest)
+  );
+  const compilePending = computed(() =>
+    hasError(compileRequest) ? false : isPending(compileRequest)
+  );
+  const compileErrors = compileDiagnosticsOf(compileRequest);
+  const compileProblem = computed(() =>
+    compileFailure(
+      hasError(compileRequest) ? compileRequest.message : undefined,
+      compileErrors,
+    )
   );
 
   return {
@@ -73,13 +84,13 @@ export default pattern<void, FetchProgramTestOutput>(() => {
         {fetchPending && <div>Fetching program...</div>}
         {compilePending && <div>Compiling...</div>}
         {fetchError && <div style="color: red">Fetch error: {fetchError}</div>}
-        {compileError && (
-          <div style="color: red">Compile error: {compileError}</div>
+        {compileProblem && (
+          <div style="color: red">Compile error: {compileProblem}</div>
         )}
-        {result && (
+        {shownResult && (
           <div style="color: green">
-            Successfully compiled pattern! Piece ID: {result}
-            <pre>{computed(() => toIndentedDebugString(result))}</pre>
+            Successfully compiled pattern! <cf-cell-link $cell={shownResult} />
+            <pre>{computed(() => toIndentedDebugString(shownResult))}</pre>
           </div>
         )}
       </div>

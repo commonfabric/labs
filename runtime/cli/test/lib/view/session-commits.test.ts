@@ -176,7 +176,7 @@ describe("Session", () => {
           const s = session(
             LOG.replace("Update the app", "Long subject ".repeat(40)),
           );
-          press(s, "tab", "L");
+          press(s, "tab", "l");
           expect(s.view().selected).not.toBeNull();
           expect(s.view().left).toBeGreaterThan(0);
           press(s, ">");

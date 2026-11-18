@@ -1,5 +1,6 @@
 export {
   type BeforeTransformersResult,
+  type CompiledTypeScriptModule,
   type TransformerPipelineResult,
   TypeScriptCompiler,
   type TypeScriptCompilerOptions,
@@ -8,6 +9,7 @@ export {
   type AuthoredSource,
   type AuthoredSourceLookup,
   CompilationError,
+  type CompilationErrorFields,
   type CompilationErrorType,
   CompilerError,
   type DiagnosticMessageTransformer,

@@ -25,12 +25,8 @@ export class Reporter {
     const failedCount = summary.failed.length;
     if (failedCount > 0) {
       console.log("%cERRORS", Reporter.Styles.errorHighlight);
-      for (const failure of summary.failed) {
-        // For compiler
-        const { error } = failure;
-        if (!error) continue;
-
-        console.log(`${failure.name}`);
+      for (const { name, error } of summary.failed) {
+        console.log(name);
         console.log(
           `%cerror%c: ${error.name}: ${error.message}`,
           Reporter.Styles.error,

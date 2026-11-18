@@ -14,6 +14,7 @@ import {
   type UnavailableErrorKind,
   type VNode,
 } from "commonfabric";
+import { promptAbout } from "./suggestion.ts";
 
 // ===== Types =====
 
@@ -106,7 +107,7 @@ export const SvgDiagramPresentation = pattern<
               ifElse(
                 responseState.pending,
                 <div style="color: var(--cf-theme-color-text-secondary);">
-                  <cf-loader show-elapsed /> Generating diagram...
+                  <cf-loader showElapsed /> Generating diagram...
                 </div>,
                 ifElse(
                   responseState.error,
@@ -135,10 +136,9 @@ const SvgDiagram = pattern<SvgDiagramInput, SvgDiagramOutput>(
   ({ topic, context }) => {
     // An empty prompt holds the request back: no provider call starts until
     // the caller names a subject.
-    const prompt = computed(() => {
-      if (!topic) return "";
-      return `Create a clear SVG diagram illustrating: ${topic}`;
-    });
+    const prompt = computed(() =>
+      promptAbout(topic, "Create a clear SVG diagram illustrating: ")
+    );
     const responseRequest = generateText({
       system:
         "You create clear, well-structured SVG diagrams. Output a single <svg> element with an appropriate viewBox. Use shapes (rect, circle, ellipse), paths, lines, text, and arrows to illustrate concepts. Use readable fonts and clear colors. Output ONLY the SVG element with no surrounding explanation or markdown.",

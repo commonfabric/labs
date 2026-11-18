@@ -56,6 +56,16 @@ describe("schedulerImplementationFingerprint", () => {
     );
   });
 
+  it("names an unstamped action by its pattern and module when telemetry has them", () => {
+    const action = makeAction({});
+    expect(
+      schedulerImplementationFingerprint(action, "id", {
+        patternName: "counter",
+        moduleName: "increment",
+      }),
+    ).toBe("action:counter:increment:id");
+  });
+
   it("falls back to a telemetry-derived id when neither is present", () => {
     const action = makeAction({});
     expect(schedulerImplementationFingerprint(action, "id", undefined)).toBe(

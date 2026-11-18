@@ -658,10 +658,10 @@ const typeMatches = (
  * exactly, however large: a finite `multipleOf` is the dyadic rational
  * `p / 2^k`, found by doubling it until it is whole, and `value` is a multiple
  * of it when `value * 2^k` is a multiple of `p`. A number is measured within
- * floating-point tolerance.
+ * floating-point tolerance. `multipleOf` is positive and finite, which
+ * `strictConstraintDefinitionIssue()` checks before any value is measured.
  */
 const isMultipleOf = (value: number | bigint, multipleOf: number): boolean => {
-  if (!(multipleOf > 0) || !Number.isFinite(multipleOf)) return false;
   if (typeof value === "bigint") {
     let whole = multipleOf;
     let shift = 0n;
@@ -721,12 +721,14 @@ const SUPPORTED_SCHEMA_TYPES = new Set([
   ...FABRIC_PRIMITIVE_SCHEMA_TYPES,
 ]);
 
-const SUPPORTED_SCHEMA_FORMATS = new Set([
-  "email",
-  "uri",
-  "date",
-  "date-time",
-]);
+/** The string formats validation checks, each with the check it makes. */
+const SCHEMA_FORMAT_MATCHERS: ReadonlyMap<string, (value: string) => boolean> =
+  new Map([
+    ["email", valueMatchesEmail],
+    ["uri", valueMatchesUri],
+    ["date", valueMatchesDate],
+    ["date-time", valueMatchesDateTime],
+  ]);
 
 const isDenseArray = (value: readonly unknown[]): boolean => {
   for (let index = 0; index < value.length; index++) {
@@ -822,7 +824,7 @@ const strictConstraintDefinitionIssue = (
   if (Object.hasOwn(record, "format")) {
     if (
       typeof record.format !== "string" ||
-      (!formatAnnotations && !SUPPORTED_SCHEMA_FORMATS.has(record.format))
+      (!formatAnnotations && !SCHEMA_FORMAT_MATCHERS.has(record.format))
     ) {
       return `schema has unsupported format ${String(record.format)}`;
     }
@@ -1435,12 +1437,17 @@ const createSchemaValidationContext = (): SchemaValidationContext => ({
 const primitiveValidationKey = (value: unknown): string =>
   `${typeof value}:${String(value)}`;
 
+/**
+ * Marks `value` active against `schema` under `root`, and returns the root's
+ * activity record, which {@link unmarkSchemaValueActive} takes back; returns
+ * `undefined`, marking nothing, when the pair is already active.
+ */
 const markSchemaValueActive = (
   root: object,
   schema: object,
   value: unknown,
   context: SchemaValidationContext,
-): boolean => {
+): SchemaRootValidationActivity | undefined => {
   let activity = context.activeByRoot.get(root);
   if (!activity) {
     activity = {
@@ -1455,33 +1462,30 @@ const markSchemaValueActive = (
   ) {
     const objectValue = value as object;
     let active = activity.activeObjectValues.get(schema);
-    if (active?.has(objectValue)) return false;
+    if (active?.has(objectValue)) return undefined;
     if (!active) {
       active = new WeakSet();
       activity.activeObjectValues.set(schema, active);
     }
     active.add(objectValue);
-    return true;
+    return activity;
   }
   const key = primitiveValidationKey(value);
   let active = activity.activePrimitiveValues.get(schema);
-  if (active?.has(key)) return false;
+  if (active?.has(key)) return undefined;
   if (!active) {
     active = new Set();
     activity.activePrimitiveValues.set(schema, active);
   }
   active.add(key);
-  return true;
+  return activity;
 };
 
 const unmarkSchemaValueActive = (
-  root: object,
+  activity: SchemaRootValidationActivity,
   schema: object,
   value: unknown,
-  context: SchemaValidationContext,
 ): void => {
-  const activity = context.activeByRoot.get(root);
-  if (!activity) return;
   if (
     isObjectOrArray(value) ||
     typeof value === "function"
@@ -1807,7 +1811,8 @@ const validateAgainstSchemaUncached = (
   }
   const schemaRoot = fullSchema;
   const rootKey = isObjectOrArray(schemaRoot) ? schemaRoot : schema;
-  if (!markSchemaValueActive(rootKey, schema, value, context)) {
+  const activity = markSchemaValueActive(rootKey, schema, value, context);
+  if (activity === undefined) {
     context.cycleVersion++;
     return indeterminate("recursive schema validation made no progress");
   }
@@ -1963,8 +1968,8 @@ const validateAgainstSchemaUncached = (
       // schema is not gated (its type never includes "object").
       //
       // Presence only: `properties` sub-schemas are not enforced against
-      // accessor values (a schema declaring `source` as a number still
-      // matches a FabricRegExp, whose `source` is a string) — the type
+      // accessor values (a schema declaring `length` as a string still
+      // matches a FabricBytes, whose `length` is a number) — the type
       // system doesn't produce such schemas, and the property walk below
       // deliberately stays limited to plain objects.
       const typeAllowsObject = schema.type === undefined ||
@@ -2085,7 +2090,7 @@ const validateAgainstSchemaUncached = (
 
     return undefined;
   } finally {
-    unmarkSchemaValueActive(rootKey, schema, value, context);
+    unmarkSchemaValueActive(activity, schema, value);
   }
 };
 
@@ -2183,7 +2188,9 @@ function validateStrictSchemaConstraints(
       if (!pattern.test(value)) return mismatch(`value does not match pattern`);
     }
     if (schema.format !== undefined) {
-      if (!valueMatchesFormat(value, schema.format)) {
+      // strictConstraintDefinitionIssue() refused a format with no matcher.
+      const matches = SCHEMA_FORMAT_MATCHERS.get(schema.format);
+      if (matches?.(value) !== true) {
         return mismatch(`value does not match format ${schema.format}`);
       }
     }
@@ -2363,58 +2370,53 @@ function validateStrictSchemaConstraints(
   return undefined;
 }
 
-function valueMatchesFormat(value: string, format: string): boolean {
-  switch (format) {
-    case "email": {
-      const separator = value.lastIndexOf("@");
-      if (separator <= 0 || separator === value.length - 1) return false;
-      const local = value.slice(0, separator);
-      const domain = value.slice(separator + 1);
-      const dotAtom = !local.startsWith(".") && !local.endsWith(".") &&
-        !local.includes("..") &&
-        /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$/.test(local);
-      const quoted = /^"(?:[\x20-\x21\x23-\x5B\x5D-\x7E]|\\[\x20-\x7E])*"$/
-        .test(
-          local,
-        );
-      if (
-        local.length === 0 || local.length > 64 || domain.length === 0 ||
-        domain.length > 255 || (!dotAtom && !quoted) || domain.includes("..")
-      ) {
-        return false;
-      }
-      const labels = domain.split(".");
-      return labels.every((label) =>
-        label.length > 0 && label.length <= 63 &&
-        !label.startsWith("-") && !label.endsWith("-") &&
-        /^[A-Za-z0-9-]+$/.test(label)
-      );
-    }
-    case "uri":
-      try {
-        new URL(value);
-        return true;
-      } catch {
-        return false;
-      }
-    case "date":
-      return valueMatchesDate(value);
-    case "date-time": {
-      const match =
-        /^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?([Zz]|[+-](\d{2}):(\d{2}))$/
-          .exec(value);
-      if (!match || !valueMatchesDate(match[1])) return false;
-      const hour = Number(match[2]);
-      const minute = Number(match[3]);
-      const second = Number(match[4]);
-      const offsetHour = match[6] === undefined ? 0 : Number(match[6]);
-      const offsetMinute = match[7] === undefined ? 0 : Number(match[7]);
-      return hour <= 23 && minute <= 59 && second <= 60 &&
-        offsetHour <= 23 && offsetMinute <= 59;
-    }
-    default:
-      return false;
+function valueMatchesEmail(value: string): boolean {
+  const separator = value.lastIndexOf("@");
+  if (separator <= 0 || separator === value.length - 1) return false;
+  const local = value.slice(0, separator);
+  const domain = value.slice(separator + 1);
+  const dotAtom = !local.startsWith(".") && !local.endsWith(".") &&
+    !local.includes("..") &&
+    /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$/.test(local);
+  const quoted = /^"(?:[\x20-\x21\x23-\x5B\x5D-\x7E]|\\[\x20-\x7E])*"$/
+    .test(
+      local,
+    );
+  if (
+    local.length === 0 || local.length > 64 || domain.length === 0 ||
+    domain.length > 255 || (!dotAtom && !quoted) || domain.includes("..")
+  ) {
+    return false;
   }
+  const labels = domain.split(".");
+  return labels.every((label) =>
+    label.length > 0 && label.length <= 63 &&
+    !label.startsWith("-") && !label.endsWith("-") &&
+    /^[A-Za-z0-9-]+$/.test(label)
+  );
+}
+
+function valueMatchesUri(value: string): boolean {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function valueMatchesDateTime(value: string): boolean {
+  const match =
+    /^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?([Zz]|[+-](\d{2}):(\d{2}))$/
+      .exec(value);
+  if (!match || !valueMatchesDate(match[1])) return false;
+  const hour = Number(match[2]);
+  const minute = Number(match[3]);
+  const second = Number(match[4]);
+  const offsetHour = match[6] === undefined ? 0 : Number(match[6]);
+  const offsetMinute = match[7] === undefined ? 0 : Number(match[7]);
+  return hour <= 23 && minute <= 59 && second <= 60 &&
+    offsetHour <= 23 && offsetMinute <= 59;
 }
 
 function valueMatchesDate(value: string): boolean {

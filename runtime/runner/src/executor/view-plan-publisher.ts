@@ -346,13 +346,13 @@ export class ViewPlanPublisher {
           shared.push(cone);
         }
         const { selected } = cone;
-        const roots = new PathKeyMap<ViewQuery["roots"][number]>();
-        const addRoot = (
-          id: string,
-          scope: ViewQuery["roots"][number]["scope"] = "space",
-        ) => {
+        type RootScope = NonNullable<ViewQuery["roots"][number]["scope"]>;
+        const roots = new PathKeyMap<
+          ViewQuery["roots"][number] & { scope: RootScope }
+        >();
+        const addRoot = (id: string, scope: RootScope = "space") => {
           if (hasInlineCellScheme(id)) return;
-          roots.set([scope ?? "space", id], {
+          roots.set([scope, id], {
             id,
             scope,
             selector: { path: [], schema: false },
@@ -393,7 +393,7 @@ export class ViewPlanPublisher {
         }
         const inputs = [...roots.entries()].map(([, root]) => ({
           id: root.id,
-          scope: root.scope ?? "space" as const,
+          scope: root.scope,
         }));
         // The producer graph is the cone's, built over the first such
         // snapshot's nodes, so its ancestors are matched to this snapshot's

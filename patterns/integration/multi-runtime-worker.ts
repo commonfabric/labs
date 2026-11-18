@@ -35,7 +35,10 @@ import {
   fabricFromRealmValue,
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
-import type { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
+import {
+  FabricBytes,
+  type FabricKeyPair,
+} from "@commonfabric/data-model/fabric-primitives";
 import type { JSONSchema } from "@commonfabric/api";
 import type {
   Cell,
@@ -68,6 +71,10 @@ import {
   MemoryWebSocketForTestingOnly,
 } from "@commonfabric/runner/for-testing-only";
 import { type DID, Identity } from "@commonfabric/identity";
+import {
+  offerProfileSuggestion,
+  profileSuggestionCell,
+} from "@commonfabric/runner/profile-suggestion";
 import {
   ensurePrivateInboxOf,
   inboxPieceLinkSchema,
@@ -507,6 +514,7 @@ const handlers: Record<
       renderView: requestedRenderView,
       clientClass,
       preferredProfileSpace,
+      profileSuggestion,
     },
   ) {
     const identity = await Identity.fromKeyPair(
@@ -532,6 +540,18 @@ const handlers: Record<
         ? { preferredProfileSpace: preferredProfileSpace as MemorySpace }
         : {}),
     });
+    if (isObjectNotArray(profileSuggestion)) {
+      const { name, picture } = profileSuggestion as {
+        name: string;
+        picture?: number[];
+      };
+      await offerProfileSuggestion(controller().runtime, {
+        name,
+        ...(picture === undefined
+          ? {}
+          : { picture: new FabricBytes(new Uint8Array(picture)) }),
+      });
+    }
     // Opening the storage session exchanges frames, so a shim that has shaped
     // none patches a class this realm's memory sockets do not use.
     if (wsShimInstalled && shapedFrames === 0) {
@@ -923,6 +943,12 @@ const handlers: Record<
    * asked for. The same read annotates each container it returns with the cell
    * it came from, and that annotation is machinery rather than content: the
    * container's own entries are what the reader asked for.
+   *
+   * The cell at `path` is pulled as well as the result. A path can run past a
+   * link the result's schema holds as a handle, into another space, and a
+   * client loads what such a path reaches only when a read reaches it: the
+   * result's pull stops at the handle, and a bare `get()` of the path would
+   * read the far documents before they arrive.
    */
   async read({ path, piece }) {
     const target = await resultAt(piece);
@@ -932,7 +958,7 @@ const handlers: Record<
       cell = cell.key(segment as never);
     }
     if (boundedReads) cell.get();
-    if (boundedReads) await cell.pull();
+    await cell.pull();
     return convertCellsToLinks(cell.get(), { doNotConvertCellResults: true });
   },
 
@@ -992,10 +1018,32 @@ const handlers: Record<
   },
 
   /**
+   * The profile stored as suggested for this runtime's user, its picture's
+   * bytes as numbers, or `undefined` when none is stored.
+   */
+  async profileSuggestion() {
+    const cell = profileSuggestionCell(controller().runtime);
+    await cell.pull();
+    const suggestion = cell.get();
+    if (suggestion === undefined) return undefined;
+    return {
+      ...(suggestion.name === undefined ? {} : { name: suggestion.name }),
+      ...(suggestion.picture === undefined
+        ? {}
+        : { picture: [...suggestion.picture.slice()] }),
+    };
+  },
+
+  /**
    * Read the RAW stored value of the cell reached from the piece result by
    * `path` (links resolved to the target cell, NO result-schema shaping) —
    * for state the declared schema does not carry, e.g. a query result's
    * `requestHash`. Nested links in the raw value stay sigils.
+   *
+   * The cell at `path` is pulled as well as the result, as `read` pulls it:
+   * a path that runs past a handle into another space loads what it reaches
+   * only when a read reaches it, and the pull loads and demands it without
+   * shaping the raw value read after it.
    */
   async readRaw({ path, piece }) {
     const target = await resultAt(piece);
@@ -1005,7 +1053,7 @@ const handlers: Record<
       cell = cell.key(segment as never);
     }
     if (boundedReads) cell.get();
-    if (boundedReads) await cell.pull();
+    await cell.pull();
     return cell.resolveAsCell().getRaw();
   },
 

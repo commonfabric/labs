@@ -35,15 +35,17 @@ export interface CalendarOutput {
   removeEvent: Stream<{ event: EventPiece }>;
 }
 
-// `nowMs` is the current time in epoch milliseconds (the caller reads #now).
+// `nowMs` is the current time in epoch milliseconds, from the `#now/300` wish.
 const getTodayDate = (nowMs: number): string => {
   return new Date(nowMs).toISOString().split("T")[0];
 };
 
-const formatDate = (date: string): string => {
+// Reads a YYYY-MM-DD date at UTC noon and formats it in UTC.
+export const formatDate = (date: string): string => {
   if (!date) return "";
-  const d = new Date(date + "T00:00:00");
+  const d = new Date(date + "T12:00:00Z");
   return d.toLocaleDateString("en-US", {
+    timeZone: "UTC",
     weekday: "short",
     month: "short",
     day: "numeric",
@@ -55,7 +57,7 @@ const isPast = (date: string, today: string): boolean =>
   today !== "" && date < today;
 
 export default pattern<CalendarInput, CalendarOutput>(({ events }) => {
-  const nowCell = wish<number>({ query: "#now" });
+  const nowCell = wish<number>({ query: "#now/300" });
   const nowCellValue = resultOf(nowCell.result);
   const todayDate = computed(() => {
     const nowMs = nowCellValue;
@@ -63,14 +65,11 @@ export default pattern<CalendarInput, CalendarOutput>(({ events }) => {
   });
 
   const newTitle = new Writable("");
-  // Seed empty and fill from the projected #now value, so the date input
-  // defaults to today without reading the ambient clock at pattern body.
+  // `newDate` holds a date the user typed, or "" for today.
   const newDate = new Writable("");
-  computed(() => {
-    const nowMs = nowCellValue;
-    if (newDate.get() === "") {
-      newDate.set(getTodayDate(nowMs));
-    }
+  const shownNewDate = computed(() => newDate.get() || todayDate);
+  const onNewDateChange = action((e: { detail: { value: string } }) => {
+    newDate.set(e?.detail?.value ?? "");
   });
   const newTime = new Writable("");
 
@@ -90,7 +89,7 @@ export default pattern<CalendarInput, CalendarOutput>(({ events }) => {
   const summary = computed(() => {
     const sorted = sortedEvents;
     return sorted
-      .map((e) => `${e.date} ${e.time || ""} ${e.title}`.trim())
+      .map((e) => [e.date, e.time, e.title].filter(Boolean).join(" "))
       .join(", ");
   });
 
@@ -220,14 +219,19 @@ export default pattern<CalendarInput, CalendarOutput>(({ events }) => {
               placeholder="Event title..."
               style="flex: 1;"
             />
-            <cf-input $value={newDate} type="date" style="width: 140px;" />
+            <cf-input
+              value={shownNewDate}
+              oncf-change={onNewDateChange}
+              type="date"
+              style="width: 140px;"
+            />
             <cf-input $value={newTime} type="time" style="width: 100px;" />
             <cf-button
               variant="primary"
               onClick={() =>
                 addEvent.send({
                   title: newTitle.get(),
-                  date: newDate.get(),
+                  date: shownNewDate,
                   time: newTime.get(),
                 })}
             >

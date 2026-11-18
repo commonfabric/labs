@@ -1,5 +1,8 @@
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
+
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 import {
   collectedMemory,
@@ -20,5 +23,53 @@ describe("collected-memory", () => {
     const after = collectedMemory();
     expect(during.external - after.external).toBeGreaterThanOrEqual(SIZE);
     expect(after.heapUsed).toBeGreaterThan(0);
+  });
+
+  it("leaves `gc()` out of reach of a worker's own realm and of a SES compartment in it", async () => {
+    // A serving worker starts after the toolshed exposes the collector, and
+    // runs a pattern's code in such a compartment.
+    exposeGarbageCollector();
+    const worker = new Worker(
+      new URL("./collected-memory-reach-worker.ts", import.meta.url),
+      { type: "module" },
+    );
+    try {
+      const seen = await new Promise<unknown>((resolve, reject) => {
+        worker.onmessage = (event) => resolve(event.data);
+        worker.onerror = (event) => {
+          event.preventDefault();
+          reject(new Error(event.message));
+        };
+      });
+      expect(seen).toEqual({
+        realm: "undefined",
+        compartment: ["undefined", "undefined", "undefined"],
+      });
+    } finally {
+      worker.terminate();
+    }
+  });
+
+  it("throws in a process that never exposed the collector", async () => {
+    // A process that has exposed the collector cannot take it back, so the
+    // call runs in a process of its own.
+
+    const output = await runDenoCommandWithTemporaryLock({
+      root: fromFileUrl(new URL("../../../", import.meta.url)),
+      args: (lock) => [
+        "run",
+        "--frozen",
+        `--lock=${lock}`,
+        fromFileUrl(
+          new URL("./collected-memory-unexposed-helper.ts", import.meta.url),
+        ),
+      ],
+    });
+
+    const decoder = new TextDecoder();
+    expect(output.success, decoder.decode(output.stderr)).toBe(true);
+    expect(decoder.decode(output.stdout).trim()).toBe(
+      "V8 exposes no `gc()`, because this process has no `--expose-gc`",
+    );
   });
 });

@@ -13,6 +13,10 @@
  * This pattern tests:
  * 1. Static fetchJson at top level (control - should work)
  * 2. fetchJson inside .map() with expression callback (claimed to fail)
+ *
+ * The claim is false: each fetchJson created inside .map() resolves with its
+ * own result, as the static one does.
+ * test-30-fetchjson-dynamic-instantiation.test.tsx asserts this.
  */
 import {
   computed,
@@ -24,6 +28,7 @@ import {
   pattern,
   resultOf,
   UI,
+  type VNode,
 } from "commonfabric";
 
 interface Repo {
@@ -45,17 +50,19 @@ interface InputSchema {
     ]>;
 }
 
-export interface Input {
+export interface Output {
+  [NAME]: string;
+  [UI]: VNode;
   repos: Repo[];
 }
 
-export default pattern<InputSchema, Input>(({ repos }) => {
+export default pattern<InputSchema, Output>(({ repos }) => {
   // Approach 1: Static fetchJson at top level (control - should work)
   // Uses computed URL that changes based on first repo
   const staticUrl = computed(() =>
     repos[0] ? `https://api.github.com/repos/facebook/${repos[0].name}` : ""
   );
-  const staticFetch = fetchJson<{ stargazers_count?: number }>({
+  const staticFetch = fetchJson<GitHubRepoStats>({
     url: staticUrl,
   });
   const staticValue = resultOf(staticFetch);
@@ -63,7 +70,7 @@ export default pattern<InputSchema, Input>(({ repos }) => {
   // Approach 2: fetchJson inside .map() - expression callback (no block syntax)
   // This is claimed to fail with frame mismatch or return undefined
   const dynamicFetches = repos.map((repo) =>
-    fetchJson<{ stargazers_count?: number }>({
+    fetchJson<GitHubRepoStats>({
       url: computed(() => `https://api.github.com/repos/facebook/${repo.name}`),
     })
   );

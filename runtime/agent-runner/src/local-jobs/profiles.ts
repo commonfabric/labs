@@ -87,6 +87,14 @@ export interface LocalJobProfile extends HarnessModelLimits {
   reasoningEffort?: ReasoningEffort;
 
   /**
+   * The provider prompt-cache key every job under this profile shares, in
+   * place of each run's own id. Jobs whose prompts open with the same bytes
+   * (one system prompt, one tool list) then reuse the provider's cache across
+   * runs rather than only within one. A caller cannot set or change it.
+   */
+  cacheAffinityKey?: string;
+
+  /**
    * Whether a job may declare a browser host. A job that does browses
    * through it: the lane adds `delegate_task` and the `browser` subagent
    * profile to that job alone, so a job without a host never gains them.
@@ -117,6 +125,12 @@ export interface LocalJobProfile extends HarnessModelLimits {
    * as the harness defaults.
    */
   patternIndexPublish?: boolean;
+
+  /**
+   * `"agent"` when the profile's jobs are the person's own agents making
+   * patterns for them, so what they publish says so; absent otherwise.
+   */
+  patternIndexOrigin?: "agent";
 
   /**
    * The subagent profiles `delegate_task` may spawn, which the profile's
@@ -271,11 +285,13 @@ const profileOf = async (
     commands,
     model,
     reasoningEffort,
+    cacheAffinityKey,
     browserHost,
     hostMounts,
     fabric,
     patternIndexUrl,
     patternIndexPublish,
+    patternIndexOrigin,
     subagentProfiles,
   } = record;
   if (
@@ -340,6 +356,12 @@ const profileOf = async (
   if (reasoningEffort !== undefined && effort === undefined) {
     fail(`\`reasoningEffort\` must be one of ${REASONING_EFFORTS.join(", ")}`);
   }
+  if (
+    cacheAffinityKey !== undefined &&
+    (typeof cacheAffinityKey !== "string" || cacheAffinityKey.trim() === "")
+  ) {
+    fail("`cacheAffinityKey` must be a non-empty string");
+  }
   if (browserHost !== undefined && typeof browserHost !== "boolean") {
     fail("`browserHost` must be true or false");
   }
@@ -386,6 +408,12 @@ const profileOf = async (
   }
   if (patternIndexPublish !== undefined && patternIndexUrl === undefined) {
     fail("`patternIndexPublish` needs `patternIndexUrl`");
+  }
+  if (patternIndexOrigin !== undefined && patternIndexOrigin !== "agent") {
+    fail('`patternIndexOrigin` must be "agent"');
+  }
+  if (patternIndexOrigin !== undefined && patternIndexUrl === undefined) {
+    fail("`patternIndexOrigin` needs `patternIndexUrl`");
   }
   if (patternIndexUrl !== undefined && session === undefined) {
     fail("`patternIndexUrl` needs `fabric`: the index signs as its identity");
@@ -457,6 +485,9 @@ const profileOf = async (
       : {}),
     ...(model !== undefined ? { model: model as string } : {}),
     ...(effort !== undefined ? { reasoningEffort: effort } : {}),
+    ...(cacheAffinityKey !== undefined
+      ? { cacheAffinityKey: cacheAffinityKey as string }
+      : {}),
     ...(browserHost === true ? { browserHost: true } : {}),
     ...(mounts !== undefined ? { hostMounts: mounts } : {}),
     ...(session !== undefined ? { fabric: session } : {}),
@@ -464,6 +495,9 @@ const profileOf = async (
       ? {
         patternIndexUrl: patternIndexUrl as string,
         patternIndexPublish: patternIndexPublish !== false,
+        ...(patternIndexOrigin === "agent"
+          ? { patternIndexOrigin: "agent" as const }
+          : {}),
       }
       : {}),
     ...(children.length > 0 ? { subagentProfiles: children } : {}),

@@ -124,7 +124,7 @@ export type JoinEvent = void;
 // live cell reference: it round-trips through `push` as a link and is compared
 // with `equals()`, the pattern idiom for cell identity (see profile-group-chat
 // / fair-share / cfc-group-chat-demo).
-const join = handler<JoinEvent, {
+export const join = handler<JoinEvent, {
   roster: RosterCell;
   viewer: ViewerCell;
   profile: ParticipantProfileCell;

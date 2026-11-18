@@ -15,7 +15,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { createBuilder } from "../src/builder/factory.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { latestComplete as latestCompleteBuiltin } from "../src/builtins/latest-complete.ts";
-import { type Cell, createCell } from "../src/cell.ts";
+import { type Cell, createCell, isCell } from "../src/cell.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { toMemorySpaceAddress } from "../src/link-types.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -204,6 +204,64 @@ describe("latestComplete", () => {
 
     await writeAndSettle(source, 2, result);
     expect(result.key("snapshot").get()).toBe(2);
+  });
+
+  it("retains nested handle identity without reading its unavailable contents", async () => {
+    const subject = runtime.getCell<unknown>(
+      space,
+      "latest complete opaque subject",
+      undefined,
+      tx,
+    );
+    subject.set(UNAVAILABLE_PENDING);
+    const source = runtime.getCell<unknown>(
+      space,
+      "latest complete handle source",
+      undefined,
+      tx,
+    );
+    source.set([{ title: "Saved entry", subject }]);
+    const schema = {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          subject: {
+            type: "object",
+            asCell: ["writeonly"],
+            properties: { name: { type: "string" } },
+          },
+        },
+        required: ["title", "subject"],
+      },
+    } as const satisfies JSONSchema;
+    const Root = pattern<{ source: unknown }>(({ source }) => ({
+      snapshot: latestComplete({ value: source, schema }),
+    }));
+    const result = runtime.run(
+      tx,
+      Root,
+      { source: source.getAsLink() },
+      runtime.getCell(space, "latest complete handle result", undefined, tx),
+    );
+    await commitAndPull(result);
+    const snapshot = result.key("snapshot").asSchema<{
+      title: string;
+      subject: Cell<{ name: string }>;
+    }[]>(schema);
+    expect(snapshot.get()?.[0].title).toBe("Saved entry");
+
+    await writeAndSettle(source, UNAVAILABLE_SYNCING, result);
+    const retained = snapshot.get()![0];
+    expect(retained.title).toBe("Saved entry");
+    expect(isCell(retained.subject)).toBe(true);
+    expect(retained.subject.equals(subject)).toBe(true);
+    retained.subject.withTx(tx).set({ name: "Recovered subject" });
+    await commitAndPull(result);
+    expect(subject.get()).toEqual({ name: "Recovered subject" });
+    expect(snapshot.get()?.[0].title).toBe("Saved entry");
+    expect(raw(result.key("snapshot"))).not.toBe(UNAVAILABLE_SYNCING);
   });
 
   it("updates an object join only when every input is complete", async () => {

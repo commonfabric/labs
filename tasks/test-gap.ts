@@ -77,7 +77,6 @@ import {
 import { fetchManifest } from "./test-selection/store.ts";
 import {
   type FailedCommand,
-  passed,
   printSummary,
   type RunSummary,
   type TestResult,
@@ -168,7 +167,16 @@ export async function localChanges(
   const git = (args: readonly string[]) =>
     gitOutput(root, args, `cannot list the changes against ${base}`);
   return new Set([
-    ...pathsOf(await git(["diff", "-z", "--name-only", "--merge-base", base])),
+    ...pathsOf(
+      await git([
+        "diff",
+        "-z",
+        "--name-only",
+        "--no-renames",
+        "--merge-base",
+        base,
+      ]),
+    ),
     ...pathsOf(await git(["ls-files", "-z", "--others", "--exclude-standard"])),
   ]);
 }
@@ -611,11 +619,14 @@ export interface Snapshot {
  * with this process's environment less whatever names another repository,
  * index or work tree, and with the repository's hooks and file-system
  * monitor turned off, since those are for its owner's checkouts. A snapshot
- * that fails leaves nothing behind.
+ * that fails leaves nothing behind. `stat` reads when the repository's
+ * index was last accessed and written.
  */
 export async function snapshotTree(
   root: string,
   under?: string,
+  stat: (path: string) => Promise<Pick<Deno.FileInfo, "atime" | "mtime">> =
+    Deno.stat,
 ): Promise<Snapshot> {
   const directory = await Deno.makeTempDir({
     prefix: "test-gap-build-",
@@ -648,7 +659,7 @@ export async function snapshotTree(
       (await git(["rev-parse", "--git-path", "index"], making)).trim(),
     );
     await Deno.copyFile(original, index);
-    const { atime, mtime } = await Deno.stat(original);
+    const { atime, mtime } = await stat(original);
     if (atime === null || mtime === null) {
       throw new Error(`cannot read when ${original} was written`);
     }
@@ -912,9 +923,6 @@ export async function runGap(gap: Gap, context: GapContext): Promise<GapRun> {
       (run.kept === undefined ? "" : `, and ${run.kept}`),
     seconds: (performance.now() - startedAt) / 1000,
   };
-  if (!run.ok && passed(run.summary)) {
-    notes.push("The run failed for a reason the output above gives.");
-  }
   return run;
 }
 

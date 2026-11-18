@@ -77,7 +77,7 @@ export type SendEvent = void;
 // link. `name` arrives as a plain string (named `computed` values auto-unwrap
 // as handler state) and is snapshotted as a durable fallback label;
 // `draft` is a live PerUser cell.
-const sendMessage = handler<SendEvent, {
+export const sendMessage = handler<SendEvent, {
   messages: MessagesCell;
   draft: DraftCell;
   profile: ChatProfileCell;

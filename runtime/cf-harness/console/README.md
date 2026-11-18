@@ -176,28 +176,28 @@ build on its own.
 
 Every environment variable has a flag, and the flag wins:
 
-| Flag                          | Environment                            | Default                               |
-| ----------------------------- | -------------------------------------- | ------------------------------------- |
-| `--port`                      | `CF_HARNESS_CONSOLE_PORT`              | `8100`                                |
-| `--fabric-api-url`            | `CF_HARNESS_FABRIC_API_URL`            | `http://localhost:8000`               |
-| `--fabric-identity`           | `CF_HARNESS_FABRIC_IDENTITY`           | required                              |
-| `--fabric-space`              | `CF_HARNESS_FABRIC_SPACE`              | required, a DID or a legacy name      |
-| `--fabric-foreign-spaces`     | `CF_HARNESS_FABRIC_FOREIGN_SPACES`     | no foreign spaces admitted            |
-| `--pattern-index-url`         | `CF_HARNESS_PATTERN_INDEX_URL`         | unset                                 |
-| `--skills-registry-url`       | `CF_HARNESS_SKILLS_REGISTRY_URL`       | unset                                 |
-| `--model`                     | `CF_HARNESS_MODEL`                     | the CLI's default model               |
-| `--reasoning-effort`          | `CF_HARNESS_REASONING_EFFORT`          | the provider's default                |
-| `--research-reasoning-effort` | `CF_HARNESS_RESEARCH_REASONING_EFFORT` | the provider's default                |
-| `--workspace`                 | `CF_HARNESS_CONSOLE_WORKSPACE`         | `.cf-harness-console/workspace`       |
-| `--artifact-root`             | `CF_HARNESS_ARTIFACT_ROOT`             | `.cf-harness-console/runs`            |
-| `--agent-runs-root`           | `CF_HARNESS_CONSOLE_AGENT_RUNS_ROOT`   | `$CF_HARNESS_HOME/agent-runs`; `none` |
-| `--session-db`                | `CF_HARNESS_CONSOLE_SESSION_DB`        | `.cf-harness-console/sessions.sqlite` |
-| `--space-db`                  | `CF_HARNESS_SPACE_DB`                  | the space's own database, discovered  |
-| `--max-model-turns`           | `CF_HARNESS_CONSOLE_MAX_MODEL_TURNS`   | the prompt loop's default             |
-| `--skills-root`               | `CF_HARNESS_CONSOLE_SKILLS_ROOT`       | the repository's `skills/` tree       |
-| `--allow-skill-scripts`       | `CF_HARNESS_ALLOW_SKILL_SCRIPTS=1`     | off; scripts do not run               |
-| `--allow-browser-host`        | `CF_HARNESS_ALLOW_BROWSER_HOST=1`      | off; a task may declare no host       |
-| `--host-mount`                | —                                      | none; repeatable                      |
+| Flag                          | Environment                            | Default                                                      |
+| ----------------------------- | -------------------------------------- | ------------------------------------------------------------ |
+| `--port`                      | `CF_HARNESS_CONSOLE_PORT`              | `8100`; `0` picks a free port, except under `console:launch` |
+| `--fabric-api-url`            | `CF_HARNESS_FABRIC_API_URL`            | `http://localhost:8000`                                      |
+| `--fabric-identity`           | `CF_HARNESS_FABRIC_IDENTITY`           | required                                                     |
+| `--fabric-space`              | `CF_HARNESS_FABRIC_SPACE`              | required, a DID or a legacy name                             |
+| `--fabric-foreign-spaces`     | `CF_HARNESS_FABRIC_FOREIGN_SPACES`     | no foreign spaces admitted                                   |
+| `--pattern-index-url`         | `CF_HARNESS_PATTERN_INDEX_URL`         | unset                                                        |
+| `--skills-registry-url`       | `CF_HARNESS_SKILLS_REGISTRY_URL`       | unset                                                        |
+| `--model`                     | `CF_HARNESS_MODEL`                     | the CLI's default model                                      |
+| `--reasoning-effort`          | `CF_HARNESS_REASONING_EFFORT`          | the provider's default                                       |
+| `--research-reasoning-effort` | `CF_HARNESS_RESEARCH_REASONING_EFFORT` | the provider's default                                       |
+| `--workspace`                 | `CF_HARNESS_CONSOLE_WORKSPACE`         | `.cf-harness-console/workspace`                              |
+| `--artifact-root`             | `CF_HARNESS_ARTIFACT_ROOT`             | `.cf-harness-console/runs`                                   |
+| `--agent-runs-root`           | `CF_HARNESS_CONSOLE_AGENT_RUNS_ROOT`   | `$CF_HARNESS_HOME/agent-runs`; `none`                        |
+| `--session-db`                | `CF_HARNESS_CONSOLE_SESSION_DB`        | `.cf-harness-console/sessions.sqlite`                        |
+| `--space-db`                  | `CF_HARNESS_SPACE_DB`                  | the space's own database, discovered                         |
+| `--max-model-turns`           | `CF_HARNESS_CONSOLE_MAX_MODEL_TURNS`   | the prompt loop's default                                    |
+| `--skills-root`               | `CF_HARNESS_CONSOLE_SKILLS_ROOT`       | the repository's `skills/` tree                              |
+| `--allow-skill-scripts`       | `CF_HARNESS_ALLOW_SKILL_SCRIPTS=1`     | off; scripts do not run                                      |
+| `--allow-browser-host`        | `CF_HARNESS_ALLOW_BROWSER_HOST=1`      | off; a task may declare no host                              |
+| `--host-mount`                | —                                      | none; repeatable                                             |
 
 ### Skill scripts
 
@@ -354,7 +354,7 @@ except the two `/api/browser-host/` routes, which also take the per-turn token
 | `GET`  | `/api/turns/<turnId>/result` | Durable structured result for a completed turn                                          |
 | `GET`  | `/api/events`                | Live and replayed chat events over SSE                                                  |
 | `GET`  | `/api/runs`                  | Run summaries                                                                           |
-| `GET`  | `/api/runs/<runId>/...`      | Run detail, flow, graph, artifacts, and tool outputs                                    |
+| `GET`  | `/api/runs/<runId>/...`      | Run detail, flow, artifacts, and tool outputs                                           |
 | `POST` | `/api/index/call`            | One allowlisted pattern-index read                                                      |
 | `POST` | `/api/index/feedback`        | Records one up or down vote on a pattern in the index                                   |
 | `POST` | `/api/index/retract`         | Retracts an owned generation in favor of its direct successor                           |
@@ -977,10 +977,10 @@ The tool takes `actions`, one to eight, in the order they should run:
 
 - `invoke_command` with an `invocation` of
   `{ command, args, target?, approval }` runs one Weaver command: `command` is a
-  catalog id, `args` its arguments (at most 16 KiB of JSON; a larger call is
-  refused before anything is delivered), `target` `{ loomId, expectedVersion? }`
-  the loom it acts on, and `approval` the one its catalog entry names
-  (`automatic` or `person`).
+  catalog id, `args` its arguments (at most 2 MiB of serialized UTF-8 JSON; a
+  larger call is refused before anything is delivered), `target`
+  `{ loomId, expectedVersion? }` the loom it acts on, and `approval` the one its
+  catalog entry names (`automatic` or `person`).
 - `list_commands` with a `request` of `{ detail? }` asks for the Weaver's
   catalog, with full descriptions for up to sixteen ids named in `detail`.
 - `open_loom` and `open_url`, the final-action kinds `finish_task` uses, ask the
@@ -1282,7 +1282,7 @@ Beside them it lists the runs the agent runner made on this machine, read from
 its work root (`--agent-runs-root`, `$CF_HARNESS_HOME/agent-runs` by default):
 an `/ask` job's runs, under `local/<job-id>/artifacts/`, are labelled `/ask`,
 and the runs of an `agent()` built-in, under `<run-key>/artifacts/`, are
-labelled `agent()`. They open, map and graph like the console's own, but no
+labelled `agent()`. They open and map just like the console's own, but no
 session holds them, so they appear here and nowhere else. A run id two roots
 both hold is read from the console's own root first, then from `/ask` jobs, then
 from `agent()` runs. Only checkpoints with the required run-state fields and an
@@ -1454,22 +1454,21 @@ It needs `--pattern-index-url`; without one, the route it reads through answers
 The page holds no key and addresses no host but this server. It posts a function
 name to `/api/index/call`, and the server signs the request with the fabric
 identity and sends it — so the index sees the operator's own identity, the same
-principal a run writes with. Four functions are reachable, all of them reads:
-`listPatterns`, `listEvents`, `getPattern` and `searchPatterns`. Anything else —
-a publication, a recorded event — is refused by name before the index is
-touched, and the request the server sends is composed field by field rather than
-forwarded, so nothing extra survives the crossing. `searchPatterns` uses the
-shared client's
+principal a run writes with. Three functions are reachable, all of them reads:
+`listPatterns`, `getPattern` and `searchPatterns`. Anything else — a
+publication, a recorded event, a read of an event stream such as `listEvents` —
+is refused by name before the index is touched, and the request the server sends
+is composed field by field rather than forwarded, so nothing extra survives the
+crossing. `searchPatterns` answers with the index's own
 [successor resolution](../README.md#pattern-generations-in-search); the listing
 and exact-ID reads retain their individual generation records. Event badges
-count only that generation's own events, split by author DID when the index
-supplies `eventAuthors`. Each DID can be copied in full. Counts with no known
-author show **author unavailable**; the caller's bounded event stream cannot
-attribute the whole index's totals. When the index supplies inherited evidence,
-the score separately identifies its inherited portion, predecessor, and
-publication cutoff. `getPattern` is called without `includeSource`: this surface
-shows metadata, schemas, dependencies and events, and a pattern's source is read
-through the CLI.
+count only that generation's own events, one badge per event type; the index
+reports how many of each type a pattern collected, not who recorded them. When
+the index supplies inherited evidence, the score separately identifies its
+inherited portion, predecessor, and publication cutoff. Event counts come from
+the listing. Opening a pattern calls `getPattern` without `includeSource` for
+its metadata, schemas and dependencies; a pattern's source is read through the
+CLI.
 
 The route sits under `/api/`, so it is behind the same `Host` gate as the rest.
 
@@ -1477,18 +1476,19 @@ Voting and owner retraction have dedicated write routes:
 `POST /api/index/feedback` and `POST /api/index/retract`, below. Neither is
 reachable through the read allowlist.
 
-Three panes:
+Two panes:
 
-- **Patterns** — everything the index holds, by score. A row carries the pattern
-  id, its description and hashtags, badges per event type and known author, the
-  weighted score those counts produce, and when it was created; the weights
-  themselves are printed beside the heading. Opening a row reads that pattern's
-  argument and result schemas, its dependencies, and the events you recorded
-  against it. Every identifier is a button that copies the whole of itself.
-- **Your events** — your own event stream, newest first, with a box that filters
-  on any field. The index answers each signer with their own events and nobody
-  else's; the shared counts and their available author breakdowns are in the
-  table above. Individual notes stay in the author's own stream.
+- **Patterns** — every pattern the index lists to this identity, by score. A row
+  carries the pattern id, its description, its owner, its hashtags, a badge per
+  event type, its listing state, the weighted score those counts produce, and
+  when it was created; the weights themselves are printed beside the heading.
+  The owner is the `handle` the index gives the author, a pseudonym such as
+  `p-3kq9w2x7mz`, marked **you** when the index answers `mine: true`. The
+  listing column joins the pattern's `listing` state (`not_requested`,
+  `pending`, `passed`, `held` or `error`) with its `bucket` and its `hidden` and
+  `grandfathered` flags when the index sends them. Opening a row reads that
+  pattern's owner, its argument and result schemas, and its dependencies. Every
+  identifier is a button that copies the whole of itself.
 - **Search** — the query the runtime's `search_patterns` would make, run by
   hand. Tags, free text and a limit compose a request, and the request is shown
   beside the results, because what the pane is for is how the index answers
@@ -1542,23 +1542,20 @@ one.
 The cloud function implementation is outside this checkout. Its matching
 contract is:
 
-- `recordEvent` accepts `{ patternId, eventType, did, note? }`. It verifies
-  `did` against the authenticated CF1 signer and rejects a mismatch. It stores
-  that authenticated DID on the event. Older clients omitting `did` can be
-  attributed from the signer; an unverified body field is never authority.
-- `listEvents` retains its caller-scoped stream and existing `did` field.
-- `listPatterns` may return `eventAuthors` on each pattern, shaped as
-  `{ "thumbs_up": { "did:key:z…": 2 } }`: event type to author DID to count.
-  These are counts on that exact generation, excluding inherited evidence, and
-  each type's author counts sum to at most its `events` total. This makes author
-  counts public alongside the totals, without exposing event notes. Historical
-  events with a stored authenticated DID can contribute; events without one stay
-  unattributed. Neither the pattern owner nor its source is evidence of who
-  voted.
-
-Until the service supplies `eventAuthors`, the inspector shows the aggregate
-counts as author unavailable. The client contract and display support do not
-establish that a cloud deployment implements them.
+- `recordEvent` accepts `{ patternId, eventType }` signed with CF1, and drops a
+  `did` or `note` the request carries. `PatternIndexClient` still sends `did`,
+  which an older deployment checks against the signer. It attributes the event
+  to the signer's member and stores only a per-lineage actor hash and a day, so
+  no stored field names the author or links their events across patterns.
+- `listPatterns` returns each pattern's `events` as counts by event type on that
+  exact generation, excluding inherited evidence, with no breakdown by author.
+  Each pattern names its author by `handle`, a pseudonym stable on that index,
+  and carries `mine: true` when the caller is that author; its standing in
+  discovery arrives as `listing`, `listed`, `bucket`, `hidden` and
+  `grandfathered`. `getPattern` names its author the same way.
+- `listEvents` answers HTTP 410: the index keeps no per-author event stream. The
+  console's read allowlist leaves it out, so the page cannot ask for it, and
+  `PatternIndexClient.listEvents()` is deprecated for the same reason.
 
 ## Retracting an owned generation
 

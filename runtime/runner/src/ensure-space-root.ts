@@ -273,7 +273,6 @@ export async function resolveSpaceRootPattern(
   const slot = runtime.getSpaceCell(space).key("defaultPattern");
   await slot.sync();
   const defaultPattern = slot.get();
-  if (!defaultPattern) return undefined;
   await defaultPattern.sync();
   if (
     defaultPattern.getRaw() === undefined &&
@@ -327,6 +326,10 @@ export async function ensureSpaceRootPattern(
     isHomeSpace: boolean;
     genesisRoot?: GenesisRoot;
     stampCreationTx?: (tx: IExtendedStorageTransaction) => void;
+    /** The fetch the root's program resolve uses; `runtime.fetch` when
+     * absent. The serving seat passes one that bounds each request, so a
+     * silent pattern host cannot hold the ensure open. */
+    fetch?: RuntimeFetch;
   },
 ): Promise<EnsureSpaceRootResult> {
   const existing = await resolveSpaceRootPattern(runtime, space);
@@ -357,11 +360,12 @@ export async function ensureSpaceRootPattern(
     // non-home roots are created from the system default-app source
     // until the fetch-trust posture is ruled. Logged unconditionally on
     // this arm because detection without the read is impossible.
-    logger.info?.("custom-default-app-url-not-consulted", () => [
+    logger.info(
+      "custom-default-app-url-not-consulted",
       `space ${space}: server ensure creates the root from the system ` +
-      "default-app source; a configured defaultAppUrl is not consulted " +
-      "server-side (unruled fork — design #6209 §3, open question 3)",
-    ]);
+        "default-app source; a configured defaultAppUrl is not consulted " +
+        "server-side (unruled fork — design #6209 §3, open question 3)",
+    );
   }
 
   const created = await createSpaceRootIfAbsent(
@@ -372,7 +376,7 @@ export async function ensureSpaceRootPattern(
       ...(options.stampCreationTx !== undefined
         ? { stampCreationTx: options.stampCreationTx }
         : {}),
-      fetch: runtime.fetch,
+      fetch: options.fetch ?? runtime.fetch,
     },
   );
   const root = await resolveSpaceRootPattern(runtime, space);

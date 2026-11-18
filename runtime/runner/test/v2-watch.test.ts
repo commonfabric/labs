@@ -5,7 +5,10 @@ import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-
 import { internSchema } from "@commonfabric/data-model-schema";
 import type { MIME, URI } from "@commonfabric/memory/interface";
 
-import { watchIdForEntry } from "../src/storage/v2-watch.ts";
+import {
+  compactWatchEntries,
+  watchIdForEntry,
+} from "../src/storage/v2-watch.ts";
 
 describe("v2-watch", () => {
   describe("watchIdForEntry()", () => {
@@ -102,6 +105,47 @@ describe("v2-watch", () => {
       expect(watchIdForEntry(address, selector, "")).not.toBe(
         watchIdForEntry({ ...address, id: "of:other" as URI }, selector, ""),
       );
+    });
+  });
+
+  describe("compactWatchEntries()", () => {
+    const address = (id: string) => ({
+      id: id as URI,
+      type: "application/json" as MIME,
+    });
+    const whole: SchemaPathSelector = {
+      path: [],
+      schema: internSchema({
+        type: "object",
+        properties: { title: { type: "string" } },
+      }),
+    };
+    const title: SchemaPathSelector = {
+      path: ["title"],
+      schema: internSchema({ type: "string" }),
+    };
+
+    it("drops an entry an earlier entry's selector already covers", () => {
+      expect(
+        compactWatchEntries([
+          [address("of:a"), whole],
+          [address("of:a"), title],
+        ], {}),
+      ).toEqual([[address("of:a"), whole]]);
+    });
+
+    it("keeps an entry for another document, and one no earlier entry covers", () => {
+      expect(
+        compactWatchEntries([
+          [address("of:a"), title],
+          [address("of:b"), title],
+          [address("of:a"), whole],
+        ], {}),
+      ).toEqual([
+        [address("of:a"), title],
+        [address("of:b"), title],
+        [address("of:a"), whole],
+      ]);
     });
   });
 });

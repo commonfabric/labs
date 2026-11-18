@@ -1,0 +1,103 @@
+/**
+ * The donut menu guest. The logo is the document's own `cf-asset:` reference;
+ * the menu is built here, each picture from its asset's URL; and the favorite
+ * is drawn onto a canvas from its asset's decoded image. Choosing a favorite
+ * is the one thing the guest writes.
+ */
+
+import { connectFabric } from "@commonfabric/iframe-sandbox/guest";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+
+import { DEFAULT_STATE, type IframeStateData, MENU } from "./contract.ts";
+
+const fabric = connectFabric();
+const state = fabric.cell<IframeStateData>("state");
+
+const status = document.querySelector<HTMLParagraphElement>("#status")!;
+const menu = document.querySelector<HTMLUListElement>("#menu")!;
+const canvas = document.querySelector<HTMLCanvasElement>("#favorite")!;
+const error = document.querySelector<HTMLParagraphElement>("#error")!;
+
+/** The button that chooses each donut, by donut id. */
+const buttons = new Map<string, HTMLButtonElement>();
+
+for (const donut of MENU) {
+  const picture = fabric.asset(donut.picture);
+  const item = document.createElement("li");
+  const image = document.createElement("img");
+  image.src = picture.url;
+  image.alt = donut.name;
+  image.dataset.picture = donut.picture;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.dataset.donut = donut.id;
+  button.textContent = donut.name;
+  button.disabled = true;
+  button.addEventListener("click", () => {
+    choose(donut.id).then(
+      () => (error.textContent = ""),
+      (failure) => (error.textContent = describeFailure(failure)),
+    );
+  });
+  buttons.set(donut.id, button);
+  item.append(image, button);
+  menu.append(item);
+}
+
+/** Makes the donut `id` the favorite. */
+async function choose(id: string): Promise<void> {
+  // A child write needs the state to exist; the default stands in for it
+  // until the first write creates it.
+  await state.initialize(DEFAULT_STATE);
+  await state.key("favorite").set(id);
+}
+
+/**
+ * Draws the favorite's picture onto the canvas, or clears it. A picture
+ * decoded after another favorite was chosen is not drawn, so the canvas shows
+ * the latest choice whichever decode finishes first.
+ */
+async function draw(favorite: string | null): Promise<boolean> {
+  const context = canvas.getContext("2d")!;
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  const donut = MENU.find((candidate) => candidate.id === favorite);
+  if (donut === undefined) return true;
+  const image = await fabric.asset(donut.picture).image();
+  if (canvas.dataset.favorite !== donut.id) return false;
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return true;
+}
+
+/** Shows `value`, the stored state or its default. */
+function show(value: IframeStateData | undefined): void {
+  const favorite = value?.favorite ?? DEFAULT_STATE.favorite;
+  const donut = MENU.find((candidate) => candidate.id === favorite);
+  status.textContent = donut === undefined
+    ? "Choose a favorite."
+    : `The favorite is ${donut.name}.`;
+  for (const [id, button] of buttons) {
+    button.setAttribute("aria-pressed", String(id === favorite));
+  }
+  canvas.dataset.favorite = favorite ?? "";
+  draw(favorite).then(
+    (drawn) => {
+      if (!drawn) return;
+      canvas.dataset.drawn = favorite ?? "";
+      error.textContent = "";
+    },
+    (failure) => (error.textContent = describeFailure(failure)),
+  );
+}
+
+// The sink hears nothing useful before the state has loaded, and the pull
+// below draws the first value.
+state.sink((value) => {
+  if (value !== undefined) show(value);
+});
+state.pull().then(
+  (value) => {
+    show(value);
+    for (const button of buttons.values()) button.disabled = false;
+  },
+  (failure) => (error.textContent = describeFailure(failure)),
+);

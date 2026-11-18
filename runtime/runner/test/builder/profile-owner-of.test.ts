@@ -142,6 +142,21 @@ describe("profileOwnerOf()", () => {
     expect(callIn(undefined)).toBeUndefined();
   });
 
+  it("throws in a computation whose frame holds no runtime", () => {
+    const frame = pushFrame({
+      runtime: undefined,
+      tx: undefined,
+      frameKind: "lift",
+    });
+    try {
+      expect(() => profileOwnerOf(undefined)).toThrow(
+        "`profileOwnerOf(target)` requires an executing runtime.",
+      );
+    } finally {
+      popFrame(frame);
+    }
+  });
+
   it("throws when called outside a handler or a reactive computation", async () => {
     const profile = await seed("profile", { name: "Bob" }, bob.did());
 

@@ -1,7 +1,9 @@
 import {
+  type BuiltInLLMMessage,
   computed,
   fetchText,
   handler,
+  hasError,
   NAME,
   navigateTo,
   pattern,
@@ -92,13 +94,29 @@ const handleExternalPin = handler<
   fabExpanded.set(true);
 });
 
+/**
+ * The text of the latest assistant message in `messages`, with the text parts
+ * of a message made of parts joined, or null when the assistant has not
+ * replied.
+ */
+export function latestAssistantText(
+  messages: readonly BuiltInLLMMessage[] | undefined,
+): string | null {
+  const latest = (messages ?? []).findLast((msg) => msg.role === "assistant");
+  if (!latest) return null;
+  return typeof latest.content === "string"
+    ? latest.content
+    : latest.content.map((part) => part.type === "text" ? part.text : "")
+      .join("");
+}
+
 /** Wish for a #tag or a custom query with optional linked context. Automatically navigates to the result. */
 type WishToolParameters = {
   query: string;
   context?: Record<string, any>;
 };
 
-const wishTool = pattern<WishToolParameters, boolean>(
+export const wishTool = pattern<WishToolParameters, boolean>(
   ({ query, context }) => {
     // Context may not have been provided.
     const wishParams = computed(() => {
@@ -126,23 +144,14 @@ export default pattern<OmniboxFABInput>(
     const profile = wish<string>({ query: "#learnedSummary" });
     const profileText = resultOf(profile.result);
 
-    const patternIndexUrl = wish<{ url: Writable<string> }>({
-      query: "#patternIndex",
-    });
+    const patternIndexUrl = wish<{ url?: string }>({ query: "#patternIndex" });
     const patternIndexLocation = resultOf(patternIndexUrl.result);
-    const resolvedPatternUrl = new Writable<string>("/api/patterns/index.md");
-    computed(() => {
-      const urlRef = patternIndexLocation.url;
-      const urlValue = typeof urlRef?.get === "function"
-        ? urlRef.get()
-        : (typeof urlRef === "string" ? urlRef : undefined);
-      if (typeof urlValue === "string" && urlValue.length > 0) {
-        resolvedPatternUrl.set(urlValue);
-      }
-    });
-
     const patternIndexRequest = fetchText({
-      url: resolvedPatternUrl,
+      url: computed(() =>
+        hasError(patternIndexUrl.result)
+          ? "/api/patterns/index.md"
+          : patternIndexLocation.url || "/api/patterns/index.md"
+      ),
     });
     const patternIndex = resultOf(patternIndexRequest);
 
@@ -220,24 +229,9 @@ Be matter-of-fact. Prefer action to explanation.`;
     });
 
     // Derive latest assistant message for peek
-    const latestAssistantMessage = computed(() => {
-      if (!omnibot.messages || omnibot.messages.length === 0) return null;
-
-      for (let i = omnibot.messages.length - 1; i >= 0; i--) {
-        const msg = omnibot.messages[i];
-        if (msg.role === "assistant") {
-          const content = typeof msg.content === "string"
-            ? msg.content
-            : msg.content.map((part: any) => {
-              if (part.type === "text") return part.text;
-              return "";
-            }).join("");
-
-          return content;
-        }
-      }
-      return null;
-    });
+    const latestAssistantMessage = computed(() =>
+      latestAssistantText(omnibot.messages)
+    );
 
     return {
       [NAME]: "OmniboxFAB",

@@ -50,7 +50,8 @@ failing tests, which the pull request's checks and `gh run view` show.
 ### Running one test by name
 
 Use `--filter` on a package's `test` task, not on the root one. The root task
-runs `tasks/test.ts`, which takes no arguments and refuses a run given any.
+runs `tasks/workspace-tests.ts`, which takes no arguments and refuses a run
+given any.
 
 ```bash
 cd runtime/runner
@@ -86,9 +87,9 @@ The package's `test` task in its `deno.jsonc` names what it runs, and
 prints each command line as it runs it, which shows where the flag was
 appended.
 
-A package can run a test runner of its own, as `base/identity` does, and
-appended arguments reach whatever that runner does with them, which its own
-source says.
+A package can run a test runner of its own, as `dashboard` does through
+`tasks/run-test-batches.ts`, and appended arguments reach whatever that runner
+does with them, which its own source says.
 
 A test's name is also its identity in the run-record store, so a renamed test
 must be listed in `tasks/test-identity-aliases/` to keep its recorded
@@ -347,16 +348,12 @@ choose:
 - The CLI's shell harnesses under `runtime/cli/integration/` run in a fixed
   order for that same reason: each is one scenario driven end to end.
 - `deno task integration pattern-tests` runs each `.test.tsx` file in a
-  `cf test` process of its own, five at a time. Each process has its own
-  store, so the order the files start in decides how long the run takes and
-  nothing else. The files a continuous-integration lane expects to take
-  longest start first, so the lane finishes close to the time it was charged
-  for. Files of equal expected time, and every file of a local run, which has
-  no such figures, start in the order the seed puts them in. A local run can
-  therefore start the files in a different order from a lane at the same
-  commit. That changes nothing a test sees, because each file runs alone in
-  its process and its steps run in the order they are written, so every step
-  runs locally in the order it ran in the lane.
+  `cf test` process of its own, one at a time, in the order the seed puts
+  them in. Each process has its own store, so the order changes nothing a
+  test sees, and a file's steps run in the order they are written. The files
+  run one at a time so that the time each records is what that file takes:
+  ["Covering a new test surface"](test-records.md#covering-a-new-test-surface)
+  says why.
 
 #### Writing a task that runs tests
 
@@ -539,8 +536,11 @@ file share a browser with the tests in the others, so a file that only passes
 after some particular sibling has run is relying on something no longer written
 down anywhere. Each file has to stand on its own.
 
-A package whose tests all need a browser, `base/identity` among them, hands
-its whole test directory to `deno-web-test` and has no such split to get wrong.
+A package that runs the files of its `test/` directory in a browser as well as
+in Deno, as `base/identity` and `base/static` do, hands that directory to
+`deno-web-test`. Test files elsewhere in the package, such as `base/static`'s
+`scripts/*.test.ts`, run in Deno only. The name still decides which files the
+plain `deno test` pass leaves out.
 
 Name a test that way whenever it needs a browser, including when its subject is
 not a component.
@@ -714,7 +714,8 @@ failing.
 `EXPERIMENTAL_SERVER_EXECUTION` and else `SERVER_EXECUTION_DEFAULT_ENABLED`,
 and on the ON arm hosts the loop with the pair below: a single-user test
 connects to `startServingMemoryServer()`, whose serving runtimes fetch through
-the test's `fetchMocks`, and a multi-user test's participants to
+the test's `fetchMocks` and have their model requests answered from its
+`llmMocks`, and a multi-user test's participants to
 `listenServingMemoryServer()`, with no access list, as on the OFF arm. Each
 settle also waits until every event the runtime fired has its consequence
 back at the runtime, which `runtime.idle()` and `storageManager.synced()` do
@@ -739,7 +740,14 @@ for. A cascade that never ends leaves the settle waiting, as a client's own
 non-converging graph leaves `runtime.idle()` waiting on the OFF arm. A run
 against a caller-supplied `storageHost` is refused on the ON arm,
 since the store is the caller's and there is no memory server to host a loop
-beside.
+beside. A caller whose check does not depend on the posture, or holds only on
+the OFF arm, sets `storageHost.serverExecution: false`, which runs that
+single-user file on the OFF arm without changing the process's environment. A
+multi-user file refuses every `storageHost`, this one included, since its
+participants write against a storage server of the runner's own. A run with
+`--cfc-enforcement-mode disabled` is refused on the ON arm too: a runtime with
+CFC disabled writes no program closure for the serving loop to load, and
+served handlers run under the serving runtime's CFC posture, not the test's.
 
 On the ON arm, most of the checks `cf test` makes of a run observe the test's
 own runtime and not the serving one: the idempotency check, read budgets,
@@ -749,7 +757,10 @@ reaches it as an `errored` outcome of the event, which the runner records as
 a runtime error marked `[served]`, under the same policy as any other —
 `allowRuntimeErrors` tolerates it, and `expectRuntimeErrors` counts it. It is
 left out when the same event's speculative run recorded an error with the
-same text, so a throw both runs hit is counted once. Logger warnings and
+same text, so a throw both runs hit is counted once. A served commit that
+CFC enforcement refuses is a denial, not a throw: it is reported as a console
+warning marked `[served]`, under `allowConsoleWarnings`, as the test's own
+refused commits are, in single-user and multi-user runs alike. Logger warnings and
 errors are counted per process, and a single-user run's serving loop shares
 the test's process, so the runner tells the loop's apart by the serving
 context described below. A logger error the loop logs fails the file as a
@@ -792,12 +803,15 @@ loop keeps for tests. `prepareStorageManager` hands the test each serving
 runtime's storage manager before the runtime is built, which is where a stub on
 one of its providers goes.
 
-Either shape runs its loop in a Worker of the test's process when
+Either shape runs its loop in Workers of the test's process, one per served
+space, when
 `SERVER_EXECUTION_WORKER` is `true` in the environment, where a toolshed over a
-file store runs it in a worker unless that variable is `false`
+file store runs it in workers unless that variable is `false`
 ([`EXPERIMENTAL_OPTIONS.md`](EXPERIMENTAL_OPTIONS.md#server_execution_worker)),
 unless its `worker` option says otherwise, over a store in a temporary
-directory, since a worker cannot open a non-persistent one. `serving.host` is
+directory, since a worker cannot open a non-persistent one. Its `maxWorkers`
+option, or `SERVER_EXECUTION_MAX_WORKERS` in the environment, caps the workers
+spaces are placed on, and `1` serves every space from one. `serving.host` is
 then the loop's handle, with `stats()` and `close()`, and its `host` is
 `undefined`; on this thread `serving.host.host` is the `ExecutorHost`. Either
 way `serving.host.diagnostics()` returns the logger counts and timing statistics

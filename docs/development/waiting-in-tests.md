@@ -252,7 +252,9 @@ card's profile surface toggles display through its entrance, a re-render relays
 out the region, or a piece re-render replaces the control with an equivalent one.
 So `clickMarked` settles the control and works out where to click it in a single
 page turn. That turn holds until the tagged control's bounding box is unchanged
-across two consecutive animation frames. It then scrolls the control into view
+across two consecutive animation frames. In a document that is not being
+rendered, which produces no frames, each of those steps is one turn of the
+event loop instead (`ProbeApi.nextFrame`). It then scrolls the control into view
 and measures the point without handing control back to the test process in
 between. The hold is frame-driven and drops its baseline whenever the box
 disappears. A control hidden partway through is picked up once it returns rather
@@ -415,10 +417,10 @@ A set of edges carries them, and
   counters move inside a cycle and are visible only as numbers afterwards, so
   `awaitEach(log, predicate)` re-reads them when one has run.
 - `SpaceServerOptions.onRootEnsure` reports each space-root ensure attempt's
-  outcome. A skip writes nothing at all, and a deadline failure reports
-  `failed` while the ensure it gave up on runs on detached and may write later,
-  so at the moment either is reported there is no commit for a test to wait
-  on.
+  outcome. A skip writes nothing at all, and a failure (a pattern-source fetch
+  that went past its deadline, or a compile or creation that threw) is
+  reported after the ensure has ended, so at the moment either is reported
+  there is no commit for a test to wait on.
 - `SpaceServerOptions.onEventDrainPass` reports the end of a drain pass, which
   is where `events.processed` moves. A pass ends before the settle that
   follows it, so a wait on that counter at the cycle boundary instead sleeps
@@ -447,7 +449,12 @@ contract as a client applies it, so past the barrier a consequence that never
 arrived is an absence to assert on. It is a barrier, not a delivery signal: a
 wave that requeues the event it drained still commits, and its advance still
 covers that event's seq, so a test whose subject is the re-run's own output
-waits for that output on the replica.
+waits for that output on the replica. The runtime and storage barriers do not
+cover the serving loop: `settled()` on a serving runtime, and a client's
+`storageManager.synced()` and `idle()`, can all resolve before the loop has
+drained the commit at all, and a client that runs the pattern itself shows its
+own speculation of the served node until W covers the commit
+([speculation.md §4](../specs/server-side-execution/speculation.md)).
 
 `ArrivalLog` records what a callback the test already registers hands it — a
 navigate callback, a scheduler `onError`, a fault injector, a settle gate — with
@@ -732,11 +739,12 @@ Two pieces of machinery come up often enough in unit tests, and dispatch
 differently enough from each other, that guessing at their timing is where fixed
 delays tend to creep back in.
 
-The **scheduler** delivers a runtime-backed cell's updates through `queueTask`
-(`runtime/runner/src/scheduler/diagnostics.ts`), which is `setTimeout(fn, 0)`.
-That is a macrotask, so yielding to the microtask queue never reaches a change
-made through a real cell, however many times the test yields. Wait for these
-with `runtime.idle()`, which resolves once the scheduler has settled.
+The **scheduler** delivers a runtime-backed cell's updates in passes, each on a
+turn of the event loop that `armTurn` (`base/async/src/turn.ts`) claims
+through a zero-delay timer and a `setImmediate` at once. That is a macrotask, so
+yielding to the microtask queue never reaches a change made through a real cell,
+however many times the test yields. Wait for these with `runtime.idle()`, which
+resolves once the scheduler has settled.
 
 The **worker reconciler** (`runtime/html/src/worker/reconciler.ts`) is
 synchronous apart from one line. It queues its VDOM ops as it renders and
@@ -958,7 +966,7 @@ transport itself delivers each server frame on its own turn, so
 `clock.settle()` drains in-flight deliveries without letting any coalescing
 window elapse.
 
-Both take that turn through `armTurn` in `runtime/memory/v2/turn.ts`, which
+Both take that turn through `armTurn` in `base/async/src/turn.ts`, which
 claims it twice over: a zero-delay timer, which is what `settle()` counts, and
 a `setImmediate`, which is the same turn for a fraction of the cost. Whichever
 arrives first runs the handler and cancels the other. So an outstanding turn
@@ -970,7 +978,7 @@ its event loop for a timer.
 
 `runtime/runtime-client` keeps its unit tests on the real clock. Most of its
 tests need no wait at all, or only a macrotask drain — a `setTimeout(fn, 0)`
-that lets the scheduler's own `queueTask` dispatch land, an awaited round-trip,
+that lets the scheduler's own pass land, an awaited round-trip,
 or a sink fire once. Those drains cross one macrotask boundary, carry no
 real-time floor, and stay as they are. A positive-delay sleep is still the
 shape to avoid here: the waits that once needed one are event-driven instead —

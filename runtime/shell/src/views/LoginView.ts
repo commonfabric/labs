@@ -1,14 +1,13 @@
 import { css, html } from "lit";
 import { property, state } from "lit/decorators.js";
 
-import { Identity, KeyStore, PassKey } from "@commonfabric/identity";
+import { Identity, type KeyStore, PassKey } from "@commonfabric/identity";
 
 import { BaseView } from "./BaseView.ts";
 import {
   AUTH_METHOD_KEYFILE,
   AUTH_METHOD_PASSKEY,
   AUTH_METHOD_PASSPHRASE,
-  type AuthMethod,
   clearStoredCredential,
   createKeyFileCredential,
   createPasskeyCredential,
@@ -18,6 +17,13 @@ import {
   saveCredential,
   type StoredCredential,
 } from "../lib/credentials.ts";
+import {
+  availableAuthMethods,
+  type LoginMethod,
+  LOOM_PAIRING,
+  methodsForFlow,
+  storedCredentialLabel,
+} from "../lib/login-methods.ts";
 import {
   pairWithLoom,
   rememberKeyFileCredential,
@@ -32,32 +38,30 @@ import "../components/VBox.ts";
 
 type AuthFlow = "register" | "login";
 
+/** The button choosing each method. */
+const METHOD_BUTTONS: Record<LoginMethod, { testId: string; label: string }> = {
+  [AUTH_METHOD_PASSKEY]: { testId: "use-passkey", label: "🔑 Use Passkey" },
+  [AUTH_METHOD_PASSPHRASE]: {
+    testId: "use-passphrase",
+    label: "📝 Use Passphrase",
+  },
+  [AUTH_METHOD_KEYFILE]: {
+    testId: "import-cli-key",
+    label: "📁 Import CLI Key",
+  },
+  [LOOM_PAIRING]: { testId: "pair-with-loom", label: "🔗 Pair with Loom" },
+};
+
 /**
- * Signing in with a code from a Loom. A login method, but not a stored
- * credential: the key it brings is stored as a key-file credential.
+ * The input named `name` in the form `e` was submitted from, or `null` where
+ * the form holds no single input of that name.
  */
-const LOOM_PAIRING = "loom-pairing" as const;
-
-type LoginMethod = AuthMethod | typeof LOOM_PAIRING;
-
-// Internal auth events for LoginView
-type AuthEventType =
-  | "passkey-register"
-  | "passkey-authenticate"
-  | "passphrase-generate"
-  | "passphrase-authenticate"
-  | "clear-stored-credential";
-
-interface AuthEventDetail {
-  type: AuthEventType;
-  data?: {
-    descriptor?: PublicKeyCredentialDescriptor;
-  } | {
-    mnemonic?: string;
-  };
+function submittedInput(e: Event, name: string): HTMLInputElement | null {
+  const control = e.target instanceof HTMLFormElement
+    ? e.target.elements.namedItem(name)
+    : null;
+  return control instanceof HTMLInputElement ? control : null;
 }
-
-const AUTH_EVENT = "auth-event";
 
 export class XLoginView extends BaseView {
   static override styles = css`
@@ -234,328 +238,260 @@ export class XLoginView extends BaseView {
   /** Why the last pairing attempt failed, shown beside the pairing form. */
   @state()
   private accessor pairingError: string | null = null;
+  /** Where signing in keeps the root identity; the view waits for it. */
   @property({ attribute: false })
-  private accessor keyStore: KeyStore | undefined = undefined;
+  accessor keyStore: Pick<KeyStore, "get" | "set"> | undefined = undefined;
 
-  #availableMethods: AuthMethod[] = [];
+  #availableMethods = availableAuthMethods(
+    globalThis.location.hostname,
+    globalThis.PublicKeyCredential !== undefined,
+  );
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.#checkAvailableMethods();
-    this.addEventListener(AUTH_EVENT, this.#onAuthEvent as EventListener);
-  }
-
-  override disconnectedCallback() {
-    this.removeEventListener(AUTH_EVENT, this.#onAuthEvent as EventListener);
-    super.disconnectedCallback();
-  }
-
-  #checkAvailableMethods() {
-    const methods: AuthMethod[] = [];
-
-    // Check if passkeys are available (not on localhost, WebAuthn available)
-    const isPasskeyAvailable = globalThis.location.hostname !== "localhost" &&
-      globalThis.PublicKeyCredential !== undefined;
-
-    if (isPasskeyAvailable) {
-      methods.push(AUTH_METHOD_PASSKEY);
-    }
-
-    // Passphrase and key files are always available.
-    methods.push(AUTH_METHOD_PASSPHRASE);
-    methods.push(AUTH_METHOD_KEYFILE);
-
-    this.#availableMethods = methods;
-
-    // If only one method available, pre-select it
-    if (methods.length === 1) {
-      this.method = methods[0];
-    }
-  }
-
-  #getKeyStore(): KeyStore {
+  #getKeyStore(): Pick<KeyStore, "get" | "set"> {
     if (this.keyStore) {
       return this.keyStore;
     }
     throw new Error("Keystore not set.");
   }
 
-  #dispatchAuthEvent(
-    type: AuthEventType,
-    data?: { mnemonic?: string } | {
-      descriptor?: PublicKeyCredentialDescriptor;
-    },
-  ) {
-    this.dispatchEvent(
-      new CustomEvent(AUTH_EVENT, {
-        detail: { type, data },
-        bubbles: false, // Don't bubble up - auth events are internal
-        composed: false,
-      }),
+  //
+  // Signing in
+  //
+
+  /**
+   * Runs `task` with the view showing its progress. Returns why `task` failed,
+   * as the error's message or else as `fallback`, or `null` if it succeeded.
+   */
+  async #attempt(
+    fallback: string,
+    task: () => Promise<void>,
+  ): Promise<string | null> {
+    this.isProcessing = true;
+    try {
+      await task();
+      return null;
+    } catch (e) {
+      console.error(`[LoginView] ${fallback}:`, e);
+      return e instanceof Error ? e.message : fallback;
+    } finally {
+      this.isProcessing = false;
+    }
+  }
+
+  /** Keeps `identity` as the root key, which signing in as it reads. */
+  async #keepRootKey(identity: Identity): Promise<void> {
+    await this.#getKeyStore().set(ROOT_KEY, identity);
+  }
+
+  /** Hands `identity` to the root view, which signs in as it. */
+  #signIn(identity: Identity) {
+    this.command({ type: "set-identity", identity });
+  }
+
+  /** Saves `credential` as the one quick unlock offers. */
+  #rememberCredential(credential: StoredCredential) {
+    saveCredential(credential);
+    this.storedCredential = credential;
+  }
+
+  // A passkey and a saved key file have no form of their own, so a failure to
+  // sign in with one leaves the error over the first screen, which the error's
+  // way back then shows.
+
+  async #registerPasskey() {
+    this.error = await this.#attempt(
+      "Passkey registration failed",
+      async () => {
+        const passkey = await PassKey.create(
+          "Common Fabric User",
+          "commonfabricuser",
+        );
+        const identity = await passkey.createRootKey();
+        await this.#keepRootKey(identity);
+        this.#signIn(identity);
+      },
+    );
+    if (this.error) this.#back();
+    else this.registrationSuccess = true;
+  }
+
+  async #loginWithPasskey() {
+    const descriptor = getPublicKeyCredentialDescriptor(this.storedCredential);
+    this.error = await this.#attempt(
+      "Passkey authentication failed",
+      async () => {
+        const passkey = await PassKey.get({
+          allowCredentials: descriptor ? [descriptor] : [],
+        });
+        const identity = await passkey.createRootKey();
+        await this.#keepRootKey(identity);
+        this.#rememberCredential(createPasskeyCredential(passkey.id()));
+        this.#signIn(identity);
+      },
+    );
+    if (this.error) this.#back();
+  }
+
+  async #generatePassphrase() {
+    this.error = await this.#attempt(
+      "Failed to generate passphrase",
+      async () => {
+        [, this.mnemonic] = await Identity.generateMnemonic();
+      },
     );
   }
 
-  #onAuthEvent = async (event: Event) => {
-    const e = event as CustomEvent<AuthEventDetail>;
-    e.stopPropagation(); // Ensure event doesn't bubble up
-
-    const { type, data } = e.detail;
-    const descriptor = data && "descriptor" in data
-      ? data.descriptor
-      : undefined;
-    try {
-      switch (type) {
-        case "passkey-register":
-          await this.#handlePasskeyRegister();
-          break;
-        case "passkey-authenticate":
-          await this.#handlePasskeyAuthenticate(descriptor);
-          break;
-        case "passphrase-generate":
-          await this.#handlePassphraseGenerate();
-          break;
-        case "passphrase-authenticate":
-          if (!data || !("mnemonic" in data) || !data.mnemonic) {
-            throw new Error("Invalid mnemonic.");
-          }
-          await this.#handlePassphraseAuthenticate(data.mnemonic);
-          break;
-        case "clear-stored-credential":
-          this.#handleClearStoredCredential();
-          break;
-      }
-    } catch (error) {
-      console.error("[LoginView] Auth event error:", error);
-      this.error = error instanceof Error
-        ? error.message
-        : "Authentication failed";
-    }
-  };
-
-  //
-  // Auth event handlers
-  //
-
-  async #handlePasskeyRegister() {
-    this.isProcessing = true;
-    this.error = null;
-
-    try {
-      const passkey = await PassKey.create(
-        "Common Fabric User",
-        "commonfabricuser",
-      );
-      const identity = await passkey.createRootKey();
-
-      // Save identity to keyStore
-      const keyStore = this.#getKeyStore();
-      if (keyStore) {
-        await keyStore.set(ROOT_KEY, identity);
-      }
-
-      // Send identity to root
-      this.command({ type: "set-identity", identity });
-      this.registrationSuccess = true;
-    } catch (e) {
-      console.error("[LoginView] Passkey register error:", e);
-      this.error = e instanceof Error
-        ? e.message
-        : "Passkey registration failed";
-      this.flow = null;
-      this.method = null;
-    } finally {
-      this.isProcessing = false;
-    }
-  }
-
-  async #handlePasskeyAuthenticate(
-    descriptor?: PublicKeyCredentialDescriptor,
-  ) {
-    this.isProcessing = true;
-    this.error = null;
-
-    try {
-      const passkey = await PassKey.get({
-        allowCredentials: descriptor ? [descriptor] : [],
-      });
-      const identity = await passkey.createRootKey();
-
-      // Save identity to keyStore
-      const keyStore = this.#getKeyStore();
-      if (keyStore) {
-        await keyStore.set(ROOT_KEY, identity);
-      }
-
-      // Store credential info for future logins
-      const credential = createPasskeyCredential(passkey.id());
-      saveCredential(credential);
-      this.storedCredential = credential;
-
-      // Send identity to root
-      this.command({ type: "set-identity", identity });
-    } catch (e) {
-      console.error("[LoginView] Passkey authenticate error:", e);
-      this.error = e instanceof Error
-        ? e.message
-        : "Passkey authentication failed";
-    } finally {
-      this.isProcessing = false;
-    }
-  }
-
-  async #handlePassphraseGenerate() {
-    this.isProcessing = true;
-    this.error = null;
-
-    try {
-      const [, mnemonic] = await Identity.generateMnemonic();
-      this.mnemonic = mnemonic;
-    } catch (e) {
-      console.error("[LoginView] Passphrase generate error:", e);
-      this.error = e instanceof Error
-        ? e.message
-        : "Failed to generate passphrase";
-    } finally {
-      this.isProcessing = false;
-    }
-  }
-
-  async #handlePassphraseAuthenticate(mnemonic: string) {
-    this.isProcessing = true;
-    this.error = null;
-
-    try {
+  async #loginWithPassphrase(mnemonic: string) {
+    this.error = await this.#attempt("Invalid passphrase", async () => {
       const identity = await Identity.fromMnemonic(mnemonic);
-
-      // Save identity to keyStore
-      const keyStore = this.#getKeyStore();
-      if (keyStore) {
-        await keyStore.set(ROOT_KEY, identity);
-      }
-
-      // Store credential indicator if not already stored
+      await this.#keepRootKey(identity);
       if (!this.storedCredential) {
-        const credential = createPassphraseCredential();
-        saveCredential(credential);
-        this.storedCredential = credential;
+        this.#rememberCredential(createPassphraseCredential());
       }
-
-      // Send identity to root
-      this.command({ type: "set-identity", identity });
-    } catch (e) {
-      console.error("[LoginView] Passphrase authenticate error:", e);
-      this.error = e instanceof Error ? e.message : "Invalid passphrase";
-    } finally {
-      this.isProcessing = false;
-    }
+      this.#signIn(identity);
+    });
   }
 
-  async #handleKeyFileImport(file: File) {
-    this.isProcessing = true;
-    this.error = null;
-
-    try {
+  async #importKeyFile(file: File) {
+    this.error = await this.#attempt("Could not import key file", async () => {
       const identity = await Identity.fromPkcs8(
         new Uint8Array(await file.arrayBuffer()),
       );
+      await this.#keepRootKey(identity);
+      this.#rememberCredential(createKeyFileCredential(identity.did()));
+      this.#signIn(identity);
+    });
+  }
 
-      const keyStore = this.#getKeyStore();
-      if (keyStore) {
-        await keyStore.set(ROOT_KEY, identity);
-      }
+  async #pairWithLoom(code: string, loomUrl: string) {
+    this.pairingError = await this.#attempt(
+      "Could not pair with Loom",
+      async () => {
+        const identity = await pairWithLoom({ code, loomUrl });
+        await this.#keepRootKey(identity);
+        rememberKeyFileCredential(identity);
+        this.storedCredential = getStoredCredential();
+        this.#signIn(identity);
+      },
+    );
+  }
 
-      const credential = createKeyFileCredential(identity.did());
-      saveCredential(credential);
-      this.storedCredential = credential;
+  /** Signs in with the saved `credential`, or asks for its passphrase. */
+  async #quickUnlock(credential: StoredCredential) {
+    this.method = credential.method;
+    this.flow = "login";
 
-      this.command({ type: "set-identity", identity });
-    } catch (e) {
-      console.error("[LoginView] Key file import error:", e);
-      this.error = e instanceof Error ? e.message : "Could not import key file";
-    } finally {
-      this.isProcessing = false;
+    if (this.method === AUTH_METHOD_PASSKEY) {
+      await this.#loginWithPasskey();
+    } else if (this.method === AUTH_METHOD_KEYFILE) {
+      this.error = await this.#attempt(
+        "Could not unlock stored key file",
+        async () => {
+          const identity = await this.#getKeyStore().get(ROOT_KEY);
+          if (!identity) {
+            this.#forgetCredential();
+            throw new Error(
+              "Stored key file is no longer available. Please re-import it.",
+            );
+          }
+          this.#signIn(identity);
+        },
+      );
+      if (this.error) this.#back();
     }
   }
 
-  async #handleLoomPairing(code: string, loomUrl: string) {
-    this.isProcessing = true;
-    this.pairingError = null;
-
-    try {
-      const identity = await pairWithLoom({ code, loomUrl });
-
-      const keyStore = this.#getKeyStore();
-      if (keyStore) {
-        await keyStore.set(ROOT_KEY, identity);
-      }
-
-      rememberKeyFileCredential(identity);
-      this.storedCredential = getStoredCredential();
-
-      this.command({ type: "set-identity", identity });
-    } catch (e) {
-      console.error("[LoginView] Loom pairing error:", e);
-      this.pairingError = e instanceof Error
-        ? e.message
-        : "Could not pair with Loom";
-    } finally {
-      this.isProcessing = false;
-    }
-  }
-
-  #handleClearStoredCredential() {
+  #forgetCredential() {
     clearStoredCredential();
     this.storedCredential = null;
   }
 
-  #handleRegister() {
-    if (this.method === AUTH_METHOD_PASSKEY) {
-      this.#dispatchAuthEvent("passkey-register");
-    } else if (this.method === AUTH_METHOD_PASSPHRASE) {
-      this.#dispatchAuthEvent("passphrase-generate");
+  //
+  // Moving between screens
+  //
+
+  /** Returns to the first screen, leaving whatever flow was under way. */
+  #back = () => {
+    this.flow = null;
+    this.method = null;
+    this.pairingError = null;
+  };
+
+  /** Chooses `method`, starting a passkey's sign-in straight away. */
+  async #selectMethod(method: LoginMethod) {
+    this.method = method;
+    if (method !== AUTH_METHOD_PASSKEY) return;
+    if (this.flow === "register") {
+      await this.#registerPasskey();
+    } else {
+      await this.#loginWithPasskey();
     }
   }
 
-  #handleLogin(passphrase?: string) {
-    console.log("[LoginView] Handling login:", {
-      method: this.method,
-      hasPassphrase: !!passphrase,
-      hasStoredCredential: !!this.storedCredential,
-    });
+  #handlePassphraseLogin = async (e: Event) => {
+    e.preventDefault();
+    const passphrase = submittedInput(e, "passphrase")?.value;
+    if (passphrase) await this.#loginWithPassphrase(passphrase);
+  };
 
-    if (this.method === AUTH_METHOD_PASSKEY) {
-      const descriptor = getPublicKeyCredentialDescriptor(
-        this.storedCredential,
-      );
-      this.#dispatchAuthEvent("passkey-authenticate", { descriptor });
-    } else if (passphrase) {
-      this.#dispatchAuthEvent("passphrase-authenticate", {
-        mnemonic: passphrase,
-      });
+  #handleKeyFileSubmit = async (e: Event) => {
+    e.preventDefault();
+    const file = submittedInput(e, "keyfile")?.files?.[0];
+    if (!file || file.size === 0) {
+      this.error = "Select a key file to import.";
+      return;
     }
+    await this.#importKeyFile(file);
+  };
+
+  #handleLoomPairingSubmit = async (e: Event) => {
+    e.preventDefault();
+    const field = (name: string) => submittedInput(e, name)?.value ?? "";
+    const code = normalizePairingCode(field("pairing-code"));
+    const loomUrl = normalizeLoomUrl(field("loom-url"));
+    if (!code) {
+      this.pairingError =
+        "A pairing code is ten letters and digits, like 7KQ2M-XH4RD.";
+      return;
+    }
+    if (!loomUrl) {
+      this.pairingError = `Enter Loom's address, like ${DEFAULT_LOOM_URL}.`;
+      return;
+    }
+    await this.#pairWithLoom(code, loomUrl);
+  };
+
+  /** Signs in with the phrase the person has just saved. */
+  #handleMnemonicSaved = async () => {
+    const mnemonic = this.mnemonic;
+    this.mnemonic = null;
+    if (mnemonic) await this.#loginWithPassphrase(mnemonic);
+  };
+
+  /** Copies `mnemonic`, and says so for two seconds once it is copied. */
+  async #copyToClipboard(mnemonic: string) {
+    try {
+      await navigator.clipboard.writeText(mnemonic);
+    } catch (e) {
+      console.error("[LoginView] Could not copy the passphrase:", e);
+      return;
+    }
+    this.copied = true;
+    setTimeout(() => this.copied = false, 2000);
   }
 
-  async #copyToClipboard() {
-    if (this.mnemonic) {
-      await navigator.clipboard.writeText(this.mnemonic);
-      this.copied = true;
-      setTimeout(() => this.copied = false, 2000);
-    }
-  }
+  //
+  // Rendering
+  //
 
   #renderInitial() {
-    if (this.storedCredential) {
-      const isPassphrase =
-        this.storedCredential.method === AUTH_METHOD_PASSPHRASE;
-      const isKeyFile = this.storedCredential.method === AUTH_METHOD_KEYFILE;
+    const credential = this.storedCredential;
+    if (credential) {
+      const isPassphrase = credential.method === AUTH_METHOD_PASSPHRASE;
       const isPasskeyAvailable = this.#availableMethods.includes(
         AUTH_METHOD_PASSKEY,
       );
-      const storedLabel = isPassphrase
-        ? "Passphrase"
-        : isKeyFile
-        ? `Imported Key (${this.storedCredential.id.slice(-8)})`
-        : `Passkey (${this.storedCredential.id.slice(-4)})`;
+      const storedLabel = storedCredentialLabel(credential);
 
       return html`
         ${!isPassphrase
@@ -563,15 +499,13 @@ export class XLoginView extends BaseView {
             <div class="login-row">
               <x-button
                 variant="primary"
-                @click="${() => this.#handleQuickUnlock()}"
+                @click="${() => this.#quickUnlock(credential)}"
               >
                 🔒 Login with ${storedLabel}
               </x-button>
               <x-button
                 class="delete-button"
-                @click="${() => {
-                  this.#dispatchAuthEvent("clear-stored-credential");
-                }}"
+                @click="${() => this.#forgetCredential()}"
                 title="Remove saved credential"
               >
                 🗑️
@@ -581,7 +515,7 @@ export class XLoginView extends BaseView {
           : html`
             <x-button
               variant="primary"
-              @click="${() => this.#handleQuickUnlock()}"
+              @click="${() => this.#quickUnlock(credential)}"
             >
               🔒 Login with ${storedLabel}
             </x-button>
@@ -589,8 +523,7 @@ export class XLoginView extends BaseView {
           ? html`
             <x-button @click="${() => {
               this.flow = "login";
-              this.method = AUTH_METHOD_PASSKEY;
-              this.#handleLogin();
+              return this.#selectMethod(AUTH_METHOD_PASSKEY);
             }}">
               🔑 Login w/ Passkey
             </x-button>
@@ -631,108 +564,35 @@ export class XLoginView extends BaseView {
     `;
   }
 
-  async #handleQuickUnlock() {
-    if (!this.storedCredential) return;
-
-    this.method = this.storedCredential.method;
-    this.flow = "login";
-
-    if (this.storedCredential.method === AUTH_METHOD_PASSKEY) {
-      this.#handleLogin();
-    } else if (this.storedCredential.method === AUTH_METHOD_KEYFILE) {
-      this.isProcessing = true;
-      this.error = null;
-
-      try {
-        const identity = await this.#getKeyStore().get(ROOT_KEY);
-        if (!identity) {
-          this.#handleClearStoredCredential();
-          this.flow = null;
-          this.method = null;
-          this.error =
-            "Stored key file is no longer available. Please re-import it.";
-          return;
-        }
-
-        this.command({ type: "set-identity", identity });
-      } catch (e) {
-        console.error("[LoginView] Key file unlock error:", e);
-        this.error = e instanceof Error
-          ? e.message
-          : "Could not unlock stored key file";
-      } finally {
-        this.isProcessing = false;
-      }
-    }
-  }
-
-  #renderMethodSelection() {
-    // Pairing signs in as an identity that already exists, so it is offered
-    // for login and not for registration.
-    const methods: LoginMethod[] = this.flow === "login"
-      ? [...this.#availableMethods, LOOM_PAIRING]
-      : this.#availableMethods;
+  #renderMethodSelection(flow: AuthFlow) {
     return html`
-      <h2>${this.flow === "login" ? "Login with" : "Register with"}</h2>
+      <h2>${flow === "login" ? "Login with" : "Register with"}</h2>
       <div class="method-list">
-        ${methods.map((method) =>
+        ${methodsForFlow(flow, this.#availableMethods).map((method) =>
           html`
             <x-button
-              test-id="${method === AUTH_METHOD_PASSKEY
-                ? "use-passkey"
-                : method === AUTH_METHOD_PASSPHRASE
-                ? "use-passphrase"
-                : method === LOOM_PAIRING
-                ? "pair-with-loom"
-                : "import-cli-key"}"
-              @click="${() => this.#handleMethodSelect(method)}"
+              test-id="${METHOD_BUTTONS[method].testId}"
+              @click="${() => this.#selectMethod(method)}"
             >
-              ${method === AUTH_METHOD_PASSKEY
-                ? "🔑 Use Passkey"
-                : method === AUTH_METHOD_PASSPHRASE
-                ? "📝 Use Passphrase"
-                : method === LOOM_PAIRING
-                ? "🔗 Pair with Loom"
-                : "📁 Import CLI Key"}
+              ${METHOD_BUTTONS[method].label}
             </x-button>
           `
         )}
       </div>
-      <x-button @click="${() => {
-        this.flow = null;
-        this.method = null;
-      }}">
+      <x-button @click="${this.#back}">
         ← Back
       </x-button>
     `;
   }
 
-  #handleMethodSelect(method: LoginMethod) {
-    this.method = method;
-    if (method === AUTH_METHOD_KEYFILE || method === LOOM_PAIRING) {
-      return;
-    }
-    if (this.flow === "register" && method === AUTH_METHOD_PASSKEY) {
-      this.#handleRegister();
-    } else if (this.flow === "login" && method === AUTH_METHOD_PASSKEY) {
-      this.#handleLogin();
-    }
-  }
-
   #renderPassphraseAuth() {
     if (this.flow === "register") {
-      if (this.mnemonic) {
-        return this.#renderMnemonicDisplay();
-      }
       return html`
         <x-button variant="primary" test-id="generate-passphrase" @click="${() =>
-          this.#handleRegister()}">
+          this.#generatePassphrase()}">
           🔑 Generate Passphrase
         </x-button>
-        <x-button @click="${() => {
-          this.flow = null;
-          this.method = null;
-        }}">
+        <x-button @click="${this.#back}">
           ← Back
         </x-button>
       `;
@@ -751,22 +611,11 @@ export class XLoginView extends BaseView {
           🔒 Login
         </x-button>
       </form>
-      <x-button @click="${() => {
-        this.flow = null;
-        this.method = null;
-      }}">
+      <x-button @click="${this.#back}">
         ← Back
       </x-button>
     `;
   }
-
-  #handlePassphraseLogin = (e: Event) => {
-    e.preventDefault();
-    const form = e.target as HTMLFormElement;
-    const formData = new FormData(form);
-    const passphrase = formData.get("passphrase") as string;
-    this.#handleLogin(passphrase);
-  };
 
   #renderKeyFileImport() {
     return html`
@@ -785,25 +634,11 @@ export class XLoginView extends BaseView {
           📁 Import Key
         </x-button>
       </form>
-      <x-button @click="${() => {
-        this.flow = null;
-        this.method = null;
-      }}">
+      <x-button @click="${this.#back}">
         ← Back
       </x-button>
     `;
   }
-
-  #handleKeyFileSubmit = (e: Event) => {
-    e.preventDefault();
-    const form = e.target as HTMLFormElement;
-    const file = new FormData(form).get("keyfile");
-    if (!(file instanceof File) || file.size === 0) {
-      this.error = "Select a key file to import.";
-      return;
-    }
-    void this.#handleKeyFileImport(file);
-  };
 
   #renderLoomPairing() {
     return html`
@@ -838,47 +673,23 @@ export class XLoginView extends BaseView {
           🔗 Pair
         </x-button>
       </form>
-      <x-button @click="${() => {
-        this.flow = null;
-        this.method = null;
-        this.pairingError = null;
-      }}">
+      <x-button @click="${this.#back}">
         ← Back
       </x-button>
     `;
   }
 
-  #handleLoomPairingSubmit = async (e: Event) => {
-    e.preventDefault();
-    const fields = (e.target as HTMLFormElement).elements;
-    const field = (name: string) =>
-      (fields.namedItem(name) as HTMLInputElement | null)?.value ?? "";
-    const code = normalizePairingCode(field("pairing-code"));
-    const loomUrl = normalizeLoomUrl(field("loom-url"));
-    if (!code) {
-      this.pairingError =
-        "A pairing code is ten letters and digits, like 7KQ2M-XH4RD.";
-      return;
-    }
-    if (!loomUrl) {
-      this.pairingError = `Enter Loom's address, like ${DEFAULT_LOOM_URL}.`;
-      return;
-    }
-    await this.#handleLoomPairing(code, loomUrl);
-  };
-
-  #renderMnemonicDisplay() {
+  #renderMnemonicDisplay(mnemonic: string) {
     return html`
       <div class="message success">
         <p>Your Secret Recovery Phrase:</p>
       </div>
       <div class="mnemonic-display">
         <v-box>
-          <textarea rows="7" name="mnemonic-text">${this.mnemonic ||
-            ""}</textarea>
+          <textarea rows="7" name="mnemonic-text">${mnemonic}</textarea>
           <x-button
             class="copy-button"
-            @click="${this.#copyToClipboard}"
+            @click="${() => this.#copyToClipboard(mnemonic)}"
           >
             ${this.copied ? "✓ Copied" : "📋 Copy"}
           </x-button>
@@ -890,13 +701,7 @@ export class XLoginView extends BaseView {
       <x-button
         variant="primary"
         test-id="passphrase-continue"
-        @click="${() => {
-          // User has saved the mnemonic, now authenticate with it
-          if (this.mnemonic) {
-            this.#handleLogin(this.mnemonic);
-          }
-          this.mnemonic = null;
-        }}"
+        @click="${this.#handleMnemonicSaved}"
       >
         🔒 I've Saved It - Continue
       </x-button>
@@ -936,6 +741,9 @@ export class XLoginView extends BaseView {
         <div class="error">
           ${this.error}
         </div>
+        <x-button @click="${() => this.error = null}">
+          ← Back
+        </x-button>
       `
       : this.isProcessing
       ? html`
@@ -946,26 +754,24 @@ export class XLoginView extends BaseView {
         </div>
       `
       : this.mnemonic
-      ? this.#renderMnemonicDisplay()
+      ? this.#renderMnemonicDisplay(this.mnemonic)
       : this.registrationSuccess
       ? this.#renderSuccess()
       : this.flow === null
       ? this.#renderInitial()
       : this.method === null
-      ? this.#renderMethodSelection()
+      ? this.#renderMethodSelection(this.flow)
       : this.method === AUTH_METHOD_PASSPHRASE
       ? this.#renderPassphraseAuth()
       : this.method === AUTH_METHOD_KEYFILE
       ? this.#renderKeyFileImport()
       : this.method === LOOM_PAIRING
       ? this.#renderLoomPairing()
-      : this.method === AUTH_METHOD_PASSKEY
-      ? html`
+      : html`
         <div class="loading">
           <p>Please follow the browser's prompts to continue...</p>
         </div>
-      `
-      : "";
+      `;
 
     return html`
       <div class="login-container">

@@ -10,7 +10,9 @@ export {
   type AuthoredSourceLookup,
   type BeforeTransformersResult,
   CompilationError,
+  type CompilationErrorFields,
   type CompilationErrorType,
+  type CompiledTypeScriptModule,
   CompilerError,
   type DiagnosticMessageTransformer,
   formatTransformerDiagnostic,
@@ -22,6 +24,7 @@ export {
 } from "./typescript/mod.ts";
 export {
   collectDataFileNames,
+  collectDataReads,
   collectImportSpecifiers,
   type ModuleDeclarations,
   resolveImportSpecifier,

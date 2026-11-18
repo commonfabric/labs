@@ -155,4 +155,25 @@ describe("differential", () => {
       )).toEqual([["value", "cfc", "a"]]);
     });
   });
+
+  describe("the changes `compare()` returns", () => {
+    it("serializes to JSON as the list of changes it iterates", () => {
+      let held: State = {
+        the: TYPE,
+        of: ENTITY,
+        is: { value: { a: 1 } },
+      } as State;
+      const memory = { get: (_address: IMemoryAddress) => held };
+      const checkout = Differential.checkout(memory, [held], IDENTITY);
+      held = { the: TYPE, of: ENTITY, is: { value: { a: 2 } } } as State;
+      const changes = checkout.compare(memory);
+
+      expect(JSON.parse(JSON.stringify(changes))).toEqual(
+        JSON.parse(JSON.stringify([...changes])),
+      );
+      expect([...changes].map((change) => change.after)).toEqual([
+        { value: { a: 2 } },
+      ]);
+    });
+  });
 });

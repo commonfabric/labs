@@ -104,15 +104,6 @@ self.onmessage = async (ev: MessageEvent) => {
           hashBytes: (value.hash as { bytes: Uint8Array } | undefined)
             ? [...(value.hash as { bytes: Uint8Array }).bytes]
             : undefined,
-          regexpParts: (value.regexp as
-              | { flavor: string; source: string; flags: string }
-              | undefined)
-            ? [
-              (value.regexp as { flavor: string }).flavor,
-              (value.regexp as { source: string }).source,
-              (value.regexp as { flags: string }).flags,
-            ]
-            : undefined,
           holeKeys: Array.isArray(value.sparse)
             ? Object.keys(value.sparse)
             : undefined,

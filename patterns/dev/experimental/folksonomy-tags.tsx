@@ -5,8 +5,8 @@
  * Like Flickr tags (public, emergent ontology) rather than Gmail labels (private silos).
  *
  * FEATURES:
- * - Local-first autocomplete: Shows tags from user's space matching the same scope
- * - Community fallback: When no local matches, show dimmed suggestions from community
+ * - Community autocomplete: Suggests the community's tags for the same scope,
+ *   leaving out the ones already applied
  * - Preferential attachment: Popular community tags sort first (most used -> least used)
  * - Telemetry: Posts add/use/remove events to community aggregator piece
  *
@@ -125,34 +125,10 @@ const addTagHandler = handler<{ tag: string }, { tags: Writable<string[]> }>(
 const removeTagHandler = handler<{ tag: string }, { tags: Writable<string[]> }>(
   (event, { tags }) => {
     const tag = event.tag?.trim();
-    if (!tag) return;
-
     const currentTags = tags.get() || [];
     tags.set(currentTags.filter((t: string) => t !== tag));
   },
 );
-
-// Handler to post telemetry event to aggregator
-const _postTelemetryEvent = handler<
-  { tag: string; action: "add" | "use" | "remove" },
-  { aggregatorStream: Stream<TagEvent> | null; scope: string }
->((event, { aggregatorStream, scope }) => {
-  if (!aggregatorStream || !scope || !event.tag) return;
-
-  const tagEvent: TagEvent = {
-    scope,
-    tag: event.tag,
-    action: event.action,
-    timestamp: Date.now(),
-  };
-
-  // Stream projected from the aggregator is a Cell containing the stream - call .send() directly
-  try {
-    aggregatorStream.send(tagEvent);
-  } catch (e) {
-    console.warn("[folksonomy-tags] Failed to post telemetry:", e);
-  }
-});
 
 // Handler for clicking the remove button on a tag
 // Posts "remove" event to aggregator
@@ -161,26 +137,25 @@ const onRemoveTag = handler<
   {
     tags: Writable<string[]>;
     index: number;
-    aggregatorStream: Stream<TagEvent> | null;
+    /** The aggregator's event stream; it reaches no handler unless
+     * `connected` is true. */
+    postEvent: Stream<TagEvent> | undefined;
+    connected: boolean;
     scope: string;
   }
->((_, { tags, index, aggregatorStream, scope }) => {
+>((_, { tags, index, postEvent, connected, scope }) => {
   const currentTags = tags.get() || [];
   const removedTag = currentTags[index];
   tags.set(currentTags.toSpliced(index, 1));
 
   // Post remove event to aggregator
-  if (removedTag && aggregatorStream && scope) {
-    try {
-      aggregatorStream.send({
-        scope,
-        tag: removedTag,
-        action: "remove",
-        timestamp: Date.now(),
-      });
-    } catch (e) {
-      console.warn("[folksonomy-tags] Failed to post remove event:", e);
-    }
+  if (connected && removedTag && scope) {
+    postEvent?.send({
+      scope,
+      tag: removedTag,
+      action: "remove",
+      timestamp: Date.now(),
+    });
   }
 });
 
@@ -191,10 +166,13 @@ const onTagsChanged = handler<
   {
     tags: Writable<string[]>;
     previousTags: Writable<string[]>;
-    aggregatorStream: Stream<TagEvent> | null;
+    /** The aggregator's event stream; it reaches no handler unless
+     * `connected` is true. */
+    postEvent: Stream<TagEvent> | undefined;
+    connected: boolean;
     scope: string;
   }
->((_, { tags, previousTags, aggregatorStream, scope }) => {
+>((_, { tags, previousTags, postEvent, connected, scope }) => {
   const current = tags.get() || [];
   const previous = previousTags.get() || [];
 
@@ -212,18 +190,14 @@ const onTagsChanged = handler<
   }
 
   // Post add events for each new tag
-  if (added.length > 0 && aggregatorStream && scope) {
-    try {
-      for (const tag of added) {
-        aggregatorStream.send({
-          scope,
-          tag,
-          action: "add",
-          timestamp: Date.now(),
-        });
-      }
-    } catch (e) {
-      console.warn("[folksonomy-tags] Failed to post add events:", e);
+  if (connected && scope) {
+    for (const tag of added) {
+      postEvent?.send({
+        scope,
+        tag,
+        action: "add",
+        timestamp: Date.now(),
+      });
     }
   }
 
@@ -231,55 +205,29 @@ const onTagsChanged = handler<
   previousTags.set([...current]);
 });
 
-// Lift function to check if we have tags
-const hasTags = lift((tags: string[]) => tags && tags.length > 0);
-
-// Lift function to build autocomplete items
+// Lift function to build autocomplete items: the community's tags for this
+// scope that are not already applied
 const buildAutocompleteItems = lift(
   ({
-    localTags,
     communitySuggestions,
     currentTags,
   }: {
-    localTags: string[];
     communitySuggestions: CommunityTagSuggestion[];
     currentTags: string[];
   }): AutocompleteItem[] => {
-    const items: AutocompleteItem[] = [];
     const currentTagsLower = new Set(
       (currentTags || []).map((t) => t.toLowerCase()),
     );
-
-    // Add local tags first (from user's space with same scope)
-    for (const tag of localTags || []) {
-      if (!currentTagsLower.has(tag.toLowerCase())) {
-        items.push({
-          value: tag,
-          label: tag,
-          group: "Your tags",
-        });
-      }
-    }
-
-    // Add community suggestions (not already in local or current)
-    const localTagsLower = new Set(
-      (localTags || []).map((t) => t.toLowerCase()),
-    );
-    for (const suggestion of communitySuggestions || []) {
-      if (
-        !currentTagsLower.has(suggestion.tag.toLowerCase()) &&
-        !localTagsLower.has(suggestion.tag.toLowerCase())
-      ) {
-        items.push({
-          value: suggestion.tag,
-          label: `${suggestion.tag} (${suggestion.count})`,
-          group: "Community",
-          data: { count: suggestion.count },
-        });
-      }
-    }
-
-    return items;
+    return (communitySuggestions || [])
+      .filter((suggestion) =>
+        !currentTagsLower.has(suggestion.tag.toLowerCase())
+      )
+      .map((suggestion) => ({
+        value: suggestion.tag,
+        label: `${suggestion.tag} (${suggestion.count})`,
+        group: "Community",
+        data: { count: suggestion.count },
+      }));
   },
 );
 
@@ -305,10 +253,6 @@ export const FolksonomyTags = pattern<
     });
     const aggregator = injectedAggregator ?? discoveredAggregator;
 
-    // Get the aggregator's postEvent stream for telemetry
-    const aggregatorStream: Stream<TagEvent> | null = aggregator?.postEvent ??
-      null;
-
     // Track previous tags for change detection
     const previousTags = new Writable<string[]>([]).for("previousTags");
 
@@ -320,17 +264,14 @@ export const FolksonomyTags = pattern<
       return suggs[scopeValue] || [];
     });
 
-    // Build autocomplete items combining local and community.
-    // Local tags are just the current tags (same scope within same piece).
     const autocompleteItems = buildAutocompleteItems({
-      localTags: tags,
       communitySuggestions,
       currentTags: tags,
     });
 
     // Check if aggregator is connected
     const hasAggregator = aggregator != null;
-    const showTags = hasTags(tags);
+    const showTags = computed(() => tags.get().length > 0);
 
     // Computed name for display
     const displayName = computed(() => {
@@ -362,7 +303,8 @@ export const FolksonomyTags = pattern<
             oncf-change={onTagsChanged({
               tags,
               previousTags,
-              aggregatorStream,
+              postEvent: aggregator?.postEvent,
+              connected: hasAggregator,
               scope,
             })}
           />
@@ -390,7 +332,8 @@ export const FolksonomyTags = pattern<
                       onClick={onRemoveTag({
                         tags,
                         index,
-                        aggregatorStream,
+                        postEvent: aggregator?.postEvent,
+                        connected: hasAggregator,
                         scope,
                       })}
                       style={{

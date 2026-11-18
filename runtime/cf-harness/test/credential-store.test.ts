@@ -1,4 +1,6 @@
 import { assertEquals, assertRejects } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import {
   FileHarnessCredentialStore,
@@ -499,4 +501,75 @@ Deno.test("file credential store finishes an atomic commit after its updater sta
     ))?.accountId,
     "account-replacement",
   );
+});
+
+describe("credential-store", () => {
+  describe("FileHarnessCredentialStore", () => {
+    describe("rejects a malformed document without overwriting it", () => {
+      for (
+        const [description, document, detail] of [
+          ["a JSON array", "[]", "credential store must contain a JSON object"],
+          [
+            "an owner entry that is not an object",
+            '{"version":1,"owners":{"local":[]}}',
+            "invalid credential owner entry",
+          ],
+          [
+            "a credential that is not an object",
+            '{"version":1,"owners":{"local":{"openai-codex":"token"}}}',
+            "invalid openai-codex credential entry",
+          ],
+        ] as const
+      ) {
+        it(`throws a read failure naming ${description}`, async () => {
+          const root = await Deno.makeTempDir();
+          const path = join(root, "auth.json");
+          await Deno.writeTextFile(path, document, { mode: 0o600 });
+          const store = new FileHarnessCredentialStore({ path });
+
+          await expect(
+            store.set("local", "openai-codex", credential("replacement")),
+          ).rejects.toThrow(`failed to read credential store: ${detail}`);
+          expect(await Deno.readTextFile(path)).toBe(document);
+        });
+      }
+    });
+
+    it("throws the open failure of a lock file that cannot be created", async () => {
+      // The lock file's name is the store's plus ".lock", so a store name at
+      // the file-name limit leaves the lock name over it.
+      const root = await Deno.makeTempDir();
+      const store = new FileHarnessCredentialStore({
+        path: join(root, `${"a".repeat(250)}.json`),
+      });
+
+      await expect(
+        store.set("local", "openai-codex", credential("local")),
+      ).rejects.toThrow("File name too long");
+      expect([...Deno.readDirSync(root)]).toEqual([]);
+    });
+
+    it("throws the commit failure and removes its temporary file", async () => {
+      const root = await Deno.makeTempDir();
+      const path = join(root, "auth.json");
+      const store = new FileHarnessCredentialStore({ path });
+
+      // Another process putting a directory where the store renames its
+      // document makes the commit fail after the temporary file is written.
+      await expect(
+        store.updateRecord("local", "openai-codex", async () => {
+          await Deno.mkdir(path);
+          return { credential: credential("local") };
+        }),
+      ).rejects.toBeInstanceOf(Deno.errors.IsADirectory);
+      expect([...Deno.readDirSync(root)].map((entry) => entry.name).sort())
+        .toEqual(["auth.json", "auth.json.lock"]);
+      expect((await Deno.lstat(path)).isDirectory).toBe(true);
+      expect(store.lastValidSnapshot()).toEqual({
+        version: 2,
+        owners: {},
+        health: {},
+      });
+    });
+  });
 });

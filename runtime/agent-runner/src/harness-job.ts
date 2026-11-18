@@ -166,6 +166,13 @@ export interface HarnessJobSpec extends HarnessModelLimits {
   /** The provider reasoning effort; the provider's default when absent. */
   reasoningEffort?: string;
 
+  /**
+   * The provider prompt-cache key the job's model calls carry, shared with
+   * every other run that names it; the run's own id when absent, so a run
+   * then reuses the cache only within itself.
+   */
+  cacheAffinityKey?: string;
+
   /** The host-owned file backing the read-only Loom tools. */
   loomRetrievalConfigPath?: string;
 
@@ -190,6 +197,9 @@ export interface HarnessJobSpec extends HarnessModelLimits {
    * harness publishes unless this is `false`.
    */
   patternIndexPublish?: boolean;
+
+  /** `"agent"`: the job is a person's own agent making patterns for them (`--pattern-index-origin`). */
+  patternIndexOrigin?: "agent";
 }
 
 /**
@@ -390,6 +400,9 @@ const argvOf = (
     ? ["--pattern-index-url", spec.patternIndexUrl]
     : []),
   ...(spec.patternIndexPublish === false ? ["--no-pattern-index-publish"] : []),
+  ...(spec.patternIndexOrigin === "agent"
+    ? ["--pattern-index-origin", "agent"]
+    : []),
   ...(spec.loomRetrievalConfigPath !== undefined
     ? ["--loom-retrieval-config", spec.loomRetrievalConfigPath]
     : []),
@@ -463,6 +476,23 @@ const SANDBOX_SELECTION = { sandboxSelectionFlags: false };
 export const selectHarnessJobSandboxRuntime = (
   harnessDeps: RunCfHarnessCliDependencies = {},
 ) => selectCfHarnessCliSandboxRuntime({ ...harnessDeps, ...SANDBOX_SELECTION });
+
+/**
+ * Whether the run recorded at `runRoot` holds a checkpoint it can continue
+ * from. A run root that is not there recorded nothing to continue.
+ *
+ * @throws Error when the run's artifacts are there but cannot be read.
+ */
+export const canContinueRecordedRun = async (
+  runRoot: string,
+): Promise<boolean> => {
+  try {
+    return canContinueHarnessRun(await readHarnessRunArtifacts(runRoot));
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return false;
+    throw error;
+  }
+};
 
 /**
  * Runs one job. It ends `completed` with the submitted value or final text and
@@ -577,6 +607,9 @@ export const runHarnessJob = async (
         ...(spec.maxOutputTokens !== undefined
           ? { maxOutputTokens: spec.maxOutputTokens }
           : {}),
+        ...(spec.cacheAffinityKey !== undefined
+          ? { cacheAffinityKey: spec.cacheAffinityKey }
+          : {}),
       });
       const run = async <
         T extends RunHarnessPromptOptions | RunHarnessTranscriptOptions,
@@ -655,16 +688,8 @@ export const runHarnessJob = async (
       }
       : undefined;
   const runRef = loopResult?.runState.artifactRoot ?? failedState?.artifactRoot;
-  let recordedRun = false;
-  if (runRef !== undefined) {
-    try {
-      recordedRun = canContinueHarnessRun(
-        await readHarnessRunArtifacts(runRef),
-      );
-    } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) throw error;
-    }
-  }
+  const recordedRun = runRef !== undefined &&
+    await canContinueRecordedRun(runRef);
   const report = loopResult !== undefined
     ? reportOf(loopResult)
     : failedReport ??

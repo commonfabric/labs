@@ -259,6 +259,44 @@ describe("serving-handler-stale-read", () => {
       }]);
     });
 
+    it("requeues a handler whose read was of a doc its replica had never loaded", async () => {
+      // A home-space read of a document the replica holds nothing of, as one
+      // whose load is still in flight is, reads it as absent. The wave holds
+      // that read to the store's head like any other. This is the wave's own
+      // behavior, which the scheduler's loading-read withdrawal relies on for
+      // a served run's home-space reads; nothing else in this case depends
+      // on that withdrawal.
+
+      const { runtime, engine } = waves;
+      const counter = runtime.getCell<number>(space, "cold", counterSchema);
+      const mirror = runtime.getCell<number>(space, "mirror", counterSchema);
+      const seed = runtime.edit();
+      mirror.withTx(seed).set(0);
+      expect((await seed.commit().settled).error).toBeUndefined();
+      await waves.storageManager.synced();
+      waves.serve();
+
+      const peerSeq = commitUnseen(engine, counter, 5);
+      const tx = runtime.edit();
+      stampWaveRunContext(tx, {
+        actionId: "mirror",
+        kind: "event-handler",
+        eventId: "mirror-cold",
+      });
+      const read = counter.withTx(tx).get();
+      mirror.withTx(tx).set((read ?? 0) + 1);
+      await tx.commit().settled;
+      const outcome = await waves.commitWave();
+
+      expect(read, "the replica has not loaded the peer's doc").toBeUndefined();
+      expect(stored(engine, mirror)).toEqual({ value: 0 });
+      expect(outcome.requeuedEventIds).toEqual(["mirror-cold"]);
+      expect(outcome.requeueCatchUp).toMatchObject([{
+        eventId: "mirror-cold",
+        docs: [{ id: counter.getAsNormalizedFullLink().id, seq: peerSeq }],
+      }]);
+    });
+
     it("requeues a handler whose read a commit staled between the wave's check and its commit", async () => {
       const { runtime, engine } = waves;
       const counter = runtime.getCell<number>(space, "counter", counterSchema);

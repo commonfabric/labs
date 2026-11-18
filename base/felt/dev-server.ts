@@ -19,7 +19,8 @@ const takesAddedHeaders = (response: Response): boolean =>
 export class DevServer {
   #server: Deno.HttpServer<Deno.NetAddr>;
   #outDir: string;
-  #sockets: WebSocket[] = [];
+  // Each reload socket, with a promise that resolves once it opens.
+  #sockets = new Map<WebSocket, Promise<void>>();
   #html: string;
   #socketScript: string;
   #useReloadSocket: boolean;
@@ -71,15 +72,24 @@ export class DevServer {
     return this.#server.addr;
   }
 
+  /** Settles once the server has stopped. */
+  get finished(): Promise<void> {
+    return this.#server.finished;
+  }
+
+  /**
+   * Tells each connected page to reload, including one whose socket is still
+   * opening.
+   */
   reload() {
-    for (const socket of this.#sockets) {
-      socket.send("reload");
+    for (const [socket, opened] of this.#sockets) {
+      opened.then(() => socket.send("reload"));
     }
   }
 
   /** Closes the reload sockets and stops the server. */
   async shutdown(): Promise<void> {
-    for (const socket of this.#sockets) {
+    for (const socket of this.#sockets.keys()) {
       socket.close();
     }
     await this.#server.shutdown();
@@ -168,15 +178,13 @@ export class DevServer {
 
   #upgradeWebSocket(req: Request): Response {
     const { socket, response } = Deno.upgradeWebSocket(req);
-    socket.addEventListener("open", () => {
-      this.#sockets.push(socket);
-    });
-    socket.addEventListener("close", () => {
-      const index = this.#sockets.findIndex((s) => s === socket);
-      if (index >= 0) {
-        this.#sockets.splice(index, 1);
-      }
-    });
+    this.#sockets.set(
+      socket,
+      new Promise((resolve) =>
+        socket.addEventListener("open", () => resolve())
+      ),
+    );
+    socket.addEventListener("close", () => this.#sockets.delete(socket));
     return response;
   }
 
@@ -202,16 +210,20 @@ export class DevServer {
   }
 }
 
-// This function gets serialized and served as `/${DEV_SOCKET}` in the client
-function devSocketClient(
+/**
+ * Connects to the dev server's reload socket, returning it, and reloads
+ * `location` when the server says to. Its source is served as `/${DEV_SOCKET}`
+ * and runs in the page, so it refers to nothing outside itself.
+ */
+export function devSocketClient(
   { hostname, port }: { hostname: string; port: number },
-) {
+  location: Pick<Location, "reload"> = globalThis.location,
+): WebSocket {
   const socket = new WebSocket(`ws://${hostname}:${port}`);
-  socket.addEventListener("open", (_) => {
-    socket.addEventListener("message", (event) => {
-      if (event.data === "reload") {
-        globalThis.location.reload();
-      }
-    });
+  socket.addEventListener("message", (event) => {
+    if (event.data === "reload") {
+      location.reload();
+    }
   });
+  return socket;
 }

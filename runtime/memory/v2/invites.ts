@@ -14,9 +14,13 @@ import {
   type InviteAccess,
   inviteCodeVerifier,
   type InviteMetadata,
+  type InvitePreview,
+  type InviteProfileSuggestion,
   type InviteRedemption,
   isInviteAccess,
   isInviteId,
+  isInvitePreviewName,
+  isInviteProfileSuggestion,
   isInviteSecret,
   type RedeemReceipt,
   SPACE_INVITE_CAPABILITY,
@@ -34,6 +38,7 @@ import {
 export type InviteOperation =
   | { operation: "create"; body: CreateInvite }
   | { operation: "redeem"; body: { inviteId: string; code: string } }
+  | { operation: "preview"; body: { inviteId: string; code: string } }
   | { operation: "revoke"; body: { inviteId: string } }
   | { operation: "list"; body: Record<string, never> }
   | { operation: "receipts"; body: { inviteId?: string } };
@@ -55,12 +60,34 @@ export function parseInviteOperation(
     keys.every((key) => allowed.includes(key));
   switch (operation) {
     case "create": {
-      const { inviteId, codeVerifier, access, ttlSeconds, maxUses } = body;
+      const {
+        inviteId,
+        codeVerifier,
+        access,
+        ttlSeconds,
+        maxUses,
+        suggestedProfile,
+        spaceName,
+        issuerName,
+      } = body;
       if (
-        !only("inviteId", "codeVerifier", "access", "ttlSeconds", "maxUses") ||
+        !only(
+          "inviteId",
+          "codeVerifier",
+          "access",
+          "ttlSeconds",
+          "maxUses",
+          "suggestedProfile",
+          "spaceName",
+          "issuerName",
+        ) ||
         typeof inviteId !== "string" || typeof codeVerifier !== "string" ||
         !isInviteAccess(access) || typeof ttlSeconds !== "number" ||
-        (maxUses !== undefined && typeof maxUses !== "number")
+        (maxUses !== undefined && typeof maxUses !== "number") ||
+        (suggestedProfile !== undefined &&
+          !isSuggestionShape(suggestedProfile)) ||
+        (spaceName !== undefined && typeof spaceName !== "string") ||
+        (issuerName !== undefined && typeof issuerName !== "string")
       ) return null;
       return {
         operation,
@@ -70,10 +97,14 @@ export function parseInviteOperation(
           access,
           ttlSeconds,
           ...(maxUses === undefined ? {} : { maxUses }),
+          ...(suggestedProfile === undefined ? {} : { suggestedProfile }),
+          ...(spaceName === undefined ? {} : { spaceName }),
+          ...(issuerName === undefined ? {} : { issuerName }),
         },
       };
     }
-    case "redeem": {
+    case "redeem":
+    case "preview": {
       const { inviteId, code } = body;
       if (
         !only("inviteId", "code") || typeof inviteId !== "string" ||
@@ -101,6 +132,17 @@ export function parseInviteOperation(
   }
 }
 
+/**
+ * Whether `value` has the fields of an `InviteProfileSuggestion`, each of its
+ * type; its values are `executeInvite()`'s to judge.
+ */
+function isSuggestionShape(value: unknown): value is InviteProfileSuggestion {
+  if (!isPlainObject(value)) return false;
+  const { name, picture, ...rest } = value;
+  return Object.keys(rest).length === 0 && typeof name === "string" &&
+    (picture === undefined || typeof picture === "string");
+}
+
 /** Common envelope, supplied by the server rather than by the request body. */
 export type InviteRequest = InviteOperation & {
   host: string;
@@ -120,6 +162,7 @@ export interface InviteResult {
     | InviteMetadata[]
     | InviteRedemption[]
     | RedeemReceipt
+    | InvitePreview
     | { revoked: true };
   commit?: AppliedCommit;
 }
@@ -151,6 +194,14 @@ CREATE TABLE IF NOT EXISTS space_invite_redemptions (
 );
 CREATE TABLE IF NOT EXISTS space_invite_rejections (
   inviteId TEXT PRIMARY KEY, rejectUntil REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS space_invite_suggestions (
+  inviteId TEXT PRIMARY KEY, issuedBy TEXT NOT NULL, name TEXT NOT NULL,
+  picture TEXT, expiresAt REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS space_invite_previews (
+  inviteId TEXT PRIMARY KEY, issuedBy TEXT NOT NULL, access TEXT NOT NULL,
+  spaceName TEXT, issuerName TEXT, expiresAt REAL NOT NULL
 );`;
 
 /** Applies admission, receipts, and any ACL grant in one durable transaction. */
@@ -187,6 +238,60 @@ export function executeInvite(
       db.prepare(
         "SELECT count(*) AS count FROM space_invite_redemptions WHERE inviteId = ?",
       ).get<{ count: number }>(inviteId)!.count;
+    // An invitation's suggested profile, and what its preview shows, outlive
+    // the row's exhaustion, so a redeemer whose receipt was lost reads them
+    // again on retry. They are forgotten when the invitation expires or is
+    // revoked, and when the issuer they keep for this no longer owns the
+    // space.
+    const forgetSuggestion = (inviteId: string) => {
+      db.prepare("DELETE FROM space_invite_suggestions WHERE inviteId = ?")
+        .run(inviteId);
+      db.prepare("DELETE FROM space_invite_previews WHERE inviteId = ?")
+        .run(inviteId);
+    };
+    const previewNames = (inviteId: string) => {
+      const row = db.prepare(
+        "SELECT issuedBy, access, spaceName, issuerName FROM space_invite_previews WHERE inviteId = ?",
+      ).get<{
+        issuedBy: string;
+        access: InviteAccess;
+        spaceName: string | null;
+        issuerName: string | null;
+      }>(inviteId);
+      return row === undefined ? undefined : {
+        issuedBy: row.issuedBy,
+        access: row.access,
+        ...(row.spaceName === null ? {} : { spaceName: row.spaceName }),
+        ...(row.issuerName === null ? {} : { issuerName: row.issuerName }),
+      };
+    };
+    const suggestion = (inviteId: string) => {
+      const row = db.prepare(
+        "SELECT issuedBy, name, picture FROM space_invite_suggestions WHERE inviteId = ?",
+      ).get<{ issuedBy: string; name: string; picture: string | null }>(
+        inviteId,
+      );
+      return row === undefined ? undefined : {
+        issuedBy: row.issuedBy,
+        profile: {
+          name: row.name,
+          ...(row.picture === null ? {} : { picture: row.picture }),
+        } satisfies InviteProfileSuggestion,
+      };
+    };
+    const withSuggestion = (
+      receipt: RedeemReceipt,
+      acl: ACL | null,
+    ): RedeemReceipt => {
+      const { inviteId } = receipt.redemption;
+      const held = suggestion(inviteId);
+      if (held === undefined) return receipt;
+      if (acl?.[held.issuedBy as keyof ACL] !== "OWNER") {
+        forgetSuggestion(inviteId);
+        return receipt;
+      }
+      return { ...receipt, suggestedProfile: held.profile };
+    };
     const metadata = (row: ActiveRow): InviteMetadata => {
       const count = usedCount(row.inviteId);
       return {
@@ -205,6 +310,12 @@ export function executeInvite(
     db.prepare("DELETE FROM space_invite_rejections WHERE rejectUntil < ?").run(
       now,
     );
+    db.prepare("DELETE FROM space_invite_suggestions WHERE expiresAt <= ?").run(
+      now,
+    );
+    db.prepare("DELETE FROM space_invite_previews WHERE expiresAt <= ?").run(
+      now,
+    );
     for (
       const row of db.prepare(
         "SELECT inviteId FROM space_invites WHERE expiresAt <= ?",
@@ -221,6 +332,56 @@ export function executeInvite(
         ? null
         : acl[principal as keyof ACL] ?? acl["*"] ?? null;
     const failure = (code: string) => ({ failure: code } as const);
+    if (request.operation === "preview") {
+      // A preview reads; it consumes no use, grants nothing, and records no
+      // receipt. Every reason it is refused gives the one refusal, so the
+      // code is what learns whether an invitation exists. As on redemption,
+      // an identity holding a receipt for the invitation needs no active
+      // row, and its preview comes from what the service keeps beside it.
+      const { inviteId, code } = request.body;
+      if (!isInviteId(inviteId) || !isInviteSecret(code)) {
+        return failure("invalid-request");
+      }
+      const redeemed = db.prepare(
+        "SELECT did FROM space_invite_redemptions WHERE inviteId = ? AND did = ?",
+      ).get(inviteId, principal) !== undefined;
+      const row = db.prepare("SELECT * FROM space_invites WHERE inviteId = ?")
+        .get<ActiveRow>(inviteId);
+      if (
+        !redeemed && (
+          row === undefined ||
+          row.codeVerifier !==
+            inviteCodeVerifier({ host: request.host, space, inviteId, code }) ||
+          usedCount(inviteId) >= row.maxUses
+        )
+      ) return failure("invite-unavailable");
+      const names = previewNames(inviteId);
+      const issuedBy = row?.issuedBy ?? names?.issuedBy;
+      const access = row?.access ?? names?.access;
+      if (issuedBy === undefined || access === undefined) {
+        return failure("invite-unavailable");
+      }
+      if (acl?.[issuedBy as keyof ACL] !== "OWNER") {
+        // As redemption does, an issuer who no longer owns the space retires
+        // the invitation and what it shows, so restoring their ownership
+        // later does not bring back an invitation they could not honour.
+        if (row !== undefined) remove(inviteId);
+        forgetSuggestion(inviteId);
+        return failure("invite-unavailable");
+      }
+      const held = suggestion(inviteId)?.profile;
+      const result: InvitePreview = {
+        access,
+        ...(names?.spaceName === undefined
+          ? {}
+          : { spaceName: names.spaceName }),
+        ...(names?.issuerName === undefined
+          ? {}
+          : { issuerName: names.issuerName }),
+        ...(held === undefined ? {} : { suggestedProfile: held }),
+      };
+      return { result };
+    }
     if (request.operation === "redeem") {
       const { inviteId, code } = request.body;
       if (!isInviteId(inviteId) || !isInviteSecret(code)) {
@@ -232,11 +393,11 @@ export function executeInvite(
       ).get(inviteId, principal);
       if (receipt) {
         return {
-          result: {
+          result: withSuggestion({
             outcome: "already-redeemed",
             redemption,
             currentAccess: capability(),
-          } satisfies RedeemReceipt,
+          }, acl),
         };
       }
       const row = db.prepare("SELECT * FROM space_invites WHERE inviteId = ?")
@@ -244,6 +405,7 @@ export function executeInvite(
       if (!row) return failure("invite-unavailable");
       if (!acl || acl[row.issuedBy as keyof ACL] !== "OWNER") {
         remove(inviteId);
+        forgetSuggestion(inviteId);
         return failure("invite-unavailable");
       }
       if (
@@ -277,13 +439,13 @@ export function executeInvite(
       );
       if (usedCount(inviteId) === row.maxUses) remove(inviteId);
       return {
-        result: {
+        result: withSuggestion({
           outcome: "redeemed",
           redemption,
           currentAccess: current !== null && isCapable(current, row.access)
             ? current
             : row.access,
-        } satisfies RedeemReceipt,
+        }, acl),
         ...(commit ? { commit } : {}),
       };
     }
@@ -304,17 +466,32 @@ export function executeInvite(
           !Number.isSafeInteger(maxUses) || maxUses < 1 ||
           maxUses > SPACE_INVITE_CAPABILITY.maxUses ||
           !Number.isSafeInteger(body.ttlSeconds) || body.ttlSeconds < 1 ||
-          body.ttlSeconds > SPACE_INVITE_CAPABILITY.maxTtlSeconds
+          body.ttlSeconds > SPACE_INVITE_CAPABILITY.maxTtlSeconds ||
+          // A suggested profile is one person's, so only an invitation that
+          // admits one identity carries one.
+          (body.suggestedProfile !== undefined &&
+            (!isInviteProfileSuggestion(body.suggestedProfile) ||
+              maxUses !== 1)) ||
+          (body.spaceName !== undefined &&
+            !isInvitePreviewName(body.spaceName)) ||
+          (body.issuerName !== undefined &&
+            !isInvitePreviewName(body.issuerName))
         ) return failure("invalid-request");
         const existing = db.prepare(
           "SELECT * FROM space_invites WHERE inviteId = ?",
         ).get<ActiveRow>(body.inviteId);
         if (existing) {
+          const held = suggestion(body.inviteId)?.profile;
+          const names = previewNames(body.inviteId);
           if (
             existing.issuedBy !== principal ||
             existing.codeVerifier !== body.codeVerifier ||
             existing.access !== body.access || existing.maxUses !== maxUses ||
-            existing.ttlSeconds !== body.ttlSeconds
+            existing.ttlSeconds !== body.ttlSeconds ||
+            held?.name !== body.suggestedProfile?.name ||
+            held?.picture !== body.suggestedProfile?.picture ||
+            names?.spaceName !== body.spaceName ||
+            names?.issuerName !== body.issuerName
           ) return failure("invite-id-unavailable");
           return { result: metadata(existing) };
         }
@@ -324,8 +501,9 @@ export function executeInvite(
             "SELECT inviteId FROM space_invite_rejections WHERE inviteId = ?",
           ).get(body.inviteId)
         ) return failure("invite-id-unavailable");
+        const { suggestedProfile, spaceName, issuerName, ...settings } = body;
         const row: ActiveRow = {
-          ...body,
+          ...settings,
           maxUses,
           issuedBy: principal,
           createdAt: now,
@@ -342,6 +520,29 @@ export function executeInvite(
             row.maxUses,
             row.ttlSeconds,
           );
+        if (suggestedProfile !== undefined) {
+          db.prepare(
+            "INSERT INTO space_invite_suggestions VALUES (?, ?, ?, ?, ?)",
+          ).run(
+            row.inviteId,
+            row.issuedBy,
+            suggestedProfile.name,
+            suggestedProfile.picture ?? null,
+            row.expiresAt,
+          );
+        }
+        // Kept for every invitation, names or not: it holds the access and
+        // issuer a redeemer's preview reads once the row is used up.
+        db.prepare(
+          "INSERT INTO space_invite_previews VALUES (?, ?, ?, ?, ?, ?)",
+        ).run(
+          row.inviteId,
+          row.issuedBy,
+          row.access,
+          spaceName ?? null,
+          issuerName ?? null,
+          row.expiresAt,
+        );
         return { result: metadata(row) };
       }
       case "list":
@@ -369,6 +570,7 @@ export function executeInvite(
           return failure("invalid-request");
         }
         remove(request.body.inviteId);
+        forgetSuggestion(request.body.inviteId);
         return { result: { revoked: true } as const };
       }
     }

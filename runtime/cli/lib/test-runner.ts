@@ -45,12 +45,12 @@ import {
 import { internSchema } from "@commonfabric/data-model-schema";
 import { debugStr, toDebugKindString } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { setLLMResponder } from "@commonfabric/llm";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   ACLManager,
   ConsoleMethod,
-  parseLink,
   PatternCoverageCollector,
   patternCoverageOutputPath,
   type PatternInstantiationObserver,
@@ -67,8 +67,8 @@ import type {
   ErrorWithContext,
   ModuleByteCache,
   Pattern,
+  SchedulerGraphNode,
   SettleStats,
-  Stream,
 } from "@commonfabric/runner";
 import {
   type CfcEnforcementMode,
@@ -113,6 +113,7 @@ import {
   makeMockFetch,
   readFetchMocks,
 } from "./fetch-mock.ts";
+import { LLMMockResponder, readLLMMocks } from "./llm-mock.ts";
 import { materializeTestVDOM, mountTestVDOM } from "./materialize-test-vdom.ts";
 import {
   multiUserDescriptorMeta,
@@ -120,12 +121,19 @@ import {
 } from "./multi-user-test-runner.ts";
 import { patternTestExperimentalOptions } from "./pattern-test-experimental-options.ts";
 import { inferProgramRoot } from "./program-root.ts";
+import { requirePattern } from "./require-pattern.ts";
 import {
   type RuntimeErrorExpectation,
   runtimeErrorExpectation,
   unmetRuntimeErrorExpectation,
 } from "./runtime-error-expectation.ts";
-import { collectServedErrors, servedRuntimeErrors } from "./served-errors.ts";
+import { TEST_DEFAULT_PATTERN_PROGRAM } from "./test-default-pattern.ts";
+import {
+  collectServedErrors,
+  servedCfcRefusalWarnings,
+  servedRuntimeErrors,
+  servedThrows,
+} from "./served-errors.ts";
 import {
   servedConsequences,
   type ServedQuiescence,
@@ -238,11 +246,13 @@ type HarnessTestStepMeta = {
   assertion?: unknown;
   trustedUi?: unknown;
   render?: unknown;
-  // `{ press, control, within? }` clicks a rendered control: `press` is the
-  // view, the other two name the control in it (`test-press.ts`).
+  // `{ press, control, within?, modifiers? }` clicks a rendered control:
+  // `press` is the view, `control` and `within` name the control in it, and
+  // `modifiers` are the keys held during the click (`test-press.ts`).
   press?: unknown;
   control?: string;
   within?: string;
+  modifiers?: unknown;
   skip?: boolean;
   // `{ settle: true }` step: wait for full settlement (scheduler + storage +
   // in-flight async builtin I/O) via `runtime.settled()` before the next step.
@@ -274,6 +284,7 @@ const testStepPeekSchema = internSchema(
       press: { type: "unknown" },
       control: { type: "string" },
       within: { type: "string" },
+      modifiers: { type: "array", items: { type: "string" } },
       skip: { type: "boolean" },
       readBudget: true,
       settle: { type: "boolean" },
@@ -297,17 +308,6 @@ const testStepListSchema = internSchema(
     default: [],
   },
 );
-
-function actionStreamForStep(stepCell: HarnessTestStepCell): Stream<unknown> {
-  const actionCell = stepCell.key("action") as unknown;
-  if (
-    typeof actionCell !== "object" || actionCell === null ||
-    typeof (actionCell as { send?: unknown }).send !== "function"
-  ) {
-    throw new Error("Test step action is not a stream");
-  }
-  return actionCell as Stream<unknown>;
-}
 
 export interface TestResult {
   name: string;
@@ -491,10 +491,24 @@ export interface TestRunnerOptions {
    * A multi-user test refuses this option: its participants instantiate and
    * write in workers of their own, against a storage server the multi-user
    * runner starts, so neither the store nor the observer below would see them.
+   *
+   * A run on the server-execution arm refuses it too, since the store is the
+   * caller's and the runner has no memory server to host a serving loop
+   * beside. `serverExecution: false` below selects the OFF arm for the run.
    */
   storageHost?: {
     identity: Identity;
     storageManager: RuntimeOptions["storageManager"];
+
+    /**
+     * `false` runs this file on the OFF arm whatever
+     * `EXPERIMENTAL_SERVER_EXECUTION` and the first-party default select,
+     * without changing the process's environment. Unset, the run resolves
+     * its posture as any `cf test` run does, and a run that resolves ON
+     * refuses the store. A caller sets it when what it checks does not
+     * depend on the posture, or holds only on the OFF arm.
+     */
+    serverExecution?: false;
 
     /** Waits for host-owned work, such as an external agent, before test steps run. */
     beforeAssertions?: (
@@ -567,7 +581,11 @@ function fmtMs(ms: number): string {
   return `${ms.toFixed(2)}ms`;
 }
 
-function printSettleStats(stats: SettleStats | null): void {
+/**
+ * Prints the scheduler's settle statistics, a line per iteration followed by
+ * the actions in its work set, when settling took more than one iteration.
+ */
+export function printSettleStats(stats: SettleStats | null): void {
   if (!stats || stats.iterations.length <= 1) return;
   console.log(
     `           Settle: ${stats.iterations.length} iterations, ${
@@ -696,12 +714,11 @@ export function printLoggerStats(
           n: timing.countSinceBaseline,
           total: timing.totalTimeSinceBaseline,
           avg: timing.averageSinceBaseline,
-          p50: cdf.length > 0 ? cdfPercentile(cdf, 0.5) : 0,
-          p95: cdf.length > 0 ? cdfPercentile(cdf, 0.95) : 0,
-          max: cdf.length > 0 ? cdf[cdf.length - 1].x : 0,
+          p50: cdfPercentile(cdf, 0.5),
+          p95: cdfPercentile(cdf, 0.95),
+          max: cdfPercentile(cdf, 1),
         });
       } else {
-        if (timing.count === 0) continue;
         entries.push({
           name: `${loggerName}/${key}`,
           n: timing.count,
@@ -859,7 +876,12 @@ function isStorageLoggerName(name: string): boolean {
     name === "extended-storage-transaction";
 }
 
-function printStorageStats(elapsedMs: number, limit = 16): void {
+/**
+ * Prints the storage loggers' activity: their timings by p95, their call
+ * counts per logger, and their call counts per key, the first and last tables
+ * holding at most `limit` rows.
+ */
+export function printStorageStats(elapsedMs: number, limit = 16): void {
   type StorageCountEntry = {
     name: string;
     d: number;
@@ -893,7 +915,6 @@ function printStorageStats(elapsedMs: number, limit = 16): void {
   for (const [loggerName, timings] of Object.entries(timingBreakdown)) {
     if (!isStorageLoggerName(loggerName)) continue;
     for (const [key, timing] of Object.entries(timings)) {
-      if (timing.count === 0) continue;
       timingEntries.push({
         name: `${loggerName}/${key}`,
         n: timing.count,
@@ -965,7 +986,6 @@ function printStorageStats(elapsedMs: number, limit = 16): void {
     for (const [loggerName, logger] of Object.entries(g.commonfabric.logger)) {
       if (!isStorageLoggerName(loggerName) || !logger.countsByKey) continue;
       for (const [key, counts] of Object.entries(logger.countsByKey)) {
-        if (counts.total === 0) continue;
         keyEntries.push({
           logger: loggerName,
           key,
@@ -1008,17 +1028,16 @@ function printStorageStats(elapsedMs: number, limit = 16): void {
  * from the same source share the same stats. We deduplicate by ID and count
  * how many live nodes share each ID.
  */
-function printActionStatsTable(runtime: Runtime): void {
-  const snapshot = runtime.scheduler.getGraphSnapshot();
-  const nodes = snapshot.nodes.filter((n) => n.stats && n.stats.runCount > 0);
-  if (nodes.length === 0) return;
-
+export function printActionStatsTable(
+  nodes: readonly SchedulerGraphNode[],
+): void {
   // Deduplicate by id since stats are shared across instances with same source.
   // Count how many live nodes share each id.
+  const ran: SchedulerGraphNode[] = [];
   const seen = new Map<
     string,
     {
-      stats: NonNullable<(typeof nodes)[0]["stats"]>;
+      stats: NonNullable<SchedulerGraphNode["stats"]>;
       type: string;
       instances: number;
       childIds: Set<string>;
@@ -1027,13 +1046,15 @@ function printActionStatsTable(runtime: Runtime): void {
   >();
 
   for (const node of nodes) {
-    if (!node.stats) continue;
+    const stats = node.stats;
+    if (!stats || stats.runCount === 0) continue;
+    ran.push(node);
     const existing = seen.get(node.id);
     if (existing) {
       existing.instances++;
     } else {
       seen.set(node.id, {
-        stats: node.stats,
+        stats,
         type: node.type,
         instances: 1,
         childIds: new Set(),
@@ -1041,9 +1062,10 @@ function printActionStatsTable(runtime: Runtime): void {
       });
     }
   }
+  if (ran.length === 0) return;
 
   // Track parent-child: aggregate children into parents
-  for (const node of nodes) {
+  for (const node of ran) {
     if (node.parentId && seen.has(node.parentId) && seen.has(node.id)) {
       seen.get(node.parentId)!.childIds.add(node.id);
     }
@@ -1133,6 +1155,184 @@ function printActionStatsTable(runtime: Runtime): void {
 }
 
 /**
+ * Prints the scheduler runs each action made since `preRunCounts` was taken,
+ * the most first, as `nodes` (a later graph snapshot) records them: up to
+ * `actionLimit` actions with the cells each reads and writes, then the
+ * entities those actions read most, then a total for the actions left out.
+ */
+export function printRunDeltas(
+  preRunCounts: ReadonlyMap<string, number>,
+  nodes: readonly SchedulerGraphNode[],
+  actionLimit: number,
+): void {
+  const deltas: { id: string; preview?: string; delta: number }[] = [];
+  const seen = new Set<string>();
+  for (const node of nodes) {
+    if (!node.stats || seen.has(node.id)) continue;
+    seen.add(node.id);
+    const pre = preRunCounts.get(node.id) ?? 0;
+    const delta = node.stats.runCount - pre;
+    if (delta > 0) {
+      deltas.push({
+        id: node.id,
+        preview: node.preview,
+        delta,
+      });
+    }
+  }
+  if (deltas.length > 0) {
+    deltas.sort((a, b) => b.delta - a.delta);
+    const totalDelta = deltas.reduce((s, d) => s + d.delta, 0);
+    console.log(
+      `    ⟳ ${totalDelta} scheduler runs across ${deltas.length} actions:`,
+    );
+    // Build reads/writes lookup from post-snapshot
+    const nodeInfo = new Map<
+      string,
+      { reads?: string[]; writes?: string[] }
+    >();
+    for (const node of nodes) {
+      if (!nodeInfo.has(node.id)) {
+        nodeInfo.set(node.id, {
+          reads: node.reads,
+          writes: node.writes,
+        });
+      }
+    }
+    // Helper to shorten cell paths: did:key:z6Mk.../of:fid1:abc.../value/foo → …abc.../value/foo
+    const shortenPath = (r: string): string => {
+      // Format: did:key:.../of:fid1:abc.../path/parts
+      const ofIdx = r.indexOf("/of:");
+      if (ofIdx < 0) return r.length > 40 ? "…" + r.slice(-39) : r;
+      const afterOf = r.slice(ofIdx + 4);
+      const slashIdx = afterOf.indexOf("/");
+      if (slashIdx < 0) return "…" + afterOf.slice(-20);
+      const entityId = afterOf.slice(0, slashIdx);
+      const path = afterOf.slice(slashIdx);
+      const shortEntity = entityId.length > 10
+        ? entityId.slice(0, 8) + "…"
+        : entityId;
+      return shortEntity + path;
+    };
+    // Collect all entity IDs read by re-triggered actions
+    const entityReadCounts = new Map<string, number>();
+    for (const d of deltas) {
+      const info = nodeInfo.get(d.id);
+      if (info?.reads) {
+        for (const r of info.reads) {
+          // Extract entity: everything between /of: and the next /
+          const ofIdx = r.indexOf("/of:");
+          if (ofIdx < 0) continue;
+          const afterOf = r.slice(ofIdx + 4);
+          const slashIdx = afterOf.indexOf("/");
+          const entity = slashIdx < 0 ? afterOf : afterOf.slice(0, slashIdx);
+          const path = slashIdx < 0 ? "" : afterOf.slice(slashIdx);
+          const key = entity.slice(0, 8) + "…" + path;
+          entityReadCounts.set(
+            key,
+            (entityReadCounts.get(key) ?? 0) + d.delta,
+          );
+        }
+      }
+    }
+
+    for (const d of deltas.slice(0, actionLimit)) {
+      const label = d.preview
+        ? d.preview.split("\n")[0].trim().slice(0, 50)
+        : d.id;
+      const info = nodeInfo.get(d.id);
+      const reads = info?.reads;
+      const writes = info?.writes;
+      // Show non-schema reads (skip the first entry which is typically the schema query)
+      const nonSchemaReads = reads?.filter((r) => !r.includes("%22query%22")) ??
+        [];
+      const rStr = nonSchemaReads.length > 0
+        ? ` r:[${nonSchemaReads.slice(0, 3).map(shortenPath).join(", ")}${
+          nonSchemaReads.length > 3 ? ` +${nonSchemaReads.length - 3}` : ""
+        }]`
+        : reads && reads.length > 0
+        ? ` r:[schema-query +${reads.length - 1}]`
+        : "";
+      const wStr = writes && writes.length > 0
+        ? ` w:[${writes.slice(0, 2).map(shortenPath).join(", ")}${
+          writes.length > 2 ? ` +${writes.length - 2}` : ""
+        }]`
+        : "";
+      console.log(
+        `      ${String(d.delta).padStart(4)}× ${label}${rStr}${wStr}`,
+      );
+    }
+
+    // Show top read entities across all re-triggered actions
+    const topReads = [...entityReadCounts.entries()]
+      .filter(([k]) => !k.includes("%22query%22"))
+      .sort((a, b) => b[1] - a[1]);
+    if (topReads.length > 0) {
+      console.log(`    📖 Most-read entities:`);
+      for (const [entity, count] of topReads.slice(0, 5)) {
+        console.log(`      ${String(count).padStart(4)}× ${entity}`);
+      }
+    }
+    if (deltas.length > actionLimit) {
+      const rest = deltas.slice(actionLimit).reduce(
+        (s, d) => s + d.delta,
+        0,
+      );
+      console.log(
+        `      ${String(rest).padStart(4)}× (${
+          deltas.length - actionLimit
+        } more actions)`,
+      );
+    }
+  }
+}
+
+/**
+ * Wraps `observe` so it is not told of the default pattern the runner gives
+ * the test's space: that one is the harness's, not the test's, and its
+ * program is no file a caller could map it to.
+ */
+function harnessPatternsLeftOut(
+  observe: PatternInstantiationObserver,
+): PatternInstantiationObserver {
+  return (instantiation) => {
+    if (instantiation.main === TEST_DEFAULT_PATTERN_PROGRAM.main) return;
+    observe(instantiation);
+  };
+}
+
+/**
+ * A failed result naming each of `unanswered`, the requests no entry of the
+ * test's `llmMocks` answered, or `undefined` when there are none.
+ */
+function llmMocksResult(unanswered: string[]): TestResult | undefined {
+  if (unanswered.length === 0) return undefined;
+  return {
+    name: "llmMocks",
+    passed: false,
+    afterAction: null,
+    error: unanswered.join("\n"),
+    durationMs: 0,
+  };
+}
+
+/**
+ * The pattern `main` exports as its default.
+ *
+ * @throws If that export is not a pattern function, naming the module
+ * `description`.
+ */
+function defaultPatternOf(
+  main: { default?: unknown } | undefined,
+  description: string,
+): Pattern {
+  return requirePattern(
+    main?.default,
+    `${description} must export a pattern function as default`,
+  );
+}
+
+/**
  * Run a single test pattern file.
  */
 export async function runTestPattern(
@@ -1140,7 +1340,10 @@ export async function runTestPattern(
   options: TestRunnerOptions = {},
 ): Promise<TestRunResult> {
   // Resolved before anything is opened, so a refusal leaves nothing to close.
-  const experimental = patternTestExperimentalOptions(Deno.env.get);
+  const resolved = patternTestExperimentalOptions(Deno.env.get);
+  const experimental = options.storageHost?.serverExecution === false
+    ? { ...resolved, serverExecution: false }
+    : resolved;
   if (experimental.serverExecution && options.storageHost !== undefined) {
     throw new Error(
       `\`cf test\` refuses a caller-supplied \`storageHost\` on the ` +
@@ -1148,6 +1351,18 @@ export async function runTestPattern(
         `no memory server to host a serving loop beside, and the events its ` +
         `runtime commits would go unserved. See "The ON topology in one ` +
         `process" in \`docs/development/TESTING.md\`.`,
+    );
+  }
+  if (
+    experimental.serverExecution && options.cfcEnforcementMode === "disabled"
+  ) {
+    throw new Error(
+      `\`cf test\` refuses \`--cfc-enforcement-mode disabled\` on the ` +
+        `server-execution arm: a runtime with CFC disabled writes no program ` +
+        `closure, so the serving loop cannot load the program it is to ` +
+        `serve, and served handlers run under the serving runtime's CFC ` +
+        `posture rather than the test's. Select the OFF arm with ` +
+        `\`EXPERIMENTAL_SERVER_EXECUTION=false\` to run with CFC disabled.`,
     );
   }
 
@@ -1222,6 +1437,18 @@ export async function runTestPattern(
   const realFetch = globalThis.fetch.bind(globalThis);
   let fetchMockEntries: FetchMockEntry[] | undefined;
   const mockFetch = makeMockFetch(() => fetchMockEntries, realFetch);
+  let llmResponder: LLMMockResponder | undefined;
+  let llmReported = 0;
+  /** The requests no entry answered that nothing has reported yet. */
+  const unreportedLLMFailures = (): string[] => {
+    const unanswered = llmResponder?.unanswered ?? [];
+    const unreported = unanswered.slice(llmReported);
+    llmReported = unanswered.length;
+    return unreported;
+  };
+  // The test's responder stays installed until the serving loop below has
+  // closed, which this stack, declared before the loop's, outlasts.
+  using llmScope = new DisposableStack();
 
   // On the server-execution arm the memory server has a serving loop beside
   // it, whose runtimes run the handlers this test's events fire. They fetch
@@ -1313,7 +1540,11 @@ export async function runTestPattern(
           ? { cfcFlowLabels: options.cfcFlowLabels }
           : {}),
         ...(options.storageHost?.onPatternInstantiated !== undefined
-          ? { onPatternInstantiated: options.storageHost.onPatternInstantiated }
+          ? {
+            onPatternInstantiated: harnessPatternsLeftOut(
+              options.storageHost.onPatternInstantiated,
+            ),
+          }
           : {}),
         errorHandlers: [(error: ErrorWithContext) => runtimeErrors.push(error)],
         navigateCallback: (target) => {
@@ -1479,14 +1710,33 @@ export async function runTestPattern(
     // so the entries must be in place before `runtime.run(...)` below. `main` is the
     // module namespace, so a named `fetchMocks` export is reachable.
     fetchMockEntries = readFetchMocks(main);
+    // Every request for a language model's answer is answered from the
+    // test's `llmMocks`, or fails, whether or not the test exports any.
+    llmResponder = new LLMMockResponder(readLLMMocks(main));
+    setLLMResponder(llmResponder);
+    llmScope.defer(() => {
+      setLLMResponder(undefined);
+      const late = unreportedLLMFailures();
+      if (late.length > 0) {
+        throw new Error(
+          `${testPath}: requests no llmMocks entry answered, made after the ` +
+            `test's results were collected:\n${late.join("\n")}`,
+        );
+      }
+    });
     readBudgets = parseReadBudgets(main.readBudgets);
 
     // A compile-only run ends here: the program's modules are in the byte
     // cache, which is all it was asked for. Nothing ran, so there is no
     // coverage to write, and a multi-user descriptor's participants are not
-    // started, since they compile this same program from that cache.
+    // started, since they compile this same program from that cache. The
+    // default pattern a run gives the test's space is compiled into the cache
+    // too, since the run takes it from there as well.
     if (options.compileOnly) {
       writeLocalPatternCoverage = false;
+      await runtime.patternManager.compileAndRegisterModules(
+        TEST_DEFAULT_PATTERN_PROGRAM,
+      );
       return {
         path: testPath,
         results: [],
@@ -1509,7 +1759,7 @@ export async function runTestPattern(
         throw new Error("Read budgets are not supported in multi-user tests");
       }
       writeLocalPatternCoverage = false;
-      return await withPhase(
+      const result = await withPhase(
         ["runTestPattern", "multiUser"],
         // The participant workers compile the file again in their own
         // processes; passing the resolved root keeps their import resolution
@@ -1520,15 +1770,16 @@ export async function runTestPattern(
             root,
           }),
       );
+      // A run that failed reports only its error, so the requests no entry
+      // answered, often the cause, join that.
+      const llmResult = llmMocksResult(unreportedLLMFailures());
+      if (llmResult === undefined) return result;
+      if (result.error === undefined) result.results.push(llmResult);
+      else result.error += `\n${llmResult.error}`;
+      return result;
     }
 
-    const testPatternFactory = main.default as Pattern;
-
-    if (typeof testPatternFactory !== "function") {
-      throw new Error(
-        `Test pattern must export a pattern function as default, got ${typeof testPatternFactory}`,
-      );
-    }
+    const testPatternFactory = defaultPatternOf(main, "Test pattern");
 
     // The test's space is its identity's home space, and gets the access
     // list a home space is born with: that identity as its only OWNER. It is
@@ -1549,6 +1800,16 @@ export async function runTestPattern(
         await home.sync();
         if (home.get()?.defaultPattern !== undefined) return;
       }
+      // Compiled as the test's own program is, and written into the test's
+      // space as that is, so a serving runtime can start its handler.
+      const { main: defaultModule } = await runtime.patternManager
+        .compileAndRegisterModules(TEST_DEFAULT_PATTERN_PROGRAM, undefined, {
+          space,
+        });
+      const defaultPattern = defaultPatternOf(
+        defaultModule,
+        "The test default pattern",
+      );
       const setupTx = runtime.edit();
       const spaceCell = runtime.getCell(space, space, undefined, setupTx);
       const defaultPatternCell = runtime.getCell(
@@ -1557,31 +1818,7 @@ export async function runTestPattern(
         undefined,
         setupTx,
       );
-      const pieceRegistry = (defaultPatternCell as any).key("pieceRegistry");
-      pieceRegistry.set([]);
-      const addPiece = runtime.getCell<unknown>(
-        space,
-        "test-default-add-piece",
-        { asCell: ["stream"] },
-        setupTx,
-      );
-      (defaultPatternCell as any).key("addPiece").set(addPiece);
-      const testPieceRegistrationCount = (defaultPatternCell as any).key(
-        "testPieceRegistrationCount",
-      );
-      testPieceRegistrationCount.set(0);
-      runtime.scheduler.addEventHandler(
-        (handlerTx, event) => {
-          const piece = event?.piece;
-          if (!piece) return;
-          pieceRegistry.withTx(handlerTx).addUnique(piece);
-          testPieceRegistrationCount.withTx(handlerTx).increment();
-        },
-        parseLink(addPiece),
-      );
-      (defaultPatternCell as any).key("backlinksIndex").set({
-        mentionable: [],
-      });
+      runtime.run(setupTx, defaultPattern, {}, defaultPatternCell);
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
       runtime.prepareTxForCommit?.(setupTx);
       await setupTx.commit().settled;
@@ -2003,7 +2240,7 @@ export async function runTestPattern(
             // Get the action stream via .key()
             const actionStream = await withPhase(
               ["runTestPattern", "step", actionName, "stream"],
-              () => actionStreamForStep(stepCell),
+              () => stepCell.key("action"),
             );
 
             // Send the step's event (undefined for plain void actions),
@@ -2044,138 +2281,11 @@ export async function runTestPattern(
             (performance.now() - itemStart > statsThreshold ||
               statsThreshold === 0)
           ) {
-            const postSnapshot = runtime.scheduler.getGraphSnapshot();
-            const deltas: { id: string; preview?: string; delta: number }[] =
-              [];
-            const seen = new Set<string>();
-            for (const node of postSnapshot.nodes) {
-              if (!node.stats || seen.has(node.id)) continue;
-              seen.add(node.id);
-              const pre = preRunCounts.get(node.id) ?? 0;
-              const delta = node.stats.runCount - pre;
-              if (delta > 0) {
-                deltas.push({
-                  id: node.id,
-                  preview: node.preview,
-                  delta,
-                });
-              }
-            }
-            if (deltas.length > 0) {
-              deltas.sort((a, b) => b.delta - a.delta);
-              const totalDelta = deltas.reduce((s, d) => s + d.delta, 0);
-              const actionLimit = options.statsActionLimit ?? 10;
-              console.log(
-                `    ⟳ ${totalDelta} scheduler runs across ${deltas.length} actions:`,
-              );
-              // Build reads/writes lookup from post-snapshot
-              const nodeInfo = new Map<
-                string,
-                { reads?: string[]; writes?: string[] }
-              >();
-              for (const node of postSnapshot.nodes) {
-                if (!nodeInfo.has(node.id)) {
-                  nodeInfo.set(node.id, {
-                    reads: node.reads,
-                    writes: node.writes,
-                  });
-                }
-              }
-              // Helper to shorten cell paths: did:key:z6Mk.../of:fid1:abc.../value/foo → …abc.../value/foo
-              const shortenPath = (r: string): string => {
-                // Format: did:key:.../of:fid1:abc.../path/parts
-                const ofIdx = r.indexOf("/of:");
-                if (ofIdx < 0) return r.length > 40 ? "…" + r.slice(-39) : r;
-                const afterOf = r.slice(ofIdx + 4);
-                const slashIdx = afterOf.indexOf("/");
-                if (slashIdx < 0) return "…" + afterOf.slice(-20);
-                const entityId = afterOf.slice(0, slashIdx);
-                const path = afterOf.slice(slashIdx);
-                const shortEntity = entityId.length > 10
-                  ? entityId.slice(0, 8) + "…"
-                  : entityId;
-                return shortEntity + path;
-              };
-              // Collect all entity IDs read by re-triggered actions
-              const entityReadCounts = new Map<string, number>();
-              for (const d of deltas) {
-                const info = nodeInfo.get(d.id);
-                if (info?.reads) {
-                  for (const r of info.reads) {
-                    // Extract entity: everything between /of: and the next /
-                    const ofIdx = r.indexOf("/of:");
-                    if (ofIdx < 0) continue;
-                    const afterOf = r.slice(ofIdx + 4);
-                    const slashIdx = afterOf.indexOf("/");
-                    const entity = slashIdx < 0
-                      ? afterOf
-                      : afterOf.slice(0, slashIdx);
-                    const path = slashIdx < 0 ? "" : afterOf.slice(slashIdx);
-                    const key = entity.slice(0, 8) + "…" + path;
-                    entityReadCounts.set(
-                      key,
-                      (entityReadCounts.get(key) ?? 0) + d.delta,
-                    );
-                  }
-                }
-              }
-
-              for (const d of deltas.slice(0, actionLimit)) {
-                const label = d.preview
-                  ? d.preview.split("\n")[0].trim().slice(0, 50)
-                  : d.id;
-                const info = nodeInfo.get(d.id);
-                const reads = info?.reads;
-                const writes = info?.writes;
-                // Show non-schema reads (skip the first entry which is typically the schema query)
-                const nonSchemaReads = reads?.filter((r) =>
-                  !r.includes("%22query%22")
-                ) ?? [];
-                const rStr = nonSchemaReads.length > 0
-                  ? ` r:[${
-                    nonSchemaReads.slice(0, 3).map(shortenPath).join(", ")
-                  }${
-                    nonSchemaReads.length > 3
-                      ? ` +${nonSchemaReads.length - 3}`
-                      : ""
-                  }]`
-                  : reads && reads.length > 0
-                  ? ` r:[schema-query +${reads.length - 1}]`
-                  : "";
-                const wStr = writes && writes.length > 0
-                  ? ` w:[${writes.slice(0, 2).map(shortenPath).join(", ")}${
-                    writes.length > 2 ? ` +${writes.length - 2}` : ""
-                  }]`
-                  : "";
-                console.log(
-                  `      ${
-                    String(d.delta).padStart(4)
-                  }× ${label}${rStr}${wStr}`,
-                );
-              }
-
-              // Show top read entities across all re-triggered actions
-              const topReads = [...entityReadCounts.entries()]
-                .filter(([k]) => !k.includes("%22query%22"))
-                .sort((a, b) => b[1] - a[1]);
-              if (topReads.length > 0) {
-                console.log(`    📖 Most-read entities:`);
-                for (const [entity, count] of topReads.slice(0, 5)) {
-                  console.log(`      ${String(count).padStart(4)}× ${entity}`);
-                }
-              }
-              if (deltas.length > actionLimit) {
-                const rest = deltas.slice(actionLimit).reduce(
-                  (s, d) => s + d.delta,
-                  0,
-                );
-                console.log(
-                  `      ${String(rest).padStart(4)}× (${
-                    deltas.length - actionLimit
-                  } more actions)`,
-                );
-              }
-            }
+            printRunDeltas(
+              preRunCounts,
+              runtime.scheduler.getGraphSnapshot().nodes,
+              options.statsActionLimit ?? 10,
+            );
           }
         } else {
           // It's an assertion - check the boolean value
@@ -2325,9 +2435,12 @@ export async function runTestPattern(
       }
     }
 
+    const llmResult = llmMocksResult(unreportedLLMFailures());
+    if (llmResult !== undefined) results.push(llmResult);
+
     // Print action stats table (sorted by total time, like the shell debug UI)
     if (options.verbose) {
-      printActionStatsTable(runtime);
+      printActionStatsTable(runtime.scheduler.getGraphSnapshot().nodes);
     }
     if (options.storageStats) {
       printStorageStats(
@@ -2355,10 +2468,13 @@ export async function runTestPattern(
     );
     const servedWarnings: string[] = [];
     servedLoggerCounts?.appendMessages(consoleErrors, servedWarnings);
+    for (const warning of servedCfcRefusalWarnings(servedErrors)) {
+      consoleWarnings.push(warning);
+    }
 
     const errorMessages = [
       ...runtimeErrors.map((e) => String(e)),
-      ...servedRuntimeErrors(servedErrors, runtimeErrors),
+      ...servedRuntimeErrors(servedThrows(servedErrors), runtimeErrors),
       ...continuousUiErrors.map((e) => `[continuous $UI] ${String(e)}`),
     ];
     return {
@@ -2379,6 +2495,9 @@ export async function runTestPattern(
     };
   } catch (err) {
     let errorMessage = describeFailure(err);
+    for (const failure of unreportedLLMFailures()) {
+      errorMessage += `\n${failure}`;
+    }
     if (initializationBudgetPending) {
       try {
         await (initializationBudgetSettlement ?? runtime.settled(Infinity));
@@ -2415,10 +2534,13 @@ export async function runTestPattern(
       errorMessage +=
         "\n    Hint: If the test imports from sibling directories (e.g., ../shared/), use --root to specify a common ancestor.";
     }
+    for (const warning of servedCfcRefusalWarnings(servedErrors)) {
+      consoleWarnings.push(warning);
+    }
 
     const errorMessages = [
       ...runtimeErrors.map((e) => String(e)),
-      ...servedRuntimeErrors(servedErrors, runtimeErrors),
+      ...servedRuntimeErrors(servedThrows(servedErrors), runtimeErrors),
       ...continuousUiErrors.map((e) => `[continuous $UI] ${String(e)}`),
     ];
     return {

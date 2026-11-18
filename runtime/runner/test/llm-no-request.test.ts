@@ -150,6 +150,42 @@ describe("LLM builtin no-request paths", () => {
     }
   });
 
+  it("`generateText` makes no request for an empty message list", async () => {
+    const original = LLMClient.prototype.sendRequest;
+    let calls = 0;
+    LLMClient.prototype.sendRequest = () => {
+      calls++;
+      return Promise.reject(new Error("should not be called"));
+    };
+    try {
+      const testPattern = builder.pattern(() =>
+        builder.generateText({ system: "Be brief.", messages: [] })
+      );
+      const resultCell = runtime.getCell(
+        space,
+        "no-request-generateText-messages",
+        testPattern.resultSchema,
+        tx,
+      );
+      const result = runtime.run(tx, testPattern, {}, resultCell);
+      tx.commit();
+
+      await waitForCellValue(
+        runtime,
+        result,
+        (value) => isUnavailable(value) && value.reason === "error",
+      );
+
+      expect(calls).toBe(0);
+      expect(result.get()).toMatchObject({
+        reason: "error",
+        errorKind: "invalidInput",
+      });
+    } finally {
+      LLMClient.prototype.sendRequest = original;
+    }
+  });
+
   it("`generateObject` makes no request for an empty prompt", async () => {
     const schema: JSONSchema = {
       type: "object",

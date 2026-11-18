@@ -72,6 +72,14 @@ export interface CfcModulePolicySource {
     space: string,
     onChange: () => void,
   ): Cancel;
+
+  /**
+   * Resolves once the local replica holds the manifest document `reference`
+   * selects in `space` as the space last sent it, or once the space refused
+   * the load, so that a decision made once reads the manifest rather than a
+   * document not yet synced.
+   */
+  load(reference: CfcModulePolicyRefAtom, space: string): Promise<void>;
 }
 
 /** How many verified manifests a {@link CfcModulePolicySource} keeps. */
@@ -187,6 +195,13 @@ export const createRuntimeCfcModulePolicySource = (
         }
         onChange();
       });
+    },
+    async load(reference, space) {
+      if (!isExactModulePolicyRef(reference) || space.length === 0) return;
+      await runtime.getCellFromEntityId(
+        space as MemorySpace,
+        cfcPolicyManifestDocId(reference.policyDigest),
+      ).sync();
     },
   };
 };

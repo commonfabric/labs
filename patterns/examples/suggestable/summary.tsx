@@ -16,6 +16,7 @@ import {
   UI,
   type VNode,
 } from "commonfabric";
+import { promptAbout } from "./suggestion.ts";
 
 // ===== Types =====
 
@@ -111,10 +112,9 @@ const Summary = pattern<SummaryInput, SummaryOutput>(({ topic, context }) => {
   // An empty prompt holds the request back: `generateText` clears its state
   // and makes no call until one arrives. A summary with no topic has nothing
   // to condense, so the model is asked only once a caller names the subject.
-  const prompt = computed(() => {
-    if (!topic) return "";
-    return `Please provide a concise, well-structured summary of ${topic}`;
-  });
+  const prompt = computed(() =>
+    promptAbout(topic, "Please provide a concise, well-structured summary of ")
+  );
 
   const responseRequest = generateText({
     system:
@@ -138,7 +138,7 @@ const Summary = pattern<SummaryInput, SummaryOutput>(({ topic, context }) => {
           {ifElse(
             responseState.pending,
             <div style="color: var(--cf-theme-color-text-secondary);">
-              <cf-loader show-elapsed /> Generating summary...
+              <cf-loader showElapsed /> Generating summary...
             </div>,
             ifElse(
               responseState.error,

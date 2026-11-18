@@ -32,7 +32,8 @@ import {
   generateETag,
 } from "@commonfabric/static/etag";
 import { LRUCache } from "@commonfabric/collections/cache";
-import { decode, decodeDataFile } from "@commonfabric/text/utf8";
+import { decodeDataFile } from "@commonfabric/text/data-file";
+import { decode } from "@commonfabric/text/utf8";
 import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
 
 import {
@@ -435,9 +436,8 @@ function validSourceRoot(name: string): boolean {
   let decoded: string;
   try {
     decoded = decodeURIComponent(path);
-  } catch (error) {
-    if (error instanceof URIError) return false;
-    throw error;
+  } catch {
+    return false;
   }
   // Check traversal after decoding, but retain the encoded name in the
   // program: the HTTP compiler hashes URL pathnames. A second escape layer

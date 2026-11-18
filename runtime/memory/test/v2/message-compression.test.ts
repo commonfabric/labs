@@ -26,6 +26,12 @@ describe("message-compression", () => {
     expect(await decodeCompressedMemoryMessage(payload)).toBe(payload);
   });
 
+  it("keeps a message larger than a receiver expands in its original wire form", async () => {
+    const payload = "x".repeat(MAX_DECOMPRESSED_MEMORY_MESSAGE_BYTES + 1);
+
+    expect(await encodeCompressedMemoryMessage(payload)).toBe(payload);
+  });
+
   it("round-trips a compressible UTF-8 message through a smaller envelope", async () => {
     const payload = `fvj1:${
       JSON.stringify({

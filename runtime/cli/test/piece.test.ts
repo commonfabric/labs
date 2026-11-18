@@ -1,6 +1,8 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import { ValidationError } from "@cliffy/command";
+
 import { BaseFabricSpecialObject } from "@commonfabric/data-model/fabric-bases";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { FabricHash } from "@commonfabric/data-model/fabric-primitives";
@@ -45,6 +47,7 @@ import {
   setCellValueFromCommand,
   setPieceSourceFromCommand,
   setsrcSuccessLine,
+  spaceWasWritten,
 } from "../commands/piece.ts";
 import { normalizeApiUrl } from "../lib/api-url.ts";
 import { ServedLifecycleError } from "../lib/pattern-lifecycle.ts";
@@ -1275,7 +1278,11 @@ describe("cli piece parsing", () => {
       const started: unknown[] = [];
       const cell = { name: "created piece" };
       const controller = {
-        runtime: { experimental: { serverExecution: true } },
+        runtime: {
+          experimental: { serverExecution: true },
+          // The space this fixture creates in exists: a refusal is the server's.
+          spaceExists: () => Promise.resolve(true),
+        },
         getSpace: () => SPACE_DID,
         getPieceCell: (id: string, run: boolean) => {
           expect(run).toBe(false);
@@ -1520,6 +1527,125 @@ describe("cli piece parsing", () => {
     });
   });
 
+  it("setPiecePattern() sends the origin to a serving deployment, and fails over a receipt that records none", async () => {
+    const requests: unknown[] = [];
+    let recordsOrigin = true;
+    const deps = {
+      loadPieces: () =>
+        Promise.resolve({
+          runtime: { experimental: { serverExecution: true } },
+          getSpace: () => SPACE_DID,
+          getPieceCell: () => Promise.resolve({}),
+          getResult: () => ({}),
+        } as any),
+      resolvePieceAddress: () => Promise.resolve(PIECE),
+      getPinnedProgramFromFile: () =>
+        Promise.resolve({ main: "/main.tsx", files: [] } as any),
+      pullServed: () => Promise.resolve(),
+      setPieceSourceOnServer: (_config: unknown, input: unknown) => {
+        requests.push(input);
+        return Promise.resolve({
+          pieceId: PIECE,
+          pattern: { identity: "B".repeat(43), symbol: "default" },
+          revisionId: "revision-2",
+          seq: 12,
+          detachedOrigin: null,
+          ...(recordsOrigin ? { origin: "system:origin.tsx" } : {}),
+        });
+      },
+    };
+    const config = {
+      apiUrl: API_URL,
+      space: SPACE,
+      identity: ID,
+      piece: PIECE,
+    };
+    const entry = { mainPath: "/main.tsx" };
+
+    const receipt = await setPiecePattern(config, entry, {
+      origin: "system:origin.tsx",
+    }, deps);
+    expect(receipt.origin).toBe("system:origin.tsx");
+    expect(requests[0]).toMatchObject({ origin: "system:origin.tsx" });
+
+    // A server that does not take an origin drops it and detaches.
+    recordsOrigin = false;
+    await expect(
+      setPiecePattern(config, entry, { origin: "system:origin.tsx" }, deps),
+    ).rejects.toThrow("does not record an origin");
+    // Without one asked for, no receipt has to name one.
+    const plain = await setPiecePattern(config, entry, {}, deps);
+    expect(plain.origin).toBeUndefined();
+    expect(requests[2]).not.toHaveProperty("origin");
+  });
+
+  it("setPiecePattern() sends a piece addressed at a scope to a serving deployment with its scope, and refreshes that instance, changing nothing here", async () => {
+    const requests: { scope?: string }[] = [];
+    const opened: unknown[] = [];
+    const deps = {
+      loadPieces: () =>
+        Promise.resolve({
+          runtime: { experimental: { serverExecution: true } },
+          getSpace: () => SPACE_DID,
+          getPieceCell: (
+            id: string,
+            _open: unknown,
+            _schema: unknown,
+            scope: unknown,
+          ) => {
+            opened.push([id, scope]);
+            return Promise.resolve({});
+          },
+          getResult: () => ({}),
+          get: () => {
+            throw new Error("must not reach the client-side update");
+          },
+        } as any),
+      resolvePieceAddress: () => Promise.resolve(PIECE),
+      getPinnedProgramFromFile: () =>
+        Promise.resolve({ main: "/main.tsx", files: [] } as any),
+      pullServed: () => Promise.resolve(),
+      setPieceSourceOnServer: (_config: unknown, input: { scope?: string }) => {
+        requests.push(input);
+        return Promise.resolve({
+          pieceId: PIECE,
+          pattern: { identity: "B".repeat(43), symbol: "default" },
+          revisionId: "revision-2",
+          seq: 12,
+          detachedOrigin: null,
+        });
+      },
+    };
+    const config = {
+      apiUrl: API_URL,
+      space: SPACE,
+      identity: ID,
+      piece: PIECE,
+    };
+    const entry = { mainPath: "/main.tsx" };
+
+    for (const pieceScope of ["user", "session", "space"] as const) {
+      const receipt = await setPiecePattern(
+        { ...config, pieceScope },
+        entry,
+        {},
+        deps,
+      );
+      expect(receipt.refresh).toEqual({ status: "completed" });
+    }
+    expect(requests.map((request) => request.scope)).toEqual([
+      "user",
+      "session",
+      undefined,
+    ]);
+    expect(requests[2]).not.toHaveProperty("scope");
+    expect(opened).toEqual([
+      [PIECE, "user"],
+      [PIECE, "session"],
+      [PIECE, "space"],
+    ]);
+  });
+
   it("recreateSpaceRootPattern() targets the explicit space", async () => {
     const seen: { config?: SpaceConfig } = {};
     const pieceId = await recreateSpaceRootPattern({
@@ -1625,6 +1751,7 @@ describe("cli piece parsing", () => {
 
     it("should reject invalid scope suffixes on the piece ID segment", () => {
       expect(() => parseLink("piece1@any")).toThrow(/Invalid scope suffix/);
+      expect(() => parseLink("piece1@any")).toThrow(ValidationError);
       expect(() => parseLink("piece1@inherit")).toThrow(
         /requires a reference context/,
       );
@@ -1701,6 +1828,19 @@ describe("cli piece parsing", () => {
         embeddedSpace: SPACE_DID,
         path: ["field"],
       });
+    });
+
+    it("reads an endpoint's scope written as a named qualifier", () => {
+      expect(parseLink("fid1:abc@scope=session/field")).toEqual({
+        pieceId: "fid1:abc",
+        scope: "session",
+        path: ["field"],
+      });
+    });
+
+    it("throws for an endpoint carrying a pin", () => {
+      expect(() => parseLink(`fid1:abc@pin=${"A".repeat(43)}/field`))
+        .toThrow("which a target does not take");
     });
   });
 
@@ -3231,6 +3371,31 @@ describe("cli piece parsing", () => {
       `Committed source update for piece ${PIECE} ` +
         `(Pattern Ref: cf:module/${"B".repeat(43)}#default, ` +
         `Revision: revision-2, Seq: 12)`,
+    );
+  });
+
+  it("names the origin the update records in the setsrc success line", () => {
+    expect(setsrcSuccessLine(
+      {
+        apiUrl: API_URL,
+        space: SPACE,
+        identity: "/tmp/test.key",
+        piece: PIECE,
+      },
+      {
+        status: "committed",
+        ref: { identity: "B".repeat(43), symbol: "default" },
+        revisionId: "revision-2",
+        detachedOrigin: null,
+        origin: "system:origin.tsx",
+        space: SPACE_DID,
+        seq: 12,
+        refresh: { status: "completed" },
+      },
+    )).toBe(
+      `Committed source update for piece ${PIECE} ` +
+        `(Pattern Ref: cf:module/${"B".repeat(43)}#default, ` +
+        `Revision: revision-2, Seq: 12); it follows system:origin.tsx`,
     );
   });
 
@@ -5545,6 +5710,7 @@ describe("cli piece parsing", () => {
                 Promise.resolve({
                   id: PIECE,
                   name: () => "Notes",
+                  getCell: () => runtime.getCell(space, "piece"),
                   getPatternRef: () => Promise.resolve(patternRef),
                   input: {
                     get: () => Promise.resolve({ title: "Input" }),
@@ -5662,5 +5828,125 @@ describe("cli piece parsing", () => {
           ),
       },
     )).rejects.toThrow(/Slug "demo" not found/);
+  });
+
+  describe("parsePieceOptions() on a bare target", () => {
+    const target = {
+      apiUrl: "http://127.0.0.1:8000",
+      identity: "/nonexistent-but-unread.key",
+      space: "did:key:z6MkSpace",
+      quiet: true,
+    };
+    const pin = "A".repeat(43);
+
+    it("reads a scope written as a named qualifier", () => {
+      const config = parsePieceOptions({ ...target, cell: "lunch@scope=user" });
+
+      expect(config.piece).toBe("lunch");
+      expect(config.pieceScope).toBe("user");
+    });
+
+    it("reads no scope on a target that names none", () => {
+      const config = parsePieceOptions({ ...target, cell: "lunch" });
+
+      expect(config.piece).toBe("lunch");
+      expect(config.pieceScope).toBeUndefined();
+    });
+
+    it("throws for a target carrying a pin", () => {
+      expect(() => parsePieceOptions({ ...target, cell: `lunch@pin=${pin}` }))
+        .toThrow(
+          `"lunch@pin=${pin}" carries a \`@pin\` or \`@inherit\` qualifier, which a target does not take.`,
+        );
+    });
+
+    it("throws a `ValidationError` naming the grammar's refusal for a target holding a path", () => {
+      const parse = () =>
+        parsePieceOptions({ ...target, cell: "lunch@user/title" });
+      expect(parse).toThrow(ValidationError);
+      expect(parse).toThrow(
+        "Expected one piece segment, without a path separator.",
+      );
+    });
+  });
+
+  describe("parseSpaceOptions() beside `--url`", () => {
+    const space = "did:key:z6MkjcdxtxTiUWkPkPffhs8ENkCcJjuRCQPpJFb2xyzwHqEk";
+    const target = {
+      apiUrl: "http://127.0.0.1:8000",
+      identity: "/nonexistent-but-unread.key",
+      space,
+      cell: "fid1:refused",
+    };
+    const url = `http://127.0.0.1:8000/${space}`;
+
+    it("throws for `--url` beside a space written on the command line", () => {
+      expect(() => parseSpaceOptions({ ...target, url, explicitSpace: true }))
+        .toThrow('"--space" cannot be provided when using "--url".');
+    });
+
+    it("takes the space from `--url` over one supplied by the environment", () => {
+      expect(parseSpaceOptions({ ...target, url, explicitSpace: false }).space)
+        .toBe(space);
+    });
+  });
+
+  describe("spaceWasWritten()", () => {
+    it("returns what the caller says when it says", () => {
+      expect(spaceWasWritten(true, [])).toBe(true);
+      expect(spaceWasWritten(false, ["--space", "home"])).toBe(false);
+    });
+
+    it("returns whether the command's own arguments spell the space", () => {
+      expect(spaceWasWritten(undefined, ["--space", "home"])).toBe(true);
+      expect(spaceWasWritten(undefined, ["-s", "home"])).toBe(true);
+      expect(spaceWasWritten(undefined, ["--space=home"])).toBe(true);
+      expect(spaceWasWritten(undefined, ["--cell", "lunch"])).toBe(false);
+    });
+
+    it("returns `false` for a space spelled only after `--`, which a callable takes", () => {
+      expect(
+        spaceWasWritten(undefined, ["--cell", "lunch", "--", "--space", "x"]),
+      ).toBe(false);
+      expect(spaceWasWritten(undefined, ["-s", "home", "--", "--space"]))
+        .toBe(true);
+    });
+  });
+
+  describe("setCellValueFromCommand() stale-value hint", () => {
+    /** Writes through the command, the write reporting `served`. */
+    async function set(served: boolean): Promise<string[]> {
+      const hints: string[] = [];
+      await setCellValueFromCommand(
+        {
+          apiUrl: "http://127.0.0.1:8000",
+          identity: "/nonexistent-but-unread.key",
+          space: "did:key:z6MkSpace",
+          quiet: true,
+          cell: "lunch",
+        },
+        "title",
+        undefined,
+        {
+          drainStdin: () => Promise.resolve({ text: "Tacos" }),
+          setCellValue: () =>
+            Promise.resolve({ piece: "lunch", path: ["title"], served }),
+          render: () => {},
+          hint: (message) => hints.push(message),
+        },
+      );
+      return hints;
+    }
+
+    it("says computed values may be stale after a write this process runs", async () => {
+      const hints = await set(false);
+
+      expect(hints).toHaveLength(1);
+      expect(hints[0]).toContain("TIP: Computed values may be stale.");
+    });
+
+    it("says nothing about stale values after a write the server runs", async () => {
+      expect(await set(true)).toEqual([]);
+    });
   });
 });

@@ -19,11 +19,10 @@ The file is JSON, holding only ASCII: every other character is escaped. Its
 
 - `name`: unique among the cases.
 - `section`: the part of the spec the case exercises.
-- `requires`: present where the case applies only to a reader that constructs a
-  flavor of regular expression, or that guarantees more by some measure of size
-  than every reader must, as [`value-probes.md`](value-probes.md#requirements)
-  describes. A reader that does not meet it skips the entry. None of the cases
-  has one.
+- `requires`: present where the case applies only to a reader that guarantees
+  more by some measure of size than every reader must, as
+  [`value-probes.md`](value-probes.md#requirements) describes. A reader that
+  does not meet it skips the entry. None of the cases has one.
 - `text`: the value hashed, as its `fvj1:` text, which
   [`3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md)
   specifies. A reader decodes it to get the value, applying the mods below.
@@ -122,3 +121,8 @@ that their cases are added then.
 A key pair holding `CryptoKey` handles, which section 8 refuses, has no text.
 The refusals the file records are those of unregistered symbols, alone and
 inside containers.
+
+No value among the cases is as large as a floor that section 12 of
+`3-json-encoding.md` sets, by any measure.
+[`fvj1-conformance.md`](fvj1-conformance.md#what-is-not-among-the-cases) says
+how an implementation tests its guarantees instead.

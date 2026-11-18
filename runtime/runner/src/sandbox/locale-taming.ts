@@ -133,10 +133,10 @@ function replaceMethod(
   name: string,
   wrap: (original: AnyLocaleMethod) => AnyLocaleMethod,
 ): void {
-  const original = (proto as Record<string, unknown>)[name];
-  if (typeof original !== "function") return; // absent on this host — nothing to sanitize
+  // ECMA-262 itself defines every method sanitized here, so each is present.
+  const original = (proto as Record<string, unknown>)[name] as AnyLocaleMethod;
   Object.defineProperty(proto, name, {
-    value: wrap(original as AnyLocaleMethod),
+    value: wrap(original),
     writable: true,
     enumerable: false,
     configurable: true,

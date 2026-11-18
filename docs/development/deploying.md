@@ -184,15 +184,84 @@ it finds, rather than skip it, is a change in that repository.
 
 ## The toolshed's heap limit
 
-The toolshed binary is built with `--v8-flags=--max-old-space-size=8192`
-(`tasks/build-binaries.ts`), and `scripts/start-local-dev.sh` and the package's
-`dev` and `production` tasks run with the same flag. V8 applies the limit to each
-isolate rather than to the process, so the main thread and the serving worker
-can each reach 8 GiB, and a host's memory has to cover both for every instance
-it runs.
+The toolshed runs with `--max-old-space-size=16384`: the binary
+(`tasks/build-binaries.ts`), `scripts/start-local-dev.sh`, and the package's
+`dev` and `production` tasks all set it. Under V8's default of about 4 GB, the
+main thread, which holds the memory server, outgrew its limit on Estuary and
+took its process down every 20 minutes or so (2026-11-16). V8 takes the flag
+over the limit each serving worker is started with, so a worker's heap could
+grow to 16 GiB without reaching `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`. The
+pool logs `heap-limit-overridden` when a worker's limit is well past the one it
+was given, and then holds the worker to its limit itself: it ends a worker
+whose heartbeats report a heap of the limit or more twice in a row. The
+compiled binary reads no V8 flags when it starts (it ignores `DENO_V8_FLAGS`,
+`NODE_OPTIONS` and `--v8-flags`), so the only V8 flags a deployment runs with
+are the ones built in. The binary is built with
+`--perf-basic-prof-only-functions` and
+`--interpreted-frames-native-stack`: V8 writes each compiled function's name to
+`/tmp/perf-<pid>.map`, so `sudo perf record -t <thread> -g` and `perf report`
+on the host name the JavaScript a thread runs, a stalled serving worker's
+included. The map grows for as long as the process runs. A toolshed runs a serving worker per served space, up to
+`SERVER_EXECUTION_MAX_WORKERS` of them (default 4; more only while spaces
+separated at a heap limit each hold a worker of their own, until one of those
+closes) and
+`SERVER_EXECUTION_SPARE_WORKERS` more kept started (default 1), and each holds
+about 110 MB before it serves anything
+([`serving-loop.md`](../specs/server-side-execution/serving-loop.md) §1,
+"Workers"). `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB` bounds what the workers'
+heaps come to together by closing the workers kept only for a parked space's
+runtime; it closes no worker that serves a space, so it does not bound a space
+that grows. `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB` (default 2048, at least
+256) does: each serving worker runs as a `node:worker_threads` thread whose
+old generation that limit bounds, and the pool ends a worker whose heap
+reaches it, alone. V8 collects a worker's garbage as its heap nears the limit,
+as it does any isolate's, so a worker reaches it only when what it still holds
+does. The limit bounds each worker, not their sum, so a host that
+runs many toolsheds sizes it, with `SERVER_EXECUTION_MAX_WORKERS`, against its
+memory. It is not exact. A worker that reaches it while evaluating its modules
+or in a timer reports an out-of-memory error and is ended at once. One that
+reaches it in a message handler or a promise continuation reports nothing:
+Deno ends what was running and raises the limit, and the pool ends the worker
+at its next heartbeat, up to ten seconds later, during which the worker can
+go on allocating. V8 bounds no memory outside the heap, array buffers among
+it, so the pool also ends a worker whose heartbeat reports as many megabytes
+of external memory as the limit, which the same ten seconds can exceed.
+`SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB=0` sets no limit and starts the
+workers as Deno `Worker`s, as before the limit existed.
 
-A worker that reaches the limit takes its process down. Events still queued
-survive that, and the restarted process handles them.
+The serving workers compile in compile workers the toolshed holds,
+`SERVER_EXECUTION_COMPILE_WORKERS` of them (default 1), each holding the
+TypeScript compiler's heap once it has compiled, and every toolshed on the
+host reads and puts compiled modules in one directory,
+`SERVER_EXECUTION_COMPILE_CACHE_DIR` (default `compiled-modules` under
+`CACHE_DIR`), so a program compiles once on the host for each release the
+host runs: the cache is keyed by the runtime version, and a new release
+compiles each program again, once. Toolsheds share the directory only where
+they are given the same one, so the toolsheds of a host take the same
+`CACHE_DIR`, an absolute path, since the default `./cache` is each one's
+working directory. That directory holds code the serving runtimes run, so it
+belongs to the user the toolsheds run as and to no one else. A compiled
+module that cannot be written there is logged
+(`shared-compile-cache-write-failed`) and compiled again by the next runtime
+that needs it; it fails no compile.
+
+A space whose worker was ended at its heap limit is not served again by itself,
+since its program would grow the next worker's heap the same way. If it was
+the only space on the worker it stays unserved until a commit that would
+start a tenure is admitted for it or a pattern-lifecycle verb names it, which
+is when its program or its input may have changed. The toolshed logs
+`worker-failed` with the spaces the worker held, and `/api/health/stats`
+counts such workers in
+`servingLoop.workers.heapLimited` and the spaces left unserved in
+`servingLoop.workers.heapStopped`.
+Spaces that shared the worker are each moved to a worker of their own, beyond
+`SERVER_EXECUTION_MAX_WORKERS` if need be, so that the one that grows ends a
+worker nothing else is on ([`serving-loop.md`](../specs/server-side-execution/serving-loop.md)
+§1, "Workers").
+
+The main thread and the compile workers are Deno isolates under the 16 GiB
+limit, and one of those that reaches it takes its process down. Events still
+queued survive that, and the restarted process handles them.
 
 ## A deploy states when it happened
 

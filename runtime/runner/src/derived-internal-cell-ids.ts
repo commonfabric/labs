@@ -40,22 +40,17 @@ export class DerivedInternalCellIds {
   }
 
   /**
-   * The observer of every id this instance mints, by the result cell's id
-   * and the partial cause, which a test counts.
+   * Installs the observer of every id this instance mints, by the result
+   * cell's id and the partial cause, which a test counts.
    */
   get accessForTestingOnly(): {
-    mintRecorder:
-      | ((resultId: string, partialCause: JSONValue) => void)
-      | undefined;
+    observeMints(
+      recorder: (resultId: string, partialCause: JSONValue) => void,
+    ): void;
   } {
-    // deno-lint-ignore no-this-alias
-    const outerThis = this;
     return {
-      get mintRecorder() {
-        return outerThis.#mintRecorder;
-      },
-      set mintRecorder(value) {
-        outerThis.#mintRecorder = value;
+      observeMints: (recorder) => {
+        this.#mintRecorder = recorder;
       },
     };
   }

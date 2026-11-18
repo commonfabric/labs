@@ -1,5 +1,8 @@
 import { assertEquals, assertRejects } from "@std/assert";
+import { expect } from "@std/expect";
 import { join } from "@std/path";
+import { describe, it } from "@std/testing/bdd";
+import { FakeTime } from "@std/testing/time";
 import {
   DenoProcessRunner,
   ProcessTimeoutError,
@@ -167,4 +170,27 @@ Deno.test("DenoProcessRunner refuses, running nothing, a run whose signal has al
     })
   );
   await assertRejects(() => Deno.stat(marker), Deno.errors.NotFound);
+});
+
+describe("process-runner", () => {
+  describe("DenoProcessRunner", () => {
+    it("throws a timeout for a process its timeout stopped, even where its signal aborts before the process has ended", async () => {
+      using time = new FakeTime();
+      const runner = new DenoProcessRunner();
+      const stop = new AbortController();
+      // Left alone it would run until stopped.
+      const running = runner.run({
+        command: "/bin/sh",
+        args: ["-c", "exec sleep 60"],
+        timeoutMs: 1000,
+        signal: stop.signal,
+      });
+      // The timeout comes due and stops the process; the signal aborts
+      // before the process can have ended, and does not take its place.
+      time.tick(1000);
+      stop.abort(new Error("closed"));
+
+      await expect(running).rejects.toThrow(ProcessTimeoutError);
+    });
+  });
 });

@@ -199,6 +199,11 @@ export class FabricUnavailable extends BaseFabricPrimitive
     return "FabricUnavailable";
   }
 
+  /** The frozen encoded state read by the canonical hasher. */
+  get state(): FabricUnavailableState {
+    return this.#state();
+  }
+
   /** Why the data is unavailable. */
   get reason(): UnavailableReason {
     return this.#reason;

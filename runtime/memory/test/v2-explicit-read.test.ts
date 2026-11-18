@@ -8,6 +8,8 @@
 // key is refused; a read naming none resolves from the session as today.
 
 import { assertEquals, assertExists } from "@std/assert";
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
 import { Server } from "../v2/server.ts";
 import {
   encodeMemoryBoundary,
@@ -50,10 +52,14 @@ const shiftMessage = (messages: ServerMessage[]): ServerMessage => {
   return message;
 };
 
-/** A connection to `server`: from another process unless `inProcess`. */
+/**
+ * A connection to `server`: from another process unless `inProcess`, and
+ * then of the realm's own lease holder unless `leaseHolderInstance` names a
+ * serving worker's.
+ */
 const connect = async (
   server: Server,
-  options: { inProcess?: boolean } = {},
+  options: { inProcess?: boolean; leaseHolderInstance?: string } = {},
 ): Promise<Harness> => {
   const messages: ServerMessage[] = [];
   const connection = server.connect(
@@ -259,6 +265,80 @@ Deno.test("explicit entity_scope_key reads: the space's serving session and a se
       offFlag.error?.message.includes("EXPERIMENTAL_SERVER_EXECUTION"),
       true,
     );
+  } finally {
+    resetServerExecutionConfig();
+    await server.close();
+  }
+});
+
+Deno.test("explicit entity_scope_key reads: among in-process sessions of the service identity, the space's serving session is the one whose connection names the holder component the lease is held under (protocol.md §2's read row)", async () => {
+  const server = newServer("memory://explicit-read-worker-holder");
+  setServerExecutionConfig(true);
+  try {
+    const alice = await connect(server);
+    const { sessionId: aliceSession } = await openSession(alice, ALICE);
+    await writeAliceProfile(server, aliceSession, 1, { name: "alice" });
+    const aliceKey = resolveScopeKey("user", { principal: ALICE });
+
+    // Three loopback sessions, all in process and all as the service
+    // identity: one from the worker that serves the space, one from a worker
+    // that serves another, and one from a host on the server's own thread.
+    const openAs = async (leaseHolderInstance?: string) =>
+      (await openSession(
+        await connect(server, {
+          inProcess: true,
+          ...(leaseHolderInstance === undefined ? {} : { leaseHolderInstance }),
+        }),
+        SERVICE,
+      )).sessionId;
+    const serving = await openAs("worker-serving");
+    const elsewhere = await openAs("worker-elsewhere");
+    const ownThread = await openAs();
+    const engine = await server.engineForSpace(SPACE);
+    assertEquals(
+      engine.executionLeases.acquire(
+        SPACE,
+        executionLeaseHolder(SERVICE, "worker-serving"),
+      ),
+      true,
+    );
+    const readAlice = (sessionId: string, label: string) =>
+      server.graphQuery({
+        type: "graph.query",
+        requestId: nextRequestId(label),
+        space: SPACE,
+        sessionId,
+        query: {
+          roots: [{
+            id: "of:profile",
+            scope: "user",
+            entityScopeKey: aliceKey,
+            selector: { path: [], schema: false },
+          }],
+        },
+      });
+
+    const held = await readAlice(serving, "worker-held");
+    assertExists(held.ok, JSON.stringify(held.error));
+    assertEquals(held.ok.entities[0].document?.value, { name: "alice" });
+
+    // The other two serve the space no more than a session from another
+    // process does: their named read is a foreign one, admitted under
+    // alice's own READ grant, which a space with no list gives nobody.
+    for (
+      const [sessionId, label] of [[elsewhere, "worker-elsewhere"], [
+        ownThread,
+        "own-thread",
+      ]]
+    ) {
+      const foreign = await readAlice(sessionId, label);
+      assertEquals(foreign.error?.name, "ProtocolError", label);
+      assertEquals(
+        foreign.error?.message.includes("grant-scoped read"),
+        true,
+        JSON.stringify(foreign.error),
+      );
+    }
   } finally {
     resetServerExecutionConfig();
     await server.close();
@@ -1539,4 +1619,63 @@ Deno.test("a serving session's UNNAMED scoped read of a space it does not serve 
     resetServerExecutionConfig();
     await server.close();
   }
+});
+
+describe("Server", () => {
+  describe("demandForSpace()", () => {
+    it("demands the instance a client session of the service identity names on a root, not its own", async () => {
+      // A local toolshed signs with the key its operator's client uses, so
+      // that client's sessions are admitted to name another actor's
+      // instance, and are demand.
+
+      const server = newServer("memory://explicit-read-client-demand");
+      setServerExecutionConfig(true);
+      try {
+        const alice = await connect(server);
+        const { sessionId: aliceSession } = await openSession(alice, ALICE);
+        await writeAliceProfile(server, aliceSession, 1, { name: "alice" });
+        await server.writeDocument(SPACE, `of:${SPACE}`, { [ALICE]: "OWNER" });
+        const aliceKey = resolveScopeKey("user", { principal: ALICE });
+        const serviceKey = resolveScopeKey("user", { principal: SERVICE });
+        const client = await connect(server);
+        const { sessionId } = await openSession(client, SERVICE);
+
+        const watched = await server.watchSet({
+          type: "session.watch.set",
+          requestId: nextRequestId("client-watch"),
+          space: SPACE,
+          sessionId,
+          watches: [{
+            id: "w1",
+            kind: "graph",
+            query: {
+              roots: [{
+                id: "of:profile",
+                scope: "user",
+                entityScopeKey: aliceKey,
+                selector: { path: [], schema: false },
+              }],
+            },
+          }],
+        }) as ResponseMessage<WatchSetResult>;
+        expect(watched.error).toBeUndefined();
+
+        const share = server.demandForSpace(SPACE, {
+          excludePrincipal: SERVICE,
+        }).find((candidate) => candidate.sessionId === sessionId);
+        const roots = [...share?.rows.values() ?? []]
+          .filter((row) => row.root)
+          .map((row) => ({ id: row.id, scopeKey: row.scopeKey }));
+
+        expect(roots).toContainEqual({ id: "of:profile", scopeKey: aliceKey });
+        expect(roots).not.toContainEqual({
+          id: "of:profile",
+          scopeKey: serviceKey,
+        });
+      } finally {
+        resetServerExecutionConfig();
+        await server.close();
+      }
+    });
+  });
 });

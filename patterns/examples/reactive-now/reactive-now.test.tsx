@@ -1,4 +1,5 @@
-import { action, assert, pattern, TESTS } from "commonfabric";
+import { action, assert, pattern, TESTS, UI } from "commonfabric";
+import { clickButton } from "../../tools/test-support/vnode-helpers.ts";
 import ReactiveNow from "./reactive-now.tsx";
 
 // The time labels derive from the reactive #now clock: they read "…" until #now
@@ -27,6 +28,13 @@ export default pattern(() => {
   });
   const assert_tap_delivered = assert(() => demo.taps >= 1);
 
+  // The rendered "Tap" button sends to the same stream, and each delivery
+  // stamps when it ran.
+  const action_click_tap = action(() => clickButton(demo[UI], "Tap"));
+  const assert_click_delivered = assert(() =>
+    demo.taps === 2 && /^\d{2}:\d{2}:\d{2}$/.test(demo.lastTapAt)
+  );
+
   // Keystroke path: driving the text box updates the derived char count and echo.
   // Like the tap, the delivery SHAPING is not exercised here (a headless test
   // send is delivered immediately); this only checks the derivation.
@@ -43,6 +51,8 @@ export default pattern(() => {
       { assertion: assert_since_load_is_ago_shaped },
       { action: action_tap },
       { assertion: assert_tap_delivered },
+      { action: action_click_tap },
+      { assertion: assert_click_delivered },
       { action: action_type },
       { assertion: assert_char_count },
       { assertion: assert_echo },

@@ -6,7 +6,6 @@ import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import {
   FabricBytes,
   FabricEpochNsec,
-  FabricRegExp,
 } from "@commonfabric/data-model/fabric-primitives";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
@@ -27,15 +26,6 @@ interface PreparedValidation {
   hasReactive: boolean;
   hasOpaque: boolean;
 }
-
-const regexpSourceGetter = Object.getOwnPropertyDescriptor(
-  RegExp.prototype,
-  "source",
-)!.get!;
-const regexpFlagsGetter = Object.getOwnPropertyDescriptor(
-  RegExp.prototype,
-  "flags",
-)!.get!;
 
 /**
  * SES compartments share the host's hardened `Object.prototype` identity.
@@ -90,18 +80,6 @@ function normalizeSandboxNativeLeaf(value: unknown): unknown {
     return new FabricEpochNsec(BigInt(millis) * 1_000_000n);
   }
 
-  if (brand === "[object RegExp]") {
-    let source: string;
-    try {
-      source = regexpSourceGetter.call(value);
-    } catch {
-      return value;
-    }
-    rejectExtraProperties(value, "RegExp");
-    const flags = regexpFlagsGetter.call(value);
-    return new FabricRegExp("es2025", source, flags);
-  }
-
   if (
     brand === "[object Uint8Array]" && ArrayBuffer.isView(value) &&
     (value as Uint8Array).BYTES_PER_ELEMENT === 1
@@ -120,12 +98,10 @@ function normalizeSandboxNativeLeaf(value: unknown): unknown {
 }
 
 function typeNameForActionResult(value: unknown): string {
-  if (typeof value === "function") return "function";
-  if (typeof value === "symbol") return "Symbol";
   if (isObjectOrArray(value)) {
     return value.constructor?.name ?? "unknown type";
   }
-  return typeof value;
+  return typeof value === "symbol" ? "Symbol" : typeof value;
 }
 
 function hintForActionResult(value: unknown): string | undefined {

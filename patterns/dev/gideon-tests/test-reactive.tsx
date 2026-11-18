@@ -14,12 +14,12 @@ import {
   type Stream,
 } from "commonfabric";
 
-interface Email {
+export interface Email {
   id: string;
   content: string;
 }
 
-interface ExtractedData {
+export interface ExtractedData {
   summary: string;
 }
 

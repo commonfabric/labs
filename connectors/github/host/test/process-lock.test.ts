@@ -199,3 +199,66 @@ Deno.test("GitHub process locks reject shared lock files", async () => {
     await Deno.remove(directory, { recursive: true });
   }
 });
+
+describe("GitHub process locks checked against a stated platform", () => {
+  it("refuses a lock file another user owns", async () => {
+    const directory = await Deno.makeTempDir();
+    const path = join(directory, "github.lock");
+    try {
+      await Deno.writeTextFile(path, "held\n", { mode: 0o600 });
+      await Deno.chmod(path, 0o600);
+      const owner = (await Deno.lstat(path)).uid;
+      await expect(GithubHostProcessLock.accessForTestingOnly.acquire(path, {
+        os: "linux",
+        uid: () => (owner ?? 0) + 1,
+      })).rejects.toThrow("process lock has a different owner");
+      expect(await Deno.readTextFile(path)).toBe("held\n");
+
+      const lock = await GithubHostProcessLock.accessForTestingOnly.acquire(
+        path,
+        {
+          os: "linux",
+          uid: () => owner,
+        },
+      );
+      await lock.release();
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("leaves ownership and mode unchecked on Windows", async () => {
+    const directory = await Deno.makeTempDir();
+    const path = join(directory, "github.lock");
+    try {
+      await Deno.writeTextFile(path, "", { mode: 0o666 });
+      await Deno.chmod(path, 0o666);
+      await expect(GithubHostProcessLock.accessForTestingOnly.acquire(path, {
+        os: "linux",
+        uid: () => Deno.uid(),
+      })).rejects.toThrow("process lock is accessible by other users");
+
+      const lock = await GithubHostProcessLock.accessForTestingOnly.acquire(
+        path,
+        {
+          os: "windows",
+          uid: () => {
+            throw new Error("the owner must not be read on Windows");
+          },
+        },
+      );
+      await lock.release();
+      expect(await Deno.readTextFile(path)).toBe(`${Deno.pid}\n`);
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("requires a configured directory where no user ID is available", () => {
+    expect(() =>
+      defaultGithubHostLockDirectory(() => undefined, "linux", () => null)
+    ).toThrow("CF_GITHUB_HOST_LOCK_DIR is required without a user ID");
+    expect(defaultGithubHostLockDirectory(() => undefined, "linux", () => 501))
+      .toBe(join(resolve("/tmp"), "commonfabric-github-host-501"));
+  });
+});

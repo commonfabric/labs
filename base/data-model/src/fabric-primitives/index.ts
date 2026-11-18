@@ -1,6 +1,5 @@
 export * from "./interface.ts";
 export { FabricBytes } from "./FabricBytes.ts";
-export { FabricRegExp } from "./FabricRegExp.ts";
 export { FabricHash } from "./FabricHash.ts";
 export { FabricKeyPair } from "./FabricKeyPair.ts";
 export { FabricEpochNsec } from "./FabricEpochNsec.ts";

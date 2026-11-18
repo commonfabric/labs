@@ -5,6 +5,7 @@ import {
   createWriteOnceExports,
   populateModuleExports,
 } from "../src/sandbox/module-record-compiler.ts";
+import { ensureSESLockdown } from "../src/sandbox/ses-runtime.ts";
 
 const noRequire = (s: string): Record<string, unknown> => {
   throw new Error(`unexpected require(${s})`);
@@ -218,5 +219,27 @@ describe("populateModuleExports", () => {
         exports.x = () => "pwned"; // smuggled overwrite
       }, noRequire);
     }).toThrow(/write-once/);
+  });
+
+  it("fails the load when an exported value cannot be hardened", () => {
+    ensureSESLockdown();
+    const exportValue = (value: unknown) => {
+      const ns: Record<string, unknown> = {};
+      populateModuleExports(ns, ["x"], (exports) => {
+        exports.x = value;
+      }, noRequire);
+      return ns;
+    };
+    const unlistable = new Proxy({}, {
+      ownKeys: () => {
+        throw new Error("no keys");
+      },
+    });
+
+    expect(() => exportValue(unlistable)).toThrow(
+      "Failed to harden exported module value: Error: no keys",
+    );
+    const plain = exportValue({ a: 1 });
+    expect(Object.isFrozen(plain.x)).toBe(true);
   });
 });
