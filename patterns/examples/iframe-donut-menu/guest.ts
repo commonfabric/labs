@@ -85,18 +85,26 @@ function show(value: IframeStateData | undefined): void {
       canvas.dataset.drawn = favorite ?? "";
       error.textContent = "";
     },
-    (failure) => (error.textContent = describeFailure(failure)),
+    (failure) => {
+      // A failure for a favorite since replaced is no longer news.
+      if (canvas.dataset.favorite !== (favorite ?? "")) return;
+      error.textContent = describeFailure(failure);
+    },
   );
 }
 
-// The sink hears nothing useful before the state has loaded, and the pull
-// below draws the first value.
+// The sink draws every value once the state has loaded; before that it hears
+// nothing useful. A pull that loads a value hands it to the sink, so the pull
+// draws only a state that holds nothing, which the sink never hears.
+let shown = false;
 state.sink((value) => {
-  if (value !== undefined) show(value);
+  if (value === undefined) return;
+  shown = true;
+  show(value);
 });
 state.pull().then(
   (value) => {
-    show(value);
+    if (!shown) show(value);
     for (const button of buttons.values()) button.disabled = false;
   },
   (failure) => (error.textContent = describeFailure(failure)),
