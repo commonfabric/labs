@@ -263,9 +263,10 @@ participants.
 the level the list grants it and those of the profiles `participants` lists that
 are its own, in the order listed, so the first is the one a reader shows. The
 list's `"*"` entry adds no member, and a profile that is no one's, or whose
-owner the list doesn't name, counts toward no one. Only a member can read the
-list, and a profile lives in its owner's own space, so `members` is derived per
-user, and is absent while the reader can't read the list.
+owner the list doesn't name, counts toward no one. Only a principal the list
+grants access, through its own entry or through `"*"`, can read the list, and a
+profile lives in its owner's own space, so `members` is derived per user, and is
+absent while the reader can't read the list.
 
 `chatRoom` links the Loom's chat room, so every member finds it in the Loom's
 shared state. It is a link to a room piece in the Loom's own space, typed as

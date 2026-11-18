@@ -63,11 +63,15 @@ export interface PiecesListOutput {
   /**
    * The members of the space (`memberSet()`): one for each principal its
    * access list names, sorted by DID, with the level the list grants them,
-   * and those of the profiles `participants` lists that are their own, in
-   * that order. The list's `"*"` entry adds no member, and a profile that is
-   * no one's, or whose owner the list doesn't name, counts toward no one. So
-   * does a profile the reader can't read, so it is derived for each reader.
-   * Absent while the reader can't read the list.
+   * and those of the profiles `participants` lists that are their own, each
+   * once, in the order listed. The list's `"*"` entry adds no member, and a
+   * profile counts toward no one when it is no one's, when its owner is not
+   * on the list, when it is still loading, or when the reader can't read it.
+   * What the reader can read is the reader's own, so the value is derived for
+   * each reader, and is absent while the reader can't read the list. The
+   * stored value is computed when a running runtime reads it, so a reader of
+   * the stored value alone can find it absent, or stale after the list
+   * changes.
    */
   members?: PerUser<SpaceMember[]>;
 
