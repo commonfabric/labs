@@ -166,6 +166,7 @@ function print(node: ts.Node, sourceFile: ts.SourceFile): string {
 // A lookup that treats every arrow/function node as an array-method callback.
 const arrayMethodLookup: ReactiveContextLookup = {
   isArrayMethodCallback: () => true,
+  isSourceFileDefaultLibrary: () => false,
 };
 
 Deno.test("normalizeDataFlows unwraps a parenthesized reactive read to the bare property access", () => {
@@ -590,6 +591,7 @@ Deno.test("getRelevantDataFlows keeps every read when a synthetic map callback i
   );
   const markedLookup: ReactiveContextLookup = {
     isArrayMethodCallback: (node) => node === arrow,
+    isSourceFileDefaultLibrary: () => false,
   };
   const relevant = getRelevantDataFlows(
     syntheticAnalysis(graph),
@@ -658,6 +660,7 @@ Deno.test("getRelevantDataFlows drops an all-synthetic map read through the igno
   );
   const relevant = getRelevantDataFlows(syntheticAnalysis(graph), checker, {
     isArrayMethodCallback: (node) => node === arrow,
+    isSourceFileDefaultLibrary: () => false,
   });
   assertEquals(relevant.length, 0);
 });
@@ -707,6 +710,7 @@ Deno.test("getRelevantDataFlows treats a marked-callback probe with no first-par
   );
   const relevant = getRelevantDataFlows(syntheticAnalysis(graph), checker, {
     isArrayMethodCallback: () => true,
+    isSourceFileDefaultLibrary: () => false,
   });
   const texts = relevant.map((r) => getExpressionText(r.expression));
   assert(texts.includes("state.items"));
@@ -768,6 +772,7 @@ Deno.test("getRelevantDataFlows climbs the parent chain to the enclosing callbac
   );
   const relevant = getRelevantDataFlows(syntheticAnalysis(graph), checker, {
     isArrayMethodCallback: (node) => node === arrow,
+    isSourceFileDefaultLibrary: () => false,
   });
   const texts = relevant.map((r) => getExpressionText(r.expression));
   assert(texts.includes("state.items"));
@@ -823,6 +828,7 @@ Deno.test("getRelevantDataFlows keeps a builder-callback parameter as an opaque 
   );
   const relevant = getRelevantDataFlows(syntheticAnalysis(graph), checker, {
     isArrayMethodCallback: (node) => node === arrow,
+    isSourceFileDefaultLibrary: () => false,
   });
   const texts = relevant.map((r) => getExpressionText(r.expression));
   // The builder callback parameter is opaque, so `element.name` survives.
@@ -876,6 +882,7 @@ Deno.test("getRelevantDataFlows marked probe returns unmarked when no callback a
   );
   const relevant = getRelevantDataFlows(syntheticAnalysis(graph), checker, {
     isArrayMethodCallback: () => true,
+    isSourceFileDefaultLibrary: () => false,
   });
   const texts = relevant.map((r) => getExpressionText(r.expression));
   assert(texts.includes("state.items"));

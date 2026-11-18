@@ -6,7 +6,6 @@ import { parseModule } from "./transformed-ast.ts";
 import {
   ensureTypeNodeRegistered,
   getTypeFromTypeNodeWithFallback,
-  hasArrayTypeArgument,
   inferArrayElementType,
   inferContextualType,
   inferParameterType,
@@ -385,8 +384,6 @@ Deno.test("type inference helpers register synthetic type nodes", () => {
 Deno.test("type inference helpers detect collections and array element types", () => {
   const { sourceFile, checker } = createProgram(`
     type ArrayContainer = Array<string[]>;
-    type UnionContainer = Array<string[]> | Array<number>;
-    type IntersectionContainer = Array<string[]> & { tag: string };
     const numbers = [1, 2, 3];
     const tuple = ["name", 1] as const;
     const unionArray = Math.random() > 0.5 ? ["a"] : [1];
@@ -400,15 +397,6 @@ Deno.test("type inference helpers detect collections and array element types", (
   const scalar = findIdentifier(sourceFile, "scalar");
   const arrayContainer = findIdentifier(sourceFile, "arrayContainer");
   const scalarContainer = findIdentifier(sourceFile, "scalarContainer");
-  const arrayContainerType = checker.getTypeFromTypeNode(
-    findTypeAlias(sourceFile, "ArrayContainer").type,
-  );
-  const unionContainerType = checker.getTypeFromTypeNode(
-    findTypeAlias(sourceFile, "UnionContainer").type,
-  );
-  const intersectionContainerType = checker.getTypeFromTypeNode(
-    findTypeAlias(sourceFile, "IntersectionContainer").type,
-  );
 
   assertEquals(isCollectionType(undefined, checker), false);
   assertEquals(
@@ -422,13 +410,6 @@ Deno.test("type inference helpers detect collections and array element types", (
   assertEquals(
     isCollectionType(checker.getTypeAtLocation(unionArray), checker),
     true,
-  );
-  assertEquals(hasArrayTypeArgument(arrayContainerType, checker), true);
-  assertEquals(hasArrayTypeArgument(unionContainerType, checker), true);
-  assertEquals(hasArrayTypeArgument(intersectionContainerType, checker), true);
-  assertEquals(
-    hasArrayTypeArgument(checker.getTypeAtLocation(scalarContainer), checker),
-    false,
   );
 
   assertEquals(

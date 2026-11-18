@@ -1,4 +1,6 @@
 import { assertThrows } from "@std/assert";
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
 import ts from "typescript";
 
 import { assertValidSyntheticComputeOwnedArrayMethodContext } from "../../src/closures/strategies/array-method-strategy.ts";
@@ -129,3 +131,49 @@ Deno.test(
     );
   },
 );
+
+describe("array-method-strategy", () => {
+  describe("assertValidSyntheticComputeOwnedArrayMethodContext()", () => {
+    it("quotes a method call longer than 160 characters cut to 157 and an ellipsis", () => {
+      const longName = "x".repeat(200);
+      const { methodCall, sourceFile } = parseMapCall(
+        `const out = sorted.map((item) => item.${longName});`,
+      );
+      const lookup = createSyntheticComputeLookup(sourceFile, [methodCall]);
+      const patternContext: ReactiveContextInfo = {
+        kind: "pattern",
+        owner: "pattern",
+        inJsxExpression: false,
+      };
+
+      const snippet = `sorted.map((item) => item.${longName})`;
+      expect(() =>
+        assertValidSyntheticComputeOwnedArrayMethodContext(
+          methodCall,
+          patternContext,
+          lookup,
+        )
+      ).toThrow(`Method call: \`${snippet.slice(0, 157)}...\``);
+    });
+
+    it("quotes a short method call whole", () => {
+      const { methodCall, sourceFile } = parseMapCall(
+        "const out = sorted.map((item) => item.name);",
+      );
+      const lookup = createSyntheticComputeLookup(sourceFile, [methodCall]);
+      const patternContext: ReactiveContextInfo = {
+        kind: "pattern",
+        owner: "pattern",
+        inJsxExpression: false,
+      };
+
+      expect(() =>
+        assertValidSyntheticComputeOwnedArrayMethodContext(
+          methodCall,
+          patternContext,
+          lookup,
+        )
+      ).toThrow("Method call: `sorted.map((item) => item.name)`");
+    });
+  });
+});

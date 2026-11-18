@@ -21,7 +21,6 @@ import { getEnclosingFunctionLikeDeclaration } from "../../src/ast/function-pred
 import {
   getPatternBuilderCallbackArgument,
   getPatternToolHoistablePatternCall,
-  getWithPatternHoistablePatternCall,
 } from "../../src/ast/call-kind.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 
@@ -169,18 +168,6 @@ function findFirstIdentifier(
   if (!found) throw new Error(`Identifier ${text} not found`);
   return found;
 }
-
-Deno.test("getWithPatternHoistablePatternCall returns undefined for a lowered method with no arguments", () => {
-  const { sourceFile, checker } = createProgram(`
-    declare const items: any;
-    const value = items.mapWithPattern();
-  `);
-
-  const call = findCall(sourceFile, "value");
-  // Callee is a lowered *WithPattern access, but there is no first argument to
-  // hoist, so the recognizer bails at the missing-argument guard.
-  assertEquals(getWithPatternHoistablePatternCall(call, checker), undefined);
-});
 
 Deno.test("getPatternToolHoistablePatternCall lifts the bare pattern call out of a patternTool call", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
