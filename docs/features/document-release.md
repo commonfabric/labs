@@ -222,7 +222,8 @@ A space is in use while any of these holds:
   opened and has not answered yet. A refused space stays open so that its
   readers, and `unreachableSpaces()` and `retrySpaceAccess()`, go on finding
   the refusal.
-- It was opened since the pass began.
+- It was opened, or a hold token was taken for one of its documents, since the
+  pass began.
 
 The storage manager never releases its own spaces: the home space of the
 identity it acts as, and a serving manager's home space. Home's profile spaces
