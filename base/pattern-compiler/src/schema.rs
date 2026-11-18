@@ -263,9 +263,10 @@ impl Resolver<'_, '_> {
                     if matches!(self.shape(property.ty), Shape::Function) {
                         continue;
                     }
-                    members.insert(property.name.clone(), self.schema_at(property.ty, next));
+                    let name = stored_name(&property.name);
+                    members.insert(name.clone(), self.schema_at(property.ty, next));
                     if !property.optional {
-                        required.push(json!(property.name));
+                        required.push(json!(name));
                     }
                 }
                 let mut object = Map::new();
@@ -365,6 +366,18 @@ impl Resolver<'_, '_> {
 
 /// "String/number literal | `{ type: …, enum: [v] }` (type path)", and
 /// "Boolean literal | `{ type: "boolean", enum: [true/false] }`" (SM §4).
+/// The name a property is stored under: a property written with a
+/// well-known key of the API, as `[NAME]`, is stored under `$NAME`.
+fn stored_name(name: &str) -> String {
+    match name
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+    {
+        Some(key) => format!("${key}"),
+        None => name.to_string(),
+    }
+}
+
 fn literal_schema(text: &str) -> Value {
     match label_term(text) {
         Some(value @ Value::String(_)) => json!({ "type": "string", "enum": [value] }),

@@ -244,3 +244,38 @@ export const P = pattern<{ n: number }, { label: Confidential<string, ["secret"]
         .expect("the document");
     assert_eq!(Some(document), plan.result_schema.as_ref());
 }
+
+#[test]
+fn a_property_written_with_a_well_known_key_has_the_name_the_key_stands_for() {
+    // A value is stored under `$NAME` where the type writes `[NAME]`, as
+    // a path of the plan has it.
+    let analysis = analyze(&[SourceFile {
+        path: "case.tsx".to_string(),
+        text: r#"import { NAME, pattern, UI, VIEWS, type VNode } from "commonfabric";
+interface Piece { [NAME]: string; [UI]: VNode; [VIEWS]?: { chat: string }; note: string }
+export const S = pattern<{ pieces: Piece[] }>(({ pieces }) => {
+  return { pieces };
+});
+"#
+        .to_string(),
+    }]);
+    let emitted = &analysis.modules[0].plans[0];
+    let id = emitted.plan["argumentSchema"]
+        .as_str()
+        .expect("the schema of the argument");
+    let (_, document) = emitted
+        .schemas
+        .iter()
+        .find(|(known, _)| known == id)
+        .expect("the document");
+    let piece = &document["properties"]["pieces"]["items"];
+    let mut names: Vec<&str> = piece["properties"]
+        .as_object()
+        .expect("properties")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    names.sort_unstable();
+    assert_eq!(names, ["$NAME", "$UI", "$VIEWS", "note"]);
+    assert_eq!(piece["required"], json!(["$NAME", "$UI", "note"]));
+}
