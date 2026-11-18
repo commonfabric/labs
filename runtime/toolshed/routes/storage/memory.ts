@@ -134,6 +134,13 @@ export async function openMemory(
         "other served read runs under the acting user via the " +
         "actingAs binding; docs/specs/server-side-execution/protocol.md §2b)",
     );
+    if (memoryAclPrincipals.isDelegatingPeer !== undefined) {
+      console.log(
+        "Memory: each toolshed the memory router's directory lists is a " +
+          "DELEGATING memory principal too (crossings from the toolshed " +
+          "serving another space; docs/specs/memory-v2/routed-mode-a.md)",
+      );
+    }
     if (memoryAclPrincipals.serviceDids.includes(identity.did())) {
       console.log(
         "Memory: NOTE — the operator's MEMORY_SERVICE_DIDS also lists the " +

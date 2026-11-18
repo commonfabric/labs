@@ -11878,8 +11878,8 @@ export class Server {
    * owner routing R3): a read naming an explicit `entity_scope_key` is
    * admitted for the space's own serving session on this server
    * (`#isServingSession`), which derives every instance and may name any,
-   * and for a session of the deployment's service identity, the
-   * delegating class, wherever it runs: a routed session from the process
+   * and for a session of the delegating class, the identities of the
+   * deployment's serving processes, wherever it runs: a routed session from the process
    * serving another space, or an in-process session reading a space it
    * does not serve. Such a session names an actor's instance under that
    * actor's READ grant on the space (the grant-scoped read, RULED

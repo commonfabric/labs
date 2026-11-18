@@ -488,8 +488,11 @@ full-holder equality still, and only for a session from the owner's
 own process (`Connection.inProcess`), since a sibling process's
 session carries the same principal — and otherwise the deployment's
 service identity, the delegating class, from any process, under the
-grant-scoped read below. A second process sharing the service DID is
-admitted as the service identity under the grant rather than refused
+grant-scoped read below. The delegating class is the identities of the
+deployment's serving processes: one shared identity, or, where each
+toolshed has its own, every toolshed identity the deployment's directory
+lists (memory-v2 04-protocol.md §4.3.12). A second process of that
+class is admitted under the grant rather than refused
 on the holder, which is what makes it a peer
 (verification-coverage.md's stage-F read-row entry records the Phase-1
 acceptance this closes).

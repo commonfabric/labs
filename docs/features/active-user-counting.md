@@ -68,8 +68,9 @@ what else the open established (`Server.#decidePerson`):
    agent's key. A chain from Alice's home space, whose DID is Alice's
    identity, to an agent's key also stands for Alice.
 3. **These are not people's identities:** the `*` principal, service principals
-   (`MEMORY_SERVICE_DIDS`), delegating principals (the server's own identity
-   when server execution is on), and a space's own key on the space it names,
+   (`MEMORY_SERVICE_DIDS`), delegating principals (when server execution is
+   on, the server's own identity and each toolshed identity the memory
+   router's directory lists), and a space's own key on the space it names,
    unless that space is a Home space or has history and no access list. Every
    space's genesis is committed by a session signed with the space's own random
    key, which is then destroyed, and that key is not a person. A Home space's
