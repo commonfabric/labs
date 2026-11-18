@@ -1968,11 +1968,20 @@ export class Instance {
    * `element` steps of the binding's `within`.
    */
   streamFor(binding: number, context: Context): StreamRef {
-    return new StreamRef(
+    const stream = new StreamRef(
       binding,
       this.keysOf(this.plan.bindings[binding].within, { context }),
       this.#owner,
     );
+    const id = this.root.#streamIdentifier(stream);
+    if (!this.root.#streamIndex.has(id)) {
+      this.root.#streamIndex.set(id, {
+        instance: this.id,
+        binding,
+        keys: [...stream.keys],
+      });
+    }
+    return stream;
   }
 
   /**
@@ -4144,11 +4153,9 @@ export class Instance {
       context.set(element, chosen);
       keys.push(chosen.key);
     }
-    this.root.#queue.push({
-      stream: new StreamRef(binding, keys, this.#owner),
-      event,
-      context,
-    });
+    const stream = new StreamRef(binding, keys, this.#owner);
+    this.root.#append(stream, event);
+    this.root.#queue.push({ stream, event, context });
     return undefined;
   }
 
@@ -4166,7 +4173,81 @@ export class Instance {
   }
 
   queue(stream: StreamRef, event: unknown): void {
+    this.root.#append(stream, event);
     this.root.#queue.push({ stream, event });
+  }
+
+  /**
+   * On the root: the stream index (ES §4.7): one row per stream whose
+   * identifier an evaluation computed, from the identifier to the
+   * instance, the binding and the element keys.
+   */
+  readonly #streamIndex = new Map<
+    string,
+    { instance: string; binding: number; keys: string[] }
+  >();
+
+  /** The rows of the stream index, in the order they were written. */
+  streamRows(): { stream: string; binding: number; keys: string[] }[] {
+    return [...this.root.#streamIndex].map(([stream, { binding, keys }]) => ({
+      stream,
+      binding,
+      keys,
+    }));
+  }
+
+  /**
+   * The identifier of a stream, which is that of its document (ES §5.2):
+   * for a binding of the reactive tier, the hash of the instance, the
+   * steps of `within` with the element keys, and the name of the
+   * binding; for a binding that a function body made, the hash of what
+   * names the binding.
+   */
+  #streamIdentifier(stream: StreamRef): string {
+    const owner = stream.instance === ""
+      ? this.root
+      : this.root.#instances.get(stream.instance);
+    const record = owner?.plan.bindings[stream.binding];
+    if (owner === undefined || record === undefined) {
+      return identifierOf({ stream: stream.keys[0] ?? "" });
+    }
+    return owner.#identifier(
+      "stream",
+      record.within,
+      stream.keys,
+      record.name ?? { binding: stream.binding },
+    );
+  }
+
+  /**
+   * On the root: appends an event to the document of its stream, which
+   * the first event creates (ES §4.7, "The stream document"). The
+   * document holds the entries and the watermark and nothing else.
+   */
+  #append(stream: StreamRef, event: unknown): void {
+    const id = this.#streamIdentifier(stream);
+    const held = this.store.docs.get(id)?.value as
+      | { entries: unknown[] }
+      | undefined;
+    const entry = { event: this.stored(event) };
+    if (held === undefined) {
+      this.store.create(id, "stream", { entries: [entry], eventWatermark: 0 });
+    } else {
+      this.store.write(new Ref(id, ["entries"]), [...held.entries, entry]);
+    }
+  }
+
+  /** On the root: moves the watermark of a stream past one entry. */
+  #passed(stream: StreamRef): void {
+    const id = this.#streamIdentifier(stream);
+    const held = this.store.docs.get(id)?.value as
+      | { eventWatermark: number }
+      | undefined;
+    if (held === undefined) return;
+    this.store.write(
+      new Ref(id, ["eventWatermark"]),
+      held.eventWatermark + 1,
+    );
   }
 
   /**
@@ -4332,6 +4413,9 @@ export class Instance {
           next.event,
           next.context ?? target.#contextOf(next.stream),
         );
+      // The watermark of the stream passes the entry, whatever became
+      // of the event (SS §5.5).
+      this.#passed(next.stream);
       outcomes.push(handled);
     }
   }

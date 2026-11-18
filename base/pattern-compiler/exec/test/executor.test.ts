@@ -69,6 +69,15 @@ const cellKey = (
     occurrence,
   });
 
+/**
+ * The documents of an instance by kind, without the documents of the
+ * streams that received an event.
+ */
+const besideStreams = (instance: Instance): Record<string, number> => {
+  const { stream: _stream, ...kinds } = instance.documents();
+  return kinds;
+};
+
 /** Keys in the order of their text, as a helper that sorts keys gives them. */
 const sorted = (keys: string[]): string[] => [...keys].sort();
 
@@ -129,12 +138,14 @@ describe("an instance", () => {
 
     instance.send(0, { text: "hello", extra: "x" });
 
-    // The record the handler pushed onto `log` has a document of its own.
+    // The record the handler pushed onto `log` has a document of its
+    // own, and the stream has one with the first event.
     expect(instance.documents()).toEqual({
       "argument": 1,
       "result": 1,
       "state cell": 2,
       "element record": 1,
+      "stream": 1,
     });
   });
 
@@ -2717,7 +2728,7 @@ describe("what a function body of an element body made, on a re-key", () => {
     ).toEqual([]);
     expect(instance.store.streams.has(replaced)).toBe(false);
     // The store holds the documents of two rows, as after it settled.
-    expect(instance.documents()).toEqual(settled);
+    expect(besideStreams(instance)).toEqual(settled);
     // The instance that moved handles an event for its stream.
     streamAt(instance, ["rows", "0", "row", "bump"]).send({ by: 1 });
     instance.dispatch();
@@ -3328,7 +3339,7 @@ describe("a key that left its collection", () => {
   it("keeps the state cell of an upstream key that leaves the result of a `filter` and returns, over references", async () => {
     const { instance, rowsCone } = await start();
     instance.send(NOTE_ROW, { text: "kept" }, [1]);
-    const documents = instance.documents();
+    const documents = besideStreams(instance);
     const [, keyOfB] = instance.coneInstances(rowsCone);
 
     // The element stays in the source and leaves the result of the
@@ -3345,7 +3356,7 @@ describe("a key that left its collection", () => {
       .toEqual([["a", ""], ["b", "kept"]]);
     // `hidden` got its document with the first `hide`, and nothing else
     // was made or deleted.
-    expect(instance.documents()).toEqual({
+    expect(besideStreams(instance)).toEqual({
       ...documents,
       "state cell": documents["state cell"] + 1,
     });
@@ -5393,7 +5404,7 @@ describe("an instance a function body makes", () => {
     expect(new Set(stored.map(({ $link }) => $link.doc)).size).toBe(2);
     // An argument and a result document for each instance, and the
     // state cell of the list.
-    expect(instance.documents()).toEqual({
+    expect(besideStreams(instance)).toEqual({
       ...before,
       "argument": 3,
       "result": 3,
@@ -5443,7 +5454,7 @@ describe("an instance a function body makes", () => {
 
     expect(outcome.committed).toBe(false);
     expect(outcome.error).toBe("a pattern called in a function body");
-    expect(instance.documents()).toEqual(before);
+    expect(besideStreams(instance)).toEqual(before);
   });
 
   it("binds a handler in a function body, and an event for its stream runs the handler with the state the body bound", async () => {

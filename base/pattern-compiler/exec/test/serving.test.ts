@@ -686,3 +686,59 @@ describe("an instance that a handler creates", () => {
     });
   });
 });
+
+// ES §4.7, "The stream document", on `fixtures/batch.tsx`.
+describe("the document of a stream", () => {
+  type Stream = { entries: { event: unknown }[]; eventWatermark: number };
+  const streamsOf = (instance: Instance) =>
+    [...instance.store.docs.values()].filter(({ kind }) => kind === "stream")
+      .map(({ value }) => value as Stream);
+
+  it("does not exist for a binding that received no event, which has a row of the stream index", async () => {
+    const instance = new Instance(await artifactOf("batch"), {});
+
+    expect(instance.documents().stream).toBe(undefined);
+    // One row for each of the six bindings whose stream the result holds.
+    expect(instance.streamRows().length).toBe(6);
+  });
+
+  it("is created by the first event appended, and holds the entries and the watermark", async () => {
+    const instance = new Instance(await artifactOf("batch"), {});
+    const add = bindingOf(instance, "adding");
+
+    instance.enqueue(add, { text: "a" });
+
+    // The append is the sender's commit: the event is stored before it
+    // is handled.
+    expect(streamsOf(instance)).toEqual([
+      { entries: [{ event: { text: "a" } }], eventWatermark: 0 },
+    ]);
+
+    instance.batch();
+    instance.send(add, { text: "b" });
+
+    expect(streamsOf(instance)).toEqual([
+      {
+        entries: [{ event: { text: "a" } }, { event: { text: "b" } }],
+        eventWatermark: 2,
+      },
+    ]);
+    expect(instance.documents().stream).toBe(1);
+  });
+
+  it("gets the entry of an event that a handler sends in the transaction of that handler", async () => {
+    const instance = new Instance(await artifactOf("batch"), {});
+
+    const [relayed] = during(instance, () => {
+      instance.send(bindingOf(instance, "relay"), { text: "x" });
+    });
+
+    // The stream of `relay` got its entry before the transaction, and
+    // that of `add` in it.
+    const written = relayed.written.map((id) =>
+      instance.store.docs.get(id)?.kind
+    );
+    expect(written).toEqual(["stream"]);
+    expect(instance.documents().stream).toBe(2);
+  });
+});
