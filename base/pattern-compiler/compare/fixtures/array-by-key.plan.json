@@ -1,6 +1,6 @@
 [
   {
-    "module": "compare/fixtures/keyed-by.tsx",
+    "module": "compare/fixtures/array-by-key.tsx",
     "patterns": [
       {
         "line": 31,
@@ -93,7 +93,7 @@
           "cones": [
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
+                "file": "compare/fixtures/array-by-key.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -108,7 +108,7 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
+                "file": "compare/fixtures/array-by-key.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -123,7 +123,7 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
+                "file": "compare/fixtures/array-by-key.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -180,7 +180,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/keyed-by.tsx#RepoRow"
+            "unhashed:pattern/compare/fixtures/array-by-key.tsx#RepoRow"
           ],
           "picks": [],
           "selectors": [],
@@ -342,7 +342,7 @@
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
             {
-              "eventSchema": "unhashed:schema/11",
+              "eventSchema": "unhashed:schema/10",
               "handler": {
                 "body": 2
               },
@@ -369,7 +369,7 @@
               ]
             },
             {
-              "eventSchema": "unhashed:schema/11",
+              "eventSchema": "unhashed:schema/10",
               "handler": {
                 "body": 2
               },
@@ -396,7 +396,7 @@
               ]
             },
             {
-              "eventSchema": "unhashed:schema/12",
+              "eventSchema": "unhashed:schema/11",
               "handler": {
                 "body": 3
               },
@@ -449,7 +449,7 @@
               ]
             },
             {
-              "eventSchema": "unhashed:schema/12",
+              "eventSchema": "unhashed:schema/11",
               "handler": {
                 "body": 3
               },
@@ -792,7 +792,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/keyed-by.tsx#RepoRow"
+                "compiled": "unhashed:pattern/compare/fixtures/array-by-key.tsx#RepoRow"
               },
               "name": "map",
               "within": [
@@ -1029,8 +1029,8 @@
           "cones": [
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 2776
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 2806
               },
               "bodies": [
                 0
@@ -1048,8 +1048,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 2820
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 2850
               },
               "bodies": [
                 1
@@ -1065,8 +1065,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 3050
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3080
               },
               "bodies": [],
               "entry": "map",
@@ -1086,8 +1086,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 3255
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3285
               },
               "bodies": [],
               "entry": "filter",
@@ -1107,8 +1107,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 3293
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3323
               },
               "bodies": [],
               "entry": "map",
@@ -1142,8 +1142,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 3367
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3397
               },
               "bodies": [],
               "entry": "map",
@@ -1162,8 +1162,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 3591
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3621
               },
               "bodies": [],
               "entry": "filter",
@@ -1182,8 +1182,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 3617
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3647
               },
               "bodies": [],
               "entry": "map",
@@ -1202,8 +1202,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 3730
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3760
               },
               "bodies": [],
               "entry": "filter",
@@ -1223,8 +1223,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 3768
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3798
               },
               "bodies": [],
               "entry": "map",
@@ -1242,7 +1242,7 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
+                "file": "compare/fixtures/array-by-key.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -1257,7 +1257,7 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
+                "file": "compare/fixtures/array-by-key.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -1272,7 +1272,7 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
+                "file": "compare/fixtures/array-by-key.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -1287,7 +1287,7 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
+                "file": "compare/fixtures/array-by-key.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -1825,7 +1825,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/keyed-by.tsx#default"
+            "unhashed:pattern/compare/fixtures/array-by-key.tsx#default"
           ],
           "picks": [],
           "selectors": [],
@@ -2009,7 +2009,7 @@
                 "handler": 3,
                 "kind": "binding"
               },
-              "schema": "unhashed:schema/9"
+              "schema": "unhashed:schema/5"
             },
             {
               "observes": "identity",
@@ -2021,7 +2021,7 @@
                 "handler": 3,
                 "kind": "binding"
               },
-              "schema": "unhashed:schema/10"
+              "schema": "unhashed:schema/9"
             },
             {
               "observes": "identity",
@@ -2158,19 +2158,19 @@
           "stateCells": [
             {
               "name": "picked",
-              "schema": "unhashed:schema/13",
+              "schema": "unhashed:schema/12",
               "scope": "space",
               "within": []
             },
             {
               "name": "owner",
-              "schema": "unhashed:schema/14",
+              "schema": "unhashed:schema/13",
               "scope": "space",
               "within": []
             },
             {
               "name": "noted",
-              "schema": "unhashed:schema/15",
+              "schema": "unhashed:schema/14",
               "scope": "space",
               "within": [
                 {
@@ -2180,7 +2180,7 @@
             },
             {
               "name": "noted",
-              "schema": "unhashed:schema/15",
+              "schema": "unhashed:schema/14",
               "scope": "space",
               "within": [
                 {
@@ -2190,7 +2190,7 @@
             },
             {
               "name": "noted",
-              "schema": "unhashed:schema/15",
+              "schema": "unhashed:schema/14",
               "scope": "space",
               "within": [
                 {
@@ -2223,9 +2223,6 @@
                     "cell"
                   ],
                   "items": {
-                    "keyFields": [
-                      "id"
-                    ],
                     "properties": {
                       "id": {
                         "type": "number"
@@ -2256,6 +2253,9 @@
                     ],
                     "type": "object"
                   },
+                  "keyFields": [
+                    "id"
+                  ],
                   "type": "array"
                 }
               },
@@ -2301,9 +2301,6 @@
           {
             "id": "unhashed:schema/5",
             "schema": {
-              "keyFields": [
-                "id"
-              ],
               "properties": {
                 "id": {
                   "type": "number"
@@ -2342,9 +2339,6 @@
                 "cell"
               ],
               "items": {
-                "keyFields": [
-                  "id"
-                ],
                 "properties": {
                   "id": {
                     "type": "number"
@@ -2375,6 +2369,9 @@
                 ],
                 "type": "object"
               },
+              "keyFields": [
+                "id"
+              ],
               "type": "array"
             }
           },
@@ -2450,40 +2447,6 @@
             "id": "unhashed:schema/9",
             "schema": {
               "properties": {
-                "id": {
-                  "type": "number"
-                },
-                "name": {
-                  "type": "string"
-                },
-                "owner": {
-                  "properties": {
-                    "login": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "login"
-                  ],
-                  "type": "object"
-                },
-                "stars": {
-                  "type": "number"
-                }
-              },
-              "required": [
-                "id",
-                "name",
-                "stars",
-                "owner"
-              ],
-              "type": "object"
-            }
-          },
-          {
-            "id": "unhashed:schema/10",
-            "schema": {
-              "properties": {
                 "login": {
                   "type": "string"
                 }
@@ -2495,7 +2458,7 @@
             }
           },
           {
-            "id": "unhashed:schema/11",
+            "id": "unhashed:schema/10",
             "schema": {
               "properties": {
                 "text": {
@@ -2509,13 +2472,13 @@
             }
           },
           {
-            "id": "unhashed:schema/12",
+            "id": "unhashed:schema/11",
             "schema": {
               "type": "unknown"
             }
           },
           {
-            "id": "unhashed:schema/13",
+            "id": "unhashed:schema/12",
             "schema": {
               "anyOf": [
                 {
@@ -2557,7 +2520,7 @@
             }
           },
           {
-            "id": "unhashed:schema/14",
+            "id": "unhashed:schema/13",
             "schema": {
               "anyOf": [
                 {
@@ -2579,7 +2542,7 @@
             }
           },
           {
-            "id": "unhashed:schema/15",
+            "id": "unhashed:schema/14",
             "schema": {
               "default": ""
             }

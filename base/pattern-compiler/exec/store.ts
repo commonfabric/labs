@@ -7,6 +7,16 @@
  * a slot's path ("A slot's path is resolved through links").
  */
 
+import {
+  type FabricHash,
+  type FabricValue,
+  hashOf,
+} from "@commonfabric/data-model";
+import {
+  fabricFromJsonValue,
+  jsonFromFabricValue,
+} from "@commonfabric/data-model/codecs";
+
 /** The members of a JSON schema the executor reads. */
 export type Schema = boolean | {
   type?: string | string[];
@@ -15,8 +25,8 @@ export type Schema = boolean | {
   items?: Schema;
   asCell?: unknown;
   /**
-   * In the schema of the items of an array: the key fields that the
-   * element type declares with `KeyedBy`, in the order of their names
+   * In the schema of an array, beside `items`: the key fields that the
+   * array type declares with `ArrayByKey`, in the order of their names
    * (`plan-and-label-templates.md` §1.3, "A declared key field").
    */
   keyFields?: string[];
@@ -105,25 +115,9 @@ export const keySegment = (key: string): string => `${KEY}${key}`;
 export const isKeySegment = (segment: string): boolean =>
   segment.startsWith(KEY);
 
-const FIELDS = "fields:";
-
 /** Whether a value can be the value of a key field: a string or a number. */
 const isKeyValue = (value: unknown): value is string | number =>
   typeof value === "string" || typeof value === "number";
-
-/** A name or a string value with a `\` before each `\`, `,` and `=`. */
-const escaped = (text: string): string => text.replace(/[\\,=]/g, "\\$&");
-
-/**
- * The value of a key field as a key holds it. A number is `#` and its
- * canonical form. A string is written with its separators escaped, and
- * with a `\` before a `#` that it starts with, so the number 7 and the
- * strings `7` and `#7` are three keys.
- */
-const written = (value: string | number): string =>
-  typeof value === "number"
-    ? `#${canonical(value)}`
-    : escaped(value).replace(/^#/, "\\#");
 
 /** Compares two strings by their code points, as the compiler orders names. */
 const byCodePoint = (a: string, b: string): number => {
@@ -141,31 +135,89 @@ const ordered = (names: readonly string[]): string[] =>
   [...new Set(names)].sort(byCodePoint);
 
 /**
- * The element part of the key of a plain value
- * (`plan-and-label-templates.md` §1.3). With `fields`, the key fields
- * the element type declares, and a value that is a record that holds a
- * string or a number at each of them, the part names the fields
- * (rulings Z44 and Z45): `fields:`, and for each field in the order of
- * the names the name, `=`, and the value, joined with `,`. A `\` stands
- * before each `\`, `,` and `=` of a name and of a string value. Any
- * other value is keyed whole, as `value:` and its canonical form, which
- * names no field. So a key formed from a field `id` that holds 7 is not
- * the key of a whole value 7.
+ * The element part of a key (`plan-and-label-templates.md` §1.3;
+ * `execution-and-storage.md` §5.3): what a key holds beside its
+ * occurrence count.
  */
-export const valuePart = (
-  value: unknown,
-  fields: readonly string[] = [],
-): string => {
-  if (fields.length === 0 || !isPlainRecord(value)) {
-    return `value:${canonical(value)}`;
+export type ElementPart =
+  /**
+   * For a plain value: the salted hash of the whole value. With
+   * `fields`, the names of the declared key fields in the order of the
+   * names, and the hash is that of the array of the values the element
+   * holds at them, in that order (rulings Z47 and Z48).
+   */
+  | { hash: FabricHash; fields?: string[] }
+  /** For a position that holds a link: what the link names. */
+  | { cell: { doc: string; path: string[] } }
+  /**
+   * For an element that holds a reference by key into its own array,
+   * while the keys of that array are formed: its position.
+   */
+  | { position: number };
+
+/** Whether a fabric value is a record of fabric values. */
+const isValueRecord = (
+  value: FabricValue,
+): value is Record<string, FabricValue> => isPlainRecord(value);
+
+/**
+ * The written form of a key: the serialization of the record of its
+ * parts by the JSON codec of fabric values (`jsonFromFabricValue()` in
+ * `base/data-model/src/codecs.ts`), which writes a hash as the codec
+ * does and needs no separator between the parts (ruling Z51).
+ */
+const written = (parts: Record<string, FabricValue>): string =>
+  jsonFromFabricValue(parts);
+
+/**
+ * The record of the parts that a key holds. Throws for a text that is
+ * not the serialization of a record.
+ */
+const partsOf = (key: string): Record<string, FabricValue> => {
+  const parts = fabricFromJsonValue(key);
+  if (!isValueRecord(parts)) {
+    throw new Error(`Not an element key: \`${key}\``);
   }
-  const parts: string[] = [];
-  for (const field of ordered(fields)) {
-    const held = Object.hasOwn(value, field) ? value[field] : undefined;
-    if (!isKeyValue(held)) return `value:${canonical(value)}`;
-    parts.push(`${escaped(field)}=${written(held)}`);
-  }
-  return `${FIELDS}${parts.join(",")}`;
+  return parts;
+};
+
+/**
+ * The keys of the positions of one array, from the element part of
+ * each: a key holds the part and the occurrence count, the number of
+ * earlier positions with the same part, so no two positions have one
+ * key (`execution-and-storage.md` §5.3).
+ */
+export const keysOfParts = (parts: readonly ElementPart[]): string[] => {
+  const seen = new Map<string, number>();
+  return parts.map((part) => {
+    const text = written(part);
+    const count = seen.get(text) ?? 0;
+    seen.set(text, count + 1);
+    return written({ ...part, count });
+  });
+};
+
+/**
+ * The key of a member of the segment that a `flatMap` gave an element:
+ * the key of the upstream element, and the key of the member among the
+ * members of the segment (`plan-and-label-templates.md` §1.3, "The key
+ * of an element that a `flatMap` contributes").
+ */
+export const memberKey = (upstream: string, member: string): string =>
+  written({ of: partsOf(upstream), member: partsOf(member) });
+
+/**
+ * A key with the upstream key `from` in it replaced by `to`: the key
+ * itself, and the key of a member of a segment of the element at any
+ * depth. Any other key is returned as it is.
+ */
+export const rekeyed = (key: string, from: string, to: string): string => {
+  if (key === from) return to;
+  const { of, member } = partsOf(key);
+  if (!isValueRecord(of) || !isValueRecord(member)) return key;
+  const upstream = written(of);
+  const moved = rekeyed(upstream, from, to);
+  return moved === upstream ? key : memberKey(moved, written(member));
 };
 
 /**
@@ -174,35 +226,18 @@ export const valuePart = (
  * with no schema (ruling Z44).
  */
 export const fieldsOfKey = (key: string): string[] => {
-  if (!key.startsWith(FIELDS)) return [];
-  const names: string[] = [];
-  let name = "";
-  // Whether the walk is in a name, and not in the value after its `=`.
-  let naming = true;
-  const part = key.slice(FIELDS.length).replace(/#\d+$/, "");
-  for (let index = 0; index < part.length; index++) {
-    const char = part[index];
-    if (char === "\\") {
-      index += 1;
-      if (naming) name += part[index] ?? "";
-    } else if (naming && char === "=") {
-      names.push(name);
-      name = "";
-      naming = false;
-    } else if (!naming && char === ",") {
-      naming = true;
-    } else if (naming) {
-      name += char;
-    }
-  }
-  return names;
+  const { fields } = partsOf(key);
+  return Array.isArray(fields)
+    ? fields.filter((field) => typeof field === "string")
+    : [];
 };
 
-/** The key fields that the schema of an array declares for its items. */
-export const keyFieldsOf = (schema: Schema | undefined): string[] => {
-  const items = typeof schema === "object" ? schema.items : undefined;
-  return typeof items === "object" ? items.keyFields ?? [] : [];
-};
+/**
+ * The key fields that the schema of an array declares, beside `items`
+ * (ruling Z49).
+ */
+export const keyFieldsOf = (schema: Schema | undefined): string[] =>
+  typeof schema === "object" ? schema.keyFields ?? [] : [];
 
 /** A reference to a position of a document. */
 export class Ref {
@@ -340,6 +375,15 @@ export type Located = {
    */
   crossed: { array: string[]; key: string; position: string[] }[];
   /**
+   * The schema that the link nearest the position holds for it, where a
+   * link the read resolved through holds one. A link whose schema
+   * declares no key fields for the position does not replace one that
+   * declares some. A reader whose own schema declares no key fields
+   * for an array forms keys with those this schema declares (ruling
+   * Z52).
+   */
+  given: Schema | undefined;
+  /**
    * The default declared nearest the end of the chain of links the read
    * resolved through: that of the last link whose schema declares one,
    * and that of the reference's own schema where no link does.
@@ -399,6 +443,21 @@ export class MissingKey extends Error {
 const MAX_LINKS = 64;
 
 export class Store {
+  /**
+   * The secret of the space, which the hash of the element part of a
+   * plain value is salted with (`execution-and-storage.md` §5.3).
+   */
+  readonly #secret: string;
+
+  /**
+   * Constructs an instance with no document. `secret` is the secret of
+   * the space; without it the store mints one, and its keys of plain
+   * values then differ from those of every other store.
+   */
+  constructor(options: { secret?: string } = {}) {
+    this.#secret = options.secret ?? crypto.randomUUID();
+  }
+
   readonly docs = new Map<string, { kind: string; value: unknown }>();
   /**
    * The places that hold nothing until a write: a state cell has no
@@ -479,17 +538,57 @@ export class Store {
   readonly #keying = new Set<string>();
 
   /**
+   * The element part of the key of a plain value
+   * (`plan-and-label-templates.md` §1.3). With `fields`, the key fields
+   * the array declares, and a value that is a record that holds a
+   * string or a number at each of them, the part names the fields in
+   * the order of their names and holds one salted hash of the array of
+   * their values in that order (rulings Z47 and Z48). Any other value
+   * is keyed whole: the part holds the salted hash of the value and
+   * names no field. So a key formed from a field `id` that holds 7 is
+   * not the key of a whole value 7. The hash is that of the value
+   * hasher (`hashOf()` in `base/data-model/src/value-hash/impl.ts`)
+   * over the array of the secret and the value, where the value is
+   * what its JSON text holds.
+   */
+  partOf(value: unknown, fields: readonly string[] = []): ElementPart {
+    if (fields.length > 0 && isPlainRecord(value)) {
+      const names = ordered(fields);
+      const values = names.map((name) =>
+        Object.hasOwn(value, name) ? value[name] : undefined
+      );
+      if (values.every(isKeyValue)) {
+        return { fields: names, hash: this.#salted(values) };
+      }
+    }
+    return { hash: this.#salted(value) };
+  }
+
+  /** The key of a plain value at an occurrence count. */
+  keyOf(value: unknown, fields: readonly string[] = [], count = 0): string {
+    return written({ ...this.partOf(value, fields), count });
+  }
+
+  /** The hash of a value with the secret of the space. */
+  #salted(value: unknown): FabricHash {
+    const held: FabricValue = value === undefined
+      ? undefined
+      : JSON.parse(canonical(value));
+    return hashOf([this.#secret, held]);
+  }
+
+  /**
    * The key of each position of a stored array
    * (`plan-and-label-templates.md` §1.3, "Element keys"): the identity of
-   * the cell where the position holds a link, the value where it holds
-   * one, and the count of the earlier positions with the same element
-   * part. `copies` gives the values of the positions where the caller has
-   * read them. With `fields`, the key fields that the collection or the
-   * read declares, or that a key to resolve names, a plain value that
-   * holds the fields is keyed by them and not by its whole value: a
-   * change of another member changes no key (rulings Z38, Z44 and Z45).
-   * A position that holds a link is keyed by its cell with or without
-   * declared fields.
+   * the cell where the position holds a link, the salted hash of the
+   * value where it holds one, and the count of the earlier positions
+   * with the same element part. `copies` gives the values of the
+   * positions where the caller has read them. With `fields`, the key
+   * fields that the collection or the read declares, or that a key to
+   * resolve names, a plain value that holds the fields is keyed by them
+   * and not by its whole value: a change of another member changes no
+   * key (rulings Z44, Z45 and Z49). A position that holds a link is
+   * keyed by its cell with or without declared fields.
    */
   keysOf(
     held: readonly unknown[],
@@ -503,9 +602,7 @@ export class Store {
     const reentered = this.#keying.has(id);
     this.#keying.add(id);
     try {
-      const seen = new Map<string, number>();
-      return held.map((member, index) => {
-        let part: string;
+      return keysOfParts(held.map((member, index): ElementPart => {
         if (isLink(member)) {
           // What the link names, with no key resolved: a link to an
           // element by key is keyed by that reference.
@@ -515,21 +612,14 @@ export class Store {
             undefined,
             true,
           );
-          part = `cell:${named.doc}:${canonical(named.path)}`;
-        } else if (reentered) {
-          part = `position:${index}`;
-        } else {
-          part = valuePart(
-            copies === undefined
-              ? this.read(at.key(`${index}`))
-              : copies[index],
-            fields,
-          );
+          return { cell: { doc: named.doc, path: [...named.path] } };
         }
-        const count = seen.get(part) ?? 0;
-        seen.set(part, count + 1);
-        return `${part}#${count}`;
-      });
+        if (reentered) return { position: index };
+        return this.partOf(
+          copies === undefined ? this.read(at.key(`${index}`)) : copies[index],
+          fields,
+        );
+      }));
     } finally {
       if (!reentered) this.#keying.delete(id);
     }
@@ -563,6 +653,7 @@ export class Store {
     let fallback = typeof ref.schema === "object"
       ? ref.schema.default
       : undefined;
+    let given: Schema | undefined;
     let rest = [...ref.path];
     let links = 0;
     let missing = false;
@@ -579,6 +670,7 @@ export class Store {
             missing,
             inPlace,
             crossed,
+            given: undefined,
             fallback: undefined,
           };
         }
@@ -590,6 +682,12 @@ export class Store {
         schema ??= below;
         if (typeof below === "object" && below.default !== undefined) {
           fallback = below.default;
+        }
+        if (
+          below !== undefined &&
+          (keyFieldsOf(below).length > 0 || keyFieldsOf(given).length === 0)
+        ) {
+          given = below;
         }
         doc = value.$link.doc;
         rest = [...value.$link.path, ...rest];
@@ -611,6 +709,7 @@ export class Store {
             missing,
             inPlace: true,
             crossed,
+            given,
             fallback,
           };
         }
@@ -665,6 +764,7 @@ export class Store {
       missing,
       inPlace,
       crossed,
+      given,
       fallback,
     };
   }
@@ -803,6 +903,7 @@ export class Store {
           copies,
           copied,
           located.ref.schema,
+          located.given,
         ),
       located.ref.schema,
       (from, to) => {
@@ -835,6 +936,12 @@ export class Store {
      * array are formed with the key fields it declares (ruling Z44).
      */
     shape?: Schema,
+    /**
+     * The schema that a link the read resolved through holds for the
+     * position: where `shape` declares no key fields for an array, its
+     * keys are formed with those this schema declares (ruling Z52).
+     */
+    given?: Schema,
   ): unknown {
     if (isLink(value)) {
       const { doc, path, schema } = value.$link;
@@ -861,10 +968,17 @@ export class Store {
           copies,
           copies,
           items,
+          typeof given === "object" ? given.items : undefined,
         )
       );
       if (containers) {
-        const keys = this.keysOf(value, here, copy, keyFieldsOf(shape));
+        const declared = keyFieldsOf(shape);
+        const keys = this.keysOf(
+          value,
+          here,
+          copy,
+          declared.length > 0 ? declared : keyFieldsOf(given),
+        );
         copy.forEach((member, index) => {
           if (isLink(value[index])) return;
           this.#readdress(
@@ -892,6 +1006,7 @@ export class Store {
             copies,
             copied,
             schemaBelow(shape, name),
+            schemaBelow(given, name),
           ),
         ]),
       );

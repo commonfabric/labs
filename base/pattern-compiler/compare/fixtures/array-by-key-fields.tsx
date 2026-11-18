@@ -1,5 +1,11 @@
 /// <cts-enable />
-import { handler, type KeyedBy, lift, pattern, Writable } from "commonfabric";
+import {
+  type ArrayByKey,
+  handler,
+  lift,
+  pattern,
+  Writable,
+} from "commonfabric";
 
 interface Repo {
   owner: string;
@@ -30,7 +36,7 @@ const RepoRow = pattern<{ repo: Repo }>(({ repo }) => {
 const fetched = lift(
   (
     input: { names: string[]; bonus: number; reversed: boolean },
-  ): KeyedBy<Repo, "owner" | "name">[] => {
+  ): ArrayByKey<Repo, "owner" | "name"> => {
     const repos = input.names.map((name, index) => ({
       owner: index % 2 === 0 ? "cf" : "x",
       name,
@@ -45,17 +51,18 @@ interface Input {
   bonus: number;
   reversed: boolean;
   minStars: number;
-  saved: Writable<KeyedBy<Repo, "owner" | "name">[]>;
+  saved: Writable<ArrayByKey<Repo, "owner" | "name">>;
 }
 
-// Ruling Z45: the element type `KeyedBy<Repo, "owner" | "name">` declares
-// two key fields, and an element has one key across them. `starred` is
-// over the result of a `filter` of a plain array generated from scratch,
-// and `kept` is over plain values in place. Each row is an instance of
-// `RepoRow` called through `asInstance()`, whose state cell `noted` stays
-// with the key when `stars` or the order of the elements changes.
-// `KeyedBy` is no member of today's `commonfabric`, so the executor's
-// tests run this fixture and it is not compared with today's runtime.
+// Rulings Z45 and Z49: the array type `ArrayByKey<Repo, "owner" | "name">`
+// declares two key fields, and an element has one key across them.
+// `starred` is over the result of a `filter` of a plain array generated
+// from scratch, and `kept` is over plain values in place. Each row is an
+// instance of `RepoRow` called through `asInstance()`, whose state cell
+// `noted` stays with the key when `stars` or the order of the elements
+// changes. `ArrayByKey` is no member of today's `commonfabric`, so the
+// executor's tests run this fixture and it is not compared with today's
+// runtime.
 export default pattern<Input>(
   ({ names, bonus, reversed, minStars, saved }) => {
     const repos = fetched({ names, bonus, reversed });

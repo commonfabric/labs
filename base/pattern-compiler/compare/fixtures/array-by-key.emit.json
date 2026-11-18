@@ -1,6 +1,6 @@
 [
   {
-    "module": "compare/fixtures/keyed-by.tsx",
+    "module": "compare/fixtures/array-by-key.tsx",
     "patterns": [
       {
         "code": {
@@ -15,8 +15,8 @@
           "modules": [
             {
               "module": 0,
-              "path": "compare/fixtures/keyed-by.tsx",
-              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst note = handler(\n  (event, { noted }) => {\n    noted.set(event.text);\n  },\n);\nconst pick = handler((_, { repo, picked, owner }) => {\n  picked.set(repo);\n  owner.set(repo.owner);\n});\nconst RepoRow = pattern(\"unhashed:pattern/compare/fixtures/keyed-by.tsx#RepoRow\");\nconst fetched = lift(\n  (input) =>\n    input.names.map((name, index) => ({\n      id: index + 1,\n      name,\n      stars: name.length + input.bonus,\n      owner: { login: `${name}-owner` },\n    })),\n);\nconst counted = lift((input) =>\n  input.names.map((_, index) => index + 1)\n);\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/keyed-by.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ name: $h.slot(3), stars: $h.slot(4), noted: $h.slot(2), note: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { noted }) => {\n    noted.set(event.text);\n  })($e, $s));"
+              "path": "compare/fixtures/array-by-key.tsx",
+              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst note = handler(\n  (event, { noted }) => {\n    noted.set(event.text);\n  },\n);\nconst pick = handler((_, { repo, picked, owner }) => {\n  picked.set(repo);\n  owner.set(repo.owner);\n});\nconst RepoRow = pattern(\"unhashed:pattern/compare/fixtures/array-by-key.tsx#RepoRow\");\nconst fetched = lift(\n  (input) =>\n    input.names.map((name, index) => ({\n      id: index + 1,\n      name,\n      stars: name.length + input.bonus,\n      owner: { login: `${name}-owner` },\n    })),\n);\nconst counted = lift((input) =>\n  input.names.map((_, index) => index + 1)\n);\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/array-by-key.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ name: $h.slot(3), stars: $h.slot(4), noted: $h.slot(2), note: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { noted }) => {\n    noted.set(event.text);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -117,7 +117,7 @@
           "cones": [
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
+                "file": "compare/fixtures/array-by-key.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -132,7 +132,7 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
+                "file": "compare/fixtures/array-by-key.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -147,7 +147,7 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
+                "file": "compare/fixtures/array-by-key.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -204,7 +204,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/keyed-by.tsx#RepoRow"
+            "unhashed:pattern/compare/fixtures/array-by-key.tsx#RepoRow"
           ],
           "picks": [],
           "selectors": [],
@@ -385,8 +385,8 @@
           "modules": [
             {
               "module": 0,
-              "path": "compare/fixtures/keyed-by.tsx",
-              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst note = handler(\n  (event, { noted }) => {\n    noted.set(event.text);\n  },\n);\nconst pick = handler((_, { repo, picked, owner }) => {\n  picked.set(repo);\n  owner.set(repo.owner);\n});\nconst RepoRow = pattern(\"unhashed:pattern/compare/fixtures/keyed-by.tsx#RepoRow\");\nconst fetched = lift(\n  (input) =>\n    input.names.map((name, index) => ({\n      id: index + 1,\n      name,\n      stars: name.length + input.bonus,\n      owner: { login: `${name}-owner` },\n    })),\n);\nconst counted = lift((input) =>\n  input.names.map((_, index) => index + 1)\n);\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/keyed-by.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((input) =>\n    input.names.map((name, index) => ({\n      id: index + 1,\n      name,\n      stars: name.length + input.bonus,\n      owner: { login: `${name}-owner` },\n    })))($a));\n$rt.body(1, ($a) => ((input) =>\n  input.names.map((_, index) => index + 1))($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ names: $h.slot(1), bonus: $h.slot(0) }))));\n$rt.value(1, ($h) => ($h.invoke(1, ({ names: $h.slot(1) }))));\n{\n$rt.element(0, ($h) => (({ name: $h.slot(6), stars: $h.slot(7), noted: $h.slot(5), note: $h.stream(0) })));\n}\n{\n$rt.element(1, ($h) => (($h.v($h.slot(8)) >= $h.v($h.slot(9)))));\n}\n{\n$rt.child(0, ($h) => (({ repo: $h.slot(11) })));\n$rt.element(2, ($h) => ($h.slot(12)));\n}\n{\n$rt.element(3, ($h) => (({ name: $h.slot(22), noted: $h.slot(14), note: $h.stream(1), pick: $h.stream(2) })));\n}\n{\n$rt.element(4, ($h) => (($h.v($h.slot(23)) > (0))));\n}\n{\n$rt.element(5, ($h) => (({ count: $h.slot(25), noted: $h.slot(26) })));\n}\n{\n$rt.element(6, ($h) => (($h.v($h.slot(27)) >= $h.v($h.slot(9)))));\n}\n{\n$rt.element(7, ($h) => (({ name: $h.slot(30), pick: $h.stream(3) })));\n}\nreturn $rt.thunk(($h) => (({ picked: $h.slot(20), owner: $h.slot(19), pickedName: $h.slot(32), ownerLogin: $h.slot(31), rows: $h.output(2), starred: $h.output(9), kept: $h.output(11), tallies: $h.output(17), found: $h.output(23) })));\n});\n$rt.body(2, ($e, $s) => ((event, { noted }) => {\n    noted.set(event.text);\n  })($e, $s));\n$rt.body(3, ($e, $s) => ((_, { repo, picked, owner }) => {\n  picked.set(repo);\n  owner.set(repo.owner);\n})($e, $s));"
+              "path": "compare/fixtures/array-by-key.tsx",
+              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst note = handler(\n  (event, { noted }) => {\n    noted.set(event.text);\n  },\n);\nconst pick = handler((_, { repo, picked, owner }) => {\n  picked.set(repo);\n  owner.set(repo.owner);\n});\nconst RepoRow = pattern(\"unhashed:pattern/compare/fixtures/array-by-key.tsx#RepoRow\");\nconst fetched = lift(\n  (input) =>\n    input.names.map((name, index) => ({\n      id: index + 1,\n      name,\n      stars: name.length + input.bonus,\n      owner: { login: `${name}-owner` },\n    })),\n);\nconst counted = lift((input) =>\n  input.names.map((_, index) => index + 1)\n);\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/array-by-key.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((input) =>\n    input.names.map((name, index) => ({\n      id: index + 1,\n      name,\n      stars: name.length + input.bonus,\n      owner: { login: `${name}-owner` },\n    })))($a));\n$rt.body(1, ($a) => ((input) =>\n  input.names.map((_, index) => index + 1))($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ names: $h.slot(1), bonus: $h.slot(0) }))));\n$rt.value(1, ($h) => ($h.invoke(1, ({ names: $h.slot(1) }))));\n{\n$rt.element(0, ($h) => (({ name: $h.slot(6), stars: $h.slot(7), noted: $h.slot(5), note: $h.stream(0) })));\n}\n{\n$rt.element(1, ($h) => (($h.v($h.slot(8)) >= $h.v($h.slot(9)))));\n}\n{\n$rt.child(0, ($h) => (({ repo: $h.slot(11) })));\n$rt.element(2, ($h) => ($h.slot(12)));\n}\n{\n$rt.element(3, ($h) => (({ name: $h.slot(22), noted: $h.slot(14), note: $h.stream(1), pick: $h.stream(2) })));\n}\n{\n$rt.element(4, ($h) => (($h.v($h.slot(23)) > (0))));\n}\n{\n$rt.element(5, ($h) => (({ count: $h.slot(25), noted: $h.slot(26) })));\n}\n{\n$rt.element(6, ($h) => (($h.v($h.slot(27)) >= $h.v($h.slot(9)))));\n}\n{\n$rt.element(7, ($h) => (({ name: $h.slot(30), pick: $h.stream(3) })));\n}\nreturn $rt.thunk(($h) => (({ picked: $h.slot(20), owner: $h.slot(19), pickedName: $h.slot(32), ownerLogin: $h.slot(31), rows: $h.output(2), starred: $h.output(9), kept: $h.output(11), tallies: $h.output(17), found: $h.output(23) })));\n});\n$rt.body(2, ($e, $s) => ((event, { noted }) => {\n    noted.set(event.text);\n  })($e, $s));\n$rt.body(3, ($e, $s) => ((_, { repo, picked, owner }) => {\n  picked.set(repo);\n  owner.set(repo.owner);\n})($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -463,7 +463,7 @@
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
             {
-              "eventSchema": "unhashed:schema/11",
+              "eventSchema": "unhashed:schema/10",
               "handler": {
                 "body": 2
               },
@@ -490,7 +490,7 @@
               ]
             },
             {
-              "eventSchema": "unhashed:schema/11",
+              "eventSchema": "unhashed:schema/10",
               "handler": {
                 "body": 2
               },
@@ -517,7 +517,7 @@
               ]
             },
             {
-              "eventSchema": "unhashed:schema/12",
+              "eventSchema": "unhashed:schema/11",
               "handler": {
                 "body": 3
               },
@@ -570,7 +570,7 @@
               ]
             },
             {
-              "eventSchema": "unhashed:schema/12",
+              "eventSchema": "unhashed:schema/11",
               "handler": {
                 "body": 3
               },
@@ -913,7 +913,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/keyed-by.tsx#RepoRow"
+                "compiled": "unhashed:pattern/compare/fixtures/array-by-key.tsx#RepoRow"
               },
               "name": "map",
               "within": [
@@ -1150,8 +1150,8 @@
           "cones": [
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 2776
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 2806
               },
               "bodies": [
                 0
@@ -1169,8 +1169,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 2820
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 2850
               },
               "bodies": [
                 1
@@ -1186,8 +1186,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 3050
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3080
               },
               "bodies": [],
               "entry": "map",
@@ -1207,8 +1207,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 3255
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3285
               },
               "bodies": [],
               "entry": "filter",
@@ -1228,8 +1228,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 3293
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3323
               },
               "bodies": [],
               "entry": "map",
@@ -1263,8 +1263,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 3367
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3397
               },
               "bodies": [],
               "entry": "map",
@@ -1283,8 +1283,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 3591
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3621
               },
               "bodies": [],
               "entry": "filter",
@@ -1303,8 +1303,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 3617
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3647
               },
               "bodies": [],
               "entry": "map",
@@ -1323,8 +1323,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 3730
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3760
               },
               "bodies": [],
               "entry": "filter",
@@ -1344,8 +1344,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
-                "start": 3768
+                "file": "compare/fixtures/array-by-key.tsx",
+                "start": 3798
               },
               "bodies": [],
               "entry": "map",
@@ -1363,7 +1363,7 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
+                "file": "compare/fixtures/array-by-key.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -1378,7 +1378,7 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
+                "file": "compare/fixtures/array-by-key.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -1393,7 +1393,7 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
+                "file": "compare/fixtures/array-by-key.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -1408,7 +1408,7 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by.tsx",
+                "file": "compare/fixtures/array-by-key.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -1946,7 +1946,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/keyed-by.tsx#default"
+            "unhashed:pattern/compare/fixtures/array-by-key.tsx#default"
           ],
           "picks": [],
           "selectors": [],
@@ -2130,7 +2130,7 @@
                 "handler": 3,
                 "kind": "binding"
               },
-              "schema": "unhashed:schema/9"
+              "schema": "unhashed:schema/5"
             },
             {
               "observes": "identity",
@@ -2142,7 +2142,7 @@
                 "handler": 3,
                 "kind": "binding"
               },
-              "schema": "unhashed:schema/10"
+              "schema": "unhashed:schema/9"
             },
             {
               "observes": "identity",
@@ -2279,19 +2279,19 @@
           "stateCells": [
             {
               "name": "picked",
-              "schema": "unhashed:schema/13",
+              "schema": "unhashed:schema/12",
               "scope": "space",
               "within": []
             },
             {
               "name": "owner",
-              "schema": "unhashed:schema/14",
+              "schema": "unhashed:schema/13",
               "scope": "space",
               "within": []
             },
             {
               "name": "noted",
-              "schema": "unhashed:schema/15",
+              "schema": "unhashed:schema/14",
               "scope": "space",
               "within": [
                 {
@@ -2301,7 +2301,7 @@
             },
             {
               "name": "noted",
-              "schema": "unhashed:schema/15",
+              "schema": "unhashed:schema/14",
               "scope": "space",
               "within": [
                 {
@@ -2311,7 +2311,7 @@
             },
             {
               "name": "noted",
-              "schema": "unhashed:schema/15",
+              "schema": "unhashed:schema/14",
               "scope": "space",
               "within": [
                 {
@@ -2344,9 +2344,6 @@
                     "cell"
                   ],
                   "items": {
-                    "keyFields": [
-                      "id"
-                    ],
                     "properties": {
                       "id": {
                         "type": "number"
@@ -2377,6 +2374,9 @@
                     ],
                     "type": "object"
                   },
+                  "keyFields": [
+                    "id"
+                  ],
                   "type": "array"
                 }
               },
@@ -2422,9 +2422,6 @@
           {
             "id": "unhashed:schema/5",
             "schema": {
-              "keyFields": [
-                "id"
-              ],
               "properties": {
                 "id": {
                   "type": "number"
@@ -2463,9 +2460,6 @@
                 "cell"
               ],
               "items": {
-                "keyFields": [
-                  "id"
-                ],
                 "properties": {
                   "id": {
                     "type": "number"
@@ -2496,6 +2490,9 @@
                 ],
                 "type": "object"
               },
+              "keyFields": [
+                "id"
+              ],
               "type": "array"
             }
           },
@@ -2571,40 +2568,6 @@
             "id": "unhashed:schema/9",
             "schema": {
               "properties": {
-                "id": {
-                  "type": "number"
-                },
-                "name": {
-                  "type": "string"
-                },
-                "owner": {
-                  "properties": {
-                    "login": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "login"
-                  ],
-                  "type": "object"
-                },
-                "stars": {
-                  "type": "number"
-                }
-              },
-              "required": [
-                "id",
-                "name",
-                "stars",
-                "owner"
-              ],
-              "type": "object"
-            }
-          },
-          {
-            "id": "unhashed:schema/10",
-            "schema": {
-              "properties": {
                 "login": {
                   "type": "string"
                 }
@@ -2616,7 +2579,7 @@
             }
           },
           {
-            "id": "unhashed:schema/11",
+            "id": "unhashed:schema/10",
             "schema": {
               "properties": {
                 "text": {
@@ -2630,13 +2593,13 @@
             }
           },
           {
-            "id": "unhashed:schema/12",
+            "id": "unhashed:schema/11",
             "schema": {
               "type": "unknown"
             }
           },
           {
-            "id": "unhashed:schema/13",
+            "id": "unhashed:schema/12",
             "schema": {
               "anyOf": [
                 {
@@ -2678,7 +2641,7 @@
             }
           },
           {
-            "id": "unhashed:schema/14",
+            "id": "unhashed:schema/13",
             "schema": {
               "anyOf": [
                 {
@@ -2700,7 +2663,7 @@
             }
           },
           {
-            "id": "unhashed:schema/15",
+            "id": "unhashed:schema/14",
             "schema": {
               "default": ""
             }

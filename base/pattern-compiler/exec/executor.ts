@@ -14,22 +14,25 @@
  */
 import {
   canonical,
+  type ElementPart,
   isKeySegment,
   isLink,
   isStream,
   isStreamSchema,
   keyFieldsOf,
   keySegment,
+  keysOfParts,
   markerOf,
+  memberKey,
   type Position,
   Ref,
+  rekeyed,
   type Schema,
   schemaBelow,
   Store,
   StreamMarker,
   streamOf,
   StreamRef,
-  valuePart,
   withDefaults,
 } from "./store.ts";
 
@@ -91,10 +94,10 @@ export type Plan = {
     within: { element?: number; site?: string }[];
     source: { slot?: number; collection?: number; output?: number };
     /**
-     * The key fields that the element type of the receiver declares
-     * with `KeyedBy`, in the order of their names, for a source that is
-     * a slot or an output (PL §1.1, `Collection.keyFields`; rulings Z38
-     * and Z45).
+     * The key fields that the array type of the receiver declares with
+     * `ArrayByKey`, in the order of their names, for a source that is a
+     * slot or an output (PL §1.1, `Collection.keyFields`; rulings Z45
+     * and Z49).
      */
     keyFields?: string[];
   }[];
@@ -391,11 +394,15 @@ export class Handle {
       // A member that is a plain value in place is named by its key, and
       // one that is a link by the position that holds the link (PL §1.3,
       // assumed there under question 115).
+      // The key fields that the schema of the read declares, and
+      // otherwise those of the array schema that a link on the way to
+      // the array holds (ruling Z52).
+      const declared = keyFieldsOf(schema);
       const keys = store.keysOf(
         located.value,
         located.ref,
         undefined,
-        keyFieldsOf(schema),
+        declared.length > 0 ? declared : keyFieldsOf(located.given),
       );
       return located.value.map((held, index) =>
         member(
@@ -1123,6 +1130,8 @@ export class Instance {
     argument: unknown,
     /**
      * `space`: the space the instance is in, which `spaceOf` gives.
+     * `secret`: the secret of that space, which the keys of plain
+     * values are salted with; the store mints one where none is given.
      * `artifacts`: the artifact of a pattern, by the identity its plan
      * begins with (`Plan.patterns`), for a pattern that a function body
      * instantiates. `parent` and `prefix`: for an instance a function
@@ -1130,12 +1139,14 @@ export class Instance {
      */
     readonly options: {
       space?: string;
+      secret?: string;
       artifacts?: (id: string) => Artifact | undefined;
       parent?: Instance;
       prefix?: string;
     } = {},
   ) {
-    this.store = options.parent?.store ?? new Store();
+    this.store = options.parent?.store ??
+      new Store({ secret: options.secret });
     this.prefix = options.prefix ?? "";
     this.root = options.parent?.root ?? this;
     this.plan = artifact.plan;
@@ -2354,7 +2365,7 @@ export class Instance {
               ]]);
               const segment = this.#segment(result, entry, inner, host);
               for (const { part, source } of segment.members) {
-                members.push({ key: `${key}/${part}`, source });
+                members.push({ key: memberKey(key, part), source });
               }
               return segment.values;
             });
@@ -2479,19 +2490,13 @@ export class Instance {
    * value, with the count of the earlier members with the same part.
    */
   #parts(members: readonly unknown[]): string[] {
-    const seen = new Map<string, number>();
-    return members.map((member) => {
-      let part: string;
+    return keysOfParts(members.map((member): ElementPart => {
       if (member instanceof Ref) {
         const { named } = this.store.locate(member, true, undefined, true);
-        part = `cell:${named.doc}:${canonical(named.path)}`;
-      } else {
-        part = `value:${canonical(this.stored(member))}`;
+        return { cell: { doc: named.doc, path: [...named.path] } };
       }
-      const count = seen.get(part) ?? 0;
-      seen.set(part, count + 1);
-      return `${part}#${count}`;
-    });
+      return this.store.partOf(this.stored(member));
+    }));
   }
 
   /**
@@ -2555,22 +2560,21 @@ export class Instance {
         member instanceof Ref ? member : { value: member }
       );
     }
-    const seen = new Map<string, number>();
-    return members.map((member, index) => {
-      // A reference is keyed by what it names, and a value by itself.
-      let part: string;
+    // A reference is keyed by what it names, and a value by itself:
+    // by the declared key fields, where the collection has them, and
+    // otherwise by the whole value.
+    const keys = keysOfParts(members.map((member): ElementPart => {
       if (member instanceof Ref) {
         const { named } = this.store.locate(member, true);
-        part = `cell:${named.doc}:${canonical(named.path)}`;
-      } else {
-        // The declared key fields, where the collection has them, and
-        // otherwise the whole value.
-        part = valuePart(host.v(member.value), keyFields);
+        return { cell: { doc: named.doc, path: [...named.path] } };
       }
-      const count = seen.get(part) ?? 0;
-      seen.set(part, count + 1);
-      return { key: `${part}#${count}`, index, source: member };
-    });
+      return this.store.partOf(host.v(member.value), keyFields);
+    }));
+    return members.map((member, index) => ({
+      key: keys[index],
+      index,
+      source: member,
+    }));
   }
 
   /**
@@ -2579,12 +2583,20 @@ export class Instance {
    * in place is named by the array and its key, and its `source` is that
    * reference by key (ruling Z12). With `fields`, the key fields that
    * the collection's record holds, the key of a plain value is formed
-   * from the fields and names them (rulings Z44 and Z45).
+   * from the fields and names them (rulings Z44 and Z45). Without
+   * them, it is formed from the key fields of the array schema that a
+   * link on the way to the array holds, and from the whole value where
+   * no link holds one (ruling Z52).
    */
   #stored(array: Ref, host: Host, fields?: readonly string[]): Element[] {
     const located = this.store.locate(array, true, host.reads);
     const held = Array.isArray(located.value) ? located.value : [];
-    const keys = this.store.keysOf(held, located.ref, undefined, fields);
+    const keys = this.store.keysOf(
+      held,
+      located.ref,
+      undefined,
+      fields ?? keyFieldsOf(located.given),
+    );
     return held.map((member, index) => ({
       key: keys[index],
       index,
@@ -3270,12 +3282,7 @@ export class Instance {
     }
     // The key itself, and the key of a member of the segment that a
     // `flatMap` gave the element (ruling Z22).
-    const renamed = (key: string) =>
-      key === rekey.from
-        ? rekey.to
-        : key.startsWith(`${rekey.from}/`)
-        ? `${rekey.to}${key.slice(rekey.from.length)}`
-        : key;
+    const renamed = (key: string) => rekeyed(key, rekey.from, rekey.to);
     for (const [name, table] of this.#tables) {
       const bar = name.indexOf("|");
       const collection = Number(name.slice(1, bar));

@@ -1,6 +1,6 @@
 [
   {
-    "module": "compare/fixtures/keyed-by-fields.tsx",
+    "module": "compare/fixtures/array-by-key-fields.tsx",
     "patterns": [
       {
         "code": {
@@ -15,8 +15,8 @@
           "modules": [
             {
               "module": 0,
-              "path": "compare/fixtures/keyed-by-fields.tsx",
-              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst note = handler(\n  (event, { noted }) => {\n    noted.set(event.text);\n  },\n);\nconst RepoRow = pattern(\"unhashed:pattern/compare/fixtures/keyed-by-fields.tsx#RepoRow\");\nconst fetched = lift(\n  (\n    input,\n  ) => {\n    const repos = input.names.map((name, index) => ({\n      owner: index % 2 === 0 ? \"cf\" : \"x\",\n      name,\n      stars: name.length + input.bonus,\n    }));\n    return input.reversed ? repos.toReversed() : repos;\n  },\n);\n\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/keyed-by-fields.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ owner: $h.slot(4), name: $h.slot(3), stars: $h.slot(5), noted: $h.slot(2), note: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { noted }) => {\n    noted.set(event.text);\n  })($e, $s));"
+              "path": "compare/fixtures/array-by-key-fields.tsx",
+              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst note = handler(\n  (event, { noted }) => {\n    noted.set(event.text);\n  },\n);\nconst RepoRow = pattern(\"unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#RepoRow\");\nconst fetched = lift(\n  (\n    input,\n  ) => {\n    const repos = input.names.map((name, index) => ({\n      owner: index % 2 === 0 ? \"cf\" : \"x\",\n      name,\n      stars: name.length + input.bonus,\n    }));\n    return input.reversed ? repos.toReversed() : repos;\n  },\n);\n\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ owner: $h.slot(4), name: $h.slot(3), stars: $h.slot(5), noted: $h.slot(2), note: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { noted }) => {\n    noted.set(event.text);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -117,7 +117,7 @@
           "cones": [
             {
               "at": {
-                "file": "compare/fixtures/keyed-by-fields.tsx",
+                "file": "compare/fixtures/array-by-key-fields.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -132,7 +132,7 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by-fields.tsx",
+                "file": "compare/fixtures/array-by-key-fields.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -147,7 +147,7 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by-fields.tsx",
+                "file": "compare/fixtures/array-by-key-fields.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -162,7 +162,7 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by-fields.tsx",
+                "file": "compare/fixtures/array-by-key-fields.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -231,7 +231,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/keyed-by-fields.tsx#RepoRow"
+            "unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#RepoRow"
           ],
           "picks": [],
           "selectors": [],
@@ -397,8 +397,8 @@
           "modules": [
             {
               "module": 0,
-              "path": "compare/fixtures/keyed-by-fields.tsx",
-              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst note = handler(\n  (event, { noted }) => {\n    noted.set(event.text);\n  },\n);\nconst RepoRow = pattern(\"unhashed:pattern/compare/fixtures/keyed-by-fields.tsx#RepoRow\");\nconst fetched = lift(\n  (\n    input,\n  ) => {\n    const repos = input.names.map((name, index) => ({\n      owner: index % 2 === 0 ? \"cf\" : \"x\",\n      name,\n      stars: name.length + input.bonus,\n    }));\n    return input.reversed ? repos.toReversed() : repos;\n  },\n);\n\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/keyed-by-fields.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((\n    input,\n  ) => {\n    const repos = input.names.map((name, index) => ({\n      owner: index % 2 === 0 ? \"cf\" : \"x\",\n      name,\n      stars: name.length + input.bonus,\n    }));\n    return input.reversed ? repos.toReversed() : repos;\n  })($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ names: $h.slot(1), bonus: $h.slot(0), reversed: $h.slot(3) }))));\n{\n$rt.element(0, ($h) => (($h.v($h.slot(4)) >= $h.v($h.slot(5)))));\n}\n{\n$rt.child(0, ($h) => (({ repo: $h.slot(7) })));\n$rt.element(1, ($h) => ($h.slot(8)));\n}\n{\n$rt.child(1, ($h) => (({ repo: $h.slot(10) })));\n$rt.element(2, ($h) => ($h.slot(11)));\n}\nreturn $rt.thunk(($h) => (({ starred: $h.output(3), kept: $h.output(5) })));\n});"
+              "path": "compare/fixtures/array-by-key-fields.tsx",
+              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst note = handler(\n  (event, { noted }) => {\n    noted.set(event.text);\n  },\n);\nconst RepoRow = pattern(\"unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#RepoRow\");\nconst fetched = lift(\n  (\n    input,\n  ) => {\n    const repos = input.names.map((name, index) => ({\n      owner: index % 2 === 0 ? \"cf\" : \"x\",\n      name,\n      stars: name.length + input.bonus,\n    }));\n    return input.reversed ? repos.toReversed() : repos;\n  },\n);\n\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((\n    input,\n  ) => {\n    const repos = input.names.map((name, index) => ({\n      owner: index % 2 === 0 ? \"cf\" : \"x\",\n      name,\n      stars: name.length + input.bonus,\n    }));\n    return input.reversed ? repos.toReversed() : repos;\n  })($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ names: $h.slot(1), bonus: $h.slot(0), reversed: $h.slot(3) }))));\n{\n$rt.element(0, ($h) => (($h.v($h.slot(4)) >= $h.v($h.slot(5)))));\n}\n{\n$rt.child(0, ($h) => (({ repo: $h.slot(7) })));\n$rt.element(1, ($h) => ($h.slot(8)));\n}\n{\n$rt.child(1, ($h) => (({ repo: $h.slot(10) })));\n$rt.element(2, ($h) => ($h.slot(11)));\n}\nreturn $rt.thunk(($h) => (({ starred: $h.output(3), kept: $h.output(5) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -433,7 +433,7 @@
           ],
           "valuesWithoutOutput": []
         },
-        "line": 59,
+        "line": 60,
         "name": "default",
         "plan": {
           "argumentSchema": "unhashed:schema/0",
@@ -483,7 +483,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/keyed-by-fields.tsx#RepoRow"
+                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#RepoRow"
               },
               "name": "map",
               "within": [
@@ -495,7 +495,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/keyed-by-fields.tsx#RepoRow"
+                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#RepoRow"
               },
               "name": "map",
               "within": [
@@ -588,8 +588,8 @@
           "cones": [
             {
               "at": {
-                "file": "compare/fixtures/keyed-by-fields.tsx",
-                "start": 1909
+                "file": "compare/fixtures/array-by-key-fields.tsx",
+                "start": 1930
               },
               "bodies": [
                 0
@@ -608,8 +608,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by-fields.tsx",
-                "start": 1987
+                "file": "compare/fixtures/array-by-key-fields.tsx",
+                "start": 2008
               },
               "bodies": [],
               "entry": "filter",
@@ -629,8 +629,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by-fields.tsx",
-                "start": 2025
+                "file": "compare/fixtures/array-by-key-fields.tsx",
+                "start": 2046
               },
               "bodies": [],
               "entry": "map",
@@ -664,8 +664,8 @@
             },
             {
               "at": {
-                "file": "compare/fixtures/keyed-by-fields.tsx",
-                "start": 2105
+                "file": "compare/fixtures/array-by-key-fields.tsx",
+                "start": 2126
               },
               "bodies": [],
               "entry": "map",
@@ -845,7 +845,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/keyed-by-fields.tsx#default"
+            "unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#default"
           ],
           "picks": [],
           "selectors": [],
@@ -994,10 +994,6 @@
                     "cell"
                   ],
                   "items": {
-                    "keyFields": [
-                      "name",
-                      "owner"
-                    ],
                     "properties": {
                       "name": {
                         "type": "string"
@@ -1016,6 +1012,10 @@
                     ],
                     "type": "object"
                   },
+                  "keyFields": [
+                    "name",
+                    "owner"
+                  ],
                   "type": "array"
                 }
               },
@@ -1059,10 +1059,6 @@
           {
             "id": "unhashed:schema/5",
             "schema": {
-              "keyFields": [
-                "name",
-                "owner"
-              ],
               "properties": {
                 "name": {
                   "type": "string"
@@ -1089,10 +1085,6 @@
                 "cell"
               ],
               "items": {
-                "keyFields": [
-                  "name",
-                  "owner"
-                ],
                 "properties": {
                   "name": {
                     "type": "string"
@@ -1111,6 +1103,10 @@
                 ],
                 "type": "object"
               },
+              "keyFields": [
+                "name",
+                "owner"
+              ],
               "type": "array"
             }
           }

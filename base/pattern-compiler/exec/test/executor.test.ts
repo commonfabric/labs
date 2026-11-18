@@ -1,8 +1,21 @@
+import { type FabricValue, hashOf } from "@commonfabric/data-model";
+import {
+  fabricFromJsonValue,
+  jsonFromFabricValue,
+} from "@commonfabric/data-model/codecs";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { type Artifact, Handle, Host, Instance } from "../executor.ts";
-import { keySegment, Ref, Store, StreamRef } from "../store.ts";
+import {
+  fieldsOfKey,
+  keySegment,
+  memberKey,
+  Ref,
+  type Schema,
+  Store,
+  StreamRef,
+} from "../store.ts";
 
 // The executor of `execution-and-storage.md` (ES) on the artifacts of the
 // fixtures of the comparison: `compare/fixtures/<name>.emit.json` is the
@@ -17,6 +30,25 @@ const artifactOf = async (name: string): Promise<Artifact> => {
   return patterns.find((pattern) => pattern.name === "default") ??
     patterns[patterns.length - 1];
 };
+
+/** The key of a plain value that is keyed whole, in a store's space. */
+const whole = (at: Instance | Store, value: unknown, count = 0): string =>
+  (at instanceof Store ? at : at.store).keyOf(value, [], count);
+
+/** The key of a record that is keyed by all of the members given. */
+const byFields = (
+  at: Instance | Store,
+  value: Record<string, unknown>,
+  count = 0,
+): string =>
+  (at instanceof Store ? at : at.store).keyOf(value, Object.keys(value), count);
+
+/** The key of a position that holds a link to a path of a document. */
+const cellKey = (doc: string, path: string[], count = 0): string =>
+  jsonFromFabricValue({ cell: { doc, path }, count });
+
+/** Keys in the order of their text, as a helper that sorts keys gives them. */
+const sorted = (keys: string[]): string[] => [...keys].sort();
 
 type ViewNode = {
   name: string;
@@ -453,8 +485,8 @@ describe("an element construct", () => {
     // A state cell per occurrence (PL §1.3, "A state cell is per
     // occurrence").
     expect(instance.stateCells().map(({ keys }) => keys)).toEqual([
-      ['value:"a"#0'],
-      ['value:"a"#1'],
+      [whole(instance, "a")],
+      [whole(instance, "a", 1)],
     ]);
 
     // The event names the second occurrence, and its cell alone is set.
@@ -547,7 +579,10 @@ describe("an element construct", () => {
     expect(stored).not.toContain('"children":[["a",');
     expect(stored).toContain(
       JSON.stringify({
-        $link: { doc: "argument", path: ["tags", keySegment('value:"a"#0')] },
+        $link: {
+          doc: "argument",
+          path: ["tags", keySegment(whole(instance, "a"))],
+        },
       }).slice(0, -2),
     );
   });
@@ -1071,7 +1106,7 @@ describe("the keys of the result of a `flatMap`", () => {
   };
   const coneOf = (artifact: Artifact, entry: string) =>
     artifact.plan.cones.findIndex((cone) => cone.entry === entry);
-  const cell = (name: string) => `cell:argument:["pool","${name}"]#0`;
+  const cell = (name: string) => cellKey("argument", ["pool", name]);
   const g = cell("g");
   const h = cell("h");
   const start = async () => {
@@ -1086,9 +1121,9 @@ describe("the keys of the result of a `flatMap`", () => {
     expect((instance.result() as Flat).loudNames).toEqual(["a!", "b!", "c!"]);
     // The cone instances of the body over the result of the `flatMap`.
     expect(instance.coneInstances(coneOf(artifact, "loudNames"))).toEqual([
-      [`${g}/value:"a"#0`],
-      [`${g}/value:"b"#0`],
-      [`${h}/value:"c"#0`],
+      [memberKey(g, whole(instance, "a"))],
+      [memberKey(g, whole(instance, "b"))],
+      [memberKey(h, whole(instance, "c"))],
     ]);
   });
 
@@ -1097,9 +1132,9 @@ describe("the keys of the result of a `flatMap`", () => {
 
     expect((instance.result() as Flat).loudPeople).toEqual(["p!", "q!", "r!"]);
     expect(instance.coneInstances(coneOf(artifact, "loudPeople"))).toEqual([
-      [`${g}/${cell("p")}`],
-      [`${g}/${cell("q")}`],
-      [`${h}/${cell("r")}`],
+      [memberKey(g, cell("p"))],
+      [memberKey(g, cell("q"))],
+      [memberKey(h, cell("r"))],
     ]);
   });
 
@@ -1113,10 +1148,10 @@ describe("the keys of the result of a `flatMap`", () => {
       "y2!",
     ]);
     expect(instance.coneInstances(coneOf(artifact, "loudHalves"))).toEqual([
-      ['value:"x"#0/value:"x1"#0'],
-      ['value:"x"#0/value:"x2"#0'],
-      ['value:"y"#0/value:"y1"#0'],
-      ['value:"y"#0/value:"y2"#0'],
+      [memberKey(whole(instance, "x"), whole(instance, "x1"))],
+      [memberKey(whole(instance, "x"), whole(instance, "x2"))],
+      [memberKey(whole(instance, "y"), whole(instance, "y1"))],
+      [memberKey(whole(instance, "y"), whole(instance, "y2"))],
     ]);
   });
 
@@ -1130,9 +1165,9 @@ describe("the keys of the result of a `flatMap`", () => {
     // member of another segment has another key, since the source keys
     // differ, and its count does not depend on the first segment.
     expect(instance.coneInstances(coneOf(artifact, "loudNames"))).toEqual([
-      [`${g}/value:"a"#0`],
-      [`${g}/value:"a"#1`],
-      [`${h}/value:"a"#0`],
+      [memberKey(g, whole(instance, "a"))],
+      [memberKey(g, whole(instance, "a", 1))],
+      [memberKey(h, whole(instance, "a"))],
     ]);
     expect((instance.result() as Flat).loudNames).toEqual(["a!", "a!", "a!"]);
   });
@@ -1196,10 +1231,10 @@ describe("the keys of the result of a `flatMap`", () => {
     // segment. The instances of the key that left are dropped.
     expect(instance.counts.elementEvaluations - before).toBe(3);
     expect(instance.coneInstances(coneOf(artifact, "loudHalves"))).toEqual([
-      ['value:"x"#0/value:"x1"#0'],
-      ['value:"x"#0/value:"x2"#0'],
-      ['value:"z"#0/value:"z1"#0'],
-      ['value:"z"#0/value:"z2"#0'],
+      [memberKey(whole(instance, "x"), whole(instance, "x1"))],
+      [memberKey(whole(instance, "x"), whole(instance, "x2"))],
+      [memberKey(whole(instance, "z"), whole(instance, "z1"))],
+      [memberKey(whole(instance, "z"), whole(instance, "z2"))],
     ]);
   });
 
@@ -1265,9 +1300,9 @@ describe("the keys of the result of a `flatMap`", () => {
     expect((instance.result() as Flat).loudNames).toEqual(["z!", "b!", "c!"]);
     expect(instance.counts.elementEvaluations - before).toBe(1);
     expect(instance.coneInstances(coneOf(artifact, "loudNames"))).toEqual([
-      [`${g}/value:"b"#0`],
-      [`${h}/value:"c"#0`],
-      [`${g}/value:"z"#0`],
+      [memberKey(g, whole(instance, "b"))],
+      [memberKey(h, whole(instance, "c"))],
+      [memberKey(g, whole(instance, "z"))],
     ]);
   });
 
@@ -1332,8 +1367,8 @@ describe("the `within` of a cone", () => {
       "bn?",
     ]);
     expect(instance.coneInstances(fixed)).toEqual([
-      ['cell:argument:["pool","a"]#0'],
-      ['cell:argument:["pool","b"]#0'],
+      [cellKey("argument", ["pool", "a"])],
+      [cellKey("argument", ["pool", "b"])],
     ]);
   });
 
@@ -1348,9 +1383,9 @@ describe("the `within` of a cone", () => {
       "yn?",
     ]);
     expect(instance.coneInstances(fixed)).toEqual([
-      ['value:"x"#0'],
-      ['value:"skip"#0'],
-      ['value:"y"#0'],
+      [whole(instance, "x")],
+      [whole(instance, "skip")],
+      [whole(instance, "y")],
     ]);
   });
 
@@ -1365,8 +1400,8 @@ describe("the `within` of a cone", () => {
     ]);
     // The keys are those of the elements the `filter` kept.
     expect(instance.coneInstances(fixed)).toEqual([
-      ['value:"x"#0'],
-      ['value:"y"#0'],
+      [whole(instance, "x")],
+      [whole(instance, "y")],
     ]);
   });
 
@@ -1398,16 +1433,16 @@ describe("the `within` of a cone", () => {
     instance.writeArgument(["tags"], ["skip", "y", "z"]);
 
     expect(instance.coneInstances(rows)).toEqual([
-      ['cell:argument:["pool","b"]#0'],
+      [cellKey("argument", ["pool", "b"])],
     ]);
     expect(instance.coneInstances(marks)).toEqual([
-      ['value:"skip"#0'],
-      ['value:"y"#0'],
-      ['value:"z"#0'],
+      [whole(instance, "skip")],
+      [whole(instance, "y")],
+      [whole(instance, "z")],
     ]);
     expect(instance.coneInstances(loud)).toEqual([
-      ['value:"y"#0'],
-      ['value:"z"#0'],
+      [whole(instance, "y")],
+      [whole(instance, "z")],
     ]);
     // For the key `z`: two cones of `marks`, the predicate, and two cones
     // of `loud`. Nothing is evaluated for a key that stayed or left.
@@ -1494,8 +1529,8 @@ describe("the stream of a binding in a computed value", () => {
 
     expect(streamsOf(rowsOf(tree(instance).children[1])))
       .toEqual([
-        { $stream: { binding: 1, keys: ['cell:argument:["pool","a"]#0'] } },
-        { $stream: { binding: 1, keys: ['cell:argument:["pool","b"]#0'] } },
+        { $stream: { binding: 1, keys: [cellKey("argument", ["pool", "a"])] } },
+        { $stream: { binding: 1, keys: [cellKey("argument", ["pool", "b"])] } },
       ]);
 
     // An event for the stream of the second key reads that element.
@@ -1511,9 +1546,9 @@ describe("the stream of a binding in a computed value", () => {
     );
 
     expect(streamsOf(rowsOf(tree(instance).children[2]))).toEqual([
-      { $stream: { binding: 2, keys: ['value:"x"#0'] } },
-      { $stream: { binding: 2, keys: ['value:"skip"#0'] } },
-      { $stream: { binding: 2, keys: ['value:"y"#0'] } },
+      { $stream: { binding: 2, keys: [whole(instance, "x")] } },
+      { $stream: { binding: 2, keys: [whole(instance, "skip")] } },
+      { $stream: { binding: 2, keys: [whole(instance, "y")] } },
     ]);
 
     instance.send(2, {}, [1]);
@@ -1529,8 +1564,8 @@ describe("the stream of a binding in a computed value", () => {
 
     // The keys are those of the elements the `filter` kept.
     expect(streamsOf(rowsOf(tree(instance).children[3]))).toEqual([
-      { $stream: { binding: 3, keys: ['value:"x"#0'] } },
-      { $stream: { binding: 3, keys: ['value:"y"#0'] } },
+      { $stream: { binding: 3, keys: [whole(instance, "x")] } },
+      { $stream: { binding: 3, keys: [whole(instance, "y")] } },
     ]);
 
     instance.send(3, {}, [1]);
@@ -1700,14 +1735,12 @@ describe("an element that is a plain value in place", () => {
     stops: [link("a"), link("b"), link("c")],
     tags: ["x", "y", "x"],
   });
-  const keyOf = (title: string, at: number, count = 0) =>
-    `value:${
-      JSON.stringify({
-        done: false,
-        position: { lat: at, lng: at },
-        title,
-      })
-    }#${count}`;
+  const keyOf = (instance: Instance, title: string, at: number, count = 0) =>
+    whole(
+      instance,
+      { done: false, position: { lat: at, lng: at }, title },
+      count,
+    );
   type Row = {
     title: string;
     stop: unknown;
@@ -1744,7 +1777,7 @@ describe("an element that is a plain value in place", () => {
     const instance = await start();
 
     const row = stored(instance).rows[1] as Record<string, unknown>;
-    const element = ["stops", keySegment(keyOf("b", 2))];
+    const element = ["stops", keySegment(keyOf(instance, "b", 2))];
     expect(row.stop).toMatchObject({
       $link: { doc: "argument", path: element },
     });
@@ -1760,7 +1793,10 @@ describe("an element that is a plain value in place", () => {
     expect(
       (stored(instance).words[2].item as ViewNode).children[0],
     ).toMatchObject({
-      $link: { doc: "argument", path: ["tags", keySegment('value:"x"#1')] },
+      $link: {
+        doc: "argument",
+        path: ["tags", keySegment(whole(instance, "x", 1))],
+      },
     });
     expect(result(instance).rows.map((each) => each.stop)).toEqual(
       inPlace().stops,
@@ -1812,7 +1848,7 @@ describe("an element that is a plain value in place", () => {
     expect(cellOf(instance, "selected")).toMatchObject({
       $link: {
         doc: "argument",
-        path: ["stops", keySegment(keyOf("b", 2))],
+        path: ["stops", keySegment(keyOf(instance, "b", 2))],
       },
     });
     expect(result(instance).rows.map((row) => row.isSelected)).toEqual([
@@ -1849,7 +1885,7 @@ describe("an element that is a plain value in place", () => {
       [],
     );
     const occurrence = (count: number) =>
-      new Ref("argument", ["tags", keySegment(`value:"x"#${count}`)]);
+      new Ref("argument", ["tags", keySegment(whole(instance, "x", count))]);
     // The row of the second `x` stores a reference to its element.
     instance.send(bindingOf(instance, "choose"), {}, [2]);
 
@@ -1875,7 +1911,10 @@ describe("an element that is a plain value in place", () => {
   // position at the time of the comparison.
   it("is equal to a handle that names the position it is at, and to no other", async () => {
     const instance = await start();
-    const element = new Ref("argument", ["stops", keySegment(keyOf("a", 1))]);
+    const element = new Ref("argument", [
+      "stops",
+      keySegment(keyOf(instance, "a", 1)),
+    ]);
     const stops = new Handle(
       instance,
       new Ref("argument", ["stops"]),
@@ -1924,7 +1963,7 @@ describe("an element that is a plain value in place", () => {
     instance.send(bindingOf(instance, "pick"), {}, [1]);
 
     // `selected.set(stop)` and `center.set(stop.position)`.
-    const element = ["stops", keySegment(keyOf("b", 2))];
+    const element = ["stops", keySegment(keyOf(instance, "b", 2))];
     expect(cellOf(instance, "selected")).toMatchObject({
       $link: { doc: "argument", path: element },
     });
@@ -1962,9 +2001,9 @@ describe("an element that is a plain value in place", () => {
     const members = stops.get() as Handle[];
 
     expect(members.map((member) => (member.target as Ref).path)).toEqual([
-      ["stops", keySegment(keyOf("a", 1))],
-      ["stops", keySegment(keyOf("b", 2))],
-      ["stops", keySegment(keyOf("c", 3))],
+      ["stops", keySegment(keyOf(instance, "a", 1))],
+      ["stops", keySegment(keyOf(instance, "b", 2))],
+      ["stops", keySegment(keyOf(instance, "c", 3))],
     ]);
     // The handle stays with its element when the element moves.
     instance.send(bindingOf(instance, "reverse"), {});
@@ -2053,9 +2092,11 @@ describe("an element that is a plain value in place", () => {
     // The position holds another key: the cone instances of that key are
     // evaluated, and its row holds the reference with the new key.
     expect(instance.counts.elementEvaluations - before).toBeGreaterThan(0);
-    const key = `value:${
-      JSON.stringify({ done: true, position: { lat: 2, lng: 2 }, title: "b" })
-    }#0`;
+    const key = whole(instance, {
+      done: true,
+      position: { lat: 2, lng: 2 },
+      title: "b",
+    });
     expect((stored(instance).rows[1] as Record<string, unknown>).stop)
       .toMatchObject({
         $link: { doc: "argument", path: ["stops", keySegment(key)] },
@@ -2067,7 +2108,7 @@ describe("an element that is a plain value in place", () => {
     const open = instance.stateCells().filter(({ name }) => name === "open")
       .map(({ keys, value }) => [keys[0], value]);
     expect(open).toContainEqual([key, true]);
-    expect(open.map(([held]) => held)).not.toContain(keyOf("b", 2));
+    expect(open.map(([held]) => held)).not.toContain(keyOf(instance, "b", 2));
     // The reference `selected` holds was stored under the old key before
     // the write, keeps that key, and reads as nothing.
     expect(result(instance).selected).toBe(undefined);
@@ -2253,8 +2294,12 @@ describe("a write through a reference by key that changes the value", () => {
     pool: { a: task("a"), b: task("b"), c: task("hidden") },
     tasks: [link("a"), link("b"), link("c")],
   });
-  const keyOf = (title: string, done = false) =>
-    `value:${JSON.stringify({ done, title })}#0`;
+  const keyOf = (
+    instance: Instance,
+    title: string,
+    done = false,
+    count = 0,
+  ) => whole(instance, { done, title }, count);
   type Result = {
     picked: unknown;
     rows: { title: string; done: boolean; noted: string }[];
@@ -2291,11 +2336,11 @@ describe("a write through a reference by key that changes the value", () => {
     // The cell is that of the new key, and no cell of the old key or of
     // the key between the two writes is left. No document was made.
     expect(cells(instance, "noted")).toEqual([[
-      keyOf("renamed", true),
+      keyOf(instance, "renamed", true),
       "mine",
     ]]);
-    expect(keysOf(instance, "noted")).not.toContain(keyOf("b"));
-    expect(keysOf(instance, "noted")).not.toContain(keyOf("b", true));
+    expect(keysOf(instance, "noted")).not.toContain(keyOf(instance, "b"));
+    expect(keysOf(instance, "noted")).not.toContain(keyOf(instance, "b", true));
     expect(instance.documents()["state cell"]).toBe(documents);
   });
 
@@ -2313,7 +2358,10 @@ describe("a write through a reference by key that changes the value", () => {
     expect(result(instance).rows).toMatchObject([
       { title: "a", done: true, noted: "mine" },
     ]);
-    expect(cells(instance, "noted")).toEqual([[keyOf("a", true), "mine"]]);
+    expect(cells(instance, "noted")).toEqual([[
+      keyOf(instance, "a", true),
+      "mine",
+    ]]);
   });
 
   it("moves nothing for another element whose occurrence count the write changed", async () => {
@@ -2330,7 +2378,7 @@ describe("a write through a reference by key that changes the value", () => {
       { title: "a", done: false, noted: "" },
     ]);
     expect(cells(instance, "noted")).toEqual([[
-      keyOf("a").replace("#0", "#1"),
+      keyOf(instance, "a", false, 1),
       "second",
     ]]);
   });
@@ -2349,7 +2397,7 @@ describe("a write through a reference by key that changes the value", () => {
 
     expect(instance.store.rekeys).toEqual([]);
     expect(result(instance).rows[1]).toMatchObject({ done: true, noted: "" });
-    expect(cells(instance, "noted")).toEqual([[keyOf("b"), "mine"]]);
+    expect(cells(instance, "noted")).toEqual([[keyOf(instance, "b"), "mine"]]);
   });
 
   it("moves the state cell of a row over the result of a `filter` with the upstream key", async () => {
@@ -2366,7 +2414,10 @@ describe("a write through a reference by key that changes the value", () => {
       { title: "a", seen: "" },
       { title: "renamed", seen: "seen" },
     ]);
-    expect(cells(instance, "seen")).toEqual([[keyOf("renamed", true), "seen"]]);
+    expect(cells(instance, "seen")).toEqual([[
+      keyOf(instance, "renamed", true),
+      "seen",
+    ]]);
   });
 
   it("stores the reference the writer holds with the new key", async () => {
@@ -2380,7 +2431,7 @@ describe("a write through a reference by key that changes the value", () => {
     expect(stored).toMatchObject({
       $link: {
         doc: "argument",
-        path: ["tasks", keySegment(keyOf("a", true))],
+        path: ["tasks", keySegment(keyOf(instance, "a", true))],
       },
     });
   });
@@ -2407,7 +2458,10 @@ describe("a write through a reference by key that changes the value", () => {
       done: true,
       noted: "mine",
     });
-    expect(cells(instance, "noted")).toEqual([[keyOf("a", true), "mine"]]);
+    expect(cells(instance, "noted")).toEqual([[
+      keyOf(instance, "a", true),
+      "mine",
+    ]]);
   });
 
   it("moves nothing where a handler that wrote throws", async () => {
@@ -2435,7 +2489,7 @@ describe("a write through a reference by key that changes the value", () => {
       done: false,
       noted: "mine",
     });
-    expect(cells(instance, "noted")).toEqual([[keyOf("b"), "mine"]]);
+    expect(cells(instance, "noted")).toEqual([[keyOf(instance, "b"), "mine"]]);
   });
 
   it("changes no key over references, where the element is a cell", async () => {
@@ -2738,10 +2792,10 @@ describe("an output that passes a derived collection on", () => {
       rows: ["a!", "c!"],
       words: ["x!", "y!"],
     });
-    expect(keysOf(instance, 0)).toEqual([
-      'cell:argument:["pool","a"]#0',
-      'cell:argument:["pool","c"]#0',
-    ]);
+    expect(keysOf(instance, 0)).toEqual(sorted([
+      cellKey("argument", ["pool", "a"]),
+      cellKey("argument", ["pool", "c"]),
+    ]));
   });
 
   it("gives a construct applied to it the keys of the source elements, over plain values in place", async () => {
@@ -2752,7 +2806,9 @@ describe("an output that passes a derived collection on", () => {
 
     // The `filter` dropped the first `x`. The one it kept is occurrence
     // 1 of the source, and that is its key downstream.
-    expect(keysOf(instance, 1)).toEqual(['value:"x"#1', 'value:"y"#0']);
+    expect(keysOf(instance, 1)).toEqual(
+      sorted([whole(instance, "x", 1), whole(instance, "y")]),
+    );
   });
 
   it("keys by what the positions hold where the output has no mark, which loses the count", async () => {
@@ -2765,13 +2821,15 @@ describe("an output that passes a derived collection on", () => {
       words: ["x!", "y!"],
     });
     // Over references the keys are those of the cells either way.
-    expect(keysOf(instance, 0)).toEqual([
-      'cell:argument:["pool","a"]#0',
-      'cell:argument:["pool","c"]#0',
-    ]);
+    expect(keysOf(instance, 0)).toEqual(sorted([
+      cellKey("argument", ["pool", "a"]),
+      cellKey("argument", ["pool", "c"]),
+    ]));
     // Over plain values in place the kept `x` is keyed as the first one
     // of the array the output holds.
-    expect(keysOf(instance, 1)).not.toEqual(['value:"x"#1', 'value:"y"#0']);
+    expect(keysOf(instance, 1)).not.toEqual(
+      sorted([whole(instance, "x", 1), whole(instance, "y")]),
+    );
   });
 
   it("evaluates nothing downstream for an element when the source elements move", async () => {
@@ -3051,7 +3109,7 @@ describe("a value read under a schema", () => {
     // the array and its key (ruling Z12).
     expect(store.addresses.get(read[1])?.path).toEqual([
       "items",
-      keySegment('value:{"title":"b"}#0'),
+      keySegment(whole(store, { title: "b" })),
     ]);
   });
 });
@@ -3129,7 +3187,7 @@ describe("a key that left its collection", () => {
     const { instance, labelsCone } = await start();
     instance.send(NOTE_LABEL, { text: "kept" }, [1]);
     const documents = instance.documents();
-    const keyOfY = ['value:"y"#0'];
+    const keyOfY = [whole(instance, "y")];
     expect(instance.coneInstances(labelsCone)).toContainEqual(keyOfY);
 
     // The value leaves the array of plain values in place.
@@ -3160,7 +3218,7 @@ describe("a key that left its collection", () => {
     instance.writeArgument(["words"], ["x"]);
 
     expect(result(instance).labels.map(({ memo }) => memo)).toEqual(["first"]);
-    expect(memos(instance)).toContainEqual(['value:"x"#1', "second"]);
+    expect(memos(instance)).toContainEqual([whole(instance, "x", 1), "second"]);
 
     instance.writeArgument(["words"], ["x", "x"]);
 
@@ -3199,7 +3257,7 @@ describe("a key that left its collection", () => {
   it("keeps the state cell of an upstream key that leaves the result of a `filter` and returns, over plain values", async () => {
     const { instance, labelsCone } = await start();
     instance.send(NOTE_LABEL, { text: "kept" }, [1]);
-    const keyOfY = ['value:"y"#0'];
+    const keyOfY = [whole(instance, "y")];
 
     instance.send(HIDE, { title: "y" });
 
@@ -3269,8 +3327,8 @@ describe("a stream a function body returns into the result", () => {
     const { instance } = await start();
 
     expect(stored(instance).rows.map((row) => row.again)).toEqual([
-      { $stream: { binding: 1, keys: ['cell:argument:["pool","a"]#0'] } },
-      { $stream: { binding: 1, keys: ['cell:argument:["pool","b"]#0'] } },
+      { $stream: { binding: 1, keys: [cellKey("argument", ["pool", "a"])] } },
+      { $stream: { binding: 1, keys: [cellKey("argument", ["pool", "b"])] } },
     ]);
   });
 
@@ -3278,8 +3336,8 @@ describe("a stream a function body returns into the result", () => {
     const { instance } = await start();
 
     expect(stored(instance).labels.map((row) => row.again)).toEqual([
-      { $stream: { binding: 2, keys: ['value:"x"#0'] } },
-      { $stream: { binding: 2, keys: ['value:"y"#0'] } },
+      { $stream: { binding: 2, keys: [whole(instance, "x")] } },
+      { $stream: { binding: 2, keys: [whole(instance, "y")] } },
     ]);
   });
 
@@ -3361,9 +3419,9 @@ describe("where the stream of a binding is stored in an array", () => {
     const instance = new Instance(await artifactOf("star-kinds"), argument());
 
     expect(held(instance, ROW_PICK)).toEqual([
-      ["$UI/children/5/children/0/0/props/onClick", ['value:"x"#0']],
-      ["$UI/children/5/children/0/1/props/onClick", ['value:"y"#0']],
-      ["$UI/children/5/children/0/2/props/onClick", ['value:"z"#0']],
+      ["$UI/children/5/children/0/0/props/onClick", [whole(instance, "x")]],
+      ["$UI/children/5/children/0/1/props/onClick", [whole(instance, "y")]],
+      ["$UI/children/5/children/0/2/props/onClick", [whole(instance, "z")]],
     ]);
   });
 
@@ -3388,13 +3446,13 @@ describe("where the stream of a binding is stored in an array", () => {
     // first collection and over plain values in place in the second.
     expect(menu.length).toBe(2);
     expect(menu[0].map((row) => row.props.onClick)).toEqual([
-      { $stream: { binding: 5, keys: ['cell:argument:["pool","a"]#0'] } },
-      { $stream: { binding: 5, keys: ['cell:argument:["pool","b"]#0'] } },
+      { $stream: { binding: 5, keys: [cellKey("argument", ["pool", "a"])] } },
+      { $stream: { binding: 5, keys: [cellKey("argument", ["pool", "b"])] } },
     ]);
     expect(menu[1].map((row) => row.props.onClick)).toEqual([
-      { $stream: { binding: 6, keys: ['value:"x"#0'] } },
-      { $stream: { binding: 6, keys: ['value:"y"#0'] } },
-      { $stream: { binding: 6, keys: ['value:"z"#0'] } },
+      { $stream: { binding: 6, keys: [whole(instance, "x")] } },
+      { $stream: { binding: 6, keys: [whole(instance, "y")] } },
+      { $stream: { binding: 6, keys: [whole(instance, "z")] } },
     ]);
   });
 });
@@ -3426,13 +3484,13 @@ describe("the stream of a binding of a `flatMap` body", () => {
     // Over references: the two members of a segment hold the stream of
     // the one source key.
     const [a, b] = ["a", "b"].map((name) =>
-      `cell:argument:["pool","${name}"]#0`
+      cellKey("argument", ["pool", name])
     );
     expect(lists(instance)[0].map((row) => row.props.onClick.$stream.keys))
       .toEqual([[a], [a], [b], [b]]);
     // Over plain values in place.
     expect(lists(instance)[1].map((row) => row.props.onClick.$stream.keys))
-      .toEqual([['value:"x"#0'], ['value:"y"#0']]);
+      .toEqual([[whole(instance, "x")], [whole(instance, "y")]]);
 
     // An event for the stream of the second source key.
     instance.send(0, {}, [1]);
@@ -3550,7 +3608,7 @@ describe("the stream of a binding of an inner `map` that a `flatMap` callback re
     expect(a[0]).toBe(b[0]);
     expect(c[0]).not.toBe(a[0]);
     expect(new Set([a[1], b[1], c[1]]).size).toBe(3);
-    for (const key of [...a, ...b, ...c]) expect(key).toMatch(/^cell:/);
+    for (const key of [...a, ...b, ...c]) expect(key).toContain('"cell"');
 
     // An event for the stream of each position reads its group and its
     // part.
@@ -3563,13 +3621,11 @@ describe("the stream of a binding of an inner `map` that a `flatMap` callback re
   it("is stored at each position of the result for both keys, over plain values in place", async () => {
     const instance = new Instance(await artifactOf("flat-inner"), argument());
 
-    const [s, t] = argument().shelves.map((shelf) =>
-      `value:${JSON.stringify(shelf)}#0`
-    );
+    const [s, t] = argument().shelves.map((shelf) => whole(instance, shelf));
     expect(rows(instance, 1).map((row) => row.props.onClick.$stream)).toEqual([
-      { binding: OVER_PLAIN_VALUES, keys: [s, 'value:"x"#0'] },
-      { binding: OVER_PLAIN_VALUES, keys: [s, 'value:"y"#0'] },
-      { binding: OVER_PLAIN_VALUES, keys: [t, 'value:"z"#0'] },
+      { binding: OVER_PLAIN_VALUES, keys: [s, whole(instance, "x")] },
+      { binding: OVER_PLAIN_VALUES, keys: [s, whole(instance, "y")] },
+      { binding: OVER_PLAIN_VALUES, keys: [t, whole(instance, "z")] },
     ]);
 
     instance.send(OVER_PLAIN_VALUES, {}, [0, 1]);
@@ -3628,33 +3684,165 @@ describe("the stream of a binding of an inner `map` that a `flatMap` callback re
   });
 });
 
-// Ruling Z44: the key of a plain value with a declared key field names
-// the field, and a reference by key is resolved from the key alone. The
-// arrays hold plain values in place, and the store is given no schema
-// for them. An array of references is keyed by its cells, and a
-// declared key field changes nothing for it.
-describe("a key formed from a declared key field", () => {
+// Rulings Z44, Z47, Z48, Z49, Z51 and Z52: the key of a plain value in
+// an array that declares key fields names the fields in the order of
+// their names and holds one salted hash of their values, a key formed
+// from a whole value holds the salted hash of the value and names no
+// field, and a reference by key is resolved from the key alone. The
+// written form of a key is the serialization of the record of its parts
+// by the JSON codec of fabric values. The arrays hold plain values in
+// place, and the store is given no schema for them. An array of
+// references is keyed by its cells, and declared key fields change
+// nothing for it.
+describe("the key of a plain value", () => {
+  const SECRET = "the secret of the space";
   const repo = (id: number, name: string) => ({
     id,
     name,
     position: { lat: id, lng: 0 },
   });
-  const keyedBy = (...fields: string[]) => ({
+  const arrayByKey = (...fields: string[]) => ({
     type: "array",
-    items: {
-      type: "object",
-      ...(fields.length === 0 ? {} : { keyFields: fields }),
-    },
+    ...(fields.length === 0 ? {} : { keyFields: fields }),
+    items: { type: "object" },
   });
   const start = () => {
-    const store = new Store();
+    const store = new Store({ secret: SECRET });
     store.create("d", "argument", {
       saved: [repo(7, "s"), repo(8, "t")],
       numbers: [7, 8],
     });
     return store;
   };
-  const SEVEN = keySegment("fields:id=#7#0");
+  // What the documents state, formed with the helpers of the data model
+  // and not with the store: the hash of the secret and the value, and
+  // the record of the parts of a key as the JSON codec writes it.
+  const salted = (value: FabricValue) => hashOf([SECRET, value]);
+  const keyOfFields = (fields: string[], values: FabricValue[], count = 0) =>
+    jsonFromFabricValue({ fields, hash: salted(values), count });
+  const keyOfWhole = (value: FabricValue, count = 0) =>
+    jsonFromFabricValue({ hash: salted(value), count });
+  const SEVEN = keySegment(keyOfFields(["id"], [7]));
+  const pair = (owner: string | number, name: string, stars = 0) => ({
+    owner,
+    name,
+    stars,
+  });
+
+  it("holds the names of the fields in the order of their names and one salted hash of the array of their values", () => {
+    const store = new Store({ secret: SECRET });
+    const held = [pair("cf", "labs"), pair("cf", "specs"), pair("x", "labs")];
+    store.create("d", "argument", { pairs: held });
+    const at = new Ref("d", ["pairs"]);
+
+    const keys = store.keysOf(held, at, undefined, ["owner", "name"]);
+
+    expect(keys).toEqual([
+      keyOfFields(["name", "owner"], ["labs", "cf"]),
+      keyOfFields(["name", "owner"], ["specs", "cf"]),
+      keyOfFields(["name", "owner"], ["labs", "x"]),
+    ]);
+    // The written form is that of the JSON codec of fabric values, and
+    // the key holds the names and no value of a field.
+    expect(keys[0].startsWith("fvj1:")).toBe(true);
+    expect(fabricFromJsonValue(keys[0])).toEqual({
+      fields: ["name", "owner"],
+      hash: salted(["labs", "cf"]),
+      count: 0,
+    });
+    expect(keys[0]).not.toContain("labs");
+    expect(keys[0]).not.toContain("cf");
+    // The order in which the fields are given changes no key.
+    expect(store.keysOf(held, at, undefined, ["name", "owner"])).toEqual(keys);
+    // The names are ordered by code point: a name that starts above the
+    // surrogates stands before one outside the basic plane.
+    expect(
+      store.keysOf([{ "\u{1F600}": 1, "Ａ": 2 }], at, [
+        { "\u{1F600}": 1, "Ａ": 2 },
+      ], ["\u{1F600}", "Ａ"]),
+    ).toEqual([keyOfFields(["Ａ", "\u{1F600}"], [2, 1])]);
+  });
+
+  it("is salted with the secret of the space", () => {
+    const held = [repo(7, "s"), 7];
+    const keysIn = (store: Store) =>
+      store.keysOf(held, new Ref("d", ["saved"]), held, ["id"]);
+
+    const keys = keysIn(new Store({ secret: SECRET }));
+
+    expect(keysIn(new Store({ secret: SECRET }))).toEqual(keys);
+    const other = keysIn(new Store({ secret: "another secret" }));
+    expect(other[0]).not.toBe(keys[0]);
+    expect(other[1]).not.toBe(keys[1]);
+    // A store that is given no secret mints one of its own.
+    expect(keysIn(new Store())).not.toEqual(keysIn(new Store()));
+  });
+
+  it("gives the number 7 and the string `7` different keys", () => {
+    const store = new Store({ secret: SECRET });
+    const held = [pair(7, "x"), pair("7", "x"), 7, "7"];
+    store.create("d", "argument", { pairs: held });
+    const at = new Ref("d", ["pairs"]);
+
+    const keys = store.keysOf(held, at, undefined, ["owner", "name"]);
+
+    expect(keys).toEqual([
+      keyOfFields(["name", "owner"], ["x", 7]),
+      keyOfFields(["name", "owner"], ["x", "7"]),
+      keyOfWhole(7),
+      keyOfWhole("7"),
+    ]);
+    expect(new Set(keys).size).toBe(4);
+    // Each key names its own element.
+    expect(keys.map((key) => store.read(at.key(keySegment(key))))).toEqual(
+      held,
+    );
+  });
+
+  it("gives two elements that share the value of one field keys with the names in common and nothing else", () => {
+    const store = new Store({ secret: SECRET });
+    const held = [pair("cf", "labs"), pair("cf", "specs")];
+
+    const [first, second] = store.keysOf(
+      held,
+      new Ref("d", ["pairs"]),
+      held,
+      ["owner", "name"],
+    ).map((key) => fabricFromJsonValue(key) as Record<string, FabricValue>);
+
+    expect(first.fields).toEqual(second.fields);
+    expect(first.count).toBe(second.count);
+    expect(jsonFromFabricValue(first.hash)).not.toBe(
+      jsonFromFabricValue(second.hash),
+    );
+    expect(Object.keys(first).sort()).toEqual(["count", "fields", "hash"]);
+  });
+
+  it("names a field whose name holds `:`, `,`, `\\`, `#` or a quote as it is, and resolves by it", () => {
+    const store = new Store({ secret: SECRET });
+    const names = ["a:b,c", "back\\slash", 'quo"te', "x#1", "count", "cell"];
+    const element = Object.fromEntries(
+      names.map((name, index) => [name, index]),
+    );
+    const held = [element, { ...element, "a:b,c": "other" }];
+    store.create("d", "argument", { odd: held });
+    const at = new Ref("d", ["odd"]);
+
+    const keys = store.keysOf(held, at, undefined, names);
+
+    const ordered = ["a:b,c", "back\\slash", "cell", "count", 'quo"te', "x#1"];
+    expect(keys[0]).toBe(
+      keyOfFields(ordered, ordered.map((name) => element[name])),
+    );
+    expect(fieldsOfKey(keys[0])).toEqual(ordered);
+    expect(new Set(keys).size).toBe(2);
+    expect(keys.map((key) => store.read(at.key(keySegment(key), "a:b,c"))))
+      .toEqual([0, "other"]);
+    // One such name alone.
+    const [single] = store.keysOf(held, at, undefined, ["a:b,c"]);
+    expect(single).toBe(keyOfFields(["a:b,c"], [0]));
+    expect(store.read(at.key(keySegment(single), "cell"))).toBe(5);
+  });
 
   it("names the field, so the key of a field that holds 7 is not the key of a whole value 7", () => {
     const store = start();
@@ -3666,20 +3854,23 @@ describe("a key formed from a declared key field", () => {
         undefined,
         ["id"],
       ),
-    ).toEqual(["fields:id=#7#0", "fields:id=#8#0"]);
+    ).toEqual([keyOfFields(["id"], [7]), keyOfFields(["id"], [8])]);
     expect(store.keysOf([7, 8], new Ref("d", ["numbers"]), [7, 8])).toEqual([
-      "value:7#0",
-      "value:8#0",
+      keyOfWhole(7),
+      keyOfWhole(8),
     ]);
     // The key of the whole value 7 names an element of `numbers` and
-    // none of `saved`, and the key of the field the reverse.
+    // none of `saved`, and the key of the field the reverse. So does the
+    // key of the whole value `[7]`, whose hash is the one the key of the
+    // field holds.
     expect(
-      store.read(new Ref("d", ["numbers", keySegment("value:7#0")])),
+      store.read(new Ref("d", ["numbers", keySegment(keyOfWhole(7))])),
     ).toBe(7);
-    expect(
-      store.locate(new Ref("d", ["saved", keySegment("value:7#0")]), true)
-        .missing,
-    ).toBe(true);
+    for (const whole of [keyOfWhole(7), keyOfWhole([7])]) {
+      expect(
+        store.locate(new Ref("d", ["saved", keySegment(whole)]), true).missing,
+      ).toBe(true);
+    }
     expect(store.locate(new Ref("d", ["numbers", SEVEN]), true).missing)
       .toBe(true);
   });
@@ -3713,7 +3904,7 @@ describe("a key formed from a declared key field", () => {
         properties: {
           picked: { type: "object" },
           center: { type: "object" },
-          list: keyedBy(...fields),
+          list: arrayByKey(...fields),
         },
       });
 
@@ -3723,76 +3914,114 @@ describe("a key formed from a declared key field", () => {
     }
     // The same through the array, read under each declaration.
     for (const fields of [[], ["id"], ["name"], ["id", "name"]]) {
-      const saved = new Ref("d", ["saved"], keyedBy(...fields));
+      const saved = new Ref("d", ["saved"], arrayByKey(...fields));
       expect(
         store.read(new Ref(saved.doc, [...saved.path, SEVEN], saved.schema)),
       ).toMatchObject({ id: 7, name: "s" });
     }
   });
 
-  it("forms the keys of an array that is read whole with the key field that the read declares", () => {
+  it("forms the keys of an array that is read whole with the key fields that the schema of the array declares beside `items`", () => {
     const store = start();
-    const first = (...fields: string[]) =>
+    const first = (schema: Schema) =>
       store.addresses.get(
-        (store.read(new Ref("d", ["saved"], keyedBy(...fields))) as object[])[
-          0
-        ],
+        (store.read(new Ref("d", ["saved"], schema)) as object[])[0],
       )!;
 
-    expect(first("id").path).toEqual(["saved", SEVEN]);
-    expect(first("name").path).toEqual([
+    expect(first(arrayByKey("id")).path).toEqual(["saved", SEVEN]);
+    expect(first(arrayByKey("name")).path).toEqual([
       "saved",
-      keySegment("fields:name=s#0"),
+      keySegment(keyOfFields(["name"], ["s"])),
     ]);
-    expect(first().path).toEqual([
+    expect(first(arrayByKey()).path).toEqual([
       "saved",
-      keySegment(`value:${JSON.stringify(repo(7, "s"))}#0`),
+      keySegment(keyOfWhole(repo(7, "s"))),
     ]);
-    expect(first("name", "id").path).toEqual([
+    expect(first(arrayByKey("name", "id")).path).toEqual([
       "saved",
-      keySegment("fields:id=#7,name=s#0"),
+      keySegment(keyOfFields(["id", "name"], [7, "s"])),
     ]);
+    // The keyword in the schema of the items declares no key.
+    expect(
+      first({ type: "array", items: { type: "object", keyFields: ["id"] } })
+        .path,
+    ).toEqual(["saved", keySegment(keyOfWhole(repo(7, "s")))]);
     // Each of these names the one element, whatever the array was read
     // under before.
     for (const fields of [["id"], ["name"], [], ["id", "name"]]) {
-      expect(store.read(first(...fields).key("name"))).toBe("s");
+      expect(store.read(first(arrayByKey(...fields)).key("name"))).toBe("s");
     }
   });
 
-  // Ruling Z45: one key across several fields.
-  it("is one key across several declared fields, in the order of their names", () => {
-    const store = new Store();
-    const pair = (owner: string, name: string, stars = 0) => ({
-      owner,
-      name,
-      stars,
+  // Ruling Z52: where the reader gets the key fields of an array of
+  // plain values in place from, when its own type declares none.
+  it("forms the keys of a reader whose schema declares no key with the key fields of the array schema that a link on the way holds", () => {
+    const store = start();
+    const link = (schema?: Schema) => ({
+      $link: {
+        doc: "d",
+        path: ["saved"],
+        ...(schema === undefined ? {} : { schema }),
+      },
     });
+    store.create("holder", "argument", {
+      keyed: link(arrayByKey("id")),
+      plain: link(arrayByKey()),
+      bare: link(),
+      // A link to a link: the one nearer the array declares no key.
+      outer: {
+        $link: {
+          doc: "holder",
+          path: ["plain"],
+          schema: arrayByKey("id"),
+        },
+      },
+    });
+    const first = (name: string, schema: Schema) =>
+      store.addresses.get(
+        (store.read(new Ref("holder", [name], schema)) as object[])[0],
+      )!.path;
+
+    expect(first("keyed", arrayByKey())).toEqual(["saved", SEVEN]);
+    expect(first("outer", arrayByKey())).toEqual(["saved", SEVEN]);
+    // The reader's own declaration comes first.
+    expect(first("keyed", arrayByKey("name"))).toEqual([
+      "saved",
+      keySegment(keyOfFields(["name"], ["s"])),
+    ]);
+    // No schema with the keyword on the way: the key is of the whole
+    // value.
+    for (const name of ["plain", "bare"]) {
+      expect(first(name, arrayByKey())).toEqual([
+        "saved",
+        keySegment(keyOfWhole(repo(7, "s"))),
+      ]);
+    }
+    // The array below a record that is read through the link.
+    store.create("above", "argument", {
+      $link: {
+        doc: "d",
+        path: [],
+        schema: { properties: { saved: arrayByKey("id") } },
+      },
+    });
+    const read = store.read(
+      new Ref("above", [], { properties: { saved: arrayByKey() } }),
+    ) as { saved: object[] };
+    expect(store.addresses.get(read.saved[0])!.path).toEqual(["saved", SEVEN]);
+  });
+
+  it("re-keys the element on a write to a key field and on no other write, and counts equal values of the fields", () => {
+    const store = new Store({ secret: SECRET });
     const held = [pair("cf", "labs"), pair("cf", "specs"), pair("x", "labs")];
     store.create("d", "argument", { pairs: held });
     const at = new Ref("d", ["pairs"]);
-
     const keys = store.keysOf(held, at, undefined, ["owner", "name"]);
 
-    expect(keys).toEqual([
-      "fields:name=labs,owner=cf#0",
-      "fields:name=specs,owner=cf#0",
-      "fields:name=labs,owner=x#0",
-    ]);
-    // The order in which the fields are given changes no key.
-    expect(store.keysOf(held, at, undefined, ["name", "owner"])).toEqual(keys);
-    // The names are ordered by code point: a name that starts above the
-    // surrogates stands before one outside the basic plane.
-    expect(
-      store.keysOf([{ "\u{1F600}": 1, "\uFF21": 2 }], at, [
-        { "\u{1F600}": 1, "\uFF21": 2 },
-      ], ["\u{1F600}", "\uFF21"]),
-    ).toEqual(["fields:\uFF21=#2,\u{1F600}=#1#0"]);
     // Each key is resolved from the key alone.
     expect(
       keys.map((key) => store.read(at.key(keySegment(key), "owner"))),
     ).toEqual(["cf", "cf", "x"]);
-    // A write to a member that is no key field re-keys nothing, and a
-    // write to one of the key fields re-keys the element.
     store.write(at.key(keySegment(keys[1]), "stars"), 5);
     expect(store.rekeys).toEqual([]);
     store.write(at.key(keySegment(keys[1]), "owner"), "y");
@@ -3800,60 +4029,16 @@ describe("a key formed from a declared key field", () => {
       doc: "d",
       array: ["pairs"],
       from: keys[1],
-      to: "fields:name=specs,owner=y#0",
+      to: keyOfFields(["name", "owner"], ["specs", "y"]),
     }]);
     // Two elements with the same values of every field have two keys,
     // and an element that lacks one of the fields is keyed whole.
-    expect(
-      store.keysOf(
-        [pair("cf", "labs"), pair("cf", "labs", 1), { owner: "cf" }],
-        at,
-        [pair("cf", "labs"), pair("cf", "labs", 1), { owner: "cf" }],
-        ["owner", "name"],
-      ),
-    ).toEqual([
-      "fields:name=labs,owner=cf#0",
-      "fields:name=labs,owner=cf#1",
-      'value:{"owner":"cf"}#0',
+    const more = [pair("cf", "labs"), pair("cf", "labs", 1), { owner: "cf" }];
+    expect(store.keysOf(more, at, more, ["owner", "name"])).toEqual([
+      keyOfFields(["name", "owner"], ["labs", "cf"]),
+      keyOfFields(["name", "owner"], ["labs", "cf"], 1),
+      keyOfWhole({ owner: "cf" }),
     ]);
-  });
-
-  it("writes each separator in a name and in a value with a `\\` before it, and a number with a `#` before it", () => {
-    const store = new Store();
-    const held = [
-      // Values that hold the separators of the written form.
-      { owner: "a,name=b", name: "c" },
-      { owner: "a", name: "b,owner=c" },
-      { owner: "back\\slash", name: "#7" },
-      { owner: "7", name: "x#1" },
-      { owner: 7, name: "x" },
-    ];
-    store.create("d", "argument", { pairs: held, odd: [{ "a=b,c": 1, d: 2 }] });
-    const at = new Ref("d", ["pairs"]);
-
-    const keys = store.keysOf(held, at, undefined, ["owner", "name"]);
-
-    expect(keys).toEqual([
-      "fields:name=c,owner=a\\,name\\=b#0",
-      "fields:name=b\\,owner\\=c,owner=a#0",
-      "fields:name=\\#7,owner=back\\\\slash#0",
-      "fields:name=x#1,owner=7#0",
-      "fields:name=x,owner=#7#0",
-    ]);
-    expect(new Set(keys).size).toBe(held.length);
-    // Each key names its own element.
-    expect(
-      keys.map((key) => store.read(at.key(keySegment(key), "owner"))),
-    ).toEqual(held.map(({ owner }) => owner));
-    // A name that holds the separators.
-    const odd = store.keysOf(
-      [{ "a=b,c": 1, d: 2 }],
-      new Ref("d", ["odd"]),
-      undefined,
-      ["a=b,c", "d"],
-    );
-    expect(odd).toEqual(["fields:a\\=b\\,c=#1,d=#2#0"]);
-    expect(store.read(new Ref("d", ["odd", keySegment(odd[0]), "d"]))).toBe(2);
   });
 
   it("re-keys the element on a write to the field that the key names", () => {
@@ -3864,8 +4049,8 @@ describe("a key formed from a declared key field", () => {
     expect(store.rekeys).toEqual([{
       doc: "d",
       array: ["saved"],
-      from: "fields:id=#7#0",
-      to: "fields:id=#9#0",
+      from: keyOfFields(["id"], [7]),
+      to: keyOfFields(["id"], [9]),
     }]);
   });
 
@@ -3877,7 +4062,9 @@ describe("a key formed from a declared key field", () => {
     expect(store.keysOf(links, new Ref("refs", []), undefined, ["id"])).toEqual(
       store.keysOf(links, new Ref("refs", [])),
     );
-    expect(store.keysOf(links, new Ref("refs", []))[0]).toMatch(/^cell:d:/);
+    expect(store.keysOf(links, new Ref("refs", []))).toEqual([
+      cellKey("d", ["saved", "0"]),
+    ]);
   });
 });
 
@@ -4036,12 +4223,12 @@ describe("a pattern called through `asInstance()` in an element body", () => {
     // One instance per key of each of the three sites.
     expect(instance.childInstances().map(({ child, keys }) => [child, keys]))
       .toEqual([
-        [ROWS, ['cell:argument:["pool","a"]#0']],
-        [ROWS, ['cell:argument:["pool","b"]#0']],
-        [WORDS, ['value:"x"#0']],
-        [WORDS, ['value:"y"#0']],
-        [KEPT, ['cell:argument:["pool","a"]#0']],
-        [KEPT, ['cell:argument:["pool","b"]#0']],
+        [ROWS, [cellKey("argument", ["pool", "a"])]],
+        [ROWS, [cellKey("argument", ["pool", "b"])]],
+        [WORDS, [whole(instance, "x")]],
+        [WORDS, [whole(instance, "y")]],
+        [KEPT, [cellKey("argument", ["pool", "a"])]],
+        [KEPT, [cellKey("argument", ["pool", "b"])]],
         [LEAD, []],
       ]);
     expect(instance.documents()).toMatchObject({ argument: 8, result: 8 });
@@ -4092,7 +4279,7 @@ describe("a pattern called through `asInstance()` in an element body", () => {
       plain.childInstances().filter(({ child }) => child === KEPT).map((
         { keys },
       ) => keys),
-    ).toEqual([['value:{"title":"a"}#0'], ['value:{"title":"b"}#0']]);
+    ).toEqual([[whole(plain, { title: "a" })], [whole(plain, { title: "b" })]]);
 
     const linked = await start(references());
     expect(valueOf(linked, docOf(stored(linked).kept[1], "argument")))
@@ -4250,7 +4437,7 @@ describe("a pattern called through `asInstance()` in an element body", () => {
     instance.store.write(
       new Ref("argument", [
         "items",
-        keySegment('value:{"title":"a"}#0'),
+        keySegment(whole(instance, { "title": "a" })),
         "title",
       ]),
       "edited",
@@ -4314,10 +4501,11 @@ describe("a pattern called through `asInstance()` in an element body", () => {
   });
 });
 
-// Rulings Z37 and Z38 on `fixtures/keyed-by.tsx`: the element type
-// `KeyedBy<T, "field">` declares the key of a plain value. Today's runtime
-// has no such marker, so these tests are of the executor alone.
-describe("a key field declared with `KeyedBy`", () => {
+// Rulings Z37 and Z49 on `fixtures/array-by-key.tsx`: the array type
+// `ArrayByKey<T, "field">` declares the key of the plain values of an
+// array. Today's runtime has no such type, so these tests are of the
+// executor alone.
+describe("a key field declared with `ArrayByKey`", () => {
   const repo = (id: number, name: string, stars: number) => ({
     id,
     name,
@@ -4333,7 +4521,10 @@ describe("a key field declared with `KeyedBy`", () => {
   const start = async (given: unknown = argument()) => {
     const [{ patterns }] = JSON.parse(
       await Deno.readTextFile(
-        new URL("../../compare/fixtures/keyed-by.emit.json", import.meta.url),
+        new URL(
+          "../../compare/fixtures/array-by-key.emit.json",
+          import.meta.url,
+        ),
       ),
     ) as { patterns: Artifact[] }[];
     const artifacts = (id: string) =>
@@ -4391,14 +4582,14 @@ describe("a key field declared with `KeyedBy`", () => {
   it("keys a plain value by the value of the field, in an array generated from scratch and in one in place", async () => {
     const instance = await start();
 
-    expect(keysOf(instance, ROWS_CELL)).toEqual([
-      "fields:id=#1#0",
-      "fields:id=#2#0",
-    ]);
-    expect(keysOf(instance, KEPT_CELL)).toEqual([
-      "fields:id=#7#0",
-      "fields:id=#8#0",
-    ]);
+    expect(keysOf(instance, ROWS_CELL)).toEqual(sorted([
+      byFields(instance, { id: 1 }),
+      byFields(instance, { id: 2 }),
+    ]));
+    expect(keysOf(instance, KEPT_CELL)).toEqual(sorted([
+      byFields(instance, { id: 7 }),
+      byFields(instance, { id: 8 }),
+    ]));
   });
 
   it("keeps the state of a row when another field of its element changes between evaluations", async () => {
@@ -4419,10 +4610,10 @@ describe("a key field declared with `KeyedBy`", () => {
       { name: "ab", stars: 7, noted: "mine" },
       { name: "cde", stars: 8, noted: "" },
     ]);
-    expect(keysOf(instance, ROWS_CELL)).toEqual([
-      "fields:id=#1#0",
-      "fields:id=#2#0",
-    ]);
+    expect(keysOf(instance, ROWS_CELL)).toEqual(sorted([
+      byFields(instance, { id: 1 }),
+      byFields(instance, { id: 2 }),
+    ]));
     expect(instance.stateCells().length).toBe(cells);
     expect(instance.documents()["state cell"]).toBe(documents);
   });
@@ -4431,7 +4622,7 @@ describe("a key field declared with `KeyedBy`", () => {
     const instance = await start();
     // One element passes the `filter`.
     expect(instance.childInstances().map(({ keys }) => keys)).toEqual([
-      ["fields:id=#2#0"],
+      [byFields(instance, { id: 2 })],
     ]);
     const [row] = starred(instance);
     note(instance, row, "kept");
@@ -4450,8 +4641,8 @@ describe("a key field declared with `KeyedBy`", () => {
         ?.value,
     ).toEqual({ repo: repo(2, "cde", 4) });
     expect(instance.childInstances().map(({ keys }) => keys)).toEqual([
-      ["fields:id=#2#0"],
-      ["fields:id=#1#0"],
+      [byFields(instance, { id: 2 })],
+      [byFields(instance, { id: 1 })],
     ]);
 
     // Both leave the result of the `filter` and enter it again: the same
@@ -4508,7 +4699,11 @@ describe("a key field declared with `KeyedBy`", () => {
 
     // A write through the reference by key of the element.
     instance.store.write(
-      new Ref("argument", ["saved", keySegment("fields:id=#7#0"), "name"]),
+      new Ref("argument", [
+        "saved",
+        keySegment(byFields(instance, { id: 7 })),
+        "name",
+      ]),
       "edited",
     );
     expect(instance.store.rekeys).toEqual([]);
@@ -4521,7 +4716,11 @@ describe("a key field declared with `KeyedBy`", () => {
     // The reference still names the element.
     expect(
       instance.store.read(
-        new Ref("argument", ["saved", keySegment("fields:id=#7#0"), "name"]),
+        new Ref("argument", [
+          "saved",
+          keySegment(byFields(instance, { id: 7 })),
+          "name",
+        ]),
       ),
     ).toBe("edited");
 
@@ -4533,10 +4732,10 @@ describe("a key field declared with `KeyedBy`", () => {
       { name: "t", noted: "" },
       { name: "again", noted: "mine" },
     ]);
-    expect(keysOf(instance, KEPT_CELL)).toEqual([
-      "fields:id=#7#0",
-      "fields:id=#8#0",
-    ]);
+    expect(keysOf(instance, KEPT_CELL)).toEqual(sorted([
+      byFields(instance, { id: 7 }),
+      byFields(instance, { id: 8 }),
+    ]));
   });
 
   it("gives two elements with one value of the field two keys, and keys an element that lacks the field by its value", async () => {
@@ -4544,11 +4743,11 @@ describe("a key field declared with `KeyedBy`", () => {
       argument([repo(7, "s", 1), repo(7, "t", 2), { name: "n" }]),
     );
 
-    expect(keysOf(instance, KEPT_CELL)).toEqual([
-      "fields:id=#7#0",
-      "fields:id=#7#1",
-      'value:{"name":"n"}#0',
-    ]);
+    expect(keysOf(instance, KEPT_CELL)).toEqual(sorted([
+      byFields(instance, { id: 7 }),
+      byFields(instance, { id: 7 }, 1),
+      whole(instance, { "name": "n" }),
+    ]));
   });
 
   // Ruling Z44, over a plain array generated from scratch with a
@@ -4558,17 +4757,19 @@ describe("a key field declared with `KeyedBy`", () => {
 
     // `tallies` is over the numbers 1 and 2, and `rows` over the
     // elements whose `id` are 1 and 2.
-    expect(keysOf(instance, TALLIES_CELL)).toEqual(["value:1#0", "value:2#0"]);
-    expect(keysOf(instance, ROWS_CELL)).toEqual([
-      "fields:id=#1#0",
-      "fields:id=#2#0",
-    ]);
+    expect(keysOf(instance, TALLIES_CELL)).toEqual(
+      sorted([whole(instance, 1), whole(instance, 2)]),
+    );
+    expect(keysOf(instance, ROWS_CELL)).toEqual(sorted([
+      byFields(instance, { id: 1 }),
+      byFields(instance, { id: 2 }),
+    ]));
     // The stream of `pick` in `found`, over the result of the `filter`,
     // has the upstream key.
     expect(
       instance.streams().filter(({ binding }) => binding === PICK_FOUND)
         .map(({ keys }) => keys),
-    ).toEqual([["fields:id=#2#0"]]);
+    ).toEqual([[byFields(instance, { id: 2 })]]);
   });
 
   // Ruling Z44, over plain values in place.
@@ -4577,7 +4778,7 @@ describe("a key field declared with `KeyedBy`", () => {
 
     expect(instance.send(PICK_KEPT, {}, [1]).committed).toBe(true);
 
-    const key = keySegment("fields:id=#8#0");
+    const key = keySegment(byFields(instance, { id: 8 }));
     expect(cell(instance, PICKED)).toEqual({
       $link: { doc: "argument", path: ["saved", key] },
     });
@@ -4604,7 +4805,7 @@ describe("a key field declared with `KeyedBy`", () => {
     });
     // A reader whose type declares another key resolves the stored
     // references to the same element.
-    const byName = { type: "object", items: { keyFields: ["name"] } };
+    const byName = { type: "array", keyFields: ["name"] };
     expect(
       instance.store.read(
         new Ref("state:0:[]", [], byName).key("name"),
@@ -4636,18 +4837,18 @@ describe("a key field declared with `KeyedBy`", () => {
       pool: { a: repo(7, "s", 1), b: repo(7, "t", 2) },
     });
 
-    expect(keysOf(instance, KEPT_CELL)).toEqual([
-      'cell:argument:["pool","a"]#0',
-      'cell:argument:["pool","b"]#0',
-    ]);
+    expect(keysOf(instance, KEPT_CELL)).toEqual(sorted([
+      cellKey("argument", ["pool", "a"]),
+      cellKey("argument", ["pool", "b"]),
+    ]));
   });
 });
 
-// Ruling Z45 on `fixtures/keyed-by-fields.tsx`: the element type
-// `KeyedBy<Repo, "owner" | "name">` declares two key fields, and an
-// element has one key across them. Today's runtime has no such marker,
+// Rulings Z45 and Z49 on `fixtures/array-by-key-fields.tsx`: the array
+// type `ArrayByKey<Repo, "owner" | "name">` declares two key fields, and
+// an element has one key across them. Today's runtime has no such type,
 // so these tests are of the executor alone.
-describe("several key fields declared with `KeyedBy`", () => {
+describe("several key fields declared with `ArrayByKey`", () => {
   const repo = (owner: string, name: string, stars: number) => ({
     owner,
     name,
@@ -4659,7 +4860,7 @@ describe("several key fields declared with `KeyedBy`", () => {
     const [{ patterns }] = JSON.parse(
       await Deno.readTextFile(
         new URL(
-          "../../compare/fixtures/keyed-by-fields.emit.json",
+          "../../compare/fixtures/array-by-key-fields.emit.json",
           import.meta.url,
         ),
       ),
@@ -4716,13 +4917,13 @@ describe("several key fields declared with `KeyedBy`", () => {
     const instance = await start();
 
     expect(keysOf(instance, STARRED)).toEqual([
-      "fields:name=cde,owner=x#0",
-      "fields:name=fghi,owner=cf#0",
+      byFields(instance, { name: "cde", owner: "x" }),
+      byFields(instance, { name: "fghi", owner: "cf" }),
     ]);
     // Two elements with one `name` and two `owner` are two keys.
     expect(keysOf(instance, KEPT)).toEqual([
-      "fields:name=labs,owner=cf#0",
-      "fields:name=labs,owner=x#0",
+      byFields(instance, { name: "labs", owner: "cf" }),
+      byFields(instance, { name: "labs", owner: "x" }),
     ]);
   });
 
@@ -4757,7 +4958,7 @@ describe("several key fields declared with `KeyedBy`", () => {
     instance.store.write(
       new Ref("argument", [
         "saved",
-        keySegment("fields:name=labs,owner=cf#0"),
+        keySegment(byFields(instance, { name: "labs", owner: "cf" })),
         "stars",
       ]),
       9,
@@ -4795,9 +4996,9 @@ describe("several key fields declared with `KeyedBy`", () => {
       { owner: "cf", name: "specs", noted: "" },
     ]);
     expect(keysOf(instance, KEPT)).toEqual([
-      "fields:name=labs,owner=cf#0",
-      "fields:name=labs,owner=x#0",
-      "fields:name=specs,owner=cf#0",
+      byFields(instance, { name: "labs", owner: "cf" }),
+      byFields(instance, { name: "labs", owner: "x" }),
+      byFields(instance, { name: "specs", owner: "cf" }),
     ]);
   });
 });
@@ -4946,5 +5147,197 @@ describe("an instance a function body makes", () => {
         { press },
       ) => press.$stream),
     ).toEqual([first, second]);
+  });
+});
+
+// Ruling Z52 and PL §8, question 143, on
+// `fixtures/array-by-key-reader.tsx`: a reader whose type declares no key
+// forms keys with the key fields of the array it is given. Today's
+// runtime has no `ArrayByKey`, so these tests are of the executor alone.
+describe("a reader typed as a plain array that is given an array with a declared key", () => {
+  const repo = (id: number, name: string, stars: number) => ({
+    id,
+    name,
+    stars,
+  });
+  const start = async () => {
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL(
+          "../../compare/fixtures/array-by-key-reader.emit.json",
+          import.meta.url,
+        ),
+      ),
+    ) as { patterns: Artifact[] }[];
+    const artifacts = (id: string) =>
+      patterns.find((pattern) => pattern.plan.patterns?.[0] === id);
+    const main = patterns.find((pattern) => pattern.name === "default")!;
+    return new Instance(main, {
+      names: ["ab", "cde"],
+      bonus: 0,
+      saved: [repo(7, "s", 1), repo(8, "t", 2)],
+      loose: [repo(7, "s", 1)],
+    }, { artifacts });
+  };
+  /** The keys of the state cells whose documents begin with a prefix. */
+  const keysOf = (instance: Instance, prefix: string) =>
+    sorted([
+      ...new Set(
+        [...instance.store.declared.keys(), ...instance.store.docs.keys()]
+          .filter((id) => id.startsWith(prefix))
+          .map((id): string => JSON.parse(id.slice(prefix.length))[0]),
+      ),
+    ]);
+  type Row = { name: string; stars: number; noted: string };
+  type Result = Record<
+    "inPlace" | "scratch" | "derived" | "none" | "made" | "madeScratch",
+    { rows: Row[] }
+  >;
+  const result = (instance: Instance) => instance.result() as Result;
+  /** Sends an event through the stream that a row of a document holds. */
+  const note = (
+    instance: Instance,
+    doc: string,
+    rows: string[],
+    row: number,
+    text: string,
+  ) => {
+    new Handle(
+      instance,
+      new Ref(doc, [...rows, `${row}`, "note"]),
+      undefined,
+      undefined,
+      [],
+    ).send({ text });
+    return instance.dispatch();
+  };
+  const [IN_PLACE, SCRATCH, DERIVED, NONE] = [0, 1, 2, 3];
+  const [MADE, MADE_SCRATCH] = ["child:0:[]:", "child:1:[]:"];
+
+  it("gives the collection of a reader that is compiled in the key fields of the array given, in the plan", async () => {
+    const instance = await start();
+
+    expect(
+      instance.plan.collections.map(({ construct, source, keyFields }) => [
+        construct,
+        Object.keys(source)[0],
+        keyFields,
+      ]),
+    ).toEqual([
+      // Over plain values in place.
+      ["map", "slot", ["id"]],
+      // Over a plain array generated from scratch.
+      ["map", "output", ["id"]],
+      ["filter", "output", ["id"]],
+      // Over the result of the `filter`: the upstream keys.
+      ["map", "collection", undefined],
+      // Over an array that declares no key.
+      ["map", "slot", undefined],
+    ]);
+  });
+
+  it("keys the rows of a reader that is compiled in by the declared field, in each of the three cases", async () => {
+    const instance = await start();
+    instance.result();
+
+    // Over plain values in place.
+    expect(keysOf(instance, `state:${IN_PLACE}:`)).toEqual(
+      sorted([7, 8].map((id) => byFields(instance, { id }))),
+    );
+    // Over a plain array generated from scratch, and over the result of
+    // a `filter` of it, whose elements have the upstream keys.
+    for (const cell of [SCRATCH, DERIVED]) {
+      expect(keysOf(instance, `state:${cell}:`)).toEqual(
+        sorted([1, 2].map((id) => byFields(instance, { id }))),
+      );
+    }
+    // Over an array whose type declares no key: the whole value.
+    expect(keysOf(instance, `state:${NONE}:`)).toEqual([
+      whole(instance, repo(7, "s", 1)),
+    ]);
+  });
+
+  it("keeps the state of a row of a reader that is compiled in when a member that is no key field changes", async () => {
+    const instance = await start();
+    instance.result();
+    expect(
+      note(instance, "result", ["inPlace", "rows"], 1, "kept").map((
+        { committed },
+      ) => committed),
+    ).toEqual([true]);
+    expect(
+      note(instance, "result", ["scratch", "rows"], 1, "fresh").map((
+        { committed },
+      ) => committed),
+    ).toEqual([true]);
+
+    instance.writeArgument(["saved", "1", "stars"], 9);
+    instance.writeArgument(["bonus"], 5);
+
+    expect(result(instance).inPlace.rows[1]).toMatchObject({
+      name: "t",
+      stars: 9,
+      noted: "kept",
+    });
+    expect(result(instance).scratch.rows[1]).toMatchObject({
+      stars: 8,
+      noted: "fresh",
+    });
+    expect(keysOf(instance, `state:${SCRATCH}:`)).toEqual(
+      sorted([1, 2].map((id) => byFields(instance, { id }))),
+    );
+  });
+
+  it("keys the rows of an instance called through `asInstance()` by the key fields of the array schema that the link in its argument holds, over plain values in place", async () => {
+    const instance = await start();
+    instance.result();
+
+    // The argument of the instance holds a link to the array, with the
+    // schema of the array that the caller reads it under.
+    expect(instance.store.docs.get(`${MADE}argument`)?.value).toMatchObject({
+      repos: {
+        $link: {
+          doc: "argument",
+          path: ["saved"],
+          schema: { type: "array", keyFields: ["id"] },
+        },
+      },
+    });
+    expect(keysOf(instance, `${MADE}state:0:`)).toEqual(
+      sorted([7, 8].map((id) => byFields(instance, { id }))),
+    );
+    // The row keeps its state when a member that is no key field
+    // changes.
+    expect(
+      note(instance, `${MADE}result`, ["rows"], 1, "mine").map((
+        { committed },
+      ) => committed),
+    ).toEqual([true]);
+    instance.writeArgument(["saved", "1", "stars"], 9);
+    expect(result(instance).made.rows).toMatchObject([
+      { name: "s", stars: 1, noted: "" },
+      { name: "t", stars: 9, noted: "mine" },
+    ]);
+    expect(keysOf(instance, `${MADE}state:0:`)).toEqual(
+      sorted([7, 8].map((id) => byFields(instance, { id }))),
+    );
+  });
+
+  it("keys the rows of an instance called through `asInstance()` by the whole value where its argument holds a plain array generated from scratch and no link", async () => {
+    const instance = await start();
+    instance.result();
+
+    // The argument holds the values, so no schema with the keyword is
+    // on the way to the array.
+    expect(instance.store.docs.get(`${MADE_SCRATCH}argument`)?.value).toEqual({
+      repos: [repo(1, "ab", 2), repo(2, "cde", 3)],
+    });
+    expect(keysOf(instance, `${MADE_SCRATCH}state:0:`)).toEqual(
+      sorted(
+        [repo(1, "ab", 2), repo(2, "cde", 3)].map((value) =>
+          whole(instance, value)
+        ),
+      ),
+    );
   });
 });

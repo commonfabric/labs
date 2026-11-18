@@ -394,6 +394,9 @@ export class ExecutorRun implements StreamRecord {
     try {
       this.#instance = new Instance(this.#artifact, this.#argument, {
         space,
+        // One secret for every run, so that the keys of plain values in
+        // a results file are those of the next run.
+        secret: "the secret of the comparison",
         artifacts: this.#artifacts,
       });
       this.#settled = this.#snapshot(this.#instance);
