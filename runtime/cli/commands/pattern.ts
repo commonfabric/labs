@@ -725,8 +725,8 @@ export const pattern = new Command()
       new Command()
         .description(
           "The versions the index keeps of a pattern you deploy: one for " +
-            "each cf piece new or cf piece setsrc of it, private unless " +
-            "shared. Without an entry file, lists every pattern of yours " +
+            "each cf piece new or cf piece setsrc of it, and each " +
+            "cf pattern checkpoint, private unless shared. Without an entry file, lists every pattern of yours " +
             "the index keeps. Only you can read them.",
         )
         .arguments("[entry:string]")

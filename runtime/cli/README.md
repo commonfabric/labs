@@ -3469,6 +3469,13 @@ remix of it. When this machine never joined an index, a deploy makes no index
 call and says so once. The index write never changes a deploy's outcome: a
 failure is reported in one line and the deploy's exit status stands.
 
+`cf pattern checkpoint <entry> --cell <piece>` keeps what a piece runs now as a
+private version of the entry's lineage, without deploying: the pattern the piece
+points at, with its source, so it is exactly what was deployed. The sharing
+setting never shares it on its own (`keepPrivate`); `cf pattern share` does. It
+pairs with deploys that keep no version, keeping one when a change is done, and
+exits 1 with the reason when no version was kept.
+
 A deploy never shares a version by itself: drafts land many times an hour. The
 index shares a version once it settles, when its owner opens it in a loom, and
 only while their sharing setting (kept by the index; `cf index sharing` and
