@@ -644,6 +644,8 @@ type KeyState = {
   formed: number;
   /** The changes since the keys were last formed whole. */
   ops: KeyOp[];
+  /** How many of those changes the store no longer holds. */
+  dropped: number;
 };
 
 /** The longest chain of links a read follows before it gives up. */
@@ -1043,8 +1045,24 @@ export class Store {
   keyState(
     held: readonly unknown[],
     fields: readonly string[] = [],
-  ): { keys: readonly string[]; formed: number; ops: readonly KeyOp[] } | undefined {
-    return this.#states.get(held)?.get(JSON.stringify(fields));
+  ): {
+    keys: readonly string[];
+    formed: number;
+    /** How many changes there were since the keys were formed whole. */
+    count: number;
+    /** The changes after the first `seen`, or nothing where the store
+     * no longer holds them. */
+    since: (seen: number) => KeyOp[] | undefined;
+  } | undefined {
+    const state = this.#states.get(held)?.get(JSON.stringify(fields));
+    if (state === undefined) return undefined;
+    return {
+      keys: state.keys,
+      formed: state.formed,
+      count: state.dropped + state.ops.length,
+      since: (seen) =>
+        seen < state.dropped ? undefined : state.ops.slice(seen - state.dropped),
+    };
   }
 
   /** The element part of a position of an array whose keys are held. */
@@ -1149,6 +1167,7 @@ export class Store {
         this.#positions.delete(state.keys);
         state.formed += 1;
         state.ops.length = 0;
+        state.dropped = 0;
         all = true;
         continue;
       }
@@ -1167,6 +1186,12 @@ export class Store {
       }
       state.keys.splice(start, removed, ...keys);
       state.ops.push({ start, removed: before, inserted: keys });
+      // A reader that is further behind than this forms what it
+      // derived from the keys whole.
+      if (state.ops.length > 512) {
+        state.dropped += 256;
+        state.ops.splice(0, 256);
+      }
       affected.push(...before, ...keys);
     }
     return all ? undefined : affected;
@@ -1429,6 +1454,7 @@ export class Store {
           others: [],
           formed: (known?.formed ?? 0) + 1,
           ops: [],
+          dropped: 0,
         };
         this.#others(state, reads);
         const states = this.#states.get(held) ?? new Map<string, KeyState>();

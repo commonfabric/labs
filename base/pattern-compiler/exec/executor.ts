@@ -41,6 +41,7 @@ import {
   linkedSchema,
   markerOf,
   memberKey,
+  type KeyOp,
   type Name,
   OUTPUT,
   type Position,
@@ -358,6 +359,51 @@ type Dependency = {
 /** The name that stands for the element table of an assembly. */
 const tableName = (assembly: string): string => `table ${assembly}`;
 
+/**
+ * What the assembly of a `map` or a `filter` over a stored array keeps
+ * so that a change of the array, or of the result of the body for one
+ * element, is applied to it, and the table and the result are not
+ * formed again (`#reassemble`).
+ */
+type Rows = {
+  construct: "map" | "filter";
+  /**
+   * For a collection over a stored array: the reference that the array
+   * was found through, its name, and of the keys of the array the
+   * count of the times they were formed whole and how many changes
+   * since the assembly has applied.
+   */
+  stored?: {
+    base: Ref;
+    named: string;
+    fields: readonly string[];
+    formed: number;
+    seen: number;
+  };
+  /**
+   * For a collection over the result of another per-element construct:
+   * that collection, the name of its assembly, and the version of the
+   * entry that this one was formed from.
+   */
+  upstream?: { collection: number; name: string; version: number };
+  /** The reads that found the array, and those that found an element. */
+  arrayReads: Set<Position>;
+  elementReads: Map<Position, string>;
+  /** How many dependencies stand before those of the elements. */
+  first: number;
+  /** The result of the body for each element of the table. */
+  results: unknown[];
+  /** The key of the element that each name of an entry is of. */
+  keyOf: Map<string, string>;
+  /** The entry of each row of the result, in the order of the table. */
+  members: Element[];
+  /** For a `filter`: whether each element is kept. */
+  flags?: boolean[];
+};
+
+/** Stands for the source of an element that is not found yet. */
+const PENDING = new Ref("", []);
+
 /** One registration of a reader: at a position, or under a key. */
 type Reg = { slot: Slot; position: Position };
 
@@ -410,6 +456,19 @@ type Entry = {
    * elements, each with the key of the element it came from.
    */
   members?: Element[];
+  /**
+   * For the assembly of a `map` or a `filter` over a stored array: what
+   * bringing it up to date from the changes of the array needs.
+   */
+  rows?: Rows;
+  /** Counts the entries that the name has had. */
+  version?: number;
+  /**
+   * For an assembly that was brought up to date from the entry of the
+   * version before: the splices of its rows, and the keys of the rows
+   * that stand where they stood and hold another value.
+   */
+  delta?: { ops: KeyOp[]; rows: string[] };
   /**
    * The cones with static side-writes whose write target the evaluation
    * read or passed on: each is brought up to date before this entry is
@@ -997,6 +1056,22 @@ export class Host {
   done = false;
 
   /**
+   * For the assembly of a collection over a stored array: the array as
+   * it was found, and which reads found it and which an element.
+   */
+  found: {
+    base: Ref;
+    named: Ref;
+    held: readonly unknown[];
+    fields: readonly string[];
+    arrayReads: Set<Position>;
+    elementReads: Map<Position, string>;
+  } | undefined;
+  /** The assembly that the table of the collection was taken from. */
+  from: { collection: number; entry: Entry } | undefined;
+  rows: Rows | undefined;
+
+  /**
    * The array that a reference to an assembled collection stands for,
    * which this evaluation then depends on, and any other value as it
    * is.
@@ -1375,6 +1450,15 @@ export type Transaction = {
    * whole, and has no patch.
    */
   bytes: number;
+  /**
+   * The bytes of what the changes of the transaction put into the
+   * documents: for a write at a path the JSON text of the value
+   * written, and for a splice of an array that of the members put in
+   * (`PatchOp` in `runtime/memory/v2.ts`).
+   */
+  patchBytes: number;
+  /** The changes of documents that the transaction made. */
+  changes: number;
   /** The cones that took an error state, by their `entry`. */
   failed: string[];
   /** Whether what the transaction staged is stored. */
@@ -1772,52 +1856,57 @@ export class Instance {
   }
 
   /**
+   * Registers an entry as a reader of a position. Returns whether a
+   * change of what the read gave marks the entry from here on.
+   */
+  #watch(slot: Slot, position: Position): boolean {
+    const { root, store } = this;
+    const add = (set: Set<Reg>, keyed: boolean) => {
+      const reg = { slot, position };
+      set.add(reg);
+      slot.regs.push({ set, reg, keyed });
+      if (keyed) root.#keyedCount += 1;
+    };
+    const { keyed } = position;
+    if (keyed === undefined) {
+      add(root.#readersAt(position.doc, position.path), false);
+      return true;
+    }
+    // A read through a reference by key into the document of a computed
+    // output brings the output up to date, which no write announces
+    // (ruling Z53).
+    if (keyed.array === undefined || store.sources.has(position.doc)) {
+      return false;
+    }
+    let keys = root.#keyedReaders.get(keyed.array);
+    if (keys === undefined) {
+      keys = new Map();
+      root.#keyedReaders.set(keyed.array, keys);
+    }
+    let set = keys.get(keyed.key);
+    if (set === undefined) {
+      set = new Set();
+      keys.set(keyed.key, set);
+    }
+    add(set, true);
+    let indexed = true;
+    for (const other of keyed.others) {
+      if (store.sources.has(other.doc)) indexed = false;
+      add(root.#readersAt(other.doc, other.path), false);
+    }
+    return indexed;
+  }
+
+  /**
    * Registers an entry as a reader of what it read and a user of what
    * it used, so that a change marks it. Returns whether everything it
    * depends on has a place in an index: an entry for which it does not
    * is compared on every pull.
    */
   #register(slot: Slot, entry: Entry): boolean {
-    const { root, store } = this;
     let indexed = entry.writers.length === 0;
-    const seen = new Set<string>();
-    const add = (set: Set<Reg>, position: Position, keyed: boolean) => {
-      const reg = { slot, position };
-      set.add(reg);
-      slot.regs.push({ set, reg, keyed });
-      if (keyed) root.#keyedCount += 1;
-    };
     for (const position of entry.reads) {
-      const { keyed } = position;
-      if (keyed === undefined) {
-        const id = `${position.doc}\n${position.path.join("\n")}`;
-        if (seen.has(id)) continue;
-        seen.add(id);
-        add(root.#readersAt(position.doc, position.path), position, false);
-        continue;
-      }
-      // A read through a reference by key into the document of a
-      // computed output brings the output up to date, which no write
-      // announces (ruling Z53).
-      if (keyed.array === undefined || store.sources.has(position.doc)) {
-        indexed = false;
-        continue;
-      }
-      let keys = root.#keyedReaders.get(keyed.array);
-      if (keys === undefined) {
-        keys = new Map();
-        root.#keyedReaders.set(keyed.array, keys);
-      }
-      let set = keys.get(keyed.key);
-      if (set === undefined) {
-        set = new Set();
-        keys.set(keyed.key, set);
-      }
-      add(set, position, true);
-      for (const other of keyed.others) {
-        if (store.sources.has(other.doc)) indexed = false;
-        add(root.#readersAt(other.doc, other.path), position, false);
-      }
+      if (!this.#watch(slot, position)) indexed = false;
     }
     for (const { on } of entry.dependencies) {
       if (on === undefined || this.#slots.get(on)?.always) indexed = false;
@@ -1842,6 +1931,19 @@ export class Instance {
       keyed: { array: object; keys?: readonly string[]; now?: object }[];
     },
   ): void {
+    const open = this.#tx;
+    if (open !== undefined) {
+      const { store } = this;
+      const now = store.peek(change.doc, change.path);
+      const put = change.splice === undefined
+        ? now
+        : (now as unknown[]).slice(
+          change.splice.start,
+          change.splice.start + change.splice.inserted,
+        );
+      open.record.changes += 1;
+      open.record.patchBytes += (JSON.stringify(put) ?? "").length;
+    }
     const mark = (regs: Iterable<Reg> | undefined) => {
       if (regs === undefined) return;
       for (const reg of [...regs]) reg.slot.instance.#mark(reg.slot, reg.position);
@@ -2025,10 +2127,32 @@ export class Instance {
       ) => { result?: unknown; error?: unknown } | undefined;
       /** What the clock holds when the executor starts. */
       now?: number;
+      /**
+       * `patches`: a transaction does not count the bytes of each
+       * document it wrote as a whole (`Transaction.bytes`), which costs
+       * a pass over the document.
+       */
+      measure?: "documents" | "patches";
+      /**
+       * Whether the key of a position that a write did not touch is
+       * kept (`kept`, the default) or formed again (`formed`); see
+       * `Store`.
+       */
+      keys?: "kept" | "formed";
+      /**
+       * Whether the assembly of a collection over a stored array is
+       * brought up to date from the changes of the array (`applied`,
+       * the default) or formed whole (`formed`).
+       */
+      assembly?: "applied" | "formed";
     } = {},
   ) {
     this.store = options.parent?.store ??
-      new Store({ secret: options.secret, space: options.space });
+      new Store({
+        secret: options.secret,
+        space: options.space,
+        keys: options.keys,
+      });
     this.id = options.id ?? "result";
     this.argument = argumentOf(this.id);
     this.root = options.parent?.root ?? this;
@@ -2084,6 +2208,8 @@ export class Instance {
         evaluated: [],
         written: [],
         bytes: 0,
+        patchBytes: 0,
+        changes: 0,
         failed: [],
         committed: false,
       },
@@ -2125,9 +2251,13 @@ export class Instance {
     open.record.committed = committed;
     if (error !== undefined) open.record.error = error;
     if (!committed) open.record.written = [];
-    for (const id of open.record.written) {
-      open.record.bytes +=
-        (JSON.stringify(this.store.docs.get(id)?.value) ?? "").length;
+    // The bytes of a document that is written whole follow its size,
+    // so a measurement of time leaves them out.
+    if (this.options.measure !== "patches") {
+      for (const id of open.record.written) {
+        open.record.bytes +=
+          (JSON.stringify(this.store.docs.get(id)?.value) ?? "").length;
+      }
     }
     this.#tx = undefined;
     this.store.journal = undefined;
@@ -3753,8 +3883,60 @@ export class Instance {
     );
     if (entry === unit.seen) return;
     const values = Array.isArray(entry.value) ? entry.value : [];
-    const keys = (entry.members ?? []).map(({ key }) => key);
     const path = this.#pathOf(unit);
+    const { delta } = entry;
+    if (
+      delta !== undefined && unit.seen !== undefined &&
+      entry.version === (unit.seen.version ?? 0) + 1 &&
+      entry.members !== undefined
+    ) {
+      // The assembly says what changed: the splices, and the rows that
+      // hold another value.
+      const { members } = entry;
+      for (const { start, removed, inserted } of delta.ops) {
+        for (const key of removed) {
+          if (inserted.includes(key)) continue;
+          for (const inner of unit.inside.get(key)?.values() ?? []) {
+            this.#dispose(inner);
+          }
+          unit.inside.delete(key);
+        }
+        // A key that a later splice removed again has no row now.
+        const rows = inserted.map((key, offset) => {
+          const index = start + offset;
+          return members[index]?.key === key
+            ? this.#formOf(values[index], { unit, key }, [], new Set())
+            : null;
+        });
+        this.store.spliceAt(this.id, path, start, removed.length, rows);
+        const appended = start === unit.keys.length && removed.length === 0;
+        unit.keys.splice(start, removed.length, ...inserted);
+        unit.values.splice(
+          start,
+          removed.length,
+          ...inserted.map((_, offset) => values[start + offset]),
+        );
+        if (appended && unit.positions !== undefined) {
+          inserted.forEach((key, offset) =>
+            unit.positions?.set(key, start + offset)
+          );
+        } else {
+          unit.positions = undefined;
+        }
+      }
+      const settled = unit.keys.length === members.length;
+      for (const key of settled ? delta.rows : []) {
+        const index = this.#positionIn(unit, key);
+        if (index < 0 || members[index]?.key !== key) continue;
+        unit.values[index] = values[index];
+        this.#place([...path, `${index}`], values[index], { unit, key }, []);
+      }
+      if (settled && delta.ops.length <= 1) {
+        unit.seen = entry;
+        return;
+      }
+    }
+    const keys = (entry.members ?? []).map(({ key }) => key);
     const were = unit.keys.length;
     let head = 0;
     while (head < were && head < keys.length && unit.keys[head] === keys[head]) {
@@ -3856,6 +4038,12 @@ export class Instance {
     kind: "element" | "assembly" | "value",
     compute: (host: Host) => unknown,
     within: readonly number[] = [],
+    /**
+     * Brings an entry that is not current up to date from the one it
+     * has, where it can: the entry it gives is the entry of the name,
+     * and with none the entry is computed.
+     */
+    refresh?: (held: Entry, slot: Slot) => Entry | undefined,
   ): Entry {
     const held = this.#memo.get(key);
     if (held !== undefined && !held.pending) {
@@ -3893,9 +4081,34 @@ export class Instance {
       }
       open.counts.set(name, times + 1);
     }
+    const slot = this.#slot(key);
+    if (refresh !== undefined && held !== undefined && !held.pending) {
+      this.#open.add(key);
+      this.#markedDuring.delete(key);
+      const serial = slot.serial;
+      let next: Entry | undefined;
+      try {
+        next = refresh(held, slot);
+      } finally {
+        this.#open.delete(key);
+      }
+      if (next !== undefined) {
+        this.counts.evaluations += 1;
+        this.counts.assemblies += 1;
+        this.#memo.set(key, next);
+        if (!this.#markedDuring.delete(key) && slot.serial === serial) {
+          slot.marked = false;
+          slot.suspects.clear();
+          slot.reads.clear();
+        } else {
+          slot.all = true;
+        }
+        if (next.changedAt !== held.changedAt) this.#markUsers(key);
+        return next;
+      }
+    }
     this.#open.add(key);
     root.#evaluating.push({ instance: this, key });
-    const slot = this.#slot(key);
     this.#unregister(slot);
     this.#markedDuring.delete(key);
     const host = new Host(this, context, cone, key);
@@ -3964,6 +4177,8 @@ export class Instance {
       dependencies: host.dependencies,
       indexes: host.indexes,
       members: host.members,
+      ...(host.rows === undefined ? {} : { rows: host.rows }),
+      version: (held?.version ?? 0) + 1,
       writers: host.writers,
       ...(failure === undefined ? {} : { error: failure }),
       evaluatedAt: ownWrite ? this.store.clock : readAt,
@@ -4378,9 +4593,57 @@ export class Instance {
         if (!this.#elements.has(collection)) {
           throw new Unsupported("an element construct that has no function");
         }
-        const results = elements.map((element) =>
-          host.depend(this.#perElement(collection, element.key))
-        );
+        const first = host.dependencies.length;
+        const keyOf = new Map<string, string>();
+        const results = elements.map((element) => {
+          const entry = host.dependEntry(
+            this.#perElement(collection, element.key),
+          );
+          if (entry.key !== undefined) keyOf.set(entry.key, element.key);
+          return entry.value;
+        });
+        // What a later change of the array or of one row is applied to.
+        const rows = (
+          construct: "map" | "filter",
+          members: Element[],
+          flags?: boolean[],
+        ) => {
+          const { found, from } = host;
+          if (
+            host.writers.length > 0 ||
+            host.dependencies.length !== first + elements.length ||
+            keyOf.size !== elements.length ||
+            !this.#mayRefresh
+          ) return;
+          const state = found === undefined
+            ? undefined
+            : this.store.keyState(found.held, found.fields);
+          const upstream = from?.entry.key === undefined ? undefined : {
+            collection: from.collection,
+            name: from.entry.key,
+            version: from.entry.version ?? 0,
+          };
+          if (state === undefined && upstream === undefined) return;
+          host.rows = {
+            construct,
+            ...(found === undefined || state === undefined ? { upstream } : {
+              stored: {
+                base: found.base,
+                named: this.store.addressText(found.named),
+                fields: found.fields,
+                formed: state.formed,
+                seen: state.count,
+              },
+            }),
+            arrayReads: found?.arrayReads ?? new Set(),
+            elementReads: found?.elementReads ?? new Map(),
+            first,
+            results,
+            keyOf,
+            members,
+            ...(flags === undefined ? {} : { flags }),
+          };
+        };
         // What the result holds for an element it passes on: what the
         // element is, a reference to a cell or a reference by key
         // included.
@@ -4408,10 +4671,17 @@ export class Instance {
               key,
               source: { entry: this.#perElement(collection, key), at: [] },
             })));
-            return keyed(results);
+            rows("map", host.members);
+            return keyed([...results]);
           case "filter": {
-            const kept = elements.filter((_, index) => holds(index));
+            const flags = elements.map((_, index) => holds(index));
+            const kept = elements.filter((_, index) => flags[index]);
             host.members = numbered(kept);
+            if (
+              results.every((result) =>
+                result === null || typeof result !== "object"
+              )
+            ) rows("filter", host.members, flags);
             return keyed(kept.map(given));
           }
           case "flatMap": {
@@ -4453,7 +4723,309 @@ export class Instance {
               `an element construct \`${record.construct}\``,
             );
         }
-      }, outer);
+      }, outer, (held, slot) =>
+        this.#reassemble(collection, key, around, context, held, slot));
+    };
+  }
+
+  /**
+   * Whether an assembly is brought up to date from the changes of its
+   * array (`assembly: "applied"`, the default), or formed again whole
+   * (`assembly: "formed"`), as `scheduler-and-serving-loop.md` §3.2 has
+   * it: "The evaluation it causes rebuilds the table".
+   */
+  get #mayRefresh(): boolean {
+    return (this.root.options.assembly ?? "applied") === "applied";
+  }
+
+  /**
+   * Brings the assembly of a `map` or a `filter` over a stored array up
+   * to date from the entry it has (`Rows`): the splices of the array
+   * are applied to the element table and to the result, the body is
+   * evaluated for the keys that entered and for those whose entry is
+   * marked, and nothing is done for another element. Gives nothing
+   * where what marked the entry is something else, and the assembly is
+   * then formed whole.
+   */
+  #reassemble(
+    collection: number,
+    name: string,
+    around: readonly string[],
+    context: Context,
+    held: Entry,
+    slot: Slot,
+  ): Entry | undefined {
+    const rows = held.rows;
+    const table = this.#tables.get(name);
+    if (
+      rows === undefined || table === undefined || slot.all || held.always ||
+      !slot.marked || !this.#mayRefresh ||
+      table.elements.length !== rows.results.length
+    ) return undefined;
+    const { store } = this;
+    const began = store.clock;
+    const relocate = new Set<string>();
+    for (const position of slot.reads) {
+      if (rows.arrayReads.has(position)) continue;
+      const key = rows.elementReads.get(position);
+      if (key === undefined) return undefined;
+      relocate.add(key);
+    }
+    const changed = new Set<string>();
+    for (const used of slot.suspects) {
+      const key = rows.keyOf.get(used);
+      if (key !== undefined) changed.add(key);
+      else if (used !== rows.upstream?.name) return undefined;
+    }
+    // The changes of what the collection is over, and how the element
+    // that stands at a position now is found.
+    let ops: KeyOp[];
+    let keyAt: (index: number) => string | undefined;
+    let sourceAt: (index: number, key: string) => Element["source"] | undefined;
+    let length: number;
+    let seen: () => void;
+    const dependencies = [...held.dependencies];
+    if (rows.stored !== undefined) {
+      const { stored } = rows;
+      const located = store.locate(stored.base, true);
+      const array = located.value;
+      if (
+        !Array.isArray(array) ||
+        store.addressText(located.named) !== stored.named
+      ) return undefined;
+      const state = store.keyState(array, stored.fields);
+      if (state === undefined || state.formed !== stored.formed) {
+        return undefined;
+      }
+      const since = state.since(stored.seen);
+      if (since === undefined) return undefined;
+      ops = since;
+      length = array.length;
+      keyAt = (index) => state.keys[index];
+      sourceAt = (index, key) => {
+        const member = array[index];
+        if (!isLink(member)) return located.named.key(keySegment(key));
+        const reads: Position[] = [];
+        const { named } = store.locate(
+          new Ref(member.$link.doc, member.$link.path),
+          true,
+          reads,
+        );
+        for (const read of reads) {
+          rows.elementReads.set(read, key);
+          held.reads.push(read);
+          this.#watch(slot, read);
+        }
+        return named;
+      };
+      seen = () => {
+        stored.seen = state.count;
+      };
+      for (const key of relocate) {
+        const element = table.byKey.get(key);
+        if (element === undefined) continue;
+        const member = array[element.index];
+        if (!isLink(member) || !(element.source instanceof Ref)) {
+          return undefined;
+        }
+        const { named } = store.locate(
+          new Ref(member.$link.doc, member.$link.path),
+          true,
+        );
+        if (store.addressText(named) !== store.addressText(element.source)) {
+          return undefined;
+        }
+      }
+    } else if (rows.upstream !== undefined) {
+      const { upstream } = rows;
+      if (relocate.size > 0) return undefined;
+      this.#users.get(upstream.name)?.delete(name);
+      slot.uses.delete(upstream.name);
+      const from = this.assembled(upstream.collection)(context);
+      this.uses(name, upstream.name);
+      const members = from.members;
+      if (members === undefined) return undefined;
+      if (from.version === upstream.version) ops = [];
+      else if (
+        from.version === upstream.version + 1 && from.delta !== undefined
+      ) ops = from.delta.ops;
+      else return undefined;
+      length = members.length;
+      keyAt = (index) => members[index]?.key;
+      sourceAt = (index) => members[index]?.source;
+      const at = dependencies.findIndex(({ on }) => on === upstream.name);
+      if (at < 0 || at >= rows.first) return undefined;
+      dependencies[at] = { ...dependencies[at], seen: from.changedAt };
+      seen = () => {
+        upstream.version = from.version ?? 0;
+      };
+    } else {
+      return undefined;
+    }
+    const { elements, byKey } = table;
+    const { results, members, flags } = rows;
+    const left = new Set<string>();
+    let low = elements.length;
+    for (const op of ops) {
+      const fresh = op.inserted.map((key): Element => ({
+        key,
+        index: -1,
+        source: PENDING,
+      }));
+      const gone = elements.splice(op.start, op.removed.length, ...fresh);
+      results.splice(op.start, op.removed.length, ...fresh.map(() => undefined));
+      flags?.splice(op.start, op.removed.length, ...fresh.map(() => false));
+      if (rows.construct === "map") {
+        members.splice(
+          op.start,
+          op.removed.length,
+          ...fresh.map(({ key }): Element => ({
+            key,
+            index: -1,
+            source: { entry: this.#perElement(collection, key), at: [] },
+          })),
+        );
+      }
+      dependencies.splice(
+        rows.first + op.start,
+        op.removed.length,
+        ...fresh.map((): Dependency => ({ stamp: () => undefined, seen: 0 })),
+      );
+      for (const element of gone) {
+        byKey.delete(element.key);
+        left.add(element.key);
+      }
+      for (const element of fresh) {
+        byKey.set(element.key, element);
+        changed.add(element.key);
+      }
+      low = Math.min(low, op.start);
+    }
+    if (elements.length !== length) return undefined;
+    const indexed = this.#indexReaders.size > 0;
+    for (let index = low; index < elements.length; index++) {
+      const element = elements[index];
+      if (element.source === PENDING) {
+        if (keyAt(index) !== element.key) return undefined;
+        const source = sourceAt(index, element.key);
+        if (source === undefined) return undefined;
+        element.source = source;
+        left.delete(element.key);
+      } else if (element.index !== index && indexed) {
+        const under = this.#name("under", collection, around, element.key);
+        if (this.#indexReaders.has(under)) {
+          this.#moved(collection, around, element.key);
+          changed.add(element.key);
+        }
+      }
+      element.index = index;
+      if (rows.construct === "map") members[index].index = index;
+    }
+    for (const key of left) {
+      // The assembly no longer uses the entry of a key that left.
+      const entry = this.#name("element", collection, around, key);
+      this.#users.get(entry)?.delete(name);
+      slot.uses.delete(entry);
+      rows.keyOf.delete(entry);
+      this.#drop(collection, around, key);
+    }
+    const dirty: string[] = [];
+    let flagged = false;
+    for (const key of changed) {
+      const element = byKey.get(key);
+      if (element === undefined) continue;
+      const lazy = this.#perElement(collection, key);
+      // The evaluation that this brings about marks the users of the
+      // entry, and the assembly is taking what it gives here.
+      const used = this.#name("element", collection, around, key);
+      this.#users.get(used)?.delete(name);
+      slot.uses.delete(used);
+      const entry = lazy(context);
+      const { index } = element;
+      const dependency = dependencies[rows.first + index];
+      if (dependency.on !== undefined && dependency.seen !== entry.changedAt) {
+        dirty.push(key);
+      }
+      results[index] = entry.value;
+      dependencies[rows.first + index] = {
+        stamp: (now) => lazy(now).changedAt,
+        seen: entry.changedAt,
+        ...(entry.key === undefined ? {} : { on: entry.key }),
+      };
+      if (entry.key === undefined) return undefined;
+      this.uses(name, entry.key);
+      rows.keyOf.set(entry.key, key);
+      if (flags !== undefined) {
+        const result = entry.value;
+        if (result !== null && typeof result === "object") return undefined;
+        if (flags[index] !== Boolean(result)) flagged = true;
+        flags[index] = Boolean(result);
+      }
+    }
+    let value = held.value;
+    let rowsNow = members;
+    let delta: Entry["delta"];
+    const moved = ops.length > 0;
+    let differs = moved;
+    if (rows.construct === "map") {
+      differs ||= dirty.length > 0;
+      if (differs) {
+        value = [...results];
+        delta = { ops, rows: dirty.filter((key) => byKey.has(key)) };
+      }
+    } else if (moved || flagged) {
+      differs = true;
+      rowsNow = [];
+      const kept: unknown[] = [];
+      elements.forEach((element, index) => {
+        if (!flags?.[index]) return;
+        rowsNow.push({ ...element, index: rowsNow.length });
+        kept.push(element.source);
+      });
+      rows.members = rowsNow;
+      value = kept;
+      // The rows that left or entered, as one splice: what stands
+      // before and after it holds the keys it held.
+      const [were, now] = [members.length, rowsNow.length];
+      let head = 0;
+      while (
+        head < were && head < now && members[head].key === rowsNow[head].key
+      ) head += 1;
+      let tail = 0;
+      while (
+        tail < were - head && tail < now - head &&
+        members[were - 1 - tail].key === rowsNow[now - 1 - tail].key
+      ) tail += 1;
+      delta = {
+        ops: head === were && head === now ? [] : [{
+          start: head,
+          removed: members.slice(head, were - tail).map(({ key }) => key),
+          inserted: rowsNow.slice(head, now - tail).map(({ key }) => key),
+        }],
+        rows: [],
+      };
+    } else {
+      differs = false;
+    }
+    if (differs && Array.isArray(value)) {
+      assembledElements.set(value, { members: rowsNow, context });
+    }
+    seen();
+    if (differs) store.clock += 1;
+    const version = (held.version ?? 0) + 1;
+    return {
+      ...held,
+      value,
+      // No canonical text is formed of the rows: the next entry that is
+      // formed whole is taken to differ.
+      stored: differs ? `\u0000${version}` : held.stored,
+      dependencies,
+      members: rowsNow,
+      version,
+      delta,
+      evaluatedAt: began,
+      changedAt: differs ? store.clock : held.changedAt,
+      checkedAt: undefined,
     };
   }
 
@@ -4598,6 +5170,7 @@ export class Instance {
     } else if (source.collection !== undefined) {
       const upstream = host.dependEntry(this.assembled(source.collection));
       if (upstream.members !== undefined) {
+        host.from = { collection: source.collection, entry: upstream };
         return upstream.members.map((member, index) => ({ ...member, index }));
       }
       const held = upstream.value;
@@ -4744,25 +5317,40 @@ export class Instance {
    * no link holds one (ruling Z52).
    */
   #stored(array: Ref, host: Host, fields?: readonly string[]): Element[] {
+    const before = host.reads.length;
     const located = this.store.locate(array, true, host.reads);
     const held = Array.isArray(located.value) ? located.value : [];
-    const keys = this.store.keysOf(
+    const given = fields ?? keyFieldsOf(located.given);
+    const keys = this.store.keysOf(held, located.ref, undefined, given);
+    const arrayReads = new Set(host.reads.slice(before));
+    const elementReads = new Map<Position, string>();
+    const elements = held.map((member, index) => {
+      const from = host.reads.length;
+      const element = {
+        key: keys[index],
+        index,
+        source: isLink(member)
+          ? this.store.locate(
+            new Ref(member.$link.doc, member.$link.path),
+            true,
+            host.reads,
+          ).named
+          : located.named.key(keySegment(keys[index])),
+      };
+      for (let read = from; read < host.reads.length; read++) {
+        elementReads.set(host.reads[read], keys[index]);
+      }
+      return element;
+    });
+    host.found = {
+      base: array,
+      named: located.named,
       held,
-      located.ref,
-      undefined,
-      fields ?? keyFieldsOf(located.given),
-    );
-    return held.map((member, index) => ({
-      key: keys[index],
-      index,
-      source: isLink(member)
-        ? this.store.locate(
-          new Ref(member.$link.doc, member.$link.path),
-          true,
-          host.reads,
-        ).named
-        : located.named.key(keySegment(keys[index])),
-    }));
+      fields: given,
+      arrayReads,
+      elementReads,
+    };
+    return elements;
   }
 
   /**
@@ -4815,6 +5403,8 @@ export class Instance {
     // ways, is a transaction of its own.
     this.root.#rekey();
     for (let pass = 0;; pass++) {
+      this.#due = false;
+      this.#dueBelow = false;
       // The bound ends every cycle through a cone instance, so the
       // passes end. A count far past what the bound allows says that
       // something that is no cone instance keeps writing.
@@ -4853,7 +5443,10 @@ export class Instance {
       // wherever it is: no position is checked (ruling Z43).
       this.#storeResult(entry);
       // The instances that function bodies of this one made.
-      for (const child of this.#children) child.#settle();
+      // An instance of which nothing is marked holds what it held.
+      for (const child of this.#children) {
+        if (child.#due || child.#dueBelow) child.#settle();
+      }
       this.#afterWave = true;
       try {
         for (const materializer of this.#materializers) materializer(none);
@@ -4862,6 +5455,11 @@ export class Instance {
       }
       this.#declare(none);
       if (this.store.clock === before) break;
+    }
+    // An instance with an entry that is compared on every pull, or
+    // with a materializer, is visited by every derivation transaction.
+    if (this.#alwaysCount > 0 || this.#materializers.length > 0) {
+      this.#nowDue();
     }
   }
 
@@ -4881,6 +5479,26 @@ export class Instance {
    */
   writeArgument(path: string[], value: unknown): void {
     this.store.write(new Ref(this.argument, path), this.stored(value));
+    this.settle();
+  }
+
+  /**
+   * Changes the members of an array of the argument document in place,
+   * as a writer outside the instance that appends, inserts or removes
+   * does, and evaluates what read it.
+   */
+  spliceArgument(
+    path: string[],
+    start: number,
+    removed: number,
+    members: unknown[],
+  ): void {
+    this.store.splice(
+      new Ref(this.argument, path),
+      start,
+      removed,
+      members.map((member) => this.stored(member)),
+    );
     this.settle();
   }
 
