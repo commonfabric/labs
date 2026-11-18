@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 import {
   deployedPieceRef,
   type PatternIndexClient,
@@ -337,8 +337,11 @@ describe("pattern-versions", () => {
   });
 
   describe("gitCheckoutOf()", () => {
+    // Deno refuses to start git synchronously, before the catch that turns
+    // a failed git into "no checkout", so the lineage never quietly falls
+    // back to a path slot. This pins that.
     it("finds this checkout, and throws rather than answer none when it may not run git", async () => {
-      const here = new URL(".", import.meta.url).pathname;
+      const here = fromFileUrl(new URL(".", import.meta.url));
       expect(await gitCheckoutOf(here)).toMatchObject({
         root: expect.any(String),
       });
@@ -357,7 +360,7 @@ await gitCheckoutOf(${JSON.stringify(here)});`,
           "run",
           "--no-lock",
           "--config",
-          new URL("../deno.jsonc", import.meta.url).pathname,
+          fromFileUrl(new URL("../deno.jsonc", import.meta.url)),
           "--allow-read",
           "--allow-env",
           script,

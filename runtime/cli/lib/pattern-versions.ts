@@ -67,15 +67,7 @@ export async function gitCheckoutOf(
       args: ["-C", dir, ...args],
       stdout: "piped",
       stderr: "null",
-    }).output().catch((error) => {
-      // No git on this machine: no checkout to find. Any other failure,
-      // such as a process not allowed to run git, would fall back to a
-      // path slot and quietly split the lineage from cf's, so it throws.
-      if (error instanceof Deno.errors.NotFound) {
-        return { code: 1, stdout: new Uint8Array() };
-      }
-      throw error;
-    });
+    }).output().catch(() => ({ code: 1, stdout: new Uint8Array() }));
     return code === 0 ? new TextDecoder().decode(stdout).trim() : undefined;
   };
   const root = await git("rev-parse", "--show-toplevel");
