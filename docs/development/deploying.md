@@ -207,9 +207,9 @@ binary is built with `--no-logfile-per-isolate` and `--logfile=+` as well: each
 isolate writes its log to an unnamed temporary file rather than to an
 `isolate-<address>-<pid>-v8.log` file in the working directory. The system frees
 a serving worker's file when the worker ends, and the main thread's when the
-process ends. The log has a line for each chunk of memory V8 allocates or frees, so
-it grows for as long as its isolate runs. On Linux the file is in `/tmp`, where
-a directory listing does not show it; `ls -l /proc/<pid>/fd` does.
+process ends. The log has a line for each chunk of memory V8 allocates or
+frees, so it grows for as long as its isolate runs. On Linux the file is in
+`/tmp`, where a directory listing does not show it; `ls -l /proc/<pid>/fd` does.
 A toolshed runs a serving worker per served space, up to
 `SERVER_EXECUTION_MAX_WORKERS` of them (default 4; more only while spaces
 separated at a heap limit each hold a worker of their own, until one of those
