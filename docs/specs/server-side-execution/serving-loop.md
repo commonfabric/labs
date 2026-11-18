@@ -1751,12 +1751,11 @@ commits overwrote is DROPPED from the consequence, and so is a whole-doc
 `set` or `delete` that one of them rewrote whole. A commit overwrites a
 path with a `set` or `delete` (the root) or with a `replace`, `add` or
 `remove` patch. The splices a commit makes to an array overwrite each
-index that held an element before them and holds a different one after,
-replaced or moved: they stand for the per-index writes of the same change
-(memory-v2 08-conflict-granularity.md, "Array writes and the leaf-only
-matcher"), and a consequence write addressed to such an index names a
-different element after them. An element a splice only appends past the old
-end, or only drops off the new end, is overwritten by nothing. A served
+index the array holds both before and after them whose value they changed:
+they stand for the per-index writes of the same change (memory-v2
+08-conflict-granularity.md, "Array writes and the leaf-only matcher"),
+which replace exactly those indices. An element a splice only appends past
+the old end, or only drops off the new end, is overwritten by nothing. A served
 handler's own array changes go index by index, so a patch this rule drops is
 never part of a splice that also carries a write it keeps. A write that
 merges into existing content (`append`, `increment`, and the like)

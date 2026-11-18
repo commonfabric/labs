@@ -4400,10 +4400,12 @@ export class V2StorageTransaction implements IStorageTransaction {
    * recursive read of it or of a path above it, which makes the store refuse
    * the commit where anything beneath the array moved since, and the splices
    * land on exactly the array they were diffed from. The reads are the
-   * commit's own (`commitReadActivities()`), indexed by document once, on
-   * the first question. Abandoning a mergeable intent while the commit is
-   * built only adds reads to the commit, so working them out before that
-   * never claims a read the commit leaves out.
+   * commit's own (`commitReadActivities()`), collected once, on the first
+   * question, as the set of paths each document is read recursively at, so
+   * each question probes the array's path and the paths above it. Abandoning
+   * a mergeable intent while the commit is built only adds reads to the
+   * commit, so working them out before that never claims a read the commit
+   * leaves out.
    *
    * A transaction a serving loop runs an event handler in sends none: the
    * wave drops each of its patches that the firing session's later writes
@@ -4414,7 +4416,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     space: MemorySpace,
   ): (id: URI, scope: CellScope, arrayPath: readonly string[]) => boolean {
     if (isServedEventHandlerTx(this)) return () => false;
-    let pinning: Map<string, (readonly string[])[]> | undefined;
+    let pinning: Map<string, Set<string>> | undefined;
     return (id, scope, arrayPath) => {
       if (pinning === undefined) {
         pinning = new Map();
@@ -4423,14 +4425,17 @@ export class V2StorageTransaction implements IStorageTransaction {
         ) {
           if (read.nonRecursive === true) continue;
           const key = this.#docKey(read);
-          const paths = pinning.get(key);
-          if (paths === undefined) pinning.set(key, [read.path]);
-          else paths.push(read.path);
+          const paths = pinning.get(key) ?? new Set<string>();
+          paths.add(encodePointer(read.path));
+          pinning.set(key, paths);
         }
       }
-      return pinning.get(this.#docKey({ id, scope }))?.some((path) =>
-        isPrefixPath(path, arrayPath)
-      ) === true;
+      const paths = pinning.get(this.#docKey({ id, scope }));
+      if (paths === undefined) return false;
+      for (let length = 0; length <= arrayPath.length; length += 1) {
+        if (paths.has(encodePointer(arrayPath.slice(0, length)))) return true;
+      }
+      return false;
     };
   }
 

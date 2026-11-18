@@ -4417,13 +4417,13 @@ export type SessionOverwrite =
  * §3d). Only writes that replace what sits at their path count: a `set` or
  * `delete` revision reports the root path, and a `patch` revision reports
  * the paths of its `replace`, `add` and `remove` patches and both paths of a
- * `move`. The splices a revision makes to one array report the indices that
- * held an element before it and hold a different one after it, replaced or
- * moved, as ranges (`SessionOverwrite`): what the per-index form of the same
- * change writes (`overwrittenArrayElements()`). An element a splice only
- * appends past the old end, and one it only drops off the new end, is
- * overwritten by nothing. A patch that merges into existing content — an
- * append, an increment — overwrites nothing and is left out.
+ * `move`. The splices a revision makes to one array report, as ranges
+ * (`SessionOverwrite`), the indices both before and after it whose value
+ * it changed, from the first splice's index on: the indices the per-index
+ * form of the same change replaces (`overwrittenArrayElements()`). An
+ * element a splice only appends past the old end, and one it only drops off
+ * the new end, is overwritten by nothing. A patch that merges into existing
+ * content — an append, an increment — overwrites nothing and is left out.
  */
 export const selectSessionOverwritePathsSince = (
   engine: Engine,
@@ -4471,28 +4471,20 @@ ORDER BY r.seq, r.op_index
         }
       }
       if (splicedArrays.size === 0) continue;
-      // The document as the revision left it, which says how long each
-      // spliced array ended up.
-      const after = readRevision(engine, {
+      const revision = {
         branch,
         id: options.id,
         scopeKey: options.scopeKey,
         seq: row.seq,
         opIndex: row.op_index,
-      });
+      };
       for (const pointer of splicedArrays) {
-        const array = parsePointer(pointer);
-        let node: unknown = after;
-        for (const segment of array) {
-          node = isObjectOrArray(node)
-            ? (node as Record<string, unknown>)[segment]
-            : undefined;
-        }
         for (
           const overwrite of overwrittenArrayElements(
-            array,
+            engine,
+            revision,
+            parsePointer(pointer),
             patches,
-            Array.isArray(node) ? node.length : undefined,
           )
         ) {
           paths.push(overwrite);
@@ -4507,99 +4499,117 @@ ORDER BY r.seq, r.op_index
 
 /**
  * Helper for {@link selectSessionOverwritePathsSince}, which returns the
- * elements of the array at `array` that one revision's `patches` overwrote,
- * `afterLength` being the array's length once they applied.
- *
- * The splices on the array are replayed over the indices of its elements as
- * they stood before the revision, worked back from `afterLength`. An index
- * below both lengths whose element is not the one it held before was
- * replaced or moved, which is what the per-index form of the same change
- * writes: a `replace` at each such index. The rest of the array is left out,
- * an element past one end being only appended or only dropped, and one whose
- * place nets out across the splices staying where it was.
- *
- * Where the replay cannot follow the array, it reports every element from
- * the first splice's index on: the array is not there once the revision
- * applied, or another op changes which element an index holds (an `add`,
- * `remove` or `move` at an index, an `add-unique` or `remove-by-value`), or
- * a later op above the array leaves it at a length the splices cannot have
- * come to. Otherwise the replay ends at `afterLength`, the length it was
- * worked back from.
+ * elements of the array at `array` that the splices among `patches`, one
+ * revision's, overwrote: as ranges, the indices below both the array's length
+ * before the revision and its length after whose value differs between the
+ * two, from the first splice's index on. That is what the per-index form of
+ * the same change writes: a `replace` at each index whose value it changed,
+ * and a splice at the tail for the length. An index below the first splice's
+ * is one no splice reaches, and another op that reaches it reports its own
+ * path. The array as it stood before the revision and as it stood after are
+ * read where the answer needs them; an array that is not there on both sides
+ * was made or taken away by an op at it or above it, whose path covers it.
  */
 const overwrittenArrayElements = (
+  engine: Engine,
+  revision: {
+    branch: BranchName;
+    id: EntityId;
+    scopeKey: string;
+    seq: number;
+    opIndex: number;
+  },
   array: readonly string[],
   patches: readonly PatchOp[],
-  afterLength: number | undefined,
 ): SessionOverwrite[] => {
   const pointer = encodePointer(array);
-  const onArray = patches.filter((patch) => patch.path === pointer);
-  const splices = onArray.filter((patch) => patch.op === "splice");
-  const whole = (): SessionOverwrite[] => [{
-    array,
-    fromIndex: splices.reduce(
-      (lowest, splice) => Math.min(lowest, splice.index),
-      Infinity,
-    ),
-  }];
-  const reordersElements = (patch: PatchOp): boolean => {
-    const pointers = patch.op === "move"
-      ? [patch.path, patch.from]
-      : patch.op === "add" || patch.op === "remove"
-      ? [patch.path]
-      : [];
-    return pointers.some((other) => {
-      const path = parsePointer(other);
-      return path.length === array.length + 1 &&
-        isPrefixPath(array, path);
-    });
-  };
-  if (
-    afterLength === undefined ||
-    onArray.some((patch) => patch.op !== "splice" && patch.op !== "append") ||
-    patches.some(reordersElements)
-  ) {
-    return whole();
-  }
-
-  let beforeLength = afterLength;
-  for (const patch of onArray) {
-    beforeLength -= patch.op === "splice"
-      ? patch.add.length - patch.remove
-      : patch.op === "append"
-      ? patch.values.length
-      : 0;
-  }
-  if (beforeLength < 0) return whole();
-  // Each entry is the index its element held before the revision, or -1 for
-  // an element the revision added.
-  let held: number[] = Array.from(
-    { length: beforeLength },
-    (_, index) => index,
-  );
-  for (const patch of onArray) {
+  let fromIndex = Infinity;
+  // The most the array's length before the revision can exceed its length
+  // after: what the splices can remove, less what they and the appends add.
+  // An op that may remove elements without saying how many leaves no bound.
+  let shrinkBound = 0;
+  for (const patch of patches) {
+    if (patch.path !== pointer) continue;
     if (patch.op === "splice") {
-      if (patch.index + patch.remove > held.length) return whole();
-      held = [
-        ...held.slice(0, patch.index),
-        ...Array.from({ length: patch.add.length }, () => -1),
-        ...held.slice(patch.index + patch.remove),
-      ];
+      fromIndex = Math.min(fromIndex, patch.index);
+      shrinkBound += patch.remove - patch.add.length;
     } else if (patch.op === "append") {
-      for (let added = 0; added < patch.values.length; added += 1) {
-        held.push(-1);
-      }
+      shrinkBound -= patch.values.length;
+    } else if (patch.op !== "add-unique") {
+      shrinkBound = Infinity;
     }
   }
 
+  const after = arrayAtPath(readRevision(engine, revision), array);
+  if (after === undefined) return [];
+  // Where the first splice's index is at or past the array's length before
+  // the revision, as a splice that only appends is, no index both sides hold
+  // can have changed, and the earlier document is not read.
+  if (fromIndex >= after.length + shrinkBound) return [];
+  const before = arrayAtPath(previousRevisionDocument(engine, revision), array);
+  if (before === undefined) return [];
+
   const overwritten: SessionOverwrite[] = [];
-  const bound = Math.min(beforeLength, afterLength);
-  for (let index = 0; index < bound; index += 1) {
-    if (held[index] === index) continue;
-    const fromIndex = index;
-    while (index < bound && held[index] !== index) index += 1;
-    overwritten.push({ array, fromIndex, toIndex: index });
+  const bound = Math.min(before.length, after.length);
+  for (let index = fromIndex; index < bound; index += 1) {
+    if (valueEqual(before[index]!, after[index]!)) continue;
+    const start = index;
+    while (index < bound && !valueEqual(before[index]!, after[index]!)) {
+      index += 1;
+    }
+    overwritten.push({ array, fromIndex: start, toIndex: index });
   }
   return overwritten;
+};
+
+/** The array at `path` of `document`, or `undefined` where there is none. */
+const arrayAtPath = (
+  document: EntityDocument | null,
+  path: readonly string[],
+): readonly FabricValue[] | undefined => {
+  let node: unknown = document;
+  for (const segment of path) {
+    node = isObjectOrArray(node)
+      ? (node as Record<string, unknown>)[segment]
+      : undefined;
+  }
+  return Array.isArray(node) ? node : undefined;
+};
+
+/**
+ * The document as it stood before the revision row of `revision`: as the
+ * document's previous row left it, or `null` where the row is its first.
+ */
+const previousRevisionDocument = (
+  engine: Engine,
+  revision: {
+    branch: BranchName;
+    id: EntityId;
+    scopeKey: string;
+    seq: number;
+    opIndex: number;
+  },
+): EntityDocument | null => {
+  const previous = engine.prepare(`
+SELECT seq, op_index FROM revision
+WHERE branch = :branch AND id = :id AND scope_key = :scope_key
+  AND (seq < :seq OR (seq = :seq AND op_index < :op_index))
+ORDER BY seq DESC, op_index DESC
+LIMIT 1
+`).get({
+      branch: revision.branch,
+      id: revision.id,
+      scope_key: revision.scopeKey,
+      seq: revision.seq,
+      op_index: revision.opIndex,
+    }) as { seq: number; op_index: number } | undefined;
+  return previous === undefined ? null : readRevision(engine, {
+    branch: revision.branch,
+    id: revision.id,
+    scopeKey: revision.scopeKey,
+    seq: previous.seq,
+    opIndex: previous.op_index,
+  });
 };
 
 /**

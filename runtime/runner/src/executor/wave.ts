@@ -824,8 +824,8 @@ export interface WaveCommitSink {
   /**
    * Where the authored commits of `session` overwrote a doc-instance after
    * `sinceSeq` — §3d's supersession of an event consequence by a later write
-   * of the session that fired the event. Splices overwrite the elements they
-   * replaced or moved, as ranges of an array (`SessionOverwrite`). Writes
+   * of the session that fired the event. Splices overwrite the indices whose
+   * value they changed, as ranges of an array (`SessionOverwrite`). Writes
    * that merge into existing content (appends, increments) overwrite nothing
    * and are not reported. A sink that cannot answer omits it, and no
    * consequence is superseded.

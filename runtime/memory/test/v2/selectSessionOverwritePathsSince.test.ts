@@ -201,28 +201,72 @@ describe("selectSessionOverwritePathsSince()", () => {
       ]);
     });
 
-    it("returns every element from its index on beside an op whose effect on the indices it cannot know", () => {
-      commit(patch(
-        { op: "splice", path: "/value/tags", index: 2, remove: 0, add: ["x"] },
-        { op: "add-unique", path: "/value/tags", values: ["a", "z"] },
-      ));
-      expect(overwritten(filled)).toEqual([
-        { array: ["value", "tags"], fromIndex: 2 },
+    it("leaves out an index whose value its splice left equal", () => {
+      // Prepending to `[a, a, b, c]` leaves `a` at index 1, as the per-index
+      // form of the change does.
+      commit(
+        patch({
+          op: "replace",
+          path: "/value/tags",
+          value: ["a", "a", "b", "c"],
+        }),
+        { principal: "did:key:seeder", sessionId: "seeder-session" },
+      );
+      const repeated = commit(
+        patch({ op: "replace", path: "/value/count", value: 1 }),
+        { principal: "did:key:seeder", sessionId: "seeder-session" },
+      );
+      commit(patch({
+        op: "splice",
+        path: "/value/tags",
+        index: 0,
+        remove: 0,
+        add: ["x"],
+      }));
+      expect(overwritten(repeated)).toEqual([
+        { array: ["value", "tags"], fromIndex: 0, toIndex: 1 },
+        { array: ["value", "tags"], fromIndex: 2, toIndex: 4 },
       ]);
     });
 
-    it("returns every element from its index on beside an op that removes an element by its index", () => {
+    it("returns nothing for a removal at the end that removes nothing", () => {
+      // The store removes what the array holds past the index, here nothing,
+      // so the splice only appends.
+      commit(patch({
+        op: "splice",
+        path: "/value/tags",
+        index: 4,
+        remove: 1,
+        add: ["t"],
+      }));
+      expect(overwritten(filled)).toEqual([]);
+    });
+
+    it("returns nothing for an append by splice beside an add-unique", () => {
+      commit(patch(
+        { op: "splice", path: "/value/tags", index: 4, remove: 0, add: ["s"] },
+        { op: "add-unique", path: "/value/tags", values: ["a"] },
+      ));
+      expect(overwritten(filled)).toEqual([]);
+    });
+
+    it("leaves the indices below its first splice to the ops that reach them", () => {
       commit(patch(
         { op: "splice", path: "/value/tags", index: 2, remove: 0, add: ["x"] },
         { op: "remove", path: "/value/tags/0" },
       ));
-      expect(overwritten(filled)).toEqual([
-        ["value", "tags", "0"],
-        { array: ["value", "tags"], fromIndex: 2 },
-      ]);
+      expect(overwritten(filled)).toEqual([["value", "tags", "0"]]);
     });
 
-    it("returns every element from its index on where a later op above the array leaves it too short for its splices", () => {
+    it("leaves an array a later op takes away to that op's path", () => {
+      commit(patch(
+        { op: "splice", path: "/value/tags", index: 0, remove: 1, add: ["x"] },
+        { op: "remove", path: "/value/tags" },
+      ));
+      expect(overwritten(filled)).toEqual([["value", "tags"]]);
+    });
+
+    it("leaves an array a later op above it replaces to that op's path", () => {
       commit(patch(
         {
           op: "splice",
@@ -237,25 +281,15 @@ describe("selectSessionOverwritePathsSince()", () => {
           value: { name: "", bio: "", tags: [], count: 0 },
         },
       ));
-      expect(overwritten(filled)).toEqual([
-        ["value"],
-        { array: ["value", "tags"], fromIndex: 0 },
-      ]);
+      expect(overwritten(filled)).toEqual([["value"]]);
     });
 
-    it("returns every element from its index on where a later op above the array leaves its splices outside it", () => {
+    it("leaves an array an earlier op in the revision made to that op's path", () => {
       commit(patch(
-        { op: "splice", path: "/value/tags", index: 3, remove: 1, add: [] },
-        {
-          op: "replace",
-          path: "/value",
-          value: { name: "", bio: "", tags: ["only"], count: 0 },
-        },
+        { op: "add", path: "/value/list", value: ["p", "q"] },
+        { op: "splice", path: "/value/list", index: 0, remove: 1, add: ["x"] },
       ));
-      expect(overwritten(filled)).toEqual([
-        ["value"],
-        { array: ["value", "tags"], fromIndex: 3 },
-      ]);
+      expect(overwritten(filled)).toEqual([["value", "list"]]);
     });
 
     it("leaves out the elements a move's splices leave where they were", () => {
