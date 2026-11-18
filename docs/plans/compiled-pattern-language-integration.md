@@ -227,8 +227,8 @@ and reports what it measures beside the figures before it.
    *Measures:* the scheduler and the routing of events, and the first
    figure per event from send to settled that compares like with like.
    *Needs first:* a crate that emits the corpus of the main branch, which
-   it does not today ("Known limits of what exists" in the design's plan),
-   and an adapter that records the plan's schema of each write.
+   it does not today (the method of the figures below says where it
+   fails), and an adapter that records the plan's schema of each write.
 3. **Labels from templates at commit.** `prepareCfc()` instantiates the
    template of each path the plan covers and checks the plan's constraints
    (`execution-and-storage.md` §1.9). The label comparison of
@@ -308,11 +308,19 @@ use the runtime's emulated storage, with no memory server and no socket.
 All runs were made at the prototype's commit `3d33db2e4d` with the code of
 milestone 1 added, which is the corpus and the runtime of the table of run
 times in the design's plan, because the crate does not emit the corpus of
-the current main branch ("Known limits of what exists" in the design's
-plan). Each command ran in a process of its own on one machine, with no
-other work of this session running. The integrated runs and today's run
-were made twice, each pair back to back, and both pairs are given; today's
-time to settle differs by two thirds between the two.
+the main branch of 2026-11-18 (`6e9ff5a381`). With
+`patterns/apps/weekly-calendar/view-walk.ts`, a helper of pattern tests
+that came in with pull request #9825, or one of the four tests that import
+it, footprint analysis does not finish: after three minutes a sample of the
+process has every frame in `footprint::normal_map`. Each file alone
+analyzes in under 0.2 seconds. Without those five files the crate panics
+with an index out of bounds in `oxc_index`, on main's changes under
+`patterns/system/` taken together; no single directory of them reproduces
+it. The prototype's own corpus emits in 2.5 seconds. Each command ran in a
+process of its own on one machine, with no other work of this session
+running. The integrated runs and today's run were made twice, each pair
+back to back, and both pairs are given; today's time to settle differs by
+two thirds between the two.
 
 **The corpus.** 215 modules run on today's runtime in the comparison, the
 executor runs 214, and 213 run in all three ways: one more fails in the
