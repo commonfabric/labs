@@ -793,7 +793,13 @@ export async function runBuildBinaries(
       // to see what it runs (2026-11-14, toolshed 8020 on Estuary). The map
       // grows with each function compiled and is never trimmed; these come
       // off once that investigation is done.
-      "--v8-flags=--max-old-space-size=16384,--perf-basic-prof-only-functions,--interpreted-frames-native-stack",
+      //
+      // `--perf-basic-prof-only-functions` also switches on V8's event log,
+      // which V8 otherwise writes to an `isolate-<address>-<pid>-v8.log` file
+      // in the working directory for each isolate. `--no-logfile-per-isolate`
+      // and `--logfile=+` give each isolate's log an unnamed temporary file
+      // instead, which the system frees when that isolate ends.
+      "--v8-flags=--max-old-space-size=16384,--perf-basic-prof-only-functions,--interpreted-frames-native-stack,--no-logfile-per-isolate,--logfile=+",
     ],
     binaries: requestedBinaries(args),
     cachedOnly: Deno.env.get("CF_DENO_DEPENDENCIES_INSTALLED") === "1",

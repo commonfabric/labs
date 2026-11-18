@@ -132,15 +132,22 @@ describe("main()", () => {
   /**
    * A git that names `abc123` as the merge base of `base` and `HEAD`, and
    * `deleted` as the files the change since it deletes, a move counting as a
-   * deletion only where `--no-renames` asks for one.
+   * deletion only where `--no-renames` asks for one. It has an `upstream/main`
+   * only where `upstream` says so.
    */
   const gitDeleting = (
     base: string,
     deleted: { removed: readonly string[]; moved?: readonly string[] },
+    upstream = false,
   ): Git =>
   (...args) => {
     const asked = args.join(" ");
     if (asked === `merge-base ${base} HEAD`) return Promise.resolve("abc123\n");
+    if (
+      asked === "for-each-ref --format=%(refname) refs/remotes/upstream/main"
+    ) {
+      return Promise.resolve(upstream ? "refs/remotes/upstream/main\n" : "");
+    }
     const listed = (paths: readonly string[]) =>
       Promise.resolve(paths.map((path) => `${path}\n`).join(""));
     const filter = "--diff-filter=D --name-only abc123...HEAD";
@@ -204,6 +211,30 @@ describe("main()", () => {
       out: "Pattern baselines are append-only against this base.",
       code: 0,
     });
+  });
+
+  it("measures from `origin/main` where it is named no base and the checkout has no `upstream/main`", async () => {
+    expect(
+      await main(
+        undefined,
+        gitDeleting("refs/remotes/origin/main", { removed: [] }),
+      ),
+    ).toEqual({
+      out: "Pattern baselines are append-only against this base.",
+      code: 0,
+    });
+  });
+
+  it("measures from `upstream/main` where it is named no base and the checkout has one", async () => {
+    const { code, err } = await main(
+      undefined,
+      gitDeleting("refs/remotes/upstream/main", {
+        removed: [`${BASE}/system/home/home.tsx/20260101T000000Z-a.json`],
+      }, true),
+    );
+
+    expect(code).toBe(1);
+    expect(err).toContain("patterns/system/home/home.tsx still exists.");
   });
 
   it("returns 2 and asks for real history where git finds no merge base", async () => {

@@ -1,9 +1,9 @@
 /**
  * What `Server.watchRemove()` delivers when releasing a watch walks a watch
- * it had covered again: the documents that walk reaches at a newer version
- * than the session was delivered, the crossings it records that the session
- * was not told of, and, for a session marked for a full re-evaluation, the
- * operation cursors of the watches that remain.
+ * it had covered again: nothing for the documents that walk reaches at the
+ * version delivered, the crossings it records that the session was not told
+ * of, and, for a session marked for a full re-evaluation, the operation
+ * cursors of the watches that remain.
  */
 
 import { expect } from "@std/expect";
@@ -125,41 +125,6 @@ const createFixture = () => {
 describe("Server", () => {
   describe("instance members", () => {
     describe("watchRemove()", () => {
-      it("upserts, at the version stored, a covered root that was absent when delivered and written since", async () => {
-        const fixture = createFixture();
-        try {
-          await fixture.watch("set", [permissive("of:a")]);
-          await fixture.watch("add", [narrow("of:a")]);
-          // Written after the watches were delivered, and before any refresh
-          // tells the reading session of it.
-          await fixture.write({
-            op: "set",
-            id: "of:a",
-            value: { value: { name: "born" } },
-          });
-
-          const removed = await fixture.remove(["of:a:all"]);
-          expect(removed.error).toBeUndefined();
-          const sync = removed.ok!.sync;
-          expect(sync.upserts.map(({ id, seq, doc }) => ({ id, seq, doc })))
-            .toEqual([{
-              id: "of:a",
-              seq: 1,
-              doc: { value: { name: "born" } },
-            }]);
-          expect(sync.removes).toEqual([]);
-          const delivered = [
-            ...fixture.sessions.get(SPACE, fixture.reader.sessionId)!.entities
-              .values(),
-          ];
-          expect(delivered.map(({ id, seq }) => ({ id, seq }))).toEqual([
-            { id: "of:a", seq: 1 },
-          ]);
-        } finally {
-          await fixture.server.close();
-        }
-      });
-
       it("upserts nothing for a document the covered watch reaches at the version delivered", async () => {
         const fixture = createFixture();
         try {

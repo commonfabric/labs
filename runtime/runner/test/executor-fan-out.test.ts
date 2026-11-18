@@ -99,6 +99,15 @@ const OWNED_DRAFT_PATTERN = [
   "});",
 ].join("\n");
 
+/** A piece owning a derivation declared per user, which has no default. */
+const OWNED_PER_USER_PATTERN = [
+  "import { computed, pattern, PerUser } from 'commonfabric';",
+  "export default pattern<{ n?: number }, { mine: string }>(({ n }) => {",
+  "  const mine = computed((): PerUser<string> => 'mine:' + String(n ?? 0));",
+  "  return { mine };",
+  "});",
+].join("\n");
+
 /** A per-user wish into the viewer's Home, and a reader of its result: the
  * reader's instance for a user follows the wish's per-user state store. */
 const WISH_TAG = "fan_out_wish_profile";
@@ -248,6 +257,40 @@ const instanceHolds = (
   [...rowsUnder(engine, scopeKey).values()].some((value) =>
     JSON.stringify(value ?? null).includes(needle)
   );
+
+/** How many commits a session of `signer`'s has made. */
+const commitsBy = (engine: Engine.Engine, signer: Identity): number =>
+  (engine.database.prepare(
+    `SELECT COUNT(*) AS n FROM "commit" WHERE session_id LIKE :session`,
+  ).get({
+    session: `session:${encodeURIComponent(signer.did())}:%`,
+  }) as { n: number }).n;
+
+/**
+ * Each write to the document `id` under `scopeKey`, in order: whether an
+ * authored commit made it, and whether it writes the `result` back-link.
+ */
+const writesOf = (
+  engine: Engine.Engine,
+  id: string,
+  scopeKey: string,
+): { authored: boolean; setsResult: boolean }[] =>
+  (engine.database.prepare(
+    `SELECT c.class AS class, r.op AS op, r.data AS data
+     FROM revision r JOIN "commit" c ON c.seq = r.commit_seq
+     WHERE r.id = :id AND r.scope_key = :scope_key
+     ORDER BY r.seq, r.op_index`,
+  ).all({ id, scope_key: scopeKey }) as Array<
+    { class: string; op: string; data: unknown }
+  >).map((row) => {
+    const data = JSON.stringify(row.data ?? null);
+    return {
+      authored: row.class === "authored",
+      setsResult: row.op === "set"
+        ? data.includes('\\"result\\"')
+        : data.includes('\\"/result'),
+    };
+  });
 
 const basisKeys = (engine: Engine.Engine): Set<string> =>
   new Set(
@@ -707,6 +750,127 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
       value,
     ) => JSON.stringify(value ?? null).includes('"title":"B"'));
     expect(drafts).toEqual([{ title: "B", members: "" }]);
+    setup.cancel();
+  });
+
+  it("(o) a user who arrives watching a piece owning a per-user derivation finds their instance of it carrying its `result` back-link, so their own start of the piece writes none of it", async () => {
+    // Every document the graph writes keeps its `result` back-link to the
+    // piece that owns it, and a per-user instance is a document of its
+    // own. Bob's runtime runs none of the pattern when he arrives, so the
+    // serving loop's computation creates his instance. Without the
+    // back-link there, Bob's own start of the piece is left to write it,
+    // and that start's commit carries every read the start made.
+
+    const setup = await standUp({
+      names: { arg: "fo-o-arg", result: "fo-o-result" },
+      pattern: OWNED_PER_USER_PATTERN,
+      clients: [aliceSigner],
+    });
+    const { engine } = setup;
+    const bob = await setup.watchRoot(bobSigner);
+    const bobKey = setup.userKey(bobSigner);
+    /** Bob's instance of the derivation, once it holds a value. */
+    const bobsInstance = () =>
+      [...rowsUnder(engine, bobKey).keys()].find((id) =>
+        id.startsWith("computed:") &&
+        JSON.stringify(
+          Engine.read(engine, { id, scopeKey: bobKey } as never)?.value ??
+            null,
+        ).includes('"mine:1"')
+      );
+    await awaitAdmitted(server, () => bobsInstance() !== undefined);
+    const id = bobsInstance()!;
+    // The serving loop's one write created it, back-link and value together.
+    expect(writesOf(engine, id, bobKey)).toEqual([
+      { authored: false, setsResult: true },
+    ]);
+    expect(
+      Engine.read(engine, { id, scopeKey: bobKey } as never)?.result,
+    ).toBeDefined();
+
+    // Bob's runtime then runs the piece itself, starting it once the
+    // transaction that runs it commits, as a client instantiating it does.
+    // That start finds his instance whole, and everything else it would
+    // write already written, so it commits nothing at all.
+    expect(commitsBy(engine, bobSigner)).toBe(0);
+    const arg = bob.getCell<Record<string, unknown>>(space, "fo-o-arg");
+    const root = bob.getCell<Record<string, unknown>>(
+      space,
+      "fo-o-result",
+      setup.compiled.resultSchema,
+    );
+    await arg.sync();
+    await root.sync();
+    const tx = bob.edit();
+    tx.tx.immediate = true;
+    (tx.tx as { deferRunnerStartUntilCommit?: boolean })
+      .deferRunnerStartUntilCommit = true;
+    bob.run(tx, setup.compiled, arg, root);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await bob.idle();
+    await bob.storageManager.synced();
+    expect(bob.runner.isRunning(root)).toBe(true);
+    expect(commitsBy(engine, bobSigner)).toBe(0);
+    expect(commitsBy(engine, aliceSigner)).toBeGreaterThan(0);
+    setup.cancel();
+  });
+
+  it("(p) a user whose own start of a piece owning a per-user derivation commits before the serving loop runs it for them finds their instance carrying one back-link, their start's, beside the value the serving loop writes", async () => {
+    // The order (o) does not reach: Bob's runtime runs the piece before the
+    // serving loop has run anything for him, so his start's setup writes
+    // the back-link onto his absent instance. The serving loop's first
+    // write there then finds it and writes the value alone.
+
+    const setup = await standUp({
+      names: { arg: "fo-p-arg", result: "fo-p-result" },
+      pattern: OWNED_PER_USER_PATTERN,
+      clients: [aliceSigner],
+    });
+    const { engine } = setup;
+    const bobKey = setup.userKey(bobSigner);
+    const bob = openClient(bobSigner);
+    const arg = bob.getCell<Record<string, unknown>>(space, "fo-p-arg");
+    const root = bob.getCell<Record<string, unknown>>(
+      space,
+      "fo-p-result",
+      setup.compiled.resultSchema,
+    );
+    await arg.sync();
+    await root.sync();
+    const tx = bob.edit();
+    tx.tx.immediate = true;
+    (tx.tx as { deferRunnerStartUntilCommit?: boolean })
+      .deferRunnerStartUntilCommit = true;
+    bob.run(tx, setup.compiled, arg, root);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await bob.idle();
+    await bob.storageManager.synced();
+
+    /** Bob's instance of the derivation, once it holds a value. */
+    const bobsInstance = () =>
+      [...rowsUnder(engine, bobKey).keys()].find((id) =>
+        id.startsWith("computed:") &&
+        JSON.stringify(
+          Engine.read(engine, { id, scopeKey: bobKey } as never)?.value ??
+            null,
+        ).includes('"mine:1"')
+      );
+    await setup.watchRoot(bobSigner);
+    await awaitAdmitted(server, () => bobsInstance() !== undefined);
+    const id = bobsInstance()!;
+    const writes = writesOf(engine, id, bobKey);
+    // Bob's start wrote the instance first, holding the back-link alone,
+    // and every later write is the serving loop's, of the value alone.
+    expect(writes[0]).toMatchObject({ authored: true, setsResult: true });
+    expect(writes.slice(1).length).toBeGreaterThan(0);
+    expect(
+      writes.slice(1).every(({ authored, setsResult }) =>
+        !authored && !setsResult
+      ),
+    ).toBe(true);
+    const instance = Engine.read(engine, { id, scopeKey: bobKey } as never);
+    expect(instance?.result).toBeDefined();
+    expect(instance?.value).toBe("mine:1");
     setup.cancel();
   });
 

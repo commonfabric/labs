@@ -179,6 +179,16 @@ describe("pattern-versions", () => {
       );
     });
 
+    it("asks the index to keep the version private when the deploy says so", async () => {
+      await joinIndex();
+      const { client, published } = stubClient();
+      const { deps } = depsWith(client);
+
+      await recordDeployedVersion(deployed({ keepPrivate: true }), deps);
+
+      expect(published.map((r) => r.keepPrivate)).toEqual([true]);
+    });
+
     it("makes no index call and reads no pattern id on a machine that never joined, and says so only the first time", async () => {
       const { client, published } = stubClient();
       const { deps, opened } = depsWith(client);
