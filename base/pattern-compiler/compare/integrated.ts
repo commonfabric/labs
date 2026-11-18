@@ -331,7 +331,10 @@ const lines = async (file: string): Promise<Record<string, unknown>[]> => {
 };
 
 const run = async (from: string, to: string, only: string | undefined) => {
-  const recorded = (await lines(from)) as RecordedModule[];
+  // A line without a module is the mark of a module the run started.
+  const recorded = (await lines(from)).filter((line) =>
+    typeof line.module === "string"
+  ) as RecordedModule[];
   const finished = new Set(
     (await lines(to)).map((line) => line.module as string),
   );
