@@ -619,15 +619,26 @@ Shift-Tab, like the navigation keys, move the focus through those first and then
 through the buttons. Space toggles the focused check box, and so does a click on
 it. Moving the focus to an input line selects its text, so that typing replaces
 it. While an input line is focused, every key but Tab, Shift-Tab, Enter, Escape,
-and Alt with a letter goes to it: typed text goes in, Backspace and Delete (or
-Ctrl-D) delete a character, Alt-Backspace deletes the word before the cursor,
-and Left, Right, Home, and End (or Ctrl-B, Ctrl-F, Ctrl-A, and Ctrl-E) move its
-cursor. A click on an input line puts its cursor where the click lands, and a
-click on its label selects its text. An arrow at either end of the line says
-that its text runs on past that end. A check box's highlighted letter toggles
-it, an input line's moves the focus to it, and a button's activates it; while an
-input line is focused, Alt with the letter does. Enter activates the default
-button wherever the focus is, unless it is on another button.
+and Alt with a shortcut letter goes to it: typed text goes in, Backspace and
+Delete (or Ctrl-D) delete a character, Alt-Backspace deletes the word before the
+cursor, and Left, Right, Home, and End (or Ctrl-B, Ctrl-F, Ctrl-A, and Ctrl-E)
+move its cursor. A click on an input line puts its cursor where the click lands,
+and a click on its label selects its text. An arrow at either end of the line
+says that its text runs on past that end. A check box's highlighted letter
+toggles it, an input line's moves the focus to it, a radio button's selects it
+and moves the focus to its set, and a button's activates it. Alt with the letter
+does the same wherever the focus is, including on an input line or among radio
+buttons. Alt with a letter that is no control's shortcut types into a focused
+input line the character the terminal says it typed, if any, and otherwise does
+nothing. Enter activates the default button wherever the focus is, unless it is
+on another button.
+
+While a dialog is up, the viewer asks the terminal to report every key in full,
+as the kitty keyboard protocol defines. In that mode, iTerm2 reports Option with
+a letter as Alt with that letter even when its Option key is set to "Normal",
+which otherwise types characters such as `ß`. A terminal without the protocol
+reports Alt only when its Option key is set to send Escape first, which iTerm2
+calls "Esc+" and Terminal calls "Use Option as Meta key".
 
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In
@@ -691,17 +702,31 @@ but fails rather than discard commits on `origin` that the branch has never
 included, even when they have been fetched. A dialog says which branch it pushes
 where, then shows git's output as it arrives, with an Abort button that stops
 the push. Up, Down, Page Up, Page Down, Home, End, and the mouse wheel scroll
-the output, and Left and Right move the focus between the buttons. When color is
-on, each web address in the dialog is a link for terminals that open links. When
-the push ends, the dialog adds how it ended, and two buttons replace Abort.
-Close leaves that summary in the status line. Quit (`Q`) closes the viewer,
-first offering to save any unsaved edits. Git asks nothing on the terminal while
-the viewer holds it; a question such as a key's passphrase goes to the program
-`SSH_ASKPASS` names, and fails when it names none. `P` refuses to push
-`origin`'s default branch, and refuses when `origin` names no default branch
+the output, and Left and Right move the focus between the buttons. When the push
+ends, the dialog adds how it ended, and two buttons replace Abort. Close leaves
+that summary in the status line. Quit (`Q`) closes the viewer, first offering to
+save any unsaved edits. Git asks nothing on the terminal while the viewer holds
+it; a question such as a key's passphrase goes to the program `SSH_ASKPASS`
+names, and fails when it names none. `P` refuses to push `origin`'s default
+branch, and refuses when `origin` names no default branch
 (`git remote set-head origin --auto` finds it). It also refuses a checkout not
 on a branch, and refuses when git started the viewer as its pager for a
 different repository.
+
+The push and land dialogs draw what the viewer says in bright text, and the
+names it mentions, such as a branch, a repository, a commit, or a pull request's
+number, in a second bright color, with a blank line between paragraphs. Each
+line that says what the viewer is doing, such as "Pushing feature to origin...",
+ends in three dots, and the latest step still running also has a spinner after
+them. A line that waits for someone, as the request to touch a security key and
+the wait for a pull request to open or merge do, has neither. Once a step ends,
+it shows a check mark, or a cross when it failed or was aborted; when a step
+fails inside another, such as the touch of a security key while a pull request
+is created, only the step that failed shows the cross. Git's output, the reason
+GitHub gives for refusing a request, and the message touch-gate gives when it
+creates a pull request without naming it are quoted: indented two columns, in
+the dialog's ordinary color. When color is on, each web address and pull request
+number in the dialog is a link for terminals that open links.
 
 When `origin` already has the branch, as git last fetched or pushed it, the
 dialog asks before pushing. It says which commit `origin`'s branch is at, and
@@ -742,17 +767,17 @@ whose changes that branch already has.
 - "Show them in the browser", the default: the viewer opens the page in the
   browser.
 - "Use touch-gate and a security key": the viewer asks a touch-gate server to
-  create the pull request with the token the settings name. The dialog asks, in
-  brighter text, for the named security key to be touched, as "Touch the
-  “carthusian” security key to create a PR.", and the server acts only once it
-  is. As soon as the security key is touched, the dialog says so, before the
-  viewer sends the server the approval. When a security key fails, the summary
-  says what libfido2's error means, as "the security key stopped answering",
-  followed by the tool and the error's name, or else gives what the tool
-  printed. The server's address, its certificate, the secret its clients share,
-  and the registered security keys come from `~/.config/touch-gate`, as the
-  touch-gate project's client keeps them, and the viewer talks to the security
-  key through libfido2's `fido2-token` and `fido2-assert` tools.
+  create the pull request with the token the settings name. The dialog asks for
+  the named security key to be touched, as "Touch the “carthusian” security key
+  to create a PR.", and the server acts only once it is. As soon as the security
+  key is touched, that step is done, and the dialog shows a step that sends the
+  server the approval. When a security key fails, the summary says what
+  libfido2's error means, as "the security key stopped answering", followed by
+  the tool and the error's name, or else gives what the tool printed. The
+  server's address, its certificate, the secret its clients share, and the
+  registered security keys come from `~/.config/touch-gate`, as the touch-gate
+  project's client keeps them, and the viewer talks to the security key through
+  libfido2's `fido2-token` and `fido2-assert` tools.
 
 When creating the pull request with the GitHub API or touch-gate fails, or is
 aborted, the dialog says what went wrong, and a Create PR button (`P`) tries
@@ -820,10 +845,11 @@ request all the same. Quitting once the viewer creates or merges the pull
 request works the same way. Once the screen is restored, it prints the pull
 request's address on the terminal. The address is printed only when the viewer
 quit for it, so a quit after cancelling the save prompt it raised prints
-nothing. With the check box on, the dialog says under its output whether the
-viewer is connecting or watching, or why it is not watching: no relay is set,
-`origin` is not on GitHub, or the connection failed or ended. Closing the dialog
-stops the watch.
+nothing. When the viewer would watch the relay, in the cases above where it
+connects to it, the dialog shows, under how the task ended, a step that connects
+to the relay and then one that waits for the pull request, or says why it is not
+watching: no relay is set, `origin` is not on GitHub, or the connection failed
+or ended. Closing the dialog stops the watch.
 
 The viewer keeps these settings in git's configuration, as the strings
 `cf-view.pullRequestTool` (`link`, `api`, `browser`, or `touch-gate`) and

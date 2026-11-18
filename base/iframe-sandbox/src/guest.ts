@@ -954,8 +954,8 @@ function guestAsset(url: string): GuestAsset {
  * Returns the assets the host wrote into this document, which are none when
  * there is no element carrying them.
  *
- * @throws TypeError when the element carries something other than an asset
- *   record.
+ * @throws SyntaxError when the element's text is not JSON, and TypeError when
+ *   it is JSON other than an asset record.
  */
 function documentAssets(): AssetRecord {
   const element = globalThis.document?.querySelector(

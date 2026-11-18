@@ -42,9 +42,8 @@ document from the pattern's result template (`#nextResultProjection` in
 `runtime/runner/src/runner.ts`), and a string passed as a JSX prop is written
 into that document whole, unless part 1 applies to it. An iframe pattern passes
 its guest as `src={dataFile("./guest.html")}` and
-`script={dataFile("./guest.js")}`. Written inline, a 137 KB `guest.js`, which
-is the size of `patterns/examples/iframe-verb-list/`'s, adds 147 KB of
-revision data to each further instance, and the commit log holds the same
+`script={dataFile("./guest.js")}`. Written inline, a 137 KB guest bundle adds
+147 KB of revision data to each further instance, and the commit log holds the same
 again. The program's source set holds one copy of each file, as a code document
 (`docs/specs/content-addressed-schemas.md`, "Code documents"), shared by every
 piece in the space. Images written inline would add each image to every piece.
@@ -127,6 +126,10 @@ the first piece set up in a space writes it and every later piece links to it.
   string well under a kilobyte saves. The rule applies to the result projection
   only. A computed value derived from a data file is written by its
   computation, inline.
+- **How many.** `DataFileStrings` holds at most 10,000 strings and 32 Mi
+  characters together, and drops the string used least recently once it is
+  full. A string it dropped is written inline by the next setup that writes
+  it, until a reader returns it again.
 - **Why it is keyed to `dataFile`.** A code document carries no CFC envelope.
   Program files are stored that way, so linking to one exposes nothing the
   space does not hold unlabeled. A rule that moved every long string into a
@@ -231,7 +234,8 @@ and `.urls("…")` on either (`dataFileRead` in
 `dataFile.urls(path)` returns a record from a name to a `data:` URL, for every
 file directly inside the directory `path` names whose extension is in the
 table. A file's name in the record is its file name without the extension:
-`glaze.png` is `glaze`. Files outside the table, such as a README, are left
+`glaze.png` is `glaze`. Files outside the table, such as a README, and hidden
+files, whose name starts with `.` (such as macOS's `._glaze.png`), are left
 out, and subdirectories are not read.
 
 - An asset name matches `[A-Za-z0-9_-]+`, the grammar part 4's references use.

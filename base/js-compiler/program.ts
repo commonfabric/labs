@@ -174,7 +174,8 @@ export class FileSystemProgramResolver implements ProgramResolver {
 
   /**
    * Lists the files directly inside the directory `directory` names, grounded
-   * as a data file is. Async for the reason {@link resolveDataFile} is.
+   * as a data file is, or undefined where there is no directory there. Async
+   * for the reason {@link resolveDataFile} is.
    */
   async listDataFiles(
     directory: string,
@@ -190,10 +191,15 @@ export class FileSystemProgramResolver implements ProgramResolver {
     if (realPath === undefined) return undefined;
     const parent = directory.replace(/\/+$/, "");
     const names: string[] = [];
-    for await (const entry of Deno.readDir(realPath)) {
-      const isFile = entry.isFile ||
-        (entry.isSymlink && await linksToFile(join(realPath, entry.name)));
-      if (isFile) names.push(`${parent}/${entry.name}`);
+    try {
+      for await (const entry of Deno.readDir(realPath)) {
+        const isFile = entry.isFile ||
+          (entry.isSymlink && await linksToFile(join(realPath, entry.name)));
+        if (isFile) names.push(`${parent}/${entry.name}`);
+      }
+    } catch (error) {
+      if (error instanceof Deno.errors.NotADirectory) return undefined;
+      throw error;
     }
     return names.sort();
   }

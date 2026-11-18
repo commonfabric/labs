@@ -228,6 +228,47 @@ describe("fabrichat file store across runtimes", () => {
         await expectAdd(member, store, add, 1, "Member");
       });
 
+      it("settles a creator's requests read when a member's profile is private", async () => {
+        const { creator, member, store, add } = await storeTheCreatorMade();
+        await expectAdd(member, store, add, 1, "Member");
+        await harness!.settle();
+
+        const memberProfile = await member.link(
+          ["entries", 1, "addedBy"],
+          { piece: store },
+        );
+        expect(await creator.read(["requests"], { piece: store }))
+          .toMatchObject({
+            "add-0": { status: "done", name: "file-0.png" },
+          });
+        expect(await creator.spaceRefused(memberProfile.space)).toBe(true);
+        expect(
+          await creator.read(["entries", 1, "addedBy", "name"], {
+            piece: store,
+          }),
+        ).toBeUndefined();
+
+        // A reader asking for the outcomes alone does not need the profiles
+        // the entries link to, so both members' outcomes remain readable.
+        expect(
+          await creator.readAs(["requests"], {
+            type: "object",
+            additionalProperties: {
+              type: "object",
+              properties: {
+                status: { type: "string" },
+                name: { type: "string" },
+              },
+              required: ["status", "name"],
+              additionalProperties: false,
+            },
+          }, { piece: store }),
+        ).toEqual({
+          "add-0": { status: "done", name: "file-0.png" },
+          "add-1": { status: "done", name: "file-1.png" },
+        });
+      });
+
       it("takes an add from a member who opened the store through the link the room holds, recording that member as its adder", async () => {
         const { member, slot, add } = await storeTheCreatorMade();
 

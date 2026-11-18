@@ -5,7 +5,11 @@
  * `cf-asset:` reference, the guest's script builds the menu from each PNG's
  * URL, and it draws the favorite onto a canvas from the PNG's decoded image,
  * all under the guest's Content Security Policy, which admits images from
- * `data:` URLs. The test reads the guest through a second CDP client.
+ * `data:` URLs. The logo's URL runs past 1,024 characters, so setup stores it
+ * in the result document as a link to a code document
+ * (`docs/specs/iframe-static-assets.md`, part 1), and its arrival covers that
+ * link reaching `cf-iframe`; the PNGs' URLs are short enough to stay inline.
+ * The test reads the guest through a second CDP client.
  */
 
 import { createTestSpace, env } from "@commonfabric/integration";
@@ -99,6 +103,13 @@ describe("iframe donut menu", () => {
         ["glazed", "data:image/png;base64", 32],
         ["chocolate", "data:image/png;base64", 32],
       ]);
+      // The logo is the asset stored by reference only while its URL is this
+      // long.
+      expect(
+        await guest.evaluate<number>(
+          `document.getElementById('logo').src.length`,
+        ),
+      ).toBeGreaterThanOrEqual(1024);
 
       await guest.waitFor<boolean>(`() =>
         !document.querySelector('button[data-donut="glazed"]').disabled

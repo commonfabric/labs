@@ -2898,19 +2898,26 @@ async function recordSavedIndexSource(
  *
  * Each file is written as the bytes it was stored from, so a binary media
  * file, which the package holds as a `data:` URL, comes back as the image,
- * font, or sound it was read from.
+ * font, or sound it was read from. Every name is checked and every file
+ * encoded before the first is written, so a package that cannot be written
+ * writes nothing.
  */
 export async function writeSourcePackage(
   program: RuntimeProgram,
   outPath: string,
 ): Promise<void> {
-  for (const { name, contents } of program.files) {
+  const files = program.files.map(({ name, contents }) => {
     if (name[0] !== "/") {
       throw new Error("Ungrounded file in pattern.");
     }
-    const outFilePath = join(outPath, name.substring(1));
-    await Deno.mkdir(dirname(outFilePath), { recursive: true });
-    await Deno.writeFile(outFilePath, encodeDataFile(contents, name));
+    return {
+      path: join(outPath, name.substring(1)),
+      bytes: encodeDataFile(contents, name),
+    };
+  });
+  for (const { path, bytes } of files) {
+    await Deno.mkdir(dirname(path), { recursive: true });
+    await Deno.writeFile(path, bytes);
   }
 }
 

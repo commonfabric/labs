@@ -453,6 +453,22 @@ describe("listDataFiles()", () => {
     }
   });
 
+  it("returns undefined for a path naming a file rather than a directory", async () => {
+    const root = await Deno.makeTempDir({ prefix: "list-data-files-" });
+    try {
+      await Deno.writeTextFile(path.join(root, "main.tsx"), "");
+      await Deno.writeTextFile(path.join(root, "guest.html"), "");
+      const resolver = new FileSystemProgramResolver(
+        path.join(root, "main.tsx"),
+        root,
+      );
+
+      expect(await resolver.listDataFiles("/guest.html")).toBeUndefined();
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
   it("leaves out a link in the directory that resolves to nothing", async () => {
     const root = await Deno.makeTempDir({ prefix: "list-data-files-" });
     try {

@@ -61,23 +61,25 @@ function withAssetsElement(html: string, assets: AssetRecord): string {
 
 /**
  * Helper for `withAssetsElement()`, which returns where the doctype `html`
- * opens with ends, or `0` when it opens with none. Ahead of a doctype the
+ * opens with ends, or, when it opens with none, where its byte order mark ends
+ * (`0` without one), so that the mark stays first. Ahead of a doctype the
  * parser lets stand a byte order mark, whitespace, and comments, each comment
  * ending at its first `-->`; a doctype anywhere later is ignored. The scan
  * reads each character once.
  */
 function leadingDoctypeEnd(html: string): number {
-  let at = html.startsWith("\ufeff") ? 1 : 0;
+  const start = html.startsWith("\ufeff") ? 1 : 0;
+  let at = start;
   for (;;) {
     while (at < html.length && LEADING_SPACE.test(html[at]!)) at++;
     if (!html.startsWith("<!--", at)) break;
     const close = html.indexOf("-->", at + 4);
-    if (close === -1) return 0;
+    if (close === -1) return start;
     at = close + 3;
   }
-  if (html.slice(at, at + 9).toLowerCase() !== "<!doctype") return 0;
+  if (html.slice(at, at + 9).toLowerCase() !== "<!doctype") return start;
   const close = html.indexOf(">", at);
-  return close === -1 ? 0 : close + 1;
+  return close === -1 ? start : close + 1;
 }
 
 /**

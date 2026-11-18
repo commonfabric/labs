@@ -1062,9 +1062,21 @@ export const IFRAME_PATTERN = {
           `{ notes: "./notes.txt" }`,
           `Asset "notes" must name an image, font, or sound file that dataFile.url() reads, such as a .png, .woff2, or .mp3; found "./notes.txt".`,
         ],
+        [
+          `{ constructor: "./glaze.png" }`,
+          `Asset name "constructor" is reserved: setup refuses "__proto__" and "constructor" as keys of the record it stores.`,
+        ],
         [`"./missing"`, "missing, which is not a directory."],
         [`"./glaze.png"`, "glaze.png, which is not a directory."],
         [`{ glaze: "./missing.png" }`, "missing.png, which is not a file."],
+        [
+          `"./dotted"`,
+          "has no asset name: `glaze.small` holds characters other than letters, digits, `_`, and `-`.",
+        ],
+        [
+          `"./reserved"`,
+          `Asset name "constructor" is reserved: setup refuses "__proto__" and "constructor" as keys of the record it stores.`,
+        ],
       ]
     ) {
       it(`writes nothing for the assets ${assets}`, async () => {
@@ -1076,6 +1088,18 @@ export const IFRAME_PATTERN = {
               new Uint8Array([0]),
             );
             await Deno.writeTextFile(resolve(directory, "notes.txt"), "notes");
+            for (
+              const [folder, file] of [
+                ["dotted", "glaze.small.png"],
+                ["reserved", "constructor.png"],
+              ]
+            ) {
+              await Deno.mkdir(resolve(directory, folder));
+              await Deno.writeFile(
+                resolve(directory, folder, file),
+                new Uint8Array([0]),
+              );
+            }
             const fixture = await writeFixture(
               directory,
               `{ name: "Refused", assets: ${assets} }`,

@@ -6,13 +6,15 @@
  */
 
 import { repositoryIndependentEnv } from "./gitenv.ts";
+import { link, name, say, type TaskOutput, type TaskText } from "./tasklog.ts";
 
 /** Runs git for its standard output, which it returns, or null when git
  * fails. Nothing is shown. */
 export type GitQuery = (args: readonly string[]) => string | null;
 
-/** The git and browser operations a push performs. */
-export interface PushIo {
+/** The git and browser operations a push performs, and where it says what
+ * it does and shows what git writes. */
+export interface PushIo extends TaskOutput {
   /** Runs git for its standard output, which it returns, or null when git
    * fails. Nothing is shown. */
   readonly query: GitQuery;
@@ -20,9 +22,6 @@ export interface PushIo {
   /** Runs git with its output shown as it arrives. Resolves to whether git
    * succeeded, and to everything it printed. */
   run(args: readonly string[]): Promise<{ success: boolean; output: string }>;
-
-  /** Shows `text` where git's output is shown. */
-  write(text: string): void;
 
   /** The canonical git directory named by an inherited `GIT_DIR`, which git
    * exports to a pager it starts when its own repository was named that way, or
@@ -34,9 +33,10 @@ export interface PushIo {
   open(url: string): boolean;
 }
 
-/** What {@link realPushIo} works with. Each optional one has the process's
- * own as its default. */
-export interface RealPushIoOptions {
+/** What {@link realPushIo} works with: where the push says what it does and
+ * shows git's output, and others, each of which has the process's own as its
+ * default. */
+export interface RealPushIoOptions extends TaskOutput {
   /** A directory in the repository to push. */
   readonly cwd?: string;
 
@@ -45,9 +45,6 @@ export interface RealPushIoOptions {
 
   /** The program that opens a URL in the browser. */
   readonly opener?: string;
-
-  /** Shows git's output. */
-  readonly write: (text: string) => void;
 
   /** Stops a running git when it aborts. */
   readonly signal?: AbortSignal;
@@ -78,8 +75,9 @@ export interface PushedBranch {
  * refuses when `origin` names none. When `origin` already has the branch and
  * there is an `ask`, pushes nothing, and returns what `ask` returns, given
  * the branch's name and how `origin`'s branch stands; otherwise it pushes,
- * and returns one line saying how that ended. Says which branch it pushes,
- * with `io`, before git starts. Once the push succeeds, calls `onPushed` with
+ * and returns one line saying how that ended. Shows a step, with `io`, that
+ * says which branch it pushes before git starts, and that is done once git
+ * succeeds. Once the push succeeds, calls `onPushed` with
  * the branch's name and the address of the page the server offers for
  * creating a pull request, or null when it offers none; by default, it opens
  * the page, and the line it returns ends with what `onPushed` returns. When
@@ -93,17 +91,16 @@ export async function pushBranch<Asked = never>(
   onPushed: (
     branch: string,
     url: string | null,
-  ) => Promise<string> | string = (_, url) =>
-    url === null ? "" : openPage(io, url),
+  ) => Promise<TaskText> | TaskText = (_, url) =>
+    url === null ? [] : openPage(io, url),
   onFailed: (output: string) => void = () => {},
   ask?: (branch: string, remote: PushedBranch) => Promise<Asked>,
-): Promise<string | Asked> {
+): Promise<TaskText | Asked> {
   const gitDir = io.query(["rev-parse", "--absolute-git-dir"])?.trim();
-  if (!gitDir) return "This is not a git repository.";
+  if (!gitDir) return say`This is not a git repository.`;
   const paged = io.pagedGitDir();
   if (paged !== null && paged !== gitDir) {
-    return `Not pushing: git is paging output for ${paged}, but the viewer ` +
-      `is running in ${gitDir}.`;
+    return say`Not pushing: git is paging output for ${paged}, but the viewer is running in ${gitDir}.`;
   }
   // The full name, since a short one is qualified, as `heads/foo`, when a
   // tag shares it.
@@ -112,25 +109,23 @@ export async function pushBranch<Asked = never>(
     ? head.slice("refs/heads/".length)
     : undefined;
   if (!branch) {
-    return "This checkout is not on a branch. Check out or create a branch " +
-      "first.";
+    return say`This checkout is not on a branch. Check out or create a branch first.`;
   }
   const main = io.query(["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"])
     ?.trim().slice("refs/remotes/origin/".length);
   if (!main) {
-    return "Not pushing: origin's default branch is unknown. " +
-      "`git remote set-head origin --auto` finds it.";
+    return say`Not pushing: ${
+      name("origin")
+    }'s default branch is unknown. \`git remote set-head origin --auto\` finds it.`;
   }
   if (branch === main) {
-    return `Rename the branch first. You were about to push your ${main} ` +
-      "branch.";
+    return say`Rename the branch first. You were about to push your ${main} branch.`;
   }
   if (ask) {
     const remote = pushedBranch(io.query, branch);
     if (remote !== null) return await ask(branch, remote);
   }
-  const pushed = `Pushed ${branch} to origin`;
-  io.write(`Pushing ${branch} to origin.\n`);
+  const pushing = io.step(say`Pushing ${branch} to ${name("origin")}`);
   const push = await io.run([
     "push",
     "--force-with-lease",
@@ -142,11 +137,13 @@ export async function pushBranch<Asked = never>(
   if (!push.success) {
     onFailed(push.output);
     return signal?.aborted
-      ? "Push aborted."
-      : `Pushing ${branch} to origin failed.`;
+      ? say`Push aborted.`
+      : say`Pushing ${branch} to ${name("origin")} failed.`;
   }
+  pushing();
   const then = await onPushed(branch, offeredPullRequestUrl(push.output));
-  return then === "" ? `${pushed}.` : `${pushed}. ${then}`;
+  const pushed = say`Pushed ${branch} to ${name("origin")}.`;
+  return then.length === 0 ? pushed : say`${pushed} ${then}`;
 }
 
 /**
@@ -180,30 +177,33 @@ export function pushedBranch(
 }
 
 /** Returns what pushing `branch`, which `origin` has as `pushed` says,
- * would do, a sentence per line. */
-export function describePush(branch: string, pushed: PushedBranch): string {
+ * would do, in a sentence or two. */
+export function describePush(branch: string, pushed: PushedBranch): TaskText {
   const commits = (count: number) =>
-    count === 1 ? "1 commit" : `${count} commits`;
+    say`${String(count)} ${count === 1 ? say`commit` : say`commits`}`;
   const { counts } = pushed;
   const effect = counts === null
-    ? "This checkout's history is shallow, so the commits pushing would add " +
-      "or remove cannot be counted."
+    ? say`This checkout's history is shallow, so the commits pushing would add or remove cannot be counted.`
     : counts.removed > 0
-    ? `Pushing would replace it, removing ${commits(counts.removed)} that ` +
-      `this checkout does not have${
-        counts.added > 0 ? ` and adding ${commits(counts.added)}` : ""
-      }.`
+    ? say`Pushing would replace it, removing ${
+      commits(counts.removed)
+    } that this checkout does not have${
+      counts.added > 0 ? say` and adding ${commits(counts.added)}` : []
+    }.`
     : counts.added > 0
-    ? `Pushing would add ${commits(counts.added)} to it.`
-    : "Pushing would leave it as it is.";
-  return `origin already has ${branch}, at ${pushed.commit.slice(0, 12)} ` +
-    `when last fetched or pushed.\n${effect}`;
+    ? say`Pushing would add ${commits(counts.added)} to it.`
+    : say`Pushing would leave it as it is.`;
+  return say`${name("origin")} already has ${branch}, at ${
+    pushed.commit.slice(0, 12)
+  } when last fetched or pushed. ${effect}`;
 }
 
 /** Opens the page at `url` for creating a pull request, and returns a
  * sentence saying so, or giving its address when it cannot be opened. */
-export function openPage(io: Pick<PushIo, "open">, url: string): string {
-  return io.open(url) ? `Opened ${url}` : `Create a pull request at ${url}`;
+export function openPage(io: Pick<PushIo, "open">, url: string): TaskText {
+  return io.open(url)
+    ? say`Opened ${link(url)}`
+    : say`Create a pull request at ${link(url)}`;
 }
 
 /** Whether git's output says the push was refused, as against failing to
@@ -261,6 +261,7 @@ export function realPushIo({
   env = Deno.env.toObject(),
   opener = Deno.build.os === "darwin" ? "open" : "xdg-open",
   write,
+  step,
   signal,
 }: RealPushIoOptions): PushIo {
   const decoder = new TextDecoder();
@@ -308,6 +309,7 @@ export function realPushIo({
       return { success: status.success, output };
     },
     write,
+    step,
     pagedGitDir: () =>
       env.GIT_DIR === undefined
         ? null

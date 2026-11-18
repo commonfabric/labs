@@ -223,18 +223,26 @@ const diskPath = (root: string, name: string): string => {
 };
 
 /**
+ * What `readIfThere` returns for a file whose bytes no source package can
+ * store: a text file that is not valid UTF-8. It equals no version's contents.
+ */
+const UNSTORABLE = Symbol("unstorable");
+
+/**
  * The contents of `path` as a source package stores the file `name`, an image
- * as its `data:` URL among them (`decodeDataFile`), or `undefined` where there
- * is no file. Any other failure to read is thrown, so a file that could not be
- * read is never taken for one that is not there and written over.
+ * as its `data:` URL among them (`decodeDataFile`), `UNSTORABLE` for bytes no
+ * package can store, or `undefined` where there is no file. Any other failure
+ * to read is thrown, so a file that could not be read is never taken for one
+ * that is not there and written over.
  */
 const readIfThere = async (
   read: (path: string) => Promise<Uint8Array>,
   path: string,
   name: string,
-): Promise<string | undefined> => {
+): Promise<string | typeof UNSTORABLE | undefined> => {
+  let bytes: Uint8Array;
   try {
-    return decodeDataFile(await read(path), name);
+    bytes = await read(path);
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) return undefined;
     throw new PatternHistoryError(
@@ -242,6 +250,12 @@ const readIfThere = async (
         error instanceof Error ? error.message : String(error)
       }); nothing was restored.`,
     );
+  }
+  try {
+    return decodeDataFile(bytes, name);
+  } catch {
+    // Decoding fails only for a text file that is not valid UTF-8.
+    return UNSTORABLE;
   }
 };
 

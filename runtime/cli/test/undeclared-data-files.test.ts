@@ -215,6 +215,29 @@ describe("writeSourcePackage", () => {
     );
   });
 
+  it("writes nothing for a package holding an image that is not a `data:` URL", async () => {
+    // The code comes first, so a writer that encoded each file as it wrote it
+    // would have written `main.tsx` before refusing the image.
+
+    const out = await Deno.makeTempDir({ prefix: "source-package-" });
+    try {
+      await expect(
+        writeSourcePackage(
+          program({
+            "/main.tsx": READS_CITIES,
+            "/glaze.png": "not a data URL",
+          }, ["/glaze.png"]),
+          out,
+        ),
+      ).rejects.toThrow(
+        "Data file `/glaze.png` does not hold an `image/png` `data:` URL.",
+      );
+      expect([...Deno.readDirSync(out)]).toEqual([]);
+    } finally {
+      await Deno.remove(out, { recursive: true });
+    }
+  });
+
   it("refuses a name that belongs to no layout", async () => {
     const out = await Deno.makeTempDir({ prefix: "source-package-" });
     try {

@@ -132,6 +132,11 @@ describe("guest-document", () => {
         );
       });
 
+      it("writes the record after the byte order mark of a document with no doctype", () => {
+        expect(guestDocument("\ufeff<p>plain</p>", undefined, ASSETS))
+          .toBe(`\ufeff${RECORD}<p>plain</p>`);
+      });
+
       it("writes the record at the start of a document with no doctype", () => {
         expect(guestDocument("<p>plain</p><!doctype html>", undefined, ASSETS))
           .toBe(`${RECORD}<p>plain</p><!doctype html>`);

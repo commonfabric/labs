@@ -375,6 +375,21 @@ describe("pattern-history", () => {
       expect(await Deno.readTextFile(entry)).toBe(V1);
     });
 
+    it("takes a file that is not valid UTF-8 as an edit no version keeps, and writes over it with force", async () => {
+      const { deps } = await indexWith();
+      const unstorable = new Uint8Array([0xff, 0xfe, 0x00]);
+      await Deno.writeFile(entry, unstorable);
+
+      await expect(rollbackEntry(entry, "1", {}, deps)).rejects.toThrow(
+        "edits that no version keeps",
+      );
+      expect(await Deno.readFile(entry)).toEqual(unstorable);
+
+      await rollbackEntry(entry, "1", { force: true }, deps);
+
+      expect(await Deno.readTextFile(entry)).toBe(V1);
+    });
+
     it("refuses to restore the current version over matching files, and a version that does not exist", async () => {
       const { deps, rollbacks } = await indexWith();
 

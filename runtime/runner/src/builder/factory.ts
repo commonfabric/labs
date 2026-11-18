@@ -150,7 +150,11 @@ const toSchema: ToSchemaFunction = (_options?) => {
 
 const runtimeSchema = freezeVerifiedPlainData as typeof schemaIdentity;
 
-/** What `dataFile.urls()` returns for a directory holding no asset. */
+/**
+ * What the placeholder's `dataFile.urls()` returns: a program whose declared
+ * directories hold no asset attaches no data file, so its graph carries none
+ * and its reads reach the placeholder.
+ */
 const NO_ASSETS: Readonly<Record<string, string>> = Object.freeze({});
 
 /**
