@@ -334,8 +334,11 @@ judged on its own, by whether its type is the type its declaration writes,
 give or take the `undefined` a `?` adds or a `-?` takes away: a conditional
 template that unwraps cell members leaves every other member read through its
 declaration, scope and default included, and a mapped type around another,
-as `Partial<Loose<T>>`, is judged by the type the outer one gives
-(`declarationDescribesMember()` in `type-utils.ts`;
+as `Partial<Loose<T>>`, is judged by the type the outer one gives. A
+declaration written in type parameters is read under the type arguments the
+mapped type's source gives the type it is declared on, so `w: PerSession<T>`
+in `Readonly<Row<null>>` keeps its scope (`declarationDescribesMember()` in
+`type-utils.ts`;
 `test/object-formatter.test.ts`). A property several
 members of an intersection or a union declare has no one declaration to read
 it as, and is read as its type, the `undefined` its `?` adds left out.

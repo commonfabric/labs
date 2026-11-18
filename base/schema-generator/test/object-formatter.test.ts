@@ -518,14 +518,55 @@ interface SchemaRoot { v: ${mapped} }
         .toMatchObject({ scope: "session" });
     });
 
-    it("keeps a member the template leaves as it is optional where its default holds `undefined`", async () => {
+    it("keeps a member the template leaves as it is optional, with its default, where the default holds `undefined`", async () => {
+      // A replica of `Default`, as `brand-payload-defaults.test.ts` declares.
       const schema = await schemaFor(`
+declare const DEFAULT_MARKER: unique symbol;
+type DefaultMarker<T> = { readonly [DEFAULT_MARKER]: T };
+type Default<T, V extends T = T> = (T & DefaultMarker<V>) | T;
 ${UNWRAP}
 interface SchemaRoot { v: Unwrap<{ w: Default<number | undefined, 42> }> }
+`);
+      const v = schema.properties?.v as {
+        properties?: Record<string, { default?: unknown }>;
+        required?: string[];
+      };
+
+      expect(v.required ?? []).not.toContain("w");
+      expect(v.properties?.w?.default).toBe(42);
+    });
+
+    it("keeps the scope of a generic field an identity mapping reads under its type arguments", async () => {
+      const ROW = "interface Row<T> { w: PerSession<T> }";
+
+      expect(await mappedMemberSchema(ROW, "Readonly<Row<null>>"))
+        .toMatchObject({ scope: "session" });
+      expect(await mappedMemberSchema(ROW, 'Pick<Row<null>, "w">'))
+        .toMatchObject({ scope: "session" });
+    });
+
+    it("keeps a generic field an identity mapping reads under its type arguments optional where its default holds `undefined`", async () => {
+      const schema = await schemaFor(`
+declare const DEFAULT_MARKER: unique symbol;
+type DefaultMarker<T> = { readonly [DEFAULT_MARKER]: T };
+type Default<T, V extends T = T> = (T & DefaultMarker<V>) | T;
+interface Fallback<T> { w: Default<T | undefined, T> }
+interface SchemaRoot { v: Readonly<Fallback<42>> }
 `);
       const v = schema.properties?.v as { required?: string[] };
 
       expect(v.required ?? []).not.toContain("w");
+    });
+
+    it("emits the permissive schema for a member a template maps to `any`", async () => {
+      const ANYTHING = "type Anything<T> = { [K in keyof T]: any };";
+
+      expect(await mappedMemberSchema(ANYTHING, "Anything<{ w: number }>"))
+        .toBe(true);
+      expect(
+        await mappedMemberSchema(ANYTHING, "Anything<{ w: Cell<number> }>"),
+      )
+        .toBe(true);
     });
 
     it("emits both members of the widened union for a cell member of a mapped type an identity mapping wraps", async () => {
