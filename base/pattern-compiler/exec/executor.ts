@@ -36,12 +36,12 @@ import {
   isStream,
   isStreamSchema,
   keyFieldsOf,
+  type KeyOp,
   keySegment,
   keysOfParts,
   linkedSchema,
   markerOf,
   memberKey,
-  type KeyOp,
   type Name,
   OUTPUT,
   type Position,
@@ -50,6 +50,7 @@ import {
   rekeyed,
   type Schema,
   schemaBelow,
+  spliceIn,
   Store,
   StreamMarker,
   streamOf,
@@ -332,7 +333,49 @@ type Unit = {
   seen?: Entry;
   /** The units in each row, by the key of the row and by their path. */
   inside: Map<string, Map<string, Unit>>;
+  /** Tells the unit from the others of its instance. */
+  serial: number;
+  /**
+   * The layout (`execution-and-storage.md` §4.10). `sizes` has the
+   * bytes of each row as it is stored, a part below it counted as its
+   * storage link. `parted` says which rows are stored in a part
+   * document, `splits` which rows can be, `forced` which rows the rule
+   * on the size of a document made parts. `sum` is the bytes that the
+   * rows take in the array: a row that is a part takes those of its
+   * storage link. `part` says whether the array is a part itself.
+   */
+  sizes: number[];
+  parted: boolean[];
+  splits: boolean[];
+  forced: Set<string>;
+  sum: number;
+  part: boolean;
+  partForced: boolean;
 };
+
+/** A document of the layout: the result document, or a part. */
+type Laid = { unit?: Unit; key?: string };
+
+/**
+ * The sizes of `execution-and-storage.md` §4.10, which are placeholders
+ * there: a split point of at least `PART_SPLIT_BYTES` is stored in a
+ * part document, a part of at most `PART_MERGE_BYTES` in place again,
+ * and a document of more than `DOCUMENT_MAX_BYTES` has every split
+ * point directly below it stored as a part.
+ */
+export const PART_SPLIT_BYTES = 1_024;
+export const PART_MERGE_BYTES = 512;
+export const DOCUMENT_MAX_BYTES = 65_536;
+
+/** The bytes of the JSON text of a stored value. */
+const bytesOf = (value: unknown): number =>
+  (JSON.stringify(value) ?? "").length;
+
+/** Whether a stored value can be a split point: a record or an array
+ * that is no link. */
+const splits = (form: unknown): boolean =>
+  typeof form === "object" && form !== null && !isLink(form) &&
+  !isStream(form);
 
 /** Stands, in a stored form, for rows that are stored already. */
 const KEPT = Symbol("kept");
@@ -1459,6 +1502,20 @@ export type Transaction = {
   patchBytes: number;
   /** The changes of documents that the transaction made. */
   changes: number;
+  /**
+   * What the transaction wrote of the results of the instances, by the
+   * documents that the layout of `execution-and-storage.md` §4.10
+   * stores a result in: how many of them it wrote, the bytes that
+   * those hold when it ends, the bytes it put into them, and how many
+   * part documents it created and deleted.
+   */
+  stored: {
+    documents: number;
+    bytes: number;
+    patchBytes: number;
+    created: number;
+    deleted: number;
+  };
   /** The cones that took an error state, by their `entry`. */
   failed: string[];
   /** Whether what the transaction staged is stored. */
@@ -1547,6 +1604,15 @@ type Open = {
   counts: Map<string, number>;
   /** What each change of a document replaced, in order. */
   journal: Undo[];
+  /**
+   * The documents of the layout of a result that were written: the
+   * bytes put into each, and whether it was created (1) or deleted
+   * (-1).
+   */
+  laid: Map<
+    string,
+    { instance: Instance; laid: Laid; patch: number; made: number }
+  >;
   /** The documents written. */
   touched: Set<string>;
   /** The writes each evaluation made, by the name of its entry. */
@@ -1935,18 +2001,18 @@ export class Instance {
     if (open !== undefined) {
       const { store } = this;
       const now = store.peek(change.doc, change.path);
-      const put = change.splice === undefined
-        ? now
-        : (now as unknown[]).slice(
-          change.splice.start,
-          change.splice.start + change.splice.inserted,
-        );
+      const put = change.splice === undefined ? now : (now as unknown[]).slice(
+        change.splice.start,
+        change.splice.start + change.splice.inserted,
+      );
       open.record.changes += 1;
       open.record.patchBytes += (JSON.stringify(put) ?? "").length;
     }
     const mark = (regs: Iterable<Reg> | undefined) => {
       if (regs === undefined) return;
-      for (const reg of [...regs]) reg.slot.instance.#mark(reg.slot, reg.position);
+      for (const reg of [...regs]) {
+        reg.slot.instance.#mark(reg.slot, reg.position);
+      }
     };
     const below = (node: Readers) => {
       mark(node.regs);
@@ -2210,11 +2276,19 @@ export class Instance {
         bytes: 0,
         patchBytes: 0,
         changes: 0,
+        stored: {
+          documents: 0,
+          bytes: 0,
+          patchBytes: 0,
+          created: 0,
+          deleted: 0,
+        },
         failed: [],
         committed: false,
       },
       counts: new Map(),
       journal: [],
+      laid: new Map(),
       touched: new Set(),
       writes: new Map(),
       exhausted: [],
@@ -2257,6 +2331,17 @@ export class Instance {
       for (const id of open.record.written) {
         open.record.bytes +=
           (JSON.stringify(this.store.docs.get(id)?.value) ?? "").length;
+      }
+    }
+    if (committed) {
+      const { stored } = open.record;
+      for (const { instance, laid, patch, made } of open.laid.values()) {
+        if (made > 0) stored.created += 1;
+        if (made < 0) stored.deleted += 1;
+        if (made < 0) continue;
+        stored.documents += 1;
+        stored.patchBytes += patch;
+        stored.bytes += instance.#laidBytes(laid);
       }
     }
     this.#tx = undefined;
@@ -3720,6 +3805,21 @@ export class Instance {
     units?.delete(unit);
     if (units?.size === 0) this.#units.delete(unit.name);
     this.#dueUnits.delete(unit);
+    this.#touched.delete(unit);
+    this.#touchedRows.delete(unit);
+    // Its part documents are deleted with it, and what holds it counts
+    // its rows as stored in place, as the value that replaces it is.
+    if (unit.part) {
+      this.#wroteLaid({ unit }, 0, -1);
+      const holder = "path" in unit.place ? undefined : unit.place;
+      if (holder === undefined || this.#stands(holder.unit)) {
+        unit.part = false;
+        this.#growHolder(unit, this.#contentOf(unit) - Instance.LINK_BYTES);
+      }
+    }
+    unit.parted.forEach((parted, index) => {
+      if (parted) this.#wroteLaid({ unit, key: unit.keys[index] }, 0, -1);
+    });
     for (const inside of unit.inside.values()) {
       for (const inner of inside.values()) this.#dispose(inner);
     }
@@ -3765,6 +3865,14 @@ export class Instance {
         keys: [],
         values: [],
         inside: new Map(),
+        serial: this.#unitSerial++,
+        sizes: [],
+        parted: [],
+        splits: [],
+        forced: new Set(),
+        sum: 0,
+        part: false,
+        partForced: false,
       };
       inside.set(id, unit);
       const units = this.#units.get(unit.name) ?? new Set();
@@ -3784,7 +3892,7 @@ export class Instance {
     unit.keys = (entry.members ?? []).map(({ key }) => key);
     unit.values = [...values];
     unit.positions = undefined;
-    return values.map((value, index) =>
+    const forms = values.map((value, index) =>
       this.#formOf(
         value,
         { unit, key: unit.keys[index] ?? `${index}` },
@@ -3792,6 +3900,364 @@ export class Instance {
         new Set(),
       )
     );
+    unit.sizes = forms.map(bytesOf);
+    unit.parted = forms.map(() => false);
+    unit.splits = forms.map(splits);
+    unit.forced.clear();
+    unit.sum = unit.sizes.reduce((sum, size) => sum + size, 0);
+    this.#touched.add(unit);
+    this.#touchedRows.set(unit, new Set(unit.keys));
+    return forms;
+  }
+
+  // ----- the layout of the stored result -----
+
+  #unitSerial = 0;
+  /** The bytes that the result document holds, a part as its link. */
+  #rootSize = 0;
+  /** The units that the transaction in progress changed. */
+  readonly #touched = new Set<Unit>();
+  /** The rows that it changed, by unit. */
+  readonly #touchedRows = new Map<Unit, Set<string>>();
+
+  /** The bytes of a storage link (`execution-and-storage.md` §4.10). */
+  static readonly LINK_BYTES = bytesOf({ $part: identifierOf({}) });
+
+  /** The bytes that the array of a unit takes, with its brackets. */
+  #contentOf(unit: Unit): number {
+    return 2 + unit.sum + Math.max(0, unit.keys.length - 1);
+  }
+
+  /** The bytes that a document of the layout holds. */
+  #laidBytes({ unit, key }: Laid): number {
+    if (unit === undefined) return this.#rootSize;
+    if (key === undefined) return this.#contentOf(unit);
+    return unit.sizes[this.#positionIn(unit, key)] ?? 0;
+  }
+
+  /** The document that stores the array of a unit. */
+  #laidOfUnit(unit: Unit): Laid {
+    if (unit.part) return { unit };
+    return "path" in unit.place
+      ? {}
+      : this.#laidOfRow(unit.place.unit, unit.place.key);
+  }
+
+  /** The document that stores the row of a key. */
+  #laidOfRow(unit: Unit, key: string): Laid {
+    return unit.parted[this.#positionIn(unit, key)]
+      ? { unit, key }
+      : this.#laidOfUnit(unit);
+  }
+
+  /** Counts a write to a document of the layout for the transaction. */
+  #wroteLaid(laid: Laid, patch: number, made = 0): void {
+    const open = this.root.#tx;
+    if (open === undefined) return;
+    const id = laid.unit === undefined
+      ? this.id
+      : `${this.id} ${laid.unit.serial} ${laid.key ?? ""}`;
+    const held = open.laid.get(id) ??
+      { instance: this, laid, patch: 0, made: 0 };
+    held.patch += patch;
+    held.made += made;
+    open.laid.set(id, held);
+  }
+
+  /** The bytes of a row changed by `delta`. */
+  #growRow(unit: Unit, key: string, delta: number): void {
+    const index = this.#positionIn(unit, key);
+    if (index < 0) return;
+    unit.sizes[index] += delta;
+    const rows = this.#touchedRows.get(unit) ?? new Set();
+    rows.add(key);
+    this.#touchedRows.set(unit, rows);
+    this.#touched.add(unit);
+    if (!unit.parted[index]) this.#growUnit(unit, delta);
+  }
+
+  /** The bytes that the rows of a unit take in its array changed. */
+  #growUnit(unit: Unit, delta: number): void {
+    unit.sum += delta;
+    this.#touched.add(unit);
+    if (!unit.part) this.#growHolder(unit, delta);
+  }
+
+  /** The bytes of what holds the array of a unit changed. */
+  #growHolder(unit: Unit, delta: number): void {
+    if ("path" in unit.place) this.#rootSize += delta;
+    else this.#growRow(unit.place.unit, unit.place.key, delta);
+  }
+
+  /**
+   * Splices the stored rows of a unit: the store, what the unit holds
+   * of its rows, and the sizes.
+   */
+  #spliceRows(
+    unit: Unit,
+    path: readonly string[],
+    start: number,
+    removed: readonly string[],
+    inserted: readonly string[],
+    values: readonly unknown[],
+    forms: readonly unknown[],
+  ): void {
+    for (const key of removed) {
+      if (inserted.includes(key)) continue;
+      for (const inner of unit.inside.get(key)?.values() ?? []) {
+        this.#dispose(inner);
+      }
+      unit.inside.delete(key);
+    }
+    const before = this.#contentOf(unit);
+    const laid = this.#laidOfUnit(unit);
+    let sum = 0;
+    for (let index = start; index < start + removed.length; index++) {
+      if (unit.parted[index]) {
+        sum -= Instance.LINK_BYTES;
+        this.#wroteLaid({ unit, key: unit.keys[index] }, 0, -1);
+      } else {
+        sum -= unit.sizes[index];
+      }
+    }
+    const sizes = forms.map(bytesOf);
+    for (const size of sizes) sum += size;
+    this.store.spliceAt(this.id, path, start, removed.length, forms);
+    const appended = start === unit.keys.length && removed.length === 0;
+    spliceIn(unit.keys, start, removed.length, inserted);
+    spliceIn(unit.values, start, removed.length, values);
+    spliceIn(unit.sizes, start, removed.length, sizes);
+    spliceIn(unit.parted, start, removed.length, forms.map(() => false));
+    spliceIn(unit.splits, start, removed.length, forms.map(splits));
+    for (const key of removed) unit.forced.delete(key);
+    if (appended && unit.positions !== undefined) {
+      inserted.forEach((key, offset) =>
+        unit.positions?.set(key, start + offset)
+      );
+    } else {
+      unit.positions = undefined;
+    }
+    unit.sum += sum;
+    this.#touched.add(unit);
+    const rows = this.#touchedRows.get(unit) ?? new Set();
+    for (const key of inserted) rows.add(key);
+    this.#touchedRows.set(unit, rows);
+    if (!unit.part) this.#growHolder(unit, this.#contentOf(unit) - before);
+    this.#wroteLaid(laid, sizes.reduce((total, size) => total + size, 0));
+  }
+
+  /** Stores a row, or the array of a unit, in a part document. */
+  #toPart(unit: Unit, key: string | undefined, forced: boolean): void {
+    const link = Instance.LINK_BYTES;
+    if (key === undefined) {
+      const content = this.#contentOf(unit);
+      const holder = this.#laidOfUnit(unit);
+      unit.part = true;
+      unit.partForced = forced;
+      this.#growHolder(unit, link - content);
+      this.#wroteLaid(holder, link);
+      this.#wroteLaid({ unit }, content, 1);
+      return;
+    }
+    const index = this.#positionIn(unit, key);
+    const holder = this.#laidOfUnit(unit);
+    unit.parted[index] = true;
+    if (forced) unit.forced.add(key);
+    this.#growUnit(unit, link - unit.sizes[index]);
+    this.#wroteLaid(holder, link);
+    this.#wroteLaid({ unit, key }, unit.sizes[index], 1);
+  }
+
+  /** Stores a part in place again, and deletes its document. */
+  #toPlace(unit: Unit, key: string | undefined): void {
+    const link = Instance.LINK_BYTES;
+    if (key === undefined) {
+      const content = this.#contentOf(unit);
+      this.#wroteLaid({ unit }, 0, -1);
+      unit.part = false;
+      unit.partForced = false;
+      this.#growHolder(unit, content - link);
+      this.#wroteLaid(this.#laidOfUnit(unit), content);
+      return;
+    }
+    const index = this.#positionIn(unit, key);
+    this.#wroteLaid({ unit, key }, 0, -1);
+    unit.parted[index] = false;
+    unit.forced.delete(key);
+    this.#growUnit(unit, unit.sizes[index] - link);
+    this.#wroteLaid(this.#laidOfUnit(unit), unit.sizes[index]);
+  }
+
+  /** How many rows are above a unit. */
+  #depthOf(unit: Unit): number {
+    return "path" in unit.place ? 0 : 1 + this.#depthOf(unit.place.unit);
+  }
+
+  /**
+   * Applies the rule on size to the split points on the paths that the
+   * transaction wrote, from the innermost outward
+   * (`execution-and-storage.md` §4.10, "The rule about size"). The
+   * split points are the rows of a collection that stands in the
+   * result, and the array of the collection, which is the root of a
+   * kept output. A node of the rendered tree that is no row is none
+   * here. The sizes are kept and are not measured again: the document
+   * has them computed from the documents being written.
+   */
+  #arrange(): void {
+    const link = Instance.LINK_BYTES;
+    const half = DOCUMENT_MAX_BYTES / 2;
+    for (let round = 0; round < 64 && this.#touched.size > 0; round++) {
+      const units = [...this.#touched].filter((unit) => this.#stands(unit))
+        .sort((a, b) => this.#depthOf(b) - this.#depthOf(a));
+      const rowsOf = new Map(this.#touchedRows);
+      this.#touched.clear();
+      this.#touchedRows.clear();
+      for (const unit of units) {
+        for (const key of rowsOf.get(unit) ?? []) {
+          const index = this.#positionIn(unit, key);
+          if (index < 0 || !unit.splits[index]) continue;
+          const size = unit.sizes[index];
+          if (!unit.parted[index] && size >= PART_SPLIT_BYTES) {
+            this.#toPart(unit, key, false);
+          } else if (
+            unit.parted[index] && size <= PART_MERGE_BYTES &&
+            (!unit.forced.has(key) ||
+              this.#laidBytes(this.#laidOfUnit(unit)) + size - link <= half)
+          ) {
+            this.#toPlace(unit, key);
+          }
+        }
+        const content = this.#contentOf(unit);
+        if (!unit.part && content >= PART_SPLIT_BYTES) {
+          this.#toPart(unit, undefined, false);
+        } else if (unit.part && content <= PART_MERGE_BYTES) {
+          const holder = "path" in unit.place
+            ? {}
+            : this.#laidOfRow(unit.place.unit, unit.place.key);
+          if (
+            !unit.partForced ||
+            this.#laidBytes(holder) + content - link <= half
+          ) this.#toPlace(unit, undefined);
+        }
+        // A part that holds more than a document may: each row that is
+        // stored in place becomes a part, whatever its size.
+        if (unit.part && this.#contentOf(unit) > DOCUMENT_MAX_BYTES) {
+          unit.keys.forEach((key, index) => {
+            if (!unit.parted[index] && unit.splits[index]) {
+              this.#toPart(unit, key, true);
+            }
+          });
+        }
+        // A row that is a part and holds more than a document may: the
+        // arrays in it become parts.
+        unit.keys.forEach((key, index) => {
+          if (!unit.parted[index] || unit.sizes[index] <= DOCUMENT_MAX_BYTES) {
+            return;
+          }
+          for (const inner of unit.inside.get(key)?.values() ?? []) {
+            if (!inner.part) this.#toPart(inner, undefined, true);
+          }
+        });
+      }
+      if (this.#rootSize > DOCUMENT_MAX_BYTES) {
+        for (const unit of this.#rootUnits.values()) {
+          if (!unit.part) this.#toPart(unit, undefined, true);
+        }
+      }
+    }
+    this.#touched.clear();
+    this.#touchedRows.clear();
+  }
+
+  /** A salted name of a key, for the identifier of a part. */
+  #hashedKey(key: string): FabricValue {
+    return this.store.salted(recordOfKey(key));
+  }
+
+  /**
+   * The documents that the layout stores the result in, by identifier
+   * (`execution-and-storage.md` §4.10): the result document, and each
+   * part with its value, the link back to the result, and the steps
+   * and the path that it is named from. A part stands in its holder as
+   * `{ $part: <identifier> }`. The executor reads the result from one
+   * document that holds it whole (`Instance.id` in the store), and
+   * forms these from it when asked.
+   */
+  laidOut(): Map<string, unknown> {
+    const documents = new Map<string, unknown>();
+    const within = (unit: Unit): FabricValue[] =>
+      "path" in unit.place ? [] : [
+        ...within(unit.place.unit),
+        {
+          element: this.plan.collections[unit.place.unit.collection].name,
+          key: this.#hashedKey(unit.place.key),
+        },
+      ];
+    const part = (steps: FabricValue[], cause: string[], value: unknown) => {
+      const id = identifierOf({
+        parent: this.id,
+        type: "part",
+        within: steps,
+        cause,
+      });
+      documents.set(id, {
+        value,
+        result: { $link: { doc: this.id, path: [] } },
+        within: steps,
+        path: cause,
+      });
+      return { $part: id };
+    };
+    // A stored value with each unit in it as the layout stores it.
+    const withUnits = (
+      value: unknown,
+      inside: Map<string, Unit> | undefined,
+    ): unknown => {
+      if (inside === undefined || inside.size === 0) return value;
+      const copy = structuredClone(value);
+      const holder = { value: copy } as Record<string, unknown>;
+      for (const [id, unit] of inside) {
+        const at = JSON.parse(id) as string[];
+        let from = holder;
+        let name = "value";
+        for (const segment of at) {
+          from = from[name] as Record<string, unknown>;
+          name = segment;
+        }
+        from[name] = rowsOf(unit);
+      }
+      return holder.value;
+    };
+    const rowsOf = (unit: Unit): unknown => {
+      const held = this.store.peek(this.id, this.#pathOf(unit));
+      const steps = within(unit);
+      const rows = (Array.isArray(held) ? held : []).map((row, index) => {
+        const key = unit.keys[index];
+        const value = withUnits(row, unit.inside.get(key));
+        return unit.parted[index]
+          ? part(
+            [...steps, {
+              element: this.plan.collections[unit.collection].name,
+              key: this.#hashedKey(key),
+            }],
+            [],
+            value,
+          )
+          : value;
+      });
+      return unit.part
+        ? part(
+          steps,
+          "path" in unit.place ? unit.place.path : unit.place.below,
+          rows,
+        )
+        : rows;
+    };
+    documents.set(
+      this.id,
+      withUnits(this.store.docs.get(this.id)?.value, this.#rootUnits),
+    );
+    return documents;
   }
 
   /**
@@ -3865,7 +4331,22 @@ export class Instance {
           return;
         }
       }
-      store.put(doc, at, filled(form, held));
+      const now = filled(form, held);
+      if (held === now || JSON.stringify(held) === JSON.stringify(now)) return;
+      const [was, size] = [bytesOf(held), bytesOf(now)];
+      store.put(doc, at, now);
+      if (owner === undefined) {
+        this.#rootSize += size - was;
+        this.#wroteLaid({}, size);
+      } else {
+        this.#growRow(owner.unit, owner.key, size - was);
+        this.#wroteLaid(this.#laidOfRow(owner.unit, owner.key), size);
+        if (at.length === path.length) {
+          owner.unit.splits[this.#positionIn(owner.unit, owner.key)] = splits(
+            now,
+          );
+        }
+      }
     };
     put(path, form, store.peek(doc, path));
   }
@@ -3894,35 +4375,38 @@ export class Instance {
       // hold another value.
       const { members } = entry;
       for (const { start, removed, inserted } of delta.ops) {
-        for (const key of removed) {
-          if (inserted.includes(key)) continue;
-          for (const inner of unit.inside.get(key)?.values() ?? []) {
-            this.#dispose(inner);
-          }
-          unit.inside.delete(key);
+        // The same keys at the same positions: the rows hold another
+        // value, and the array holds what it held.
+        if (
+          removed.length === inserted.length &&
+          removed.every((key, offset) => key === inserted[offset])
+        ) {
+          inserted.forEach((key, offset) => {
+            const index = start + offset;
+            if (members[index]?.key !== key || unit.keys[index] !== key) return;
+            unit.values[index] = values[index];
+            this.#place([...path, `${index}`], values[index], {
+              unit,
+              key,
+            }, []);
+          });
+          continue;
         }
         // A key that a later splice removed again has no row now.
-        const rows = inserted.map((key, offset) => {
-          const index = start + offset;
-          return members[index]?.key === key
-            ? this.#formOf(values[index], { unit, key }, [], new Set())
-            : null;
-        });
-        this.store.spliceAt(this.id, path, start, removed.length, rows);
-        const appended = start === unit.keys.length && removed.length === 0;
-        unit.keys.splice(start, removed.length, ...inserted);
-        unit.values.splice(
+        this.#spliceRows(
+          unit,
+          path,
           start,
-          removed.length,
-          ...inserted.map((_, offset) => values[start + offset]),
+          removed,
+          inserted,
+          inserted.map((_, offset) => values[start + offset]),
+          inserted.map((key, offset) => {
+            const index = start + offset;
+            return members[index]?.key === key
+              ? this.#formOf(values[index], { unit, key }, [], new Set())
+              : null;
+          }),
         );
-        if (appended && unit.positions !== undefined) {
-          inserted.forEach((key, offset) =>
-            unit.positions?.set(key, start + offset)
-          );
-        } else {
-          unit.positions = undefined;
-        }
       }
       const settled = unit.keys.length === members.length;
       for (const key of settled ? delta.rows : []) {
@@ -3939,7 +4423,9 @@ export class Instance {
     const keys = (entry.members ?? []).map(({ key }) => key);
     const were = unit.keys.length;
     let head = 0;
-    while (head < were && head < keys.length && unit.keys[head] === keys[head]) {
+    while (
+      head < were && head < keys.length && unit.keys[head] === keys[head]
+    ) {
       head += 1;
     }
     let tail = 0;
@@ -3961,23 +4447,17 @@ export class Instance {
     const removed = unit.keys.slice(head, were - tail);
     const inserted = keys.slice(head, keys.length - tail);
     if (removed.length > 0 || inserted.length > 0) {
-      for (const key of removed) {
-        for (const inner of unit.inside.get(key)?.values() ?? []) {
-          this.#dispose(inner);
-        }
-        unit.inside.delete(key);
-      }
-      const rows = inserted.map((key, offset) =>
-        this.#formOf(values[head + offset], { unit, key }, [], new Set())
-      );
-      this.store.spliceAt(this.id, path, head, removed.length, rows);
-      unit.keys.splice(head, removed.length, ...inserted);
-      unit.values.splice(
+      this.#spliceRows(
+        unit,
+        path,
         head,
-        removed.length,
-        ...values.slice(head, keys.length - tail),
+        removed,
+        inserted,
+        values.slice(head, keys.length - tail),
+        inserted.map((key, offset) =>
+          this.#formOf(values[head + offset], { unit, key }, [], new Set())
+        ),
       );
-      unit.positions = undefined;
     }
     for (let index = keys.length - tail; index < keys.length; index++) {
       row(index);
@@ -4007,6 +4487,7 @@ export class Instance {
       this.#dueUnits.delete(unit);
       if (this.#stands(unit)) this.#storeUnit(unit);
     }
+    this.#arrange();
   }
 
   /** The entry of a computation that has not been evaluated. */
@@ -4572,159 +5053,167 @@ export class Instance {
     return (context) => {
       const around = this.#keysIn(outer, context);
       const key = this.#name("assembly", collection, around);
-      return this.#ensure(key, context, undefined, "assembly", (host) => {
-        const elements = this.#table(collection, host);
-        // The instances of a key that left the collection are dropped,
-        // and those of a key that entered are made when they are first
-        // evaluated (ruling Z10).
-        const before = this.#tables.get(key);
-        this.#setTable(key, collection, around, elements);
-        const now = this.#tables.get(key)?.byKey;
-        for (const { key: left, index } of before?.elements ?? []) {
-          const stays = now?.get(left);
-          if (stays === undefined) {
-            this.#drop(collection, around, left);
-          } else if (stays.index !== index) {
-            this.#moved(collection, around, left);
+      return this.#ensure(
+        key,
+        context,
+        undefined,
+        "assembly",
+        (host) => {
+          const elements = this.#table(collection, host);
+          // The instances of a key that left the collection are dropped,
+          // and those of a key that entered are made when they are first
+          // evaluated (ruling Z10).
+          const before = this.#tables.get(key);
+          this.#setTable(key, collection, around, elements);
+          const now = this.#tables.get(key)?.byKey;
+          for (const { key: left, index } of before?.elements ?? []) {
+            const stays = now?.get(left);
+            if (stays === undefined) {
+              this.#drop(collection, around, left);
+            } else if (stays.index !== index) {
+              this.#moved(collection, around, left);
+            }
           }
-        }
-        // What reads the value of an element from the table.
-        this.#markUsers(tableName(key));
-        if (!this.#elements.has(collection)) {
-          throw new Unsupported("an element construct that has no function");
-        }
-        const first = host.dependencies.length;
-        const keyOf = new Map<string, string>();
-        const results = elements.map((element) => {
-          const entry = host.dependEntry(
-            this.#perElement(collection, element.key),
-          );
-          if (entry.key !== undefined) keyOf.set(entry.key, element.key);
-          return entry.value;
-        });
-        // What a later change of the array or of one row is applied to.
-        const rows = (
-          construct: "map" | "filter",
-          members: Element[],
-          flags?: boolean[],
-        ) => {
-          const { found, from } = host;
-          if (
-            host.writers.length > 0 ||
-            host.dependencies.length !== first + elements.length ||
-            keyOf.size !== elements.length ||
-            !this.#mayRefresh
-          ) return;
-          const state = found === undefined
-            ? undefined
-            : this.store.keyState(found.held, found.fields);
-          const upstream = from?.entry.key === undefined ? undefined : {
-            collection: from.collection,
-            name: from.entry.key,
-            version: from.entry.version ?? 0,
-          };
-          if (state === undefined && upstream === undefined) return;
-          host.rows = {
-            construct,
-            ...(found === undefined || state === undefined ? { upstream } : {
-              stored: {
-                base: found.base,
-                named: this.store.addressText(found.named),
-                fields: found.fields,
-                formed: state.formed,
-                seen: state.count,
-              },
-            }),
-            arrayReads: found?.arrayReads ?? new Set(),
-            elementReads: found?.elementReads ?? new Map(),
-            first,
-            results,
-            keyOf,
-            members,
-            ...(flags === undefined ? {} : { flags }),
-          };
-        };
-        // What the result holds for an element it passes on: what the
-        // element is, a reference to a cell or a reference by key
-        // included.
-        const given = ({ source }: Element) =>
-          source instanceof Ref
-            ? source
-            : "entry" in source
-            ? host.at(host.depend(source.entry, source.at), source.at)
-            : source.value;
-        const holds = (index: number) => Boolean(host.v(results[index]));
-        const numbered = (members: Omit<Element, "index">[]) =>
-          members.map((member, index) => ({ ...member, index }));
-        // Each position of the assembled array is an element of the
-        // collection, with its key.
-        const keyed = (array: unknown[]) => {
-          assembledElements.set(array, {
-            members: host.members ?? [],
-            context,
-          });
-          return array;
-        };
-        switch (record.construct) {
-          case "map":
-            host.members = numbered(elements.map(({ key }) => ({
-              key,
-              source: { entry: this.#perElement(collection, key), at: [] },
-            })));
-            rows("map", host.members);
-            return keyed([...results]);
-          case "filter": {
-            const flags = elements.map((_, index) => holds(index));
-            const kept = elements.filter((_, index) => flags[index]);
-            host.members = numbered(kept);
-            if (
-              results.every((result) =>
-                result === null || typeof result !== "object"
-              )
-            ) rows("filter", host.members, flags);
-            return keyed(kept.map(given));
+          // What reads the value of an element from the table.
+          this.#markUsers(tableName(key));
+          if (!this.#elements.has(collection)) {
+            throw new Unsupported("an element construct that has no function");
           }
-          case "flatMap": {
-            // An element of the result has the key of its source
-            // element together with a part formed from the member (PL
-            // §1.3, "The key of an element that a `flatMap`
-            // contributes"; ruling Z22).
-            const members: Omit<Element, "index">[] = [];
-            const flat = results.flatMap((result, index) => {
-              const { key } = elements[index];
-              const entry = this.#perElement(collection, key);
-              const inner = new Map([...context, [
-                collection,
-                elements[
-                  index
-                ],
-              ]]);
-              const segment = this.#segment(result, entry, inner, host);
-              for (const { part, source } of segment.members) {
-                members.push({ key: memberKey(key, part), source });
-              }
-              return segment.values;
-            });
-            host.members = numbered(members);
-            return keyed(flat);
-          }
-          case "some":
-            return elements.some((_, index) => holds(index));
-          case "every":
-            return elements.every((_, index) => holds(index));
-          case "find": {
-            const found = elements.find((_, index) => holds(index));
-            return found === undefined ? undefined : given(found);
-          }
-          case "findIndex":
-            return elements.findIndex((_, index) => holds(index));
-          default:
-            throw new Unsupported(
-              `an element construct \`${record.construct}\``,
+          const first = host.dependencies.length;
+          const keyOf = new Map<string, string>();
+          const results = elements.map((element) => {
+            const entry = host.dependEntry(
+              this.#perElement(collection, element.key),
             );
-        }
-      }, outer, (held, slot) =>
-        this.#reassemble(collection, key, around, context, held, slot));
+            if (entry.key !== undefined) keyOf.set(entry.key, element.key);
+            return entry.value;
+          });
+          // What a later change of the array or of one row is applied to.
+          const rows = (
+            construct: "map" | "filter",
+            members: Element[],
+            flags?: boolean[],
+          ) => {
+            const { found, from } = host;
+            if (
+              host.writers.length > 0 ||
+              host.dependencies.length !== first + elements.length ||
+              keyOf.size !== elements.length ||
+              !this.#mayRefresh
+            ) return;
+            const state = found === undefined
+              ? undefined
+              : this.store.keyState(found.held, found.fields);
+            const upstream = from?.entry.key === undefined ? undefined : {
+              collection: from.collection,
+              name: from.entry.key,
+              version: from.entry.version ?? 0,
+            };
+            if (state === undefined && upstream === undefined) return;
+            host.rows = {
+              construct,
+              ...(found === undefined || state === undefined ? { upstream } : {
+                stored: {
+                  base: found.base,
+                  named: this.store.addressText(found.named),
+                  fields: found.fields,
+                  formed: state.formed,
+                  seen: state.count,
+                },
+              }),
+              arrayReads: found?.arrayReads ?? new Set(),
+              elementReads: found?.elementReads ?? new Map(),
+              first,
+              results,
+              keyOf,
+              members,
+              ...(flags === undefined ? {} : { flags }),
+            };
+          };
+          // What the result holds for an element it passes on: what the
+          // element is, a reference to a cell or a reference by key
+          // included.
+          const given = ({ source }: Element) =>
+            source instanceof Ref
+              ? source
+              : "entry" in source
+              ? host.at(host.depend(source.entry, source.at), source.at)
+              : source.value;
+          const holds = (index: number) => Boolean(host.v(results[index]));
+          const numbered = (members: Omit<Element, "index">[]) =>
+            members.map((member, index) => ({ ...member, index }));
+          // Each position of the assembled array is an element of the
+          // collection, with its key.
+          const keyed = (array: unknown[]) => {
+            assembledElements.set(array, {
+              members: host.members ?? [],
+              context,
+            });
+            return array;
+          };
+          switch (record.construct) {
+            case "map":
+              host.members = numbered(elements.map(({ key }) => ({
+                key,
+                source: { entry: this.#perElement(collection, key), at: [] },
+              })));
+              rows("map", host.members);
+              return keyed([...results]);
+            case "filter": {
+              const flags = elements.map((_, index) => holds(index));
+              const kept = elements.filter((_, index) => flags[index]);
+              host.members = numbered(kept);
+              if (
+                results.every((result) =>
+                  result === null || typeof result !== "object"
+                )
+              ) rows("filter", host.members, flags);
+              return keyed(kept.map(given));
+            }
+            case "flatMap": {
+              // An element of the result has the key of its source
+              // element together with a part formed from the member (PL
+              // §1.3, "The key of an element that a `flatMap`
+              // contributes"; ruling Z22).
+              const members: Omit<Element, "index">[] = [];
+              const flat = results.flatMap((result, index) => {
+                const { key } = elements[index];
+                const entry = this.#perElement(collection, key);
+                const inner = new Map([...context, [
+                  collection,
+                  elements[
+                    index
+                  ],
+                ]]);
+                const segment = this.#segment(result, entry, inner, host);
+                for (const { part, source } of segment.members) {
+                  members.push({ key: memberKey(key, part), source });
+                }
+                return segment.values;
+              });
+              host.members = numbered(members);
+              return keyed(flat);
+            }
+            case "some":
+              return elements.some((_, index) => holds(index));
+            case "every":
+              return elements.every((_, index) => holds(index));
+            case "find": {
+              const found = elements.find((_, index) => holds(index));
+              return found === undefined ? undefined : given(found);
+            }
+            case "findIndex":
+              return elements.findIndex((_, index) => holds(index));
+            default:
+              throw new Unsupported(
+                `an element construct \`${record.construct}\``,
+              );
+          }
+        },
+        outer,
+        (held, slot) =>
+          this.#reassemble(collection, key, around, context, held, slot),
+      );
     };
   }
 
@@ -4872,24 +5361,38 @@ export class Instance {
         index: -1,
         source: PENDING,
       }));
-      const gone = elements.splice(op.start, op.removed.length, ...fresh);
-      results.splice(op.start, op.removed.length, ...fresh.map(() => undefined));
-      flags?.splice(op.start, op.removed.length, ...fresh.map(() => false));
-      if (rows.construct === "map") {
-        members.splice(
+      const gone = spliceIn(elements, op.start, op.removed.length, fresh);
+      spliceIn(
+        results,
+        op.start,
+        op.removed.length,
+        fresh.map(() => undefined),
+      );
+      if (flags !== undefined) {
+        spliceIn(
+          flags,
           op.start,
           op.removed.length,
-          ...fresh.map(({ key }): Element => ({
+          fresh.map(() => false),
+        );
+      }
+      if (rows.construct === "map") {
+        spliceIn(
+          members,
+          op.start,
+          op.removed.length,
+          fresh.map(({ key }): Element => ({
             key,
             index: -1,
             source: { entry: this.#perElement(collection, key), at: [] },
           })),
         );
       }
-      dependencies.splice(
+      spliceIn(
+        dependencies,
         rows.first + op.start,
         op.removed.length,
-        ...fresh.map((): Dependency => ({ stamp: () => undefined, seen: 0 })),
+        fresh.map((): Dependency => ({ stamp: () => undefined, seen: 0 })),
       );
       for (const element of gone) {
         byKey.delete(element.key);

@@ -7,6 +7,7 @@
  * a slot's path ("A slot's path is resolved through links").
  */
 
+import { spliceAll } from "@commonfabric/collections/splice";
 import {
   debugStr,
   type FabricHash,
@@ -48,6 +49,24 @@ export type Schema = boolean | {
   $defs?: Record<string, Schema>;
   $ref?: string;
 };
+
+/**
+ * `array.splice(start, count, ...members)`, with the members passed as
+ * arguments of the call only where they are few: a call takes about a
+ * hundred thousand arguments and no more.
+ */
+export const spliceIn = <T>(
+  array: T[],
+  start: number,
+  count: number,
+  members: readonly T[],
+): T[] =>
+  members.length > 1_024
+    ? spliceAll(array, start, count, members)
+    : Array.prototype.splice.apply(
+      array,
+      ([start, count] as unknown[]).concat(members) as [number, number],
+    ) as T[];
 
 const linked = new WeakSet<object>();
 
@@ -610,7 +629,11 @@ export const OUTPUT = "output";
  * held, and no copy: a change replaces a value and mutates none.
  */
 export type Undo =
-  | { doc: string; whole: true; old: { kind: string; value: unknown } | undefined }
+  | {
+    doc: string;
+    whole: true;
+    old: { kind: string; value: unknown } | undefined;
+  }
   | { doc: string; path: readonly string[]; old: unknown }
   | {
     doc: string;
@@ -864,10 +887,11 @@ export class Store {
       if ("splice" in undo) {
         const array = holder[name];
         if (Array.isArray(array)) {
-          array.splice(
+          spliceIn(
+            array,
             undo.splice.start,
             undo.splice.inserted,
-            ...structuredClone(undo.splice.removed),
+            structuredClone(undo.splice.removed),
           );
         }
       } else if (undo.old === undefined && !Array.isArray(holder)) {
@@ -955,10 +979,11 @@ export class Store {
       if ("splice" in undo) {
         const array = holder[name];
         if (Array.isArray(array)) {
-          const taken = array.splice(
+          const taken = spliceIn(
+            array,
             undo.splice.start,
             undo.splice.inserted,
-            ...undo.splice.removed,
+            undo.splice.removed,
           );
           this.#changed(undo.doc, undo.path, taken, {
             start: undo.splice.start,
@@ -1061,7 +1086,9 @@ export class Store {
       formed: state.formed,
       count: state.dropped + state.ops.length,
       since: (seen) =>
-        seen < state.dropped ? undefined : state.ops.slice(seen - state.dropped),
+        seen < state.dropped
+          ? undefined
+          : state.ops.slice(seen - state.dropped),
     };
   }
 
@@ -1077,7 +1104,10 @@ export class Store {
       );
       return this.addressOf(named);
     }
-    return this.partOf(this.read(state.at.key(`${index}`), reads), state.fields);
+    return this.partOf(
+      this.read(state.at.key(`${index}`), reads),
+      state.fields,
+    );
   }
 
   /**
@@ -1153,8 +1183,8 @@ export class Store {
         const here = texts.filter((one) => one === text).length;
         if (others > 0 || here > 1) shared = true;
       }
-      state.parts.splice(start, removed, ...parts);
-      state.texts.splice(start, removed, ...texts);
+      spliceIn(state.parts, start, removed, parts);
+      spliceIn(state.texts, start, removed, texts);
       for (const [text, change] of counts) {
         const now = (state.counts.get(text) ?? 0) + change;
         if (now === 0) state.counts.delete(text);
@@ -1163,7 +1193,7 @@ export class Store {
       if (shared) {
         // The occurrence counts of the positions with those parts are
         // formed again, and every reader of the keys starts over.
-        state.keys.splice(0, state.keys.length, ...keysOfParts(state.parts));
+        spliceIn(state.keys, 0, state.keys.length, keysOfParts(state.parts));
         this.#positions.delete(state.keys);
         state.formed += 1;
         state.ops.length = 0;
@@ -1184,7 +1214,7 @@ export class Store {
           this.#positions.delete(state.keys);
         }
       }
-      state.keys.splice(start, removed, ...keys);
+      spliceIn(state.keys, start, removed, keys);
       state.ops.push({ start, removed: before, inserted: keys });
       // A reader that is further behind than this forms what it
       // derived from the keys whole.
@@ -1192,7 +1222,8 @@ export class Store {
         state.dropped += 256;
         state.ops.splice(0, 256);
       }
-      affected.push(...before, ...keys);
+      for (const key of before) affected.push(key);
+      for (const key of keys) affected.push(key);
     }
     return all ? undefined : affected;
   }
@@ -1244,7 +1275,10 @@ export class Store {
     // the start and at the end keep their keys.
     const states = this.#states.get(old);
     if (states === undefined || !Array.isArray(value) || !this.#kept) {
-      keyed.push({ array: old, ...(Array.isArray(value) ? { now: value } : {}) });
+      keyed.push({
+        array: old,
+        ...(Array.isArray(value) ? { now: value } : {}),
+      });
       return keyed;
     }
     const same = (a: unknown, b: unknown) =>
@@ -1329,6 +1363,16 @@ export class Store {
       throw new Error(debugStr`Not a fabric value: $quote${value}`);
     }
     this.hashes += 1;
+    return hashOf({ salt: this.#secret, value });
+  }
+
+  /**
+   * The salted hash of a value that is no element part of a key, as
+   * the name of a key in the identifier of a part document is
+   * (`execution-and-storage.md` §4.10): it is not counted with the
+   * hashes of the keys.
+   */
+  salted(value: FabricValue): FabricHash {
     return hashOf({ salt: this.#secret, value });
   }
 
@@ -1963,7 +2007,11 @@ export class Store {
       for (let index = 0; index < path.length - 1; index++) {
         const next = (holder as Record<string, unknown>)[path[index]];
         if (typeof next !== "object" || next === null) {
-          this.journal?.push({ doc, path: path.slice(0, index + 1), old: next });
+          this.journal?.push({
+            doc,
+            path: path.slice(0, index + 1),
+            old: next,
+          });
           holder[path[index]] = /^\d+$/.test(path[index + 1]) ? [] : {};
         }
         holder = holder[path[index]] as Record<string, unknown>;
@@ -2043,7 +2091,7 @@ export class Store {
     }
     if (removed === 0 && members.length === 0) return;
     this.onWrite?.(doc, path);
-    const taken = held.splice(start, removed, ...members);
+    const taken = spliceIn(held, start, removed, members);
     this.journal?.push({
       doc,
       path,
@@ -2095,7 +2143,7 @@ export class Store {
     if (!Array.isArray(held)) return;
     if (removed === 0 && members.length === 0) return;
     this.onWrite?.(doc, path);
-    const taken = held.splice(start, removed, ...members);
+    const taken = spliceIn(held, start, removed, members);
     this.journal?.push({
       doc,
       path,
