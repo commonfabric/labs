@@ -1567,3 +1567,96 @@ fn keyed_by_declaration_is_reported_at_the_marker_as_an_error() {
     assert_eq!((found[0].line, found[0].column), position);
     assert_eq!(found[0].severity, Severity::Error);
 }
+
+/// `plan-and-label-templates.md` §1.3, "Two declared keys for one value"
+/// (assumed there): a value whose type declares one key is not passed to
+/// a parameter whose type declares another key (`keyed-by:mismatch`). A
+/// parameter whose type declares no key accepts it, and so does one that
+/// declares the same fields in another order. `saved` is a pattern
+/// input, an array of plain values in place or of references, which the
+/// type does not tell apart. `fetched(count)` is a plain array generated
+/// from scratch, and `saved.filter(...)` the result of another
+/// per-element construct, whose elements have the upstream key.
+#[test]
+fn a_value_that_declares_one_key_is_not_passed_where_another_key_is_declared() {
+    let found = |parameter: &str, argument: &str| {
+        ids(&check(&format!(
+            "interface Repo {{ id: number; name: string; owner: string }}\n\
+             const fetched = lift((count: number): KeyedBy<Repo, \"id\">[] => [{{ id: count, name: \"n\", owner: \"o\" }}]);\n\
+             const Sub = pattern<{{ repos: {parameter} }}>(({{ repos }}) => ({{ count: repos.length }}));\n\
+             export default pattern<{{ saved: KeyedBy<Repo, \"id\">[]; pairs: KeyedBy<Repo, \"owner\" | \"name\">[]; plain: Repo[]; count: number }}>(\n\
+               ({{ saved, pairs, plain, count }}) => ({{\n\
+                 sub: Sub({{ repos: {argument} }}),\n\
+               }}));"
+        )))
+    };
+    let none = Vec::<&str>::new();
+    let mismatch = vec!["keyed-by:mismatch"];
+    // Another key.
+    assert_eq!(found("KeyedBy<Repo, \"name\">[]", "saved"), mismatch);
+    assert_eq!(
+        found("KeyedBy<Repo, \"id\" | \"name\">[]", "saved"),
+        mismatch
+    );
+    assert_eq!(found("KeyedBy<Repo, \"name\">[]", "pairs"), mismatch);
+    assert_eq!(
+        found("KeyedBy<Repo, \"name\">[]", "fetched(count)"),
+        mismatch
+    );
+    assert_eq!(
+        found(
+            "KeyedBy<Repo, \"name\">[]",
+            "saved.filter((repo) => repo.id > 0)"
+        ),
+        mismatch
+    );
+    // The same key, also written in another order.
+    assert_eq!(found("KeyedBy<Repo, \"id\">[]", "saved"), none);
+    assert_eq!(
+        found("KeyedBy<Repo, \"name\" | \"owner\">[]", "pairs"),
+        none
+    );
+    assert_eq!(found("KeyedBy<Repo, \"id\">[]", "fetched(count)"), none);
+    // A parameter that declares no key.
+    assert_eq!(found("Repo[]", "saved"), none);
+    assert_eq!(found("Repo[]", "pairs"), none);
+    // A value that declares no key, where the parameter declares one.
+    assert_eq!(found("KeyedBy<Repo, \"name\">[]", "plain"), none);
+}
+
+/// The same rule at the state of a handler, at the argument of a `lift`
+/// result, and at the argument of an authored function, each given a
+/// pattern input whose elements are plain values in place or references.
+/// The report is at the value, and is an error.
+#[test]
+fn a_mismatched_declared_key_is_reported_at_the_value_at_each_kind_of_call() {
+    for (declarations, call) in [
+        (
+            "const use = handler<unknown, { repos: Writable<KeyedBy<Repo, \"name\">[]> }>((_, { repos }) => { repos.set([]); });",
+            "use({ repos: /*!*/saved })",
+        ),
+        (
+            "const count = lift((input: { repos: KeyedBy<Repo, \"name\">[] }) => input.repos.length);",
+            "count({ repos: /*!*/saved })",
+        ),
+        (
+            "function count(repos: KeyedBy<Repo, \"name\">[]): number { return repos.length; }",
+            "computed(() => count(/*!*/saved.get()))",
+        ),
+    ] {
+        let (position, snippet) = marked(&format!(
+            "interface Repo {{ id: number; name: string }}\n\
+             {declarations}\n\
+             export default pattern<{{ saved: Writable<KeyedBy<Repo, \"id\">[]> }}>(({{ saved }}) => ({{\n\
+               out: {call},\n\
+             }}));"
+        ));
+        let found: Vec<_> = check(&snippet)
+            .into_iter()
+            .filter(|diagnostic| diagnostic.id == "keyed-by:mismatch")
+            .collect();
+        assert_eq!(found.len(), 1, "{call}");
+        assert_eq!((found[0].line, found[0].column), position, "{call}");
+        assert_eq!(found[0].severity, Severity::Error);
+    }
+}

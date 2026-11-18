@@ -341,6 +341,9 @@ pub fn rewrite(id: &str) -> &'static str {
             "Name one required top-level property of type `string` or `number`, or a union \
              of such names, as in `KeyedBy<Repo, \"owner\" | \"name\">`."
         }
+        "keyed-by:mismatch" => {
+            "Declare the same key fields on both types, or declare no key on the parameter."
+        }
         _ => "",
     }
 }

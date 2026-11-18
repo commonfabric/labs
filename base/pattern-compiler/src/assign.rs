@@ -1133,6 +1133,17 @@ impl<'a> Resolver<'_, 'a> {
         let Ok(from) = typed else {
             return Verdict::Unsure;
         };
+        if let Some((given, declared)) = self.key_mismatch(from, to, 0) {
+            self.type_report(
+                module,
+                "keyed-by:mismatch",
+                expression.span(),
+                &format!(
+                    "A value whose type declares the key `{given}` is given where the \
+                     key `{declared}` is declared"
+                ),
+            );
+        }
         let verdict = self.relate_in(from, to, 0, by_reference);
         if !matches!(verdict, Verdict::No(..)) {
             self.note_bindings(module, expression, from, to, by_reference, &verdict);
@@ -1178,6 +1189,54 @@ impl<'a> Resolver<'_, 'a> {
             }
         }
         verdict
+    }
+
+    /// The key fields that `KeyedBy` declares on a type node, as the text
+    /// of the keyword `keyFields`.
+    fn declared_key(&self, ty: TypeId) -> Option<String> {
+        self.annotations_of(ty)
+            .into_iter()
+            .find(|annotation| annotation.key == "keyFields")
+            .and_then(|annotation| annotation.value)
+            .map(|fields| fields.to_string())
+    }
+
+    /// The two keys, where a value of type `from` given where `to` is
+    /// declared has a part whose type declares one key at a position
+    /// where `to` declares another (`keyed-by:mismatch`; PL §1.3, "Two
+    /// declared keys for one value"). A position at which one of the two
+    /// declares no key is no mismatch. The walk goes through handles,
+    /// arrays, the properties both types declare, and the members of a
+    /// union, and gives up at depth 6, so a mismatch deeper than that is
+    /// not found.
+    fn key_mismatch(&self, from: TypeId, to: TypeId, depth: u32) -> Option<(String, String)> {
+        if depth > 6 {
+            return None;
+        }
+        if let (Some(given), Some(declared)) = (self.declared_key(from), self.declared_key(to)) {
+            if given != declared {
+                return Some((given, declared));
+            }
+        }
+        let next = depth + 1;
+        match (self.shape(from), self.shape(to)) {
+            (Shape::Handle(_, from), _) => self.key_mismatch(from, to, next),
+            (_, Shape::Handle(_, to)) => self.key_mismatch(from, to, next),
+            (Shape::Union(members), _) => members
+                .into_iter()
+                .find_map(|member| self.key_mismatch(member, to, next)),
+            (_, Shape::Union(members)) => members
+                .into_iter()
+                .find_map(|member| self.key_mismatch(from, member, next)),
+            (Shape::Array(from), Shape::Array(to)) => self.key_mismatch(from, to, next),
+            (Shape::Object(given, _), Shape::Object(declared, _)) => {
+                declared.iter().find_map(|property| {
+                    let given = given.iter().find(|given| given.name == property.name)?;
+                    self.key_mismatch(given.ty, property.ty, next)
+                })
+            }
+            _ => None,
+        }
     }
 
     /// Counts and lists two kinds of accepted argument the specification
