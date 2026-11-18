@@ -104,6 +104,15 @@ export const term = {
   leaveAltScreen: `${CSI}?1049l`,
   enableMouse: `${CSI}?1000h${CSI}?1006h`,
   disableMouse: `${CSI}?1006l${CSI}?1000l`,
+
+  /** Has the terminal report every key as the kitty keyboard protocol's
+   * `CSI … u`, with its modifiers, the code point it types with Shift, and
+   * the text it types. In this mode iTerm2 reports Option as Alt even when
+   * Option is set to type characters. */
+  reportAllKeys: `${CSI}>29u`,
+
+  /** Has the terminal report keys as it did before {@link reportAllKeys}. */
+  reportKeysAsBefore: `${CSI}<u`,
   hideCursor: `${CSI}?25l`,
   showCursor: `${CSI}?25h`,
   clearScreen: `${CSI}2J`,

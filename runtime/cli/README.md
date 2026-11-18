@@ -619,15 +619,26 @@ Shift-Tab, like the navigation keys, move the focus through those first and then
 through the buttons. Space toggles the focused check box, and so does a click on
 it. Moving the focus to an input line selects its text, so that typing replaces
 it. While an input line is focused, every key but Tab, Shift-Tab, Enter, Escape,
-and Alt with a letter goes to it: typed text goes in, Backspace and Delete (or
-Ctrl-D) delete a character, Alt-Backspace deletes the word before the cursor,
-and Left, Right, Home, and End (or Ctrl-B, Ctrl-F, Ctrl-A, and Ctrl-E) move its
-cursor. A click on an input line puts its cursor where the click lands, and a
-click on its label selects its text. An arrow at either end of the line says
-that its text runs on past that end. A check box's highlighted letter toggles
-it, an input line's moves the focus to it, and a button's activates it; while an
-input line is focused, Alt with the letter does. Enter activates the default
-button wherever the focus is, unless it is on another button.
+and Alt with a shortcut letter goes to it: typed text goes in, Backspace and
+Delete (or Ctrl-D) delete a character, Alt-Backspace deletes the word before the
+cursor, and Left, Right, Home, and End (or Ctrl-B, Ctrl-F, Ctrl-A, and Ctrl-E)
+move its cursor. A click on an input line puts its cursor where the click lands,
+and a click on its label selects its text. An arrow at either end of the line
+says that its text runs on past that end. A check box's highlighted letter
+toggles it, an input line's moves the focus to it, a radio button's selects it
+and moves the focus to its set, and a button's activates it. Alt with the letter
+does the same wherever the focus is, including on an input line or among radio
+buttons. Alt with a letter that is no control's shortcut types into a focused
+input line the character the terminal says it typed, if any, and otherwise does
+nothing. Enter activates the default button wherever the focus is, unless it is
+on another button.
+
+While a dialog is up, the viewer asks the terminal to report every key in full,
+as the kitty keyboard protocol defines. In that mode, iTerm2 reports Option with
+a letter as Alt with that letter even when its Option key is set to "Normal",
+which otherwise types characters such as `ß`. A terminal without the protocol
+reports Alt only when its Option key is set to send Escape first, which iTerm2
+calls "Esc+" and Terminal calls "Use Option as Meta key".
 
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In

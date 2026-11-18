@@ -1749,6 +1749,17 @@ export class Session {
       this.#handleWheel(key.name === "wheel-up" ? -1 : 1);
       return;
     }
+    // Alt with a letter is the dialog's shortcut wherever the focus is, and
+    // otherwise types what it types into a focused input line.
+    const prompt = key.alt && [...key.name].length === 1
+      ? this.#promptDialog()
+      : null;
+    if (prompt) {
+      if (!this.#pressShortcut(prompt, key, beforeButtonAction)) {
+        this.#handleFieldKey(key);
+      }
+      return;
+    }
     if (this.#handleFieldKey(key)) return;
     if (this.#handleDialogNavigation(key)) return;
     if (this.#prompting()) {
@@ -4685,29 +4696,47 @@ export class Session {
     } else if (key.name === "escape") {
       index = buttons.findIndex((b) => b.kind === "cancel");
     } else {
-      const k = key.char ?? key.name;
-      const answers = (hotkey: string) =>
-        hotkey === k || hotkey === k.toLowerCase();
-      const field = fields.findIndex((f) => answers(f.hotkey));
-      if (field >= 0) {
-        this.#pressField(field);
-        return;
-      }
-      // A radio button's letter selects it, and moves the focus to its set.
-      for (const [i, f] of this.#fieldStates().entries()) {
-        const button = f.kind === "radioButtons"
-          ? f.buttons.findIndex((b) => answers(b.hotkey))
-          : -1;
-        if (f.kind !== "radioButtons" || button < 0) continue;
-        this.#moveDialogFocus(i);
-        f.selected = button;
-        return;
-      }
-      index = buttons.findIndex((b) => answers(b.hotkey));
+      this.#pressShortcut(dialog, key, beforeButtonAction);
+      return;
     }
     // An unbound key leaves the prompt up.
     if (index < 0 || index >= buttons.length) return;
     this.#activateButton(dialog, index, beforeButtonAction);
+  }
+
+  /**
+   * Presses the control of `dialog`, the prompt that is up, whose shortcut
+   * letter is `key`'s, and returns whether there was one: focuses a field,
+   * toggling a check box; selects a radio button and focuses its set; or
+   * activates a button. A lowercase shortcut answers its letter in either
+   * case, and an uppercase one only the uppercase letter.
+   */
+  #pressShortcut(
+    dialog: DialogState,
+    key: Key,
+    beforeButtonAction?: (pushed: PushedFrame) => void,
+  ): boolean {
+    const answers = (hotkey: string) =>
+      hotkey === key.name || hotkey === key.name.toLowerCase();
+    const fields = this.#fieldStates();
+    const field = fields.findIndex((f) => answers(f.hotkey));
+    if (field >= 0) {
+      this.#pressField(field);
+      return true;
+    }
+    for (const [i, f] of fields.entries()) {
+      const button = f.kind === "radioButtons"
+        ? f.buttons.findIndex((b) => answers(b.hotkey))
+        : -1;
+      if (f.kind !== "radioButtons" || button < 0) continue;
+      this.#moveDialogFocus(i);
+      f.selected = button;
+      return true;
+    }
+    const index = dialog.buttons.findIndex((b) => answers(b.hotkey));
+    if (index < 0) return false;
+    this.#activateButton(dialog, index, beforeButtonAction);
+    return true;
   }
 
   /**
@@ -4718,7 +4747,7 @@ export class Session {
    * does nothing, since the selected button is the focused one. An input
    * line takes
    * every key but those that move the focus or close the dialog: Tab,
-   * Shift-Tab, Enter, Escape, and Alt with a letter.
+   * Shift-Tab, Enter, Escape, and Alt with a key that types nothing.
    */
   #handleFieldKey(key: Key): boolean {
     const field = this.#fieldStates()[this.#dialogFocus];
