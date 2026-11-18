@@ -511,6 +511,49 @@ interface SchemaRoot { v: ${mapped} }
       ).toEqual({ type: "number" });
     });
 
+    it("keeps the scope of a member the template leaves as it is", async () => {
+      expect(
+        await mappedMemberSchema(UNWRAP, "Unwrap<{ w: PerSession<null> }>"),
+      )
+        .toMatchObject({ scope: "session" });
+    });
+
+    it("keeps a member the template leaves as it is optional where its default holds `undefined`", async () => {
+      const schema = await schemaFor(`
+${UNWRAP}
+interface SchemaRoot { v: Unwrap<{ w: Default<number | undefined, 42> }> }
+`);
+      const v = schema.properties?.v as { required?: string[] };
+
+      expect(v.required ?? []).not.toContain("w");
+    });
+
+    it("emits both members of the widened union for a cell member of a mapped type an identity mapping wraps", async () => {
+      // `Partial`'s `?` adds `undefined` beside the two members, so only the
+      // members are pinned.
+
+      const schema = await mappedMemberSchema(
+        LOOSE,
+        "Partial<Loose<{ w: Cell<number> }>>",
+      ) as { anyOf?: { type?: string | string[]; asCell?: unknown }[] };
+
+      expect(schema.anyOf).toContainEqual({ type: "number", asCell: ["cell"] });
+      expect(
+        schema.anyOf?.some(({ type }) =>
+          type === "string" || (Array.isArray(type) && type.includes("string"))
+        ),
+      ).toBe(true);
+    });
+
+    it("emits the unwrapped value type for a cell member of a mapped type an identity mapping wraps", async () => {
+      expect(
+        await mappedMemberSchema(
+          UNWRAP,
+          "Readonly<Unwrap<{ w: Cell<number> }>>",
+        ),
+      ).toEqual({ type: "number" });
+    });
+
     it("emits the cell a `Pick` leaves as it is", async () => {
       expect(
         await mappedMemberSchema(

@@ -19,11 +19,11 @@ import type {
 } from "../interface.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
 import {
+  declarationDescribesMember,
   getPropertyNameText,
   instantiatedPropertyType,
   instantiatedValueType,
   isFunctionLike,
-  keepsDeclaredMemberTypes,
   resolvePropertyType,
 } from "../type-utils.ts";
 import { getCellWrapperInfo } from "../typescript/cell-brand.ts";
@@ -244,7 +244,8 @@ export class ObjectFormatter implements TypeFormatter {
           ts.isPropertySignature(propDecl) || ts.isPropertyDeclaration(propDecl)
         ) {
           if (
-            !propTypeNode && propDecl.type && keepsDeclaredMemberTypes(type)
+            !propTypeNode && propDecl.type &&
+            declarationDescribesMember(prop, type, propDecl.type, checker)
           ) {
             propTypeNode = propDecl.type;
           }

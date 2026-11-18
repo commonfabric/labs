@@ -236,29 +236,34 @@ export function resolvePropertyType(
 }
 
 /**
- * Whether `type`'s members keep the types their declarations write. A mapped
- * type keeps the declaration of each member it maps. Where its template reads
- * the member as it is (`T[K]`, as `Partial`, `Required`, `Readonly` and `Pick`
- * do), that declaration still describes the member, and the mapping's
- * modifiers change only its optionality and mutability. A template that
- * changes the member's type, as `T[K] | string` or
- * `T[K] extends Cell<infer U> ? U : T[K]` does, leaves each member a type its
- * declaration does not write.
+ * Whether `declTypeNode`, the type `prop`'s declaration writes, describes
+ * `prop` as a member of `type`. A mapped type keeps the declaration of each
+ * member it maps, the one an inner mapped type took over included, as in
+ * `Partial<Loose<T>>`, and its template can change the member's type:
+ * `T[K] | string` widens every member, and
+ * `T[K] extends Cell<infer U> ? U : T[K]` unwraps a cell member and leaves the
+ * others as they are. A member of a mapped type is described by its
+ * declaration where its type is the type the declaration writes, or differs
+ * from it only by the `undefined` that a `?` adds or a `-?` takes away. A
+ * member the checker reads as `any` is described by its declaration, since
+ * that read says nothing about the member (`resolvePropertyType()`). A member
+ * of any other type is described by its own declaration.
  */
-export function keepsDeclaredMemberTypes(type: ts.Type): boolean {
+export function declarationDescribesMember(
+  prop: ts.Symbol,
+  type: ts.Type,
+  declTypeNode: ts.TypeNode,
+  checker: ts.TypeChecker,
+): boolean {
   if (
     !(type.flags & ts.TypeFlags.Object) ||
     !((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped)
   ) {
     return true;
   }
-  const mapped = type.getSymbol()?.declarations?.find(ts.isMappedTypeNode);
-  if (!mapped?.type) return true;
-  const template = unwrapTypeParentheses(mapped.type);
-  return ts.isIndexedAccessTypeNode(template) &&
-    ts.isTypeReferenceNode(template.indexType) &&
-    ts.isIdentifier(template.indexType.typeName) &&
-    template.indexType.typeName.text === mapped.typeParameter.name.text;
+  const memberType = checker.getTypeOfSymbol(prop);
+  return (memberType.flags & ts.TypeFlags.Any) !== 0 ||
+    sameBesidesUndefined(memberType, checker.getTypeFromTypeNode(declTypeNode));
 }
 
 /**
