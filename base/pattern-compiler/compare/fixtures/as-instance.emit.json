@@ -233,6 +233,7 @@
               "within": []
             }
           ],
+          "templates": [],
           "version": 1
         },
         "schemas": [
@@ -526,6 +527,7 @@
               "within": []
             }
           ],
+          "templates": [],
           "version": 1
         },
         "schemas": [
@@ -814,23 +816,8 @@
             {
               "construct": "filter",
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 6
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               },
               "name": "filter",
               "source": {
@@ -1127,23 +1114,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 6
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -1422,6 +1394,27 @@
                   "site": "map"
                 }
               ]
+            }
+          ],
+          "templates": [
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 6
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 2,
+              "op": "fold"
             }
           ],
           "version": 1

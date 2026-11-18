@@ -309,6 +309,7 @@
               "within": []
             }
           ],
+          "templates": [],
           "version": 1
         },
         "schemas": [
@@ -516,24 +517,8 @@
                 "owner"
               ],
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 4
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 5
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               },
               "name": "filter",
               "source": {
@@ -742,24 +727,8 @@
               ],
               "path": [],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 4
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 5
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -959,6 +928,28 @@
             }
           ],
           "stateCells": [],
+          "templates": [
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 4
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 5
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 0,
+              "op": "fold"
+            }
+          ],
           "version": 1
         },
         "schemas": [

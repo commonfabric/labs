@@ -380,28 +380,8 @@
                     "slot": 10
                   },
                   "template": {
-                    "by": {
-                      "body": 2
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 10
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 11
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 12
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 13
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 },
                 {
@@ -415,28 +395,8 @@
                     "slot": 10
                   },
                   "template": {
-                    "by": {
-                      "body": 2
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 10
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 11
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 12
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 13
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 },
                 {
@@ -447,28 +407,8 @@
                     "slot": 13
                   },
                   "template": {
-                    "by": {
-                      "body": 2
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 10
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 11
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 12
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 13
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 },
                 {
@@ -482,28 +422,8 @@
                     "slot": 13
                   },
                   "template": {
-                    "by": {
-                      "body": 2
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 10
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 11
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 12
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 13
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 }
               ]
@@ -519,24 +439,8 @@
                 "tag"
               ],
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 4
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 5
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "shared",
+                "template": 1
               },
               "name": {
                 "name": "filter",
@@ -570,24 +474,8 @@
                 "tag"
               ],
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 20
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 5
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "shared",
+                "template": 2
               },
               "name": {
                 "name": "filter",
@@ -833,24 +721,8 @@
               ],
               "path": [],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 4
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 5
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "shared",
+                "template": 1
               }
             },
             {
@@ -949,24 +821,8 @@
               ],
               "path": [],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 20
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 5
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "shared",
+                "template": 2
               }
             },
             {
@@ -1425,6 +1281,72 @@
                   "element": 3
                 }
               ]
+            }
+          ],
+          "templates": [
+            {
+              "by": {
+                "body": 2
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 10
+                },
+                {
+                  "op": "slot",
+                  "slot": 11
+                },
+                {
+                  "op": "slot",
+                  "slot": 12
+                },
+                {
+                  "op": "slot",
+                  "slot": 13
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 4
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 5
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 0,
+              "op": "fold"
+            },
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 20
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 5
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 2,
+              "op": "fold"
             }
           ],
           "version": 1

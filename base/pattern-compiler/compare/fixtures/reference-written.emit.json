@@ -106,20 +106,8 @@
                     "slot": 1
                   },
                   "template": {
-                    "by": {
-                      "body": 0
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 0
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 1
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 },
                 {
@@ -135,20 +123,8 @@
                     "slot": 1
                   },
                   "template": {
-                    "by": {
-                      "body": 0
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 0
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 1
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 }
               ]
@@ -214,6 +190,24 @@
             }
           ],
           "stateCells": [],
+          "templates": [
+            {
+              "by": {
+                "body": 0
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 0
+                },
+                {
+                  "op": "slot",
+                  "slot": 1
+                }
+              ],
+              "op": "derive"
+            }
+          ],
           "version": 1
         },
         "schemas": [

@@ -12,7 +12,69 @@ fn program(text: &str) -> ProgramAnalysis {
     }])
 }
 
+/// The plan of a pattern with each template that it holds once, in
+/// `Plan.templates`, written at each position that names it: a node of
+/// `op` `shared` denotes the template at its index (provisional decision
+/// P6), so the tests of what a template is read it in place.
 fn plan_of(analysis: &ProgramAnalysis, name: &str) -> Value {
+    fn expand(value: &mut Value, shared: &[Value]) {
+        match value {
+            Value::Object(node) => {
+                if node.get("op") == Some(&json!("shared")) {
+                    let index = node["template"].as_u64().expect("an index") as usize;
+                    *value = shared[index].clone();
+                    expand(value, shared);
+                    return;
+                }
+                node.values_mut().for_each(|member| expand(member, shared));
+            }
+            Value::Array(members) => members.iter_mut().for_each(|member| expand(member, shared)),
+            _ => {}
+        }
+    }
+    let mut plan = raw_plan_of(analysis, name);
+    let shared = plan["templates"].as_array().cloned().unwrap_or_default();
+    if let Some(plan) = plan.as_object_mut() {
+        plan.remove("templates");
+    }
+    expand(&mut plan, &shared);
+    plan
+}
+
+/// The same for a pattern that may have something unsupported.
+fn expanded_plan(analysis: &ProgramAnalysis, name: &str) -> Value {
+    let found = analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.plans)
+        .find(|plan| plan.name.as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("no pattern named {name}"));
+    let mut plan = found.plan.clone();
+    let shared = plan["templates"].as_array().cloned().unwrap_or_default();
+    fn expand(value: &mut Value, shared: &[Value]) {
+        match value {
+            Value::Object(node) => {
+                if node.get("op") == Some(&json!("shared")) {
+                    let index = node["template"].as_u64().expect("an index") as usize;
+                    *value = shared[index].clone();
+                    expand(value, shared);
+                    return;
+                }
+                node.values_mut().for_each(|member| expand(member, shared));
+            }
+            Value::Array(members) => members.iter_mut().for_each(|member| expand(member, shared)),
+            _ => {}
+        }
+    }
+    if let Some(plan) = plan.as_object_mut() {
+        plan.remove("templates");
+    }
+    expand(&mut plan, &shared);
+    plan
+}
+
+/// The plan of a pattern as the crate emits it.
+fn raw_plan_of(analysis: &ProgramAnalysis, name: &str) -> Value {
     let found = analysis
         .modules
         .iter()
@@ -938,14 +1000,7 @@ fn the_send_handler_and_its_binding_are_the_records_of_pl_section_6_2() {
 }
 
 fn pattern_plan(analysis: &ProgramAnalysis, name: &str) -> Value {
-    analysis
-        .modules
-        .iter()
-        .flat_map(|module| &module.plans)
-        .find(|plan| plan.name.as_deref() == Some(name))
-        .unwrap_or_else(|| panic!("no pattern named {name}"))
-        .plan
-        .clone()
+    expanded_plan(analysis, name)
 }
 
 /// The name of one of several declarations of one name: the record of
@@ -4427,7 +4482,7 @@ fn a_template_names_the_template_of_another_output_by_reference() {
 #[test]
 fn the_size_of_a_plan_follows_its_outputs_and_not_the_ways_between_them() {
     let size = |length: usize| {
-        plan_of(&program(&chain_with_sharing(length)), "P")
+        raw_plan_of(&program(&chain_with_sharing(length)), "P")
             .to_string()
             .len()
     };
@@ -4439,7 +4494,7 @@ fn the_size_of_a_plan_follows_its_outputs_and_not_the_ways_between_them() {
 
 /// The size of the plan of the pattern `name` of a source text.
 fn plan_bytes(text: &str, name: &str) -> usize {
-    plan_of(&program(text), name).to_string().len()
+    raw_plan_of(&program(text), name).to_string().len()
 }
 
 /// Patterns compiled in to a depth, each of which calls the one below it
@@ -4516,4 +4571,93 @@ fn the_size_of_a_plan_follows_the_number_of_handlers_that_capture_the_same_value
     };
     let (few, many) = (handlers(10), handlers(20));
     assert!(many < few * 5 / 2, "10: {few} bytes, 20: {many} bytes");
+}
+
+/// A value that is the first that is present of `operands` optional
+/// inputs, written as a chain of `??`.
+fn chain_of_nullish(operands: usize) -> String {
+    let fields: Vec<String> = (0..operands)
+        .map(|index| format!("a{index}?: string"))
+        .collect();
+    let names: Vec<String> = (0..operands).map(|index| format!("a{index}")).collect();
+    format!(
+        "import {{ pattern }} from \"commonfabric\";\n\
+         export const P = pattern<{{ {} }}>(({{ {} }}) => {{\n\
+         const first = {} ?? \"none\";\nreturn {{ first }};\n}});\n",
+        fields.join("; "),
+        names.join(", "),
+        names.join(" ?? ")
+    )
+}
+
+#[test]
+fn an_operand_that_a_template_holds_twice_is_written_once() {
+    // `a ?? b` is a `select` whose condition and one branch are the
+    // template of `a` (PL §3.5), so a chain of operands held each
+    // template of its left part twice. The plan writes a template that
+    // occurs at two positions once, in `Plan.templates`, and a node of
+    // `op` `shared` at each (provisional decision P6).
+    let plan = raw_plan_of(&program(&chain_of_nullish(4)), "P");
+    let shared = plan["templates"].as_array().expect("templates");
+    assert!(!shared.is_empty());
+    let text = plan["outputs"].to_string();
+    assert!(text.contains("\"op\":\"shared\""), "{text}");
+    let (short, long) = (
+        plan_bytes(&chain_of_nullish(10), "P"),
+        plan_bytes(&chain_of_nullish(20), "P"),
+    );
+    assert!(long < 3 * short, "10: {short} bytes, 20: {long} bytes");
+}
+
+#[test]
+fn the_template_of_a_body_is_written_once_for_all_its_write_edges() {
+    let body = |reads: usize, writes: usize| {
+        let mut state = Vec::new();
+        let mut names = Vec::new();
+        let mut cells = String::new();
+        for index in 0..reads {
+            state.push(format!("r{index}: Writable<number>"));
+            names.push(format!("r{index}"));
+            cells.push_str(&format!("const r{index} = Writable.of({index});\n"));
+        }
+        for index in 0..writes {
+            state.push(format!("w{index}: Writable<number>"));
+            names.push(format!("w{index}"));
+            cells.push_str(&format!("const w{index} = Writable.of(0);\n"));
+        }
+        let sum: Vec<String> = (0..reads).map(|index| format!("r{index}.get()")).collect();
+        let sets: Vec<String> = (0..writes)
+            .map(|index| format!("w{index}.set(sum + {index});"))
+            .collect();
+        let names = names.join(", ");
+        format!(
+            "import {{ handler, pattern, Writable }} from \"commonfabric\";\n\
+             const h = handler<unknown, {{ {} }}>((_e, {{ {names} }}) => {{\n\
+             const sum = {};\n{}\n}});\n\
+             export const P = pattern<Record<string, never>>(() => {{\n{cells}\
+             return {{ go: h({{ {names} }}) }};\n}});\n",
+            state.join("; "),
+            sum.join(" + "),
+            sets.join("\n")
+        )
+    };
+    let plan = raw_plan_of(&program(&body(8, 8)), "P");
+    let handler = plan["bodies"]
+        .as_array()
+        .expect("bodies")
+        .iter()
+        .find(|body| body["kind"] == "handler")
+        .expect("the handler");
+    let writes = handler["writes"].as_array().expect("writes");
+    assert_eq!(writes.len(), 8);
+    // Each of the eight write edges names the one template of the body.
+    for write in writes {
+        assert_eq!(write["template"], writes[0]["template"]);
+        assert_eq!(write["template"]["op"], json!("shared"));
+    }
+    let templates: usize = writes
+        .iter()
+        .map(|write| write["template"].to_string().len())
+        .sum();
+    assert!(templates < 8 * 40, "{templates} bytes");
 }

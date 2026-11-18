@@ -724,19 +724,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 0
-                  },
-                  {
-                    "op": "const"
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -746,19 +735,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 0
-                  },
-                  {
-                    "op": "const"
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -1310,6 +1288,23 @@
             }
           ],
           "stateCells": [],
+          "templates": [
+            {
+              "by": {
+                "expression": true
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 0
+                },
+                {
+                  "op": "const"
+                }
+              ],
+              "op": "derive"
+            }
+          ],
           "version": 1
         },
         "schemas": [

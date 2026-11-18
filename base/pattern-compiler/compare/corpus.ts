@@ -424,7 +424,7 @@ export const runModule = async (
         resultRow(
           "output",
           row,
-          namedTemplate(plan.outputs[row.output].template, plan.outputs),
+          namedTemplate(plan.outputs[row.output].template, plan),
         )
       ),
       ...run.writes.map((row) =>
@@ -434,7 +434,7 @@ export const runModule = async (
           namedTemplate(
             plan.bodies?.[plan.bindings?.[row.binding]?.handler?.body ?? -1]
               ?.writes?.[row.write]?.template,
-            plan.outputs,
+            plan,
           ),
           withinOf(plan.bindings?.[row.binding]?.within),
         )

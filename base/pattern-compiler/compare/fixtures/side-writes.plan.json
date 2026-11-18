@@ -386,20 +386,8 @@
                 "body": 2
               },
               "input": {
-                "by": {
-                  "body": 2
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 5
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 6
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 0
               },
               "kind": "materializer",
               "name": "tally",
@@ -438,20 +426,8 @@
                 "tallied"
               ],
               "template": {
-                "by": {
-                  "body": 2
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 5
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 6
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -621,6 +597,24 @@
               "schema": "unhashed:schema/6",
               "scope": "space",
               "within": []
+            }
+          ],
+          "templates": [
+            {
+              "by": {
+                "body": 2
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 5
+                },
+                {
+                  "op": "slot",
+                  "slot": 6
+                }
+              ],
+              "op": "derive"
             }
           ],
           "version": 1

@@ -555,16 +555,8 @@
                     ]
                   },
                   "template": {
-                    "by": {
-                      "body": 2
-                    },
-                    "inputs": [
-                      {
-                        "op": "output",
-                        "output": 0
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 }
               ]
@@ -672,16 +664,8 @@
                 "builtin": "fetchJson"
               },
               "input": {
-                "by": {
-                  "body": 2
-                },
-                "inputs": [
-                  {
-                    "op": "output",
-                    "output": 0
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 0
               },
               "kind": "effect",
               "name": "guarded",
@@ -1050,6 +1034,20 @@
               "schema": "unhashed:schema/8",
               "scope": "space",
               "within": []
+            }
+          ],
+          "templates": [
+            {
+              "by": {
+                "body": 2
+              },
+              "inputs": [
+                {
+                  "op": "output",
+                  "output": 0
+                }
+              ],
+              "op": "derive"
             }
           ],
           "version": 1

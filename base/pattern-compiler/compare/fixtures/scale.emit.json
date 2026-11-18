@@ -107,20 +107,8 @@
             {
               "construct": "filter",
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 5
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               },
               "name": "open",
               "source": {
@@ -367,20 +355,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 5
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -583,6 +559,24 @@
             }
           ],
           "stateCells": [],
+          "templates": [
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 5
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 2,
+              "op": "fold"
+            }
+          ],
           "version": 1
         },
         "schemas": [

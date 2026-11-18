@@ -180,6 +180,7 @@
             }
           ],
           "stateCells": [],
+          "templates": [],
           "version": 1
         },
         "schemas": [
@@ -406,6 +407,7 @@
             }
           ],
           "stateCells": [],
+          "templates": [],
           "version": 1
         },
         "schemas": [
@@ -871,23 +873,8 @@
             {
               "construct": "filter",
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 10
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 1,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               },
               "name": "filter",
               "source": {
@@ -1394,21 +1381,8 @@
                 "bound"
               ],
               "template": {
-                "by": {
-                  "expression": true,
-                  "pattern": 1
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 1
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 0
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 1
               }
             },
             {
@@ -1580,23 +1554,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 10
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 1,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -1715,21 +1674,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "by": {
-                  "expression": true,
-                  "pattern": 1
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 1
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 0
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 1
               }
             },
             {
@@ -2020,6 +1966,44 @@
             }
           ],
           "stateCells": [],
+          "templates": [
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 10
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 1,
+              "op": "fold"
+            },
+            {
+              "by": {
+                "expression": true,
+                "pattern": 1
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 1
+                },
+                {
+                  "op": "slot",
+                  "slot": 0
+                }
+              ],
+              "op": "derive"
+            }
+          ],
           "version": 1
         },
         "schemas": [

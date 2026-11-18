@@ -230,6 +230,7 @@
               "within": []
             }
           ],
+          "templates": [],
           "version": 1
         },
         "schemas": [
@@ -345,16 +346,8 @@
                     "passes": 2
                   },
                   "template": {
-                    "by": {
-                      "body": 1
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 2
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 }
               ],
@@ -430,16 +423,8 @@
                     "path": []
                   },
                   "template": {
-                    "by": {
-                      "body": 0
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 1
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 1
                   }
                 }
               ]
@@ -691,16 +676,8 @@
                 "button"
               ],
               "template": {
-                "by": {
-                  "body": 1
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 2
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -727,16 +704,8 @@
                 "row"
               ],
               "template": {
-                "by": {
-                  "body": 0
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 1
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 1
               }
             },
             {
@@ -858,6 +827,32 @@
               "schema": "unhashed:schema/10",
               "scope": "space",
               "within": []
+            }
+          ],
+          "templates": [
+            {
+              "by": {
+                "body": 1
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 2
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "body": 0
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 1
+                }
+              ],
+              "op": "derive"
             }
           ],
           "version": 1

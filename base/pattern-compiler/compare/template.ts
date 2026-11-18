@@ -45,7 +45,13 @@ export type Template =
    * The template of entry `output` of `Plan.outputs`, by reference
    * (ruling Z58): it denotes what that template denotes in its place.
    */
-  | { op: "output"; output: number };
+  | { op: "output"; output: number }
+  /**
+   * The entry `template` of `Plan.templates`: a template that the plan
+   * holds at more than one position and writes once (provisional
+   * decision P6). It denotes that template in its place.
+   */
+  | { op: "shared"; template: number };
 
 /**
  * One element of a collection: the collection, and the element's key. For
@@ -129,6 +135,8 @@ export type EvaluationOptions = {
    * `Plan.outputs`: the template that a node of `op` `output` names.
    */
   outputs?: readonly { template?: Template }[];
+  /** `Plan.templates`: the template that a node of `op` `shared` names. */
+  templates?: readonly Template[];
   /**
    * Whether the template is that of a kept output. Its label then has the
    * atom of entry 0 of `patterns` added, with no condition (§3.2, "Every
@@ -242,15 +250,22 @@ const NEUTRAL: Label = { confidentiality: [], integrity: "neutral" };
  */
 export const namedTemplate = (
   template: Template | undefined,
-  outputs: readonly { template?: Template }[],
+  plan: {
+    outputs: readonly { template?: Template }[];
+    templates?: readonly Template[];
+  },
 ): Template | undefined => {
   let found = template;
-  const seen = new Set<number>();
-  while (found?.op === "output" && !seen.has(found.output)) {
-    seen.add(found.output);
-    found = outputs[found.output]?.template;
+  for (
+    let hops = 0;
+    hops <= plan.outputs.length + (plan.templates?.length ?? 0);
+    hops++
+  ) {
+    if (found?.op === "output") found = plan.outputs[found.output]?.template;
+    else if (found?.op === "shared") found = plan.templates?.[found.template];
+    else return found;
   }
-  return found;
+  return undefined;
 };
 
 /** Evaluates `template` by §3.2. */
@@ -290,19 +305,22 @@ export const evaluateTemplate = (
     { label: Label; bound: boolean; unsupported: string[] }
   >();
   const reference = (
-    output: number,
+    kind: "output" | "shared",
+    index: number,
     at: readonly ElementBinding[],
     passed: boolean,
   ): Label => {
-    const key = JSON.stringify([output, at, passed]);
+    const key = JSON.stringify([kind, index, at, passed]);
     let known = named.get(key);
     if (known === undefined) {
-      const template = options.outputs?.[output]?.template;
+      const template = kind === "output"
+        ? options.outputs?.[index]?.template
+        : options.templates?.[index];
       const outer = { bound, unsupported: unsupported.length };
       bound = false;
       let label: Label;
       if (template === undefined) {
-        unsupported.push("output");
+        unsupported.push(kind);
         label = NEUTRAL;
       } else {
         label = walk(template, at, passed);
@@ -330,7 +348,9 @@ export const evaluateTemplate = (
       case "const":
         return NEUTRAL;
       case "output":
-        return reference(node.output, at, passed);
+        return reference("output", node.output, at, passed);
+      case "shared":
+        return reference("shared", node.template, at, passed);
       case "slot": {
         const collection = inputs.indexOf?.(node.slot);
         if (collection === undefined) return inputs.slot(node.slot, at, passed);

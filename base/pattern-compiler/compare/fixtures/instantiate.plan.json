@@ -269,6 +269,7 @@
               "within": []
             }
           ],
+          "templates": [],
           "version": 1
         },
         "schemas": [
@@ -406,16 +407,8 @@
                     "passes": 0
                   },
                   "template": {
-                    "by": {
-                      "body": 0
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 0
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 }
               ],
@@ -596,24 +589,8 @@
                     "path": []
                   },
                   "template": {
-                    "by": {
-                      "body": 2
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 4
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 5
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 6
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 1
                   }
                 },
                 {
@@ -629,24 +606,8 @@
                     ]
                   },
                   "template": {
-                    "by": {
-                      "body": 2
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 4
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 5
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 6
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 1
                   }
                 },
                 {
@@ -659,24 +620,8 @@
                     "slot": 5
                   },
                   "template": {
-                    "by": {
-                      "body": 2
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 4
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 5
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 6
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 1
                   }
                 }
               ]
@@ -785,16 +730,8 @@
                 "buttons"
               ],
               "template": {
-                "by": {
-                  "body": 0
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 0
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -971,6 +908,40 @@
               "schema": "unhashed:schema/8",
               "scope": "space",
               "within": []
+            }
+          ],
+          "templates": [
+            {
+              "by": {
+                "body": 0
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 0
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "body": 2
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 4
+                },
+                {
+                  "op": "slot",
+                  "slot": 5
+                },
+                {
+                  "op": "slot",
+                  "slot": 6
+                }
+              ],
+              "op": "derive"
             }
           ],
           "version": 1

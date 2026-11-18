@@ -97,12 +97,8 @@
             {
               "construct": "flatMap",
               "membership": {
-                "body": {
-                  "op": "slot",
-                  "slot": 2
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               },
               "name": "names",
               "source": {
@@ -126,12 +122,8 @@
             {
               "construct": "flatMap",
               "membership": {
-                "body": {
-                  "op": "slot",
-                  "slot": 5
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "shared",
+                "template": 1
               },
               "name": "people",
               "source": {
@@ -155,94 +147,8 @@
             {
               "construct": "flatMap",
               "membership": {
-                "body": {
-                  "branches": [
-                    {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "by": {
-                            "expression": true
-                          },
-                          "inputs": [
-                            {
-                              "op": "slot",
-                              "slot": 9
-                            },
-                            {
-                              "op": "const"
-                            }
-                          ],
-                          "op": "derive"
-                        },
-                        {
-                          "by": {
-                            "expression": true
-                          },
-                          "inputs": [
-                            {
-                              "op": "slot",
-                              "slot": 9
-                            },
-                            {
-                              "op": "const"
-                            }
-                          ],
-                          "op": "derive"
-                        }
-                      ],
-                      "op": "derive"
-                    },
-                    {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "by": {
-                            "expression": true
-                          },
-                          "inputs": [
-                            {
-                              "op": "slot",
-                              "slot": 9
-                            },
-                            {
-                              "op": "const"
-                            }
-                          ],
-                          "op": "derive"
-                        },
-                        {
-                          "by": {
-                            "expression": true
-                          },
-                          "inputs": [
-                            {
-                              "op": "slot",
-                              "slot": 9
-                            },
-                            {
-                              "op": "const"
-                            }
-                          ],
-                          "op": "derive"
-                        }
-                      ],
-                      "op": "derive"
-                    }
-                  ],
-                  "condition": {
-                    "op": "slot",
-                    "slot": 8
-                  },
-                  "op": "select",
-                  "selector": 0
-                },
-                "collection": 4,
-                "op": "fold"
+                "op": "shared",
+                "template": 2
               },
               "name": "halves",
               "source": {
@@ -399,12 +305,8 @@
                 "names"
               ],
               "template": {
-                "body": {
-                  "op": "slot",
-                  "slot": 2
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -466,12 +368,8 @@
                 "people"
               ],
               "template": {
-                "body": {
-                  "op": "slot",
-                  "slot": 5
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "shared",
+                "template": 1
               }
             },
             {
@@ -533,94 +431,8 @@
                 "halves"
               ],
               "template": {
-                "body": {
-                  "branches": [
-                    {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "by": {
-                            "expression": true
-                          },
-                          "inputs": [
-                            {
-                              "op": "slot",
-                              "slot": 9
-                            },
-                            {
-                              "op": "const"
-                            }
-                          ],
-                          "op": "derive"
-                        },
-                        {
-                          "by": {
-                            "expression": true
-                          },
-                          "inputs": [
-                            {
-                              "op": "slot",
-                              "slot": 9
-                            },
-                            {
-                              "op": "const"
-                            }
-                          ],
-                          "op": "derive"
-                        }
-                      ],
-                      "op": "derive"
-                    },
-                    {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "by": {
-                            "expression": true
-                          },
-                          "inputs": [
-                            {
-                              "op": "slot",
-                              "slot": 9
-                            },
-                            {
-                              "op": "const"
-                            }
-                          ],
-                          "op": "derive"
-                        },
-                        {
-                          "by": {
-                            "expression": true
-                          },
-                          "inputs": [
-                            {
-                              "op": "slot",
-                              "slot": 9
-                            },
-                            {
-                              "op": "const"
-                            }
-                          ],
-                          "op": "derive"
-                        }
-                      ],
-                      "op": "derive"
-                    }
-                  ],
-                  "condition": {
-                    "op": "slot",
-                    "slot": 8
-                  },
-                  "op": "select",
-                  "selector": 0
-                },
-                "collection": 4,
-                "op": "fold"
+                "op": "shared",
+                "template": 2
               }
             },
             {
@@ -810,6 +622,85 @@
             }
           ],
           "stateCells": [],
+          "templates": [
+            {
+              "body": {
+                "op": "slot",
+                "slot": 2
+              },
+              "collection": 0,
+              "op": "fold"
+            },
+            {
+              "body": {
+                "op": "slot",
+                "slot": 5
+              },
+              "collection": 2,
+              "op": "fold"
+            },
+            {
+              "body": {
+                "branches": [
+                  {
+                    "by": {
+                      "expression": true
+                    },
+                    "inputs": [
+                      {
+                        "op": "shared",
+                        "template": 3
+                      },
+                      {
+                        "op": "shared",
+                        "template": 3
+                      }
+                    ],
+                    "op": "derive"
+                  },
+                  {
+                    "by": {
+                      "expression": true
+                    },
+                    "inputs": [
+                      {
+                        "op": "shared",
+                        "template": 3
+                      },
+                      {
+                        "op": "shared",
+                        "template": 3
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                ],
+                "condition": {
+                  "op": "slot",
+                  "slot": 8
+                },
+                "op": "select",
+                "selector": 0
+              },
+              "collection": 4,
+              "op": "fold"
+            },
+            {
+              "by": {
+                "expression": true
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 9
+                },
+                {
+                  "op": "const"
+                }
+              ],
+              "op": "derive"
+            }
+          ],
           "version": 1
         },
         "schemas": [

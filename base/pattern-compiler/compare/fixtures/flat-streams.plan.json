@@ -150,11 +150,8 @@
             {
               "construct": "flatMap",
               "membership": {
-                "body": {
-                  "op": "const"
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               },
               "name": {
                 "name": "flatMap",
@@ -168,11 +165,8 @@
             {
               "construct": "flatMap",
               "membership": {
-                "body": {
-                  "op": "const"
-                },
-                "collection": 1,
-                "op": "fold"
+                "op": "shared",
+                "template": 1
               },
               "name": {
                 "name": "flatMap",
@@ -282,11 +276,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "body": {
-                  "op": "const"
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -309,11 +300,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "body": {
-                  "op": "const"
-                },
-                "collection": 1,
-                "op": "fold"
+                "op": "shared",
+                "template": 1
               }
             },
             {
@@ -467,6 +455,22 @@
               "schema": "unhashed:schema/6",
               "scope": "space",
               "within": []
+            }
+          ],
+          "templates": [
+            {
+              "body": {
+                "op": "const"
+              },
+              "collection": 0,
+              "op": "fold"
+            },
+            {
+              "body": {
+                "op": "const"
+              },
+              "collection": 1,
+              "op": "fold"
             }
           ],
           "version": 1

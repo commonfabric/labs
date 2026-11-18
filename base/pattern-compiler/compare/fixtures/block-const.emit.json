@@ -116,12 +116,8 @@
             {
               "construct": "filter",
               "membership": {
-                "body": {
-                  "op": "slot",
-                  "slot": 2
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               },
               "name": {
                 "name": "value",
@@ -135,24 +131,8 @@
             {
               "construct": "filter",
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 5
-                    },
-                    {
-                      "op": "output",
-                      "output": 4
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 1,
-                "op": "fold"
+                "op": "shared",
+                "template": 1
               },
               "name": "filter",
               "source": {
@@ -163,20 +143,8 @@
             {
               "construct": "filter",
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 10
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "shared",
+                "template": 2
               },
               "name": {
                 "name": "value",
@@ -356,12 +324,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "body": {
-                  "op": "slot",
-                  "slot": 2
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -384,21 +348,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "branches": [
-                  {
-                    "op": "slot",
-                    "slot": 1
-                  },
-                  {
-                    "op": "const"
-                  }
-                ],
-                "condition": {
-                  "op": "slot",
-                  "slot": 0
-                },
-                "op": "select",
-                "selector": 0
+                "op": "shared",
+                "template": 3
               }
             },
             {
@@ -423,21 +374,8 @@
                         "output": 0
                       },
                       {
-                        "branches": [
-                          {
-                            "op": "slot",
-                            "slot": 1
-                          },
-                          {
-                            "op": "const"
-                          }
-                        ],
-                        "condition": {
-                          "op": "slot",
-                          "slot": 0
-                        },
-                        "op": "select",
-                        "selector": 0
+                        "op": "shared",
+                        "template": 3
                       }
                     ],
                     "op": "derive"
@@ -449,21 +387,8 @@
                   },
                   "inputs": [
                     {
-                      "branches": [
-                        {
-                          "op": "slot",
-                          "slot": 1
-                        },
-                        {
-                          "op": "const"
-                        }
-                      ],
-                      "condition": {
-                        "op": "slot",
-                        "slot": 0
-                      },
-                      "op": "select",
-                      "selector": 0
+                      "op": "shared",
+                      "template": 3
                     },
                     {
                       "op": "const"
@@ -562,24 +487,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 5
-                    },
-                    {
-                      "op": "output",
-                      "output": 4
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 1,
-                "op": "fold"
+                "op": "shared",
+                "template": 1
               }
             },
             {
@@ -603,20 +512,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 10
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "shared",
+                "template": 2
               }
             },
             {
@@ -641,44 +538,16 @@
               "template": {
                 "branches": [
                   {
-                    "branches": [
-                      {
-                        "op": "slot",
-                        "slot": 8
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 9
-                      }
-                    ],
-                    "condition": {
-                      "op": "slot",
-                      "slot": 7
-                    },
-                    "op": "select",
-                    "selector": 4
+                    "op": "shared",
+                    "template": 4
                   },
                   {
                     "op": "const"
                   }
                 ],
                 "condition": {
-                  "branches": [
-                    {
-                      "op": "slot",
-                      "slot": 8
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 9
-                    }
-                  ],
-                  "condition": {
-                    "op": "slot",
-                    "slot": 7
-                  },
-                  "op": "select",
-                  "selector": 4
+                  "op": "shared",
+                  "template": 4
                 },
                 "op": "select",
                 "selector": 6
@@ -707,22 +576,8 @@
                   },
                   "inputs": [
                     {
-                      "branches": [
-                        {
-                          "op": "slot",
-                          "slot": 8
-                        },
-                        {
-                          "op": "slot",
-                          "slot": 9
-                        }
-                      ],
-                      "condition": {
-                        "op": "slot",
-                        "slot": 7
-                      },
-                      "op": "select",
-                      "selector": 4
+                      "op": "shared",
+                      "template": 4
                     }
                   ],
                   "op": "derive"
@@ -882,6 +737,87 @@
             }
           ],
           "stateCells": [],
+          "templates": [
+            {
+              "body": {
+                "op": "slot",
+                "slot": 2
+              },
+              "collection": 0,
+              "op": "fold"
+            },
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 5
+                  },
+                  {
+                    "op": "output",
+                    "output": 4
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 1,
+              "op": "fold"
+            },
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 10
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 2,
+              "op": "fold"
+            },
+            {
+              "branches": [
+                {
+                  "op": "slot",
+                  "slot": 1
+                },
+                {
+                  "op": "const"
+                }
+              ],
+              "condition": {
+                "op": "slot",
+                "slot": 0
+              },
+              "op": "select",
+              "selector": 0
+            },
+            {
+              "branches": [
+                {
+                  "op": "slot",
+                  "slot": 8
+                },
+                {
+                  "op": "slot",
+                  "slot": 9
+                }
+              ],
+              "condition": {
+                "op": "slot",
+                "slot": 7
+              },
+              "op": "select",
+              "selector": 4
+            }
+          ],
           "version": 1
         },
         "schemas": [

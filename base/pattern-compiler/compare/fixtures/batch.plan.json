@@ -46,8 +46,8 @@
                     "output": 0
                   },
                   "template": {
-                    "op": "slot",
-                    "slot": 0
+                    "op": "output",
+                    "output": 0
                   }
                 },
                 {
@@ -971,6 +971,7 @@
               "within": []
             }
           ],
+          "templates": [],
           "version": 1
         },
         "schemas": [

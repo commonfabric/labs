@@ -105,6 +105,8 @@ export type Plan = {
     computed?: { observes?: string; template?: Template }[];
   }[];
   operations?: { kind?: string; input?: Template }[];
+  /** The templates that a node of `op` `shared` names. */
+  templates?: Template[];
   stateCells?: { name: Name; within?: unknown[] }[];
   selectors?: { arity: number }[];
 };
@@ -732,6 +734,10 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
     const picks = new Map<number, PickNode>();
     for (const output of plan.outputs) {
       indexNodes(output.template, selects, picks);
+    }
+    // A template that the plan holds once for several positions.
+    for (const shared of plan.templates ?? []) {
+      indexNodes(shared, selects, picks);
     }
     for (const body of plan.bodies ?? []) {
       for (const write of body.writes ?? []) {
@@ -1475,7 +1481,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             if (
               (plan.operations ?? []).some((operation) =>
                 operation.kind === "materializer" &&
-                sameValue(operation.input, template)
+                sameValue(namedTemplate(operation.input, plan), template)
               )
             ) return "at";
             const body = plan.bodies?.[template.by.body];
@@ -1491,8 +1497,9 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             );
           case "pick":
             return computedReference(template.body);
-          case "output": {
-            const named = plan.outputs[template.output]?.template;
+          case "output":
+          case "shared": {
+            const named = namedTemplate(template, plan);
             return named === undefined ? undefined : computedReference(named);
           }
           default:
@@ -1562,7 +1569,11 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
                 entry.template,
                 inputsFor(dereference && (passed ?? false), {}),
                 elements,
-                { patterns: plan.patterns, outputs: plan.outputs },
+                {
+                  patterns: plan.patterns,
+                  outputs: plan.outputs,
+                  templates: plan.templates,
+                },
               );
               if (evaluated.unsupported.length > 0) {
                 throw new Unsupported(
@@ -1629,7 +1640,10 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             const node = selects.get(selector);
             if (node === undefined) return decide("unobserved");
             // The value stored at the output is the selected branch's.
-            if (current?.template === node) {
+            if (
+              current !== undefined &&
+              namedTemplate(current.template, plan) === node
+            ) {
               const value = valueOf(outputAt(current.path));
               const known = node.branches.map((branch) =>
                 branch.op === "slot"
@@ -1655,7 +1669,11 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             // `select(a, [a, b])` (PL §3.5): one branch is the condition.
             // The stored value is `a` where it converts to false under
             // `&&`, and where it converts to true under `||`.
-            if (current?.template === node && node.branches.length === 2) {
+            if (
+              current !== undefined &&
+              namedTemplate(current.template, plan) === node &&
+              node.branches.length === 2
+            ) {
               const value = valueOf(outputAt(current.path));
               const same = node.branches.map((branch) =>
                 sameValue(branch, node.condition)
@@ -1691,7 +1709,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           },
           membership: (collection, elements) => {
             const record = plan.collections[collection];
-            const membership = namedTemplate(record.membership, plan.outputs);
+            const membership = namedTemplate(record.membership, plan);
             // The membership a record iterates (PL §3.2). For a `map` it
             // is the record's own, and otherwise that of its source.
             if (
@@ -1702,6 +1720,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               const evaluated = evaluateTemplate(membership, inputs, elements, {
                 patterns: plan.patterns,
                 outputs: plan.outputs,
+                templates: plan.templates,
               });
               if (evaluated.unsupported.length > 0) {
                 throw new Unsupported(
@@ -1730,7 +1749,8 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             if (node === undefined || from === undefined) {
               return decide("unobserved");
             }
-            const stored = current?.template === node
+            const stored = current !== undefined &&
+                namedTemplate(current.template, plan) === node
               ? valueOf(outputAt(current.path))
               : NO_VALUE;
             if (from.container !== undefined) {
@@ -1863,7 +1883,12 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             event: context.event,
           }),
           context.elements,
-          { patterns: plan.patterns, outputs: plan.outputs, kept },
+          {
+            patterns: plan.patterns,
+            outputs: plan.outputs,
+            templates: plan.templates,
+            kept,
+          },
         );
         if (evaluated.unsupported.length > 0) {
           throw new Unsupported(`a \`${evaluated.unsupported[0]}\` node`);
@@ -1967,7 +1992,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
                 }
                 missing.push({
                   path,
-                  root: namedTemplate(template, plan.outputs)?.op ?? "",
+                  root: namedTemplate(template, plan)?.op ?? "",
                   absentFrom: absentFrom + 1,
                   above: Array.isArray(above)
                     ? "array"

@@ -317,6 +317,7 @@
               ]
             }
           ],
+          "templates": [],
           "version": 1
         },
         "schemas": [
@@ -818,23 +819,8 @@
                 "id"
               ],
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 12
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               },
               "name": {
                 "name": "filter",
@@ -890,23 +876,8 @@
                 "id"
               ],
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 22
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 5,
-                "op": "fold"
+                "op": "shared",
+                "template": 1
               },
               "name": {
                 "name": "filter",
@@ -923,23 +894,8 @@
                 "id"
               ],
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 24
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 6,
-                "op": "fold"
+                "op": "shared",
+                "template": 2
               },
               "name": {
                 "name": "filter",
@@ -1517,23 +1473,8 @@
               ],
               "path": [],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 12
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -1704,23 +1645,8 @@
               ],
               "path": [],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 22
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 5,
-                "op": "fold"
+                "op": "shared",
+                "template": 1
               }
             },
             {
@@ -1747,23 +1673,8 @@
               ],
               "path": [],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 24
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 6,
-                "op": "fold"
+                "op": "shared",
+                "template": 2
               }
             },
             {
@@ -2183,6 +2094,65 @@
                   "element": 4
                 }
               ]
+            }
+          ],
+          "templates": [
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 12
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 2,
+              "op": "fold"
+            },
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 22
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 5,
+              "op": "fold"
+            },
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 24
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 6,
+              "op": "fold"
             }
           ],
           "version": 1

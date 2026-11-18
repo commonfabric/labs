@@ -240,20 +240,8 @@
                     "slot": 7
                   },
                   "template": {
-                    "by": {
-                      "body": 2
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 6
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 7
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 },
                 {
@@ -267,20 +255,8 @@
                     "slot": 7
                   },
                   "template": {
-                    "by": {
-                      "body": 2
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 6
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 7
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 }
               ]
@@ -718,6 +694,24 @@
               "schema": "unhashed:schema/9",
               "scope": "space",
               "within": []
+            }
+          ],
+          "templates": [
+            {
+              "by": {
+                "body": 2
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 6
+                },
+                {
+                  "op": "slot",
+                  "slot": 7
+                }
+              ],
+              "op": "derive"
             }
           ],
           "version": 1

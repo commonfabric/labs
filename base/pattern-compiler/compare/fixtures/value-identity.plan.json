@@ -356,28 +356,8 @@
                     "slot": 4
                   },
                   "template": {
-                    "by": {
-                      "body": 0
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 4
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 5
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 6
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 7
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 },
                 {
@@ -391,28 +371,8 @@
                     "slot": 4
                   },
                   "template": {
-                    "by": {
-                      "body": 0
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 4
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 5
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 6
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 7
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 },
                 {
@@ -423,28 +383,8 @@
                     "slot": 5
                   },
                   "template": {
-                    "by": {
-                      "body": 0
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 4
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 5
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 6
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 7
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 },
                 {
@@ -458,28 +398,8 @@
                     "slot": 5
                   },
                   "template": {
-                    "by": {
-                      "body": 0
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 4
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 5
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 6
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 7
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 }
               ]
@@ -558,16 +478,8 @@
                     "slot": 12
                   },
                   "template": {
-                    "by": {
-                      "body": 2
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 12
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 1
                   }
                 },
                 {
@@ -580,16 +492,8 @@
                     "slot": 12
                   },
                   "template": {
-                    "by": {
-                      "body": 2
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 12
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 1
                   }
                 }
               ]
@@ -724,20 +628,8 @@
                     "slot": 21
                   },
                   "template": {
-                    "by": {
-                      "body": 5
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 21
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 22
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 2
                   }
                 },
                 {
@@ -751,20 +643,8 @@
                     "slot": 21
                   },
                   "template": {
-                    "by": {
-                      "body": 5
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 21
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 22
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 2
                   }
                 }
               ]
@@ -834,36 +714,8 @@
                     "slot": 24
                   },
                   "template": {
-                    "by": {
-                      "body": 6
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 24
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 25
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 26
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 27
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 28
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 29
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 3
                   }
                 },
                 {
@@ -881,36 +733,8 @@
                     "slot": 24
                   },
                   "template": {
-                    "by": {
-                      "body": 6
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 24
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 25
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 26
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 27
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 28
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 29
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 3
                   }
                 },
                 {
@@ -921,36 +745,8 @@
                     "slot": 27
                   },
                   "template": {
-                    "by": {
-                      "body": 6
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 24
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 25
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 26
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 27
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 28
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 29
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 3
                   }
                 },
                 {
@@ -968,36 +764,8 @@
                     "slot": 27
                   },
                   "template": {
-                    "by": {
-                      "body": 6
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 24
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 25
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 26
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 27
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 28
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 29
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 3
                   }
                 }
               ]
@@ -1067,36 +835,8 @@
                     "slot": 32
                   },
                   "template": {
-                    "by": {
-                      "body": 7
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 32
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 33
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 34
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 35
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 36
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 37
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 4
                   }
                 },
                 {
@@ -1114,36 +854,8 @@
                     "slot": 32
                   },
                   "template": {
-                    "by": {
-                      "body": 7
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 32
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 33
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 34
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 35
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 36
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 37
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 4
                   }
                 },
                 {
@@ -1154,36 +866,8 @@
                     "slot": 35
                   },
                   "template": {
-                    "by": {
-                      "body": 7
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 32
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 33
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 34
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 35
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 36
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 37
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 4
                   }
                 },
                 {
@@ -1201,36 +885,8 @@
                     "slot": 35
                   },
                   "template": {
-                    "by": {
-                      "body": 7
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 32
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 33
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 34
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 35
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 36
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 37
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 4
                   }
                 }
               ]
@@ -2079,6 +1735,124 @@
                   "element": 0
                 }
               ]
+            }
+          ],
+          "templates": [
+            {
+              "by": {
+                "body": 0
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 4
+                },
+                {
+                  "op": "slot",
+                  "slot": 5
+                },
+                {
+                  "op": "slot",
+                  "slot": 6
+                },
+                {
+                  "op": "slot",
+                  "slot": 7
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "body": 2
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 12
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "body": 5
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 21
+                },
+                {
+                  "op": "slot",
+                  "slot": 22
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "body": 6
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 24
+                },
+                {
+                  "op": "slot",
+                  "slot": 25
+                },
+                {
+                  "op": "slot",
+                  "slot": 26
+                },
+                {
+                  "op": "slot",
+                  "slot": 27
+                },
+                {
+                  "op": "slot",
+                  "slot": 28
+                },
+                {
+                  "op": "slot",
+                  "slot": 29
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "body": 7
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 32
+                },
+                {
+                  "op": "slot",
+                  "slot": 33
+                },
+                {
+                  "op": "slot",
+                  "slot": 34
+                },
+                {
+                  "op": "slot",
+                  "slot": 35
+                },
+                {
+                  "op": "slot",
+                  "slot": 36
+                },
+                {
+                  "op": "slot",
+                  "slot": 37
+                }
+              ],
+              "op": "derive"
             }
           ],
           "version": 1

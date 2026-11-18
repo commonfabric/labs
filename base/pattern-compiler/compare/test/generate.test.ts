@@ -10,7 +10,7 @@ import {
 } from "../generate.ts";
 import type { Artifact } from "../../exec/executor.ts";
 import { type Plan, scenarioAudience } from "../harness.ts";
-import { atomKey } from "../template.ts";
+import { atomKey, namedTemplate } from "../template.ts";
 import { runBesideExecutor } from "../values.ts";
 
 const fixture = (name: string) =>
@@ -595,10 +595,15 @@ describe("the template of a write edge", () => {
       slot.root.kind === "binding" && slot.path.join("/") === "label"
     );
     const [write] = plan.bodies?.[0].writes ?? [];
-    const template = write.template as {
+    // The plan holds the template of the body once, for all its write
+    // edges: this edge gets a template of its own, without the read.
+    const named = namedTemplate(write.template, plan) as {
       inputs: { op: string; slot?: number }[];
     };
-    template.inputs = template.inputs.filter((input) => input.slot !== label);
+    write.template = {
+      ...named,
+      inputs: named.inputs.filter((input) => input.slot !== label),
+    } as typeof write.template;
 
     const run = await runBesideExecutor(artifact, {
       program: {

@@ -39,23 +39,8 @@
             {
               "construct": "filter",
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 5
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               },
               "name": {
                 "name": "loud",
@@ -256,19 +241,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 1
-                  },
-                  {
-                    "op": "const"
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 1
               }
             },
             {
@@ -316,19 +290,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 1
-                  },
-                  {
-                    "op": "const"
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 1
               }
             },
             {
@@ -377,23 +340,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 5
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -416,19 +364,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 1
-                  },
-                  {
-                    "op": "const"
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 1
               }
             },
             {
@@ -555,6 +492,42 @@
             }
           ],
           "stateCells": [],
+          "templates": [
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 5
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 2,
+              "op": "fold"
+            },
+            {
+              "by": {
+                "expression": true
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 1
+                },
+                {
+                  "op": "const"
+                }
+              ],
+              "op": "derive"
+            }
+          ],
           "version": 1
         },
         "schemas": [

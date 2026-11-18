@@ -69,11 +69,8 @@
                     "path": []
                   },
                   "template": {
-                    "by": {
-                      "body": 0
-                    },
-                    "inputs": [],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 }
               ]
@@ -158,11 +155,8 @@
                 "body": 0
               },
               "input": {
-                "by": {
-                  "body": 0
-                },
-                "inputs": [],
-                "op": "derive"
+                "op": "shared",
+                "template": 0
               },
               "kind": "materializer",
               "name": "make",
@@ -177,11 +171,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "by": {
-                  "body": 0
-                },
-                "inputs": [],
-                "op": "derive"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -241,6 +232,15 @@
           "selectors": [],
           "slots": [],
           "stateCells": [],
+          "templates": [
+            {
+              "by": {
+                "body": 0
+              },
+              "inputs": [],
+              "op": "derive"
+            }
+          ],
           "version": 1
         },
         "schemas": [

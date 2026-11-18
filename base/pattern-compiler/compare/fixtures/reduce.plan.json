@@ -300,19 +300,8 @@
               },
               "input": {
                 "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "const"
-                    },
-                    {
-                      "op": "slot",
-                      "slot": 2
-                    }
-                  ],
-                  "op": "derive"
+                  "op": "shared",
+                  "template": 0
                 },
                 "collection": 0,
                 "op": "fold"
@@ -327,31 +316,8 @@
               },
               "input": {
                 "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "const"
-                    },
-                    {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "op": "slot",
-                          "slot": 5
-                        },
-                        {
-                          "op": "slot",
-                          "slot": 6
-                        }
-                      ],
-                      "op": "derive"
-                    }
-                  ],
-                  "op": "derive"
+                  "op": "shared",
+                  "template": 1
                 },
                 "collection": 1,
                 "op": "fold"
@@ -371,19 +337,8 @@
                 "inputs": [
                   {
                     "body": {
-                      "by": {
-                        "expression": true
-                      },
-                      "inputs": [
-                        {
-                          "op": "const"
-                        },
-                        {
-                          "op": "slot",
-                          "slot": 10
-                        }
-                      ],
-                      "op": "derive"
+                      "op": "shared",
+                      "template": 2
                     },
                     "collection": 3,
                     "op": "fold"
@@ -413,19 +368,8 @@
                 "*"
               ],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "const"
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 2
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -437,31 +381,8 @@
                 "*"
               ],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "const"
-                  },
-                  {
-                    "by": {
-                      "expression": true
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 5
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 6
-                      }
-                    ],
-                    "op": "derive"
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 1
               }
             },
             {
@@ -509,19 +430,8 @@
                 "*"
               ],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "const"
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 10
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 2
               }
             },
             {
@@ -694,6 +604,65 @@
             }
           ],
           "stateCells": [],
+          "templates": [
+            {
+              "by": {
+                "expression": true
+              },
+              "inputs": [
+                {
+                  "op": "const"
+                },
+                {
+                  "op": "slot",
+                  "slot": 2
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "expression": true
+              },
+              "inputs": [
+                {
+                  "op": "const"
+                },
+                {
+                  "by": {
+                    "expression": true
+                  },
+                  "inputs": [
+                    {
+                      "op": "slot",
+                      "slot": 5
+                    },
+                    {
+                      "op": "slot",
+                      "slot": 6
+                    }
+                  ],
+                  "op": "derive"
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "expression": true
+              },
+              "inputs": [
+                {
+                  "op": "const"
+                },
+                {
+                  "op": "slot",
+                  "slot": 10
+                }
+              ],
+              "op": "derive"
+            }
+          ],
           "version": 1
         },
         "schemas": [

@@ -254,16 +254,8 @@
                     "slot": 5
                   },
                   "template": {
-                    "by": {
-                      "body": 1
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 5
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 },
                 {
@@ -276,16 +268,8 @@
                     "slot": 5
                   },
                   "template": {
-                    "by": {
-                      "body": 1
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 5
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 }
               ]
@@ -325,20 +309,8 @@
                     "slot": 7
                   },
                   "template": {
-                    "by": {
-                      "body": 2
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 7
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 8
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 1
                   }
                 },
                 {
@@ -352,20 +324,8 @@
                     "slot": 7
                   },
                   "template": {
-                    "by": {
-                      "body": 2
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 7
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 8
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 1
                   }
                 },
                 {
@@ -378,20 +338,8 @@
                     "slot": 8
                   },
                   "template": {
-                    "by": {
-                      "body": 2
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 7
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 8
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 1
                   }
                 }
               ]
@@ -431,20 +379,8 @@
                     "slot": 10
                   },
                   "template": {
-                    "by": {
-                      "body": 3
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 10
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 11
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 2
                   }
                 },
                 {
@@ -458,20 +394,8 @@
                     "slot": 10
                   },
                   "template": {
-                    "by": {
-                      "body": 3
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 10
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 11
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 2
                   }
                 }
               ]
@@ -498,23 +422,8 @@
             {
               "construct": "filter",
               "membership": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 13
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 1,
-                "op": "fold"
+                "op": "shared",
+                "template": 3
               },
               "name": "filter",
               "source": {
@@ -713,23 +622,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "body": {
-                  "by": {
-                    "expression": true
-                  },
-                  "inputs": [
-                    {
-                      "op": "slot",
-                      "slot": 13
-                    },
-                    {
-                      "op": "const"
-                    }
-                  ],
-                  "op": "derive"
-                },
-                "collection": 1,
-                "op": "fold"
+                "op": "shared",
+                "template": 3
               }
             },
             {
@@ -1017,6 +911,71 @@
                   "element": 2
                 }
               ]
+            }
+          ],
+          "templates": [
+            {
+              "by": {
+                "body": 1
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 5
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "body": 2
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 7
+                },
+                {
+                  "op": "slot",
+                  "slot": 8
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "body": 3
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 10
+                },
+                {
+                  "op": "slot",
+                  "slot": 11
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 13
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 1,
+              "op": "fold"
             }
           ],
           "version": 1

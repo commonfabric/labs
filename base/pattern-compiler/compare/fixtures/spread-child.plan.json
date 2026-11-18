@@ -180,20 +180,8 @@
                 "4"
               ],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 5
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 4
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -207,20 +195,8 @@
                 "*"
               ],
               "template": {
-                "by": {
-                  "expression": true
-                },
-                "inputs": [
-                  {
-                    "op": "slot",
-                    "slot": 5
-                  },
-                  {
-                    "op": "slot",
-                    "slot": 4
-                  }
-                ],
-                "op": "derive"
+                "op": "shared",
+                "template": 0
               }
             }
           ],
@@ -294,6 +270,24 @@
             }
           ],
           "stateCells": [],
+          "templates": [
+            {
+              "by": {
+                "expression": true
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 5
+                },
+                {
+                  "op": "slot",
+                  "slot": 4
+                }
+              ],
+              "op": "derive"
+            }
+          ],
           "version": 1
         },
         "schemas": [

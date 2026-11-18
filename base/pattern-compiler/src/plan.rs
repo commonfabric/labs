@@ -6652,10 +6652,23 @@ impl<'a> Emitter<'_, '_, 'a> {
             .iter()
             .map(|value| value.template.clone())
             .collect();
-        resolve_templates(&mut plan, &output_of, &templates);
+        let mut held_of = HashMap::new();
+        resolve_templates(&mut plan, &output_of, &templates, &mut held_of);
+        // The templates that are held by a reference name values as well.
+        let mut next = 0;
+        while let Some(mut held) = HELD_TWICE.with(|held| held.borrow().get(next).cloned()) {
+            resolve_templates(&mut held, &output_of, &templates, &mut held_of);
+            HELD_TWICE.with(|all| all.borrow_mut()[next] = held);
+            next += 1;
+        }
         // A record that refers to a value names its output.
         let mut missing = false;
         resolve_values(&mut plan, &output_of, &mut missing);
+        HELD_TWICE.with(|held| {
+            for template in held.borrow_mut().iter_mut() {
+                resolve_values(template, &output_of, &mut missing);
+            }
+        });
         if missing {
             self.unsupported
                 .push(("a reference to a value that has no output".to_string(), 0));
@@ -6682,6 +6695,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
             }
         }
+        // A template that occurs at more than one position is written
+        // once (provisional decision P6).
+        share_templates(&mut plan);
         // The checks follow a reference node to the template it names.
         crate::flow::name_templates(
             plan["outputs"].as_array().map_or(&[][..], Vec::as_slice),
@@ -7455,19 +7471,214 @@ fn joined(inputs: Vec<Value>) -> Value {
     }
 }
 
+thread_local! {
+    /// The templates that a `select` under construction holds at two
+    /// positions, each written once (`select_node`). `share_templates`
+    /// takes them when the plan is assembled.
+    static HELD_TWICE: std::cell::RefCell<Vec<Value>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether a template is one node with no template below it.
+fn is_leaf(template: &Value) -> bool {
+    matches!(
+        template["op"].as_str(),
+        Some("const" | "slot" | "output" | "shared")
+    )
+}
+
 /// A `select` node, where the condition and every branch have a template.
+/// `a && b`, `a || b` and `a ?? b` hold the template of `a` as the
+/// condition and as a branch (PL §3.5): it is written once, and the node
+/// holds a reference to it at both positions, so that a chain of such
+/// operands does not double with each (provisional decision P6).
 fn select_node(
     selector: usize,
     condition: Option<Value>,
     branches: Vec<Option<Value>>,
 ) -> Option<Value> {
-    let branches: Option<Vec<Value>> = branches.into_iter().collect();
+    let mut condition = condition?;
+    let mut branches: Vec<Value> = branches.into_iter().collect::<Option<_>>()?;
+    // Each operand that is no single node is held by a reference while
+    // the plan is built, so equal operands are one, at whatever depth
+    // they are. `share_templates` writes an operand that one position
+    // holds in place again.
+    let hold = |template: &mut Value| {
+        if is_leaf(template) {
+            return;
+        }
+        *template = HELD_TWICE.with(|held| {
+            let mut held = held.borrow_mut();
+            let index = held
+                .iter()
+                .position(|known| known == template)
+                .unwrap_or_else(|| {
+                    held.push(template.clone());
+                    held.len() - 1
+                });
+            json!({ "op": "shared", "$held": index })
+        });
+    };
+    hold(&mut condition);
+    branches.iter_mut().for_each(hold);
     Some(json!({
         "op": "select",
         "selector": selector,
-        "condition": condition?,
-        "branches": branches?,
+        "condition": condition,
+        "branches": branches,
     }))
+}
+
+/// Writes each template that occurs at more than one position of a plan
+/// once, in `Plan.templates`, and a node `{ "op": "shared", "template": n }`
+/// at each position (provisional decision P6). Two templates are one
+/// where they are structurally equal, and a template that is one node
+/// with nothing below it is written in place. An entry of the table can
+/// hold `shared` and `output` nodes.
+fn share_templates(plan: &mut Value) {
+    let held: Vec<Value> = HELD_TWICE.with(|held| std::mem::take(&mut *held.borrow_mut()));
+    // How many positions hold each template. What is below a template
+    // that was counted before is not counted again: it will be written
+    // once with it.
+    fn is_template(node: &Map<String, Value>) -> bool {
+        matches!(
+            node.get("op").and_then(Value::as_str),
+            Some("derive" | "select" | "pick" | "fold" | "dynamic")
+        )
+    }
+    fn count(
+        value: &Value,
+        held: &[Value],
+        counts: &mut HashMap<String, usize>,
+        seen_held: &mut HashMap<usize, usize>,
+    ) {
+        match value {
+            Value::Object(node) => {
+                if let Some(index) = node.get("$held").and_then(Value::as_u64) {
+                    let uses = seen_held.entry(index as usize).or_insert(0);
+                    *uses += 1;
+                    if *uses == 1 {
+                        if let Some(template) = held.get(index as usize) {
+                            count(template, held, counts, seen_held);
+                        }
+                    }
+                    return;
+                }
+                if is_template(node) {
+                    let times = counts.entry(value.to_string()).or_insert(0);
+                    *times += 1;
+                    if *times > 1 {
+                        return;
+                    }
+                }
+                for member in node.values() {
+                    count(member, held, counts, seen_held);
+                }
+            }
+            Value::Array(members) => {
+                for member in members {
+                    count(member, held, counts, seen_held);
+                }
+            }
+            _ => {}
+        }
+    }
+    struct Table<'h> {
+        held: &'h [Value],
+        counts: HashMap<String, usize>,
+        index: HashMap<String, usize>,
+        of_held: HashMap<usize, usize>,
+        held_uses: HashMap<usize, usize>,
+        entries: Vec<Value>,
+    }
+    fn share(value: &mut Value, table: &mut Table) {
+        match value {
+            Value::Object(node) => {
+                if let Some(index) = node.get("$held").and_then(Value::as_u64) {
+                    let index = index as usize;
+                    // An operand that one position holds is written in
+                    // place, unless the same template is written
+                    // elsewhere.
+                    if table.held_uses.get(&index).copied().unwrap_or(0) <= 1 {
+                        *value = table.held.get(index).cloned().unwrap_or(Value::Null);
+                        share(value, table);
+                        return;
+                    }
+                    let at = match table.of_held.get(&index) {
+                        Some(at) => *at,
+                        None => {
+                            let at = table.entries.len();
+                            table.entries.push(Value::Null);
+                            table.of_held.insert(index, at);
+                            let mut template =
+                                table.held.get(index).cloned().unwrap_or(Value::Null);
+                            // The template is written once whatever its
+                            // count: it is held at two positions.
+                            let key = template.to_string();
+                            table.index.insert(key, at);
+                            share_below(&mut template, table);
+                            table.entries[at] = template;
+                            at
+                        }
+                    };
+                    *value = json!({ "op": "shared", "template": at });
+                    return;
+                }
+                if is_template(node) {
+                    let key = value.to_string();
+                    if let Some(at) = table.index.get(&key) {
+                        *value = json!({ "op": "shared", "template": at });
+                        return;
+                    }
+                    if table.counts.get(&key).copied().unwrap_or(0) > 1 {
+                        let at = table.entries.len();
+                        table.entries.push(Value::Null);
+                        table.index.insert(key, at);
+                        let mut template = value.clone();
+                        share_below(&mut template, table);
+                        table.entries[at] = template;
+                        *value = json!({ "op": "shared", "template": at });
+                        return;
+                    }
+                }
+                share_below(value, table);
+            }
+            Value::Array(members) => {
+                for member in members {
+                    share(member, table);
+                }
+            }
+            _ => {}
+        }
+    }
+    fn share_below(value: &mut Value, table: &mut Table) {
+        match value {
+            Value::Object(node) => {
+                for member in node.values_mut() {
+                    share(member, table);
+                }
+            }
+            Value::Array(members) => {
+                for member in members {
+                    share(member, table);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut counts = HashMap::new();
+    let mut held_uses = HashMap::new();
+    count(plan, &held, &mut counts, &mut held_uses);
+    let mut table = Table {
+        held: &held,
+        counts,
+        held_uses,
+        index: HashMap::new(),
+        of_held: HashMap::new(),
+        entries: Vec::new(),
+    };
+    share(plan, &mut table);
+    plan["templates"] = Value::Array(table.entries);
 }
 
 /// Whether a hint names no declaration: the expression is an operand, a
@@ -7567,6 +7778,7 @@ fn resolve_templates(
     value: &mut Value,
     output_of: &HashMap<(usize, Vec<String>), usize>,
     templates: &[Option<Value>],
+    held_of: &mut HashMap<usize, usize>,
 ) {
     match value {
         Value::Object(members) => {
@@ -7575,23 +7787,39 @@ fn resolve_templates(
                 match output_of.get(&(index, Vec::new())) {
                     Some(output) => *value = json!({ "op": "output", "output": output }),
                     None => {
-                        *value = templates
+                        let template = templates
                             .get(index)
                             .cloned()
                             .flatten()
                             .unwrap_or_else(|| json!({ "op": "const" }));
-                        resolve_templates(value, output_of, templates);
+                        if is_leaf(&template) {
+                            *value = template;
+                            resolve_templates(value, output_of, templates, held_of);
+                            return;
+                        }
+                        // The template of a value that has no output is
+                        // held once for every position that names it:
+                        // `share_templates` writes it in place where one
+                        // position does.
+                        let held = *held_of.entry(index).or_insert_with(|| {
+                            HELD_TWICE.with(|held| {
+                                let mut held = held.borrow_mut();
+                                held.push(template);
+                                held.len() - 1
+                            })
+                        });
+                        *value = json!({ "op": "shared", "$held": held });
                     }
                 }
                 return;
             }
             for member in members.values_mut() {
-                resolve_templates(member, output_of, templates);
+                resolve_templates(member, output_of, templates, held_of);
             }
         }
         Value::Array(elements) => {
             for element in elements {
-                resolve_templates(element, output_of, templates);
+                resolve_templates(element, output_of, templates, held_of);
             }
         }
         _ => {}

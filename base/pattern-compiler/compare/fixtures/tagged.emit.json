@@ -156,6 +156,7 @@
             }
           ],
           "stateCells": [],
+          "templates": [],
           "version": 1
         },
         "schemas": [
@@ -403,6 +404,7 @@
             }
           ],
           "stateCells": [],
+          "templates": [],
           "version": 1
         },
         "schemas": [

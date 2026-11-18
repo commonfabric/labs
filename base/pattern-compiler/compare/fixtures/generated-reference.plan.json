@@ -66,6 +66,7 @@
             }
           ],
           "stateCells": [],
+          "templates": [],
           "version": 1
         },
         "schemas": [
@@ -220,20 +221,8 @@
                     "slot": 4
                   },
                   "template": {
-                    "by": {
-                      "body": 1
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 3
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 4
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 },
                 {
@@ -247,20 +236,8 @@
                     "slot": 4
                   },
                   "template": {
-                    "by": {
-                      "body": 1
-                    },
-                    "inputs": [
-                      {
-                        "op": "slot",
-                        "slot": 3
-                      },
-                      {
-                        "op": "slot",
-                        "slot": 4
-                      }
-                    ],
-                    "op": "derive"
+                    "op": "shared",
+                    "template": 0
                   }
                 }
               ]
@@ -661,6 +638,24 @@
               "schema": "unhashed:schema/7",
               "scope": "space",
               "within": []
+            }
+          ],
+          "templates": [
+            {
+              "by": {
+                "body": 1
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 3
+                },
+                {
+                  "op": "slot",
+                  "slot": 4
+                }
+              ],
+              "op": "derive"
             }
           ],
           "version": 1

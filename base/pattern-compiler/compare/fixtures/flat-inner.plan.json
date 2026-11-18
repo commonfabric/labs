@@ -294,12 +294,8 @@
             {
               "construct": "flatMap",
               "membership": {
-                "body": {
-                  "op": "output",
-                  "output": 0
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               },
               "name": {
                 "name": "flatMap",
@@ -329,12 +325,8 @@
             {
               "construct": "flatMap",
               "membership": {
-                "body": {
-                  "op": "output",
-                  "output": 5
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "shared",
+                "template": 1
               },
               "name": {
                 "name": "flatMap",
@@ -555,12 +547,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "body": {
-                  "op": "output",
-                  "output": 0
-                },
-                "collection": 0,
-                "op": "fold"
+                "op": "shared",
+                "template": 0
               }
             },
             {
@@ -623,12 +611,8 @@
               "kept": false,
               "path": [],
               "template": {
-                "body": {
-                  "op": "output",
-                  "output": 5
-                },
-                "collection": 2,
-                "op": "fold"
+                "op": "shared",
+                "template": 1
               }
             },
             {
@@ -895,6 +879,24 @@
               "schema": "unhashed:schema/10",
               "scope": "space",
               "within": []
+            }
+          ],
+          "templates": [
+            {
+              "body": {
+                "op": "output",
+                "output": 0
+              },
+              "collection": 0,
+              "op": "fold"
+            },
+            {
+              "body": {
+                "op": "output",
+                "output": 5
+              },
+              "collection": 2,
+              "op": "fold"
             }
           ],
           "version": 1
