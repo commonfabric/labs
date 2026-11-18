@@ -229,6 +229,19 @@ describe("space-session-release", () => {
     expect(value).toEqual({ n: 2 });
   });
 
+  it("releases a space again once nothing uses it after it reopened", async () => {
+    const { space, id } = await spaceWith(1);
+    await load(space, id);
+    await releaseTwice();
+    expect(isOpen(space)).toBe(false);
+    await load(space, id);
+    expect(isOpen(space)).toBe(true);
+
+    await releaseTwice();
+
+    expect(isOpen(space)).toBe(false);
+  });
+
   it("sends a write to a released space once it opens again", async () => {
     const { space, id } = await spaceWith(1);
     await load(space, id);

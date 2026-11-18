@@ -3718,6 +3718,9 @@ export class StorageManager implements IStorageManager {
       const hold = { ref: new WeakRef(token), followsUp: false };
       this.#documentHolds.set(key, hold);
       this.#holdRegistry.register(token, { space: address.space, key, hold });
+      // The pass under way found its holds as it began, so the space of one
+      // taken since is kept as an open since then is.
+      this.#openedDuringPass.add(address.space);
     }
     return token;
   }
@@ -3740,16 +3743,23 @@ export class StorageManager implements IStorageManager {
   releaseUnreadDocuments(options: ReleaseOptions = {}): Promise<boolean> {
     const pass = this.#releasePass.catch(() => false).then(async () => {
       this.#openedDuringPass.clear();
+      // A hold token still reachable is a cell that may read its document
+      // again, so its space is in use whether or not the document is loaded.
+      const held = new Set<MemorySpace>();
       for (const [key, hold] of this.#documentHolds) {
-        if (hold.ref.deref() === undefined) this.#documentHolds.delete(key);
-        else if (options.followUpOnCollection === true) hold.followsUp = true;
+        if (hold.ref.deref() === undefined) {
+          this.#documentHolds.delete(key);
+          continue;
+        }
+        held.add(key.slice(0, key.indexOf("\0")) as MemorySpace);
+        if (options.followUpOnCollection === true) hold.followsUp = true;
       }
       const results = await Promise.all(
         [...this.#providers.values()].map((provider) =>
           provider.replica.releaseUnread()
         ),
       );
-      this.#releaseUnusedSpaces();
+      this.#releaseUnusedSpaces(held);
       return results.some((result) => result.deferred);
     });
     this.#releasePass = pass;
@@ -3769,18 +3779,12 @@ export class StorageManager implements IStorageManager {
    * provider and what this manager kept for the space alone, tells the
    * observers of `subscribeSpacesReleased()`, and closes the space's
    * session. The next use of the space opens it again, once that close has
-   * finished.
+   * finished. `held` names the spaces of the hold tokens still reachable as
+   * the pass began, found there rather than here: a token dereferenced here
+   * would be kept from collection for the rest of the turn.
    */
-  #releaseUnusedSpaces(): void {
+  #releaseUnusedSpaces(held: ReadonlySet<MemorySpace>): void {
     if (this.#multiSpaceCommitsApplying.size > 0) return;
-    // A hold token still reachable is a cell that may read its document
-    // again, so its space is in use whether or not the document is loaded.
-    const held = new Set<string>();
-    for (const [key, hold] of this.#documentHolds) {
-      if (hold.ref.deref() !== undefined) {
-        held.add(key.slice(0, key.indexOf("\0")));
-      }
-    }
     for (const [space, provider] of [...this.#providers]) {
       if (held.has(space) || !this.#isUnusedSpace(space, provider)) continue;
       this.#providers.delete(space);
