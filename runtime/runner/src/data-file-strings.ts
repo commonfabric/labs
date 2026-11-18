@@ -1,3 +1,4 @@
+import { LRUCache } from "@commonfabric/collections/cache";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { isPlainObject } from "@commonfabric/js-values/types";
 
@@ -11,6 +12,12 @@ import type { MemorySpace } from "./runtime.ts";
  * stays inline.
  */
 const SHORTEST_LINKED = 1024;
+
+/** Most strings `DataFileStrings` holds at once. */
+const MOST_STRINGS = 10_000;
+
+/** Most characters, all its strings together, `DataFileStrings` holds. */
+const MOST_CHARACTERS = 32 * 1024 * 1024;
 
 /** What `DataFileStrings.linkInto()` returns. */
 export interface LinkedValue {
@@ -33,12 +40,18 @@ export interface LinkedValue {
  * string equal to a recorded one is linked wherever it occurs, which exposes
  * nothing, since the space holds that text unlabeled already.
  *
- * Recorded strings are held for the runtime's lifetime, as the modules that
- * read them are.
+ * The set is bounded, by count and by total length, and drops the string used
+ * least recently once it is full. A string it dropped is written inline by the
+ * next setup that writes it, which costs that piece the copy this saves and
+ * nothing else; a reader returning it again records it again.
  */
 export class DataFileStrings {
   /** Each recorded string, with the id of its code document once computed. */
-  #codeDocumentIds = new Map<string, string | undefined>();
+  #codeDocumentIds = new LRUCache<string, string | null>({
+    capacity: MOST_STRINGS,
+    maxWeight: MOST_CHARACTERS,
+    weigh: (text) => text.length,
+  });
 
   /**
    * Records `text` as returned by a data-file reader. A string shorter than
@@ -46,8 +59,10 @@ export class DataFileStrings {
    */
   record(text: string): void {
     if (text.length < SHORTEST_LINKED) return;
-    if (!this.#codeDocumentIds.has(text)) {
-      this.#codeDocumentIds.set(text, undefined);
+    if (this.#codeDocumentIds.has(text)) {
+      this.#codeDocumentIds.get(text);
+    } else {
+      this.#codeDocumentIds.put(text, null);
     }
   }
 
@@ -77,10 +92,14 @@ export class DataFileStrings {
     if (typeof value === "string") {
       if (!this.#codeDocumentIds.has(value)) return value;
       documents.add(value);
+      // A link with no scope of its own takes the scope of the document
+      // holding it, and a result document can be user- or session-scoped. The
+      // code document is in the space.
       return createSigilLinkFromParsedLink({
         id: this.#codeDocumentId(value),
         path: [],
         space,
+        scope: "space",
       });
     }
     // A link under the legacy representation is a plain record, so it is
@@ -89,9 +108,11 @@ export class DataFileStrings {
     if (Array.isArray(value)) {
       let copy: unknown[] | undefined;
       for (let i = 0; i < value.length; i++) {
+        if (!(i in value)) continue;
         const element = this.#link(value[i], space, documents);
         if (element !== value[i]) {
-          copy ??= [...value];
+          // `slice()`, unlike a spread, keeps the array's holes.
+          copy ??= value.slice();
           copy[i] = element;
         }
       }
@@ -114,9 +135,9 @@ export class DataFileStrings {
   /** Helper for `#link()`, which returns the id of `text`'s code document. */
   #codeDocumentId(text: string): `cid:${string}` {
     let id = this.#codeDocumentIds.get(text);
-    if (id === undefined) {
+    if (id === null || id === undefined) {
       id = `cid:${taggedHashStringOf(text)}`;
-      this.#codeDocumentIds.set(text, id);
+      this.#codeDocumentIds.put(text, id);
     }
     return id as `cid:${string}`;
   }

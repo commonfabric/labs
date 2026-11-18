@@ -33,6 +33,31 @@ function renderedProp(value: unknown): unknown {
   return isCell(value) ? value.get() : value;
 }
 
+/**
+ * The `src` a render read hands the first `cf-iframe` in `view`, following
+ * each cell the read returns, as the reconciler subscribes to it.
+ */
+function srcOf(view: unknown): unknown {
+  const node = renderedProp(view);
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const src = srcOf(child);
+      if (src !== undefined) return src;
+    }
+    return undefined;
+  }
+  if (typeof node !== "object" || node === null) return undefined;
+  const { name, props, children } = node as {
+    name?: unknown;
+    props?: unknown;
+    children?: unknown;
+  };
+  if (name === "cf-iframe") {
+    return renderedProp((renderedProp(props) as { src?: unknown }).src);
+  }
+  return srcOf(children);
+}
+
 /** The id of the code document holding `text`. */
 function codeDocumentId(text: string): `cid:${string}` {
   return `cid:${taggedHashStringOf(text)}`;
@@ -53,6 +78,7 @@ describe("data-file-strings", () => {
               id: codeDocumentId(PAGE),
               path: [],
               space,
+              scope: "space",
             }),
           });
           expect(documents).toEqual([PAGE]);
@@ -103,6 +129,34 @@ describe("data-file-strings", () => {
           );
 
           expect(documents).toEqual([PAGE]);
+        });
+
+        it("keeps the holes of an array it copies", () => {
+          const strings = new DataFileStrings();
+          strings.record(PAGE);
+          // deno-lint-ignore no-sparse-arrays
+          const sparse = [PAGE, , "kept"];
+
+          const { value } = strings.linkInto(sparse, space);
+
+          expect(1 in (value as unknown[])).toBe(false);
+          expect((value as unknown[]).length).toBe(3);
+        });
+
+        it("leaves inline a string it dropped once full", () => {
+          // The set holds at most 32 Mi characters, so the 33rd string of
+          // 1 Mi characters drops the one used least recently, the first.
+
+          const strings = new DataFileStrings();
+          const texts = Array.from(
+            { length: 33 },
+            (_, i) => `${i}:`.padEnd(1024 * 1024, "glaze"),
+          );
+          for (const text of texts) strings.record(text);
+
+          const { documents } = strings.linkInto([texts[0], texts[32]], space);
+
+          expect(documents).toEqual([texts[32]]);
         });
 
         it("returns a link as itself", () => {
@@ -215,6 +269,62 @@ describe("data-file-strings", () => {
       expect(result.key("logo").get()).toBe(url);
     });
 
+    describe("a later setup", () => {
+      /** A program reading `page.html` into its result, as `label` says. */
+      const reading = (label: string) =>
+        [
+          'import { dataFile, pattern } from "commonfabric";',
+          'const PAGE = dataFile("./page.html");',
+          `export default pattern(() => ({ page: PAGE, label: "${label}" }));`,
+        ].join("\n");
+
+      /** Whether setting `main` up over `cause` would rewrite its result. */
+      async function rewrites(main: string, cause: string): Promise<boolean> {
+        const pattern = await runtime.patternManager.compileOrGetPattern({
+          main: "/main.tsx",
+          files: [
+            { name: "/main.tsx", contents: main },
+            { name: "/page.html", contents: PAGE },
+          ],
+          dataFiles: ["/page.html"],
+        });
+        const tx = runtime.edit();
+        try {
+          return runtime.runner.setupRewritesResultProjection(
+            tx,
+            pattern,
+            runtime.getCell(space, cause, undefined, tx),
+          );
+        } finally {
+          tx.abort();
+        }
+      }
+
+      it("leaves a stored link alone when the projection is the same", async () => {
+        await setUp(reading("same"), "unchanged-link");
+
+        // Another pattern, so that the comparison runs, with the same
+        // projection.
+        expect(
+          await rewrites(reading("same") + "\n// another", "unchanged-link"),
+        ).toBe(false);
+      });
+
+      it("rewrites a string stored inline as a link", async () => {
+        await setUp(reading("inline"), "inline-page");
+        const tx = runtime.edit();
+        runtime.getCell(space, "inline-page", undefined, tx).setRawUntyped({
+          page: PAGE,
+          label: "inline",
+        });
+        await tx.commit().settled;
+
+        expect(
+          await rewrites(reading("inline") + "\n// another", "inline-page"),
+        ).toBe(true);
+      });
+    });
+
     it("stores a short data-file string inline", async () => {
       const result = await setUp(
         [
@@ -264,6 +374,41 @@ describe("data-file-strings", () => {
       };
       expect(renderedProp(view.props.get().src)).toBe(PAGE);
     });
+
+    for (const scope of ["PerSession", "PerUser"]) {
+      it(`hands a render read the string in a view that reads ${scope} state`, async () => {
+        // A view computed from scoped state that builds a sub-pattern is
+        // written into a document of that scope, and a link holding no scope
+        // of its own takes the scope of the document it is in. The code
+        // document is in the space.
+
+        const result = await setUp(
+          [
+            "import {",
+            "  computed, dataFile, Default, pattern, PerSession, PerUser, UI,",
+            "  Writable,",
+            '} from "commonfabric";',
+            'const PAGE = dataFile("./page.html");',
+            `interface Input { mode: ${scope}<Writable<string | Default<"a">>> }`,
+            "const Label = pattern<{ mode: Writable<string> }>(({ mode }) => ({",
+            "  [UI]: <span>{mode}</span>,",
+            "}));",
+            "export default pattern<Input>(({ mode }) => ({",
+            "  [UI]: computed(() =>",
+            '    mode.get() === "a"',
+            "      ? <div><cf-iframe src={PAGE} />{Label({ mode })}</div>",
+            "      : <p>other</p>",
+            "  ),",
+            "}));",
+          ].join("\n"),
+          `scoped-view-${scope}`,
+        );
+        const view = result.key(UI).asSchema(rendererVDOMSchema);
+        await view.pull();
+
+        expect(srcOf(view.get())).toBe(PAGE);
+      });
+    }
 
     it("hands a render read the strings of an `assets` record", async () => {
       // A render read stops at an object-valued prop, so a link inside one

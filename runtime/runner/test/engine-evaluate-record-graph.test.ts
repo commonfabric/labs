@@ -638,6 +638,24 @@ describe("Engine.evaluateRecordGraph()", () => {
       });
     });
 
+    it("returns an empty record in a program that attaches no data file", async () => {
+      // A program whose only declared directory holds no asset attaches
+      // nothing, and its modules read through the builder's placeholder.
+
+      const { main } = await engine.compileAndEvaluateModules({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: [
+            'import { __cf_data, dataFile } from "commonfabric";',
+            'export default __cf_data(dataFile.urls("./assets"));',
+          ].join("\n"),
+        }],
+      });
+
+      expect(main?.default).toEqual({});
+    });
+
     it("returns an empty record for a directory holding no asset", async () => {
       const { main } = await engine.compileAndEvaluateModules(
         programReading('dataFile.urls("./elsewhere")'),

@@ -36,6 +36,10 @@ describe("commonfabric dataFile builtin", () => {
     );
   });
 
+  it("returns no assets for a directory when no data-file closure is bound", () => {
+    expect(dataFile.urls("/assets")).toEqual({});
+  });
+
   it("says the closure is missing rather than blaming the path", () => {
     // The distinction matters: a caller whose path is right, on a load that
     // carried no data, is told the load is the problem.

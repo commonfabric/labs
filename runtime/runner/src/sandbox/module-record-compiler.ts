@@ -842,11 +842,14 @@ function dataFileBinding(
       urlOf(resolveDataFilePath(path, moduleName));
     const urls = (path: string): Readonly<Record<string, string>> => {
       const directory = resolveDataFilePath(path, moduleName);
-      const assets: Record<string, string> = {};
-      for (const [name, file] of dataFileAssets(directory, attached)) {
-        assets[name] = urlOf(file);
-      }
-      return freezeSandboxValue(assets);
+      // `fromEntries()` defines each name as a property of the record, where
+      // an assignment of `__proto__` would reach the prototype instead.
+      return freezeSandboxValue(Object.fromEntries(
+        [...dataFileAssets(directory, attached)].map(([name, file]) => [
+          name,
+          urlOf(file),
+        ]),
+      ));
     };
     const reader = freezeSandboxValue(Object.assign(read, { url, urls }));
     const bound = new WeakMap<

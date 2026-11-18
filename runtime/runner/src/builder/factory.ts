@@ -150,6 +150,9 @@ const toSchema: ToSchemaFunction = (_options?) => {
 
 const runtimeSchema = freezeVerifiedPlainData as typeof schemaIdentity;
 
+/** What `dataFile.urls()` returns for a directory holding no asset. */
+const NO_ASSETS: Readonly<Record<string, string>> = Object.freeze({});
+
 /**
  * Returns the error a `dataFile` read throws when it reaches the builder's
  * placeholder rather than a module's own reader: the module was loaded in a
@@ -275,8 +278,10 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     // Placeholder for the per-module binding. A graph carrying data files hands
     // each module its own copy of this namespace, whose reader is closed over
     // that load's files and that module's path (see
-    // `compileSourcesToRecords`). Reaching either body here means the module
-    // is running outside a graph that carries any.
+    // `compileSourcesToRecords`). Reaching a file read here means the module
+    // is running outside a graph that carries any. A directory read returns
+    // no assets instead: a program whose only declared directory holds none
+    // attaches no data file at all, and no assets is the right answer for it.
     dataFile: Object.assign(
       (path: string): string => {
         throw noDataFileClosure(path);
@@ -285,9 +290,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
         url: (path: string): string => {
           throw noDataFileClosure(path);
         },
-        urls: (path: string): Readonly<Record<string, string>> => {
-          throw noDataFileClosure(path);
-        },
+        urls: (_path: string): Readonly<Record<string, string>> => NO_ASSETS,
       },
     ),
     sqliteDatabase,
