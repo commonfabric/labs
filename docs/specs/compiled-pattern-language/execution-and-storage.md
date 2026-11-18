@@ -1646,7 +1646,11 @@ going in", and its §8, question 149). An array of plain values in place
 and an array of references that are given whole are given as links
 already. What the argument holds for the result of another per-element
 construct that is given whole to an instance of its own is *assumed*:
-the assembled values.
+the assembled values. The coordinator of this work recommends a link to
+the assembled collection in their place, which is not ruled (its
+question 154). Where an output that is not kept is stored, so that it
+has an address, is *assumed* as well: in a document of its own
+(sections 4.1 and 5.2; its question 157).
 
 **Resolving a reference by key.** A reference by key that is stored
 outside the element body, as in a cell a handler wrote, is resolved by
@@ -1697,7 +1701,12 @@ and its documents stay in the store: nothing is cleaned up, as when
 an element leaves, and a link to it that is stored elsewhere keeps
 reading it. *Assumed* (`plan-and-label-templates.md` §8, question
 146): a replaced instance that a `lift` or a `computed` of the body
-made is removed with its documents.
+made is removed with its documents. Where the replaced instance was
+called through `asInstance()` and stays, the moved one cannot be
+written under the identifiers of the new key, which the replaced one
+holds. *Assumed* (its question 158): the moved instance keeps the
+identifier it was made with, and an instance that is made later under
+the key it left has a cause that tells it from the moved one.
 
 The prototype's executor re-keys when the handler returns, or at its
 next settling for a write from outside a handler, as through a member
@@ -2476,12 +2485,11 @@ again. A second fixture has a key of two fields. The prototype reads
 the declaration of the key from the array type and the keyword from the
 schema of the array. Its key names the fields and holds one salted hash
 of their values, it is written with `jsonFromFabricValue`, and its
-store resolves a reference by key from the key alone, as ruled. The
-record forms of its key and what it hashes for a whole value differ from
-the documents (`plan-and-label-templates.md` §1.3, "A declared key
-field", and its §8, question 144). It forms the salted hash from an
-array of the secret and the value, where by ruling the hash is of the
-record with `salt` and `value` (its question 152). In the fixtures the
+store resolves a reference by key from the key alone, as ruled. Its
+key has the record forms of the documents, and its salted hash is of
+the record with `salt` and `value`, as ruled
+(`plan-and-label-templates.md` §1.3, "A declared key field", and its
+§8, questions 144 and 152). In the fixtures the
 array is what a `lift` returns, which the executor stores in a document
 of the output, and a handler over it stores a reference by key, with
 that document as the collection. A pattern whose input is typed `Repo[]`
@@ -2490,12 +2498,15 @@ in, which is *assumed* to be the design (its question 149). By ruling a
 pattern that is called through `asInstance()` and given whole what a
 `lift` or a `computed` returns is given a link to the stored output with
 the schema of the array, so its rows are keyed by `id` as well, and its
-argument does not hold the values. The prototype's executor writes the
-values into the argument and keys the rows by their whole values, and
-does not follow that ruling. By ruling the type of the result of the
-`map` in the example keeps the key `id` of its receiver, as the type of
-the result of the `filter` does. The prototype's compiler gives the type
-of a `map` result no key (its question 150). The runtime of
+argument does not hold the values. The prototype's executor does so.
+By ruling the type of the result of a `map` keeps the key fields of its
+receiver, as the type of the result of a `filter` does (its question
+150). *Assumed* (its question 155): it does so only where the element
+type of the result has those fields. The rows of the `map` in the
+example are results of `RepoRow`, so the type of `rows` declares the key
+`id` only where that result type has a property `id`; the rows have the
+upstream keys in either case. The prototype's compiler keeps the key
+fields for every `map` result. The runtime of
 today has no such declaration, so nothing of this is compared with
 it.
 
@@ -3112,6 +3123,7 @@ says how many scope instances exist.
 | Operation state document | The durable state of one aggregate, `reduce`, index, effect, `wish`, forced cache or materializer. For an effect it includes the stored request, for a `wish` the stored operands, and for a `reduce` the initial value (`plan-and-label-templates.md` §3.13 and §3.19, where the last two are assumptions) | Section 6 | By the scope of the operation's cone instance |
 | Cache document | The entries of cones the runtime promoted | Section 8.4 | One per scope the promoted cones have |
 | Binding state document | The state of a binding made in a function body: the copied paths, and a link for each cell and each container bound by reference | Section 5.5 | The body's |
+| Output document | One interim output that is a plain array generated from scratch and has to have an address, because a per-element construct is over it or it is given whole to an instance of its own (section 2.5). *Assumed* (`plan-and-label-templates.md` §8, question 157) | Section 5.2 | By the scope of the output's cone instance |
 | Instances document | Which instances the evaluations of the instance's computations made | Section 2.8 | One per scope the making cone instances have |
 | Stream document | The entries of the events appended to one stream, and the stream's `eventWatermark`. It exists once the stream received an event (section 4.7) | The stream's identifier (sections 5.2 and 5.5) | As today |
 
@@ -4189,6 +4201,14 @@ A part document is named by the same record with type `part`, a path in
 place of the name, and every element key hashed under the secret of the
 space (section 4.10).
 
+An output document is named by the same record with type `output`, the
+`within` of the output's cone, and as the cause the name of the interim
+value with the output's path. It holds an interim output that is a
+plain array generated from scratch and that has to have an address:
+one that a per-element construct is over, or that is given whole to an
+instance of its own (section 2.5). That is *assumed*
+(`plan-and-label-templates.md` §8, question 157).
+
 ### 5.3 Element keys and the salt
 
 The `key` of an `element` step has an element part and an occurrence
@@ -4196,14 +4216,24 @@ count. By ruling it is a fabric value and has no written form of this
 design: a record of the members `element` and `occurrence`, which
 `createRef` hashes with the rest of the cause, and which
 `jsonFromFabricValue` (`base/data-model/src/codecs.ts`) writes where a
-key has to stand as a string, as in the stored path of a reference by
-key (`plan-and-label-templates.md` §1.2, "Written forms", and §1.3,
-"The structure of a key"). The names of the members are *assumed*
-(its §8, question 144).
+key has to stand as a string (`plan-and-label-templates.md` §1.2,
+"Written forms", and §1.3, "The structure of a key"). In the stored
+path of a reference by key it stands as the record, which is *assumed*
+(its §8, question 156). The names of the members are *assumed* (its
+§8, question 144).
 
 - The element part for a position that holds a link is the record of
-  the space and identifier of the cell the link resolves to, and its
-  path, without the link's scope.
+  the address that the link resolves to: the space, the identifier of
+  the document, the scope, and the path, with the members `space`,
+  `document`, `scope` and `path`. That is the case of an array of
+  references. The ruling on the identity of such a cell lists the four
+  parts, and `cellIdentityKey` in
+  `runtime/runner/src/builtins/scope-policy.ts` forms today's key from
+  them. *Assumed* (its §8, question 153): the scope is a member, absent
+  where the link names none. The scope of the link then enters the
+  identifiers of what the element body holds, through the key. That is
+  apart from the scope instances of section 5.1, of which one
+  identifier has one per scope key.
 - The element part for a position that holds a plain value is the hash
   of a secret of the space and the value: what `hashOf` returns for the
   record of the two, a `FabricHash`. Where the

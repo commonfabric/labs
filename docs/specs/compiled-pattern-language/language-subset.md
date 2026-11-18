@@ -677,9 +677,12 @@ and 150 of `plan-and-label-templates.md` §8 and question 44 of
   `map` result keeps the key of its receiver, as the type of a `filter`
   result does, since the elements of both results have the upstream
   keys. So either result is reported where another key is declared. The
-  prototype's compiler gives the type of a `map` result no key.
-  *Assumed* (its question 150): the key fields of a `map` result need
-  not be properties of its element type, and the type of a `flatMap`
+  prototype's compiler does so.
+  *Assumed* (its questions 150 and 155): the type of a `map` result
+  declares the key fields of its receiver only where the element type
+  of the result has them, so the result of a `map` whose callback
+  computes a value of another type declares no key and is not
+  reported; and the type of a `flatMap`
   result declares no key, so nothing is reported for it. The rule is for
   plain values, in an array of
   plain values in place and in the result of another per-element
