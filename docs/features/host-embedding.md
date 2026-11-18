@@ -174,7 +174,14 @@ DOM). A host embeds by listening for:
   tab"). A host that calls `preventDefault()` owns the new tab and can
   apply its own URL scheme. Left uncancelled, the default builds a
   fabric URL and calls `globalThis.open`, which on a non-shell origin is
-  a 404 tab — so a host that mounts these components binds this one. The
+  a 404 tab — so a host that mounts these components binds this one.
+  A link whose target takes longer than `NEW_TAB_RESERVE_AFTER_MS` (one
+  second) to resolve reserves a tab first, while the gesture still allows
+  one, and the event it then dispatches carries `claimReservedTab()`. A host
+  that owns the new tab calls it and points the tab it returns at its own
+  URL: the gesture that could have opened another tab was spent on the
+  reservation. A host that cancels without claiming leaves the reserved tab
+  to be closed. The
   conceptual browser form is described by
   [Common Fabric URLs](../specs/fabric-urls.md). No deployment is planned; the
   current event behavior remains authoritative.

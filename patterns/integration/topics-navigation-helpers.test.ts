@@ -1,6 +1,8 @@
 /**
  * Exercises cell-link navigation over stand-in links whose destinations and
- * replacement timing are controlled by the test.
+ * replacement timing are controlled by the test. A stand-in's button
+ * dispatches `cf-navigate` for what it opens, as a `cf-cell-link`'s click
+ * does, and the helper reports that.
  */
 
 import { Browser, type Page } from "@commonfabric/integration";
@@ -60,7 +62,12 @@ describe("topics-navigation-helpers", () => {
             JSON.stringify(path)
           }`;
           button.textContent = `${label} ${identity}`;
-          button.addEventListener("click", () => clicks.push(identity));
+          button.addEventListener("click", () => {
+            clicks.push(identity);
+            globalThis.dispatchEvent(
+              new CustomEvent("cf-navigate", { detail: { pieceId } }),
+            );
+          });
           chipRoot.append(button);
           linkRoot.append(chip);
           return link;
@@ -140,7 +147,12 @@ describe("topics-navigation-helpers", () => {
         const chipRoot = chip.attachShadow({ mode: "open" });
         const button = document.createElement("button");
         button.textContent = "Open";
-        button.addEventListener("click", () => clicks.push(pieceId));
+        button.addEventListener("click", () => {
+          clicks.push(pieceId);
+          globalThis.dispatchEvent(
+            new CustomEvent("cf-navigate", { detail: { pieceId } }),
+          );
+        });
         chipRoot.append(button);
         linkRoot.append(chip);
         document.body.append(link);
@@ -195,7 +207,12 @@ describe("topics-navigation-helpers", () => {
           const chipRoot = chip.attachShadow({ mode: "open" });
           const button = document.createElement("button");
           button.textContent = label;
-          button.addEventListener("click", () => clicks.push(pieceId));
+          button.addEventListener("click", () => {
+            clicks.push(pieceId);
+            globalThis.dispatchEvent(
+              new CustomEvent("cf-navigate", { detail: { pieceId } }),
+            );
+          });
           chipRoot.append(button);
           linkRoot.append(chip);
           return link;
@@ -259,7 +276,12 @@ describe("topics-navigation-helpers", () => {
           const chipRoot = chip.attachShadow({ mode: "open" });
           const button = document.createElement("button");
           button.textContent = "Open";
-          button.addEventListener("click", () => clicks.push(pieceId));
+          button.addEventListener("click", () => {
+            clicks.push(pieceId);
+            globalThis.dispatchEvent(
+              new CustomEvent("cf-navigate", { detail: { pieceId } }),
+            );
+          });
           chipRoot.append(button);
           linkRoot.append(chip);
           document.body.append(link);
@@ -316,13 +338,13 @@ describe("topics-navigation-helpers", () => {
         const chipRoot = chip.attachShadow({ mode: "open" });
         const button = document.createElement("button");
         button.textContent = "Open";
-        button.addEventListener(
-          "click",
-          () =>
-            clicks.push(
-              (link._resolvedCell as { id(): string }).id(),
-            ),
-        );
+        button.addEventListener("click", () => {
+          const pieceId = (link._resolvedCell as { id(): string }).id();
+          clicks.push(pieceId);
+          globalThis.dispatchEvent(
+            new CustomEvent("cf-navigate", { detail: { pieceId } }),
+          );
+        });
         chipRoot.append(button);
         linkRoot.append(chip);
         document.body.append(link);
@@ -342,6 +364,137 @@ describe("topics-navigation-helpers", () => {
 
       expect(returned).toBe("of:fid1:current");
       expect(result.clicks).toEqual(["of:fid1:current"]);
+    });
+
+    it("passes over a link whose resolution found nothing, to the next match", async () => {
+      await page.evaluate(() => {
+        document.body.replaceChildren();
+        const clicks: string[] = [];
+        const requests: Record<string, number> = {};
+        const buildLink = (pieceId: string, resolves: boolean) => {
+          requests[pieceId] = 0;
+          const link = Object.assign(document.createElement("cf-cell-link"), {
+            label: "Open",
+            _resolvedCell: undefined as unknown,
+            resolveTarget() {
+              requests[pieceId]++;
+              return new Promise((resolve) =>
+                setTimeout(() => {
+                  link._resolvedCell = resolves
+                    ? {
+                      space: () => "did:key:space",
+                      id: () => pieceId,
+                      ref: () => ({ scope: "space", path: [] }),
+                    }
+                    : undefined;
+                  resolve(link._resolvedCell);
+                }, 5)
+              );
+            },
+          });
+          const linkRoot = link.attachShadow({ mode: "open" });
+          const chip = document.createElement("cf-chip");
+          const chipRoot = chip.attachShadow({ mode: "open" });
+          const button = document.createElement("button");
+          button.textContent = "Open";
+          button.addEventListener("click", () => {
+            clicks.push(pieceId);
+            globalThis.dispatchEvent(
+              new CustomEvent("cf-navigate", { detail: { pieceId } }),
+            );
+          });
+          chipRoot.append(button);
+          linkRoot.append(chip);
+          return link;
+        };
+        document.body.append(
+          buildLink("of:fid1:empty", false),
+          buildLink("of:fid1:healthy", true),
+        );
+
+        Object.assign(globalThis, {
+          commonfabric: { viewSettled: () => Promise.resolve() },
+          __topicsNavigationResult: () => ({ clicks, requests }),
+        });
+      });
+
+      const returned = await clickCellLink(page, "Open");
+      const result = await page.evaluate(() =>
+        (globalThis as typeof globalThis & {
+          __topicsNavigationResult: () => {
+            clicks: string[];
+            requests: Record<string, number>;
+          };
+        }).__topicsNavigationResult()
+      );
+
+      expect(returned).toBe("of:fid1:healthy");
+      expect(result.clicks).toEqual(["of:fid1:healthy"]);
+      expect(result.requests["of:fid1:empty"]).toBe(1);
+    });
+
+    it("reports what the click opened when the link moves after it was chosen", async () => {
+      await page.evaluate(() => {
+        document.body.replaceChildren();
+        const clicks: string[] = [];
+        const destination = (pieceId: string) => ({
+          space: () => "did:key:space",
+          id: () => pieceId,
+          ref: () => ({ scope: "space", path: [] }),
+        });
+        let resolutions = 0;
+        const link = Object.assign(document.createElement("cf-cell-link"), {
+          label: "Open",
+          _resolvedCell: undefined as unknown,
+          // The first resolution, made when the helper chooses the link,
+          // finds where the link points then; every later one finds where
+          // its slot has moved to since.
+          resolveTarget() {
+            const pieceId = resolutions++ === 0
+              ? "of:fid1:chosen"
+              : "of:fid1:moved";
+            return new Promise((resolve) =>
+              setTimeout(() => {
+                link._resolvedCell = destination(pieceId);
+                resolve(link._resolvedCell);
+              }, 5)
+            );
+          },
+        });
+        const linkRoot = link.attachShadow({ mode: "open" });
+        const chip = document.createElement("cf-chip");
+        const chipRoot = chip.attachShadow({ mode: "open" });
+        const button = document.createElement("button");
+        button.textContent = "Open";
+        // As a cf-cell-link's click does: resolve again, then navigate there.
+        button.addEventListener("click", () => {
+          void link.resolveTarget().then((cell) => {
+            const pieceId = (cell as { id(): string }).id();
+            clicks.push(pieceId);
+            globalThis.dispatchEvent(
+              new CustomEvent("cf-navigate", { detail: { pieceId } }),
+            );
+          });
+        });
+        chipRoot.append(button);
+        linkRoot.append(chip);
+        document.body.append(link);
+
+        Object.assign(globalThis, {
+          commonfabric: { viewSettled: () => Promise.resolve() },
+          __topicsNavigationResult: () => ({ clicks }),
+        });
+      });
+
+      const returned = await clickCellLink(page, "Open");
+      const result = await page.evaluate(() =>
+        (globalThis as typeof globalThis & {
+          __topicsNavigationResult: () => { clicks: string[] };
+        }).__topicsNavigationResult()
+      );
+
+      expect(returned).toBe("of:fid1:moved");
+      expect(result.clicks).toEqual(["of:fid1:moved"]);
     });
 
     it("revalidates after a surviving link's box settles", async () => {
@@ -364,10 +517,13 @@ describe("topics-navigation-helpers", () => {
           const chipRoot = chip.attachShadow({ mode: "open" });
           const button = document.createElement("button");
           button.textContent = `${label} ${pieceId}`;
-          button.addEventListener(
-            "click",
-            () => clicks.push(link._resolvedCell.id()),
-          );
+          button.addEventListener("click", () => {
+            const pieceId = link._resolvedCell.id();
+            clicks.push(pieceId);
+            globalThis.dispatchEvent(
+              new CustomEvent("cf-navigate", { detail: { pieceId } }),
+            );
+          });
           chipRoot.append(button);
           linkRoot.append(chip);
           return link;

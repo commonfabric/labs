@@ -49,41 +49,82 @@ export function openInNewTab(command: NavigationCommand) {
   globalThis.open(fabricUrlOf(command), "_blank", "noopener");
 }
 
-// Open in a new tab a navigation target that is still being found, keeping
-// the user activation of the click that asked for it. A browser opens a tab
-// only within a short time of a user's gesture, so a target that takes longer
-// to find than that would open nothing. A tab is reserved now, within the
-// gesture, and pointed at the target once `target` settles:
-// - the same cancellable `cf-open-external` event `openInNewTab` dispatches
-//   is dispatched then, and a host that cancels it owns the navigation, so
-//   the reserved tab is closed;
-// - a target of `undefined`, or a rejection, closes the reserved tab.
-// Where the browser opens no tab here (a blocked popup, or no window), the
-// target is handed to `openInNewTab` once it is known.
+// How long `openInNewTabWhenReady` waits for its target before it reserves a
+// tab. A browser lets a page open a tab only within a short time of a user's
+// gesture (about five seconds in Chrome and Firefox), and opening one uses
+// that up, so a host that takes `cf-open-external` and opens its own tab can
+// do so only while nothing has been reserved.
+export const NEW_TAB_RESERVE_AFTER_MS = 1000;
+
+// A `cf-open-external` event dispatched for a tab reserved in advance. A host
+// that takes the event and wants a tab of its own calls `claimReservedTab()`
+// and points the tab it returns at its own URL: the gesture that could have
+// opened a new one has been spent on the reservation. A host that cancels the
+// event without claiming the tab leaves it to be closed.
+export type OpenExternalEvent = CustomEvent<NavigationCommand> & {
+  claimReservedTab?: () => Window;
+};
+
+// Open in a new tab a navigation target that is still being found, from the
+// click that asked for it.
+// - A target that arrives within `reserveAfterMs` (default
+//   `NEW_TAB_RESERVE_AFTER_MS`) is opened as `openInNewTab` opens it, while
+//   the gesture still allows a host or the default to open a tab.
+// - Past that, a tab is reserved, while the gesture still allows it, and
+//   pointed at the target once it lands. The `cf-open-external` event then
+//   dispatched offers the reserved tab to a host (`claimReservedTab()`).
+// - A target of `undefined`, or a rejection, closes a reserved tab. So does
+//   a host that cancels the event without claiming it.
+// Where the browser opens no tab for the reservation, the target is handed to
+// `openInNewTab` once it is known.
 export async function openInNewTabWhenReady(
   target: Promise<NavigationCommand | undefined>,
+  options: { reserveAfterMs?: number } = {},
 ): Promise<void> {
-  const reserved = globalThis.open?.("", "_blank") ?? null;
+  let reserved: Window | null = null;
+  let settled = false;
+  const reservation = setTimeout(() => {
+    if (!settled) reserved = globalThis.open?.("", "_blank") ?? null;
+  }, options.reserveAfterMs ?? NEW_TAB_RESERVE_AFTER_MS);
   let command: NavigationCommand | undefined;
   try {
     command = await target;
   } catch (error) {
-    reserved?.close();
+    (reserved as Window | null)?.close();
     throw error;
+  } finally {
+    settled = true;
+    clearTimeout(reservation);
   }
+  const tab = reserved as Window | null;
   if (command === undefined) {
-    reserved?.close();
+    tab?.close();
     return;
   }
-  if (reserved === null) return openInNewTab(command);
-  if (!proceedToOpenExternally(command)) {
-    reserved.close();
+  if (tab === null) return openInNewTab(command);
+  let claimed = false;
+  const event: OpenExternalEvent = Object.assign(
+    new CustomEvent(OPEN_EXTERNAL_EVENT, {
+      detail: command,
+      cancelable: true,
+    }),
+    {
+      claimReservedTab: () => {
+        claimed = true;
+        return tab;
+      },
+    },
+  );
+  const proceed = globalThis.dispatchEvent(event);
+  if (claimed) return;
+  if (!proceed) {
+    tab.close();
     return;
   }
   // `noopener` cannot be asked for on a tab whose handle is kept, so the
   // reserved tab is cut from this page before it navigates.
-  reserved.opener = null;
-  reserved.location.href = fabricUrlOf(command);
+  tab.opener = null;
+  tab.location.href = fabricUrlOf(command);
 }
 
 // Dispatch the cancellable `cf-open-external` event for `command`; false when

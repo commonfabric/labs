@@ -2,7 +2,7 @@
 import { mount, settle } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { DID } from "@commonfabric/identity/did";
 import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
@@ -917,6 +917,19 @@ async function navigatedToOnceSettled(act: () => void): Promise<string[]> {
   return seen;
 }
 
+/**
+ * A click a pointer makes, as opposed to one the keyboard makes: it carries
+ * the click count in `detail`.
+ */
+function pointerClick(init: MouseEventInit = {}): Event {
+  return new MouseEvent("click", {
+    detail: 1,
+    bubbles: true,
+    composed: true,
+    ...init,
+  });
+}
+
 /** The piece ids navigated to while `act()` runs. */
 function navigatedTo(act: () => void): string[] {
   const seen: string[] = [];
@@ -1155,11 +1168,29 @@ describe("CFCellLink in a document", () => {
 
       const opened = await navigatedToOnceSettled(() => {
         chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
-        chip(element).click();
+        chip(element).dispatchEvent(pointerClick());
       });
 
       expect(opened).toEqual(["of:fid1:topic-111111"]);
       expect(reads.resolutions).toBe(1);
+    });
+
+    it("resolves a keyboard's click on its own while a mouse press is held", async () => {
+      const cell = linkTo(
+        pieceCell("of:fid1:topic-111111"),
+        pieceCell("of:fid1:topic-222222"),
+      );
+      const reads = countReads(cell);
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
+      await settle();
+      // The keyboard's click carries no detail: it is not the press's.
+      const opened = await navigatedToOnceSettled(() => chip(element).click());
+
+      expect(opened).toEqual(["of:fid1:topic-222222"]);
+      expect(reads.resolutions).toBe(2);
     });
 
     it("asks the worker for where the links end, loading what they pass through", async () => {
@@ -1241,6 +1272,14 @@ describe("CFCellLink in a document", () => {
     });
 
     describe("with the command key held", () => {
+      let reserveAfterMs: number;
+      beforeEach(() => {
+        reserveAfterMs = CFCellLink.newTabReserveAfterMs;
+      });
+      afterEach(() => {
+        CFCellLink.newTabReserveAfterMs = reserveAfterMs;
+      });
+
       /** A tab `globalThis.open` hands back, recording what is done to it. */
       function fakeTab() {
         return {
@@ -1277,16 +1316,13 @@ describe("CFCellLink in a document", () => {
         }
       }
 
-      /** A click on `element`'s chip with the command key held. */
+      /** A pointer's click on `element`'s chip with the command key held. */
       function commandClick(element: CFCellLink): void {
-        chip(element).dispatchEvent(
-          new MouseEvent("click", {
-            metaKey: true,
-            bubbles: true,
-            composed: true,
-          }),
-        );
+        chip(element).dispatchEvent(pointerClick({ metaKey: true }));
       }
+
+      /** Lets a timer due now, and what it leads to, run. */
+      const nextTask = () => new Promise((resolve) => setTimeout(resolve, 0));
 
       it("opens a target its press already resolved within the click", async () => {
         const element = await cellLink({
@@ -1315,7 +1351,39 @@ describe("CFCellLink in a document", () => {
         }
       });
 
-      it("reserves a tab within the click for a target still on its way, and points it there once it lands", async () => {
+      it("reserves no tab for a target found soon, so a host can open its own", async () => {
+        CFCellLink.newTabReserveAfterMs = 60_000;
+        const pending = deferred<CellHandle>();
+        const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+          resolveAsCell: () => pending.promise,
+        });
+        const element = await cellLink({ label: "Open", cell, isStatic: true });
+        await shownText(element);
+        const opened: unknown[] = [];
+        const onOpen = (event: Event) => {
+          event.preventDefault();
+          opened.push((event as CustomEvent).detail.pieceId);
+        };
+        globalThis.addEventListener("cf-open-external", onOpen);
+        try {
+          await withOpen(fakeTab(), async (openArgs) => {
+            commandClick(element);
+            // Later than a reservation due at once would be, well before one
+            // due at the deadline.
+            await nextTask();
+            pending.resolve(pieceCell("of:fid1:topic-111111"));
+            await settle();
+            await nextTask();
+            expect(openArgs).toEqual([]);
+          });
+        } finally {
+          globalThis.removeEventListener("cf-open-external", onOpen);
+        }
+        expect(opened).toEqual(["of:fid1:topic-111111"]);
+      });
+
+      it("reserves a tab for a slow target, and points it there once it lands", async () => {
+        CFCellLink.newTabReserveAfterMs = 0;
         const pending = deferred<CellHandle>();
         const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
           resolveAsCell: () => pending.promise,
@@ -1326,11 +1394,12 @@ describe("CFCellLink in a document", () => {
 
         await withOpen(tab, async (openArgs) => {
           commandClick(element);
+          await nextTask();
           expect(openArgs).toEqual([["", "_blank"]]);
 
           pending.resolve(pieceCell("of:fid1:topic-111111"));
           await settle();
-          await new Promise((resolve) => setTimeout(resolve, 0));
+          await nextTask();
         });
 
         expect(tab.location.href).toContain("of:fid1:topic-111111");
@@ -1339,6 +1408,7 @@ describe("CFCellLink in a document", () => {
       });
 
       it("closes the reserved tab, without a warning, when the link is taken off the page first", async () => {
+        CFCellLink.newTabReserveAfterMs = 0;
         const pending = deferred<CellHandle>();
         const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
           resolveAsCell: () => pending.promise,
@@ -1352,10 +1422,11 @@ describe("CFCellLink in a document", () => {
         try {
           await withOpen(tab, async () => {
             commandClick(element);
+            await nextTask();
             element.remove();
             pending.resolve(pieceCell("of:fid1:topic-111111"));
             await settle();
-            await new Promise((resolve) => setTimeout(resolve, 0));
+            await nextTask();
           });
         } finally {
           console.warn = originalWarn;
@@ -1366,8 +1437,10 @@ describe("CFCellLink in a document", () => {
       });
 
       it("closes the reserved tab, and warns, when the click resolves nothing", async () => {
+        CFCellLink.newTabReserveAfterMs = 0;
+        const pending = deferred<CellHandle>();
         const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
-          resolveAsCell: () => Promise.reject(new Error("boom")),
+          resolveAsCell: () => pending.promise,
         });
         const element = await cellLink({ label: "Open", cell, isStatic: true });
         await shownText(element);
@@ -1379,8 +1452,10 @@ describe("CFCellLink in a document", () => {
           await errorsLogged(() =>
             withOpen(tab, async () => {
               commandClick(element);
+              await nextTask();
+              pending.reject(new Error("boom"));
               await settle();
-              await new Promise((resolve) => setTimeout(resolve, 0));
+              await nextTask();
             })
           );
         } finally {

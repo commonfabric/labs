@@ -11,6 +11,7 @@ import type { DID } from "@commonfabric/identity/did";
 import {
   navigate,
   type NavigationCommand,
+  NEW_TAB_RESERVE_AFTER_MS,
   openInNewTab,
   openInNewTabWhenReady,
 } from "@commonfabric/navigation";
@@ -33,8 +34,12 @@ import {
 import { LinkTargetWatch } from "../../core/link-target-watch.ts";
 import { runtimeContext, spaceContext } from "../../runtime-context.ts";
 
-/** A press on a labelled link: what it resolves, and what it resolved. */
+/**
+ * A press on a labelled link: the pointer that began it, what it resolves,
+ * and what it resolved.
+ */
 type LinkPress = {
+  readonly pointerId: number;
   readonly resolution: Promise<CellHandle | undefined>;
   target?: CellHandle;
 };
@@ -71,6 +76,13 @@ type LinkPress = {
  * <cf-cell-link .cell=${myCell} static></cf-cell-link>
  */
 export class CFCellLink extends BaseElement {
+  /**
+   * How long a labelled link's Cmd- or Ctrl-click waits for its target before
+   * it reserves the new tab (`openInNewTabWhenReady`). A target found sooner
+   * opens while the click still allows a host to open a tab of its own.
+   */
+  static newTabReserveAfterMs = NEW_TAB_RESERVE_AFTER_MS;
+
   static override styles = [
     BaseElement.baseStyles,
     css`
@@ -492,6 +504,7 @@ export class CFCellLink extends BaseElement {
    */
   private _beginPress(pointerId: number) {
     const press: LinkPress = {
+      pointerId,
       resolution: this.resolveTarget().then((target) => {
         if (this._press === press) press.target = target;
         return target;
@@ -564,8 +577,15 @@ export class CFCellLink extends BaseElement {
     e.stopPropagation();
     const newTab = e.metaKey || e.ctrlKey;
     if (this._resolvesOnDemand) {
-      const press = this._press;
-      this._press = undefined;
+      // Only a click the press's own pointer made ends the press. A click the
+      // keyboard makes (no detail, no pointer) resolves on its own, and
+      // leaves a press another pointer holds to the click that ends it.
+      const pointerId = (e as Partial<PointerEvent>).pointerId;
+      const press = this._press !== undefined && e.detail > 0 &&
+          (pointerId === undefined || pointerId === this._press.pointerId)
+        ? this._press
+        : undefined;
+      if (press !== undefined) this._press = undefined;
       // A target the press this click ends has already resolved opens now,
       // within the click.
       if (press?.target !== undefined) {
@@ -579,13 +599,17 @@ export class CFCellLink extends BaseElement {
       // unfollowable, so it neither opens nor warns.
       const resolving = press?.resolution ?? this.resolveTarget();
       if (newTab) {
-        // A browser opens a tab only close to the gesture that asked for it,
-        // so the tab is reserved now and pointed at the target once it lands.
-        void openInNewTabWhenReady(resolving.then((target) => {
-          if (!this.isConnected) return undefined;
-          if (!target) this._warnUnfollowed();
-          return target && this._viewOf(target);
-        }));
+        // A browser opens a tab only close to the gesture that asked for it.
+        // A target found soon opens as usual; a slow one gets a tab reserved
+        // for it while the gesture still allows one.
+        void openInNewTabWhenReady(
+          resolving.then((target) => {
+            if (!this.isConnected) return undefined;
+            if (!target) this._warnUnfollowed();
+            return target && this._viewOf(target);
+          }),
+          { reserveAfterMs: CFCellLink.newTabReserveAfterMs },
+        );
         return;
       }
       void resolving.then((target) => {

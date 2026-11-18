@@ -83,7 +83,9 @@ const markCellLink: MarkLinkPredicate = (
         });
         return false;
       }
-      if (!activation.settled || !activation.target) return false;
+      if (!activation.settled) return false;
+      // Resolved for this click and found nothing: try the next match.
+      if (!activation.target) continue;
     } else if (!link._resolvedCell) {
       continue;
     }
@@ -153,7 +155,9 @@ const markCardOpenLink: MarkLinkPredicate = (
         });
         return false;
       }
-      if (!activation.settled || !activation.target) return false;
+      if (!activation.settled) return false;
+      // Resolved for this click and found nothing: try the next match.
+      if (!activation.target) continue;
     } else if (!link._resolvedCell) {
       continue;
     }
@@ -263,9 +267,11 @@ const markResolvedCellLink = (
 
 /**
  * Wait for `predicate` to mark a resolved cell link, then issue one trusted
- * browser click on it. Returning the id of the cell the link resolved lets the
- * caller confirm the shell selected exactly the destination the rendered data
- * points at.
+ * browser click on it, and return the id of the piece the click navigated to
+ * (the `cf-navigate` it dispatched). That is what the caller then waits for
+ * the shell to select. A labelled link resolves again when it is pressed, so
+ * a slot that moved after the link was chosen opens, and reports, its new
+ * target, not the one the choice found.
  *
  * The view is settled before marking, so the link is resolved against a page
  * that has caught up rather than one mid-render. `clickMarked` carries the rest:
@@ -373,6 +379,19 @@ async function markResolveAndClick(
     CLICK_TARGET_ATTR,
     LINK_TARGET_ATTR,
   ];
+  await page.evaluate((targetToken: string) => {
+    const scope = globalThis as typeof globalThis & {
+      __topicsNavigations?: Record<string, string>;
+    };
+    const navigations = scope.__topicsNavigations ??= {};
+    const capture = (event: Event) => {
+      globalThis.removeEventListener("cf-navigate", capture);
+      navigations[targetToken] = String(
+        (event as CustomEvent<{ pieceId?: unknown }>).detail?.pieceId,
+      );
+    };
+    globalThis.addEventListener("cf-navigate", capture);
+  }, { args: [token] });
   await clickMarked(page, {
     token,
     remark: {
@@ -381,11 +400,26 @@ async function markResolveAndClick(
       revalidateBeforeClick: true,
     },
   });
-  return resolved.id;
+  await waitForCondition(
+    page,
+    (_probe: ProbeApi, targetToken: string) =>
+      (globalThis as typeof globalThis & {
+        __topicsNavigations?: Record<string, string>;
+      }).__topicsNavigations?.[targetToken] !== undefined,
+    { args: [token] },
+  );
+  return await page.evaluate(
+    (targetToken: string) =>
+      (globalThis as typeof globalThis & {
+        __topicsNavigations: Record<string, string>;
+      }).__topicsNavigations[targetToken],
+    { args: [token] },
+  );
 }
 
 /**
- * Click the cell link named `label`, and return the id of the cell it resolved.
+ * Click the cell link named `label`, and return the id of the piece the click
+ * navigated to.
  */
 export function clickCellLink(page: Page, label: string): Promise<string> {
   return markResolveAndClick(
@@ -399,7 +433,7 @@ export function clickCellLink(page: Page, label: string): Promise<string> {
 
 /**
  * Click the `Open` link on the board card titled `title`, and return the id of
- * the cell it resolved.
+ * the piece the click navigated to.
  *
  * Addressing a card by its title makes the click independent of the order the
  * board lists its cards in, which is by last activity.
