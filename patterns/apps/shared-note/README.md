@@ -161,6 +161,38 @@ resolved state are cells of their own, linked from the comment, so anyone who
 can write the note can reply or resolve while the comment itself stays its
 author's.
 
+## Activity
+
+The note tells what its members did under the `"[ACTIVITY]"` key of its result,
+so a host can let the other members of a shared space hear about an edit without
+reading the note or diffing it. Each row is `{ body, doneAt }`: `body` says what
+was done to the note, by its title, and never who did it; `doneAt` is the
+handler's clock in nanoseconds since the epoch. The runtime labels each row
+`authored-by` the person whose handler run wrote it, and only the handlers the
+row type's write policy names can write one, so a host reads who acted from the
+label rather than from the row.
+
+| What happened                                                  | Row                                 |
+| -------------------------------------------------------------- | ----------------------------------- |
+| An editing session of the body or of the title that changed it | `edited "<title>"`                  |
+| A call of `appendLine`, `prependLine` or `replaceText`         | `edited "<title>"`                  |
+| A comment posted, from the composer or `addComment`            | `commented on "<title>"`            |
+| A reply, from the reply field or `replyToComment`              | `replied to a comment on "<title>"` |
+
+An editing session is everything a viewer types into one field between giving it
+focus and taking focus away: the body's editor and the title field each keep a
+per-session flag that their own changes set, and losing focus reports one row if
+the flag is set and clears it. A burst of keystrokes is one row, and leaving a
+field unchanged reports nothing. Another member's typing reaches the editor as a
+remote change, which sets no flag. A session whose tab closes before the field
+loses focus is not reported. A comment's or a reply's words stay in the comment:
+the row only says one was written. Resolving, reopening and deleting a comment,
+and opening or discarding a draft, report nothing.
+
+The handlers that may write a row are fixed once a row is stored: a later
+version of the note can neither add a writer to the row type's policy nor drop
+one.
+
 ## Editing failures
 
 The editor pauses on collaboration errors and the note shows the error. If a
@@ -185,4 +217,6 @@ The pattern test covers initial text, the filesystem projection, compact views,
 profile setup, editor bindings, error display, recovery, the live-cursor notice,
 the verbs, and comments: posting from a selection, anchors moving through the
 verbs' edits, an anchor whose text is deleted, replies, resolving, and deleting.
-Browser integration covers multiple identities and the actual editor protocol.
+`activity.test.tsx` covers the activity rows, and `multi-user.test.tsx` that
+each row is labeled with the person who acted. Browser integration covers
+multiple identities and the actual editor protocol.
