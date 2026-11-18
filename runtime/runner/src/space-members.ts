@@ -69,14 +69,14 @@ export const joinSpaceMembers: JoinSpaceMembersFunction = <P>(
 /**
  * Returns the members of `space`, read through `tx`, whose roster is
  * `roster`: {@link joinSpaceMembers} over the list `spaceMemberListAt()`
- * reads, with whose own each profile is as `profileOwnerAt()` reads it, and
- * two profiles one when their links, resolved in `tx`, are the same. It is
- * what pattern code joins with `profileOwnerOf` and `equalsKey`, for a host.
- * `undefined` while `spaceMemberListAt()` returns it.
+ * reads. Each profile's owner is the one `profileOwnerAt()` reads, and two
+ * profiles count as one when their links, resolved in `tx`, are the same. It
+ * is the join pattern code makes with `profileOwnerOf` and `equalsKey`, for a
+ * host. `undefined` while `spaceMemberListAt()` returns it.
  *
- * The profiles and the documents their names resolve through are loaded by
- * the caller (`loadProfileOwnerDocuments()`); one that is not reads as no
- * one's.
+ * The caller loads each profile on `roster` and the documents its name links
+ * through before the call, for example with `loadProfileOwnerDocuments()`. A
+ * profile that is not loaded counts toward no one.
  *
  * @throws What `profileOwnerAt()` throws.
  */

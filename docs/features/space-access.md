@@ -142,7 +142,10 @@ wherever its two functions can.
 A host joins the same way, from `@commonfabric/runner`, with no frame:
 `spaceMemberListAt(runtime, tx, space)` reads the list `spaceMembers(target)`
 returns, through `tx`, and `spaceMembersAt(runtime, tx, space, roster)` joins it
-with `roster` by `profileOwnerAt()` and the profiles' links. The host's reader
+with `roster` by `profileOwnerAt()` and the profiles' links. The host loads
+each profile on `roster` and the documents its name links through before
+calling `spaceMembersAt()`, for example with `loadProfileOwnerDocuments()`; a
+profile that is not loaded counts toward no one. The host's reader
 checks no principal: who sees the list is the host's to decide. It returns
 `undefined` where there is no list to read: one not arrived, none at all, one
 that is not a well-formed list, and a space refused as deleted. On a client it
