@@ -12,6 +12,7 @@ import { createSession, Identity } from "@commonfabric/identity";
 import {
   PieceController,
   PiecesController,
+  readPieceSourceMetadata,
   readPieceSourceState,
 } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
@@ -751,6 +752,43 @@ describe("piece-source", () => {
         status: "error",
         message:
           "read_piece_source found no authored source retained for this piece",
+      });
+    });
+
+    it("refuses a revision of a piece whose source the space does not hold, which would write it without the files it carries over", async () => {
+      const engine = createEngine();
+      const { cell, token } = await createGlazePiece();
+      const before = await readPieceSourceState(runtime, cell);
+      Object.assign(runtime.patternManager, {
+        getPatternSourceProgramByIdentity: () => Promise.resolve(undefined),
+      });
+
+      const output = (await revise(engine, token, glazePatternSource(3)))
+        .output as PieceSourceToolErrorOutput;
+      expect(output).toMatchObject({
+        status: "error",
+        message:
+          "revise_piece refused: the space holds no authored source for this " +
+          "piece, so the files a revision carries over from it cannot be read",
+      });
+      expect(readPieceSourceMetadata(runtime, cell).currentRevisionId).toBe(
+        before.currentRevisionId,
+      );
+    });
+
+    it("refuses to read a source whose binary media file does not hold a data: URL of its media type, naming the file", async () => {
+      const engine = createEngine();
+      const { token } = await createGlazePiece("/main.tsx", [
+        { name: "/spare.png", contents: "a picture saved as text" },
+      ]);
+
+      const output = (await engine.invokeBuiltinTool("read_piece_source", {
+        token,
+      })).output as PieceSourceToolErrorOutput;
+      expect(output).toMatchObject({
+        status: "error",
+        message: "read_piece_source could not read the piece's source: " +
+          "Data file `/spare.png` does not hold an `image/png` `data:` URL.",
       });
     });
 

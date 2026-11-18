@@ -132,7 +132,9 @@ the files the read leaves out, so the child never holds them to send back,
 and a revision cannot drop or corrupt one. `sourceText` is written as
 `main.tsx` in the directory of the entry it replaces, because a data file is
 read by a path relative to the module reading it. Text files other than the
-entry, data or code, are not carried over.
+entry, data or code, are not carried over. A piece whose authored source the
+space does not hold is refused, as the read refuses it: which files a
+revision would have to carry over is then unknown.
 
 The piece's current source is read before anything is compiled, for those
 files and for the revision it is at. `expectedRevisionId` is optional.

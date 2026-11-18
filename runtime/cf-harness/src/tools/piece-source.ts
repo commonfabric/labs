@@ -318,7 +318,7 @@ export const revisePieceToolDescriptor: HarnessToolDescriptor = {
   toolId: "revise_piece",
   title: "Revise Piece",
   description:
-    "Replace the source of a piece behind a handle token with a revised program, keeping the piece's data. The piece's binary media files (the omittedFiles read_piece_source lists) are carried over unchanged at the same paths, so the revised source reads them as the current one does. The candidate is checked against what the piece holds before it is applied — its argument and result schemas, the links it retains, and the CFC envelope on its argument — and a candidate that does not fit is refused with every reason at once rather than applied and left broken. Returns the new revision's id and a reference to the refreshed result, never source. Use it after read_piece_source when someone asks for a piece they already have to work differently; use run_pattern when there is no such piece. A change that needs a rehearsal against a copy of the space is refused, because that is a person's judgement to make and not this tool's.",
+    "Replace the source of a piece behind a handle token with a revised program, keeping the piece's data. The piece's binary media files (the omittedFiles read_piece_source lists) are carried over unchanged at the same paths, so the revised source reads them as the current one does; a piece whose source the space does not hold is refused. The candidate is checked against what the piece holds before it is applied — its argument and result schemas, the links it retains, and the CFC envelope on its argument — and a candidate that does not fit is refused with every reason at once rather than applied and left broken. Returns the new revision's id and a reference to the refreshed result, never source. Use it after read_piece_source when someone asks for a piece they already have to work differently; use run_pattern when there is no such piece. A change that needs a rehearsal against a copy of the space is refused, because that is a person's judgment to make and not this tool's.",
   effectClass: "side-effect",
   inputSchema: {
     type: "object",
@@ -402,12 +402,11 @@ const OMITTED_FILES_REASON =
   "a revision does not send them.";
 
 /**
- * Helper for `read_piece_source`, which splits `files` into the ones it
- * returns and a description, without contents, of each binary media file it
- * leaves out. Throws, naming the file, for a binary media file whose contents
- * are not a `data:` URL of its media type, which a program built without
- * `decodeDataFile()` can hold, and which `cf piece getsrc` refuses the same
- * way.
+ * Splits `files`, for `read_piece_source`, into the files it returns and a
+ * description, without contents, of each binary media file it leaves out.
+ * Throws, naming the file, for a binary media file whose contents are not a
+ * `data:` URL of its media type. A program built without `decodeDataFile()`
+ * can hold one, and `cf piece getsrc` refuses it the same way.
  */
 const withoutBinaryMedia = (
   files: readonly { name: string; contents: string }[],
@@ -785,6 +784,15 @@ export const revisePieceTool: HarnessToolDefinition<
         "revise_piece refused: the piece has been revised since the " +
           "source you are editing was read. Read it again and rewrite " +
           "your change against what it holds now.",
+      );
+    }
+    // With no authored source to read, the files a revision carries over are
+    // unknown, so writing one could drop a picture the piece shows. The read
+    // refuses the same piece.
+    if (current.files.length === 0) {
+      return fail(
+        "revise_piece refused: the space holds no authored source for this " +
+          "piece, so the files a revision carries over from it cannot be read",
       );
     }
     const program = revisedProgram(input.sourceText, current);

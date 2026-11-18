@@ -3465,7 +3465,8 @@ and size in bytes, with the reason. A revision sends only its `sourceText`, and
 at its own path. It writes `sourceText` as `main.tsx` in the directory of the
 entry it replaces, so a path the source reads relative to itself names the file
 it named before. The read refuses a source whose binary file does not hold a
-`data:` URL of its media type, as `cf piece getsrc` does.
+`data:` URL of its media type, as `cf piece getsrc` does, and both tools refuse
+a piece whose authored source the space does not hold.
 
 For a classifier or filter change, the child is instructed to evaluate the old
 and new predicates over the same bounded sample before applying the revision.
