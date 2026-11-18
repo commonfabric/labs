@@ -1030,3 +1030,23 @@ export const P = pattern<{
         "{hoisted:?}"
     );
 }
+
+#[test]
+fn a_debug_renderer_is_given_each_operand_as_its_value() {
+    let (_, code) = emitted(
+        r#"import { pattern, toIndentedDebugString, Writable } from "commonfabric";
+export const P = pattern<{ title: Writable<string>; count: number }>(({ title, count }) => {
+  return { text: toIndentedDebugString({ title: title.get(), count }, { limit: 5 }) };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    // A record that the code builds holds references, and the renderer
+    // reads every operand by value over its whole subtree (BI, "Debug
+    // strings").
+    assert!(
+        text.contains("toIndentedDebugString($h.v(({ title: "),
+        "{text}"
+    );
+}

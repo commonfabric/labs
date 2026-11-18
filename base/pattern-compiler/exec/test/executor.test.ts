@@ -1,4 +1,9 @@
-import { type FabricValue, hashOf } from "@commonfabric/data-model";
+import {
+  type FabricValue,
+  hashOf,
+  toCompactDebugString,
+  toIndentedDebugString,
+} from "@commonfabric/data-model";
 import {
   fabricFromJsonValue,
   jsonFromFabricValue,
@@ -6233,5 +6238,21 @@ describe("a memo entry that other entries share", () => {
     instance.writeArgument(["seed"], 2);
 
     expect(instance.result()).toEqual({ v10: 322 });
+  });
+});
+
+// The debug renderers of the API are conversions to a string (FA §3.3;
+// `fixtures/debug-strings.tsx`).
+describe("a debug renderer", () => {
+  it("gives the text that the renderer of the data model gives, in the reactive tier and in a function body", async () => {
+    const entry = { title: "a", tags: ["x", "y"] };
+    const instance = new Instance(await artifactOf("debug-strings"), {
+      entry,
+    });
+
+    expect(instance.result()).toEqual({
+      compact: toCompactDebugString(entry),
+      indented: `entry: ${toIndentedDebugString(entry)}`,
+    });
   });
 });

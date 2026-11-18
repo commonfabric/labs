@@ -12,7 +12,12 @@
  * `SPEC-NOTES.md` (notes 281 on) lists what it needed that the plan and
  * the documents do not give.
  */
-import type { FabricValue } from "@commonfabric/data-model";
+import {
+  debugStr,
+  type FabricValue,
+  toCompactDebugString,
+  toIndentedDebugString,
+} from "@commonfabric/data-model";
 
 import {
   argumentOf,
@@ -3848,6 +3853,10 @@ const commonfabric = (instance: Instance): unknown => {
     str: (strings: TemplateStringsArray, ...values: unknown[]) =>
       String.raw({ raw: strings }, ...values),
     toSchema: () => ({}),
+    // The debug renderers are conversions to a string (FA §3.3).
+    debugStr,
+    toCompactDebugString,
+    toIndentedDebugString,
     equals: (a: unknown, b: unknown) => instance.same(a, b),
     // Every cell of an executed instance is in the instance's space.
     spaceOf: () => {

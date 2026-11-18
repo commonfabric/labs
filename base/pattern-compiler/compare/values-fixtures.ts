@@ -207,6 +207,10 @@ const WRITTEN: Record<string, Written[]> = {
       { binding: 2, event: {} },
     ],
   }],
+  // The debug renderers, in the reactive tier and in a function body.
+  "debug-strings": [{
+    argument: { entry: { tags: ["x", "y"], title: "a" } },
+  }],
   // A `const` of the block body of a promoted `computed` that a
   // per-element construct names, over arrays of plain values in place.
   "block-const": [false, true].map((second) => ({

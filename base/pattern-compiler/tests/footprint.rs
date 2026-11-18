@@ -130,6 +130,26 @@ fn stringify_of_an_input_container_is_widening_w2() {
     assert_eq!(record.widenings, ["W2"]);
 }
 
+// ----- §3.4: the debug renderers -----
+
+#[test]
+fn a_debug_renderer_of_an_input_container_reads_it_whole_and_is_widening_w2() {
+    // "`toCompactDebugString(v, options)`, `toIndentedDebugString(v,
+    // options)` | A conversion to a string, as a template literal
+    // converts (§3.3)".
+    for renderer in ["toCompactDebugString", "toIndentedDebugString"] {
+        let record = record(
+            &format!(
+                "import {{ {renderer} }} from \"commonfabric\";\n\
+                 function f(donut: Donut) {{ return {renderer}(donut); }}\n"
+            ),
+            "f",
+        );
+        assert_eq!(record.reads, ["donut : value"], "{renderer}");
+        assert_eq!(record.widenings, ["W2"], "{renderer}");
+    }
+}
+
 // ----- §5.2: W1 -----
 
 #[test]

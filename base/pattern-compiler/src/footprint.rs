@@ -2844,6 +2844,15 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 }
                 Val::Computed
             }
+            // A debug renderer converts its operand to a string, as a
+            // template literal does (FA §3.4).
+            "toCompactDebugString" | "toIndentedDebugString" => {
+                for argument in arguments {
+                    let val = self.eval(argument);
+                    self.consume(argument, &val, true);
+                }
+                Val::Computed
+            }
             "getPatternEnvironment" => Val::Computed,
             // A builder call in a body creates a value. Its callback is a
             // body of its own. An `action` is a binding (FA §8.5).

@@ -1444,6 +1444,16 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                     }
                 }
             }
+            // A debug renderer reads every operand by value over its
+            // whole subtree (BI, "Debug strings"), so a record that the
+            // code builds is given with its references read.
+            Some(name @ ("toCompactDebugString" | "toIndentedDebugString")) => {
+                let operands: Vec<String> = arguments
+                    .iter()
+                    .map(|argument| format!("$h.v({})", self.render(argument, Want::Pass)))
+                    .collect();
+                Some(format!("{name}({})", operands.join(", ")))
+            }
             Some("ifElse") if arguments.len() == 3 => {
                 let test = self.render(arguments[0], Want::Use);
                 let consequent = self.render(arguments[1], Want::Pass);
