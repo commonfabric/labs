@@ -290,39 +290,40 @@ the document of a state cell with the first write to it and reads the default of
 the cell's schema until then, evaluates the kept outputs and the result,
 evaluates the body of an element construct once per element key, and handles an
 event by running the handler's body and evaluating again what read a position
-the body wrote. It instantiates no label, checks no constraint, persists
-nothing, and answers every effect as pending. It does not narrow a slot to its
-observation class, validates no read against its schema, and has no error state:
-a body that throws stops the instance. `navigateTo` in a handler is a request
-that the instance holds (`Instance.requests`) and does not answer. The debug
-renderers are those of `@commonfabric/data-model`, and value code gives each
-operand of one as its value. A built-in that the executor does not have gives,
-while the modules are evaluated, a value whose members can be read and called,
-so a declaration of policy at module scope is evaluated, and a call of it in a
-function body throws. A function body can instantiate a pattern and bind a
-handler (ES §2.8). In value code the marker of each `pattern(...)` holds the
-identity of the pattern, the entry that the pattern's own `Plan.patterns` begins
-with, so the factory value a body calls names the callee, in whichever module it
-is written. The executor is given the artifacts of the program
-(`options.artifacts` of `Instance`), finds the callee's among them, and makes an
-instance of it with documents of its own in the same store, named from the
-instance that made it, the run of the body, and the ordinal among what that run
-made. The run of a `lift` or a `computed` is named by the body and its element
-keys, and the run of a handler by its event. A handler that a body binds has a
-stream named the same way, and an event for it runs the handler with the state
-the body bound (`compare/fixtures/instantiate.tsx`). The record `Child` of the
-crate's plan has no `callee`. The record of a key of a list (`elementById`) is a
-place of its own, named by the list and the key, which has a document once
-something writes it, and `addUnique` and `removeByValue` change the list's
-membership by reference. The record is a cell of its own and no member of the
-list until a reference to it is added (ruling Z23): a write through the handle
-is a write to the record, at no position of the list, and makes no reader of the
-list stale. The plan has no record that names it: the body's write edge and
-envelope are at `*` below the list, as `footprint-analysis.md` §7 records the
-handle, and the executor reads them for its count of covered writes alone. A
-record that a function body puts into an array through a handle, with `push`,
-`addUnique` or a `set` of the list, gets a document of its own, and the list
-stores a link to it, as today's runtime does (`anchorValueAsEntity` in
+the body wrote. It instantiates no label, checks no constraint of a plan, and
+persists nothing. It does not narrow a slot to its observation class and
+validates no read against its schema. "The serving loop, error states and
+effects" below says how it handles events, a body that throws, and a request of
+an effect. `navigateTo` in a handler is a request that the instance holds
+(`Instance.requests`) and does not answer. The debug renderers are those of
+`@commonfabric/data-model`, and value code gives each operand of one as its
+value. A built-in that the executor does not have gives, while the modules are
+evaluated, a value whose members can be read and called, so a declaration of
+policy at module scope is evaluated, and a call of it in a function body throws.
+A function body can instantiate a pattern and bind a handler (ES §2.8). In value
+code the marker of each `pattern(...)` holds the identity of the pattern, the
+entry that the pattern's own `Plan.patterns` begins with, so the factory value a
+body calls names the callee, in whichever module it is written. The executor is
+given the artifacts of the program (`options.artifacts` of `Instance`), finds
+the callee's among them, and makes an instance of it with documents of its own
+in the same store, named from the instance that made it, the run of the body,
+and the ordinal among what that run made. The run of a `lift` or a `computed` is
+named by the body and its element keys, and the run of a handler by its event. A
+handler that a body binds has a stream named the same way, and an event for it
+runs the handler with the state the body bound
+(`compare/fixtures/instantiate.tsx`). The record `Child` of the crate's plan has
+no `callee`. The record of a key of a list (`elementById`) is a place of its
+own, named by the list and the key, which has a document once something writes
+it, and `addUnique` and `removeByValue` change the list's membership by
+reference. The record is a cell of its own and no member of the list until a
+reference to it is added (ruling Z23): a write through the handle is a write to
+the record, at no position of the list, and makes no reader of the list stale.
+The plan has no record that names it: the body's write edge and envelope are at
+`*` below the list, as `footprint-analysis.md` §7 records the handle, and the
+executor reads them for its count of covered writes alone. A record that a
+function body puts into an array through a handle, with `push`, `addUnique` or a
+`set` of the list, gets a document of its own, and the list stores a link to it,
+as today's runtime does (`anchorValueAsEntity` in
 `runtime/runner/src/data-updating.ts`): the list is then an array of references.
 A record of the argument the instance is created with, and a plain value that is
 no record, stay in the list's document, which is the case of an array of plain
@@ -693,6 +694,67 @@ and the names in line with the documents. Notes 461 on class every module that
 was not executed, every event that was not handled and every value that differed
 at commit `682b918ed1`, and say what was fixed, what needs a ruling, and what is
 left.
+
+## The serving loop, error states and effects
+
+The executor handles events as `scheduler-and-serving-loop.md` §5 has a runtime
+with no serving loop handle them. `Instance.enqueue` queues an event and
+`Instance.batch` handles the queued events and those that their handlers send,
+each in a transaction of its own, with one derivation transaction behind them.
+`Instance.send` is a batch of one event. Before a handler body runs, the stale
+cone instances that compute what the handler reads are evaluated in its
+transaction. `Instance.transactions` holds a record of each transaction: its
+cause, the cones it evaluated, the documents it wrote and their bytes, and the
+cones that took an error state. A body that throws, a handler that reads a
+failed value, and a write that the option `refuses` refuses, each store nothing
+of their event. The option stands for the constraints on what a handler writes,
+which the executor does not check.
+
+A cone instance is evaluated at most ten times in one transaction
+(`MAX_EVALUATIONS`). One whose next evaluation would be the eleventh, and one
+whose value code throws, takes an error state, the record
+`{ $error: { message } }`, and the rest of the transaction commits. Its
+side-writes are withdrawn. A cone that observes a failed value fails in turn,
+and one that places it in a record or among the children of a view node passes
+it on. `Instance.failed` lists the failures.
+
+An effect of the reactive tier has a state document that holds its request, the
+hash of the request, and under `outcome` the `pending`, `result` and `error`
+that a reader reads. The crate registers the function of each request
+(`$rt.request`). The request is stored when something reads the result, a
+request transaction behind the derivation transaction puts it into
+`Instance.outbox`, and nothing leaves the process: a test delivers the
+completion with `Instance.complete`, or answers from a table with
+`Instance.answer`. A handler requests an effect by calling the built-in, and the
+request leaves when the event commits. A `wish` resolves to a reference to what
+the option `wishes` gives for its operands, and the clock is a document that
+`Instance.tick` writes. A stream has a document from its first event
+(`execution-and-storage.md` §4.7).
+
+`exec/test/serving.test.ts`, `effects.test.ts` and `growth.test.ts` test these,
+and `compare/test/batch.test.ts` compares a batch with today's runtime under its
+serving posture. From the repository root:
+
+```sh
+deno run -A --no-check base/pattern-compiler/compare/values-corpus.ts alone alone.jsonl
+deno run -A --no-check base/pattern-compiler/compare/values-corpus.ts stubbed stubbed.jsonl
+deno run -A base/pattern-compiler/compare/sizes.ts
+deno run -A --no-check base/pattern-compiler/compare/growth.ts 100 1000 10000
+```
+
+`alone` runs the modules that need `wish` or request an effect on the executor,
+with the answers of `compare/stubs.ts`, and `stubbed` runs them on today's
+runtime as well, with `fetch` replaced by a function that answers the same.
+`sizes.ts` prints the size of each plan of the corpus with its largest members,
+and `growth.ts` what one change of a list costs the executor at several lengths.
+Notes 479 on of `SPEC-NOTES.md` have what was tested, what the documents do not
+decide, and the figures.
+
+A template names the template of another output by a node
+`{ op: "output", output }` (ruling Z58), a template that a plan holds at more
+than one position is written once in `Plan.templates` and named by
+`{ op: "shared", template }`, and a schema that a schema document holds at more
+than one position is written once under `$defs`.
 
 ## The parser
 
