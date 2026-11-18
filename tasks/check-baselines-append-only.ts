@@ -18,12 +18,13 @@
  * accepted only when the pattern file is deleted in the same change — which is
  * also exactly what the gate's own `retired` message instructs.
  *
- * Usage: check-baselines-append-only.ts [base-ref]   (default: origin/main)
+ * Usage: check-baselines-append-only.ts [base-ref]
+ *        (default: upstream/main where that exists, and origin/main otherwise)
  */
 
 import { type CommandOutput, emit } from "./command-output.ts";
 import { patternPath, PATTERNS_DIR } from "./pattern-files.ts";
-import { type Git, git } from "./repository-files.ts";
+import { defaultBase, type Git, git } from "./repository-files.ts";
 
 const BASELINES_PREFIX = `${PATTERNS_DIR}/baselines/`;
 
@@ -77,15 +78,16 @@ export function unjustifiedDeletions(
 }
 
 /**
- * Checks the change from the merge base of `base` and `HEAD` in the
- * repository `run` runs git in, and returns what to say: exit code 0 where no
- * baseline was deleted without its pattern, 1 where one was, and 2 where git
- * finds no merge base.
+ * Checks the change from the merge base of `base`, or of the default base
+ * where it is undefined, and `HEAD` in the repository `run` runs git in, and
+ * returns what to say: exit code 0 where no baseline was deleted without its
+ * pattern, 1 where one was, and 2 where git finds no merge base.
  */
 export async function main(
-  base = "origin/main",
+  named: string | undefined,
   run: Git = git,
 ): Promise<CommandOutput> {
+  const base = named ?? await defaultBase(run);
   let mergeBase: string;
   try {
     mergeBase = (await run("merge-base", base, "HEAD")).trim();

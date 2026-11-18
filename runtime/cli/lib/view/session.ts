@@ -52,6 +52,7 @@ import {
   labeledDiffMetadataLine,
   type Match,
   overlayBox,
+  overlayLineAt,
   type OverlayState,
   radioButtonAt,
   type ViewState,
@@ -4720,7 +4721,9 @@ export class Session {
    * drawing a button pushed, and puts an input line's cursor where the mouse
    * went down. The mouse coming up on the control it went down on toggles a
    * check box, selects the radio button it comes up on, and activates a
-   * button. The mouse going down or coming up anywhere else does nothing.
+   * button. With no prompt up, the mouse going down on an entry of the file
+   * picker or the jump list selects that entry. The mouse going down or coming
+   * up anywhere else does nothing.
    */
   #handleClick(
     mouse: MouseButton,
@@ -4728,7 +4731,10 @@ export class Session {
     beforeButtonAction?: (pushed: PushedFrame) => void,
   ): void {
     const dialog = this.#promptDialog();
-    if (!dialog) return;
+    if (!dialog) {
+      if (mouse.down) this.#selectListEntryAt(mouse.x, mouse.y);
+      return;
+    }
     const index = dialogControlAt(this, dialog, mouse.x, mouse.y);
     if (index < 0) return;
     const controls = [...(dialog.fields ?? []), ...dialog.buttons];
@@ -4754,6 +4760,22 @@ export class Session {
     } else if (index >= fields) {
       this.#activateButton(dialog, index - fields, beforeButtonAction);
     }
+  }
+
+  /** Selects the entry of the file picker or the jump list drawn at the screen
+   * cell `x`, `y`, when that list is up and shows an entry there. */
+  #selectListEntryAt(x: number, y: number): void {
+    const line = overlayLineAt(this, this.#overlayScroll, x, y);
+    if (line === null) return;
+    if (this.#mode === "filePicker" && line < this.#pickerEntries.length) {
+      this.#pickerSel = line;
+    } else if (this.#mode === "jumpList" && line < this.#jumpEntries.length) {
+      this.#jumpSel = line;
+      this.#scrollJumpToSelection(line);
+    } else {
+      return;
+    }
+    this.#message = "";
   }
 
   /**
@@ -6350,6 +6372,7 @@ export function helpOverlay(hasMultipleCommits: boolean): {
     ...commitRows,
     ["", ""],
     ["Diff index", ""],
+    ["  click", "select a file or commit"],
     ["  f", "hide / show a file or commit"],
     ["  /", "filter the list"],
     ["  D", "cycle its diff counts"],

@@ -8,7 +8,8 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
-import { parseDocument } from "./view-helpers.ts";
+import { cellOf, drawnRows, mouseKey, parseDocument } from "./view-helpers.ts";
+import { overlayBox } from "../lib/view/render.ts";
 import { Session } from "../lib/view/session.ts";
 import { buildView } from "../lib/view/mod.ts";
 import type { EditableSource } from "../lib/view/editsource.ts";
@@ -105,6 +106,28 @@ Deno.test("filepicker: lists the file's directory, dirs first, with a .. entry",
   assertEquals(entryText(s), ["../", "sub/", "a.ts", "b.ts"]);
   assertEquals(s.view().inputLine, "find file: /work");
   assertEquals(s.view().overlay?.selectedLine, 0);
+});
+
+Deno.test("filepicker: pressing the mouse on an entry selects it", () => {
+  const s = session();
+  openPicker(s);
+  s.handleKey(mouseKey(true, cellOf(drawnRows(s), "b.ts")));
+  assertEquals(s.view().overlay?.selectedLine, 3);
+  press(s, "enter");
+  assertEquals(s.doc.text, FILES["/work/b.ts"]);
+});
+
+Deno.test("filepicker: pressing the mouse off the entries keeps the selection", () => {
+  const s = session();
+  openPicker(s);
+  press(s, "down"); // ".." -> "sub/"
+  const rows = drawnRows(s);
+  s.handleKey(mouseKey(true, cellOf(rows, "Open file")));
+  s.handleKey(mouseKey(true, cellOf(rows, "enter open")));
+  const box = overlayBox(s.width, s.height);
+  assert(box.innerH > 5, "the box shows rows below the four entries");
+  s.handleKey(mouseKey(true, { x: box.x + 2, y: box.y + 1 + 5 }));
+  assertEquals(s.view().overlay?.selectedLine, 1);
 });
 
 Deno.test("filepicker: typing filters the list and drops the .. entry", () => {

@@ -52,6 +52,11 @@ adoption and the run step by step. This repository's own patterns sync through
 `.github/workflows/pattern-index-sync.yml`, which runs only while the repository
 variable `PATTERN_INDEX_SYNC` is `on`.
 
+An oversized program's publish refusal reports the server's byte limit in the
+sync summary. The report recognizes only the server's fixed size-error wording
+with a bounded decimal limit; other index response details remain withheld. The
+entry stays failed, and the sync continues with the remaining entries.
+
 ## Loom helper contract
 
 Loom's CFS commands spawn `runtime/pattern-index/cli.ts` once per request:

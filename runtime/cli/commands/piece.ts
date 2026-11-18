@@ -152,7 +152,6 @@ import {
   patternIndexStoreDir,
 } from "@commonfabric/pattern-index/store";
 import { noteWroteTo } from "../lib/write-receipt.ts";
-import { loadIdentity } from "../lib/identity.ts";
 import type {
   DeployedSource,
   VersionOutcome,
@@ -5278,48 +5277,29 @@ export async function restoreFromCommand(
   }
 }
 
-/** The modules recording a version needs, loaded on first use. */
+/** The module recording a version, loaded on first use. */
 const loadVersionModules = async () => ({
-  // deno-lint-ignore cf-imports/no-inline-module-import
-  access: await import("@commonfabric/pattern-index/access"),
   // deno-lint-ignore cf-imports/no-inline-module-import
   versions: await import("../lib/pattern-versions.ts"),
 });
 
 /**
- * Keeps a deploy of the person's own source as a private version in the
- * pattern index `CF_PATTERN_INDEX_URL` names, else the default index,
- * signing as the deploying identity. Never throws, synchronously or not:
- * the deploy it follows has committed, and an index that is misconfigured
- * or unreachable must not turn that into a failure.
+ * Keeps a deploy as a private version: `recordVersionInIndex` in
+ * `lib/pattern-versions.ts`, loaded here rather than with the command,
+ * since recording reaches the compiler's identity code, which starting
+ * `cf piece` must not load. Never throws.
  */
 export async function recordVersionInIndex(
   identity: string,
   deployed: DeployedSource,
 ): Promise<VersionOutcome> {
-  // Loaded here rather than with the command: recording reaches the
-  // compiler's identity code, which starting `cf piece` must not load.
   let modules;
-  let baseUrl: string;
-  let store: PatternIndexStore;
   try {
     modules = await loadVersionModules();
-    baseUrl = modules.access.resolvePatternIndexUrl(undefined);
-    store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
   } catch (error) {
     return { status: "failed", reason: describeFailure(error) };
   }
-  const { openPatternIndexClient } = modules.access;
-  return await modules.versions.recordDeployedVersion(deployed, {
-    store,
-    openClient: async () =>
-      openPatternIndexClient({
-        baseUrl,
-        signer: await loadIdentity(identity),
-        store,
-      }),
-    readTextFile: (path) => Deno.readTextFile(path),
-  });
+  return await modules.versions.recordVersionInIndex(identity, deployed);
 }
 
 /**
