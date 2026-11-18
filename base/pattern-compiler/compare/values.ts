@@ -91,6 +91,15 @@ export type ValueComparison = {
   requests?: Record<string, number>;
   outstanding?: number;
   /**
+   * What the executor's transactions wrote, by cause: how many
+   * transactions, the documents they wrote, and the bytes of those
+   * documents.
+   */
+  written?: Record<
+    string,
+    { transactions: number; documents: number; bytes: number }
+  >;
+  /**
    * The evaluations of the executor that ended in an error state: the
    * cone and the message, each once.
    */
@@ -585,6 +594,17 @@ export class ExecutorRun implements StreamRecord {
     if (this.#stubs !== undefined) {
       comparison.requests = { ...this.#requests };
       comparison.outstanding = instance.outbox.length;
+    }
+    comparison.written = {};
+    for (const { cause, written, bytes } of instance.transactions) {
+      const sum = comparison.written[cause] ??= {
+        transactions: 0,
+        documents: 0,
+        bytes: 0,
+      };
+      sum.transactions += 1;
+      sum.documents += written.length;
+      sum.bytes += bytes;
     }
     if (instance.failed.length > 0) {
       comparison.failures = [

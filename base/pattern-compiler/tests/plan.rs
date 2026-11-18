@@ -4431,3 +4431,84 @@ fn the_size_of_a_plan_follows_its_outputs_and_not_the_ways_between_them() {
     // chain of 12, and 500 times the ways from the last to the first.
     assert!(long < 3 * short, "12: {short} bytes, 25: {long} bytes");
 }
+
+/// The size of the plan of the pattern `name` of a source text.
+fn plan_bytes(text: &str, name: &str) -> usize {
+    plan_of(&program(text), name).to_string().len()
+}
+
+/// Patterns compiled in to a depth, each of which calls the one below it
+/// at `sites` sites.
+fn nested_patterns(depth: usize, sites: usize) -> String {
+    let mut text = String::from(
+        "import { pattern } from \"commonfabric\";\n\
+         const P0 = pattern<{ n: number }>(({ n }) => ({ out: n + 1 }));\n",
+    );
+    for level in 1..=depth {
+        let name = if level == depth {
+            "export const P".to_string()
+        } else {
+            format!("const P{level}")
+        };
+        text.push_str(&format!(
+            "{name} = pattern<{{ n: number }}>(({{ n }}) => {{\n"
+        ));
+        let mut sum = Vec::new();
+        for site in 0..sites {
+            text.push_str(&format!(
+                "const c{site} = P{}({{ n: n + {site} }});\n",
+                level - 1
+            ));
+            sum.push(format!("c{site}.out"));
+        }
+        text.push_str(&format!("return {{ out: {} }};\n}});\n", sum.join(" + ")));
+    }
+    text
+}
+
+#[test]
+fn the_size_of_a_plan_follows_the_depth_of_patterns_compiled_in_at_one_site_each() {
+    let (shallow, deep) = (
+        plan_bytes(&nested_patterns(3, 1), "P"),
+        plan_bytes(&nested_patterns(6, 1), "P"),
+    );
+    assert!(deep < 3 * shallow, "3: {shallow} bytes, 6: {deep} bytes");
+}
+
+#[test]
+fn a_pattern_compiled_in_at_two_sites_per_level_is_copied_for_each_site() {
+    // PL §1.1: the slots, bodies and cones of a pattern compiled in "are
+    // entries of the enclosing plan", once per site. Two sites per level
+    // double the plan with each level, where the source grows by one
+    // pattern: this test records the growth and bounds nothing.
+    let sizes: Vec<usize> = (3..=6)
+        .map(|depth| plan_bytes(&nested_patterns(depth, 2), "P"))
+        .collect();
+    for pair in sizes.windows(2) {
+        assert!(pair[1] > pair[0] * 19 / 10, "{sizes:?}");
+    }
+}
+
+#[test]
+fn the_size_of_a_plan_follows_the_number_of_handlers_that_capture_the_same_values() {
+    let handlers = |count: usize| {
+        let mut text = String::from(
+            "import { action, pattern, Writable } from \"commonfabric\";\n\
+             export const P = pattern<Record<string, never>>(() => {\n",
+        );
+        for cell in 0..5 {
+            text.push_str(&format!("const c{cell} = Writable.of({cell});\n"));
+        }
+        let mut names = Vec::new();
+        for index in 0..count {
+            text.push_str(&format!(
+                "const a{index} = action(() => {{ c0.set(c0.get() + c1.get() + c2.get() + c3.get() + c4.get() + {index}); }});\n"
+            ));
+            names.push(format!("a{index}"));
+        }
+        text.push_str(&format!("return {{ {} }};\n}});\n", names.join(", ")));
+        plan_bytes(&text, "P")
+    };
+    let (few, many) = (handlers(10), handlers(20));
+    assert!(many < few * 5 / 2, "10: {few} bytes, 20: {many} bytes");
+}

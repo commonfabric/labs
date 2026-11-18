@@ -1195,6 +1195,12 @@ export type Transaction = {
   /** The identifiers of the documents written, in the order of the
    * first write to each. */
   written: string[];
+  /**
+   * The bytes of the documents written, each as the JSON text of what
+   * it holds when the transaction ends: the executor writes a document
+   * whole, and has no patch.
+   */
+  bytes: number;
   /** The cones that took an error state, by their `entry`. */
   failed: string[];
   /** Whether what the transaction staged is stored. */
@@ -1605,6 +1611,7 @@ export class Instance {
         ...(binding === undefined ? {} : { binding }),
         evaluated: [],
         written: [],
+        bytes: 0,
         failed: [],
         committed: false,
       },
@@ -1635,6 +1642,10 @@ export class Instance {
     open.record.committed = committed;
     if (error !== undefined) open.record.error = error;
     if (!committed) open.record.written = [];
+    for (const id of open.record.written) {
+      open.record.bytes +=
+        (JSON.stringify(this.store.docs.get(id)?.value) ?? "").length;
+    }
     this.#tx = undefined;
     this.#transactions.push(open.record);
   }

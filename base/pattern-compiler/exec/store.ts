@@ -779,8 +779,12 @@ export class Store {
     if (!isValidFabricValue(value)) {
       throw new Error(debugStr`Not a fabric value: $quote${value}`);
     }
+    this.hashes += 1;
     return hashOf({ salt: this.#secret, value });
   }
+
+  /** How many salted hashes of a plain value were formed for a key. */
+  hashes = 0;
 
   /**
    * The address that a reference names, as a fabric value: the record of

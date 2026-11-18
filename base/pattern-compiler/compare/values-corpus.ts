@@ -442,6 +442,46 @@ const report = async (file: string, verbose: boolean) => {
   ) {
     console.log(`  ${name}: ${total(name)}`);
   }
+  const written = new Map<
+    string,
+    { transactions: number; documents: number; bytes: number }
+  >();
+  for (const result of executed) {
+    for (
+      const [cause, sum] of Object.entries(result.comparison?.written ?? {})
+    ) {
+      const total = written.get(cause) ??
+        { transactions: 0, documents: 0, bytes: 0 };
+      total.transactions += sum.transactions;
+      total.documents += sum.documents;
+      total.bytes += sum.bytes;
+      written.set(cause, total);
+    }
+  }
+  console.log("what the executor's transactions wrote, by cause:");
+  for (const [cause, { transactions, documents, bytes }] of written) {
+    console.log(
+      `  ${cause}: ${transactions} transactions, ${documents} documents, ` +
+        `${bytes} bytes`,
+    );
+  }
+  if (verbose) {
+    const largest = executed.map((result) => ({
+      module: result.module,
+      bytes: Object.values(result.comparison?.written ?? {}).reduce(
+        (sum, { bytes }) => sum + bytes,
+        0,
+      ),
+      transactions: Object.values(result.comparison?.written ?? {}).reduce(
+        (sum, { transactions }) => sum + transactions,
+        0,
+      ),
+    })).sort((a, b) => b.bytes - a.bytes).slice(0, 10);
+    console.log("  the modules whose transactions wrote the most bytes:");
+    for (const { module, bytes, transactions } of largest) {
+      console.log(`    ${module}: ${bytes} bytes in ${transactions}`);
+    }
+  }
   const failures = executed.flatMap((result) =>
     (result.comparison?.failures ?? []).map((failure) => ({
       module: result.module,
