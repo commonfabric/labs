@@ -535,7 +535,10 @@
               ],
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 1
+                  }
                 },
                 {
                   "element": 0
@@ -565,7 +568,10 @@
               ],
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 2
+                  }
                 },
                 {
                   "element": 1
@@ -595,7 +601,10 @@
               ],
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 3
+                  }
                 },
                 {
                   "element": 3
@@ -625,7 +634,10 @@
               ],
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 4
+                  }
                 },
                 {
                   "element": 4
@@ -778,16 +790,16 @@
                 "op": "slot",
                 "slot": 3
               },
-              "name": {
-                "name": "map",
-                "ordinal": 1
-              },
+              "name": "map",
               "source": {
                 "slot": 3
               },
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 1
+                  }
                 }
               ]
             },
@@ -800,16 +812,16 @@
                 "op": "output",
                 "output": 0
               },
-              "name": {
-                "name": "map",
-                "ordinal": 2
-              },
+              "name": "map",
               "source": {
                 "output": 0
               },
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 2
+                  }
                 }
               ]
             },
@@ -837,17 +849,17 @@
                 "op": "output",
                 "output": 11
               },
-              "name": {
-                "name": "map",
-                "ordinal": 3
-              },
+              "name": "map",
               "source": {
                 "collection": 2,
                 "via": "map"
               },
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 3
+                  }
                 }
               ]
             },
@@ -857,16 +869,16 @@
                 "op": "slot",
                 "slot": 17
               },
-              "name": {
-                "name": "map",
-                "ordinal": 4
-              },
+              "name": "map",
               "source": {
                 "slot": 17
               },
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 4
+                  }
                 }
               ]
             },
@@ -943,7 +955,10 @@
               ],
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 1
+                  }
                 },
                 {
                   "element": 0
@@ -967,7 +982,10 @@
               ],
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 2
+                  }
                 },
                 {
                   "element": 1
@@ -1011,7 +1029,10 @@
               ],
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 3
+                  }
                 },
                 {
                   "element": 3
@@ -1035,7 +1056,10 @@
               ],
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 4
+                  }
                 },
                 {
                   "element": 4
@@ -2049,7 +2073,10 @@
               "scope": "space",
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 1
+                  }
                 },
                 {
                   "element": 0
@@ -2062,7 +2089,10 @@
               "scope": "space",
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 2
+                  }
                 },
                 {
                   "element": 1
@@ -2075,7 +2105,10 @@
               "scope": "space",
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 3
+                  }
                 },
                 {
                   "element": 3
@@ -2088,7 +2121,10 @@
               "scope": "space",
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 4
+                  }
                 },
                 {
                   "element": 4

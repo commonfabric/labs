@@ -3983,7 +3983,8 @@ export const P = pattern<{
 }
 
 /// The construct, the kind of the source, the key fields and the sites
-/// of each collection of a plan.
+/// of each collection of a plan. A site that is one of several of its
+/// name is written as the name, `#`, and its ordinal.
 fn collections_of(plan: &Value) -> Vec<(String, String, String, String)> {
     plan["collections"]
         .as_array()
@@ -3999,7 +4000,15 @@ fn collections_of(plan: &Value) -> Vec<(String, String, String, String)> {
                 .map(|steps| {
                     steps
                         .iter()
-                        .filter_map(|step| step["site"].as_str().map(str::to_string))
+                        .filter_map(|step| match &step["site"] {
+                            Value::String(name) => Some(name.clone()),
+                            Value::Object(site) => Some(format!(
+                                "{}#{}",
+                                site["name"].as_str().unwrap_or(""),
+                                site["ordinal"]
+                            )),
+                            _ => None,
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
@@ -4058,12 +4067,12 @@ export const P = pattern<{
     assert_eq!(
         collections_of(&plan),
         [
-            text("map", "slot", r#"["id"]"#, "Rows"),
-            text("map", "output", r#"["id"]"#, "Rows"),
+            text("map", "slot", r#"["id"]"#, "Rows#1"),
+            text("map", "output", r#"["id"]"#, "Rows#2"),
             text("filter", "slot", r#"["id"]"#, ""),
-            text("map", "collection", "null", "Rows"),
-            text("map", "slot", "null", "Rows"),
-            text("map", "output", r#"["id"]"#, "Rows"),
+            text("map", "collection", "null", "Rows#3"),
+            text("map", "slot", "null", "Rows#4"),
+            text("map", "output", r#"["id"]"#, "Rows#5"),
         ]
     );
 }
@@ -4697,4 +4706,57 @@ fn the_plan_of_a_pattern_called_at_two_sites_per_level_is_linear_in_the_depth() 
             "the plans are {sizes:?} bytes for 1 to 6 levels"
         );
     }
+}
+
+/// PL §1.3: "Where two declarations of one pattern body have the same
+/// name, each takes the name and its ordinal among them, in source
+/// order", and "A `site` step holds the name of its call by the same
+/// rules". A call that is the one of its name keeps the name alone.
+#[test]
+fn two_call_sites_of_one_name_in_one_body_have_a_site_step_with_an_ordinal_each() {
+    let analysis = program(
+        r#"import { pattern, UI, Writable } from "commonfabric";
+const Counter = pattern<{ label: string }>(({ label }) => {
+  const count = Writable.of(0);
+  return { [UI]: <b>{label}{count}</b>, count };
+});
+const Other = pattern<{ label: string }>(({ label }) => {
+  const seen = Writable.of(0);
+  return { [UI]: <i>{label}{seen}</i> };
+});
+export const P = pattern<{ title: string; rows: string[] }>(({ title, rows }) => ({
+  [UI]: (
+    <div>
+      <Counter label="a" />
+      <Other label="o" />
+      <Counter label={title} />
+      {rows.map((row) => <Counter label={row} />)}
+    </div>
+  ),
+}));
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let cells: Vec<(Value, Value)> = plan["stateCells"]
+        .as_array()
+        .expect("state cells")
+        .iter()
+        .map(|cell| (cell["name"].clone(), cell["within"].clone()))
+        .collect();
+    let counter = |ordinal: u64| json!({ "site": { "name": "Counter", "ordinal": ordinal } });
+    assert_eq!(
+        cells,
+        [
+            (json!("count"), json!([counter(1)])),
+            (json!("seen"), json!([{ "site": "Other" }])),
+            (json!("count"), json!([counter(2)])),
+            // The tag in the element body is the one site of its name
+            // under that `element` step.
+            (
+                json!("count"),
+                json!([{ "element": 0 }, { "site": "Counter" }])
+            ),
+        ]
+    );
+    assert!(!plan.to_string().contains("$site"), "{plan}");
 }
