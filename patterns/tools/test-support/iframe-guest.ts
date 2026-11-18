@@ -497,10 +497,10 @@ export class MemorySqlite {
 /**
  * Returns the assets the directory at `directory` holds, as a pattern's
  * `dataFile.urls()` reads them from that directory: each file directly inside
- * it whose extension has a media type, keyed by its file name without the
- * extension, as a base64 `data:` URL. A symbolic link to a file counts as the
- * file, and one that names nothing is left out, as they are for
- * `dataFile.urls()`.
+ * it whose extension has a media type, other than a hidden file such as
+ * macOS's `._glaze.png`, keyed by its file name without the extension, as a
+ * base64 `data:` URL. A symbolic link to a file counts as the file, and one
+ * that names nothing is left out, as they are for `dataFile.urls()`.
  *
  * @throws Error for a file whose name without its extension is not an asset's
  *   name, and for two files that would share one, as `dataFile.urls()` does.

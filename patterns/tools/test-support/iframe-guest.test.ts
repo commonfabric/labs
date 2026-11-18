@@ -266,6 +266,15 @@ describe("iframe-guest", () => {
       });
     });
 
+    it("leaves out a hidden file", async () => {
+      const directory = await directoryOf({
+        "glaze.png": new Uint8Array([1, 2, 3]),
+        "._glaze.png": new Uint8Array([0]),
+      });
+
+      expect(await readAssets(directory)).toEqual({ glaze: GLAZE });
+    });
+
     it("reads a directory whose address has no trailing slash", async () => {
       const directory = await directoryOf({
         "glaze.png": new Uint8Array([1, 2, 3]),

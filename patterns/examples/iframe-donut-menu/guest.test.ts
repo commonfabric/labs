@@ -258,5 +258,18 @@ describe("iframe-donut-menu/guest", () => {
       expect(alert.textContent).toContain("The menu is read-only.");
       expect(state.value).toBeUndefined();
     });
+
+    it("clears why a favorite could not be stored once a favorite is drawn", async () => {
+      const { page, state } = await open();
+      state.failWrites(new Error("The menu is read-only."));
+      button("glazed").click();
+      const alert = one('[role="alert"]');
+      await page.until(() => alert.textContent !== "");
+
+      state.value = { favorite: "chocolate" };
+      await page.until(() => canvas().dataset.drawn === "chocolate");
+
+      expect(alert.textContent).toBe("");
+    });
   });
 });
