@@ -1883,6 +1883,28 @@ describe("spaceAccess()", () => {
         .toBeUndefined();
     });
 
+    it("returns `undefined` on a client the memory server refuses the space after it read the list", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+
+      const runtime = clientRuntime(bob);
+      await syncAcl(runtime);
+      expect(spaceMemberListAt(runtime, runtime.edit(), space)).toBeDefined();
+
+      const heard = Promise.withResolvers<void>();
+      const cancel = runtime.storageManager.subscribeSpaceAccessLoss?.(
+        (lost) => {
+          if (lost === space) heard.resolve();
+        },
+      );
+      await setAcl({ [alice.did()]: "OWNER" });
+      await heard.promise;
+      cancel?.();
+      expect(runtime.storageManager.spaceAccessError?.(space)).toBeDefined();
+      expect(spaceMemberListAt(runtime, runtime.edit(), space))
+        .toBeUndefined();
+    });
+
     it("returns the list on a serving runtime, to a transaction that acts for no one", async () => {
       const setAcl = await aclWriter();
       await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
