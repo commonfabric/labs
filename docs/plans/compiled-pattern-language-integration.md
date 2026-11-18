@@ -40,7 +40,8 @@ run:
   label for every written path and persists it. Today's runtime made 2,822
   preparations to settle the corpus.
 - **Storage transactions.** A read journal, staged writes, the commit into
-  the space's replica and the store (`runtime/runner/src/storage/v2-transaction.ts`,
+  the space's replica and the store
+  (`runtime/runner/src/storage/v2-transaction.ts`,
   `runtime/memory/v2/engine.ts`), the encoding of values, and the
   notification of subscribers.
 - **A scheduler across instances.** Today Scheduler v2
@@ -109,12 +110,27 @@ pattern can run both ways in one runtime, under one harness.
     labels stored before milestone 3 are therefore today's rule applied to
     the design's transactions, and the measurement is of its cost, not of
     the design's labels.
+  - *The schema of a write.* A transaction relevant to Contextual Flow
+    Control that writes a document which already carries labels must
+    record the schema of that write (`recordCfcWritePolicyInput` of the
+    runtime's transaction, which today's `Cell.set` calls); otherwise the
+    commit is refused with "missing schema write-policy input"
+    (`runtime/runner/src/cfc/prepare.ts`). The executor writes values and
+    no schema. The plan has a schema for each state cell, slot and output,
+    so the adapter can record it; milestone 1 does not, and counts the
+    refusals.
   - *A conflict on a derived write.* By ruling, the commit withdraws that
-    write alone and the rest commits. The memory server accepts or refuses
-    a commit whole (`ConflictError` in `runtime/memory/v2/engine.ts` lists
-    the stale reads). Withdrawal needs either units in the commit protocol
-    or a second commit without the withdrawn units. This is a requirement
-    on storage that integration exposes; the prototype could not.
+    write alone and the rest commits. The memory server applies a commit
+    whole or refuses it, and names what was stale: a direct commit with the
+    entities of its stale reads (`ConflictError.conflicts` in
+    `runtime/memory/v2/engine.ts`), a wave commit of the serving loop with
+    the contribution each stale read belongs to (`WaveStaleReadError`),
+    after which the wave commit step tries again without that
+    contribution. So the ruling is implementable on today's storage as a
+    second attempt that leaves the withdrawn units out, if each derived
+    write is a contribution of its own, and not as one atomic commit. What
+    that second attempt costs is measured in milestone 5; the prototype
+    has no conflict at all.
 
 ### C. A second executor written for the runtime
 
@@ -210,6 +226,9 @@ and reports what it measures beside the figures before it.
    paths with the runtime's own calls (`Runtime.run`, `sendEvent`).
    *Measures:* the scheduler and the routing of events, and the first
    figure per event from send to settled that compares like with like.
+   *Needs first:* a crate that emits the corpus of the main branch, which
+   it does not today ("Known limits of what exists" in the design's plan),
+   and an adapter that records the plan's schema of each write.
 3. **Labels from templates at commit.** `prepareCfc()` instantiates the
    template of each path the plan covers and checks the plan's constraints
    (`execution-and-storage.md` §1.9). The label comparison of
@@ -256,6 +275,15 @@ storage builds them, with the harness of milestone 2.
   another instance, or a handler of another pattern can write what it reads.
   The marking of readers (`scheduler-and-serving-loop.md` §3) has to be
   driven by those changes as well as by its own.
+- **Readers outside the executor read today's forms.** The executor stores
+  a path of a link that crosses an array by key as the key's text, which
+  the runtime does not resolve, and it nests the children of a rendered
+  tree differently from today's runtime, which the harness translates
+  (`base/pattern-compiler/README.md`, "Value code and the executor").
+  Before the shell renders a compiled piece in milestone 2, the executor
+  has to store the rendered tree in the form the renderer reads, and a link
+  that the runtime can follow, or the readers of such a document have to be
+  compiled too (`execution-and-storage.md` §9.9).
 - **The executor's own cost.** It was written to be read. In one corpus
   module it is slower per event than today's runtime
   (`showcase/battleship/pass-and-play/main.tsx`, 7.64 against 5.64 ms).
@@ -264,4 +292,106 @@ storage builds them, with the harness of milestone 2.
 
 ## Milestone 1: first figures
 
-To be filled in by the run of `compare/integrated.ts`.
+**Method.** `compare/integrated.ts` runs each module that a run of today's
+runtime recorded (`compare/values-corpus.ts run`) three ways, on the
+argument and the committed events of that run: the executor with its
+documents in memory (`memory`), the executor with its documents in the
+runtime's storage and the argument in place (`plain`), and the same with
+each input a cell of its own under a schema that declares a clause, the
+argument linking to each (`labeled`). Today's figures are those of
+`compare/cost.ts run`, which writes the inputs the same way as `labeled`
+and sends the same generated events. A time of `plain` and `labeled` runs
+from the start of the executor's work to the settlement of every commit it
+made; a time of today's runtime from the send to the runtime idle with
+every kept output read, the reads of labels by the harness included. Both
+use the runtime's emulated storage, with no memory server and no socket.
+All runs were made at the prototype's commit `3d33db2e4d` with the code of
+milestone 1 added, which is the corpus and the runtime of the table of run
+times in the design's plan, because the crate does not emit the corpus of
+the current main branch ("Known limits of what exists" in the design's
+plan). Each command ran in a process of its own on one machine, with no
+other work of this session running. The integrated runs and today's run
+were made twice, each pair back to back, and both pairs are given; today's
+time to settle differs by two thirds between the two.
+
+**The corpus.** 215 modules run on today's runtime in the comparison, the
+executor runs 214, and 213 run in all three ways: one more fails in the
+runs in storage at the creation of its argument
+(`examples/cfc-exchange-rules/witnessed-chain.tsx`), not examined. In this
+session's values run 6,013 of 6,107 compared values equal today's, the
+figure of the design's plan, so the hooks change no value of the executor.
+
+| Over 213 modules | In memory | In storage, argument in place | In storage, labeled inputs | Today's runtime |
+| --- | ---: | ---: | ---: | ---: |
+| To a settled result, first pair | 593 ms | 1,894 ms | 1,687 ms | 25,302 ms |
+| To a settled result, second pair | 662 ms | 2,184 ms | 2,021 ms | 42,586 ms |
+| 536 events, first pair | 2,833 ms | 8,246 ms | 9,980 ms | 72,607 ms |
+| 536 events, second pair | 2,923 ms | 9,510 ms | 10,279 ms | 75,400 ms |
+| Commits to settle | | 426 | 424 | 1,458 |
+| Commits for the events | | 1,959 | 1,780 | 1,448 |
+| CFC preparations to settle | | 0 | 95 | 2,743 |
+| CFC preparations for the events | | 0 | 421 | 2,067 |
+| Reads journaled to settle | | | 1,834 | 492,625 |
+| Reads journaled for the events | | | 33,759 | 2,255,897 |
+
+The executor journals a position once per transaction; today's count is
+every read the journal holds, so the last two rows are not counts of the
+same thing.
+
+**The two modules of the milestone,** and the one module of the corpus
+that is slower than today. Milliseconds; a range is the two pairs of runs.
+
+| Module | To settle: memory, labeled, today | Per event: memory, labeled, today | Commits for the events: labeled, today | Preparations: labeled, today |
+| --- | --- | --- | --- | --- |
+| `examples/counter/counter.tsx` | 0.5–1.0, 3.5–4.0, 28 | 0.19–0.25, 2.9–3.7, 15–17 | 11, 10 | 6, 15 |
+| `examples/simple-list/simple-list.tsx` | 1.9–2.5, 5.4–5.8, 138–166 | 0.5–0.6, 4.4–5.7, 69–78 | 29, 60 | 14, 90 |
+| `showcase/battleship/pass-and-play/main.tsx` | 5.2–6.2, 11–12, 118–189 | 13.5–13.7, 26–249, 7.7–9.7 | 12, 4 | 0, 0 |
+
+**What the figures say.**
+
+- **Commits are most of the added cost.** With the argument in place, the
+  events take 5,910 ms of synchronous work in the second pair (the executor,
+  the reads through the transaction, the staging and the local commit),
+  against 2,923 ms in memory: about 1.5 ms more for each of the 1,959
+  commits. Waiting for those commits to settle adds 3,600 ms more, about
+  1.8 ms each. How much of that wait is work and how much is idle was not
+  measured.
+- **The executor commits more often per event than today's runtime,** 3.3
+  to 3.7 against 2.7 on average, because the append of the event and the
+  watermark that passes it are commits of their own beside the event's
+  transaction and the derivation behind it. Whether the watermark belongs in the
+  event's transaction is not decided by the documents
+  (`scheduler-and-serving-loop.md` §5.5); there it would save one commit
+  per event.
+- **It prepares CFC far less often:** 95 against 2,743 preparations to
+  settle and 421 against 2,067 for the events, which is the design's one
+  preparation per transaction. What a preparation costs is not resolved
+  here: the difference between the labeled runs and the runs with the
+  argument in place is smaller than the difference between two runs.
+- **176 commits of the labeled runs were refused, in 79 modules,** all but
+  one with "missing schema write-policy input": the write of a document
+  that already carries labels, with no schema recorded for it (see
+  "The schema of a write" above). The other one is a writer-fit misfit.
+  The 38 modules where a labeled run stores other values than the run in
+  memory are these refusals. The runs with the argument in place have no
+  refusal, and store the values of the run in memory in 206 of 213
+  modules; each of the other 7 reads the wall clock or calls
+  `crypto.randomUUID()`, which the comparison does not make equal between
+  two runs.
+- **`showcase/battleship/pass-and-play/main.tsx` is slower than today's
+  runtime per event by the executor's own work:** 13.5 ms in memory
+  against 7.7 to 9.7 ms for today's whole event. The prototype's last
+  round found one of its four events taking 47.8 ms, with 1,140 element
+  evaluations over the run, so that event evaluates the element bodies of
+  the board wholesale; not investigated yet. One labeled run of it took
+  249 ms per event on average and the other 26 ms; that was not examined.
+- **The ratios overstate what a compiled runtime gains.** The executor runs
+  no scheduler, no sandbox and no network, and today's figures include the
+  harness reading labels between events. They are an upper bound on the
+  gain until milestones 2 to 5.
+
+**Not examined.** The failure of `witnessed-chain.tsx` in storage; the
+outlier of the labeled battleship run; how much of the wait for a commit to
+settle is idle; and why the driver's own comparison with today's values,
+made in the same process after the runs, finds 5,637 of 6,053 equal where
+the values run finds 6,013 of 6,107.
