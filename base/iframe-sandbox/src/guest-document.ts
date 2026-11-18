@@ -4,11 +4,8 @@ import {
   substituteAssets,
 } from "./assets.ts";
 
-/**
- * The doctype a document opens with, together with the whitespace and comments
- * the parser lets stand ahead of it. A doctype anywhere later is ignored.
- */
-const LEADING_DOCTYPE = /^(?:[\t\n\f\r ]|<!--[\s\S]*?-->)*<!doctype[^>]*>/i;
+/** The whitespace the parser lets stand ahead of a doctype. */
+const LEADING_SPACE = /[\t\n\f\r ]/;
 
 /**
  * Returns the document a guest is loaded as: `html`, with `assets`, and with
@@ -58,8 +55,29 @@ function withAssetsElement(html: string, assets: AssetRecord): string {
   const record = JSON.stringify(assets).replaceAll("<", "\\u003c");
   const element = `<script type="application/json" ${ASSETS_ATTRIBUTE}>` +
     `${record}</script>`;
-  const doctype = LEADING_DOCTYPE.exec(html)?.[0] ?? "";
-  return doctype + element + html.slice(doctype.length);
+  const end = leadingDoctypeEnd(html);
+  return html.slice(0, end) + element + html.slice(end);
+}
+
+/**
+ * Helper for `withAssetsElement()`, which returns where the doctype `html`
+ * opens with ends, or `0` when it opens with none. Ahead of a doctype the
+ * parser lets stand a byte order mark, whitespace, and comments, each comment
+ * ending at its first `-->`; a doctype anywhere later is ignored. The scan
+ * reads each character once.
+ */
+function leadingDoctypeEnd(html: string): number {
+  let at = html.startsWith("\ufeff") ? 1 : 0;
+  for (;;) {
+    while (at < html.length && LEADING_SPACE.test(html[at]!)) at++;
+    if (!html.startsWith("<!--", at)) break;
+    const close = html.indexOf("-->", at + 4);
+    if (close === -1) return 0;
+    at = close + 3;
+  }
+  if (html.slice(at, at + 9).toLowerCase() !== "<!doctype") return 0;
+  const close = html.indexOf(">", at);
+  return close === -1 ? 0 : close + 1;
 }
 
 /**

@@ -453,6 +453,26 @@ describe("listDataFiles()", () => {
     }
   });
 
+  it("leaves out a link in the directory that resolves to nothing", async () => {
+    const root = await Deno.makeTempDir({ prefix: "list-data-files-" });
+    try {
+      await Deno.mkdir(path.join(root, "assets"));
+      await Deno.writeTextFile(path.join(root, "main.tsx"), "");
+      await Deno.writeTextFile(path.join(root, "assets/glaze.png"), "");
+      await Deno.symlink("missing.png", path.join(root, "assets/gone.png"));
+      const resolver = new FileSystemProgramResolver(
+        path.join(root, "main.tsx"),
+        root,
+      );
+
+      expect(await resolver.listDataFiles("/assets")).toEqual([
+        "/assets/glaze.png",
+      ]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
   it("refuses a directory that climbs out of the root", async () => {
     const root = await Deno.makeTempDir({ prefix: "list-data-files-" });
     try {

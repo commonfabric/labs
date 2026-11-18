@@ -192,8 +192,7 @@ export class FileSystemProgramResolver implements ProgramResolver {
     const names: string[] = [];
     for await (const entry of Deno.readDir(realPath)) {
       const isFile = entry.isFile ||
-        (entry.isSymlink &&
-          (await Deno.stat(join(realPath, entry.name))).isFile);
+        (entry.isSymlink && await linksToFile(join(realPath, entry.name)));
       if (isFile) names.push(`${parent}/${entry.name}`);
     }
     return names.sort();
@@ -238,6 +237,20 @@ export class FileSystemProgramResolver implements ProgramResolver {
   #readFile(path: string): string {
     requireDeno("FileSystemProgramResolver");
     return Deno.readTextFileSync(path);
+  }
+}
+
+/**
+ * Helper for `FileSystemProgramResolver.listDataFiles()`, which returns
+ * whether the symbolic link `path` resolves to a file. One that resolves to
+ * nothing is not a file.
+ */
+async function linksToFile(path: string): Promise<boolean> {
+  try {
+    return (await Deno.stat(path)).isFile;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return false;
+    throw error;
   }
 }
 
