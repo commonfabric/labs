@@ -187,11 +187,12 @@ An editing session is everything a viewer types into one field between giving it
 focus and taking focus away: the body's editor and the title field each keep a
 per-session flag that their own changes set, and losing focus reports one row if
 the flag is set and clears it. A burst of keystrokes is one row, and leaving a
-field unchanged reports nothing. The editor and the title field tell only the
-viewer's own changes: another member's typing reaches the editor as a remote
-change, which it does not tell. A session whose tab closes before the field
-loses focus is not reported. Resolving, reopening and deleting a comment, and
-opening or discarding a draft, report nothing.
+field unchanged reports nothing. Only the viewer's own changes set the flag: the
+editor's `cf-edit` and the title field's `cf-input` never tell another member's
+typing or a value the field's cell pushed. A title longer than 80 characters is
+cut short in the row. A session whose tab closes before the field loses focus is
+not reported. Resolving, reopening and deleting a comment, and opening or
+discarding a draft, report nothing.
 
 The handlers that may write a row are fixed once a row is stored: a later
 version of the note can neither add a writer to the row type's policy nor drop

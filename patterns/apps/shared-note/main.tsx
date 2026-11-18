@@ -433,12 +433,20 @@ export interface ActivityState {
   activity: ActivityCell;
 }
 
+/** The most of a title a row repeats; a longer one is cut short. */
+const ROW_TITLE_MAX = 80;
+
 /**
  * Adds a row saying `did` the note now, as `<did> "<title>"`. The caller is
  * the handler the row is reported by, so the write counts as that handler's.
+ * The title is cut short to keep a row brief: anyone can write a title of
+ * any length, and a host may refuse a long row.
  */
 const report = (did: string, { title, activity }: ActivityState): void => {
-  const name = title.get().trim() || "Untitled note";
+  const whole = title.get().trim() || "Untitled note";
+  const name = whole.length > ROW_TITLE_MAX
+    ? whole.slice(0, ROW_TITLE_MAX - 1) + "…"
+    : whole;
   activity.push({
     body: `${did} "${name}"`,
     doneAt: new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
@@ -446,8 +454,9 @@ const report = (did: string, { title, activity }: ActivityState): void => {
 };
 
 /**
- * Notes that the viewer changed a field in this session. The editor and the
- * title field tell only the viewer's own changes, never another member's.
+ * Notes that the viewer changed a field in this session. The editor's
+ * `cf-edit` and the title field's `cf-input` tell only the viewer's own
+ * changes, never another member's or one the field's cell pushed.
  */
 const markEdited = handler<unknown, { edited: Writable<boolean> }>(
   (_, { edited }) => {
@@ -1269,7 +1278,7 @@ export const SharedNoteCore = pattern<
         oncf-presence-join={clearPresenceNotice({ presenceNotice })}
         oncf-selection-change={trackSelection({ content, selection })}
         oncf-highlight-click={selectHighlight({ selectedId, replyDraft })}
-        oncf-change={markEdited({ edited })}
+        oncf-edit={markEdited({ edited })}
         oncf-blur={reportEdit({ edited, title, activity })}
         style={{ minHeight: "20rem" }}
       >

@@ -40,10 +40,10 @@ const editorOf = (root: unknown): unknown =>
 const titleFieldOf = (root: unknown): unknown =>
   findNodeByProp(root, "aria-label", "Note title");
 
-/** A local change in the editor, as `cf-code-editor` tells one. */
+/** The viewer's own edit, as `cf-code-editor` tells one. */
 const change = (value: string) => ({
-  type: "cf-change",
-  detail: { value, oldValue: BODY },
+  type: "cf-edit",
+  detail: { value },
 });
 
 export default pattern(() => {
@@ -68,10 +68,10 @@ export default pattern(() => {
     fireEvent(editorOf(note[UI]), "oncf-blur", {})
   );
   const action_type = action(() =>
-    fireEvent(editorOf(note[UI]), "oncf-change", change(BODY + "x"))
+    fireEvent(editorOf(note[UI]), "oncf-edit", change(BODY + "x"))
   );
   const action_type_more = action(() =>
-    fireEvent(editorOf(note[UI]), "oncf-change", change(BODY + "xy"))
+    fireEvent(editorOf(note[UI]), "oncf-edit", change(BODY + "xy"))
   );
 
   const assert_no_rows = assert(() => activity.get().length === 0);
@@ -94,17 +94,21 @@ export default pattern(() => {
   const assert_untitled = assert(() =>
     bodies(activity.get()).at(-1) === 'edited "Untitled note"'
   );
+  const action_long_title = action(() => title.set("x".repeat(500)));
+  const assert_title_cut_short = assert(() =>
+    bodies(activity.get()).at(-1) === `edited "${"x".repeat(79)}…"`
+  );
   const action_restore_title = action(() => title.set("Packing list"));
 
   const assert_verbs_reported = assert(() =>
     bodies(activity.get()).slice(-3).join("|") ===
       'edited "Packing list"|edited "Packing list"|edited "Packing list"'
   );
-  const assert_verb_count = assert(() => activity.get().length === 6);
+  const assert_verb_count = assert(() => activity.get().length === 7);
 
   const assert_commented = assert(() =>
     bodies(activity.get()).at(-1) === 'commented on "Packing list"' &&
-    activity.get().length === 7
+    activity.get().length === 8
   );
   const action_reply = action(() =>
     note.replyToComment.send({
@@ -115,10 +119,10 @@ export default pattern(() => {
   const assert_replied = assert(() =>
     bodies(activity.get()).at(-1) ===
       'replied to a comment on "Packing list"' &&
-    activity.get().length === 8
+    activity.get().length === 9
   );
 
-  const assert_refusals_add_nothing = assert(() => activity.get().length === 8);
+  const assert_refusals_add_nothing = assert(() => activity.get().length === 9);
 
   const action_type_title = action(() => {
     setBound(titleFieldOf(whole[UI]), "$value", "Groceries!");
@@ -176,6 +180,11 @@ export default pattern(() => {
       { action: action_type },
       { action: action_blur },
       { assertion: assert_untitled },
+      // A long title is cut short in the row.
+      { action: action_long_title },
+      { action: action_type },
+      { action: action_blur },
+      { assertion: assert_title_cut_short },
       { action: action_restore_title },
 
       // Each verb call is a session of its own.
