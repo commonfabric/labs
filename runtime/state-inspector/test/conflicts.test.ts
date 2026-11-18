@@ -409,6 +409,8 @@ Deno.test("conflicts: counts the later commits whose reads it could not check", 
     const x = entityConflicts(space, "of:x");
     expect(x.staleReads).toEqual([]);
     expect(x.readSetsNotKept).toBe(1);
+    // No read of an entity nobody wrote can be stale, so none counts.
+    expect(entityConflicts(space, "of:unwritten").readSetsNotKept).toBe(0);
     // `cf inspect commits` reads the counts from the digest.
     expect(
       listCommits(space).map(({ seq, reads }) => ({ seq, reads })),
