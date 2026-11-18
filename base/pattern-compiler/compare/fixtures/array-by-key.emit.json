@@ -1481,6 +1481,9 @@
               "cone": 2,
               "constraints": [],
               "kept": true,
+              "keyFields": [
+                "id"
+              ],
               "path": [
                 "rows"
               ],
@@ -1595,9 +1598,6 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
-              "keyFields": [
-                "id"
-              ],
               "path": [
                 "*"
               ],
@@ -1611,6 +1611,9 @@
               "cone": 4,
               "constraints": [],
               "kept": true,
+              "keyFields": [
+                "id"
+              ],
               "path": [
                 "starred"
               ],
@@ -1653,6 +1656,9 @@
               "cone": 5,
               "constraints": [],
               "kept": true,
+              "keyFields": [
+                "id"
+              ],
               "path": [
                 "kept"
               ],
@@ -1845,9 +1851,6 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
-              "keyFields": [
-                "id"
-              ],
               "path": [
                 "*"
               ],
@@ -1861,6 +1864,9 @@
               "cone": 9,
               "constraints": [],
               "kept": true,
+              "keyFields": [
+                "id"
+              ],
               "path": [
                 "found"
               ],

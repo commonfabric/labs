@@ -435,6 +435,9 @@
               "constraints": [],
               "interim": "map",
               "kept": false,
+              "keyFields": [
+                "title"
+              ],
               "path": [],
               "template": {
                 "by": {

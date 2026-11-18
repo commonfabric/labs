@@ -1109,6 +1109,11 @@ impl<'a> Resolver<'_, 'a> {
             }
             Expression::CallExpression(call) => {
                 if let Some(verdict) = self.callback_against(module, call, to) {
+                    // The callback of a `map` decides the element type,
+                    // and the result has the key of the receiver.
+                    if let Ok(from) = self.typed_at(module, expression, 0) {
+                        self.report_key_mismatch(module, expression, from, to);
+                    }
                     return verdict;
                 }
             }
@@ -1133,17 +1138,7 @@ impl<'a> Resolver<'_, 'a> {
         let Ok(from) = typed else {
             return Verdict::Unsure;
         };
-        if let Some((given, declared)) = self.key_mismatch(from, to, 0) {
-            self.type_report(
-                module,
-                "array-by-key:mismatch",
-                expression.span(),
-                &format!(
-                    "An array whose type declares the key `{given}` is given where the \
-                     key `{declared}` is declared"
-                ),
-            );
-        }
+        self.report_key_mismatch(module, expression, from, to);
         let verdict = self.relate_in(from, to, 0, by_reference);
         if !matches!(verdict, Verdict::No(..)) {
             self.note_bindings(module, expression, from, to, by_reference, &verdict);
@@ -1189,6 +1184,29 @@ impl<'a> Resolver<'_, 'a> {
             }
         }
         verdict
+    }
+
+    /// Reports `array-by-key:mismatch` at `expression`, a value of type
+    /// `from` given where `to` is declared, where the two declare
+    /// different keys for one array.
+    fn report_key_mismatch(
+        &self,
+        module: usize,
+        expression: &Expression<'a>,
+        from: TypeId,
+        to: TypeId,
+    ) {
+        if let Some((given, declared)) = self.key_mismatch(from, to, 0) {
+            self.type_report(
+                module,
+                "array-by-key:mismatch",
+                expression.span(),
+                &format!(
+                    "An array whose type declares the key `{given}` is given where the \
+                     key `{declared}` is declared"
+                ),
+            );
+        }
     }
 
     /// The key fields that `ArrayByKey` declares on a type node, as the

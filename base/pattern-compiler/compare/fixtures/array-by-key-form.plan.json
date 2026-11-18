@@ -812,10 +812,6 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
-              "keyFields": [
-                "a:b",
-                "tag"
-              ],
               "path": [
                 "*"
               ],
@@ -829,6 +825,10 @@
               "cone": 2,
               "constraints": [],
               "kept": true,
+              "keyFields": [
+                "a:b",
+                "tag"
+              ],
               "path": [
                 "found"
               ],
@@ -944,10 +944,6 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
-              "keyFields": [
-                "a:b",
-                "tag"
-              ],
               "path": [
                 "*"
               ],
@@ -961,6 +957,10 @@
               "cone": 4,
               "constraints": [],
               "kept": true,
+              "keyFields": [
+                "a:b",
+                "tag"
+              ],
               "path": [
                 "kept"
               ],

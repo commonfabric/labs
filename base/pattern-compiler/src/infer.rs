@@ -879,7 +879,15 @@ impl<'a> Resolver<'_, 'a> {
         };
         let maybe = |ty: TypeId| Ok(self.union_of(vec![ty, self.intern(Shape::Undefined)]));
         match name {
-            "map" => self.of(Shape::Array(returned())),
+            // The elements of the result of a `map` have the upstream
+            // keys, so its type declares the key fields that the type of
+            // the receiver declares (ruling Z55). The fields are
+            // properties of the upstream element, which the element type
+            // of the result need not have.
+            "map" => {
+                let result = self.intern(Shape::Array(returned()));
+                Ok(self.with_key_fields_of(array, result))
+            }
             "flatMap" => {
                 // Each array the callback returns is taken apart, and any
                 // other value it returns is an element as it is.

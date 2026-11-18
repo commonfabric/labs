@@ -6289,6 +6289,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                             }
                             if star || !at.is_empty() {
                                 output.remove("passesCollection");
+                                output.remove("keyFields");
                             }
                             if let Some(template) = template {
                                 output.insert("template".to_string(), template.clone());
@@ -6331,6 +6332,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     path.push(json!("*"));
                     output.insert("path".to_string(), json!(path));
                     output.remove("collection");
+                    output.remove("keyFields");
                     output.remove("template");
                     if let Some(element) = element {
                         output.insert("template".to_string(), element.clone());

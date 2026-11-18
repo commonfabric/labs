@@ -1485,9 +1485,6 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
-              "keyFields": [
-                "id"
-              ],
               "path": [
                 "*"
               ],
@@ -1690,9 +1687,6 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
-              "keyFields": [
-                "id"
-              ],
               "path": [
                 "*"
               ],
@@ -1736,9 +1730,6 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
-              "keyFields": [
-                "id"
-              ],
               "path": [
                 "*"
               ],

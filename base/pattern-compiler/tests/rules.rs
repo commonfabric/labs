@@ -1665,6 +1665,69 @@ fn a_value_that_declares_one_key_is_not_passed_where_another_key_is_declared() {
     assert_eq!(found("ArrayByKey<Repo, \"name\">", "plain"), none);
 }
 
+/// Ruling Z55 (`plan-and-label-templates.md` §8, question 150): the
+/// type of the result of a `map` over an array with a declared key keeps
+/// the key fields of its receiver, as that of a `filter` does, since its
+/// elements have the upstream keys. So giving it where another key is
+/// declared is reported, also where the element type of the result has
+/// none of the fields. The type of a `flatMap` result declares no key
+/// (assumed there), so nothing is reported for it. `saved` is a pattern
+/// input, an array of plain values in place or of references, and
+/// `fetched(count)` a plain array generated from scratch; each receiver
+/// of the second group is the result of another per-element construct.
+#[test]
+fn the_result_of_a_map_declares_the_key_of_its_receiver_and_that_of_a_flat_map_none() {
+    let found = |parameter: &str, argument: &str| {
+        ids(&check(&format!(
+            "interface Repo {{ id: number; name: string }}\n\
+             interface Label {{ label: string }}\n\
+             const fetched = lift((count: number): ArrayByKey<Repo, \"id\"> => [{{ id: count, name: \"n\" }}]);\n\
+             const Sub = pattern<{{ repos: {parameter} }}>(({{ repos }}) => ({{ count: repos.length }}));\n\
+             export default pattern<{{ saved: ArrayByKey<Repo, \"id\">; plain: Repo[]; count: number }}>(\n\
+               ({{ saved, plain, count }}) => ({{\n\
+                 sub: Sub({{ repos: {argument} }}),\n\
+               }}));"
+        )))
+    };
+    let none = Vec::<&str>::new();
+    let mismatch = vec!["array-by-key:mismatch"];
+    let renamed = "ArrayByKey<Repo, \"name\">";
+    // The result of a `map`, over each kind of receiver.
+    assert_eq!(found(renamed, "saved.map((repo) => repo)"), mismatch);
+    assert_eq!(
+        found(renamed, "fetched(count).map((repo) => repo)"),
+        mismatch
+    );
+    assert_eq!(
+        found(
+            renamed,
+            "saved.filter((repo) => repo.id > 0).map((repo) => repo)"
+        ),
+        mismatch
+    );
+    assert_eq!(
+        found(
+            "ArrayByKey<Label, \"label\">",
+            "saved.map((repo) => ({ label: repo.name }))"
+        ),
+        mismatch
+    );
+    // The same key, a parameter that declares none, and a receiver that
+    // declares none.
+    assert_eq!(
+        found("ArrayByKey<Repo, \"id\">", "saved.map((repo) => repo)"),
+        none
+    );
+    assert_eq!(found("Repo[]", "saved.map((repo) => repo)"), none);
+    assert_eq!(found(renamed, "plain.map((repo) => repo)"), none);
+    // The result of a `flatMap` declares no key.
+    assert_eq!(found(renamed, "saved.flatMap((repo) => [repo])"), none);
+    assert_eq!(
+        found(renamed, "fetched(count).flatMap((repo) => [repo])"),
+        none
+    );
+}
+
 /// The same rule at the state of a handler, at the argument of a `lift`
 /// result, and at the argument of an authored function, each given a
 /// pattern input whose elements are plain values in place or references.

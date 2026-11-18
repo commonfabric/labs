@@ -775,10 +775,6 @@
               "constraints": [],
               "interim": "filter",
               "kept": false,
-              "keyFields": [
-                "name",
-                "owner"
-              ],
               "path": [
                 "*"
               ],
@@ -792,6 +788,10 @@
               "cone": 2,
               "constraints": [],
               "kept": true,
+              "keyFields": [
+                "name",
+                "owner"
+              ],
               "path": [
                 "starred"
               ],
@@ -834,6 +834,10 @@
               "cone": 3,
               "constraints": [],
               "kept": true,
+              "keyFields": [
+                "name",
+                "owner"
+              ],
               "path": [
                 "kept"
               ],
