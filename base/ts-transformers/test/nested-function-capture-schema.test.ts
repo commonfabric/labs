@@ -114,6 +114,23 @@ export default pattern<{ a: number; c: { y: number } }>(({ a, c }) => ({
       expect(propertyNames(schema)).toEqual(["a", "c"]);
     });
 
+    it("is kept in an authored lift's input when read in a computed key of a nested function's parameter", async () => {
+      const schema = await liftArgumentSchema(
+        `const total = lift((input: { a: number; k: string }) => {
+  function f({ [input.k]: x }: Record<string, number>) {
+    return input.a + (x ?? 0);
+  }
+  return f({ b: 2 });
+});
+export default pattern<{ a: number; k: string }>(({ a, k }) => ({
+  v: total({ a, k }),
+}));`,
+        "function f(",
+      );
+
+      expect(propertyNames(schema)).toEqual(["a", "k"]);
+    });
+
     it("still narrows the input to the members the nested function reads", async () => {
       const schema = await liftArgumentSchema(
         `const pick = lift((input: { a: number; b: { x: number; y: number } }) =>

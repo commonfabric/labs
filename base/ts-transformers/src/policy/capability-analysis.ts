@@ -3919,16 +3919,22 @@ export function analyzeFunctionCapabilities(
     };
 
     /**
-     * Visits the default `node` writes and every default in the binding
-     * pattern it destructures.
+     * Visits the expressions `node` evaluates as it binds: its default, and
+     * every computed key and default in the binding pattern it destructures.
      */
-    const visitBindingDefaults = (
+    const visitBindingExpressions = (
       node: ts.ParameterDeclaration | ts.BindingElement,
     ): void => {
+      if (
+        ts.isBindingElement(node) && node.propertyName &&
+        ts.isComputedPropertyName(node.propertyName)
+      ) {
+        visit(node.propertyName.expression);
+      }
       if (node.initializer) visit(node.initializer);
       if (ts.isIdentifier(node.name)) return;
       for (const element of node.name.elements) {
-        if (!ts.isOmittedExpression(element)) visitBindingDefaults(element);
+        if (!ts.isOmittedExpression(element)) visitBindingExpressions(element);
       }
     };
 
@@ -3962,11 +3968,11 @@ export function analyzeFunctionCapabilities(
             assignBindingAlias(parameter.name, binding);
           }
         }
-        // A parameter's default runs in the function's parameter scope when
-        // the function is called, so a read in it is the function's, as one
-        // in its body is.
+        // A parameter's defaults and computed keys run in the function's
+        // parameter scope when the function is called, so a read in one is the
+        // function's, as one in its body is.
         for (const parameter of callback.parameters) {
-          visitBindingDefaults(parameter);
+          visitBindingExpressions(parameter);
         }
 
         const body = callback.body;

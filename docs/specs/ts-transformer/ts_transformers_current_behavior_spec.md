@@ -628,9 +628,9 @@ The analysis of a builder callback (`lift`, `computed`, `action`, or a
 handler) sees into the functions nested in its body, since they run as part of
 the callback and read its parameters when they do. A read inside a closure the
 callback hands to a helper, inside an arrow it invokes on the spot, or in a
-nested function's parameter default, is charged to the callback's parameter
-like a read in its own body, and narrows the input schema the same way
-(`test/nested-function-capture-schema.test.ts`). An array method's callback is
+nested function's parameter default or computed key, is charged to the
+callback's parameter like a read in its own body, and narrows the input schema
+the same way (`test/nested-function-capture-schema.test.ts`). An array method's callback is
 walked once, with its element bound, so a value it stores in a local `Map` is
 still read back through that `Map` afterward.
 A `pattern(...)` callback's analysis does not see into nested functions: each
