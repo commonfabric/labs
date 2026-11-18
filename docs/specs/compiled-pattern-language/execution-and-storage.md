@@ -2457,17 +2457,21 @@ The prototype's executor has the second case in a fixture, with a
 `stars`, and the instance of a row is the same when its element has
 another `stars`, leaves the result of the `filter`, and enters it
 again. A second fixture has a key of two fields. The prototype reads
-the declaration of the key from a marker on the type
-of the element. Its key names the fields and holds the value of each
-with no salt and no hash, as a string with separators and an escaping
-of its own, and its store resolves a reference by key from the key
-alone. By ruling the key is declared on the array, holds one salted
-hash of the values, and is a fabric value that the helpers of
-`base/data-model` write, so the prototype does not follow the rulings
-in those three points (`plan-and-label-templates.md` §1.3, "A declared
-key field"). In the fixtures the array is what a `lift` returns, and
-the executor gives its elements no place, so a handler over it stores
-a copy where by ruling it stores a reference by key. The runtime of
+the declaration of the key from the array type and the keyword from the
+schema of the array. Its key names the fields and holds one salted hash
+of their values, it is written with `jsonFromFabricValue`, and its
+store resolves a reference by key from the key alone, as ruled. The
+record forms of its key, the way it combines the secret and the value,
+and what it hashes for a whole value differ from the documents
+(`plan-and-label-templates.md` §1.3, "A declared key field", and its
+§8, questions 144 and 152). In the fixtures the array is what a `lift`
+returns, which the executor stores in a document of the output, and a
+handler over it stores a reference by key, with that document as the
+collection. A pattern whose input is typed `Repo[]` and that is given
+the array keys its rows by `id` where it is compiled in. Where it is
+called through `asInstance()` and given what a `lift` returns, its
+argument holds the values and its rows are keyed by their whole values,
+which is *assumed* to be the design (its question 149). The runtime of
 today has no such declaration, so nothing of this is compared with
 it.
 

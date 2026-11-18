@@ -369,8 +369,13 @@ export interface Collection {
    * alone. An element that is a plain value is keyed by the values of
    * those properties, and a position that holds a link is keyed by its
    * cell (section 1.3, "A declared key field"). Absent where `source`
-   * names a collection: an element then has the upstream key. Absent
-   * as well where the type of the receiver is a plain array type.
+   * names a collection: an element then has the upstream key. Where
+   * the type of the receiver is a plain array type in a pattern that
+   * is compiled in, the member holds the key fields that the type of
+   * the caller's place declares, or that the type of the argument
+   * expression declares where the caller gives a computed value
+   * (*assumed*, section 8, question 149). Absent where none of these
+   * declares a key.
    * By ruling the runtime then forms the keys with the key fields of
    * the array that the receiver holds, where the schema that is
    * traversed while the link to that array is resolved declares any
@@ -1954,7 +1959,9 @@ holds a string, it is the text that `jsonFromFabricValue` returns for
 the record. A resolver tells a key that names fields from one that is
 formed from a whole value by the element part: a record with `fields`,
 or a hash. *Assumed* (section 8, question 144): the names of the
-members, and the record that the salted hash is formed from. That a
+members, and the record that the salted hash is formed from. The
+prototype's executor forms that hash from an array of the two, which
+is question 152. That a
 key is a fabric value which the helpers of `base/data-model` hash and
 write is ruled.
 
@@ -2180,7 +2187,24 @@ question of section 8.
   stored included. A collection of the plan that declares the key
   reaches its source through no such link: it has
   `Collection.keyFields`, and an element of the result of another
-  per-element construct has the upstream key already. *Assumed*
+  per-element construct has the upstream key already.
+  *Assumed* (question 149), for two readers that resolve no link. A
+  pattern that is compiled in reads the caller's places, so the
+  compiler decides: the collection of the callee has
+  `Collection.keyFields` with the key fields that the type of the
+  caller's place declares, for an array of plain values in place, or
+  that the type of the argument expression declares, for a plain array
+  generated from scratch that the caller gives as a computed value. A
+  reader that is an instance of its own and is given a plain array
+  generated from scratch whole, as `Rows.asInstance()({ repos })` where
+  `repos` is what a `lift` returns, is given the values: the argument
+  path holds the computed value (section 3.15, "Labels going in") and
+  no link, so no schema is met and the reader forms keys from the whole
+  value. The same is assumed for the result of another per-element
+  construct that is given whole to an instance of its own, which the
+  prototype did not run. The prototype's compiler and executor do the
+  first two.
+  *Assumed*
   (question 145): where no schema with the keyword is met on the way,
   as with a link that holds no schema or one that a party wrote whose
   type declares no key, the reader forms keys from the whole value. A
@@ -2201,14 +2225,35 @@ question of section 8.
   values in place, one from the whole value and one from the fields.
   Both keys resolve to the element, and what each reader keeps under
   its key is its own. The prototype's compiler accepts such an array.
+  *Assumed* (question 150), for the result of another per-element
+  construct over an array with a declared key: the type of a `filter`
+  result declares the key fields of its receiver, so it is reported
+  where another key is declared, and the type of a `map` or a `flatMap`
+  result declares no key, so nothing is reported for it. The elements
+  of a `map` result have the upstream key all the same. The prototype's
+  compiler does so.
 
-The prototype's executor reads the declaration of a key from a marker
-on the type of the element, and its compiler writes the keyword into
-the schema of the items. The executor forms the element part as a
-string of its own, with each field name beside the value of the field,
-separators and an escaping, and with no salt and no hash. The rulings
-allow none of the three. It resolves a reference by key from the key
-alone, as ruled. Three points that the rulings leave open beside these
+The prototype's compiler writes the keyword into the schema of the
+array, and its executor reads it there. The executor forms the element
+part of a key with declared fields from the names and one salted hash,
+writes a key with `jsonFromFabricValue`, and resolves a reference by
+key from the key alone, as ruled. It differs from this section in five
+points. The members of its key record have other names, and the element
+part is no member of its own: a key is `{ hash, count }`,
+`{ fields, hash, count }` or `{ cell, count }`, and the key of a
+`flatMap` member is `{ of, member }` (section 8, question 144). It
+forms the salted hash from the array of the secret and the value
+(question 152). It hashes a whole value as the JSON text of the value
+holds it, read back, so a member that is `undefined` is dropped and a
+hole of an array is `null`. The element part of a position that holds a
+link holds the document and the path, with no space. And a key stands
+in the names of state cells and child instances as its text, where this
+document hashes a key where it enters an identifier (section 1.2,
+"Written forms"). The first three and the last are about plain values,
+in an array of plain values in place, a plain array generated from
+scratch included, and in the result of another per-element construct
+where the upstream position holds a value; the fourth is about an array
+of references. Three points that the rulings leave open beside these
 six are question 129 of section 8, question 93 of
 `execution-and-storage.md` §11, and question 43 of `language-subset.md`
 §13.
@@ -2350,10 +2395,25 @@ to an element is the link to its cell, which a move does not change.
   the reference stays with the element while the values of its key
   fields stay. The owner holds this ruling weakly: if forming these
   references proves complex for little gain, storing a copy of the
-  value is acceptable. The prototype's executor gives such an element
-  no place, so a handler of a body over the array is given the value
-  and stores a copy; the prototype is to report what the reference
-  costs to build (section 8, question 148). An element that a
+  value is acceptable. The prototype's executor builds the reference:
+  it stores such an array in a document of the output, named by the
+  output and the element keys around it, and names an element by that
+  document and its key. It reports the cost as about 90 lines in the
+  executor and the store, about 110 lines of tests with one fixture,
+  and three things that it keeps: one document per output and
+  combination of the element keys around it, stored again whenever the
+  array differs; for an output outside every element body, a function
+  that brings the output up to date when a read enters the document,
+  since a link stored elsewhere is no dependency on the output; and the
+  set of the documents whose function is running. Each element is
+  hashed once per element table and once more per resolution of a
+  reference by key. Whether that cost is within the reservation is the
+  owner's to say (section 8, question 148). *Assumed* (section 8,
+  question 151): the rule holds for such an output inside an element
+  body as outside one; and it does not hold for an array at a path
+  below a value that a function body returns, or for an array that the
+  reactive tier writes, whose elements have no place, so that a body
+  over one is given the value. An element that a
   `filter` passes on is the element of the source, so a reference to it
   names the source and the key the element has there, which is also
   its key in the result. For an element of a `map` or `flatMap` result
@@ -12854,8 +12914,7 @@ this document made.
      a key formed from the whole value names no field, and a reference
      by key is resolved from the key alone, with no schema (section 1.3,
      "A declared key field"). The prototype's executor forms the key
-     with no field name and no hash, and resolves it through the schema
-     that the array is stored under, which the rulings do not allow.
+     so and resolves it from the key alone.
      The case is an array
      of plain values in place, a plain array generated from scratch
      included, and the result of another per-element construct where the
@@ -13047,7 +13106,10 @@ this document made.
      record with `fields` for an array of plain values in place, a
      plain array generated from scratch included, and the upstream key
      unchanged for the result of another per-element construct. The
-     part on a name is not about a per-element construct.
+     part on a name is not about a per-element construct. The
+     prototype's executor writes a key with `jsonFromFabricValue` and
+     has other record forms (section 1.3, "A declared key field");
+     the record that the salted hash is formed from is question 152.
 145. **A reader whose type declares no key, where no schema with the
      keyword is met** (for the project owner). By ruling such a reader
      learns the key fields from the schema that is traversed while the
@@ -13064,7 +13126,9 @@ this document made.
      link, a plain array generated from scratch that an instance
      stored included. Over the result of another per-element construct
      the elements have the upstream key, and over an array of
-     references nothing of it arises.
+     references nothing of it arises. The prototype's executor does as
+     assumed. Question 149 is the case of a reader that is given the
+     values and reaches the array through no link.
 146. **An instance that a function body made, replaced on a re-key**
      (for the project owner; from the prototype). By ruling a re-key
      moves an instance that a `lift` or a `computed` of the element
@@ -13118,11 +13182,123 @@ this document made.
      owner gave the ruling with a reservation: "if all that hashing
      gets too complex for little gain, copies are fine". So storing a
      copy is acceptable if building the reference proves complex for
-     little gain. The prototype's executor gives such an element no
-     place and stores a copy, and the prototype is to report what the
-     reference costs to build. The ruling is about a plain array
+     little gain. The prototype's executor builds the reference and
+     reports what it cost: about 90 lines in the executor and the
+     store, about 110 lines of tests with one fixture, one stored
+     document per such output and combination of the element keys
+     around it, a function per document that brings the output up to
+     date when a read enters the document, the set of the documents
+     whose function is running, and one hash per element for each
+     element table and each resolution of a reference by key (section
+     1.3, "A plain value in place has an identity"). The owner has not
+     said whether that is within the reservation. Question 151 has what
+     the ruling leaves undetermined in what was built. The ruling is
+     about a plain array
      generated from scratch alone. An array of plain values that is
      stored in place has its reference by key by the earlier ruling,
      an element of the result of another per-element construct has
      the upstream key, and an element of an array of references is
      the link to its cell. The entry keeps its number.
+149. **A reader whose type declares no key, given a plain array
+     generated from scratch whole** (for the project owner; from the
+     prototype). By ruling such a reader learns the key fields from the
+     schema that is traversed while the link to the array is resolved
+     (question 143). Two readers resolve no such link. *Assumed*
+     (section 1.1, `Collection.keyFields`; section 1.3, "A declared key
+     field"), for a pattern that is compiled in: it reads the caller's
+     places, so the compiler decides, and writes `Collection.keyFields`
+     with the key fields that the type of the place declares, or that
+     the type of the argument expression declares where the caller
+     gives a computed value. The prototype's compiler does so where the
+     value is a property of an object literal at the call or an
+     attribute of a tag. *Assumed,* for a reader that is an instance of
+     its own, as `Rows.asInstance()({ repos })` where `repos` is what a
+     `lift` returns: the argument holds the values, as an argument path
+     that is a computed value does (section 3.15, "Labels going in"),
+     and no link. No schema is met, and the reader forms keys from the
+     whole value (question 145), so the declared key is not carried
+     forward. The prototype's executor does so. The plan of the
+     instance has no record of the caller's collection, and no plan
+     holds a schema of an output. The coordinator of this work
+     recommends, and the owner has not ruled, that the argument hold a
+     link to the stored output, which by ruling has an address
+     (question 148), with the schema of the array, so that the keyword
+     is met and the key fields are carried forward. The question is
+     about a plain array generated from scratch. An array of plain
+     values in place that is given whole is given as a link with the
+     schema that the caller reads it under, and the reader forms keys
+     of the declared fields. *Assumed* as well, and not run by the
+     prototype: the result of another per-element construct that is
+     given whole to an instance of its own is given as the assembled
+     values, and a position of it that holds a link is keyed by its
+     cell. Over an array of references nothing of it arises.
+150. **The key that the type of the result of a per-element construct
+     declares** (for the project owner; from the prototype). The
+     assumed error `array-by-key:mismatch` compares the keys that two
+     types declare (question 141). The question is about the result of
+     another per-element construct over an array with a declared key,
+     given where a key is declared; over an array of references the
+     declaration has no effect. The elements of a `filter` result and
+     of a `map` result have the upstream keys. *Assumed* (section 1.3,
+     "A declared key field"), as the prototype's compiler has it: the
+     type of a `filter` result declares the key fields of its receiver,
+     so giving it where another key is declared is reported, and the
+     type of a `map` or a `flatMap` result declares no key, so nothing
+     is reported for it. The declared fields are properties of the
+     upstream element, and the element type of a `map` result need not
+     have them. The coordinator of this work recommends, and the owner
+     has not ruled, that the type of a `map` result keep the key fields
+     of its receiver, since its elements have the upstream keys, and
+     that it be reported as a `filter` result is. For a `flatMap` the
+     following holds under either answer: the key of an element of its
+     result is a record of the key of the source element and the key of
+     the member (section 1.3, "The key of an element that a `flatMap`
+     contributes"), the declared fields describe the first part alone,
+     and the member is keyed by its cell or its whole value. No list of
+     fields names that key, so the type of a `flatMap` result declares
+     no key. The alternative reports nothing for any result, since a
+     reader that is compiled in forms no key over such a result and has
+     the upstream key.
+151. **Which arrays that an instance computes give their elements a
+     place** (for the project owner; from the prototype). By ruling an
+     element of a plain array generated from scratch, which a `lift` or
+     a `computed` returns whole and the instance stores as an output,
+     has a reference by key (question 148). The prototype's executor
+     builds it for an output at the empty path whose cone has a
+     function body. *Assumed* (section 1.3, "A plain value in place has
+     an identity"), first: the ruling holds for such an output inside
+     an element body as outside one, and a link to one of its elements
+     that is stored elsewhere reads the array as the computation last
+     returned it. The prototype's executor brings an output up to date
+     on such a read outside every element body alone, so inside one the
+     link can read a stale document. The coordinator of this work
+     recommends, and the owner has not ruled, that this be a defect of
+     the prototype to fix. *Assumed,* second: an array at a path below
+     a value that a function body returns, as `facts.main` where the
+     body returns a record that holds the array, and an array that the
+     reactive tier writes have no place for their elements, and a body
+     over one is given the value and stores a copy, since the ruling
+     names what is returned whole. The prototype's executor does so.
+     The coordinator recommends, and the owner has not ruled, that this
+     stay a limit for the time being. The alternative gives those
+     arrays a place by the same rule. The question is about a plain
+     array generated from scratch, with or without a declared key. An
+     array of plain values that is stored in place, the result of
+     another per-element construct, and an array of references are not
+     affected.
+152. **How the salt and the value are combined in a salted hash** (for
+     the project owner; from the prototype). *Assumed* (section 1.3,
+     "The structure of a key"; question 144): the salted hash of a
+     value is `hashOf` of the record with the members `salt` and
+     `value`. The prototype's executor hashes the array of the secret
+     and the value, and for a key with declared fields the array of the
+     secret and the array of the values of the fields. Both give
+     another hash for another secret or another value, and no key of
+     one form equals a key of the other. The coordinator of this work
+     recommends, and the owner has not ruled, that the prototype follow
+     this document. The alternative takes the array into this document.
+     The question is about the element part of a plain value: an array
+     of plain values in place, a plain array generated from scratch
+     included, and the result of another per-element construct where
+     the upstream position holds a value. The element part of an array
+     of references holds no hash.

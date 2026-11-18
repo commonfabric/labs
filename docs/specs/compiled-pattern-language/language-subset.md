@@ -609,8 +609,8 @@ constructor, in the declared result type of a `computed` or a `lift`.
 The array type, the union form for several fields, and the order of the
 fields are ruled. So is that the key belongs to the array and not to
 the element. Each point below says what of it is ruled and what is
-*assumed*; the assumed ones are questions 138, 141, 145 and 147 of
-`plan-and-label-templates.md` §8 and question 44 of
+*assumed*; the assumed ones are questions 138, 141, 145, 147, 149,
+150 and 151 of `plan-and-label-templates.md` §8 and question 44 of
 [§13](#13-open-questions).
 
 - **The fields.** The second argument is a string literal type, or a
@@ -650,7 +650,13 @@ the element. Each point below says what of it is ruled and what is
   the result of another per-element construct has the upstream key
   already. *Assumed* (`plan-and-label-templates.md` §8, question
   145): where no schema with the keyword is met on the way, the
-  reader forms keys from the whole value.
+  reader forms keys from the whole value. *Assumed* as well (its
+  question 149): a pattern that is compiled in resolves no link, and
+  the compiler gives its collection the key fields that the type of
+  the caller's place or of the argument expression declares; and a
+  pattern called through `asInstance()` that is given whole what a
+  `lift` or a `computed` returns is given the values and no link, so
+  it forms keys from the whole value.
 - **Two declared keys for one array.** *Assumed:* an array whose type
   declares one key is not assignable to a parameter whose type
   declares another key, and the compiler reports it where it sees both
@@ -662,7 +668,11 @@ the element. Each point below says what of it is ruled and what is
   argument, an attribute of a tag that names a pattern, a returned
   value under a written return type, and an initializer under an
   annotation, and does not check an assignment or the argument of a
-  handle method. The rule is for plain values, in an array of
+  handle method. *Assumed* (its question 150), for the result of
+  another per-element construct over an array with a declared key:
+  the type of a `filter` result declares the key of its receiver, and
+  the type of a `map` or a `flatMap` result declares no key, so
+  nothing is reported for one. The rule is for plain values, in an array of
   plain values in place and in the result of another per-element
   construct where the upstream position holds a value; on an array of
   references the declaration has no effect, and nothing is reported.
@@ -677,7 +687,10 @@ By ruling an element of a plain array generated from scratch, which a
 `lift` or a `computed` returns whole, has a reference by key as an
 element of a stored array of plain values has, with or without a
 declared key; the owner accepts a copy there if the reference proves
-complex to build for little gain (its §8, question 148).
+complex to build for little gain (its §8, question 148). *Assumed*
+(its question 151): an array at a path below a value that a function
+body returns, and an array that the reactive tier writes, give their
+elements no such reference.
 `ArrayByKey` is unrelated
 to the method `keyBy` ([§4.7](#47-cell-and-handle-methods)), which
 builds an index of a collection and declares the key of no element.
