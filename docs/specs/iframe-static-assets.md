@@ -315,6 +315,13 @@ Writing assets into the document, rather than sending them over the bridge,
 makes them available synchronously, before the bridge connects and before the
 guest's initial `pull()`.
 
+A guest's Deno test assembles its document with the same `guestDocument`.
+`openGuestPage()` in `patterns/tools/test-support/iframe-guest.ts` takes an
+`assets` record, which `readAssets()` there reads from a pattern's `assets/`
+directory the way `dataFile.urls()` does. It refuses a record `toAssetRecord()`
+refuses, and fails where the sandbox reports a reference to a name the record
+lacks. `patterns/examples/iframe-donut-menu/guest.test.ts` is a test of one.
+
 ## 5. The guest's `fabric.asset()`
 
 `FabricClient` in `base/iframe-sandbox/src/guest.ts` has:
@@ -411,9 +418,6 @@ uses when it writes a source set itself. The details are open.
   asset's name, and the runtime refuses both as keys of a stored record
   (`isUnsafeObjectKey` in `base/js-values/src/types.ts`), so a view whose
   `assets` holds one is refused when setup stores it.
-- **Testing a guest that reads assets in Deno.** `openGuestPage()` in
-  `patterns/tools/test-support/iframe-guest.ts` loads `guest.html` as written,
-  with no assets in it, so such a guest is tested in a browser.
 
 ## Alternatives considered
 

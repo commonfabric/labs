@@ -76,7 +76,10 @@ colon as `&#58;`. The element also writes the record into the document, right
 after its doctype and ahead of every script, as a
 `<script type="application/json" data-cf-assets>` element, which the guest reads
 with `fabric.asset()` ([Assets](#assets)). A change to `assets` reloads the
-guest; assigning a record that holds the same names and URLs does not.
+guest; assigning a record that holds the same names and URLs does not. A host
+that loads a guest some other way, such as a guest's Deno test, assembles the
+same document with `guestDocument(src, script, assets)`, and lists the names
+`src` refers to that `assets` lacks with `missingAssets(src, assets)`.
 
 A resource has a `kind`, optional schema and description, and only the
 operations the host supplies. A cell capability follows the runtime's Cell

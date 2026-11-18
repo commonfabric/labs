@@ -1771,15 +1771,18 @@ export type SessionDescriptor = {
    * 2026-08-19: the service identity reads a space's ACL only; every
    * other served read runs under the acting USER's identity). A session
    * opened with `actingAs: "space-owner"` by a principal in the memory
-   * ACL's DELEGATING class (`acl.delegatingDids` — under the flag, the
-   * co-hosted process identity; the LT5 trust footing of the write
-   * plane's carried actors) has its READ-class capability decisions
+   * ACL's DELEGATING class (`acl.delegatingDids` and `acl.isDelegatingPeer`
+   * — under the flag, the co-hosted process identity and, behind the memory
+   * router, each toolshed identity its directory lists; the LT5 trust
+   * footing of the write plane's carried actors) has its READ-class
+   * capability decisions
    * resolved as the space's ACL OWNER — the user whose space it is —
    * which the server resolves itself from the ACL (the ruled
    * service-identity ACL read). WRITE/OWNER-class requirements keep
    * resolving against the ENVELOPE principal: the binding grants no
    * write path (served writes ride the wave's §2b delegated carriage).
-   * A non-delegating principal sending the marker is refused. Spaces
+   * A non-delegating principal sending the marker is refused, and a
+   * bound session whose principal leaves the class is revoked. Spaces
    * with no valid concrete-owner ACL bind nothing (today's rules
    * apply). Signed into the session.open invocation with the rest of
    * this descriptor.

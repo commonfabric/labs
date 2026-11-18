@@ -2347,10 +2347,14 @@ the per-epic implementation notes).
   the process's own memory server, whichever process owned the target, so the
   owner learned of them only through the store. With the knob on, the loop
   reaches a space other than the ones it serves through that space's owner: a
-  routed session per target space, open as the service identity on both
+  routed session per target space, open as the process's identity on both
   threads the loop can run on, carries the crossing as a `served` request of
   the memory protocol (the memory protocol chapter's section 4.3.12), and the
-  owner admits it as its own host's call. The outbox's event appends, the
+  owner admits it as its own host's call. The owner admits a sender whose
+  identity is its own, and, behind the memory router, where each toolshed has
+  an identity of its own, a sender the deployment's directory lists as a
+  toolshed (`docs/specs/memory-v2/routed-mode-a.md`, "Toolshed deployment
+  inputs"). The outbox's event appends, the
   pattern-lifecycle handler's registration delivery, and the wave's foreign
   batches and access-list changes go that way. The genesis of a space the
   serving runtime creates takes the same route as a signed `session.open`
@@ -2371,7 +2375,9 @@ the per-epic implementation notes).
   memory server's read row admits a routed service-identity session under the
   read actor's grant.
   [`runtime/runner/integration/owner-routing.test.ts`](../../runtime/runner/integration/owner-routing.test.ts)
-  runs two toolshed processes behind a proxy that routes by space. The
+  runs two toolshed processes behind a proxy that routes by space, once
+  sharing an identity and once with an identity each and a directory that
+  lists both. The
   crossings a process sent through the route are counted by kind under
   `servingLoop.routed` in `/api/health/stats`, zero with the route off, so a
   deployment reads there whether routing carries its crossings.
