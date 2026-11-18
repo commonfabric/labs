@@ -2,11 +2,12 @@
 /**
  * Refreshes the "before" release that the FabriChat update rehearsal
  * (`patterns/integration/fabrichat-update-rehearsal.test.ts`) serves:
- * a copy of FabriChat's pattern source as a git revision holds it, `origin/main`
- * unless another is named.
+ * a copy of FabriChat's pattern source as a git revision holds it, the
+ * default branch unless another is named: `upstream/main` where that exists,
+ * and `origin/main` otherwise.
  *
- *   deno task refresh-fabrichat-rehearsal              # from `origin/main`
- *   deno task refresh-fabrichat-rehearsal <revision>   # from another revision
+ *   deno task refresh-fabrichat-rehearsal              # the default branch
+ *   deno task refresh-fabrichat-rehearsal <revision>   # another revision
  *
  * The copy is every non-test module under `patterns/system/fabrichat/`, and
  * `patterns/system/loom/participants.tsx`, whose roster type is part of what a
@@ -22,7 +23,7 @@
 
 import { emptyDir } from "@std/fs";
 import { dirname, fromFileUrl, join } from "@std/path";
-import { type Git, gitIn } from "./repository-files.ts";
+import { defaultBase, type Git, gitIn } from "./repository-files.ts";
 
 const REPO = fromFileUrl(new URL("..", import.meta.url));
 
@@ -49,7 +50,7 @@ const CHECKOUT: RefreshPlaces = { git: gitIn(REPO), fixtures: FIXTURES };
 
 /**
  * Replaces the copy in `fixtures` with the one the revision `argv` names
- * holds, `origin/main` when it names none, and returns what it did.
+ * holds, the default base when it names none, and returns what it did.
  *
  * Every module is read before the old copy is removed, so a revision missing
  * one leaves the old copy as it was.
@@ -58,7 +59,7 @@ export async function refreshRehearsal(
   argv: readonly string[],
   { git, fixtures }: RefreshPlaces,
 ): Promise<string> {
-  const revision = argv[0] ?? "origin/main";
+  const revision = argv[0] ?? await defaultBase(git);
   const commit = (await git("rev-parse", "--verify", `${revision}^{commit}`))
     .trim();
   const listed = await git(

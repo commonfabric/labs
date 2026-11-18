@@ -27,7 +27,8 @@
  * them all.
  *
  * Usage: check-cause-assignments.ts [base-ref] [--part K/N]
- *        (default base: origin/main)
+ *        (default base: upstream/main where that exists, and origin/main
+ *        otherwise)
  */
 
 import { parse as parseJsonc } from "@std/jsonc";
@@ -35,7 +36,7 @@ import { fromFileUrl, join, toFileUrl } from "@std/path";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { EXPERIMENTAL_ENV_VARS } from "../runtime/runner/src/experimental-posture.ts";
 import { collectAllPatternFiles, patternKey } from "./pattern-files.ts";
-import { type Git, git } from "./repository-files.ts";
+import { defaultBase, type Git, git } from "./repository-files.ts";
 import { type CommandOutput, emit } from "./command-output.ts";
 import {
   type AmbiguousCells,
@@ -104,7 +105,8 @@ export interface Part {
 
 /** What a run of the gate is asked to compare. */
 export interface Arguments {
-  baseRef: string;
+  /** The base revision named, or undefined where none is. */
+  baseRef: string | undefined;
   part: Part;
 }
 
@@ -114,9 +116,8 @@ export interface Arguments {
  * base revision.
  */
 export function parseArguments(args: readonly string[]): Arguments {
-  let baseRef = "origin/main";
+  let baseRef: string | undefined;
   let part: Part = { index: 0, count: 1 };
-  let named = false;
   for (let at = 0; at < args.length; at++) {
     const arg = args[at]!;
     if (arg === "--part") {
@@ -132,11 +133,10 @@ export function parseArguments(args: readonly string[]): Arguments {
       part = { index: k - 1, count: n };
     } else if (arg.startsWith("-")) {
       throw new Error(`unknown argument ${arg}`);
-    } else if (named) {
+    } else if (baseRef !== undefined) {
       throw new Error(`a second base revision, ${arg}`);
     } else {
       baseRef = arg;
-      named = true;
     }
   }
   return { baseRef, part };
@@ -681,7 +681,8 @@ export async function main(
       code: 2,
     };
   }
-  const { baseRef, part } = parsed;
+  const { part } = parsed;
+  const baseRef = parsed.baseRef ?? await defaultBase(checkout.git);
   let mergeBase: string;
   try {
     mergeBase = (await checkout.git("merge-base", baseRef, "HEAD")).trim();

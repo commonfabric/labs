@@ -259,6 +259,8 @@ export {
   profileOwnership,
 } from "./profile-order.ts";
 export { loadProfileOwnerDocuments, profileOwnerAt } from "./profile-owner.ts";
+export { spaceMemberListAt } from "./builder/space-access.ts";
+export { joinSpaceMembers, spaceMembersAt } from "./space-members.ts";
 export { writtenPrincipalAt } from "./written-principal.ts";
 export {
   classifyPieceOriginString,

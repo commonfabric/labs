@@ -179,6 +179,16 @@ describe("pattern-versions", () => {
       );
     });
 
+    it("asks the index to keep the version private when the deploy says so", async () => {
+      await joinIndex();
+      const { client, published } = stubClient();
+      const { deps } = depsWith(client);
+
+      await recordDeployedVersion(deployed({ keepPrivate: true }), deps);
+
+      expect(published.map((r) => r.keepPrivate)).toEqual([true]);
+    });
+
     it("makes no index call and reads no pattern id on a machine that never joined, and says so only the first time", async () => {
       const { client, published } = stubClient();
       const { deps, opened } = depsWith(client);
@@ -536,6 +546,58 @@ describe("pattern-versions", () => {
         [entry, "system:x.tsx"],
       ]);
     });
+
+    it("makes no index call under --no-index-version, so the deploy never waits on the index", async () => {
+      const recorded: DeployedSource[] = [];
+      const lines: string[] = [];
+      const run = (indexVersion: boolean | undefined) =>
+        applyPieceSourceCommandAction(
+          {
+            identity: "/unused/test.key",
+            space: "s",
+            apiUrl: "https://cf.dev",
+            ...(indexVersion === undefined ? {} : { indexVersion }),
+          },
+          entry,
+          {
+            setPieceSourceFromCommand: (_options, _main, deps) => {
+              deps?.onDeployed?.({
+                program: PROGRAM,
+                patternId: () => Promise.resolve("pat-1"),
+                piece: { space: "did:key:z6Mkspace", id: "fid1:p" },
+              });
+              return Promise.resolve({
+                config: { piece: "fid1:p" },
+                update: {
+                  ref: { identity: "pat-1", symbol: "default" },
+                  revisionId: "rev-1",
+                  seq: 7,
+                  refresh: { status: "completed" },
+                },
+              } as never);
+            },
+            // An index that never answers: a deploy that waited on it
+            // would never return.
+            recordVersion: (deployed) => {
+              recorded.push(deployed);
+              return new Promise<VersionOutcome>(() => {});
+            },
+            render: () => {},
+            warn: (line) => lines.push(line),
+            hint: () => {},
+          },
+        );
+
+      await run(false);
+      expect(recorded).toEqual([]);
+      expect(lines).toEqual([]);
+
+      // The same deploy without the flag goes to the index.
+      void run(true);
+      void run(undefined);
+      await Promise.resolve();
+      expect(recorded.map((d) => d.entry)).toEqual([entry, entry]);
+    });
   });
 
   describe("piece new", () => {
@@ -637,6 +699,50 @@ describe("pattern-versions", () => {
       );
 
       expect(recorded.map((d) => d.entry)).toEqual([entry]);
+    });
+
+    it("reports a deploy under --no-index-version as skipped in its --json receipt, with no index call", async () => {
+      const printed: unknown[] = [];
+      let calls = 0;
+      await captureStderr(() =>
+        newPieceFromCommand(
+          {
+            apiUrl: "https://cf.dev",
+            space: "s",
+            identity: "/unused/test.key",
+            quiet: true,
+            json: true,
+            indexVersion: false,
+          },
+          entry,
+          {
+            newPiece: (_config, _entry, options) => {
+              options?.onDeployed?.({
+                program: PROGRAM,
+                patternId: () => Promise.resolve("pat-1"),
+                piece: { space: "did:key:z6Mkspace", id: "fid1:created" },
+              });
+              return Promise.resolve({ pieceId: "fid1:created" });
+            },
+            recordVersion: () => {
+              calls += 1;
+              return Promise.resolve({
+                status: "recorded",
+                created: true,
+                response: RECORDED,
+              });
+            },
+            render: (value) => printed.push(value),
+            note: () => {},
+          },
+        )
+      );
+
+      expect(calls).toBe(0);
+      expect(printed).toEqual([{
+        pieceId: "fid1:created",
+        version: { status: "skipped", reason: "--no-index-version" },
+      }]);
     });
   });
 });

@@ -52,24 +52,31 @@ async function choose(id: string): Promise<void> {
   await state.key("favorite").set(id);
 }
 
+/** How many times `show()` has run; each call's number is its generation. */
+let shows = 0;
+
 /**
- * Draws the favorite's picture onto the canvas, or clears it. A picture
- * decoded after another favorite was chosen is not drawn, so the canvas shows
- * the latest choice whichever decode finishes first.
+ * Draws the favorite's picture onto the canvas, or clears it, for the `show()`
+ * call numbered `generation`. A picture decoded after a later call is not
+ * drawn, so the canvas shows the latest value whichever decode finishes first.
  */
-async function draw(favorite: string | null): Promise<boolean> {
+async function draw(
+  favorite: string | null,
+  generation: number,
+): Promise<boolean> {
   const context = canvas.getContext("2d")!;
   context.clearRect(0, 0, canvas.width, canvas.height);
   const donut = MENU.find((candidate) => candidate.id === favorite);
   if (donut === undefined) return true;
   const image = await fabric.asset(donut.picture).image();
-  if (canvas.dataset.favorite !== donut.id) return false;
+  if (generation !== shows) return false;
   context.drawImage(image, 0, 0, canvas.width, canvas.height);
   return true;
 }
 
 /** Shows `value`, the stored state or its default. */
 function show(value: IframeStateData | undefined): void {
+  const generation = ++shows;
   const favorite = value?.favorite ?? DEFAULT_STATE.favorite;
   const donut = MENU.find((candidate) => candidate.id === favorite);
   status.textContent = donut === undefined
@@ -78,25 +85,33 @@ function show(value: IframeStateData | undefined): void {
   for (const [id, button] of buttons) {
     button.setAttribute("aria-pressed", String(id === favorite));
   }
-  canvas.dataset.favorite = favorite ?? "";
-  draw(favorite).then(
+  draw(favorite, generation).then(
     (drawn) => {
       if (!drawn) return;
       canvas.dataset.drawn = favorite ?? "";
       error.textContent = "";
     },
-    (failure) => (error.textContent = describeFailure(failure)),
+    (failure) => {
+      // A failure for a value since replaced is no longer news, even when the
+      // later value names the same favorite.
+      if (generation !== shows) return;
+      error.textContent = describeFailure(failure);
+    },
   );
 }
 
-// The sink hears nothing useful before the state has loaded, and the pull
-// below draws the first value.
+// The sink draws every value once the state has loaded; before that it hears
+// nothing useful. A pull that loads a value hands it to the sink, so the pull
+// draws only a state that holds nothing, which the sink never hears.
+let shown = false;
 state.sink((value) => {
-  if (value !== undefined) show(value);
+  if (value === undefined) return;
+  shown = true;
+  show(value);
 });
 state.pull().then(
   (value) => {
-    show(value);
+    if (!shown) show(value);
     for (const button of buttons.values()) button.disabled = false;
   },
   (failure) => (error.textContent = describeFailure(failure)),

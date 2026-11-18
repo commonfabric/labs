@@ -32,11 +32,12 @@
 import { encodeHex } from "@std/encoding/hex";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { RuntimeProgram } from "@commonfabric/runner";
-import type {
-  PatternIndexClient,
-  PatternIndexFinding,
-  PatternIndexPublishRequest,
-  PatternIndexRepoHead,
+import {
+  type PatternIndexClient,
+  PatternIndexError,
+  type PatternIndexFinding,
+  type PatternIndexPublishRequest,
+  type PatternIndexRepoHead,
 } from "./client.ts";
 
 /** One entry as the plan phase found it. */
@@ -131,9 +132,25 @@ export const programSourceHash = async (
   return encodeHex(new Uint8Array(digest));
 };
 
-/** A failure's message, for a report. */
-export const reasonOf = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
+/**
+ * Returns a failure's message for a report. A publish's HTTP 400 program-size
+ * refusal adds its limit when the entire detail matches the server's fixed
+ * wording with one to twelve decimal digits. Other index details stay withheld.
+ */
+export const reasonOf = (error: unknown): string => {
+  if (
+    error instanceof PatternIndexError && error.fn === "publishPattern" &&
+    error.status === 400
+  ) {
+    const refusal = /^program exceeds ([0-9]{1,12}) bytes of source$/.exec(
+      error.detail ?? "",
+    );
+    if (refusal !== null && refusal[0] === error.detail) {
+      return `${error.message}: program exceeds ${refusal[1]} bytes of source`;
+    }
+  }
+  return error instanceof Error ? error.message : String(error);
+};
 
 /**
  * What keeps `plan` from being a {@link RepoSyncPlan}, or `undefined` when

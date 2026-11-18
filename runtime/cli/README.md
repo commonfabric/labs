@@ -643,11 +643,13 @@ calls "Esc+" and Terminal calls "Use Option as Meta key".
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In
 browse mode, Space pages through the entries, and `g` and `G` select the first
-and last entry. The `f`, `F`, `E`, `T`, `M`, and `C` file-visibility keys remain
-active. On a commit row, `f` hides all of that commit's files. Pressing it again
-shows them. Each commit row reports its total added and removed lines under the
-selected count policy. The list's summary reports added and removed lines for
-the complete diff and for the files that are currently shown.
+and last entry. Pressing the primary mouse button on an entry selects it, in
+this list and in the list of files that Ctrl-X Ctrl-F opens. The `f`, `F`, `E`,
+`T`, `M`, and `C` file-visibility keys remain active. On a commit row, `f` hides
+all of that commit's files. Pressing it again shows them. Each commit row
+reports its total added and removed lines under the selected count policy. The
+list's summary reports added and removed lines for the complete diff and for the
+files that are currently shown.
 
 Use `<` and `>` to move to the preceding or following commit header in the main
 view or the index list. From within a commit, `<` returns to that commit's
@@ -3468,6 +3470,23 @@ and deployed unchanged keep no version; an edited one is kept as the person's
 remix of it. When this machine never joined an index, a deploy makes no index
 call and says so once. The index write never changes a deploy's outcome: a
 failure is reported in one line and the deploy's exit status stands.
+
+`--no-index-version` on `piece new <file>` and `piece setsrc` keeps no version
+of that deploy and makes no index call to record one, so a deploy in a tight
+edit loop never waits on the index (`--json` reports `skipped`). A
+`--from-index` deploy still reads the index for its source, and keeps no version
+either way.
+
+`cf pattern checkpoint <entry> --cell <piece>` keeps what a piece runs now as a
+private version of the entry's lineage, without deploying: the pattern the piece
+points at, with its source, so it is exactly what was deployed. The sharing
+setting never shares it on its own (`keepPrivate`); `cf pattern share` does. It
+pairs with `--no-index-version` deploys, keeping one when a change is done, and
+exits 1 with the reason when no version was kept. A checkpoint of a source the
+newest version already has keeps no new one, says so, and exits 0. It refuses an
+entry file whose contents are not what the piece runs (another file, or this one
+edited since its deploy). A piece following an origin keeps no version, as a
+deploy of it does not.
 
 A deploy never shares a version by itself: drafts land many times an hour. The
 index shares a version once it settles, when its owner opens it in a loom, and

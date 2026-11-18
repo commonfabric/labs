@@ -1,0 +1,1 @@
+{"date": "2026-11-18", "from": {"k": "unit", "s": "tasks", "n": "check-cause-assignments > parseArguments() > compares every pattern against origin/main when given nothing"}, "to": {"k": "unit", "s": "tasks", "n": "check-cause-assignments > parseArguments() > names no base revision and compares every pattern when given nothing"}}

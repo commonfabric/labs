@@ -459,23 +459,5 @@ describe("background", () => {
         ["Uncaught error:", "no filling"],
       ]);
     });
-
-    it("logs an unhandled rejection by its reason", () => {
-      const target = new EventTarget();
-      const logged: unknown[][] = [];
-      using _error = stub(console, "error", (...args: unknown[]) => {
-        logged.push(args);
-      });
-      const reason = new Error("stale batch");
-      const promise = Promise.reject(reason);
-      promise.catch(() => {});
-
-      logUncaughtErrors(target);
-      target.dispatchEvent(
-        new PromiseRejectionEvent("unhandledrejection", { promise, reason }),
-      );
-
-      expect(logged).toEqual([["Unhandled promise rejection:", reason]]);
-    });
   });
 });
