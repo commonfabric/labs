@@ -31,6 +31,7 @@ import {
   appendWatchSetPart,
   encodeUnlessTooLong,
   halveSyncPart,
+  halveTooLong,
   type PartLimits,
   payloadFits,
   serverMessageSync,
@@ -41,6 +42,7 @@ import {
 } from "../v2/message-parts.ts";
 import type { JSONSchema } from "@commonfabric/api";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
+import { compressServerMessageSchemas } from "../v2/sync-schema-table.ts";
 import { countValues } from "./support/routed-slots.ts";
 import {
   testSessionOpenAuthFactory,
@@ -187,6 +189,117 @@ Deno.test("a halved part keeps its place in the sequence", () => {
     join([...parts.slice(0, -1), first, second]),
     responseWith(syncOf(8)),
   );
+});
+
+Deno.test("a split part that says more follow keeps saying so on its last part", () => {
+  const parts = splitSyncMessage(
+    responseWith(syncOf(30, { more: true })),
+    SESSION,
+    { bytes: 2048, values: null },
+  );
+  assert(parts.length > 1);
+  assertEquals(
+    parts.map((part) => serverMessageSync(part)!.more),
+    parts.map(() => true as const),
+  );
+});
+
+describe("halveTooLong()", () => {
+  // Each document links with a schema of its own. The connection's schema
+  // table holds all of them, so the whole message is mostly table, and a
+  // part carries only the schemas its documents use.
+  const schemaOf = (n: number): JSONSchema => ({
+    type: "object",
+    properties: Object.fromEntries(
+      Array.from({ length: 60 }, (_, i) => [`field${n}x${i}`, {
+        type: "string",
+      }]),
+    ),
+  });
+  const linking = (count: number) =>
+    responseWith({
+      type: "sync",
+      fromSeq: 0,
+      toSeq: 40,
+      upserts: Array.from({ length: count }, (_, n) => ({
+        branch: "",
+        id: `of:linking-${n}`,
+        seq: n + 1,
+        doc: {
+          value: {
+            link: linkRefFrom({
+              id: `of:target-${n}`,
+              path: [],
+              schema: schemaOf(n),
+            }),
+          },
+        },
+      })),
+      removes: [],
+    } as unknown as SessionSync);
+  const prepare = (message: ServerMessage) =>
+    compressServerMessageSchemas(message);
+  // The engine's refusal of text past its longest string, at a smaller size.
+  const encodeWithin = (ceiling: number) => (message: ServerMessage) => {
+    const encoded = encodeMemoryBoundary(message);
+    if (encoded.length > ceiling) throw new RangeError("Invalid string length");
+    return encoded;
+  };
+
+  it("halves a sync whose tables alone pass the ceiling until each half encodes", () => {
+    const message = linking(48);
+    const whole = serverMessageSync(prepare(message)) as SessionSync & {
+      schemaTable: Record<string, unknown>;
+    };
+    const ceiling = Math.floor(
+      encodeMemoryBoundary(prepare(message)).length / 3,
+    );
+    assert(encodeMemoryBoundary(whole.schemaTable as never).length > ceiling);
+
+    const halves = halveTooLong(
+      message,
+      SESSION,
+      prepare,
+      encodeWithin(ceiling),
+    );
+
+    assert(halves.length > 2);
+    for (const { part, prepared, payload } of halves) {
+      assert(payload.length <= ceiling);
+      assertEquals(payload, encodeMemoryBoundary(prepared));
+      const sync = serverMessageSync(prepared) as SessionSync & {
+        schemaTable: Record<string, unknown>;
+      };
+      assertEquals(
+        Object.keys(sync.schemaTable).length,
+        serverMessageSync(part)!.upserts.length,
+      );
+    }
+    assertEquals(join(halves.map(({ part }) => part)), message);
+  });
+
+  it("keeps the sequence when a half is split in turn", () => {
+    const message = linking(48);
+    const ceiling = Math.floor(
+      encodeMemoryBoundary(prepare(message)).length / 3,
+    );
+    const limits: PartLimits = { bytes: 4096, values: null };
+    const parts = halveTooLong(message, SESSION, prepare, encodeWithin(ceiling))
+      .flatMap(({ part, prepared, payload }) =>
+        payloadFits(payload, limits)
+          ? [part]
+          : splitSyncMessage(part, SESSION, limits, prepared)
+      );
+    assertEquals(join(parts), message);
+  });
+
+  it("throws the engine's error for a single entry it cannot encode", () => {
+    assertThrows(
+      () => halveTooLong(linking(1), SESSION, prepare, encodeWithin(100)),
+      RangeError,
+      "Invalid string length",
+    );
+  });
 });
 
 Deno.test("the assembler passes other sessions' messages between a split sync's parts", () => {

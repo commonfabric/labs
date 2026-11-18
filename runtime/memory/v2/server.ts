@@ -259,6 +259,7 @@ import {
   appendWatchSetPart,
   encodeUnlessTooLong,
   halveSyncPart,
+  halveTooLong,
   type PartLimits,
   payloadFits,
   serverMessageSync,
@@ -1533,13 +1534,9 @@ class Connection {
       }
       const prepared = this.#prepare(message);
       const encodeStart = performance.now();
-      // A sync too long to encode whole is not yet undeliverable: it is
-      // split, and its parts are encoded alone. That relies on a part's bound
-      // sitting far below the engine's longest string (2^29 - 24 units), as
-      // every transport's does (1 MiB routed, 32 MiB direct): a part the
-      // split cuts then exceeds its bound only by its own tables, which hold
-      // each schema and label once. Only an entry, or a table, that the
-      // engine cannot encode fails, as it would whole.
+      // A sync too long to encode whole is not yet undeliverable: its parts
+      // are encoded alone, and only an entry the engine cannot encode alone
+      // fails, as it would whole.
       const payload = encodeUnlessTooLong(prepared);
       const fits = payload !== undefined &&
         payloadFits(payload, wholeLimits(limits));
@@ -1568,6 +1565,9 @@ class Connection {
    * its entries can exceed them once it carries its own tables, as can the
    * whole message when its entries fit one part, so a part that does is
    * halved until its halves fit, or a half is one entry, which goes as it is.
+   * A whole with no `payload`, too long for the engine to encode, is halved
+   * until each half encodes before anything measures it (`halveTooLong()`),
+   * and each half then goes as it is or is divided in turn.
    */
   #syncParts(
     message: ServerMessage,
@@ -1576,6 +1576,20 @@ class Connection {
     target: SyncPartSession,
     limits: PartLimits,
   ): [ServerMessage, string][] {
+    if (payload === undefined) {
+      return halveTooLong(message, target, (part) => this.#prepare(part))
+        .flatMap((half): [ServerMessage, string][] =>
+          payloadFits(half.payload, limits)
+            ? [[half.prepared, half.payload]]
+            : this.#syncParts(
+              half.part,
+              half.prepared,
+              half.payload,
+              target,
+              limits,
+            )
+        );
+    }
     const split = splitSyncMessage(message, target, limits, prepared);
     const queue: {
       part: ServerMessage;

@@ -20,6 +20,7 @@
 
 import { membersWritten } from "@commonfabric/data-model/codec-json";
 import { isPlainObject } from "@commonfabric/js-values/types";
+import { utf8ByteLength } from "@commonfabric/text/utf8";
 
 import type {
   ResponseMessage,
@@ -141,7 +142,7 @@ export function encodeUnlessTooLong(
 export function payloadFits(payload: string, limits: PartLimits): boolean {
   if (payload.length > limits.bytes) return false;
   if (
-    payload.length * 3 > limits.bytes && utf8Length(payload) > limits.bytes
+    payload.length * 3 > limits.bytes && utf8ByteLength(payload) > limits.bytes
   ) {
     return false;
   }
@@ -160,9 +161,10 @@ export function payloadFits(payload: string, limits: PartLimits): boolean {
  * that a part is cut by what it takes on the wire. Every part is charged
  * room for tables: those of the whole prepared message, which hold every
  * table a part can carry, up to half the bounds. A part whose own tables
- * still take it past the bounds is the caller's to check. Returns
- * `[message]` when the sync has fewer than two entries or the entries fit
- * one part.
+ * still take it past the bounds is the caller's to check. A `message` that
+ * is itself a part, whose sync says more follow, keeps saying so on its last
+ * part. Returns `[message]` when the sync has fewer than two entries or the
+ * entries fit one part.
  */
 export function splitSyncMessage(
   message: ServerMessage,
@@ -200,7 +202,7 @@ export function splitSyncMessage(
         sync,
         SYNC_LISTS,
         group,
-        index < groups.length - 1,
+        index < groups.length - 1 || sync.more === true,
         index === 0,
       ) as SessionSync,
       session,
@@ -251,6 +253,54 @@ export function halveSyncPart(
       false,
     ),
   ];
+}
+
+/** A part of a sync, prepared for its connection and encoded. */
+export type EncodedSyncPart = {
+  /** The part as it was cut, before the connection's table encodings. */
+  readonly part: ServerMessage;
+  readonly prepared: ServerMessage;
+  readonly payload: string;
+};
+
+/**
+ * Divides `message`, a sync too long for the engine to encode whole, in
+ * halves by its entries until each half encodes, and returns the halves in
+ * order, each prepared by `prepare` and encoded by `encode`. Nothing is
+ * measured before it encodes: a whole that long can carry tables that are
+ * too, though every part cut from it would fit its bounds. A half of one
+ * entry that the engine cannot encode throws the engine's error.
+ */
+export function halveTooLong(
+  message: ServerMessage,
+  session: SyncPartSession,
+  prepare: (message: ServerMessage) => ServerMessage,
+  encode: (message: ServerMessage) => string = (value) =>
+    encodeMemoryBoundary(value as never),
+): EncodedSyncPart[] {
+  const ready: EncodedSyncPart[] = [];
+  const stack = [message];
+  while (stack.length > 0) {
+    const part = stack.pop()!;
+    // The whole is known not to encode; each half is tried.
+    const prepared = part === message ? undefined : prepare(part);
+    const payload = prepared === undefined
+      ? undefined
+      : encodeUnlessTooLong(prepared, encode);
+    if (payload !== undefined) {
+      ready.push({ part, prepared: prepared!, payload });
+      continue;
+    }
+    const halves = halveSyncPart(part, session);
+    if (halves !== undefined) {
+      stack.push(halves[1], halves[0]);
+      continue;
+    }
+    // One entry: encoding it again raises the engine's own error.
+    const alone = prepared ?? prepare(part);
+    ready.push({ part, prepared: alone, payload: encode(alone) });
+  }
+  return ready;
 }
 
 /**
@@ -564,40 +614,5 @@ function requireParts(condition: boolean): asserts condition {
 /** Helper for the splits: the encoded size of one value, as a message holds it. */
 function measure(value: unknown): Size {
   const json = encodeMemoryBoundary(value as never).slice(WIRE_TAG.length);
-  return { bytes: utf8Length(json), values: membersWritten(json) + 1 };
-}
-
-/**
- * Runs of UTF-16 units that take more than one UTF-8 byte each, one width to
- * a run: units below U+0800 take two bytes, surrogate pairs four for their two
- * units, other units three, and a lone surrogate the three of the U+FFFD the
- * encoder writes for it.
- */
-const MULTIBYTE_RUNS =
-  /[\u0080-߿]+|(?:[\ud800-\udbff][\udc00-\udfff])+|[ࠀ-퟿-￿]+|[\ud800-\udfff]/g;
-
-/**
- * The UTF-8 length of `text`, counted without encoding it. A message measured
- * against a whole message's bound can be hundreds of megabytes, and the
- * transport encodes it again to compress it; a copy here would double that.
- */
-function utf8Length(text: string): number {
-  let length = text.length;
-  MULTIBYTE_RUNS.lastIndex = 0;
-  for (
-    let match = MULTIBYTE_RUNS.exec(text);
-    match !== null;
-    match = MULTIBYTE_RUNS.exec(text)
-  ) {
-    const run = match[0];
-    const unit = run.charCodeAt(0);
-    length += unit < 0x800
-      ? run.length
-      : unit < 0xd800 || unit > 0xdfff
-      ? 2 * run.length
-      : run.length === 1
-      ? 2
-      : run.length;
-  }
-  return length;
+  return { bytes: utf8ByteLength(json), values: membersWritten(json) + 1 };
 }
