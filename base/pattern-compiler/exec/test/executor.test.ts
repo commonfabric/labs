@@ -8,8 +8,10 @@ import { describe, it } from "@std/testing/bdd";
 
 import { type Artifact, Handle, Host, Instance } from "../executor.ts";
 import {
+  argumentOf as argumentDocument,
   ComputedOutput,
   fieldsOfKey,
+  identifierOf,
   keySegment,
   memberKey,
   Ref,
@@ -31,6 +33,9 @@ const artifactOf = async (name: string): Promise<Artifact> => {
   return patterns.find((pattern) => pattern.name === "default") ??
     patterns[patterns.length - 1];
 };
+
+/** The argument document of an instance that is given no identifier. */
+const ARGUMENT = argumentDocument("result");
 
 /** The key of a plain value that is keyed whole, in a store's space. */
 const whole = (at: Instance | Store, value: unknown, count = 0): string =>
@@ -106,7 +111,7 @@ describe("an instance", () => {
     // A constant first value is the default of the cell's schema: a read
     // of the cell reads it, and nothing is written at creation.
     expect(instance.documents()).toEqual({ "argument": 1, "result": 1 });
-    expect(instance.stateCells()).toEqual([
+    expect(instance.stateCells()).toMatchObject([
       { name: "last", keys: [], value: "" },
       { name: "log", keys: [], value: [] },
     ]);
@@ -191,7 +196,7 @@ describe("an instance", () => {
   // in three element bodies.
   describe("a write below the root of a state cell that has no document", () => {
     const link = (name: string) => ({
-      $link: { doc: "argument", path: ["pool", name] },
+      $link: { doc: ARGUMENT, path: ["pool", name] },
     });
     const start = async () =>
       new Instance(await artifactOf("state-below"), {
@@ -282,7 +287,7 @@ describe("an instance", () => {
   describe("a first value that is an input whole", () => {
     const stop = (title: string) => ({ title, done: false });
     const link = (name: string) => ({
-      $link: { doc: "argument", path: ["pool", name] },
+      $link: { doc: ARGUMENT, path: ["pool", name] },
     });
     const start = async (stops: unknown[], pool = {}) =>
       new Instance(await artifactOf("state-first"), {
@@ -293,13 +298,9 @@ describe("an instance", () => {
         pool,
       });
     const cells = (instance: Instance, name: string) =>
-      [...instance.store.docs].filter(([id]) =>
-        id.startsWith(
-          `state:${
-            instance.plan.stateCells.findIndex((cell) => cell.name === name)
-          }:`,
-        )
-      ).map(([, document]) => document.value);
+      instance.stateCells().filter((cell) =>
+        cell.name === name && instance.store.docs.has(cell.id)
+      ).map(({ id }) => instance.store.docs.get(id)?.value);
     const bindingOf = (instance: Instance, name: string) =>
       instance.plan.bindings.findIndex((binding) => binding.name === name);
 
@@ -314,7 +315,7 @@ describe("an instance", () => {
         { name: "renamed", tags: ["t"] },
       ]);
       expect(
-        (instance.store.docs.get("argument")?.value as { seed: unknown }).seed,
+        (instance.store.docs.get(ARGUMENT)?.value as { seed: unknown }).seed,
       ).toEqual({ name: "s", tags: ["t"] });
     });
 
@@ -334,7 +335,7 @@ describe("an instance", () => {
         stop("b"),
       ]);
       expect(
-        (instance.store.docs.get("argument")?.value as {
+        (instance.store.docs.get(ARGUMENT)?.value as {
           pool: Record<string, unknown>;
         }).pool.a,
       ).toEqual(stop("a"));
@@ -353,7 +354,7 @@ describe("an instance", () => {
         stop("b"),
       ]);
       expect(
-        (instance.store.docs.get("argument")?.value as { stops: unknown[] })
+        (instance.store.docs.get(ARGUMENT)?.value as { stops: unknown[] })
           .stops,
       ).toEqual([stop("a"), stop("b")]);
     });
@@ -488,6 +489,63 @@ describe("an event", () => {
   });
 });
 
+describe("the identifier of a document", () => {
+  // `execution-and-storage.md` §5.1 and §5.2: an identifier is the hash of
+  // the cause of the thing, and a key in the cause enters the hash as the
+  // record it is.
+  it("is the hash of the cause for a state cell of an element body, and holds no text of a key", async () => {
+    const instance = new Instance(await artifactOf("equal-values"), {
+      tags: ["a", "a"],
+    });
+
+    const [first, second] = instance.stateCells();
+
+    expect(first.id).toBe(identifierOf({
+      parent: "result",
+      type: "state",
+      within: [{
+        element: "map",
+        key: fabricFromJsonValue(whole(instance, "a")),
+      }],
+      cause: "opened",
+    }));
+    expect(first.id).toBe(
+      instance.stateCellDocument(0, [whole(instance, "a")]),
+    );
+    expect(second.id).not.toBe(first.id);
+    // The identifier is one tagged hash, however long the key is.
+    for (const { id } of [first, second]) {
+      expect(id).toMatch(/^fid1:[\w-]{43}$/);
+    }
+  });
+
+  it("is the hash of the cause of an internal cell for a state cell declared directly in the pattern body", async () => {
+    const instance = new Instance(await artifactOf("handler"), {
+      secret: "s3cret",
+      note: "n",
+    });
+
+    expect(instance.stateCells().map(({ id }) => id)).toEqual(
+      ["last", "log"].map((cause) =>
+        identifierOf({ parent: "result", type: "internal", cause })
+      ),
+    );
+  });
+
+  it("is the hash of the result document and the type for the argument document", async () => {
+    const instance = new Instance(await artifactOf("handler"), {}, {
+      id: "another instance",
+    });
+
+    expect(instance.id).toBe("another instance");
+    expect(instance.argument).toBe(
+      identifierOf({ type: "argument", parent: "another instance" }),
+    );
+    expect(instance.store.docs.get(instance.argument)?.kind).toBe("argument");
+    expect(instance.store.docs.get(instance.id)?.kind).toBe("result");
+  });
+});
+
 describe("an element construct", () => {
   it("keys two equal plain values by their value and their count", async () => {
     const instance = new Instance(await artifactOf("equal-values"), {
@@ -592,7 +650,7 @@ describe("an element construct", () => {
     expect(stored).toContain(
       JSON.stringify({
         $link: {
-          doc: "argument",
+          doc: ARGUMENT,
           path: ["tags", keySegment(whole(instance, "a"))],
         },
       }).slice(0, -2),
@@ -707,7 +765,7 @@ describe("a pattern compiled in", () => {
     expect(
       (instance.store.docs.get("result")?.value as Marked).marked.symbol,
     ).toMatchObject({
-      $link: { doc: "argument", path: ["sign"], schema: { default: "$" } },
+      $link: { doc: ARGUMENT, path: ["sign"], schema: { default: "$" } },
     });
     expect((instance.result() as Marked).marked.symbol).toBe("$");
 
@@ -751,7 +809,7 @@ describe("a pattern compiled in", () => {
     instance.send(append, {});
 
     expect(
-      (instance.store.docs.get("argument")?.value as { sign: string }).sign,
+      (instance.store.docs.get(ARGUMENT)?.value as { sign: string }).sign,
     ).toBe("$!");
   });
 
@@ -760,8 +818,8 @@ describe("a pattern compiled in", () => {
       amount: 420,
       pool: { a: { amount: 1 }, b: { amount: 20, sign: "kr" } },
       rows: [
-        { $link: { doc: "argument", path: ["pool", "a"] } },
-        { $link: { doc: "argument", path: ["pool", "b"] } },
+        { $link: { doc: ARGUMENT, path: ["pool", "a"] } },
+        { $link: { doc: ARGUMENT, path: ["pool", "b"] } },
       ],
       words: [],
     });
@@ -808,7 +866,7 @@ describe("a pattern compiled in", () => {
 // upstream element it came from.
 describe("a chain of element constructs", () => {
   const link = (name: string) => ({
-    $link: { doc: "argument", path: ["pool", name] },
+    $link: { doc: ARGUMENT, path: ["pool", name] },
   });
   // The elements of `items` are references to cells, and those of `tags`
   // are plain values stored in place.
@@ -892,7 +950,7 @@ describe("a chain of element constructs", () => {
 // the value of the slot of root `operation`.
 describe("a `reduce` in the reactive tier", () => {
   const link = (name: string) => ({
-    $link: { doc: "argument", path: ["pool", name] },
+    $link: { doc: ARGUMENT, path: ["pool", name] },
   });
   // The elements of `items` are references to cells, and those of
   // `amounts` are plain values stored in place. `doubled` is over the
@@ -956,6 +1014,10 @@ describe("a `reduce` in the reactive tier", () => {
 // by value (`addUnique`, `removeByValue`), and a cell constructed with
 // `new`. The list holds references to the records.
 describe("the record of a key", () => {
+  // The identifier of the record: the hash of the address of the list as
+  // its cause, and the key.
+  const keyed = (list: Ref, key: string) =>
+    identifierOf({ list: { document: list.doc, path: [] } }, { key });
   type Pins = { pins: { id: string; title: string }[]; last: string };
 
   it("is written once, and is a member of the list once", async () => {
@@ -1014,9 +1076,7 @@ describe("the record of a key", () => {
     expect(instance.documents()["keyed element"]).toBe(undefined);
     expect(record.get()).toBe(undefined);
     record.set({ id: "z", title: "t" });
-    expect([...instance.store.docs.keys()]).toContain(
-      `keyed:${list.doc}:[]:z`,
-    );
+    expect([...instance.store.docs.keys()]).toContain(keyed(list, "z"));
     // The same key of the same list is the same cell.
     expect(pins.elementById("z").equals(record)).toBe(true);
     expect(pins.elementById("y").equals(record)).toBe(false);
@@ -1049,7 +1109,7 @@ describe("the record of a key", () => {
     instance.settle();
     expect((instance.result() as Pins).pins).toEqual([{ id: "z", title: "t" }]);
     expect(instance.store.docs.get(list.doc)?.value).toEqual([
-      { $link: { doc: `keyed:${list.doc}:[]:z`, path: [] } },
+      { $link: { doc: keyed(list, "z"), path: [] } },
     ]);
     record.key("title").set("u");
     instance.settle();
@@ -1089,7 +1149,7 @@ describe("the record of a key", () => {
 // segment (PL §1.3, "The key of an element that a `flatMap` contributes").
 describe("the keys of the result of a `flatMap`", () => {
   const link = (name: string) => ({
-    $link: { doc: "argument", path: ["pool", name] },
+    $link: { doc: ARGUMENT, path: ["pool", name] },
   });
   // The elements of `groups` are references to cells, and each segment is
   // an array the element holds: `members` of plain values, and `people`
@@ -1118,7 +1178,7 @@ describe("the keys of the result of a `flatMap`", () => {
   };
   const coneOf = (artifact: Artifact, entry: string) =>
     artifact.plan.cones.findIndex((cone) => cone.entry === entry);
-  const cell = (name: string) => cellKey("argument", ["pool", name]);
+  const cell = (name: string) => cellKey(ARGUMENT, ["pool", name]);
   const g = cell("g");
   const h = cell("h");
   const start = async () => {
@@ -1344,7 +1404,7 @@ describe("the keys of the result of a `flatMap`", () => {
 // `fixed`, whose cone lists no slot of root `element` or `index`.
 describe("the `within` of a cone", () => {
   const link = (name: string) => ({
-    $link: { doc: "argument", path: ["pool", name] },
+    $link: { doc: ARGUMENT, path: ["pool", name] },
   });
   // The elements of `items` are references to cells. Those of `tags` are
   // plain values stored in place, and `loud` is over the result of a
@@ -1379,8 +1439,8 @@ describe("the `within` of a cone", () => {
       "bn?",
     ]);
     expect(instance.coneInstances(fixed)).toEqual([
-      [cellKey("argument", ["pool", "a"])],
-      [cellKey("argument", ["pool", "b"])],
+      [cellKey(ARGUMENT, ["pool", "a"])],
+      [cellKey(ARGUMENT, ["pool", "b"])],
     ]);
   });
 
@@ -1445,7 +1505,7 @@ describe("the `within` of a cone", () => {
     instance.writeArgument(["tags"], ["skip", "y", "z"]);
 
     expect(instance.coneInstances(rows)).toEqual([
-      [cellKey("argument", ["pool", "b"])],
+      [cellKey(ARGUMENT, ["pool", "b"])],
     ]);
     expect(instance.coneInstances(marks)).toEqual([
       [whole(instance, "skip")],
@@ -1472,7 +1532,7 @@ describe("the `within` of a cone", () => {
 // the stream when it stores the value, wherever the marker is.
 describe("the stream of a binding in a computed value", () => {
   const link = (name: string) => ({
-    $link: { doc: "argument", path: ["pool", name] },
+    $link: { doc: ARGUMENT, path: ["pool", name] },
   });
   // The elements of `items` are references to cells. Those of `tags` are
   // plain values stored in place, and the last list is over the result of
@@ -1541,8 +1601,8 @@ describe("the stream of a binding in a computed value", () => {
 
     expect(streamsOf(rowsOf(tree(instance).children[1])))
       .toEqual([
-        { $stream: { binding: 1, keys: [cellKey("argument", ["pool", "a"])] } },
-        { $stream: { binding: 1, keys: [cellKey("argument", ["pool", "b"])] } },
+        { $stream: { binding: 1, keys: [cellKey(ARGUMENT, ["pool", "a"])] } },
+        { $stream: { binding: 1, keys: [cellKey(ARGUMENT, ["pool", "b"])] } },
       ]);
 
     // An event for the stream of the second key reads that element.
@@ -1597,7 +1657,7 @@ describe("the stream of a binding in a computed value", () => {
 
     // The branch that places the marker is selected, and a tag is
     // removed in the same write, which changes another subtree.
-    instance.store.write(new Ref("argument", ["tags"]), ["x"]);
+    instance.store.write(new Ref(ARGUMENT, ["tags"]), ["x"]);
     instance.writeArgument(["shown"], true);
 
     // The tree is stored whole: the link at the position of the
@@ -1619,7 +1679,7 @@ describe("the stream of a binding in a computed value", () => {
 
     // The stored position holds a link to the place of the input, and no
     // stream of a binding.
-    expect(stored.outside.$link.doc).toBe("argument");
+    expect(stored.outside.$link.doc).toBe(ARGUMENT);
     expect(stored.outside.$link.path).toEqual(["outside"]);
     const passed = tree(instance).children[4].props.onClick as {
       $link: { doc: string; path: string[] };
@@ -1717,7 +1777,7 @@ describe("a cone with side-writes", () => {
     });
 
     expect(instance.trace).not.toContain("_copy");
-    expect(instance.stateCells()).toEqual([
+    expect(instance.stateCells()).toMatchObject([
       { name: "unseen", keys: [], value: "" },
     ]);
     expect(instance.documents()).toEqual({ "argument": 1, "result": 1 });
@@ -1740,7 +1800,7 @@ describe("an element that is a plain value in place", () => {
     tags: ["x", "y", "x"],
   });
   const link = (name: string) => ({
-    $link: { doc: "argument", path: ["pool", name] },
+    $link: { doc: ARGUMENT, path: ["pool", name] },
   });
   const references = () => ({
     pool: { a: stop("a", 1), b: stop("b", 2), c: stop("c", 3) },
@@ -1778,9 +1838,9 @@ describe("an element that is a plain value in place", () => {
     instance.plan.bindings.findIndex((binding) => binding.name === name);
   const cellOf = (instance: Instance, name: string) =>
     instance.store.docs.get(
-      `state:${
-        instance.plan.stateCells.findIndex((cell) => cell.name === name)
-      }:[]`,
+      instance.stateCellDocument(
+        instance.plan.stateCells.findIndex((cell) => cell.name === name),
+      ),
     )?.value;
   const start = async (argument: unknown = inPlace()) =>
     new Instance(await artifactOf("value-identity"), argument);
@@ -1791,22 +1851,22 @@ describe("an element that is a plain value in place", () => {
     const row = stored(instance).rows[1] as Record<string, unknown>;
     const element = ["stops", keySegment(keyOf(instance, "b", 2))];
     expect(row.stop).toMatchObject({
-      $link: { doc: "argument", path: element },
+      $link: { doc: ARGUMENT, path: element },
     });
     expect(row.position).toMatchObject({
-      $link: { doc: "argument", path: [...element, "position"] },
+      $link: { doc: ARGUMENT, path: [...element, "position"] },
     });
     // The member bound both ways holds the reference with the member's
     // path.
     expect((row.check as ViewNode).props.$checked).toMatchObject({
-      $link: { doc: "argument", path: [...element, "done"] },
+      $link: { doc: ARGUMENT, path: [...element, "done"] },
     });
     // A string: the second `x` is occurrence 1.
     expect(
       (stored(instance).words[2].item as ViewNode).children[0],
     ).toMatchObject({
       $link: {
-        doc: "argument",
+        doc: ARGUMENT,
         path: ["tags", keySegment(whole(instance, "x", 1))],
       },
     });
@@ -1823,10 +1883,10 @@ describe("an element that is a plain value in place", () => {
 
     const row = stored(instance).rows[1] as Record<string, unknown>;
     expect(row.stop).toMatchObject({
-      $link: { doc: "argument", path: ["pool", "b"] },
+      $link: { doc: ARGUMENT, path: ["pool", "b"] },
     });
     expect(row.position).toMatchObject({
-      $link: { doc: "argument", path: ["pool", "b", "position"] },
+      $link: { doc: ARGUMENT, path: ["pool", "b", "position"] },
     });
   });
 
@@ -1859,7 +1919,7 @@ describe("an element that is a plain value in place", () => {
 
     expect(cellOf(instance, "selected")).toMatchObject({
       $link: {
-        doc: "argument",
+        doc: ARGUMENT,
         path: ["stops", keySegment(keyOf(instance, "b", 2))],
       },
     });
@@ -1881,7 +1941,7 @@ describe("an element that is a plain value in place", () => {
     instance.send(bindingOf(instance, "pick"), {}, [1]);
 
     expect(cellOf(instance, "selected")).toMatchObject({
-      $link: { doc: "argument", path: ["pool", "b"] },
+      $link: { doc: ARGUMENT, path: ["pool", "b"] },
     });
     instance.send(bindingOf(instance, "reverse"), {});
     expect(result(instance).rows.map((row) => [row.title, row.isSelected]))
@@ -1891,13 +1951,13 @@ describe("an element that is a plain value in place", () => {
   it("is told from an equal value by its occurrence, over plain values in place", async () => {
     const instance = await start();
     const chosen = new Ref(
-      `state:${
-        instance.plan.stateCells.findIndex((cell) => cell.name === "chosen")
-      }:[]`,
+      instance.stateCellDocument(
+        instance.plan.stateCells.findIndex((cell) => cell.name === "chosen"),
+      ),
       [],
     );
     const occurrence = (count: number) =>
-      new Ref("argument", ["tags", keySegment(whole(instance, "x", count))]);
+      new Ref(ARGUMENT, ["tags", keySegment(whole(instance, "x", count))]);
     // The row of the second `x` stores a reference to its element.
     instance.send(bindingOf(instance, "choose"), {}, [2]);
 
@@ -1923,13 +1983,13 @@ describe("an element that is a plain value in place", () => {
   // position at the time of the comparison.
   it("is equal to a handle that names the position it is at, and to no other", async () => {
     const instance = await start();
-    const element = new Ref("argument", [
+    const element = new Ref(ARGUMENT, [
       "stops",
       keySegment(keyOf(instance, "a", 1)),
     ]);
     const stops = new Handle(
       instance,
-      new Ref("argument", ["stops"]),
+      new Ref(ARGUMENT, ["stops"]),
       undefined,
       undefined,
       [],
@@ -1953,10 +2013,10 @@ describe("an element that is a plain value in place", () => {
 
   it("is equal to a handle that names its position, over references", async () => {
     const instance = await start(references());
-    const element = new Ref("argument", ["pool", "a"]);
+    const element = new Ref(ARGUMENT, ["pool", "a"]);
     const stops = new Handle(
       instance,
-      new Ref("argument", ["stops"]),
+      new Ref(ARGUMENT, ["stops"]),
       undefined,
       undefined,
       [],
@@ -1977,10 +2037,10 @@ describe("an element that is a plain value in place", () => {
     // `selected.set(stop)` and `center.set(stop.position)`.
     const element = ["stops", keySegment(keyOf(instance, "b", 2))];
     expect(cellOf(instance, "selected")).toMatchObject({
-      $link: { doc: "argument", path: element },
+      $link: { doc: ARGUMENT, path: element },
     });
     expect(cellOf(instance, "center")).toMatchObject({
-      $link: { doc: "argument", path: [...element, "position"] },
+      $link: { doc: ARGUMENT, path: [...element, "position"] },
     });
   });
 
@@ -1990,10 +2050,10 @@ describe("an element that is a plain value in place", () => {
     instance.send(bindingOf(instance, "pick"), {}, [1]);
 
     expect(cellOf(instance, "selected")).toMatchObject({
-      $link: { doc: "argument", path: ["pool", "b"] },
+      $link: { doc: ARGUMENT, path: ["pool", "b"] },
     });
     expect(cellOf(instance, "center")).toMatchObject({
-      $link: { doc: "argument", path: ["pool", "b", "position"] },
+      $link: { doc: ARGUMENT, path: ["pool", "b", "position"] },
     });
   });
 
@@ -2003,7 +2063,7 @@ describe("an element that is a plain value in place", () => {
     const instance = await start();
     const stops = new Handle(
       instance,
-      new Ref("argument", ["stops"]),
+      new Ref(ARGUMENT, ["stops"]),
       undefined,
       undefined,
       [],
@@ -2026,7 +2086,7 @@ describe("an element that is a plain value in place", () => {
     const instance = await start(references());
     const stops = new Handle(
       instance,
-      new Ref("argument", ["stops"]),
+      new Ref(ARGUMENT, ["stops"]),
       undefined,
       undefined,
       [],
@@ -2079,7 +2139,7 @@ describe("an element that is a plain value in place", () => {
     );
 
     expect(
-      (instance.store.docs.get("argument")?.value as { stops: unknown[] })
+      (instance.store.docs.get(ARGUMENT)?.value as { stops: unknown[] })
         .stops,
     ).toEqual([stop("c", 3), stop("b", 2), { ...stop("a", 1), done: true }]);
   });
@@ -2098,7 +2158,7 @@ describe("an element that is a plain value in place", () => {
     expect(outcome.committed).toBe(true);
     const changed = { ...stop("b", 2), done: true };
     expect(
-      (instance.store.docs.get("argument")?.value as { stops: unknown[] })
+      (instance.store.docs.get(ARGUMENT)?.value as { stops: unknown[] })
         .stops[1],
     ).toEqual(changed);
     // The position holds another key: the cone instances of that key are
@@ -2111,7 +2171,7 @@ describe("an element that is a plain value in place", () => {
     });
     expect((stored(instance).rows[1] as Record<string, unknown>).stop)
       .toMatchObject({
-        $link: { doc: "argument", path: ["stops", keySegment(key)] },
+        $link: { doc: ARGUMENT, path: ["stops", keySegment(key)] },
       });
     // What the old key held moved to the new key in the same
     // transaction (ruling Z24): the state cell of the row is that of
@@ -2198,7 +2258,7 @@ describe("a plain value that a function body reads through a handle", () => {
     right: [card("b", 3), card("b", 4)],
   });
   const link = (name: string) => ({
-    $link: { doc: "argument", path: ["pool", name] },
+    $link: { doc: ARGUMENT, path: ["pool", name] },
   });
   const references = () => ({
     pool: {
@@ -2213,15 +2273,15 @@ describe("a plain value that a function body reads through a handle", () => {
   type Result = { left: unknown[]; right: unknown[]; kept: unknown };
   const [DISCARD, SWAP, KEEP] = [0, 1, 2];
   const argumentOf = (instance: Instance) =>
-    instance.store.docs.get("argument")?.value as {
+    instance.store.docs.get(ARGUMENT)?.value as {
       left: unknown[];
       right: unknown[];
     };
   const keptOf = (instance: Instance) =>
     instance.store.docs.get(
-      `state:${
-        instance.plan.stateCells.findIndex((cell) => cell.name === "kept")
-      }:[]`,
+      instance.stateCellDocument(
+        instance.plan.stateCells.findIndex((cell) => cell.name === "kept"),
+      ),
     )?.value;
 
   it("is stored as the value where the body writes it to a cell, over plain values in place", async () => {
@@ -2300,7 +2360,7 @@ describe("a write through a reference by key that changes the value", () => {
   const task = (title: string, done = false) => ({ title, done });
   const inPlace = () => ({ tasks: [task("a"), task("b"), task("hidden")] });
   const link = (name: string) => ({
-    $link: { doc: "argument", path: ["pool", name] },
+    $link: { doc: ARGUMENT, path: ["pool", name] },
   });
   const references = () => ({
     pool: { a: task("a"), b: task("b"), c: task("hidden") },
@@ -2439,10 +2499,11 @@ describe("a write through a reference by key that changes the value", () => {
 
     // The handle was stored after the write: it names the element.
     expect(result(instance).picked).toEqual(task("a", true));
-    const stored = instance.store.docs.get("state:0:[]")?.value;
+    const stored = instance.store.docs.get(instance.stateCellDocument(0))
+      ?.value;
     expect(stored).toMatchObject({
       $link: {
-        doc: "argument",
+        doc: ARGUMENT,
         path: ["tasks", keySegment(keyOf(instance, "a", true))],
       },
     });
@@ -2682,8 +2743,8 @@ describe("what a function body of an element body made, on a re-key", () => {
     const instance = await start({
       pool: { a: task("a"), b: task("b") },
       tasks: [
-        { $link: { doc: "argument", path: ["pool", "a"] } },
-        { $link: { doc: "argument", path: ["pool", "b"] } },
+        { $link: { doc: ARGUMENT, path: ["pool", "a"] } },
+        { $link: { doc: ARGUMENT, path: ["pool", "b"] } },
       ],
     });
     streamAt(instance, ["rows", "0", "row", "bump"]).send({ by: 3 });
@@ -2714,7 +2775,7 @@ describe("a `push` below an empty argument path with a declared default", () => 
     expect(outcome.committed).toBe(true);
     expect((instance.result() as Result).tags).toEqual(["first", "x"]);
     expect(
-      (instance.store.docs.get("argument")?.value as Result).tags,
+      (instance.store.docs.get(ARGUMENT)?.value as Result).tags,
     ).toEqual(["first", "x"]);
   });
 
@@ -2729,7 +2790,7 @@ describe("a `push` below an empty argument path with a declared default", () => 
       { text: "given" },
       { text: "x" },
     ]);
-    const stored = (instance.store.docs.get("argument")?.value as {
+    const stored = (instance.store.docs.get(ARGUMENT)?.value as {
       entries: unknown[];
     }).entries;
     expect(stored[0]).toEqual({ text: "given" });
@@ -2758,7 +2819,7 @@ describe("a `push` below an empty argument path with a declared default", () => 
 // `map` over a `computed` that returns the result of a `filter`, twice.
 describe("an output that passes a derived collection on", () => {
   const link = (name: string) => ({
-    $link: { doc: "argument", path: ["pool", name] },
+    $link: { doc: ARGUMENT, path: ["pool", name] },
   });
   const argument = () => ({
     pool: {
@@ -2805,8 +2866,8 @@ describe("an output that passes a derived collection on", () => {
       words: ["x!", "y!"],
     });
     expect(keysOf(instance, 0)).toEqual(sorted([
-      cellKey("argument", ["pool", "a"]),
-      cellKey("argument", ["pool", "c"]),
+      cellKey(ARGUMENT, ["pool", "a"]),
+      cellKey(ARGUMENT, ["pool", "c"]),
     ]));
   });
 
@@ -2834,8 +2895,8 @@ describe("an output that passes a derived collection on", () => {
     });
     // Over references the keys are those of the cells either way.
     expect(keysOf(instance, 0)).toEqual(sorted([
-      cellKey("argument", ["pool", "a"]),
-      cellKey("argument", ["pool", "c"]),
+      cellKey(ARGUMENT, ["pool", "a"]),
+      cellKey(ARGUMENT, ["pool", "c"]),
     ]));
     // Over plain values in place the kept `x` is keyed as the first one
     // of the array the output holds.
@@ -2867,7 +2928,7 @@ describe("an output that passes a derived collection on", () => {
 describe("the name bound to `[SELF]`", () => {
   const toResult = { $link: { doc: "result", path: [] } };
   const link = (name: string) => ({
-    $link: { doc: "argument", path: ["pool", name] },
+    $link: { doc: ARGUMENT, path: ["pool", name] },
   });
   type Stored = {
     other: unknown;
@@ -2945,10 +3006,13 @@ describe("the name bound to `[SELF]`", () => {
     const kept = instance.plan.stateCells.findIndex((cell) =>
       cell.name === "kept"
     );
-    expect(instance.store.docs.get(`state:${kept}:[]`)?.value).toEqual(
-      toResult,
-    );
-    expect(instance.store.read(new Ref(`state:${kept}:[]`, ["title"]))).toBe(
+    expect(instance.store.docs.get(instance.stateCellDocument(kept))?.value)
+      .toEqual(
+        toResult,
+      );
+    expect(
+      instance.store.read(new Ref(instance.stateCellDocument(kept), ["title"])),
+    ).toBe(
       "t",
     );
   });
@@ -2976,9 +3040,10 @@ describe("the name bound to `[SELF]`", () => {
       ).toEqual({ result: true });
       instance.writeState("kept", [], null);
       instance.send(binding, {}, [0]);
-      expect(instance.store.docs.get(`state:${kept}:[]`)?.value).toEqual(
-        toResult,
-      );
+      expect(instance.store.docs.get(instance.stateCellDocument(kept))?.value)
+        .toEqual(
+          toResult,
+        );
     }
   });
 });
@@ -2995,7 +3060,8 @@ describe("a record a handler writes into a list", () => {
     const index = instance.plan.stateCells.findIndex(({ name }) =>
       name === cell
     );
-    return instance.store.docs.get(`state:${index}:[]`)?.value as unknown[];
+    return instance.store.docs.get(instance.stateCellDocument(index))
+      ?.value as unknown[];
   };
   const bindingOf = (instance: Instance, name: string) =>
     instance.plan.bindings.findIndex((binding) => binding.name === name);
@@ -3005,7 +3071,6 @@ describe("a record a handler writes into a list", () => {
     instance.send(bindingOf(instance, "add"), { title: "a" });
 
     const [slot] = held(instance, "stops") as { $link: { doc: string } }[];
-    expect(slot.$link.doc).toMatch(/^record:/);
     expect(instance.store.docs.get(slot.$link.doc)).toEqual({
       kind: "element record",
       value: { title: "a", position: { lat: 1, lng: 7 } },
@@ -3022,7 +3087,9 @@ describe("a record a handler writes into a list", () => {
     const slots = held(instance, "stops") as { $link: { doc: string } }[];
     expect(slots.length).toBe(2);
     expect(slots[0].$link.doc).toBe(first.$link.doc);
-    expect(slots[1].$link.doc).toMatch(/^record:/);
+    expect(instance.store.docs.get(slots[1].$link.doc)?.kind).toBe(
+      "element record",
+    );
     expect(slots[1].$link.doc).not.toBe(first.$link.doc);
     expect(instance.documents()["element record"]).toBe(2);
   });
@@ -3067,7 +3134,7 @@ describe("a record a handler writes into a list", () => {
     const index = instance.plan.stateCells.findIndex(({ name }) =>
       name === "stops"
     );
-    const list = new Ref(`state:${index}:[]`, []);
+    const list = new Ref(instance.stateCellDocument(index), []);
 
     // What `stops.set(stops.get().toReversed())` writes where `get` gives
     // a handle for each position: a link to each position of the list.
@@ -3087,7 +3154,7 @@ describe("a record a handler writes into a list", () => {
       items: [{ title: "a", done: false }],
     });
 
-    expect(instance.store.docs.get("argument")?.value).toMatchObject({
+    expect(instance.store.docs.get(ARGUMENT)?.value).toMatchObject({
       items: [{ title: "a", done: false }],
     });
   });
@@ -3159,7 +3226,8 @@ describe("a key that left its collection", () => {
       { keys, value },
     ) => [keys[0], value]);
   const stored = (instance: Instance) =>
-    (instance.store.docs.get("state:0:[]")?.value ?? []) as unknown[];
+    (instance.store.docs.get(instance.stateCellDocument(0))?.value ??
+      []) as unknown[];
 
   it("keeps the state cell of a reference that leaves the source and returns", async () => {
     const { instance, rowsCone } = await start();
@@ -3303,7 +3371,7 @@ describe("a key that left its collection", () => {
 // stored as a link as any reference a body returns is.
 describe("a stream a function body returns into the result", () => {
   const link = (name: string) => ({
-    $link: { doc: "argument", path: ["pool", name] },
+    $link: { doc: ARGUMENT, path: ["pool", name] },
   });
   // The elements of `items` are references to cells, and those of `tags`
   // plain values stored in place.
@@ -3339,8 +3407,8 @@ describe("a stream a function body returns into the result", () => {
     const { instance } = await start();
 
     expect(stored(instance).rows.map((row) => row.again)).toEqual([
-      { $stream: { binding: 1, keys: [cellKey("argument", ["pool", "a"])] } },
-      { $stream: { binding: 1, keys: [cellKey("argument", ["pool", "b"])] } },
+      { $stream: { binding: 1, keys: [cellKey(ARGUMENT, ["pool", "a"])] } },
+      { $stream: { binding: 1, keys: [cellKey(ARGUMENT, ["pool", "b"])] } },
     ]);
   });
 
@@ -3379,7 +3447,7 @@ describe("a stream a function body returns into the result", () => {
 // and inside the value of an element.
 describe("where the stream of a binding is stored in an array", () => {
   const link = (name: string) => ({
-    $link: { doc: "argument", path: ["pool", name] },
+    $link: { doc: ARGUMENT, path: ["pool", name] },
   });
   // The elements of `items` are references to cells, and those of `tags`
   // plain values stored in place.
@@ -3458,8 +3526,8 @@ describe("where the stream of a binding is stored in an array", () => {
     // first collection and over plain values in place in the second.
     expect(menu.length).toBe(2);
     expect(menu[0].map((row) => row.props.onClick)).toEqual([
-      { $stream: { binding: 5, keys: [cellKey("argument", ["pool", "a"])] } },
-      { $stream: { binding: 5, keys: [cellKey("argument", ["pool", "b"])] } },
+      { $stream: { binding: 5, keys: [cellKey(ARGUMENT, ["pool", "a"])] } },
+      { $stream: { binding: 5, keys: [cellKey(ARGUMENT, ["pool", "b"])] } },
     ]);
     expect(menu[1].map((row) => row.props.onClick)).toEqual([
       { $stream: { binding: 6, keys: [whole(instance, "x")] } },
@@ -3474,7 +3542,7 @@ describe("where the stream of a binding is stored in an array", () => {
 // of that source key (rulings Z22 and Z43).
 describe("the stream of a binding of a `flatMap` body", () => {
   const link = (name: string) => ({
-    $link: { doc: "argument", path: ["pool", name] },
+    $link: { doc: ARGUMENT, path: ["pool", name] },
   });
   // The elements of `items` are references to cells, and those of `tags`
   // plain values stored in place.
@@ -3495,9 +3563,7 @@ describe("the stream of a binding of a `flatMap` body", () => {
 
     // Over references: the two members of a segment hold the stream of
     // the one source key.
-    const [a, b] = ["a", "b"].map((name) =>
-      cellKey("argument", ["pool", name])
-    );
+    const [a, b] = ["a", "b"].map((name) => cellKey(ARGUMENT, ["pool", name]));
     expect(lists(instance)[0].map((row) => row.props.onClick.$stream.keys))
       .toEqual([[a], [a], [b], [b]]);
     // Over plain values in place.
@@ -3517,7 +3583,7 @@ describe("the stream of a binding of a `flatMap` body", () => {
 // node, is each one child at its written position.
 describe("a spread among the children of a view node", () => {
   const link = (name: string) => ({
-    $link: { doc: "argument", path: ["pool", name] },
+    $link: { doc: ARGUMENT, path: ["pool", name] },
   });
   // The elements of `items` are references to cells, and those of
   // `words` plain values stored in place.
@@ -4243,7 +4309,7 @@ describe("the store's record of the links to streams", () => {
 // tests are of the executor alone.
 describe("a pattern called through `asInstance()` in an element body", () => {
   const link = (name: string) => ({
-    $link: { doc: "argument", path: ["pool", name] },
+    $link: { doc: ARGUMENT, path: ["pool", name] },
   });
   const references = () => ({
     pool: { a: { title: "a" }, b: { title: "b" } },
@@ -4282,9 +4348,6 @@ describe("a pattern called through `asInstance()` in an element body", () => {
       "rows" | "words" | "kept",
       Link[]
     >;
-  /** The document of the child that a stored row links to, by its name. */
-  const docOf = (row: Link, name: string) =>
-    row.$link.doc.replace(/result$/, name);
   const valueOf = (instance: Instance, id: string) =>
     instance.store.docs.get(id)?.value;
   /** Sends an event through the stream a document holds at `note`. */
@@ -4332,12 +4395,12 @@ describe("a pattern called through `asInstance()` in an element body", () => {
     // One instance per key of each of the three sites.
     expect(instance.childInstances().map(({ child, keys }) => [child, keys]))
       .toEqual([
-        [ROWS, [cellKey("argument", ["pool", "a"])]],
-        [ROWS, [cellKey("argument", ["pool", "b"])]],
+        [ROWS, [cellKey(ARGUMENT, ["pool", "a"])]],
+        [ROWS, [cellKey(ARGUMENT, ["pool", "b"])]],
         [WORDS, [whole(instance, "x")]],
         [WORDS, [whole(instance, "y")]],
-        [KEPT, [cellKey("argument", ["pool", "a"])]],
-        [KEPT, [cellKey("argument", ["pool", "b"])]],
+        [KEPT, [cellKey(ARGUMENT, ["pool", "a"])]],
+        [KEPT, [cellKey(ARGUMENT, ["pool", "b"])]],
         [LEAD, []],
       ]);
     expect(instance.documents()).toMatchObject({ argument: 8, result: 8 });
@@ -4346,7 +4409,7 @@ describe("a pattern called through `asInstance()` in an element body", () => {
     // the element's cell.
     const [first] = stored(instance).rows;
     expect(first.$link.path).toEqual([]);
-    expect(valueOf(instance, docOf(first, "argument"))).toMatchObject({
+    expect(valueOf(instance, argumentDocument(first.$link.doc))).toMatchObject({
       item: link("a"),
     });
 
@@ -4357,7 +4420,7 @@ describe("a pattern called through `asInstance()` in an element body", () => {
     expect(result(instance).rows[0].title).toBe("renamed");
     expect(
       instance.store.log.slice(before).some((write) =>
-        write.doc === docOf(first, "argument")
+        write.doc === argumentDocument(first.$link.doc)
       ),
     ).toBe(false);
     expect(instance.childInstances().length).toBe(7);
@@ -4369,10 +4432,12 @@ describe("a pattern called through `asInstance()` in an element body", () => {
     const [first] = stored(instance).rows;
     const [word] = stored(instance).words;
     // The value, and no reference by key.
-    expect(valueOf(instance, docOf(first, "argument"))).toEqual({
+    expect(valueOf(instance, argumentDocument(first.$link.doc))).toEqual({
       item: { title: "a" },
     });
-    expect(valueOf(instance, docOf(word, "argument"))).toEqual({ tag: "x" });
+    expect(valueOf(instance, argumentDocument(word.$link.doc))).toEqual({
+      tag: "x",
+    });
     expect(result(instance).words).toMatchObject([
       { tag: "x", noted: "" },
       { tag: "y", noted: "" },
@@ -4381,9 +4446,10 @@ describe("a pattern called through `asInstance()` in an element body", () => {
 
   it("holds the value in its argument over the result of a `filter` of plain values, and the reference over one of references", async () => {
     const plain = await start(inPlace());
-    expect(valueOf(plain, docOf(stored(plain).kept[1], "argument"))).toEqual({
-      item: { title: "b" },
-    });
+    expect(valueOf(plain, argumentDocument(stored(plain).kept[1].$link.doc)))
+      .toEqual({
+        item: { title: "b" },
+      });
     expect(
       plain.childInstances().filter(({ child }) => child === KEPT).map((
         { keys },
@@ -4391,7 +4457,7 @@ describe("a pattern called through `asInstance()` in an element body", () => {
     ).toEqual([[whole(plain, { title: "a" })], [whole(plain, { title: "b" })]]);
 
     const linked = await start(references());
-    expect(valueOf(linked, docOf(stored(linked).kept[1], "argument")))
+    expect(valueOf(linked, argumentDocument(stored(linked).kept[1].$link.doc)))
       .toMatchObject({ item: link("b") });
   });
 
@@ -4411,13 +4477,17 @@ describe("a pattern called through `asInstance()` in an element body", () => {
     expect(instance.documents()).toEqual(documents);
     expect(
       instance.store.log.slice(before).some((write) =>
-        write.doc.startsWith(docOf(second, ""))
+        instance.childInstances().find(({ instance: made }) =>
+          made.id === second.$link.doc
+        )?.instance.documentIds().includes(write.doc)
       ),
     ).toBe(false);
     expect(instance.childInstances().length).toBe(7);
-    expect(valueOf(instance, docOf(second, "argument"))).toMatchObject({
-      item: link("b"),
-    });
+    expect(valueOf(instance, argumentDocument(second.$link.doc))).toMatchObject(
+      {
+        item: link("b"),
+      },
+    );
 
     // The key returns, at another position: the row has the instance it
     // had, with its state.
@@ -4544,7 +4614,7 @@ describe("a pattern called through `asInstance()` in an element body", () => {
     // A write through the reference by key of the element, as a handler
     // of the row or a member bound both ways makes.
     instance.store.write(
-      new Ref("argument", [
+      new Ref(ARGUMENT, [
         "items",
         keySegment(whole(instance, { "title": "a" })),
         "title",
@@ -4560,7 +4630,7 @@ describe("a pattern called through `asInstance()` in an element body", () => {
       title: "edited",
       noted: "mine",
     });
-    expect(valueOf(instance, docOf(first, "argument"))).toEqual({
+    expect(valueOf(instance, argumentDocument(first.$link.doc))).toEqual({
       item: { title: "edited" },
     });
     expect(instance.childInstances().length).toBe(children);
@@ -4585,7 +4655,7 @@ describe("a pattern called through `asInstance()` in an element body", () => {
     // A write through the reference by key re-keys `x` to the key that
     // the instance of `y` is named by.
     instance.store.write(
-      new Ref("argument", ["tags", keySegment(whole(instance, "x"))]),
+      new Ref(ARGUMENT, ["tags", keySegment(whole(instance, "x"))]),
       "y",
     );
     instance.settle();
@@ -4597,11 +4667,13 @@ describe("a pattern called through `asInstance()` in an element body", () => {
       { tag: "y", noted: "moved" },
     ]);
     expect(words().map(({ keys }) => keys)).toEqual([[whole(instance, "y")]]);
-    expect(words()[0].instance.doc("result")).toBe(first.$link.doc);
+    expect(words()[0].instance.id).toBe(first.$link.doc);
     // The documents of the instance that was replaced stay, and a link
     // to it that is stored elsewhere reads it.
     expect(instance.store.docs.size).toBe(documents);
-    expect(valueOf(instance, docOf(second, "argument"))).toEqual({ tag: "y" });
+    expect(valueOf(instance, argumentDocument(second.$link.doc))).toEqual({
+      tag: "y",
+    });
     expect(instance.store.read(new Ref(second.$link.doc, []))).toMatchObject({
       tag: "y",
       noted: "old",
@@ -4613,9 +4685,12 @@ describe("a pattern called through `asInstance()` in an element body", () => {
     const lead = (instance.store.docs.get("result")?.value as { lead: Link })
       .lead;
 
-    expect(lead.$link.doc).toBe("child:3:[]:result");
-    expect(valueOf(instance, docOf(lead, "argument"))).toMatchObject({
-      item: { $link: { doc: "argument", path: ["lead"] } },
+    expect(lead.$link.doc).toBe(
+      instance.childInstances().find(({ child }) => child === LEAD)?.instance
+        .id,
+    );
+    expect(valueOf(instance, argumentDocument(lead.$link.doc))).toMatchObject({
+      item: { $link: { doc: ARGUMENT, path: ["lead"] } },
     });
     expect(note(instance, lead, "led")).toEqual([{
       binding: 0,
@@ -4690,12 +4765,12 @@ describe("a key field declared with `ArrayByKey`", () => {
   const [PICKED, OWNER, ROWS_CELL, KEPT_CELL, TALLIES_CELL] = [0, 1, 2, 3, 4];
   /** What a state cell of the pattern's body stores. */
   const cell = (instance: Instance, index: number) =>
-    instance.store.docs.get(`state:${index}:[]`)?.value;
+    instance.store.docs.get(instance.stateCellDocument(index))?.value;
   /** The key of each state cell declared by one record of the plan. */
   const keysOf = (instance: Instance, cell: number) =>
-    [...instance.store.declared.keys()].filter((id) =>
-      id.startsWith(`state:${cell}:`)
-    ).map((id) => JSON.parse(id.slice(`state:${cell}:`.length))[0]).sort();
+    instance.stateCells().filter((held) => held.cell === cell).map((
+      { keys },
+    ) => keys[0]).sort();
   type Link = { $link: { doc: string; path: string[] } };
   const starred = (instance: Instance) =>
     (instance.store.docs.get("result")?.value as { starred: Link[] }).starred;
@@ -4788,8 +4863,7 @@ describe("a key field declared with `ArrayByKey`", () => {
     ]);
     // The argument of the instance is written again with the new value.
     expect(
-      instance.store.docs.get(row.$link.doc.replace(/result$/, "argument"))
-        ?.value,
+      instance.store.docs.get(argumentDocument(row.$link.doc))?.value,
     ).toEqual({ repo: repo(2, "cde", 4) });
     expect(instance.childInstances().map(({ keys }) => keys)).toEqual([
       [byFields(instance, { id: 2 })],
@@ -4850,7 +4924,7 @@ describe("a key field declared with `ArrayByKey`", () => {
 
     // A write through the reference by key of the element.
     instance.store.write(
-      new Ref("argument", [
+      new Ref(ARGUMENT, [
         "saved",
         keySegment(byFields(instance, { id: 7 })),
         "name",
@@ -4867,7 +4941,7 @@ describe("a key field declared with `ArrayByKey`", () => {
     // The reference still names the element.
     expect(
       instance.store.read(
-        new Ref("argument", [
+        new Ref(ARGUMENT, [
           "saved",
           keySegment(byFields(instance, { id: 7 })),
           "name",
@@ -4931,10 +5005,10 @@ describe("a key field declared with `ArrayByKey`", () => {
 
     const key = keySegment(byFields(instance, { id: 8 }));
     expect(cell(instance, PICKED)).toEqual({
-      $link: { doc: "argument", path: ["saved", key] },
+      $link: { doc: ARGUMENT, path: ["saved", key] },
     });
     expect(cell(instance, OWNER)).toEqual({
-      $link: { doc: "argument", path: ["saved", key, "owner"] },
+      $link: { doc: ARGUMENT, path: ["saved", key, "owner"] },
     });
     // `pickedName` and `ownerLogin` read the cells under types that
     // declare no key.
@@ -4959,11 +5033,13 @@ describe("a key field declared with `ArrayByKey`", () => {
     const byName = { type: "array", keyFields: ["name"] };
     expect(
       instance.store.read(
-        new Ref("state:0:[]", [], byName).key("name"),
+        new Ref(instance.stateCellDocument(0), [], byName).key("name"),
       ),
     ).toBe("again");
     expect(
-      instance.store.read(new Ref("state:1:[]", [], byName).key("login")),
+      instance.store.read(
+        new Ref(instance.stateCellDocument(1), [], byName).key("login"),
+      ),
     ).toBe("new-owner");
   });
 
@@ -4977,10 +5053,10 @@ describe("a key field declared with `ArrayByKey`", () => {
 
     const key = keySegment(byFields(instance, { id: 2 }));
     expect(cell(instance, PICKED)).toEqual({
-      $link: { doc: "output:0:[]", path: [key] },
+      $link: { doc: instance.outputDocument(0), path: [key] },
     });
     expect(cell(instance, OWNER)).toEqual({
-      $link: { doc: "output:0:[]", path: [key, "owner"] },
+      $link: { doc: instance.outputDocument(0), path: [key, "owner"] },
     });
     expect(instance.result()).toMatchObject({
       pickedName: "cde",
@@ -4995,13 +5071,16 @@ describe("a key field declared with `ArrayByKey`", () => {
     });
     // A computed output refuses a write through the reference.
     expect(() =>
-      instance.store.write(new Ref("output:0:[]", [key, "name"]), "edited")
+      instance.store.write(
+        new Ref(instance.outputDocument(0), [key, "name"]),
+        "edited",
+      )
     ).toThrow(ComputedOutput);
   });
 
   it("changes nothing over an array of references, where the key is the cell", async () => {
     const link = (name: string) => ({
-      $link: { doc: "argument", path: ["pool", name] },
+      $link: { doc: ARGUMENT, path: ["pool", name] },
     });
     const instance = await start({
       ...argument([link("a"), link("b")]),
@@ -5009,8 +5088,8 @@ describe("a key field declared with `ArrayByKey`", () => {
     });
 
     expect(keysOf(instance, KEPT_CELL)).toEqual(sorted([
-      cellKey("argument", ["pool", "a"]),
-      cellKey("argument", ["pool", "b"]),
+      cellKey(ARGUMENT, ["pool", "a"]),
+      cellKey(ARGUMENT, ["pool", "b"]),
     ]));
   });
 });
@@ -5127,7 +5206,7 @@ describe("several key fields declared with `ArrayByKey`", () => {
     // A write through the reference by key of the element, to a member
     // that is no key field.
     instance.store.write(
-      new Ref("argument", [
+      new Ref(ARGUMENT, [
         "saved",
         keySegment(byFields(instance, { name: "labs", owner: "cf" })),
         "stars",
@@ -5232,9 +5311,10 @@ describe("an instance a function body makes", () => {
         },
       },
     ]);
-    const stored = instance.store.docs.get("state:0:[]")?.value as {
-      $link: { doc: string; path: string[] };
-    }[];
+    const stored = instance.store.docs.get(instance.stateCellDocument(0))
+      ?.value as {
+        $link: { doc: string; path: string[] };
+      }[];
     expect(stored.map(({ $link }) => $link.path)).toEqual([[], []]);
     expect(new Set(stored.map(({ $link }) => $link.doc)).size).toBe(2);
     // An argument and a result document for each instance, and the
@@ -5350,15 +5430,21 @@ describe("a reader typed as a plain array that is given an array with a declared
       loose: [repo(7, "s", 1)],
     }, { artifacts });
   };
-  /** The keys of the state cells whose documents begin with a prefix. */
-  const keysOf = (instance: Instance, prefix: string) =>
-    sorted([
-      ...new Set(
-        [...instance.store.declared.keys(), ...instance.store.docs.keys()]
-          .filter((id) => id.startsWith(prefix))
-          .map((id): string => JSON.parse(id.slice(prefix.length))[0]),
-      ),
-    ]);
+  /** The keys of the state cells that one record of a plan declares. */
+  const keysOf = (instance: Instance, cell: number) =>
+    sorted(
+      instance.stateCells().filter((held) => held.cell === cell).map((
+        { keys },
+      ) => keys[0]),
+    );
+  /** The instance that a call through `asInstance()` made, by its child. */
+  const made = (instance: Instance, child: number) => {
+    const found = instance.childInstances().find((held) =>
+      held.child === child
+    );
+    if (found === undefined) throw new Error("no instance of the child");
+    return found.instance;
+  };
   type Row = { name: string; stars: number; noted: string };
   type Result = Record<
     "inPlace" | "scratch" | "derived" | "none" | "made" | "madeScratch",
@@ -5383,7 +5469,7 @@ describe("a reader typed as a plain array that is given an array with a declared
     return instance.dispatch();
   };
   const [IN_PLACE, SCRATCH, DERIVED, NONE] = [0, 1, 2, 3];
-  const [MADE, MADE_SCRATCH] = ["child:0:[]:", "child:1:[]:"];
+  const [MADE, MADE_SCRATCH] = [0, 1];
 
   it("gives the collection of a reader that is compiled in the key fields of the array given, in the plan", async () => {
     const instance = await start();
@@ -5412,18 +5498,18 @@ describe("a reader typed as a plain array that is given an array with a declared
     instance.result();
 
     // Over plain values in place.
-    expect(keysOf(instance, `state:${IN_PLACE}:`)).toEqual(
+    expect(keysOf(instance, IN_PLACE)).toEqual(
       sorted([7, 8].map((id) => byFields(instance, { id }))),
     );
     // Over a plain array generated from scratch, and over the result of
     // a `filter` of it, whose elements have the upstream keys.
     for (const cell of [SCRATCH, DERIVED]) {
-      expect(keysOf(instance, `state:${cell}:`)).toEqual(
+      expect(keysOf(instance, cell)).toEqual(
         sorted([1, 2].map((id) => byFields(instance, { id }))),
       );
     }
     // Over an array whose type declares no key: the whole value.
-    expect(keysOf(instance, `state:${NONE}:`)).toEqual([
+    expect(keysOf(instance, NONE)).toEqual([
       whole(instance, repo(7, "s", 1)),
     ]);
   });
@@ -5454,7 +5540,7 @@ describe("a reader typed as a plain array that is given an array with a declared
       stars: 8,
       noted: "fresh",
     });
-    expect(keysOf(instance, `state:${SCRATCH}:`)).toEqual(
+    expect(keysOf(instance, SCRATCH)).toEqual(
       sorted([1, 2].map((id) => byFields(instance, { id }))),
     );
   });
@@ -5465,22 +5551,23 @@ describe("a reader typed as a plain array that is given an array with a declared
 
     // The argument of the instance holds a link to the array, with the
     // schema of the array that the caller reads it under.
-    expect(instance.store.docs.get(`${MADE}argument`)?.value).toMatchObject({
-      repos: {
-        $link: {
-          doc: "argument",
-          path: ["saved"],
-          schema: { type: "array", keyFields: ["id"] },
+    expect(instance.store.docs.get(made(instance, MADE).argument)?.value)
+      .toMatchObject({
+        repos: {
+          $link: {
+            doc: ARGUMENT,
+            path: ["saved"],
+            schema: { type: "array", keyFields: ["id"] },
+          },
         },
-      },
-    });
-    expect(keysOf(instance, `${MADE}state:0:`)).toEqual(
+      });
+    expect(keysOf(made(instance, MADE), 0)).toEqual(
       sorted([7, 8].map((id) => byFields(instance, { id }))),
     );
     // The row keeps its state when a member that is no key field
     // changes.
     expect(
-      note(instance, `${MADE}result`, ["rows"], 1, "mine").map((
+      note(instance, made(instance, MADE).id, ["rows"], 1, "mine").map((
         { committed },
       ) => committed),
     ).toEqual([true]);
@@ -5489,7 +5576,7 @@ describe("a reader typed as a plain array that is given an array with a declared
       { name: "s", stars: 1, noted: "" },
       { name: "t", stars: 9, noted: "mine" },
     ]);
-    expect(keysOf(instance, `${MADE}state:0:`)).toEqual(
+    expect(keysOf(made(instance, MADE), 0)).toEqual(
       sorted([7, 8].map((id) => byFields(instance, { id }))),
     );
   });
@@ -5500,10 +5587,12 @@ describe("a reader typed as a plain array that is given an array with a declared
 
     // The argument holds the values, so no schema with the keyword is
     // on the way to the array.
-    expect(instance.store.docs.get(`${MADE_SCRATCH}argument`)?.value).toEqual({
+    expect(
+      instance.store.docs.get(made(instance, MADE_SCRATCH).argument)?.value,
+    ).toEqual({
       repos: [repo(1, "ab", 2), repo(2, "cde", 3)],
     });
-    expect(keysOf(instance, `${MADE_SCRATCH}state:0:`)).toEqual(
+    expect(keysOf(made(instance, MADE_SCRATCH), 0)).toEqual(
       sorted(
         [repo(1, "ab", 2), repo(2, "cde", 3)].map((value) =>
           whole(instance, value)
@@ -5559,12 +5648,12 @@ describe("the form of a key with declared fields, over a `filter` and a `map`", 
   const [PICK_FOUND, PICK_KEPT] = [1, 3];
   const [PICKED, CENTER, FOUND_CELL, KEPT_CELL] = [0, 1, 2, 3];
   const cell = (instance: Instance, index: number) =>
-    instance.store.docs.get(`state:${index}:[]`)?.value;
+    instance.store.docs.get(instance.stateCellDocument(index))?.value;
   const keysOf = (instance: Instance, cell: number) =>
     sorted(
-      [...instance.store.declared.keys()].filter((id) =>
-        id.startsWith(`state:${cell}:`)
-      ).map((id): string => JSON.parse(id.slice(`state:${cell}:`.length))[0]),
+      instance.stateCells().filter((held) => held.cell === cell).map((
+        { keys },
+      ) => keys[0]),
     );
   type Result = {
     pickedTag: string;
@@ -5630,10 +5719,10 @@ describe("the form of a key with declared fields, over a `filter` and a `map`", 
 
     const key = keySegment(keyOf("7", "x"));
     expect(cell(instance, PICKED)).toEqual({
-      $link: { doc: "argument", path: ["saved", key] },
+      $link: { doc: ARGUMENT, path: ["saved", key] },
     });
     expect(cell(instance, CENTER)).toEqual({
-      $link: { doc: "argument", path: ["saved", key, "position"] },
+      $link: { doc: ARGUMENT, path: ["saved", key, "position"] },
     });
     expect(instance.result() as Result).toMatchObject({
       pickedTag: "x",
@@ -5659,10 +5748,10 @@ describe("the form of a key with declared fields, over a `filter` and a `map`", 
 
     const key = keySegment(keyOf("7", "x"));
     expect(cell(instance, PICKED)).toEqual({
-      $link: { doc: "output:0:[]", path: [key] },
+      $link: { doc: instance.outputDocument(0), path: [key] },
     });
     expect(cell(instance, CENTER)).toEqual({
-      $link: { doc: "output:0:[]", path: [key, "position"] },
+      $link: { doc: instance.outputDocument(0), path: [key, "position"] },
     });
     expect(instance.result() as Result).toMatchObject({
       pickedTag: "x",
@@ -5706,14 +5795,13 @@ describe("an element of a plain array generated from scratch that declares no ke
     title,
     stars: title.length + bonus,
   });
-  const OUTPUT = "output:0:[]";
   const PICK = 0;
   type Result = { picked?: unknown; pickedTitle?: string };
 
   it("is stored in a document of the output, which the rows read by key", async () => {
     const instance = await start();
 
-    expect(instance.store.docs.get(OUTPUT)).toEqual({
+    expect(instance.store.docs.get(instance.outputDocument(0))).toEqual({
       kind: "output",
       value: [item("ab"), item("cde")],
     });
@@ -5723,7 +5811,7 @@ describe("an element of a plain array generated from scratch that declares no ke
     expect(rows.map(({ title }) => title)).toMatchObject(
       ["ab", "cde"].map((title) => ({
         $link: {
-          doc: OUTPUT,
+          doc: instance.outputDocument(0),
           path: [keySegment(whole(instance, item(title))), "title"],
         },
       })),
@@ -5736,9 +5824,10 @@ describe("an element of a plain array generated from scratch that declares no ke
     expect(instance.send(PICK, {}, [1]).committed).toBe(true);
 
     const key = keySegment(whole(instance, item("cde")));
-    expect(instance.store.docs.get("state:0:[]")?.value).toEqual({
-      $link: { doc: OUTPUT, path: [key] },
-    });
+    expect(instance.store.docs.get(instance.stateCellDocument(0))?.value)
+      .toEqual({
+        $link: { doc: instance.outputDocument(0), path: [key] },
+      });
     expect(instance.result() as Result).toMatchObject({
       picked: item("cde"),
       pickedTitle: "cde",
@@ -5754,7 +5843,10 @@ describe("an element of a plain array generated from scratch that declares no ke
     // No write repairs it: the output refuses writes.
     expect(() =>
       instance.store.write(
-        new Ref(OUTPUT, [keySegment(whole(instance, item("cde", 2))), "title"]),
+        new Ref(instance.outputDocument(0), [
+          keySegment(whole(instance, item("cde", 2))),
+          "title",
+        ]),
         "edited",
       )
     ).toThrow(ComputedOutput);
@@ -5765,7 +5857,7 @@ describe("an element of a plain array generated from scratch that declares no ke
 
     expect(
       instance.childInstances().map(({ instance: made }) =>
-        instance.store.docs.get(made.doc("argument"))?.value
+        instance.store.docs.get(made.argument)?.value
       ),
     ).toEqual([{ item: item("ab") }, { item: item("cde") }]);
   });

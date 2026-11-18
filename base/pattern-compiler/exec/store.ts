@@ -13,6 +13,7 @@ import {
   type FabricValue,
   hashOf,
   isValidFabricValue,
+  taggedHashStringOf,
 } from "@commonfabric/data-model";
 import {
   fabricFromJsonValue,
@@ -169,7 +170,30 @@ const isValueRecord = (
  * `base/data-model/src/codecs.ts`), which writes a hash as the codec
  * does and needs no separator between the parts (ruling Z51).
  */
-const written = (value: FabricValue): string => jsonFromFabricValue(value);
+export const textOf = (value: FabricValue): string =>
+  jsonFromFabricValue(value);
+
+/**
+ * The identifier of a thing, from the cause of its creation and what
+ * tells it from the other things of that cause: the hash of the record
+ * `{ ...source, causal: cause }`, as `createRef()` of
+ * `runtime/runner/src/create-ref.ts` forms one
+ * (`execution-and-storage.md` §5.1), written as `taggedHashStringOf()`
+ * of `base/data-model/src/value-hash/impl.ts` writes a hash that stands
+ * alone. A key in the cause enters the hash as the record it is, so no
+ * identifier holds the text of a key.
+ */
+export const identifierOf = (
+  cause: FabricValue,
+  source: Record<string, FabricValue> = {},
+): string => taggedHashStringOf({ ...source, causal: cause });
+
+/**
+ * The identifier of the argument document of an instance, from that of
+ * its result document (`execution-and-storage.md` §5.1).
+ */
+export const argumentOf = (result: string): string =>
+  identifierOf({ type: "argument", parent: result });
 
 /**
  * The record that a key is the text of. Throws for a text that is not
@@ -193,10 +217,10 @@ export const recordOfKey = (key: string): Record<string, FabricValue> => {
 export const keysOfParts = (parts: readonly ElementPart[]): string[] => {
   const seen = new Map<string, number>();
   return parts.map((element) => {
-    const text = written(element);
+    const text = textOf(element);
     const occurrence = seen.get(text) ?? 0;
     seen.set(text, occurrence + 1);
-    return written({ element, occurrence });
+    return textOf({ element, occurrence });
   });
 };
 
@@ -208,7 +232,7 @@ export const keysOfParts = (parts: readonly ElementPart[]): string[] => {
  * `flatMap` contributes").
  */
 export const memberKey = (upstream: string, member: string): string =>
-  written({ source: recordOfKey(upstream), member: recordOfKey(member) });
+  textOf({ source: recordOfKey(upstream), member: recordOfKey(member) });
 
 /**
  * A key with the upstream key `from` in it replaced by `to`: the key
@@ -219,9 +243,9 @@ export const rekeyed = (key: string, from: string, to: string): string => {
   if (key === from) return to;
   const { source, member } = recordOfKey(key);
   if (!isValueRecord(source) || !isValueRecord(member)) return key;
-  const upstream = written(source);
+  const upstream = textOf(source);
   const moved = rekeyed(upstream, from, to);
-  return moved === upstream ? key : memberKey(moved, written(member));
+  return moved === upstream ? key : memberKey(moved, textOf(member));
 };
 
 /**
@@ -606,7 +630,7 @@ export class Store {
 
   /** The key of a plain value at an occurrence count. */
   keyOf(value: unknown, fields: readonly string[] = [], count = 0): string {
-    return written({ element: this.partOf(value, fields), occurrence: count });
+    return textOf({ element: this.partOf(value, fields), occurrence: count });
   }
 
   /**
@@ -624,13 +648,14 @@ export class Store {
   }
 
   /**
-   * The element part of a position that holds a link, from what the
-   * link names: the record of the address of the cell, and for a link to
-   * an element by key the record of that reference, with the address of
-   * the collection, the key, and the path below the element
+   * The address that a reference names, as a fabric value: the record of
+   * the space, the document and the path, and for a reference to an
+   * element by key the record of that reference, with the address of the
+   * collection, the key, and the path below the element. It is the
+   * element part of a position that holds a link
    * (`plan-and-label-templates.md` §1.3, "The structure of a key").
    */
-  partOfReference(named: Ref): ElementPart {
+  addressOf(named: Ref): ElementPart {
     const at = named.path.findLastIndex(isKeySegment);
     if (at < 0) {
       return {
@@ -640,7 +665,7 @@ export class Store {
       };
     }
     return {
-      collection: this.partOfReference(
+      collection: this.addressOf(
         new Ref(named.doc, named.path.slice(0, at)),
       ),
       key: recordOfKey(named.path[at].slice(KEY.length)),
@@ -683,7 +708,7 @@ export class Store {
             undefined,
             true,
           );
-          return this.partOfReference(named);
+          return this.addressOf(named);
         }
         if (reentered) return { position: index };
         return this.partOf(
@@ -1186,6 +1211,15 @@ export class Store {
         this.rekeys.push({ doc, array, from: key, to: now });
       }
     }
+  }
+
+  /**
+   * The address that a reference names as a string: the text of the
+   * codec for `addressOf()`. Two references name one thing where their
+   * texts are the same.
+   */
+  addressText(named: Ref): string {
+    return textOf(this.addressOf(named));
   }
 
   /** Whether a write after `since` is at, above, or below a position. */

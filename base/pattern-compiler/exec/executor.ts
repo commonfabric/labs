@@ -12,9 +12,13 @@
  * `SPEC-NOTES.md` (notes 281 on) lists what it needed that the plan and
  * the documents do not give.
  */
+import type { FabricValue } from "@commonfabric/data-model";
+
 import {
+  argumentOf,
   canonical,
   type ElementPart,
+  identifierOf,
   isKeySegment,
   isLink,
   isStream,
@@ -26,6 +30,7 @@ import {
   memberKey,
   OUTPUT,
   type Position,
+  recordOfKey,
   Ref,
   rekeyed,
   type Schema,
@@ -34,8 +39,18 @@ import {
   StreamMarker,
   streamOf,
   StreamRef,
+  textOf,
   withDefaults,
 } from "./store.ts";
+
+/**
+ * The name of a record of the plan (PL §1.1, `Name`): a string, or the
+ * record of its parts.
+ */
+type Name = FabricValue;
+
+/** One step of where a declaration sits (PL §1.1, `WithinStep`). */
+type Step = { element?: number; site?: Name };
 
 type Root = {
   kind: string;
@@ -65,7 +80,7 @@ export type Plan = {
      * for each combination of keys of the collections the `element`
      * steps name, and what the instance holds is kept under those keys.
      */
-    within: { element?: number; site?: string }[];
+    within: Step[];
     slots: number[];
     bodies: number[];
     /**
@@ -90,9 +105,9 @@ export type Plan = {
   }[];
   edges: { from: number; to: number; via: { kind: string; output?: number } }[];
   collections: {
-    name: string;
+    name: Name;
     construct: string;
-    within: { element?: number; site?: string }[];
+    within: Step[];
     source: { slot?: number; collection?: number; output?: number };
     /**
      * The key fields that the array type of the receiver declares with
@@ -104,7 +119,7 @@ export type Plan = {
   }[];
   bodies: {
     kind: string;
-    name: string;
+    name: Name;
     /**
      * Each slot the body reads, with its place in the argument, and for a
      * body of a pattern compiled in the default the callee declares for
@@ -118,9 +133,9 @@ export type Plan = {
     envelopes: { kind: string; slot?: number; path?: string[] }[];
   }[];
   stateCells: {
-    name: string;
+    name: Name;
     scope: string;
-    within: { element?: number; site?: string }[];
+    within: Step[];
     /** The schema of the cell's value, with a constant first value as
      * its default. */
     schema?: string;
@@ -143,20 +158,20 @@ export type Plan = {
      * Z35 and Z36).
      */
     asInstance?: true;
-    name: string;
-    within: { element?: number; site?: string }[];
+    name: Name;
+    within: Step[];
   }[];
   operations: {
     kind: string;
     name: string;
-    within?: { element?: number; site?: string }[];
+    within?: Step[];
     /** For a `reduce`: the cone of its step. */
     implementation?: { cone?: number };
   }[];
   bindings: {
     name?: string;
     handler: { body?: number };
-    within: { element?: number; site?: string }[];
+    within: Step[];
     state: {
       path: string[];
       place?: {
@@ -315,8 +330,6 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value) &&
   (Object.getPrototypeOf(value) === Object.prototype ||
     Object.getPrototypeOf(value) === null);
-
-const addressOf = (ref: Ref): string => `${ref.doc}:${canonical(ref.path)}`;
 
 /**
  * How often the cones of an instance are brought up to date before the
@@ -924,7 +937,7 @@ export class Host {
     }
     const keyed = { body, keys: instance.contextKeys(this.context) };
     return instance.returned(
-      instance.during(runName(keyed), () => run(argument), keyed),
+      instance.during(instance.runCause(keyed), () => run(argument), keyed),
     );
   }
 
@@ -996,9 +1009,12 @@ export type StreamHeld = {
  */
 type KeyedRun = { body: number; keys: [number, string][] };
 
-/** The name of such a run, which names what it makes. */
-const runName = ({ body, keys }: KeyedRun): string =>
-  `body:${body}:${canonical(keys)}`;
+/**
+ * The run of a function body in progress: the cause that names it, how
+ * many instances and bindings it has made, and for the run of a `lift`
+ * or a `computed` the body and the element keys.
+ */
+type Running = { cause: FabricValue; made: number; keyed?: KeyedRun };
 
 /** How a handled event ended. */
 export type Outcome = {
@@ -1012,17 +1028,24 @@ export type Outcome = {
 export class Instance {
   readonly store: Store;
   /**
-   * What the identifier of each document of the instance begins with:
-   * nothing for the instance the executor was started with, and for an
-   * instance a function body made the name of that instance.
+   * The identifier of the instance, which is that of its result
+   * document (ES §5.4): `result` for the instance the executor was
+   * started with, unless it was given another, and for an instance that
+   * this executor made the hash of the cause it was made under.
    */
-  readonly prefix: string;
+  readonly id: string;
+  /** The identifier of the argument document (ES §5.1). */
+  readonly argument: string;
   /** The instance the executor was started with. */
   readonly root: Instance;
-  /** On the root: every instance a function body made, by its prefix. */
+  /** On the root: every instance that this executor made, by its `id`. */
   readonly #instances = new Map<string, Instance>();
-  /** The instances that a function body of this instance made. */
+  /** The instances that this instance made. */
   readonly #children: Instance[] = [];
+  /** The documents and declared places of this instance, by identifier. */
+  readonly #documents = new Set<string>();
+  /** The bindings that function bodies of this instance made, by key. */
+  readonly #bindings = new Set<string>();
   /**
    * On the root: each binding a function body made, by the key of its
    * stream, with the handler and the state the body bound.
@@ -1032,22 +1055,19 @@ export class Instance {
     { run: (...given: unknown[]) => unknown; state: unknown }
   >();
   /**
-   * On the root: each instance a function body made, by its name: the
-   * instance that made it, the run, and the ordinal among what the run
-   * made. `keyed` is absent for the run of a handler. An instance that
-   * was re-keyed has another name than the one its documents begin
-   * with (ruling Z41).
+   * On the root: each instance a function body made, by the identifier
+   * that the run and the ordinal give it now: the instance, the run,
+   * and the ordinal among what the run made. `keyed` is absent for the
+   * run of a handler. An instance that was re-keyed is held under
+   * another identifier than its `id`, which its documents are named
+   * from (ruling Z41).
    */
   readonly #made = new Map<
     string,
     { instance: Instance; keyed?: KeyedRun; ordinal: number }
   >();
-  /**
-   * The run of a function body in progress: what names it, how many
-   * instances and bindings it has made (ES §2.8, "Identity"), and for
-   * the run of a `lift` or a `computed` the body and the element keys.
-   */
-  #running: { name: string; made: number; keyed?: KeyedRun } | undefined;
+  /** The run of a function body in progress (ES §2.8, "Identity"). */
+  #running: Running | undefined;
   /** The events handled, which name the run of a handler. */
   #events = 0;
   readonly plan: Plan;
@@ -1136,20 +1156,22 @@ export class Instance {
      * values are salted with; the store mints one where none is given.
      * `artifacts`: the artifact of a pattern, by the identity its plan
      * begins with (`Plan.patterns`), for a pattern that a function body
-     * instantiates. `parent` and `prefix`: for an instance a function
-     * body made, the instance that made it and the name of this one.
+     * instantiates. `id`: the identifier of the instance, which is that
+     * of its result document. `parent`: for an instance that this
+     * executor made, the instance that made it.
      */
     readonly options: {
       space?: string;
       secret?: string;
       artifacts?: (id: string) => Artifact | undefined;
       parent?: Instance;
-      prefix?: string;
+      id?: string;
     } = {},
   ) {
     this.store = options.parent?.store ??
       new Store({ secret: options.secret, space: options.space });
-    this.prefix = options.prefix ?? "";
+    this.id = options.id ?? "result";
+    this.argument = argumentOf(this.id);
     this.root = options.parent?.root ?? this;
     this.plan = artifact.plan;
     this.code = artifact.code;
@@ -1161,8 +1183,9 @@ export class Instance {
         this.valueOfOutput.set(value.output, index);
       }
     });
-    this.store.create(this.doc("argument"), "argument", this.stored(argument));
-    this.store.create(this.doc("result"), "result", undefined);
+    this.#documents.add(this.argument).add(this.id);
+    this.store.create(this.argument, "argument", this.stored(argument));
+    this.store.create(this.id, "result", undefined);
     this.#load();
     this.#sideWriters();
     // A state cell of the pattern's own body exists from the start, and
@@ -1281,7 +1304,7 @@ export class Instance {
     return {
       nohost: none,
       // What `[SELF]` of the pattern's parameter names: the result.
-      self: new Ref(this.doc("result"), []),
+      self: new Ref(this.id, []),
       setups: this.#setups,
       external: (specifier: string) => instance.#external(specifier),
       module: (index: number) => instance.#module(index),
@@ -1413,8 +1436,94 @@ export class Instance {
     return new StreamRef(
       binding,
       this.keysOf(this.plan.bindings[binding].within, { context }),
-      this.prefix,
+      this.#owner,
     );
+  }
+
+  /**
+   * What a stream names the instance of its binding by: nothing for the
+   * instance the executor was started with, and the `id` of another.
+   */
+  get #owner(): string {
+    return this === this.root ? "" : this.id;
+  }
+
+  /**
+   * The identifier of a thing declared in the reactive tier (ES §5.2):
+   * the hash of the cause that holds the instance, the type of the
+   * thing, the steps of `within` outermost first, each `element` step
+   * with the name of its collection and the key of the element as the
+   * record it is, and the name. A state cell declared directly in the
+   * pattern body under a name of one part has the cause of an internal
+   * cell. `keys` has one key per `element` step. `again` tells an
+   * instance from one that was re-keyed away from the same cause and
+   * keeps its documents.
+   */
+  #identifier(
+    type: string,
+    within: readonly Step[],
+    keys: readonly string[],
+    name: Name,
+    again = 0,
+  ): string {
+    if (type === "state" && within.length === 0 && typeof name === "string") {
+      return identifierOf({ parent: this.id, type: "internal", cause: name });
+    }
+    let element = 0;
+    const steps = within.map((step): FabricValue => {
+      if (step.element === undefined) return { site: step.site };
+      const key = keys[element];
+      element += 1;
+      return {
+        element: this.plan.collections[step.element].name,
+        // A step whose collection the context has no element for.
+        ...(key === undefined || key === "?" ? {} : { key: recordOfKey(key) }),
+      };
+    });
+    return identifierOf({
+      parent: this.id,
+      type,
+      within: steps,
+      cause: name,
+      ...(again === 0 ? {} : { again }),
+    });
+  }
+
+  /** The identifier of the document of a state cell under element keys. */
+  stateCellDocument(cell: number, keys: readonly string[] = []): string {
+    const record = this.plan.stateCells[cell];
+    return this.#identifier("state", record.within, keys, record.name);
+  }
+
+  /**
+   * The identifier of the document that holds what an output returned
+   * whole, under the element keys of its cone (`#generated()`). The
+   * name is that of an interim output, and the index of another.
+   */
+  outputDocument(output: number, keys: readonly string[] = []): string {
+    const record = this.plan.outputs[output];
+    return this.#identifier(
+      "output",
+      this.plan.cones[record.cone].within,
+      keys,
+      record.interim ?? { output },
+    );
+  }
+
+  /**
+   * The cause that names the run of a `lift` or a `computed` (ES §5.5):
+   * the instance, the name of the body, and the element keys that the
+   * run is evaluated for.
+   */
+  runCause({ body, keys }: KeyedRun): FabricValue {
+    return {
+      parent: this.id,
+      site: this.plan.bodies[body].name,
+      within: keys.map(([collection, key]): FabricValue => ({
+        element: this.plan.collections[collection].name,
+        key: recordOfKey(key),
+      })),
+    };
   }
 
   /** The element keys of the `element` steps of a `within`. */
@@ -1439,7 +1548,7 @@ export class Instance {
   rootOf(root: Root, host: Host, path: readonly string[] = []): unknown {
     switch (root.kind) {
       case "argument":
-        return new Ref(this.doc("argument"), []);
+        return new Ref(this.argument, []);
       case "state":
         return this.stateCell(root.cell ?? 0, host);
       case "element": {
@@ -1521,9 +1630,10 @@ export class Instance {
   stateCell(cell: number, host: Host): Ref {
     const record = this.plan.stateCells[cell];
     const keys = this.keysOf(record.within, host);
-    const id = this.doc(`state:${cell}:${canonical(keys)}`);
+    const id = this.stateCellDocument(cell, keys);
     if (!this.#cells.has(id)) {
       this.#cells.set(id, { cell, keys });
+      this.#documents.add(id);
       const schema = this.schemaOf(record.schema);
       this.store.declare(
         id,
@@ -1622,7 +1732,12 @@ export class Instance {
           const keys = within.map((collection) =>
             context.get(collection)?.key ?? "?"
           );
-          const id = `${child}|${canonical(keys)}`;
+          const id = this.#identifier(
+            "child",
+            record.within,
+            keys,
+            record.name,
+          );
           let held = this.#asInstances.get(id);
           if (held === undefined) {
             const artifact = typeof record.callee.compiled === "string"
@@ -1633,30 +1748,36 @@ export class Instance {
                 "a child whose compiled pattern the executor was not given",
               );
             }
-            // The name holds the key the instance was made under. An
-            // instance that was re-keyed keeps its documents, so a later
-            // instance of the same key gets a name beside it.
-            const name = `${this.prefix}child:${child}:${canonical(keys)}`;
-            let prefix = `${name}:`;
-            for (let other = 1; this.root.#instances.has(prefix); other++) {
-              prefix = `${name}~${other}:`;
+            // The identifier holds the key the instance was made under.
+            // An instance that was re-keyed keeps its documents, so a
+            // later instance of the same key gets an identifier beside
+            // it.
+            let made = id;
+            for (let again = 1; this.root.#instances.has(made); again++) {
+              made = this.#identifier(
+                "child",
+                record.within,
+                keys,
+                record.name,
+                again,
+              );
             }
             const instance = new Instance(artifact, argument, {
               ...this.options,
               parent: this,
-              prefix,
+              id: made,
             });
-            this.root.#instances.set(prefix, instance);
+            this.root.#instances.set(made, instance);
             this.#children.push(instance);
             held = { child, keys, instance };
             this.#asInstances.set(id, held);
           } else {
             this.store.write(
-              new Ref(held.instance.doc("argument"), []),
+              new Ref(held.instance.argument, []),
               argument,
             );
           }
-          return new Ref(held.instance.doc("result"), []);
+          return new Ref(held.instance.id, []);
         },
         within,
       );
@@ -1675,17 +1796,31 @@ export class Instance {
    * has no document, until something writes it.
    */
   keyedElement(list: Ref, key: string): Ref {
-    const id = `keyed:${addressOf(this.store.locate(list, true).ref)}:${key}`;
+    const id = identifierOf(
+      { list: this.store.addressOf(this.store.locate(list, true).ref) },
+      { key },
+    );
     if (!this.store.declared.has(id)) {
       this.store.declare(id, "keyed element", undefined);
     }
     return new Ref(id, []);
   }
 
+  /**
+   * The identifier of a document that a function body of this instance
+   * makes with no cause of its own: the instance, and the ordinal among
+   * the documents that its bodies made. `kind` says what it is.
+   */
+  #fresh(kind: "cell" | "record" | "constant"): string {
+    this.#created += 1;
+    const id = identifierOf({ parent: this.id }, { [kind]: this.#created });
+    this.#documents.add(id);
+    return id;
+  }
+
   /** A cell a function body made. */
   createCell(value: unknown): Handle {
-    this.#created += 1;
-    const id = this.doc(`created:${this.#created}`);
+    const id = this.#fresh("cell");
     this.store.create(id, "created cell", this.stored(value));
     return new Handle(this, new Ref(id, []), undefined, undefined, []);
   }
@@ -1770,8 +1905,7 @@ export class Instance {
       ) => [name, this.anchored(member)]),
     );
     if (!inArray || this.#copied.has(value)) return members;
-    this.#created += 1;
-    const id = this.doc(`record:${this.#created}`);
+    const id = this.#fresh("record");
     this.store.create(id, "element record", members);
     return { $link: { doc: id, path: [] } };
   }
@@ -1843,8 +1977,7 @@ export class Instance {
       value !== undefined && typeof declared === "object" &&
       declared.asCell !== undefined
     ) {
-      this.#created += 1;
-      const id = this.doc(`constant:${this.#created}`);
+      const id = this.#fresh("constant");
       this.store.create(id, "held constant", this.stored(value));
       return new Handle(this, new Ref(id, []), host, slot, [], declared, true);
     }
@@ -1863,9 +1996,10 @@ export class Instance {
   same(a: unknown, b: unknown): boolean {
     const address = (value: unknown): string | undefined => {
       if (value instanceof Handle && value.target instanceof StreamRef) {
-        return `stream:${value.target.instance}:${value.target.binding}:${
-          canonical(value.target.keys)
-        }`;
+        const { instance, binding, keys } = value.target;
+        return textOf({
+          stream: { instance, binding, keys: [...keys] },
+        });
       }
       const ref = value instanceof Handle
         ? value.target as Ref
@@ -1878,7 +2012,7 @@ export class Instance {
       // reference is compared as the key it holds.
       return ref === undefined
         ? undefined
-        : addressOf(this.store.locate(ref, true).ref);
+        : this.store.addressText(this.store.locate(ref, true).ref);
     };
     const [left, right] = [address(a), address(b)];
     if (left !== undefined && right !== undefined) return left === right;
@@ -2495,7 +2629,7 @@ export class Instance {
     return keysOfParts(members.map((member): ElementPart => {
       if (member instanceof Ref) {
         const { named } = this.store.locate(member, true, undefined, true);
-        return this.store.partOfReference(named);
+        return this.store.addressOf(named);
       }
       return this.store.partOf(this.stored(member));
     }));
@@ -2574,7 +2708,7 @@ export class Instance {
     const keys = keysOfParts(members.map((member): ElementPart => {
       if (member instanceof Ref) {
         const { named } = this.store.locate(member, true);
-        return this.store.partOfReference(named);
+        return this.store.addressOf(named);
       }
       return this.store.partOf(this.stored(host.v(member.value)), keyFields);
     }));
@@ -2607,11 +2741,11 @@ export class Instance {
       return undefined;
     }
     const within = this.collectionsOf(record.cone);
-    const id = this.doc(
-      `output:${output}:${
-        canonical(within.map((collection) => context.get(collection)?.key))
-      }`,
+    const id = this.outputDocument(
+      output,
+      within.map((collection) => context.get(collection)?.key ?? "?"),
     );
+    this.#documents.add(id);
     const store = (array: readonly unknown[]) => {
       const stored = this.stored(array);
       if (canonical(this.store.docs.get(id)?.value) !== canonical(stored)) {
@@ -2705,7 +2839,7 @@ export class Instance {
       // Each marker in the value is stored as the link to its stream,
       // wherever it is: no position is checked (ruling Z43).
       this.store.write(
-        new Ref(this.doc("result"), []),
+        new Ref(this.id, []),
         this.stored(entry.value),
       );
       // The instances that function bodies of this one made.
@@ -2727,7 +2861,7 @@ export class Instance {
    * what read the position written.
    */
   writeThrough(path: string[], value: unknown): void {
-    this.store.write(new Ref(this.doc("result"), path), this.stored(value));
+    this.store.write(new Ref(this.id, path), this.stored(value));
     this.settle();
   }
 
@@ -2736,21 +2870,29 @@ export class Instance {
    * instance does, and evaluates what read it.
    */
   writeArgument(path: string[], value: unknown): void {
-    this.store.write(new Ref(this.doc("argument"), path), this.stored(value));
+    this.store.write(new Ref(this.argument, path), this.stored(value));
     this.settle();
   }
 
   /** The result, with every link in it followed. */
   result(): unknown {
-    return this.store.read(new Ref(this.doc("result"), []));
+    return this.store.read(new Ref(this.id, []));
   }
 
   /**
    * The value of each state cell that exists: what its document holds,
    * or the default of its schema where nothing wrote it.
    */
-  stateCells(): { name: string; keys: string[]; value: unknown }[] {
+  stateCells(): {
+    cell: number;
+    id: string;
+    name: Name;
+    keys: string[];
+    value: unknown;
+  }[] {
     return [...this.#cells].map(([id, { cell, keys }]) => ({
+      cell,
+      id,
       name: this.plan.stateCells[cell].name,
       keys,
       value: this.store.read(new Ref(id, [])),
@@ -2796,7 +2938,7 @@ export class Instance {
         if (!recorded) {
           throw new Error("a stream link the store did not record");
         }
-        const elements = (instance ?? "") === this.prefix
+        const elements = (instance ?? "") === this.#owner
           ? this.#positionsOf(binding, keys)
           : undefined;
         found.push({
@@ -2812,7 +2954,7 @@ export class Instance {
           new Ref(value.$link.doc, value.$link.path),
           true,
         );
-        const id = addressOf(located.ref);
+        const id = this.store.addressText(located.ref);
         if (open.has(id)) return;
         open.add(id);
         walk(located.value, path, located.ref);
@@ -2827,7 +2969,7 @@ export class Instance {
         }
       }
     };
-    const result = new Ref(this.doc("result"), []);
+    const result = new Ref(this.id, []);
     walk(this.store.docs.get(result.doc)?.value, [], result);
     return found;
   }
@@ -2875,11 +3017,6 @@ export class Instance {
     this.root.#queue.push({ stream, event });
   }
 
-  /** The identifier of a document of this instance. */
-  doc(name: string): string {
-    return `${this.prefix}${name}`;
-  }
-
   /**
    * Names what the run of a function body in progress makes next: the
    * run, and the ordinal among what it has made (ES §2.8, "Identity").
@@ -2888,25 +3025,27 @@ export class Instance {
    * same things again names the same ones. The run of a handler is named
    * by its event, so each event makes its own.
    */
-  #next(): { name: string; ordinal: number; keyed?: KeyedRun } {
-    const running = this.#running ?? { name: "outside", made: 0 };
+  #next(): { cause: FabricValue; ordinal: number; keyed?: KeyedRun } {
+    const running: Running = this.#running ??
+      { cause: { parent: this.id }, made: 0 };
     const ordinal = running.made;
     running.made += 1;
     return {
-      name: `${running.name}/${ordinal}`,
+      cause: running.cause,
       ordinal,
       ...(running.keyed === undefined ? {} : { keyed: running.keyed }),
     };
   }
 
   /**
-   * Runs a function body under a name for what it makes. `keyed` is the
-   * body and the element keys of the run of a `lift` or a `computed`.
+   * Runs a function body under the cause that names what it makes.
+   * `keyed` is the body and the element keys of the run of a `lift` or
+   * a `computed`.
    */
-  during<T>(name: string, run: () => T, keyed?: KeyedRun): T {
+  during<T>(cause: FabricValue, run: () => T, keyed?: KeyedRun): T {
     const outer = this.#running;
     this.#running = {
-      name,
+      cause,
       made: 0,
       ...(keyed === undefined ? {} : { keyed }),
     };
@@ -2936,21 +3075,21 @@ export class Instance {
     if (artifact === undefined) {
       throw new Unsupported("a pattern called in a function body");
     }
-    const { name: run, ordinal, keyed } = this.#next();
-    const name = `${this.prefix}instance:${run}`;
+    const { cause, ordinal, keyed } = this.#next();
+    const name = identifierOf(cause, { instance: ordinal });
     const given = this.stored(this.returned(argument));
     let child = this.root.#made.get(name)?.instance;
     if (child === undefined) {
-      let prefix = `${name}:`;
-      for (let other = 1; this.root.#instances.has(prefix); other++) {
-        prefix = `${name}~${other}:`;
+      let made = name;
+      for (let again = 1; this.root.#instances.has(made); again++) {
+        made = identifierOf(cause, { instance: ordinal, again });
       }
       child = new Instance(artifact, given, {
         ...this.options,
         parent: this,
-        prefix,
+        id: made,
       });
-      this.root.#instances.set(prefix, child);
+      this.root.#instances.set(made, child);
       this.root.#made.set(name, {
         instance: child,
         ordinal,
@@ -2958,11 +3097,11 @@ export class Instance {
       });
       this.#children.push(child);
     } else {
-      this.store.write(new Ref(child.doc("argument"), []), given);
+      this.store.write(new Ref(child.argument, []), given);
     }
     return new Handle(
       this,
-      new Ref(child.doc("result"), []),
+      new Ref(child.id, []),
       undefined,
       undefined,
       [],
@@ -2975,9 +3114,11 @@ export class Instance {
    * An event for the stream runs the handler with that state.
    */
   bind(run: (...given: unknown[]) => unknown, state: unknown): StreamRef {
-    const key = `${this.prefix}bound:${this.#next().name}`;
+    const { cause, ordinal } = this.#next();
+    const key = identifierOf(cause, { bound: ordinal });
     this.root.#bound.set(key, { run, state });
-    return new StreamRef(-1, [key], this.prefix);
+    this.#bindings.add(key);
+    return new StreamRef(-1, [key], this.#owner);
   }
 
   /** Counts a write of the handler being run against its record. */
@@ -3029,7 +3170,7 @@ export class Instance {
       context.set(element, chosen);
       keys.push(chosen.key);
     }
-    this.queue(new StreamRef(binding, keys, this.prefix), event);
+    this.queue(new StreamRef(binding, keys, this.#owner), event);
     const outcome = this.root.#drain(context, binding);
     this.root.settle();
     return outcome;
@@ -3188,7 +3329,7 @@ export class Instance {
       } else if (place.result === true) {
         // The name bound to `[SELF]`: a reference to the result cell of
         // the instance, as value code is given one (ruling Z28).
-        found = host.at(new Ref(this.doc("result"), []), rest);
+        found = host.at(new Ref(this.id, []), rest);
       } else {
         found = host.at(place.constant, rest);
       }
@@ -3228,7 +3369,10 @@ export class Instance {
     root.#events += 1;
     this.#handling = body;
     try {
-      this.during(`event:${root.#events}`, () => run(event, state));
+      this.during(
+        { handling: { parent: root.id, event: root.#events } },
+        () => run(event, state),
+      );
     } catch (error) {
       this.store.docs.clear();
       for (const [id, document] of before) this.store.docs.set(id, document);
@@ -3237,11 +3381,11 @@ export class Instance {
         this.store.log.push({ doc: id, path: [], at: this.store.clock });
       }
       root.#queue.length = queued;
-      for (const prefix of [...root.#instances.keys()]) {
-        if (!instances.has(prefix)) root.#instances.delete(prefix);
+      for (const id of [...root.#instances.keys()]) {
+        if (!instances.has(id)) root.#instances.delete(id);
       }
       for (const [name, { instance }] of [...root.#made]) {
-        if (!root.#instances.has(instance.prefix)) root.#made.delete(name);
+        if (!root.#instances.has(instance.id)) root.#made.delete(name);
       }
       root.#bound.clear();
       for (const [key, held] of bound) root.#bound.set(key, held);
@@ -3289,21 +3433,29 @@ export class Instance {
    */
   #remove(replaced: Instance): void {
     const { root, store } = this;
-    const within = (id: string) => id.startsWith(replaced.prefix);
-    for (const id of [...store.docs.keys(), ...store.declared.keys()]) {
-      if (within(id)) store.remove(id);
-    }
-    for (const prefix of [...root.#instances.keys()]) {
-      if (within(prefix)) root.#instances.delete(prefix);
+    const removed = new Set<Instance>();
+    const collect = (instance: Instance) => {
+      removed.add(instance);
+      for (const child of instance.#children) collect(child);
+    };
+    collect(replaced);
+    for (const instance of removed) {
+      for (const id of instance.#documents) {
+        if (store.docs.has(id) || store.declared.has(id)) store.remove(id);
+      }
+      root.#instances.delete(instance.id);
+      for (const key of instance.#bindings) root.#bound.delete(key);
     }
     for (const [name, { instance }] of [...root.#made]) {
-      if (within(instance.prefix)) root.#made.delete(name);
-    }
-    for (const key of [...root.#bound.keys()]) {
-      if (within(key)) root.#bound.delete(key);
+      if (removed.has(instance)) root.#made.delete(name);
     }
     const at = this.#children.indexOf(replaced);
     if (at >= 0) this.#children.splice(at, 1);
+  }
+
+  /** The identifiers of the documents and declared places of the instance. */
+  documentIds(): string[] {
+    return [...this.#documents];
   }
 
   #moveKey(
@@ -3370,10 +3522,12 @@ export class Instance {
       );
       if (canonical(moved) === canonical(held.keys)) continue;
       this.#asInstances.delete(id);
-      this.#asInstances.set(`${held.child}|${canonical(moved)}`, {
-        ...held,
-        keys: moved,
-      });
+      const record = this.plan.children?.[held.child];
+      if (record === undefined) continue;
+      this.#asInstances.set(
+        this.#identifier("child", record.within, moved, record.name),
+        { ...held, keys: moved },
+      );
     }
     // An instance that a `lift` or a `computed` of the body made moves
     // to the new key as a child, and replaces one that is named there
@@ -3388,7 +3542,7 @@ export class Instance {
       ]);
       if (canonical(keys) === canonical(keyed.keys)) continue;
       const moved = { body: keyed.body, keys };
-      const to = `${this.prefix}instance:${runName(moved)}/${ordinal}`;
+      const to = identifierOf(this.runCause(moved), { instance: ordinal });
       this.root.#made.delete(name);
       const replaced = this.root.#made.get(to)?.instance;
       if (replaced !== undefined && replaced !== instance) {
@@ -3404,9 +3558,11 @@ export class Instance {
         over.has(steps[index]) ? renamed(key) : key
       );
       if (canonical(moved) === canonical(keys)) continue;
-      const to = this.doc(`state:${cell}:${canonical(moved)}`);
+      const to = this.stateCellDocument(cell, moved);
       this.#cells.delete(id);
       this.#cells.set(to, { cell, keys: moved });
+      this.#documents.delete(id);
+      this.#documents.add(to);
       this.store.move(id, to);
     }
   }
