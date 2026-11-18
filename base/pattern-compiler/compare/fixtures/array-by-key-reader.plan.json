@@ -2045,6 +2045,27 @@
           {
             "id": "unhashed:schema/0",
             "schema": {
+              "$defs": {
+                "t0": {
+                  "properties": {
+                    "id": {
+                      "type": "number"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "stars": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "stars"
+                  ],
+                  "type": "object"
+                }
+              },
               "properties": {
                 "bonus": {
                   "type": "number"
@@ -2054,23 +2075,7 @@
                     "cell"
                   ],
                   "items": {
-                    "properties": {
-                      "id": {
-                        "type": "number"
-                      },
-                      "name": {
-                        "type": "string"
-                      },
-                      "stars": {
-                        "type": "number"
-                      }
-                    },
-                    "required": [
-                      "id",
-                      "name",
-                      "stars"
-                    ],
-                    "type": "object"
+                    "$ref": "#/$defs/t0"
                   },
                   "type": "array"
                 },
@@ -2085,23 +2090,7 @@
                     "cell"
                   ],
                   "items": {
-                    "properties": {
-                      "id": {
-                        "type": "number"
-                      },
-                      "name": {
-                        "type": "string"
-                      },
-                      "stars": {
-                        "type": "number"
-                      }
-                    },
-                    "required": [
-                      "id",
-                      "name",
-                      "stars"
-                    ],
-                    "type": "object"
+                    "$ref": "#/$defs/t0"
                   },
                   "keyFields": [
                     "id"

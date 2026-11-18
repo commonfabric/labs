@@ -322,8 +322,8 @@
           {
             "id": "unhashed:schema/1",
             "schema": {
-              "properties": {
-                "bump": {
+              "$defs": {
+                "t0": {
                   "asCell": [
                     "stream"
                   ],
@@ -336,23 +336,17 @@
                     "by"
                   ],
                   "type": "object"
+                }
+              },
+              "properties": {
+                "bump": {
+                  "$ref": "#/$defs/t0"
                 },
                 "count": {
                   "type": "number"
                 },
                 "tally": {
-                  "asCell": [
-                    "stream"
-                  ],
-                  "properties": {
-                    "by": {
-                      "type": "number"
-                    }
-                  },
-                  "required": [
-                    "by"
-                  ],
-                  "type": "object"
+                  "$ref": "#/$defs/t0"
                 },
                 "title": {
                   "type": "string"
@@ -1045,41 +1039,35 @@
           {
             "id": "unhashed:schema/4",
             "schema": {
+              "$defs": {
+                "t0": {
+                  "asCell": [
+                    "stream"
+                  ],
+                  "properties": {
+                    "by": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "by"
+                  ],
+                  "type": "object"
+                }
+              },
               "asCell": [
                 "cell"
               ],
               "items": {
                 "properties": {
                   "bump": {
-                    "asCell": [
-                      "stream"
-                    ],
-                    "properties": {
-                      "by": {
-                        "type": "number"
-                      }
-                    },
-                    "required": [
-                      "by"
-                    ],
-                    "type": "object"
+                    "$ref": "#/$defs/t0"
                   },
                   "count": {
                     "type": "number"
                   },
                   "tally": {
-                    "asCell": [
-                      "stream"
-                    ],
-                    "properties": {
-                      "by": {
-                        "type": "number"
-                      }
-                    },
-                    "required": [
-                      "by"
-                    ],
-                    "type": "object"
+                    "$ref": "#/$defs/t0"
                   },
                   "title": {
                     "type": "string"
@@ -1127,39 +1115,33 @@
           {
             "id": "unhashed:schema/7",
             "schema": {
+              "$defs": {
+                "t0": {
+                  "asCell": [
+                    "stream"
+                  ],
+                  "properties": {
+                    "by": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "by"
+                  ],
+                  "type": "object"
+                }
+              },
               "default": [],
               "items": {
                 "properties": {
                   "bump": {
-                    "asCell": [
-                      "stream"
-                    ],
-                    "properties": {
-                      "by": {
-                        "type": "number"
-                      }
-                    },
-                    "required": [
-                      "by"
-                    ],
-                    "type": "object"
+                    "$ref": "#/$defs/t0"
                   },
                   "count": {
                     "type": "number"
                   },
                   "tally": {
-                    "asCell": [
-                      "stream"
-                    ],
-                    "properties": {
-                      "by": {
-                        "type": "number"
-                      }
-                    },
-                    "required": [
-                      "by"
-                    ],
-                    "type": "object"
+                    "$ref": "#/$defs/t0"
                   },
                   "title": {
                     "type": "string"

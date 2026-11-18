@@ -279,3 +279,56 @@ export const S = pattern<{ pieces: Piece[] }>(({ pieces }) => {
     assert_eq!(names, ["$NAME", "$UI", "$VIEWS", "note"]);
     assert_eq!(piece["required"], json!(["$NAME", "$UI", "note"]));
 }
+
+/// A type declared `depth` deep, each level of which uses the level
+/// below it at two positions.
+fn nested_aliases(depth: usize) -> String {
+    let mut text = String::from(
+        "import { pattern } from \"commonfabric\";\ntype T0 = { v: string; n: number };\n",
+    );
+    for level in 1..=depth {
+        text.push_str(&format!(
+            "type T{level} = {{ a: T{}; b: T{} }};\n",
+            level - 1,
+            level - 1
+        ));
+    }
+    text.push_str(&format!(
+        "export const P = pattern<{{ x: T{depth} }}>(({{ x }}) => ({{ x }}));\n"
+    ));
+    text
+}
+
+fn schema_bytes(text: &str) -> usize {
+    let analysis = analyze(&[SourceFile {
+        path: "case.tsx".to_string(),
+        text: text.to_string(),
+    }]);
+    analysis.modules[0].plans[0]
+        .schemas
+        .iter()
+        .map(|(_, document)| document.to_string().len())
+        .sum()
+}
+
+#[test]
+fn a_type_used_at_two_positions_of_a_schema_is_written_once() {
+    // PL §1.5 writes a type that is not recursive in place at each
+    // occurrence, which is 2^depth copies for aliases that each use the
+    // one below twice. The schema names such a type by `$ref` and holds
+    // it once under `$defs` (provisional decision P7).
+    let analysis = analyze(&[SourceFile {
+        path: "case.tsx".to_string(),
+        text: nested_aliases(3),
+    }]);
+    let (_, document) = &analysis.modules[0].plans[0].schemas[0];
+    let x = &document["properties"]["x"];
+    assert_eq!(x["properties"]["a"], x["properties"]["b"]);
+    assert!(x["properties"]["a"]["$ref"].is_string(), "{document}");
+    assert!(document["$defs"].is_object(), "{document}");
+    let (shallow, deep) = (
+        schema_bytes(&nested_aliases(5)),
+        schema_bytes(&nested_aliases(10)),
+    );
+    assert!(deep < 3 * shallow, "5: {shallow} bytes, 10: {deep} bytes");
+}

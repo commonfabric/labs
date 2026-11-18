@@ -8074,9 +8074,14 @@ pub fn emit_module<'a>(
             .map(|ty| resolver.schema_of(*ty));
         let result_schema = emitter.result_type.map(|ty| resolver.schema_of(ty));
         let (mut plan, unsupported, cycles, flows, finished) = emitter.finish(&parsed.path);
-        let schemas = name_schemas(&mut plan, argument_schema.as_ref(), result_schema.as_ref());
+        let mut schemas = name_schemas(&mut plan, argument_schema.as_ref(), result_schema.as_ref());
         let code = crate::emit::requested()
             .then(|| crate::emit::generate(resolver, module, &plan, &schemas, &finished));
+        // A type that a schema document holds at more than one position
+        // is written once (provisional decision P7).
+        for (_, document) in &mut schemas {
+            crate::schema::share_types(document);
+        }
         plans.push(PatternPlan {
             name: body.name.clone(),
             line: body.line,

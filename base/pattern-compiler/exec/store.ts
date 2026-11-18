@@ -37,6 +37,58 @@ export type Schema = boolean | {
    * (`plan-and-label-templates.md` §1.3, "A declared key field").
    */
   keyFields?: string[];
+
+  /**
+   * In a schema document: the schemas that the document holds at more
+   * than one position, each written once, and at a position the name of
+   * one of them (`plan-and-label-templates.md` §1.5, provisional
+   * decision P7). `linkedSchema` puts the schema in the place of each
+   * name.
+   */
+  $defs?: Record<string, Schema>;
+  $ref?: string;
+};
+
+const linked = new WeakSet<object>();
+
+/**
+ * A schema document with each `$ref` replaced by the schema under `$defs`
+ * that it names: the same object at every position that names it, so the
+ * document is no larger for it. The document is changed in place, once.
+ */
+export const linkedSchema = <S>(document: S): S => {
+  if (typeof document !== "object" || document === null) return document;
+  if (linked.has(document)) return document;
+  linked.add(document);
+  const defs = (document as { $defs?: Record<string, unknown> }).$defs ?? {};
+  const seen = new WeakSet<object>();
+  const named = (value: unknown): unknown => {
+    const name = typeof value === "object" && value !== null &&
+        typeof (value as { $ref?: unknown }).$ref === "string"
+      ? (value as { $ref: string }).$ref.match(/^#\/\$defs\/(.+)$/)?.[1]
+      : undefined;
+    return name !== undefined && name in defs ? defs[name] : value;
+  };
+  const walk = (value: unknown): void => {
+    if (typeof value !== "object" || value === null || seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      value.forEach((member, index) => {
+        value[index] = named(member);
+        walk(value[index]);
+      });
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    for (const name of Object.keys(record)) {
+      if (name === "default") continue;
+      record[name] = named(record[name]);
+      walk(record[name]);
+    }
+  };
+  walk(defs);
+  walk(document);
+  return document;
 };
 
 /** The schema of a member of what a schema describes. */

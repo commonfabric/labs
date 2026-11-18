@@ -189,8 +189,8 @@
           {
             "id": "unhashed:schema/0",
             "schema": {
-              "properties": {
-                "first": {
+              "$defs": {
+                "t0": {
                   "properties": {
                     "name": {
                       "type": "string"
@@ -200,6 +200,11 @@
                     "name"
                   ],
                   "type": "object"
+                }
+              },
+              "properties": {
+                "first": {
+                  "$ref": "#/$defs/t0"
                 },
                 "selected": {
                   "asCell": [
@@ -207,15 +212,7 @@
                   ],
                   "properties": {
                     "room": {
-                      "properties": {
-                        "name": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "name"
-                      ],
-                      "type": "object"
+                      "$ref": "#/$defs/t0"
                     }
                   },
                   "type": "object"

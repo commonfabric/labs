@@ -1043,12 +1043,17 @@
           {
             "id": "unhashed:schema/0",
             "schema": {
-              "properties": {
-                "items": {
+              "$defs": {
+                "t0": {
                   "items": {
                     "type": "string"
                   },
                   "type": "array"
+                }
+              },
+              "properties": {
+                "items": {
+                  "$ref": "#/$defs/t0"
                 },
                 "seed": {
                   "properties": {
@@ -1056,10 +1061,7 @@
                       "type": "string"
                     },
                     "tags": {
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
+                      "$ref": "#/$defs/t0"
                     }
                   },
                   "required": [

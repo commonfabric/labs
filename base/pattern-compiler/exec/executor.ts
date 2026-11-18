@@ -34,6 +34,7 @@ import {
   keyFieldsOf,
   keySegment,
   keysOfParts,
+  linkedSchema,
   markerOf,
   memberKey,
   type Name,
@@ -1564,7 +1565,7 @@ export class Instance {
     this.plan = artifact.plan;
     this.code = artifact.code;
     for (const { id, schema } of artifact.schemas) {
-      if (schema !== undefined) this.#schemas.set(id, schema);
+      if (schema !== undefined) this.#schemas.set(id, linkedSchema(schema));
     }
     this.code.values.forEach((value, index) => {
       if (value.output !== undefined && value.function) {

@@ -462,31 +462,8 @@
           {
             "id": "unhashed:schema/1",
             "schema": {
-              "properties": {
-                "area": {
-                  "properties": {
-                    "center": {
-                      "properties": {
-                        "lat": {
-                          "type": "number"
-                        },
-                        "lng": {
-                          "type": "number"
-                        }
-                      },
-                      "required": [
-                        "lat",
-                        "lng"
-                      ],
-                      "type": "object"
-                    }
-                  },
-                  "required": [
-                    "center"
-                  ],
-                  "type": "object"
-                },
-                "center": {
+              "$defs": {
+                "t0": {
                   "properties": {
                     "lat": {
                       "type": "number"
@@ -500,6 +477,22 @@
                     "lng"
                   ],
                   "type": "object"
+                }
+              },
+              "properties": {
+                "area": {
+                  "properties": {
+                    "center": {
+                      "$ref": "#/$defs/t0"
+                    }
+                  },
+                  "required": [
+                    "center"
+                  ],
+                  "type": "object"
+                },
+                "center": {
+                  "$ref": "#/$defs/t0"
                 },
                 "go": {
                   "asCell": [

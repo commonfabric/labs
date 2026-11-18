@@ -938,48 +938,35 @@
           {
             "id": "unhashed:schema/0",
             "schema": {
+              "$defs": {
+                "t0": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "items": {
+                    "properties": {
+                      "rank": {
+                        "type": "number"
+                      },
+                      "suit": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "suit",
+                      "rank"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
               "properties": {
                 "left": {
-                  "asCell": [
-                    "cell"
-                  ],
-                  "items": {
-                    "properties": {
-                      "rank": {
-                        "type": "number"
-                      },
-                      "suit": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "suit",
-                      "rank"
-                    ],
-                    "type": "object"
-                  },
-                  "type": "array"
+                  "$ref": "#/$defs/t0"
                 },
                 "right": {
-                  "asCell": [
-                    "cell"
-                  ],
-                  "items": {
-                    "properties": {
-                      "rank": {
-                        "type": "number"
-                      },
-                      "suit": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "suit",
-                      "rank"
-                    ],
-                    "type": "object"
-                  },
-                  "type": "array"
+                  "$ref": "#/$defs/t0"
                 }
               },
               "required": [

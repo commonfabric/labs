@@ -3,6 +3,7 @@
  * with a value of each type its schema declares, a confidentiality atom of
  * its own for each top-level input, and one event for each handler.
  */
+import { linkedSchema } from "../exec/store.ts";
 import type { LabeledInput, Plan } from "./harness.ts";
 
 /** A JSON schema as the crate's `plan` command prints it. */
@@ -179,8 +180,9 @@ export const generateInputs = (
   schemas: Schemas,
   audience?: unknown,
 ): Record<string, LabeledInput> => {
-  const root = schemas.find((entry) => entry.id === plan.argumentSchema)
-    ?.schema;
+  const root = linkedSchema(
+    schemas.find((entry) => entry.id === plan.argumentSchema)?.schema,
+  );
   if (root === undefined) return {};
   const argument = resolve(root, root);
   if (typeof argument !== "object" || argument.properties === undefined) {
@@ -234,9 +236,10 @@ export const generateEvent = (
   // The whole declared type where the plan has it: the runtime reads an
   // event under the schema of the authored type (PL §3.12), and an event
   // without a required field it does not read is refused all the same.
-  const declared = schemas.find((entry) =>
-    entry.id === plan.bindings?.[binding]?.eventSchema
-  )?.schema;
+  const declared = linkedSchema(
+    schemas.find((entry) => entry.id === plan.bindings?.[binding]?.eventSchema)
+      ?.schema,
+  );
   if (declared !== undefined) {
     const value = generateValue(declared, declared, "event", 0, false);
     if (value !== NONE && value !== null && typeof value === "object") {
@@ -252,7 +255,9 @@ export const generateEvent = (
   for (const slot of plan.slots) {
     if (slot.root.kind !== "event" || slot.root.handler !== body) continue;
     if (slot.path.includes("*")) continue;
-    const schema = schemas.find((entry) => entry.id === slot.schema)?.schema ??
+    const schema = linkedSchema(
+      schemas.find((entry) => entry.id === slot.schema)?.schema,
+    ) ??
       true;
     const value = generateValue(schema, schema, `event-${slot.path.join("-")}`);
     if (value === NONE) continue;

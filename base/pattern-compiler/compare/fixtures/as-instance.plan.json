@@ -1313,22 +1313,8 @@
           {
             "id": "unhashed:schema/0",
             "schema": {
-              "properties": {
-                "items": {
-                  "items": {
-                    "properties": {
-                      "title": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "title"
-                    ],
-                    "type": "object"
-                  },
-                  "type": "array"
-                },
-                "lead": {
+              "$defs": {
+                "t0": {
                   "properties": {
                     "title": {
                       "type": "string"
@@ -1338,6 +1324,17 @@
                     "title"
                   ],
                   "type": "object"
+                }
+              },
+              "properties": {
+                "items": {
+                  "items": {
+                    "$ref": "#/$defs/t0"
+                  },
+                  "type": "array"
+                },
+                "lead": {
+                  "$ref": "#/$defs/t0"
                 },
                 "tags": {
                   "items": {

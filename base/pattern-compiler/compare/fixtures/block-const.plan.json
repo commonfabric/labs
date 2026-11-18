@@ -723,48 +723,44 @@
           {
             "id": "unhashed:schema/0",
             "schema": {
-              "properties": {
-                "fleet": {
+              "$defs": {
+                "t0": {
                   "properties": {
                     "ships": {
                       "items": {
-                        "properties": {
-                          "done": {
-                            "type": "boolean"
-                          },
-                          "text": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "text",
-                          "done"
-                        ],
-                        "type": "object"
+                        "$ref": "#/$defs/t1"
                       },
                       "type": "array"
                     }
                   },
                   "type": "object"
                 },
+                "t1": {
+                  "properties": {
+                    "done": {
+                      "type": "boolean"
+                    },
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text",
+                    "done"
+                  ],
+                  "type": "object"
+                }
+              },
+              "properties": {
+                "fleet": {
+                  "$ref": "#/$defs/t0"
+                },
                 "items": {
                   "asCell": [
                     "cell"
                   ],
                   "items": {
-                    "properties": {
-                      "done": {
-                        "type": "boolean"
-                      },
-                      "text": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "text",
-                      "done"
-                    ],
-                    "type": "object"
+                    "$ref": "#/$defs/t1"
                   },
                   "type": "array"
                 },
@@ -775,27 +771,7 @@
                   "type": "string"
                 },
                 "spare": {
-                  "properties": {
-                    "ships": {
-                      "items": {
-                        "properties": {
-                          "done": {
-                            "type": "boolean"
-                          },
-                          "text": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "text",
-                          "done"
-                        ],
-                        "type": "object"
-                      },
-                      "type": "array"
-                    }
-                  },
-                  "type": "object"
+                  "$ref": "#/$defs/t0"
                 }
               },
               "required": [

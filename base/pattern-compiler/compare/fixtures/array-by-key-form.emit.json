@@ -1355,6 +1355,42 @@
           {
             "id": "unhashed:schema/0",
             "schema": {
+              "$defs": {
+                "t0": {
+                  "properties": {
+                    "a:b": {
+                      "type": [
+                        "number",
+                        "string"
+                      ]
+                    },
+                    "position": {
+                      "properties": {
+                        "lat": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "lat"
+                      ],
+                      "type": "object"
+                    },
+                    "stars": {
+                      "type": "number"
+                    },
+                    "tag": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "a:b",
+                    "tag",
+                    "stars",
+                    "position"
+                  ],
+                  "type": "object"
+                }
+              },
               "properties": {
                 "bonus": {
                   "type": "number"
@@ -1367,38 +1403,7 @@
                     "cell"
                   ],
                   "items": {
-                    "properties": {
-                      "a:b": {
-                        "type": [
-                          "number",
-                          "string"
-                        ]
-                      },
-                      "position": {
-                        "properties": {
-                          "lat": {
-                            "type": "number"
-                          }
-                        },
-                        "required": [
-                          "lat"
-                        ],
-                        "type": "object"
-                      },
-                      "stars": {
-                        "type": "number"
-                      },
-                      "tag": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "a:b",
-                      "tag",
-                      "stars",
-                      "position"
-                    ],
-                    "type": "object"
+                    "$ref": "#/$defs/t0"
                   },
                   "keyFields": [
                     "a:b",
@@ -1408,38 +1413,7 @@
                 },
                 "seeds": {
                   "items": {
-                    "properties": {
-                      "a:b": {
-                        "type": [
-                          "number",
-                          "string"
-                        ]
-                      },
-                      "position": {
-                        "properties": {
-                          "lat": {
-                            "type": "number"
-                          }
-                        },
-                        "required": [
-                          "lat"
-                        ],
-                        "type": "object"
-                      },
-                      "stars": {
-                        "type": "number"
-                      },
-                      "tag": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "a:b",
-                      "tag",
-                      "stars",
-                      "position"
-                    ],
-                    "type": "object"
+                    "$ref": "#/$defs/t0"
                   },
                   "type": "array"
                 }

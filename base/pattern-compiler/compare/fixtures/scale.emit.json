@@ -583,41 +583,8 @@
           {
             "id": "unhashed:schema/0",
             "schema": {
-              "properties": {
-                "groups": {
-                  "items": {
-                    "properties": {
-                      "items": {
-                        "items": {
-                          "properties": {
-                            "done": {
-                              "type": "boolean"
-                            },
-                            "title": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "title",
-                            "done"
-                          ],
-                          "type": "object"
-                        },
-                        "type": "array"
-                      },
-                      "name": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "name",
-                      "items"
-                    ],
-                    "type": "object"
-                  },
-                  "type": "array"
-                },
-                "rows": {
+              "$defs": {
+                "t0": {
                   "items": {
                     "properties": {
                       "done": {
@@ -634,6 +601,29 @@
                     "type": "object"
                   },
                   "type": "array"
+                }
+              },
+              "properties": {
+                "groups": {
+                  "items": {
+                    "properties": {
+                      "items": {
+                        "$ref": "#/$defs/t0"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "items"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "rows": {
+                  "$ref": "#/$defs/t0"
                 }
               },
               "required": [

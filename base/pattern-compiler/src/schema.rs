@@ -451,3 +451,110 @@ fn union_schema(members: Vec<Value>) -> Value {
     }
     json!({ "anyOf": rest })
 }
+
+/// Writes each schema that a schema document holds at more than one
+/// position once, under `$defs` of the document, and a `$ref` at each
+/// position (provisional decision P7). Two schemas are one where they
+/// are structurally equal, annotations and defaults included. A schema
+/// with no schema below it, as that of a string, is written in place.
+pub fn share_types(document: &mut Value) {
+    fn holds_schemas(node: &Map<String, Value>) -> bool {
+        [
+            "properties",
+            "items",
+            "anyOf",
+            "prefixItems",
+            "additionalProperties",
+        ]
+        .iter()
+        .any(|member| {
+            node.get(*member)
+                .is_some_and(|below| below.is_object() || below.is_array())
+        })
+    }
+    fn count(value: &Value, counts: &mut std::collections::HashMap<String, usize>, root: bool) {
+        match value {
+            Value::Object(node) => {
+                if !root && holds_schemas(node) {
+                    let times = counts.entry(value.to_string()).or_insert(0);
+                    *times += 1;
+                    // What is below a schema that was counted before is
+                    // written once with it.
+                    if *times > 1 {
+                        return;
+                    }
+                }
+                for (name, member) in node {
+                    if name != "default" {
+                        count(member, counts, false);
+                    }
+                }
+            }
+            Value::Array(members) => members
+                .iter()
+                .for_each(|member| count(member, counts, false)),
+            _ => {}
+        }
+    }
+    struct Shared {
+        counts: std::collections::HashMap<String, usize>,
+        names: std::collections::HashMap<String, String>,
+        defs: Vec<(String, Value)>,
+    }
+    fn share(value: &mut Value, shared: &mut Shared, root: bool) {
+        match value {
+            Value::Object(node) => {
+                if !root && holds_schemas(node) {
+                    let key = value.to_string();
+                    if shared.counts.get(&key).copied().unwrap_or(0) > 1 {
+                        let name = match shared.names.get(&key) {
+                            Some(name) => name.clone(),
+                            None => {
+                                let name = format!("t{}", shared.names.len());
+                                shared.names.insert(key, name.clone());
+                                let mut held = value.clone();
+                                below(&mut held, shared);
+                                shared.defs.push((name.clone(), held));
+                                name
+                            }
+                        };
+                        *value = json!({ "$ref": format!("#/$defs/{name}") });
+                        return;
+                    }
+                }
+                below(value, shared);
+            }
+            Value::Array(members) => members
+                .iter_mut()
+                .for_each(|member| share(member, shared, false)),
+            _ => {}
+        }
+    }
+    fn below(value: &mut Value, shared: &mut Shared) {
+        if let Value::Object(node) = value {
+            for (name, member) in node.iter_mut() {
+                if name != "default" {
+                    share(member, shared, false);
+                }
+            }
+        }
+    }
+    let mut counts = std::collections::HashMap::new();
+    count(document, &mut counts, true);
+    let mut shared = Shared {
+        counts,
+        names: std::collections::HashMap::new(),
+        defs: Vec::new(),
+    };
+    share(document, &mut shared, true);
+    if shared.defs.is_empty() {
+        return;
+    }
+    if let Some(root) = document.as_object_mut() {
+        let mut defs = Map::new();
+        for (name, schema) in shared.defs {
+            defs.insert(name, schema);
+        }
+        root.insert("$defs".to_string(), Value::Object(defs));
+    }
+}

@@ -625,6 +625,14 @@
           {
             "id": "unhashed:schema/0",
             "schema": {
+              "$defs": {
+                "t0": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
               "properties": {
                 "flip": {
                   "type": "boolean"
@@ -633,10 +641,7 @@
                   "items": {
                     "properties": {
                       "members": {
-                        "items": {
-                          "type": "string"
-                        },
-                        "type": "array"
+                        "$ref": "#/$defs/t0"
                       },
                       "name": {
                         "type": "string"
@@ -666,10 +671,7 @@
                   "type": "array"
                 },
                 "words": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
+                  "$ref": "#/$defs/t0"
                 }
               },
               "required": [
