@@ -240,9 +240,10 @@ export type SetProfileInboxEvent = {
  */
 export type InboxPointable = {
   // The pointer is a typed link. An inbox labels its offers confidential to
-  // its owner, and the link carries that label; read as an untyped link from
-  // another space, it joins that label into the reading run, and the run is
-  // refused. `private-inbox.pointer-type.test.ts` pins the type.
+  // its owner; read as an untyped link from another space, the pointer is
+  // followed into those offers, the reading run joins that label, and
+  // writer-fit refuses the run's sends. `private-inbox.pointer-type.test.ts`
+  // pins the type.
   inbox?: ProfileInbox;
   // Optional so that a handler binding a list of these as a value still runs
   // over a stored profile of a vintage without the stream.
@@ -265,10 +266,9 @@ export function pointAtInboxIfUnset(
   profile: InboxPointable | undefined,
   holder: ProfileInbox | undefined,
 ): void {
-  // The holder's link reaches the inbox through the cell that wrote it. A link
-  // written into a profile's labeled `inbox` takes its label from the document
-  // it names, and only the inbox's own result document carries the schema
-  // that label comes from, so the profile is given that document.
+  // The holder's link reaches the inbox through the cell that wrote it. The
+  // profile is given the inbox's own result document, the one its typed
+  // pointer describes.
   const inbox = holder?.piece?.resolveAsCell();
   if (inbox === undefined || profile === undefined) return;
   if (profile.inbox?.piece !== undefined) return;
