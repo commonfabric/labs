@@ -3805,6 +3805,22 @@ const uiHelper = (
 };
 
 /**
+ * A built-in that the executor does not have. While the modules are
+ * evaluated, a call of it and a read of a member of it give such a value
+ * again, so a declaration at module scope that nothing of a run reads is
+ * evaluated. A call in a function body throws.
+ */
+const absent = (instance: Instance, name: string): unknown =>
+  new Proxy(function () {}, {
+    get: (_target, member) =>
+      typeof member === "string" ? absent(instance, name) : undefined,
+    apply: () => {
+      if (instance.loading) return absent(instance, name);
+      throw new Unsupported(`the built-in \`${name}\` in a function body`);
+    },
+  });
+
+/**
  * What a module of compiled code imports from `commonfabric`: the
  * constants, the cell constructors a function body may call, and a marker
  * for each builder, whose function the value code holds already.
@@ -3912,10 +3928,7 @@ const commonfabric = (instance: Instance): unknown => {
       }
       // At module scope a built-in the executor does not have gives a
       // value nothing of a run reads, such as a declaration of policy.
-      return (..._given: unknown[]) => {
-        if (instance.loading) return undefined;
-        throw new Unsupported(`the built-in \`${name}\` in a function body`);
-      };
+      return absent(instance, name);
     },
   });
 };

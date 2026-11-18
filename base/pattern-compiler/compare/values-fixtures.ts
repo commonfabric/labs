@@ -218,6 +218,8 @@ const WRITTEN: Record<string, Written[]> = {
   // A constant at a position of handle type that a sandboxed body
   // reads through its handle.
   "body-constant": [{ argument: { words: ["a", "b"] } }],
+  // A declaration of policy at module scope, which no run reads.
+  "module-policy": [{ argument: { message: "kept" } }],
   // The debug renderers, in the reactive tier and in a function body.
   "debug-strings": [{
     argument: { entry: { tags: ["x", "y"], title: "a" } },

@@ -6301,3 +6301,15 @@ describe("a name of handle type that a body captures and the call binds to a con
     expect(instance.result()).toEqual({ open: "a,b", closed: "-" });
   });
 });
+
+// A declaration of policy at module scope names built-ins that the
+// executor does not have (`fixtures/module-policy.tsx`).
+describe("a built-in that the executor does not have", () => {
+  it("gives, at module scope, a value whose members can be read and called", async () => {
+    const instance = new Instance(await artifactOf("module-policy"), {
+      message: "kept",
+    });
+
+    expect(instance.result()).toEqual({ message: "kept" });
+  });
+});
