@@ -152,6 +152,7 @@ import {
   captureMissing,
   type GateRoots,
   pinNewestGeneration,
+  type Progress,
   replayAll,
 } from "./pattern-vintage-run.ts";
 import {
@@ -197,6 +198,9 @@ export interface VintageGateOptions {
 
   /** Whether the replay writes one record per fixture into the run's spool. */
   recordResults?: boolean;
+
+  /** Receives a line as each replay or capture step of the run begins. */
+  progress?: Progress;
 }
 
 /**
@@ -211,6 +215,7 @@ export async function runPatternVintage(
     systemPatternUrls,
     acceptedDrops = ACCEPTED_STATE_DROPS,
     recordResults = false,
+    progress,
   } = options;
   const { repoRoot } = roots;
 
@@ -258,6 +263,7 @@ export async function runPatternVintage(
       roots,
       named,
       new Date(),
+      progress,
     );
     const out = captured.length === 0 && problems.length === 0
       ? [`Already pinned: ${named.join(", ")}.`]
@@ -286,11 +292,12 @@ export async function runPatternVintage(
     recordResults,
     only,
     acceptedDrops,
+    progress,
   });
 
   if (args.includes("--capture-changed")) {
     return describeCaptureOutcome(
-      await captureChangedGenerations(roots, replay, new Date()),
+      await captureChangedGenerations(roots, replay, new Date(), progress),
       repoRoot,
     );
   }
@@ -369,5 +376,10 @@ if (import.meta.main) {
   // explicitly through `emit`, which is what keeps the guard from firing on a
   // success.
   armVerdictGuard(globalThis, Deno.exit);
-  emit(await runPatternVintage(Deno.args, { recordResults: true }));
+  emit(
+    await runPatternVintage(Deno.args, {
+      recordResults: true,
+      progress: (line) => console.error(line),
+    }),
+  );
 }
