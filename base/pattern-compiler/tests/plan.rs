@@ -4692,7 +4692,7 @@ fn the_plan_of_a_pattern_called_at_two_sites_per_level_is_linear_in_the_depth() 
             ));
         }
         text.push_str(&format!(
-            "export const Top = pattern<{{ n: number }}>(({{ n }}) => ({{ v: P{depth}({{ n }}).v }}));\n"
+            "export const Top = pattern<{{ n: number }}>(({{ n }}) => {{ const top = P{depth}({{ n }}); return {{ v: top.v }}; }});\n"
         ));
         raw_plan_of(&program(&text), "Top").to_string().len()
     };
