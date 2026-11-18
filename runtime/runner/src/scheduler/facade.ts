@@ -3512,7 +3512,8 @@ export class Scheduler {
       isLiveAction: (action) => this.#isLiveAction(action),
       hasActiveDebounceTimer: (action) =>
         this.#gates.hasActiveDebounceTimer(action),
-      getNextEligibleRunTime: (action) => this.#getNextEligibleRunTime(action),
+      getNextEligibleRunTime: (action, now) =>
+        this.#getNextEligibleRunTime(action, now),
       // Engaged only while an initial rehydration is being applied (synchronous
       // post-phase-7). MUST NOT read backgroundTasks: that set holds work such
       // as an event-driven piece start (events.ts) or a sidecar pattern launch,
@@ -4037,8 +4038,11 @@ export class Scheduler {
     return record?.status === "invalid" || record?.status === "never-ran";
   }
 
-  #getNextEligibleRunTime(action: Action): number | undefined {
-    return this.#gates.getNextEligibleRunTime(action);
+  #getNextEligibleRunTime(
+    action: Action,
+    now = performance.now(),
+  ): number | undefined {
+    return this.#gates.getNextEligibleRunTime(action, now);
   }
 
   #markActionInvalid(
