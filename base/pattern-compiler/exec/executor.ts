@@ -1542,6 +1542,53 @@ export type Transaction = {
 };
 
 /**
+ * What a store that keeps the executor's documents outside the executor
+ * is told of each transaction, as the runtime's storage transactions
+ * keep them (`docs/plans/compiled-pattern-language-integration.md`,
+ * milestone 1). The executor computes on the documents it holds in
+ * memory, and the store sees the same reads and changes.
+ */
+export type TransactionHooks = {
+  /**
+   * A transaction of the cause given opened. `send` is the append of an
+   * event sent from outside the executor to its stream, which is the
+   * sender's write and no transaction of the executor (ES §4.7), and
+   * `watermark` the watermark of a stream passing an event, which the
+   * executor moves after the event's transaction (SS §5.5).
+   */
+  begin(cause: Transaction["cause"] | "send" | "watermark"): void;
+
+  /**
+   * The transaction in progress read a position of a document: one a
+   * link the read followed was at, or the one the read ended at.
+   */
+  read(doc: string, path: readonly string[]): void;
+
+  /**
+   * The transaction in progress changed a path of a document, which
+   * `store` holds as it is after the change. A splice is a change of the
+   * array's path, and a document that was removed is a change of its
+   * root.
+   */
+  change(doc: string, path: readonly string[], store: Store): void;
+
+  /**
+   * The transaction ended. Where it commits, `changes` holds every change
+   * it made to a document, in order, and `store` holds the documents as
+   * they are after it. `record` is the executor's record of the
+   * transaction, which the append of a sent event has none of.
+   */
+  end(
+    ended: {
+      committed: boolean;
+      changes: readonly Undo[];
+      store: Store;
+      record?: Transaction;
+    },
+  ): void;
+};
+
+/**
  * A request of an effect that left the executor and has no completion
  * yet (SS §6.2, step 6): what a test answers in place of the network.
  */
@@ -1690,6 +1737,13 @@ export class Instance {
   >();
   /** On the root: the transaction in progress. */
   #tx: Open | undefined;
+  /**
+   * On the root: a write outside the executor's transactions is being
+   * made, which `transactions` is told of as a transaction of its own:
+   * the append of an event sent from outside, and the watermark of a
+   * stream passing an event.
+   */
+  #outside = false;
   /** On the root: the entries being evaluated, innermost last. */
   readonly #evaluating: { instance: Instance; key: string }[] = [];
   /** The run of a function body in progress (ES §2.8, "Identity"). */
@@ -2016,6 +2070,9 @@ export class Instance {
     },
   ): void {
     const open = this.#tx;
+    if (open !== undefined || this.#outside) {
+      this.options.transactions?.change(change.doc, change.path, this.store);
+    }
     if (open !== undefined) {
       const { store } = this;
       const now = store.peek(change.doc, change.path);
@@ -2234,6 +2291,19 @@ export class Instance {
        * decision P20); `false` keeps no part documents.
        */
       parts?: PartsOptions | false;
+      /**
+       * A store outside the executor that keeps its documents, told of
+       * each transaction (`TransactionHooks`). Only the hooks of the
+       * instance the executor was started with are called.
+       */
+      transactions?: TransactionHooks;
+      /**
+       * Documents that exist before the instance is created, each with
+       * its identifier, its kind and its value: the documents of the
+       * inputs that the argument links to. They are made outside any
+       * transaction, so `transactions` is told of no change to them.
+       */
+      documents?: { id: string; kind: string; value: unknown }[];
     } = {},
   ) {
     this.store = options.parent?.store ??
@@ -2260,6 +2330,15 @@ export class Instance {
     if (this.root === this) {
       this.store.onWrite = (doc, path) => this.#wrote(doc, path);
       this.store.onChange = (change) => this.#changed(change);
+      const hooks = options.transactions;
+      if (hooks !== undefined) {
+        this.store.onRead = (doc, path) => {
+          if (this.#tx !== undefined) hooks.read(doc, path);
+        };
+      }
+    }
+    for (const { id, kind, value } of options.documents ?? []) {
+      this.store.create(id, kind, value);
     }
     // The creation of an instance by something that is no handler is a
     // transaction that writes its two documents and evaluates nothing
@@ -2319,6 +2398,7 @@ export class Instance {
     };
     this.#tx = open;
     this.store.journal = open.journal;
+    this.options.transactions?.begin(cause);
     return open;
   }
 
@@ -2373,6 +2453,12 @@ export class Instance {
     this.#tx = undefined;
     this.store.journal = undefined;
     this.#transactions.push(open.record);
+    this.options.transactions?.end({
+      committed,
+      changes: committed ? open.journal : [],
+      store: this.store,
+      record: open.record,
+    });
   }
 
   /**
@@ -6386,16 +6472,42 @@ export class Instance {
    * document holds the entries and the watermark and nothing else.
    */
   #append(stream: StreamRef, event: unknown): void {
-    const id = this.#streamIdentifier(stream);
-    const held = this.store.docs.get(id)?.value as
-      | { entries: unknown[] }
-      | undefined;
-    const entry = { event: this.stored(event) };
-    if (held === undefined) {
-      this.store.create(id, "stream", { entries: [entry], eventWatermark: 0 });
-    } else {
-      this.store.write(new Ref(id, ["entries"]), [...held.entries, entry]);
+    // An event sent from outside the executor is the sender's write; an
+    // event a handler sends is part of the handler's transaction.
+    this.#writeOutside("send", () => {
+      const id = this.#streamIdentifier(stream);
+      const held = this.store.docs.get(id)?.value as
+        | { entries: unknown[] }
+        | undefined;
+      const entry = { event: this.stored(event) };
+      if (held === undefined) {
+        this.store.create(id, "stream", {
+          entries: [entry],
+          eventWatermark: 0,
+        });
+      } else {
+        this.store.write(new Ref(id, ["entries"]), [...held.entries, entry]);
+      }
+    });
+  }
+
+  /**
+   * On the root: makes a write, which is part of the transaction in
+   * progress where one is, and otherwise one that a store outside the
+   * executor commits by itself (`TransactionHooks`).
+   */
+  #writeOutside(cause: "send" | "watermark", write: () => void): void {
+    const hooks = this.#tx === undefined
+      ? this.options.transactions
+      : undefined;
+    hooks?.begin(cause);
+    this.#outside = hooks !== undefined;
+    try {
+      write();
+    } finally {
+      this.#outside = false;
     }
+    hooks?.end({ committed: true, changes: [], store: this.store });
   }
 
   /** On the root: moves the watermark of a stream past one entry. */
@@ -6405,10 +6517,11 @@ export class Instance {
       | { eventWatermark: number }
       | undefined;
     if (held === undefined) return;
-    this.store.write(
-      new Ref(id, ["eventWatermark"]),
-      held.eventWatermark + 1,
-    );
+    this.#writeOutside("watermark", () =>
+      this.store.write(
+        new Ref(id, ["eventWatermark"]),
+        held.eventWatermark + 1,
+      ));
   }
 
   /**

@@ -859,6 +859,15 @@ export class Store {
     | undefined;
 
   /**
+   * Called for each position a read goes through, with the document and
+   * the path: the position of each link the read follows, and the
+   * position it ends at. Whoever keeps the documents in a store with a
+   * journal of reads, as the runtime's transactions do, records the read
+   * there.
+   */
+  onRead: ((doc: string, path: readonly string[]) => void) | undefined;
+
+  /**
    * What each change of a transaction in progress replaced, in order,
    * while a transaction keeps one: enough to put back what a path held
    * before the transaction, without a copy of its document.
@@ -1610,6 +1619,7 @@ export class Store {
           };
         }
         reads?.push({ doc, path: at });
+        this.onRead?.(doc, at);
         const below = rest.reduce(schemaBelow, value.$link.schema);
         // The schema of the first link crossed, where the reference has
         // none of its own, and the default of the last link that
@@ -1707,6 +1717,7 @@ export class Store {
       named_ = [...named_, segment];
     }
     reads?.push({ doc, path: at });
+    this.onRead?.(doc, at);
     return {
       ref: new Ref(doc, at, schema),
       value,
