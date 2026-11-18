@@ -4129,6 +4129,20 @@ export class Server {
   }
 
   /**
+   * Whether `session` holds a delegated READ binding (OW31) whose principal
+   * is no longer in the delegating class. The class can shrink while the
+   * session is open: `acl.isDelegatingPeer` stops naming a toolshed the
+   * memory router's directory no longer lists. No access-list change follows
+   * that, so the bound session is refused from its next decision instead of
+   * reading on as the space's owner.
+   */
+  #bindingEnded(session: SessionState): boolean {
+    return session.actingPrincipal !== undefined &&
+      (session.principal === undefined ||
+        !this.#isDelegatingPrincipal(session.principal));
+  }
+
+  /**
    * Resolve the acting principal a delegated READ binding stands for
    * (OW31; `SessionDescriptor.actingAs: "space-owner"`): the space's ACL
    * OWNER — the space DID itself when self-owned (every home space),
@@ -4166,27 +4180,42 @@ export class Server {
   }
 
   /**
-   * Decides the person `session` stands for against `engine`'s copy of its
-   * space, and records it as `session.person`
-   * (`docs/features/active-user-counting.md`). A serving loop's own session,
-   * and a session whose principal is not a person's, stands for nobody. Any
-   * other session stands for the first person's identity among its chain's
-   * issuers, root first, and then its principal. The `*` principal, service
-   * principals, and delegating principals are not people's identities, and
-   * neither is a space's own key unless the space is a Home space or has
-   * history and no access list, which only a space older than access lists
-   * has.
+   * Decides, against `engine`'s copy of `session`'s space, whether the
+   * space's own key is a person's identity there, and records it as
+   * `session.ownKeyIsPerson` for {@link #personOf}. It is when the space is
+   * a Home space, or has history and no access list, which only a space
+   * older than access lists has. Decided only for a session whose principal
+   * or chain names the space's key, since no other session asks.
    */
-  #decidePerson(session: SessionState, engine: Engine.Engine): void {
+  #decideOwnKey(session: SessionState, engine: Engine.Engine): void {
+    const { space } = session;
+    session.ownKeyIsPerson =
+      session.principal === space || session.chainIssuers?.includes(space)
+        ? this.#isHome(engine, space) ||
+          (this.#aclState(engine, space).kind === "missing" &&
+            Engine.serverSeq(engine) > 0)
+        : undefined;
+  }
+
+  /**
+   * The person `session` stands for (`docs/features/active-user-counting.md`),
+   * or `undefined`. A serving loop's own session, and a session whose
+   * principal is not a person's, stands for nobody. Any other session stands
+   * for the first person's identity among its chain's issuers, root first,
+   * and then its principal. The `*` principal, service principals, and
+   * delegating principals are not people's identities, and neither is a
+   * space's own key unless `session.ownKeyIsPerson` says it is. The
+   * delegating class is read as it is at the call, so a toolshed identity the
+   * memory router's directory starts or stops listing is judged anew on a
+   * session that is already open.
+   */
+  #personOf(session: SessionState): string | undefined {
     const { principal, space } = session;
-    let ownKeyIsPerson: boolean | undefined;
     const isPerson = (did: string) =>
       did !== ANYONE_USER && !this.#isServicePrincipal(did) &&
       !this.#isDelegatingPrincipal(did) &&
-      (did !== space || (ownKeyIsPerson ??= this.#isHome(engine, space) ||
-        (this.#aclState(engine, space).kind === "missing" &&
-          Engine.serverSeq(engine) > 0)));
-    session.person = session.servingOwn === true || principal === undefined ||
+      (did !== space || session.ownKeyIsPerson === true);
+    return session.servingOwn === true || principal === undefined ||
         !isPerson(principal)
       ? undefined
       : [...(session.chainIssuers ?? []), principal].find(isPerson);
@@ -4195,17 +4224,19 @@ export class Server {
   /**
    * Sets the attributes that say whom `span`'s work is for, each when
    * `session` has one: `user.did`, the principal that signed the session's
-   * open, and `enduser.id`, the person the session stands for. Attributes
-   * only accumulate on a span, so one set again after the person is decided
-   * afresh keeps an `enduser.id` it already carried.
+   * open, and `enduser.id`, the person the session stands for. A span that
+   * records nothing gets neither, so the person is decided only for spans
+   * that keep it. Attributes only accumulate on a span, so one set again
+   * after the person is decided afresh keeps an `enduser.id` it already
+   * carried.
    */
   #attributeSpan(span: Span, session: SessionState): void {
+    if (!span.isRecording()) return;
     if (session.principal !== undefined && session.principal !== ANYONE_USER) {
       span.setAttribute("user.did", session.principal);
     }
-    if (session.person !== undefined) {
-      span.setAttribute("enduser.id", session.person);
-    }
+    const person = this.#personOf(session);
+    if (person !== undefined) span.setAttribute("enduser.id", person);
   }
 
   /**
@@ -4484,6 +4515,12 @@ export class Server {
     }
     if (this.#sessions.get(space, sessionId) !== session) {
       return toError("SessionError", "Unknown session for space");
+    }
+    if (this.#bindingEnded(session)) {
+      return toError(
+        "SessionRevokedError",
+        "The session's principal is no longer a delegating principal",
+      );
     }
     // The delegated READ binding (OW31, READ side RULED 2026-08-19): a
     // bound session's READ-class decisions resolve as the ACTING user
@@ -4795,8 +4832,9 @@ export class Server {
 
   /**
    * Brings the sessions on `space` up to date after a change to its access
-   * list: decides again the person each stands for, revokes those the list
-   * no longer admits, and notices the admissions it now allows.
+   * list: decides again whether the space's own key is a person's for each,
+   * revokes those the list no longer admits, and notices the admissions it
+   * now allows.
    * `writerSessionId` names the session whose commit made the change, as
    * {@link #revokeDeauthorizedSessions} takes it.
    */
@@ -4806,7 +4844,7 @@ export class Server {
     writerSessionId?: string,
   ): void {
     for (const session of this.#sessions.sessionsForSpace(space)) {
-      this.#decidePerson(session, engine);
+      this.#decideOwnKey(session, engine);
     }
     this.#revokeDeauthorizedSessions(engine, space, writerSessionId);
     this.#noticeAdmissions(engine, space);
@@ -6653,12 +6691,14 @@ export class Server {
       }
       // The delegated READ binding (OW31, READ side RULED 2026-08-19):
       // `actingAs: "space-owner"` is admitted only for a DELEGATING-class
-      // envelope (the co-hosted process identity under the flag — the
-      // LT5 trust footing), and resolves to the space's ACL OWNER, the
-      // user the session's READ-class decisions then run as. Inert in
-      // `off` mode (off preserves historical behavior); refused hard in
-      // observe AND enforce for a non-delegating envelope — the marker
-      // is an admission-validity claim, not a capability shortfall.
+      // envelope (under the flag, the co-hosted process identity and,
+      // behind the memory router, each toolshed identity its directory
+      // lists — the LT5 trust footing), and resolves to the space's ACL
+      // OWNER, the user the session's READ-class decisions then run as.
+      // Inert in `off` mode (off preserves historical behavior); refused
+      // hard in observe AND enforce for a non-delegating envelope — the
+      // marker is an admission-validity claim, not a capability shortfall,
+      // and `#bindingEnded` re-judges it at each later decision.
       let actingPrincipal: string | undefined;
       const actingAs = message.session.actingAs;
       if (actingAs !== undefined && this.#aclMode() !== "off") {
@@ -6681,7 +6721,8 @@ export class Server {
               "AuthorizationError",
               `Principal ${principal ?? "<anonymous>"} may not open a ` +
                 `session acting as the owner of ${message.space}: not a ` +
-                "delegating principal (memory ACL delegatingDids; OW31)",
+                "delegating principal (memory ACL delegatingDids or the memory " +
+                "router's directory; OW31)",
             ),
           );
         }
@@ -6862,7 +6903,7 @@ export class Server {
         }
         throw error;
       }
-      this.#decidePerson(opened.state, engine);
+      this.#decideOwnKey(opened.state, engine);
       const openSpan = tracer.startSpan("memory.session.open");
       openSpan.setAttribute("space.did", message.space);
       openSpan.setAttribute("session.id", opened.sessionId);
@@ -10528,6 +10569,19 @@ export class Server {
       return Promise.resolve(null);
     }
     if (session.routedAuthority?.() === false) return Promise.resolve(null);
+    if (this.#bindingEnded(session)) {
+      // No request is waiting on this pass, so the session is revoked here,
+      // as an access-list change revokes one it leaves without READ.
+      this.#sessions.remove(space, sessionId);
+      if (session.ownerConnectionId !== null) {
+        this.#connections.get(session.ownerConnectionId)?.revokeSession(
+          space,
+          sessionId,
+          "unauthorized",
+        );
+      }
+      return Promise.resolve(null);
+    }
     // The catch-up marker is consumed into `session.caughtUpLocalSeq` (and
     // stamped on the frame) DURING evaluation; capture the pre-call values
     // so a throwing evaluation can restore them — the marker is the one

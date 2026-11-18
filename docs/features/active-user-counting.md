@@ -50,7 +50,7 @@ established by signature verification, so it is not something a client can
 assert on its own.
 
 The server decides the person a session stands for from that principal and from
-what else the open established (`Server.#decidePerson`):
+what else the open established (`Server.#personOf`):
 
 1. **Some sessions stand for nobody.** These are a serving loop's own sessions
    (`SessionState.servingOwn`), and sessions whose principal is not a person's
@@ -79,9 +79,13 @@ what else the open established (`Server.#decidePerson`):
    the same test that refuses to delete one. A space with history and no access
    list predates access lists, and its own key is taken to be its person's.
 
-The decision is made when a session opens, and again for every session on a
-space whenever that space's access list changes, so the genesis commit that
-makes a space a Home space is attributed to its person.
+The decision is made each time a span is attributed. The part that reads the
+space, whether its own key is a person's, is decided when a session opens and
+again for every session on a space whenever that space's access list changes
+(`Server.#decideOwnKey`), so the genesis commit that makes a space a Home space
+is attributed to its person. The service and delegating classes are read as
+they are at the span, so a toolshed identity the memory router's directory
+starts or stops listing is judged anew on a session that is already open.
 
 ## The Available Signal
 

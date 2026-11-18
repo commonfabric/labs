@@ -110,8 +110,11 @@ export async function openMemory(
   // `MEMORY_SERVICE_DIDS` list is used verbatim on both arms, and the
   // Phase-7 implicit-OWNER blanket is retired (the serving identity never
   // writes into users' home spaces; served writes ride the wave's §2b
-  // delegated carriage under the acting user). OFF the flag the delegating
-  // list is empty — byte-identical ACL decisions.
+  // delegated carriage under the acting user). Behind the memory router each
+  // toolshed identity the directory lists is a delegating principal too: a
+  // crossing from the toolshed serving another space opens its session, with
+  // the same binding, as that toolshed's identity. OFF the flag the
+  // delegating class is empty — byte-identical ACL decisions.
   const serverExecutionOn = serverExecutionEnabledFromEnv(getEnv);
   const memoryAclPrincipals = memoryAclPrincipalsFor({
     configured: environment.MEMORY_SERVICE_DIDS
