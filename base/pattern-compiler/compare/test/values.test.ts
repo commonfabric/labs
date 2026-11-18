@@ -166,6 +166,24 @@ describe("the values of a fixture", () => {
     expect(comparison.compared).toBe(2);
   });
 
+  it("are equal for a stream at a member written after a spread and at a child written after a JSX spread child, in a `computed`", async () => {
+    // The arrays hold plain values in place, which each `computed`
+    // reads whole.
+    const [{ comparison }] = await compareFixtures("spread-stream");
+
+    expect(comparison.notExecuted).toBeUndefined();
+    expect(comparison.differences).toEqual([]);
+    expect(comparison.failedEvents).toEqual([]);
+    expect(comparison.notSent ?? []).toEqual([]);
+    // Four members of the result and one state cell, after the instance
+    // settled and after each of the two events.
+    expect(comparison.compared).toBe(15);
+    expect(comparison.equal).toBe(15);
+    // The links of `after` in `rows` and in the tree, and of `tail` in
+    // `words`.
+    expect(comparison.storedStreams).toBe(3);
+  });
+
   it("are equal for cones with side-writes of both kinds", async () => {
     // Ruling Z7: two cones that write a named cell, one of them demanded
     // by a path that passes the cell on, and a materializer.

@@ -117,6 +117,20 @@ const WRITTEN: Record<string, Written[]> = {
       { binding: 1, event: {} },
     ],
   }],
+  // A stream at a member written after a spread in an array value, and
+  // at a child written after two JSX spread children, each written in a
+  // `computed`, which today's runtime runs. The arrays hold plain values
+  // in place.
+  "spread-stream": [{
+    argument: {
+      items: [{ title: "a" }, { title: "b" }],
+      tags: ["x", "y", "z"],
+    },
+    events: [
+      { binding: 0, event: { by: 1 } },
+      { binding: 1, event: { by: 10 } },
+    ],
+  }],
   "flat-keys": [{
     argument: {
       groups: [
