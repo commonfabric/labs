@@ -160,6 +160,16 @@ export class EffectsChannel {
     this.#spaces.delete(space);
   }
 
+  /**
+   * Whether an enactment that has settled in `space` still acks there: the
+   * channel is open and still subscribed to the space. An ack into a space
+   * the storage manager has released would open it again; the next open
+   * re-reads the stored instance, and acks what this runtime enacted.
+   */
+  #tracks(space: MemorySpace): boolean {
+    return !this.#closed && this.#spaces.has(space);
+  }
+
   /** Subscribe to this session's effects instance in `space` (idempotent
    * per space). The doc names scope "session" and NO key: the instance
    * resolves from the runtime's own authenticated session, and push
@@ -332,7 +342,7 @@ export class EffectsChannel {
         // and a later delivery retries instead of acking a navigation
         // that never happened.
         void inFlight.then((ok) => {
-          if (ok && !this.#closed) this.#ack(space, nonce);
+          if (ok && this.#tracks(space)) this.#ack(space, nonce);
         });
         continue;
       }
@@ -395,7 +405,7 @@ export class EffectsChannel {
         // delivery converges on the in-flight record instead of
         // double-enacting — and chain the ack on SUCCESS only.
         void this.#beginEnactment(nonce, work).then((ok) => {
-          if (ok && !this.#closed) this.#ack(space, nonce);
+          if (ok && this.#tracks(space)) this.#ack(space, nonce);
         });
         continue;
       }

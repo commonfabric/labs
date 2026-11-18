@@ -2978,32 +2978,36 @@ export class StorageManager implements IStorageManager {
         createSession: this.#sessionFactory.supportsAclBootstrap === true
           ? async (routeGeneration, routeSignal) => {
             await this.#releasingSessions.get(space);
-            const resume = this.#takeReleasedSession(space);
+            const resume = this.#releasedResumeOf(space);
             if (resume !== undefined) {
               this.#detachedSessionResumes.set(space, {
                 options: resume,
                 routeGeneration,
               });
             }
-            return await this.#createInitializedSession(
+            const opened = await this.#createInitializedSession(
               space,
               signer,
               routeState,
               routeGeneration,
               routeSignal,
             );
+            this.#releasedSessions.delete(space);
+            return opened;
           }
           : async (_routeGeneration, routeSignal) => {
             await this.#releasingSessions.get(space);
-            return await this.#createSession(
+            const opened = await this.#createSession(
               space,
               signer,
-              this.#takeReleasedSession(space) ?? {
+              this.#releasedResumeOf(space) ?? {
                 sessionId: this.#sessionId,
                 ...this.#sessionDescriptorFields(),
               },
               routeSignal,
             );
+            this.#releasedSessions.delete(space);
+            return opened;
           },
         syncReplayDependencies: (document) =>
           this.#syncCfcSchemaDocument(space, document),
@@ -3855,15 +3859,15 @@ export class StorageManager implements IStorageManager {
 
   /**
    * Helper for opening a session in `space`, which returns how to resume the
-   * session a release of the space left, once, or `undefined` when none is
-   * left.
+   * session a release of the space left, or `undefined` when none is left.
+   * The session is forgotten only once an open of it succeeds, so an open
+   * that fails is followed by one that presents the same resume.
    */
-  #takeReleasedSession(
+  #releasedResumeOf(
     space: MemorySpace,
   ): MemoryV2Client.MountOptions | undefined {
     const released = this.#releasedSessions.get(space);
     if (released === undefined) return undefined;
-    this.#releasedSessions.delete(space);
     return {
       sessionId: released.sessionId,
       seenSeq: released.seenSeq,

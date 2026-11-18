@@ -237,6 +237,9 @@ client-effect channel's subscription to the space's effects document
 (`EffectsChannel`). Each exists because the space is open, so counting it
 would keep every opened space open. Releasing the space ends both.
 
+A pass releases no space while a commit spanning several spaces is still
+applying.
+
 Releasing a space closes its session: `session.close` on a shared connection,
 which leaves the connection to its other sessions, and the connection itself
 when the session has one of its own. The provider is dropped with what the
@@ -264,7 +267,7 @@ server takes a commit under a local sequence the session has used already for
 a replay of the commit it stored there, and a new replica would otherwise
 start that sequence again. The next session opened in the
 space presents them, once the closing has finished. A server that no longer
-holds the session, because the while has run out or because it restarted,
+holds the session, because the resume window has run out or because it restarted,
 opens the id as a new session, and the reopened space works the same way.
 
 ## Reading a released document again

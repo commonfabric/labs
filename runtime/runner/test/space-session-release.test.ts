@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { connect, loopback } from "@commonfabric/memory/v2/client";
@@ -227,6 +228,71 @@ describe("space-session-release", () => {
 
     expect(isOpen(space)).toBe(true);
     expect(value).toEqual({ n: 2 });
+  });
+
+  it("releases a space on a runtime with server execution on, whose effects channel subscribed to it", async () => {
+    // The effects channel subscribes to every space the runtime opens; its
+    // subscription is the runtime's own, which keeps no space open.
+
+    const storage = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage,
+      experimental: { serverExecution: true },
+    });
+    try {
+      expect(runtime.experimental.serverExecution).toBe(true);
+      const { space, id } = await spaceWith(1);
+      expect(
+        (await storage.open(space).sync(id, { path: [], schema: false }))
+          .error,
+      ).toBeUndefined();
+      await runtime.idle();
+      await storage.synced();
+      const documents = () =>
+        runtime.getSizes().storage?.bySpace.find((entry) =>
+          entry.space === space
+        )?.documents ?? 0;
+      expect(documents()).toBeGreaterThan(1);
+
+      await runtime.scheduler.idle();
+      await storage.releaseUnreadDocuments();
+      await storage.releaseUnreadDocuments();
+
+      expect(storage.openedSpaces()).not.toContain(space);
+    } finally {
+      await runtime.dispose();
+      await storage.close();
+    }
+  });
+
+  it("opens a released space again after a first open of it fails", async () => {
+    // A failed open is followed by one that presents the same resume, which
+    // the server still holding the closed session takes.
+
+    const { space, id } = await spaceWith(1);
+    await load(space, id);
+    await releaseTwice();
+    expect(isOpen(space)).toBe(false);
+    const connect = stub(server, "connect", () => {
+      connect.restore();
+      throw new Error("connection refused");
+    });
+    try {
+      const failed = await readerStorage.open(space).sync(id, {
+        path: [],
+        schema: false,
+      });
+      expect(failed.error).toBeDefined();
+      expect(connect.calls.length).toBe(1);
+    } finally {
+      if (!connect.restored) connect.restore();
+    }
+
+    const counter = reader.getCell(space, "counter", counterSchema);
+
+    expect(await counter.pull()).toEqual({ n: 1 });
+    expect(readerStorage.spaceAccessError(space)).toBeUndefined();
   });
 
   it("releases a space again once nothing uses it after it reopened", async () => {
