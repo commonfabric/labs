@@ -185,6 +185,7 @@ The artifact's `code` has these members.
 | `values`              | For each value a cone computes: its cone, its entry of `Plan.outputs`, and whether it has a value function                        |
 | `outputsBelow`        | The interim outputs at a path below a value                                                                                       |
 | `handlers`            | For each handler body: whether its state is its second parameter or what it captures                                              |
+| `dataFiles`           | The files that the `dataFile` calls of the program name, each with its text, which the `emit` command reads                       |
 | `unlistedReads`       | The reads the value code makes of a place that no slot of its cone names                                                          |
 | `valuesWithoutOutput` | The values the code refers to that have no entry of `Plan.outputs`                                                                |
 | `unsupported`         | The constructs the emitter writes no code for                                                                                     |
@@ -221,6 +222,24 @@ bound to a name whose property the call writes as a literal holds the literal as
 its constant. Where code of the caller names a path of the callee's result, the
 crate resolves it to the caller's slot at compile time and writes a read of that
 slot with no default, which is a defect of the crate.
+
+A name that an `action`, an inline handler or a sandboxed body captures has the
+type it is declared with: the slot of root `binding` of the name has the schema
+of that type, a handle where a pattern declares one for the property of its
+parameter. Where the call of a pattern compiled in binds such a name to a
+constant, a literal or the default of a path it leaves out, the body is handed a
+handle that reads the constant and refuses a write (`execution-and-storage.md`
+§2.4). A handler written in place takes that name from its state, and a
+sandboxed body is given `$h.constant(name)`
+(`compare/fixtures/action-constant.tsx`, `compare/fixtures/body-constant.tsx`).
+A callee that names its whole argument, as `(context) => context`, is given
+every path that the call binds (`compare/fixtures/whole-argument.tsx`).
+
+A `const` of the block body of a promoted `computed` is a variable of the block
+in value code. Where a per-element construct inside the block names it, as its
+receiver or in its callback, the crate also registers a value function for it,
+and code that is registered outside the block reads it as an output
+(`compare/fixtures/block-const.tsx`, over arrays of plain values in place).
 
 A module's text registers a setup function for the pattern (`$rt.setup`) and for
 each pattern compiled into it, and each setup function registers a value
@@ -273,31 +292,37 @@ evaluates the body of an element construct once per element key, and handles an
 event by running the handler's body and evaluating again what read a position
 the body wrote. It instantiates no label, checks no constraint, persists
 nothing, and answers every effect as pending. It does not narrow a slot to its
-observation class and does not evaluate the debug strings. A function body can
-instantiate a pattern and bind a handler (ES §2.8). In value code the marker of
-each `pattern(...)` holds the identity of the pattern, the entry that the
-pattern's own `Plan.patterns` begins with, so the factory value a body calls
-names the callee, in whichever module it is written. The executor is given the
-artifacts of the program (`options.artifacts` of `Instance`), finds the callee's
-among them, and makes an instance of it with documents of its own in the same
-store, named from the instance that made it, the run of the body, and the
-ordinal among what that run made. The run of a `lift` or a `computed` is named
-by the body and its element keys, and the run of a handler by its event. A
-handler that a body binds has a stream named the same way, and an event for it
-runs the handler with the state the body bound
-(`compare/fixtures/instantiate.tsx`). The record `Child` of the crate's plan has
-no `callee`. The record of a key of a list (`elementById`) is a place of its
-own, named by the list and the key, which has a document once something writes
-it, and `addUnique` and `removeByValue` change the list's membership by
-reference. The record is a cell of its own and no member of the list until a
-reference to it is added (ruling Z23): a write through the handle is a write to
-the record, at no position of the list, and makes no reader of the list stale.
-The plan has no record that names it: the body's write edge and envelope are at
-`*` below the list, as `footprint-analysis.md` §7 records the handle, and the
-executor reads them for its count of covered writes alone. A record that a
-function body puts into an array through a handle, with `push`, `addUnique` or a
-`set` of the list, gets a document of its own, and the list stores a link to it,
-as today's runtime does (`anchorValueAsEntity` in
+observation class, validates no read against its schema, and has no error state:
+a body that throws stops the instance. `navigateTo` in a handler is a request
+that the instance holds (`Instance.requests`) and does not answer. The debug
+renderers are those of `@commonfabric/data-model`, and value code gives each
+operand of one as its value. A built-in that the executor does not have gives,
+while the modules are evaluated, a value whose members can be read and called,
+so a declaration of policy at module scope is evaluated, and a call of it in a
+function body throws. A function body can instantiate a pattern and bind a
+handler (ES §2.8). In value code the marker of each `pattern(...)` holds the
+identity of the pattern, the entry that the pattern's own `Plan.patterns` begins
+with, so the factory value a body calls names the callee, in whichever module it
+is written. The executor is given the artifacts of the program
+(`options.artifacts` of `Instance`), finds the callee's among them, and makes an
+instance of it with documents of its own in the same store, named from the
+instance that made it, the run of the body, and the ordinal among what that run
+made. The run of a `lift` or a `computed` is named by the body and its element
+keys, and the run of a handler by its event. A handler that a body binds has a
+stream named the same way, and an event for it runs the handler with the state
+the body bound (`compare/fixtures/instantiate.tsx`). The record `Child` of the
+crate's plan has no `callee`. The record of a key of a list (`elementById`) is a
+place of its own, named by the list and the key, which has a document once
+something writes it, and `addUnique` and `removeByValue` change the list's
+membership by reference. The record is a cell of its own and no member of the
+list until a reference to it is added (ruling Z23): a write through the handle
+is a write to the record, at no position of the list, and makes no reader of the
+list stale. The plan has no record that names it: the body's write edge and
+envelope are at `*` below the list, as `footprint-analysis.md` §7 records the
+handle, and the executor reads them for its count of covered writes alone. A
+record that a function body puts into an array through a handle, with `push`,
+`addUnique` or a `set` of the list, gets a document of its own, and the list
+stores a link to it, as today's runtime does (`anchorValueAsEntity` in
 `runtime/runner/src/data-updating.ts`): the list is then an array of references.
 A record of the argument the instance is created with, and a plain value that is
 no record, stay in the list's document, which is the case of an array of plain
@@ -435,13 +460,18 @@ and the literal is stored as one nested array value (ruling Z39;
 literal with no spread and no hole among the children as children of their own,
 and a view node that a function body builds flattens the arrays it is handed
 (`$rt.hf`), as the JSX factory of today does. An array literal with a spread is
-an array literal in value code, with the members of each spread operand read
-through `$rt.spread`. The comparison of values flattens the children of a view
-node on both sides. Today's runtime runs neither form in the body of a pattern:
-its transformer refuses a spread of a pattern value in an array literal, and its
-JSX factory throws at a spread child. `compare/fixtures/spread-stream.tsx`
-writes both in a `computed`, with a stream at a member after the spread and at a
-child after two spread children, and is compared with today's runtime.
+an array literal in value code, and a spread in the reactive tier, in a literal
+or as a JSX spread child, is given its operand as the reference it is
+(`$h.spread`): a position of the operand that holds a link gives the reference
+to its cell, so a spread of an array of references stores the links, and a
+position that holds a plain value in place gives the value. The result of
+another per-element construct gives its members as it assembled them. The
+comparison of values flattens the children of a view node on both sides. Today's
+runtime runs neither form in the body of a pattern: its transformer refuses a
+spread of a pattern value in an array literal, and its JSX factory throws at a
+spread child. `compare/fixtures/spread-stream.tsx` writes both in a `computed`,
+with a stream at a member after the spread and at a child after two spread
+children, and is compared with today's runtime.
 
 A stream that is an input of the pattern is a reference like any other input,
 and what passes it on stores a link to its place. A sandboxed body that is
@@ -659,7 +689,10 @@ Z45, and notes 432 on rulings Z47 to Z53: `ArrayByKey`, the salted hash in a
 key, the written form of a key, where a reader with no declared key gets the key
 fields, and the reference to an element of a plain array generated from scratch.
 Notes 446 on have rulings Z54 to Z57 and what brought the keys, the identifiers
-and the names in line with the documents.
+and the names in line with the documents. Notes 461 on class every module that
+was not executed, every event that was not handled and every value that differed
+at commit `682b918ed1`, and say what was fixed, what needs a ruling, and what is
+left.
 
 ## The parser
 
