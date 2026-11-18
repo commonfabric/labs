@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
 import { afterEach, describe, it } from "@std/testing/bdd";
-import { toFileUrl } from "@std/path";
+import { fromFileUrl, join, toFileUrl } from "@std/path";
 import { Window } from "happy-dom";
 import type { BridgeCell, BridgeMethod } from "@commonfabric/iframe-sandbox";
 
@@ -274,6 +274,20 @@ describe("iframe-guest", () => {
       expect(await readAssets(new URL(directory.href.slice(0, -1)))).toEqual({
         glaze: GLAZE,
       });
+    });
+
+    it("returns a file a symbolic link names, and leaves out a link to a directory", async () => {
+      const directory = await directoryOf({
+        "originals/glaze.png": new Uint8Array([1, 2, 3]),
+      });
+      const path = fromFileUrl(directory);
+      await Deno.symlink(
+        join(path, "originals", "glaze.png"),
+        join(path, "glaze.png"),
+      );
+      await Deno.symlink(join(path, "originals"), join(path, "menu.png"));
+
+      expect(await readAssets(directory)).toEqual({ glaze: GLAZE });
     });
 
     it("throws for two files that would be the same asset", async () => {

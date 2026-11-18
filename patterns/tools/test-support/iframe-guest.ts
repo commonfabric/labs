@@ -13,6 +13,7 @@
 
 // deno-lint-ignore no-external-import -- Deno's built-in SQLite holds a guest's database in memory.
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { fromFileUrl, join } from "@std/path";
 import {
   CustomEvent as DocumentCustomEvent,
   Event as DocumentEvent,
@@ -497,22 +498,23 @@ export class MemorySqlite {
  * Returns the assets the directory at `directory` holds, as a pattern's
  * `dataFile.urls()` reads them from that directory: each file directly inside
  * it whose extension has a media type, keyed by its file name without the
- * extension, as a base64 `data:` URL.
+ * extension, as a base64 `data:` URL. A symbolic link to a file counts as the
+ * file, as it does for `dataFile.urls()`.
  *
  * @throws Error for a file whose name without its extension is not an asset's
  *   name, and for two files that would share one, as `dataFile.urls()` does.
  */
 export async function readAssets(directory: URL): Promise<AssetRecord> {
-  const base = directory.href.endsWith("/")
-    ? directory
-    : new URL(`${directory.href}/`);
+  const path = fromFileUrl(directory);
   const names: string[] = [];
-  for await (const entry of Deno.readDir(base)) {
-    if (entry.isFile) names.push(`./${entry.name}`);
+  for await (const entry of Deno.readDir(path)) {
+    const isFile = entry.isFile ||
+      (entry.isSymlink && (await Deno.stat(join(path, entry.name))).isFile);
+    if (isFile) names.push(`./${entry.name}`);
   }
   const entries: [string, string][] = [];
   for (const [name, file] of dataFileAssets(".", names.sort())) {
-    const bytes = await Deno.readFile(new URL(file, base));
+    const bytes = await Deno.readFile(join(path, file));
     entries.push([name, dataFileUrl(decodeDataFile(bytes, file), file)]);
   }
   return toAssetRecord(Object.fromEntries(entries));
