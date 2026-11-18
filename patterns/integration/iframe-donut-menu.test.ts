@@ -108,7 +108,7 @@ describe("iframe donut menu", () => {
       const stored = Promise.withResolvers<void>();
       const cancelStored = cc.getResult(piece.getCell()).key("state").key(
         "favorite",
-      ).sink((favorite) => {
+      ).sink((favorite: unknown) => {
         if (favorite === "glazed") stored.resolve();
       });
       await guest.click('button[data-donut="glazed"]');
