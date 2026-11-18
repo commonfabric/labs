@@ -4,7 +4,6 @@ import ts from "typescript";
 import { detectCallKind, isReactiveOriginExpression } from "../ast/mod.ts";
 import type { TransformationContext } from "../core/mod.ts";
 import {
-  outermostTransparentWrapper,
   unwrapExpression,
   unwrapTransparentWrapperOnce,
 } from "../utils/expression.ts";
@@ -109,17 +108,12 @@ export function getOpaqueAccessInfo(
 }
 
 export function isTopmostMemberAccess(node: ts.Node): boolean {
-  // A transparent wrapper between a member access and the access it is the
-  // receiver of, as in `(user.tags).push`, leaves it that access's receiver.
-  const outer = ts.isExpression(node)
-    ? outermostTransparentWrapper(node)
-    : node;
-  const parent = outer.parent;
+  const parent = node.parent;
   if (!parent) return true;
   return !(
     (ts.isPropertyAccessExpression(parent) ||
       ts.isElementAccessExpression(parent)) &&
-    parent.expression === outer
+    parent.expression === node
   );
 }
 

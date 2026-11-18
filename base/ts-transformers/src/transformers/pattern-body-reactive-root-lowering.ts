@@ -13,7 +13,10 @@ import {
   visitEachChildWithJsx,
 } from "../ast/mod.ts";
 import type { TransformationContext } from "../core/mod.ts";
-import { unwrapExpression } from "../utils/expression.ts";
+import {
+  outermostTransparentWrapper,
+  unwrapExpression,
+} from "../utils/expression.ts";
 import {
   cloneKeyExpression,
   getCommonFabricKeyName,
@@ -175,6 +178,24 @@ function calledMethod(
   return key?.kind === "literal"
     ? { name: key.text, evaluatesKey: true }
     : undefined;
+}
+
+/**
+ * Whether `access` is the receiver of a method call through a transparent
+ * wrapper, as `user.tags` is in `(user.tags).push("y")` and
+ * `(user.tags)["push"]("y")`.
+ */
+function isWrappedMethodReceiver(
+  access: ts.Node,
+  callTargetParents: WeakMap<ts.Node, ts.CallExpression>,
+): boolean {
+  if (!ts.isExpression(access)) return false;
+  const outer = outermostTransparentWrapper(access);
+  const member = outer.parent;
+  return outer !== access && !!member &&
+    (ts.isPropertyAccessExpression(member) ||
+      ts.isElementAccessExpression(member)) &&
+    member.expression === outer && callTargetParents.has(member);
 }
 
 export function reportComputationError(
@@ -922,6 +943,14 @@ function rewriteTrackedOpaquePatternBody(
               notLowerableMethodRemedy(methodName),
           );
         }
+        return visited;
+      }
+
+      // A receiver behind a transparent wrapper, as `user.tags` in
+      // `(user.tags).push("y")`, is left for the access around the wrapper,
+      // which reads its path through the wrapper and lowers or reports the
+      // method call as it would `user.tags.push("y")`.
+      if (isWrappedMethodReceiver(node, callTargetParents)) {
         return visited;
       }
 
