@@ -643,11 +643,13 @@ calls "Esc+" and Terminal calls "Use Option as Meta key".
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In
 browse mode, Space pages through the entries, and `g` and `G` select the first
-and last entry. The `f`, `F`, `E`, `T`, `M`, and `C` file-visibility keys remain
-active. On a commit row, `f` hides all of that commit's files. Pressing it again
-shows them. Each commit row reports its total added and removed lines under the
-selected count policy. The list's summary reports added and removed lines for
-the complete diff and for the files that are currently shown.
+and last entry. Pressing the primary mouse button on an entry selects it, in
+this list and in the list of files that Ctrl-X Ctrl-F opens. The `f`, `F`, `E`,
+`T`, `M`, and `C` file-visibility keys remain active. On a commit row, `f` hides
+all of that commit's files. Pressing it again shows them. Each commit row
+reports its total added and removed lines under the selected count policy. The
+list's summary reports added and removed lines for the complete diff and for the
+files that are currently shown.
 
 Use `<` and `>` to move to the preceding or following commit header in the main
 view or the index list. From within a commit, `<` returns to that commit's

@@ -1,9 +1,12 @@
+import { assert } from "@std/assert";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import type { JSONSchema } from "@commonfabric/api";
+import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { Identity } from "@commonfabric/identity";
 import {
-  UNAVAILABLE_PENDING,
+  isPending,
   unavailableError,
 } from "@commonfabric/data-model/availability";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
@@ -81,10 +84,13 @@ describe("compile-and-run", () => {
   });
 
   /** Builds a node and returns its action, its outputs, and its stop. */
-  function node(name: string) {
+  function node(name: string, inputSchema?: JSONSchema) {
     const inputs = runtime.getCell<BuiltInCompileAndRunParams<unknown>>(
       space,
       `${name}-inputs`,
+      inputSchema === undefined
+        ? undefined
+        : { type: "object", properties: { input: inputSchema } },
     );
     const parent = runtime.getCell(space, `${name}-parent`);
     const binding = runtime.getCell<unknown>(space, `${name}-binding`);
@@ -107,7 +113,10 @@ describe("compile-and-run", () => {
       parent,
       runtime,
     );
-    function stage(program: RuntimeProgram, input?: unknown) {
+    function stage(
+      program: BuiltInCompileAndRunParams<unknown>,
+      input = program.input,
+    ) {
       const tx = runtime.edit();
       inputs.withTx(tx).set({ ...program, input });
       action(tx);
@@ -116,7 +125,7 @@ describe("compile-and-run", () => {
     return {
       binding,
       stage,
-      async run(program: RuntimeProgram, input?: unknown) {
+      async run(program: BuiltInCompileAndRunParams<unknown>, input?: unknown) {
         const tx = stage(program, input);
         runtime.prepareTxForCommit(tx);
         expect((await tx.commit().settled).error).toBeUndefined();
@@ -335,6 +344,71 @@ describe("compile-and-run", () => {
       }
     });
 
+    it("passes nested object and array inputs to the compiled pattern", async () => {
+      const n = node("structured-input", {
+        type: "object",
+        properties: {
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { value: { type: "number" } },
+              required: ["value"],
+            },
+          },
+        },
+        required: ["items"],
+      });
+      const input = { items: [{ value: 10 }, { value: 20 }] };
+      await n.run({ ...PROGRAM, input });
+
+      const { pattern } = createTrustedBuilder(runtime).commonfabric;
+      compilations[0].resolve(
+        pattern<{ items: { value: number }[] }>(({ items }) => ({ items })),
+      );
+      await drain();
+      const shown = await waitForCellValue(
+        runtime,
+        n.outputs.result.key("items"),
+        (value) => value !== undefined,
+      );
+      expect(shown).toEqual(input.items);
+      expect(created).toHaveLength(1);
+
+      await n.run({ ...PROGRAM, input: { items: [{ value: 30 }] } });
+      const updated = await waitForCellValue(
+        runtime,
+        n.outputs.result.key("items"),
+        (value) => Array.isArray(value) && value.length === 1,
+      );
+      expect(updated).toEqual([{ value: 30 }]);
+      expect(compilations).toHaveLength(1);
+    });
+
+    it("preserves a special value in a schema-bearing input", async () => {
+      const n = node("special-input", {
+        type: "object",
+        properties: { failure: true },
+        required: ["failure"],
+      });
+      await n.run({
+        ...PROGRAM,
+        input: { failure: new TypeError("child input") },
+      });
+
+      const { pattern } = createTrustedBuilder(runtime).commonfabric;
+      compilations[0].resolve(
+        pattern<{ failure: unknown }>(({ failure }) => ({ failure })),
+      );
+      await drain();
+      const failure = n.outputs.result.key("failure");
+      await waitForCellValue(runtime, failure, (value) => value !== undefined);
+      const stored = failure.getRaw({ lastNode: "value" });
+      assert(stored instanceof FabricError);
+      expect(stored.message).toBe("child input");
+      expect(stored.name).toBe("TypeError");
+    });
+
     it("runs no pattern for a compilation a newer program superseded", async () => {
       const n = node("superseded-success");
       await n.run(PROGRAM);
@@ -343,7 +417,8 @@ describe("compile-and-run", () => {
       compilations[0].resolve(childPattern());
       await drain();
       expect(created).toEqual([]);
-      expect(n.outputs.result.get()).toEqual(UNAVAILABLE_PENDING);
+      await n.outputs.result.sync();
+      expect(isPending(n.outputs.result.get())).toBe(true);
     });
 
     it("runs no pattern for a compilation stopped before it finished", async () => {
@@ -354,7 +429,8 @@ describe("compile-and-run", () => {
       compilations[0].resolve(childPattern());
       await drain();
       expect(created).toEqual([]);
-      expect(n.outputs.result.get()).toEqual(UNAVAILABLE_PENDING);
+      await n.outputs.result.sync();
+      expect(isPending(n.outputs.result.get())).toBe(true);
     });
 
     it("runs the pattern of the current compilation", async () => {

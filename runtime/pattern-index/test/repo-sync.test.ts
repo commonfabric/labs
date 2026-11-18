@@ -1,9 +1,10 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { RuntimeProgram } from "@commonfabric/runner";
-import type {
-  PatternIndexPublishRequest,
-  PatternIndexRepoHead,
+import {
+  PatternIndexError,
+  type PatternIndexPublishRequest,
+  type PatternIndexRepoHead,
 } from "../src/client.ts";
 import {
   findEntries,
@@ -17,6 +18,7 @@ import {
   programSourceHash,
   type PublishClient,
   publishPlan,
+  reasonOf,
   reportMarkdown,
   syncFailed,
 } from "../src/repo-sync.ts";
@@ -466,7 +468,13 @@ describe("repo-sync", () => {
       const publishPattern = client.publishPattern;
       client.publishPattern = (request) =>
         request.patternId === "id:p/a.tsx"
-          ? Promise.reject(new Error("pattern index publishPattern 429"))
+          ? Promise.reject(
+            new PatternIndexError(
+              "publishPattern",
+              400,
+              "program exceeds 819200 bytes of source",
+            ),
+          )
           : publishPattern(request);
       const report = await publishPlan(
         {
@@ -484,6 +492,9 @@ describe("repo-sync", () => {
         "p/b.tsx",
       ]);
       expect(syncFailed(report)).toBe(true);
+      expect(reportMarkdown(report)).toContain(
+        "| `p/a.tsx` | pattern index publishPattern failed (400): program exceeds 819200 bytes of source |",
+      );
     });
 
     it("carries the plan's failed and undescribed entries into the report, publishing neither", async () => {
@@ -595,6 +606,59 @@ describe("repo-sync", () => {
         status: "failed",
         findings: [finding],
       }]);
+    });
+  });
+
+  describe("reasonOf()", () => {
+    it("reports the limit in a recognized program-size refusal", () => {
+      const error = new PatternIndexError(
+        "publishPattern",
+        400,
+        "program exceeds 123456 bytes of source",
+      );
+      expect(reasonOf(error)).toBe(
+        "pattern index publishPattern failed (400): program exceeds 123456 bytes of source",
+      );
+    });
+
+    it("withholds unrecognized details and size wording from other refusals", () => {
+      const sizeRefusal = "program exceeds 819200 bytes of source";
+      for (
+        const error of [
+          new PatternIndexError("publishPattern", 400),
+          new PatternIndexError("publishPattern", 400, "private source text"),
+          new PatternIndexError(
+            "publishPattern",
+            400,
+            `${sizeRefusal}: secret`,
+          ),
+          new PatternIndexError("publishPattern", 400, `${sizeRefusal}\n`),
+          new PatternIndexError(
+            "publishPattern",
+            400,
+            `${sizeRefusal}\nsecret`,
+          ),
+          new PatternIndexError(
+            "publishPattern",
+            400,
+            `${sizeRefusal}\x1b[31m`,
+          ),
+          new PatternIndexError(
+            "publishPattern",
+            400,
+            `${sizeRefusal} | secret`,
+          ),
+          new PatternIndexError(
+            "publishPattern",
+            400,
+            "program exceeds 1234567890123 bytes of source",
+          ),
+          new PatternIndexError("publishPattern", 500, sizeRefusal),
+          new PatternIndexError("listRepoHeads", 400, sizeRefusal),
+        ]
+      ) {
+        expect(reasonOf(error)).toBe(error.message);
+      }
     });
   });
 
