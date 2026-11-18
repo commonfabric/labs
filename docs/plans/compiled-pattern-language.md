@@ -133,17 +133,19 @@ next.
   lists the places where it found the documents ambiguous. Its notes through
   272, notes 281 to 302, notes 307 to 320, notes 325 to 341, notes 344
   to 363, notes 367 to 382, notes 387 to 402, notes 406 to 414,
-  notes 419 to 426, notes 432 to 443, notes 446 to 458, and notes
-  461 to 474 and 478 are written into the documents.
+  notes 419 to 426, notes 432 to 443, notes 446 to 458, notes
+  461 to 474 and 478, and notes 479 to 497, 499 and 502 are written
+  into the documents.
   Notes 273 to 280, which measure cost, are written into
   [What compiling, running, and storing cost](#what-compiling-running-and-storing-cost)
   below, and notes 303 to 306, 321 to 324, 342 and 343, 364 to 366,
   383 to 386, 403 to 405, 415 to 418, 427 to 431, 444 and 445, 459
-  and 460, and 475 to 477, the results of the value comparison and the
+  and 460, 475 to 477, and 498, 500, 501, 503 and 504, the results of
+  the value comparison, the measurements of growth and the
   later runs of the
   label comparison and the cost measurement, into
   [What the prototype's executor computes](#what-the-prototypes-executor-computes).
-  The latest prototype commit read is `abd965cc37`. From commit
+  The latest prototype commit read is `a84264daf2`. From commit
   `3e518147df` on the crate also emits value code and an executor runs
   a plan with it. At `3e518147df`, in the fixtures 122 of 122 compared
   values equal those of today's runtime, and in the corpus 4,472 of
@@ -222,8 +224,17 @@ next.
   values that differed, they are 829 of 830 in the fixtures and, over
   212 modules, 5,813 of 5,907 against a fresh seeded run. The
   comparison of labels was run again at that commit: of 1,454 outputs
-  and 241 write edges compared, none is looser than today's or
-  incomparable with it. No
+  and 241 write edges compared, none is looser than today's or incomparable with
+  it. At `a84264daf2`, with a queue of events and a batch, a transaction of each
+  cause, the bound of ten evaluations, the error state, a stubbed effect layer,
+  and the reference forms of the ruling on question 222 and of the provisional
+  decisions P5 to P7 in the executor and the crate, they are 1,004 of 1,013 in
+  the fixtures and, over 214 modules, 6,013 of 6,107 against a fresh seeded run.
+  Of 1,462 outputs and 249 write edges compared at that commit, none is looser
+  than today's or incomparable with it. The plans of the corpus are 5,956,178
+  bytes together, where they were 9,826,792. The sizes and costs that the round
+  measured, the ones it fixed and the ones it did not, are first in [The corpus
+  at commit `a84264daf2`](#the-corpus-at-commit-a84264daf2). No
   compared row of the
   corpus evaluates the label of an
   index: the 54 index slots of the corpus plans are read by outputs
@@ -663,8 +674,23 @@ that differed, and has fixed the defects of the crate and the executor
 among them. Those are notes 461 to 474, with note 478 on the size of a
 plan; what they show the documents not to decide is questions 217
 to 223. Notes 475 to 477 run the fixtures, the comparison of values and
-the comparison of labels again and say what the round did not verify.
-Each
+the comparison of labels again and say what the round did not verify. At commit
+`a84264daf2` the executor has what the documents say of a running instance and
+it did not have: a queue of events and a batch, a transaction for each cause,
+the bound on the evaluations of a cone instance, the error state, and the
+request and the completion of an effect, with answers that a test gives. Each
+statement of the documents was built and tested on a fixture, and compared with
+today's runtime where today's runtime has the behavior. Those are notes 479
+to 497. Note 499 has the reference forms of the ruling on question 222 and of
+the provisional decisions P5 to P7 as the crate writes them, notes 500 and 501
+measure sizes and costs, and note 502 lists what the prototype does where the
+documents do not decide, which is the provisional decisions P8 to P17 and
+question 247. Notes 498 and 503 run the fixtures, the comparison of values and
+the comparison of labels again, and note 504 says what the round did not verify.
+The fixtures of notes 479 to 497 hold one per-element construct, the `map` of
+`fixtures/failing.tsx`, which is over an array of plain values in place: no
+statement of those notes was tried over an array of references or over the
+result of another per-element construct. Each
 part below gives the figures of each commit, the earliest first.
 
 Notes 281 to 302 say what the executor needed that the
@@ -746,16 +772,18 @@ result keeps, a reference into such an array that an element body
 computes, and the record that a salted hash is formed from. Questions
 211 to 216 are what notes 446 to 458 leave undetermined. Questions 217
 to 223 are what notes 461 to 478 leave undetermined, and questions 224
-to 238 are places where two statements of the documents conflict or
-where the documents state nothing, found by a reading for what the
-prototype's executor does not exercise. The parts
+to 238 are places where two statements of the documents conflict or where the
+documents state nothing, found by a reading for what the prototype's executor
+does not exercise. Questions 276 to 289 are what notes 479 to 504 leave
+undetermined, and those notes bear on questions 224, 225 and 247 to 275 as each
+of those entries says. The parts
 below that name `KeyedBy`, a key field declared in the element type,
 a key that holds the value of its field, or a key written as a string
 with separators describe the prototype at
 the commit they name, and not the design.
 Notes 303 to 306, 321 to 323, 342, 364 and 365, 383 and 384, 403
-and 404, 416 and 417, 429 and 430, 444, 459, and 475 and 476 are the
-results here.
+and 404, 416 and 417, 429 and 430, 444, 459, 475 and 476, and 498,
+500, 501 and 503 are the results here.
 The executor was not timed. Note 428 times today's runtime and the
 crate's compile again, on a machine that was not idle.
 
@@ -982,6 +1010,31 @@ coordinator of this work ran the prototype's tests and fixtures at that
 commit and not the corpus: 486 tests of the crate and 97 tests under
 Deno, with 384 steps, passed, and the fixtures gave 57 of 57 runs and
 829 of 830 values.
+
+Note 504 says the same of the round of commit `a84264daf2`. Written after the
+code: the tests of the bound and of the error state of a body that throws, whose
+code was in the commit of the batch, and which were then seen to fail with the
+bound set to twelve; the test of a failed value that is placed; the tests of the
+stream document; the tests of the reference in the template evaluator; and the
+growth tests, which state what was measured. The tests of the request and the
+completion were written before the code and passed on its first run, some of
+them having failed before on a missing member and not on an assertion. The
+crate's test of the request function failed on one assertion that was wrong and
+was changed, and the test of the label-flow check through a reference passed
+when it was written. One existing test had its expectation changed for the error
+state, five for the stream documents, and four of the crate for the reference
+forms. The first run of `fixtures/bound.tsx` on today's runtime did not end and
+was stopped, and one run of the corpus was stopped to change the executor. Not
+done: what [Known limits](#known-limits-of-what-exists) lists as not built; the
+storage layout beyond the stream document; the findings of the growth audit
+beyond what notes 500 and 501 measure; today's runtime on the lists of note 501;
+and a comparison of the cost measurement. Not verified: the causes that notes
+482, 498 and 503 mark as read; that the count of ten per value function and the
+count per cone instance agree on any module of the corpus; and the times of
+notes 500 and 501, which are of one run each. The coordinator of this work ran
+the prototype's tests and fixtures at that commit and not the corpus: 496 tests
+of the crate and 112 tests under Deno, with 456 steps, passed, and the fixtures
+gave 59 of 59 runs and 1,004 of 1,013 values.
 
 ### What is compared, and what is not
 
@@ -1724,6 +1777,49 @@ there. Eighteen fixtures are run by the executor's tests alone,
   finds the links of a spread of an array of references, where it found
   the records. Nothing of it is compared with today's runtime, which
   runs none of these forms in a pattern body.
+
+At commit `a84264daf2` the fixtures are run in 59 runs, the 57 of the earlier
+commit with `batch` and `failing`, and 1,004 of 1,013 compared values are equal.
+The 9 that differ are the one of `callee-default`, 2 of `batch` and 6 of
+`failing`. The fixtures `bound`, `effects`, `handler-effect`, `wishes` and
+`lists` have tests of the executor alone.
+
+- **`batch`.** A state cell `items`, an array of plain values in place that
+  handlers push strings onto; `count`, which reads the whole array; `total`,
+  which reads `count`; and the cone `_join`, which writes the cell `joined` from
+  `items`. With two `add` events in one batch the transactions are event, event,
+  derivation, the two event transactions evaluate nothing, and `count` and
+  `total` are each evaluated once; with each event a batch of its own, `count`
+  is evaluated twice. `compare/test/batch.test.ts` runs five batches on today's
+  runtime under its serving posture, with the events queued before its scheduler
+  takes any, and the values are equal in all five: a handler that reads `count`
+  behind two `add` events, one that reads `joined` behind one, one that writes
+  `joined` behind one, one that sends an event, and one that throws between two
+  that commit. The number of evaluations was not compared. The 2 values that
+  differ are in the run of the comparison of values, where three `add` events
+  come before `overwrite`, each a batch of its own: today's runtime runs `_join`
+  again behind the handler's write and holds `a,b,c!`, and the executor holds
+  what the handler wrote (provisional decision P9, question 277).
+- **`failing`.** A cone whose value code throws (`halved`), one that reads it
+  (`next`), one that reads it in the branch it does not select (`chosen`), a
+  `map` over an array of plain values in place one of whose elements fails
+  (`each`), a cone that writes a cell and then throws (`_try`), and a view with
+  a failed value among its children (`view`). The 6 values that differ: 4 are
+  the side-write of `_try`, which today's runtime commits and the executor
+  withdraws (question 285), and 2 are `chosen`, at which today's runtime holds
+  nothing and the executor the selected branch (question 287).
+- **`bound`.** `_ping` writes `b` from `a` and `_pong` writes `a` from `b`. The
+  first derivation transaction evaluates each ten times, the eleventh evaluation
+  of each does not run, and both take an error state. The transaction commits,
+  the side-writes of both are withdrawn, and `a` and `b` read as the constants
+  they were declared with. `sum`, which reads both cells, is evaluated five
+  times and does not fail. Today's runtime does not become idle on this fixture,
+  because it tries the cycle again behind a backoff gate (`planBudgetBackoff` in
+  `runtime/runner/src/scheduler/execution.ts`), so the fixture is not compared.
+- **`effects`, `handler-effect` and `wishes`.** An effect of the reactive tier
+  that is requested when a kept output reads its result and not otherwise, its
+  request transaction and its completion, a request that a handler makes, and a
+  `wish` that resolves from a table. None has a per-element construct.
 
 ### The corpus
 
@@ -2762,6 +2858,241 @@ of references from one over an array of plain values in place, so the 3
 write edges of an element body are of both, and of bodies over the
 result of another per-element construct. The cost measurement was not
 run again; its figures stay those of commit `7774ba208c`.
+
+### The corpus at commit `a84264daf2`
+
+The figures of this section are from the prototype author's runs, as the
+prototype's notes 498 to 503 give them. They were not computed again for this
+plan; the coordinator of this work ran the prototype's tests and fixtures again
+and not the corpus. Each figure is of one run on a machine that also ran the
+corpus comparison at times: the counts are exact and the times are not.
+
+#### First: the growth that was measured, what is fixed and what is not
+
+The owner asked that a size or a cost which follows the number of paths, or
+grows faster than linearly in the source or in the data, be looked for and
+reported prominently. This round measured the following (notes 500 and 501). The
+first table is what was fixed. A representation changed in each and no meaning
+did.
+
+| What grew | Before | After | Fixed by |
+| --- | ---: | ---: | --- |
+| The plan of a chain of 25 values, each reading the two before it | 27,897,914 bytes | 14,397 bytes, 2.1 times the plan of a chain of 12 | The ruling on question 222 (Z58): a template names another output |
+| The plans of the corpus together | 9,826,792 bytes | 6,410,715 with the ruling, 5,956,178 with P6 | The ruling and P5, then P6 |
+| The plan of `system/home/home.tsx`, the largest | 1,897,836 bytes | 377,176 bytes | The same. The largest is then `dev/factory-outputs/lot-with-coordinator-demo/main.tsx`, 561,499 bytes |
+| The template of a chain of `&&`, `\|\|` or `??` operands computed in one cone | 11,128 bytes for 4 operands, 165,732 for 8, 3,262,474 for 12, 63,119,254 for 16 | 12,701 for 12, 16,165 for 16, 19,629 for 20 | P6: a template that stands at more than one position is an entry of `Plan.templates` |
+| The templates of the write edges of a handler with `R` reads and `W` writes | 1,280 bytes at 4 and 4, 4,864 at 8 and 8, 18,944 at 16 and 16 | One reference for each edge | P6 |
+| The schema of a type that each level of nesting uses twice | Doubles with each level | Written once under `$defs` | P7 |
+| Forming the keys of an array after every evaluation (`fixtures/scale.tsx`, 200 rows and 200 groups of five) | 203,335 key formations and 8.1 s for a settle | 802 and 0.12 s | The executor's store: the keys stand until a document that forming them read is written |
+| Resolving a reference by key by a scan of the keys of its array (10,000 plain values in place) | 4.8 s for a settle and 5 to 11 s for one change, with counts that are linear | Not timed again | The executor's store: an index from a key to its position for each list of keys it formed |
+
+Three things about the first table. While the crate built a plan with the
+copies, a chain of twenty `??` operands took 3.6 s and would have written about
+1.2 GB, so the crate holds the operands of a `select` and the template of a
+value that has no output by reference while it builds, and the plan is never
+built with the copies. The crate still writes two templates in place: that of a
+constructed value read whole, which is the join of its entries and the template
+of no output, and one whose root is changed for the child of a `pick`. And P7
+reaches the schema documents: the schemas that the prototype's plan holds in
+place, the event schema of a binding and the schema of an output, are not
+changed, and the crate still cuts a type at a depth of twelve. One run of the
+crate over the corpus took 3.7 s before the round and 2.5 to 2.9 s after it; the
+front end and footprint analysis were not timed apart.
+
+What was measured and is not fixed:
+
+- **A pattern that is compiled in is copied for each site that calls it, and
+  doubles with each level.** With two sites per level:
+
+  | Levels | 1 | 2 | 3 | 4 | 5 | 6 |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+  | Bytes of the plan | 3,193 | 7,746 | 16,961 | 35,665 | 73,936 | 152,575 |
+  | Cones | 5 | 13 | 29 | 61 | 125 | 253 |
+
+  The value code doubles as well, and the source grows by 148 bytes per level.
+  With one site per level the plan is linear. P6 does not help, because the
+  copies differ in their slot indexes. The provisional decision P18 writes such
+  a pattern once (question 247); the prototype does not have it.
+- **The result document is written whole, so the bytes written for one change
+  follow the length of the list.** The table below has it: 22,879 to 22,924
+  bytes for a change of a list of 1,000 and 238,879 to 238,925 for one of
+  10,000, whatever the change.
+  Over the corpus the transactions of the executed modules wrote 42,479 bytes in
+  214 creations, 120,422 bytes in 570 events, and 31,642,734 bytes in 755
+  derivations. 14,970,456 of the last are those of
+  `examples/cfc-trusted-component-examples/main.tsx`, whose result document of
+  about 140,000 bytes is written whole behind each of its events. The executor
+  has no patch and writes a document whole. The assembled collection and the
+  result are values of the whole list (question 259).
+- **Every array write over plain values forms the key of every position, with or
+  without a declared key.** One salted hash for each position, for an append, an
+  edit of one field and a removal alike. With a declared key the edit changes no
+  key, and the hashes are spent all the same, because the executor keeps no hash
+  for a position that a write did not touch. Over an array of references no hash
+  is formed (question 256).
+- **The checks of memo entries follow the list: 3 `N` to 7 `N` for one change.**
+  The executor finds what is stale by checking each entry that is demanded,
+  where the documents have the scheduler mark what a write reaches (question
+  271).
+- **The time of one change grows 20 to 35 times for 10 times the list,** with
+  counts that grow 10 times. Something in the executor is still more than
+  linear, and it was not found ([Open, and not needing the
+  owner](#open-and-not-needing-the-owner)).
+- **Many handlers that capture the same values are linear in the source, with a
+  large factor.** 10 and 20 handlers over 5 cells are plans of 24,856 and 48,966
+  bytes. The plan is about twenty times the source, most of it slots: each
+  handler has a slot of its own for each name it captures.
+
+One change of a list, at three lengths (`compare/growth.ts` on
+`fixtures/lists.tsx`: one `map` over the list, and for the fourth case a `map`
+over the result of a `filter`). Each change is a write to the argument by a
+writer outside the instance, and the counts are of the derivation transaction
+that follows. The case of each row is in its first column: over an array of
+references, over an array of plain values in place with no declared key and with
+`ArrayByKey`, and over the result of another per-element construct.
+
+| Case | Length | Change | Evaluations | Salted hashes | Checks | Bytes written | Milliseconds |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| References | 100 | settle | 102 | 0 | 203 | 15,680 | 8 |
+| References | 1,000 | settle | 1,002 | 0 | 2,003 | 161,480 | 29 |
+| References | 1,000 | append | 3 | 0 | 3,007 | 22,924 | 26 |
+| References | 1,000 | edit one field | 3 | 0 | 3,005 | 22,904 | 19 |
+| References | 1,000 | remove first | 2 | 0 | 3,002 | 22,879 | 19 |
+| References | 10,000 | settle | 10,002 | 0 | 20,003 | 1,664,480 | 651 |
+| References | 10,000 | append | 3 | 0 | 30,007 | 238,925 | 927 |
+| References | 10,000 | edit one field | 3 | 0 | 30,005 | 238,904 | 971 |
+| References | 10,000 | remove first | 2 | 0 | 30,002 | 238,879 | 967 |
+| Plain values, no key | 100 | settle | 102 | 100 | 203 | 6,191 | 9 |
+| Plain values, no key | 1,000 | settle | 1,002 | 1,000 | 2,003 | 64,691 | 60 |
+| Plain values, no key | 1,000 | append | 3 | 1,001 | 3,007 | 22,924 | 58 |
+| Plain values, no key | 1,000 | edit one field | 3 | 1,000 | 3,004 | 22,904 | 66 |
+| Plain values, no key | 1,000 | remove first | 2 | 999 | 3,002 | 22,879 | 60 |
+| Plain values, no key | 10,000 | settle | 10,002 | 10,000 | 20,003 | 676,691 | 1,019 |
+| Plain values, no key | 10,000 | append | 3 | 10,001 | 30,007 | 238,925 | 1,264 |
+| Plain values, no key | 10,000 | edit one field | 3 | 10,000 | 30,004 | 238,904 | 1,163 |
+| Plain values, no key | 10,000 | remove first | 2 | 9,999 | 30,002 | 238,879 | 1,219 |
+| Plain values, `ArrayByKey` | 100 | settle | 102 | 100 | 203 | 6,191 | 7 |
+| Plain values, `ArrayByKey` | 1,000 | settle | 1,002 | 1,000 | 2,003 | 64,691 | 70 |
+| Plain values, `ArrayByKey` | 1,000 | append | 3 | 1,001 | 3,007 | 22,924 | 67 |
+| Plain values, `ArrayByKey` | 1,000 | edit one field | 3 | 1,000 | 3,005 | 22,904 | 64 |
+| Plain values, `ArrayByKey` | 1,000 | remove first | 2 | 999 | 3,002 | 22,879 | 65 |
+| Plain values, `ArrayByKey` | 10,000 | settle | 10,002 | 10,000 | 20,003 | 676,691 | 1,086 |
+| Plain values, `ArrayByKey` | 10,000 | append | 3 | 10,001 | 30,007 | 238,925 | 1,423 |
+| Plain values, `ArrayByKey` | 10,000 | edit one field | 3 | 10,000 | 30,005 | 238,904 | 1,405 |
+| Plain values, `ArrayByKey` | 10,000 | remove first | 2 | 9,999 | 30,002 | 238,879 | 1,549 |
+| Result of a `filter` | 100 | settle | 203 | 100 | 405 | 6,191 | 9 |
+| Result of a `filter` | 1,000 | settle | 2,003 | 1,000 | 4,005 | 64,691 | 100 |
+| Result of a `filter` | 1,000 | append | 5 | 1,001 | 7,014 | 22,924 | 112 |
+| Result of a `filter` | 1,000 | edit one field | 5 | 1,000 | 7,007 | 22,904 | 107 |
+| Result of a `filter` | 1,000 | remove first | 3 | 999 | 7,002 | 22,879 | 104 |
+| Result of a `filter` | 10,000 | settle | 20,003 | 10,000 | 40,005 | 676,691 | 1,767 |
+| Result of a `filter` | 10,000 | append | 5 | 10,001 | 70,014 | 238,925 | 2,753 |
+| Result of a `filter` | 10,000 | edit one field | 5 | 10,000 | 70,007 | 238,904 | 2,675 |
+| Result of a `filter` | 10,000 | remove first | 3 | 9,999 | 70,002 | 238,879 | 2,591 |
+
+What the table shows. The evaluations of a change are 2 to 5 at every length:
+the element, the assembly and the result. That part follows the change.
+Everything else follows the list: the bytes written, the salted hashes over
+plain values, and the checks. An index from a write to its readers, and a key
+kept for each position that a write did not touch, are changes of the executor
+alone, and were not made. Today's runtime was not measured on these lists. The
+fourth case is a `map` over the result of a `filter` over plain values in place;
+a `map` over the result of a `filter` over an array of references, and a chain
+of more than two constructs, were not measured.
+
+Which questions on growth the round bears on: 222 and 245 to 247, 256, 257, 259,
+271 and 274. Each of those entries has the measurement and says whether the
+finding is confirmed, refuted or unchanged. The round measured nothing for
+questions 248 to 255, 258, 260 to 270, 272, 273 and 275, which are unchanged.
+
+#### The comparison of values
+
+A seeded run of today's runtime over the 272 modules (`values-corpus.ts run`),
+beside that of commit `abd965cc37`:
+
+| | `abd965cc37` | `a84264daf2` |
+| --- | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 |
+| Executed | 212 | 214 |
+| Every value equal and every event handled | 191 | 193 |
+| Values compared | 5,907 | 6,107 |
+| Values equal | 5,813 | 6,013 |
+| Values that differ | 94 | 94 |
+| Modules with a difference | 21 | 21 |
+| Committed events the executor does not handle | 3 of 531 | 3 of 541 |
+| Evaluations the executor counted | 7,090 | 7,118 |
+| Positions of the results that hold a stream | 894 | 909 |
+| Documents the executor stored | 887 | 1,444 |
+
+Two modules have another outcome, and 270 the same:
+`apps/weekly-calendar/event.tsx` is executed with 198 of 198 values equal and
+`dev/test/silent-computed-crash.tsx` with 2 of 2, where the value code threw and
+the executor had no error state. The comparison reads an error state as nothing,
+which is what today's runtime stores. The one module that is not executed is
+`system/profile-picker/profile-picker.tsx`, for `linksOf`. Of the 557 documents
+more, 552 are the stream documents, which the executor makes from the first
+event of a stream, and 5 are of the two modules. Six cones took an error state:
+three of `apps/base/contacts.tsx`, behind an event, on data that does not match
+its type, two of `event.tsx` and one of `silent-computed-crash.tsx`. The first
+run counted `showcase/wordsearch/play.tsx` with one event not handled, because
+the executor took a `RangeError` that the handler throws for a stack that ran
+out; that was corrected, and the figures are those of `values-corpus.ts again`
+on the file of the run.
+
+**The 47 modules that need `wish` or request an effect** were left out of every
+comparison before. `values-corpus.ts alone` runs them on the executor with
+stubbed answers: a request for JSON gets an empty record, a `navigateTo` is
+done, every other request fails with one text, no `wish` has a target, and the
+clock holds the time of the run. 44 are executed and 3 are not (a computed key
+in a binding, an element construct with no function, and the built-in
+`spaceDeleted`). 13 of 106 events are not handled, 9 of them for a built-in or a
+pattern called in a function body that the executor does not have. 32 requests
+left and were answered. 5 cones took an error state, each where a body calls a
+method of something that holds nothing, which by a reading of three of the four
+modules is the result of a `wish`.
+
+`values-corpus.ts stubbed` runs the same modules on today's runtime as well,
+with `fetch` replaced by a function that answers the same. Today's runtime runs
+45 and fails 2 on a refused commit. 42 are executed, 16 have every value equal
+and every event handled, 1,484 of 1,584 values are equal, and 4 of 94 committed
+events are not handled. The two sides are not stubbed equally except for the
+fetch of JSON from an address outside `/api/`. Of the 100 values that differ, in
+25 modules, by a reading of the two values that was not verified one by one: 56
+in 12 modules are answers that the two sides were not given equally (the text of
+a language-model failure, a fetch that had not come back when today's values
+were read, `fetchProgram`, `sqliteQuery`, `agent`); 10 in 6 are what `wish` does
+today and the executor does not build, the profile sidecar and the search; 17 in
+3 are a time or a generated value; and 17 in 3 are not determined.
+
+#### The comparison of labels
+
+`compare/corpus.ts`, beside the run at commit `abd965cc37`:
+
+| | `abd965cc37` | `a84264daf2` |
+| --- | ---: | ---: |
+| Outputs compared | 1,454, 156 bounds | 1,462, 148 bounds |
+| With the atom of a kept output: tighter | 1,331 | 1,332 |
+| With it: the atom names the pattern | 123 | 130 |
+| With it: looser, incomparable | 0, 0 | 0, 0 |
+| Write edges compared | 241 | 249 |
+| Equal | 229 | 237 |
+| Tighter | 12 | 12 |
+| Looser, incomparable | 0, 0 | 0, 0 |
+
+No output and no write edge is looser than today's or incomparable with it. The
+8 write edges more are of events that are sent at this commit, since the
+executor's result holds more streams. With the ruling on question 222 alone the
+outputs were as at `abd965cc37`, row for row. With P6, 8 rows that were bounds
+are compared, each in the category it had as a bound: the harness finds the
+branch of a `select` from the stored value where the template of the output is
+that `select`, which it tested by the identity of the node, and with one shared
+node the test holds for every output that names it. No row changed its category.
+P7 changed nothing. The template evaluator of the harness forms the label of a
+named output and of a shared template once for the element bindings and the
+position it is read at, in one evaluation. It keeps no memo across evaluations,
+so a label is formed once per evaluation of a template and not once per
+transaction. The cost measurement was not run again.
+
 
 ### What the run conformed to
 
@@ -3908,6 +4239,66 @@ names the case.
   own and holds no copy of it ([Decided](#decided)); the crate at this
   commit does not follow that ruling.
 
+At commit `a84264daf2` the executor has the following (notes 479 to 497 and
+499). Each item says whether the statement of the documents held when it was
+built and tested. The one per-element construct in these fixtures is a `map`
+over an array of plain values in place.
+
+- **A transaction for each cause.** The executor records each transaction with
+  its cause (creation, event, derivation, request, completion), the cones it
+  evaluated, the documents it wrote, the cones that took an error state, and
+  whether it committed. An event's transaction that does not commit puts every
+  document back. The creation of an instance writes its two documents and
+  evaluates nothing, as `execution-and-storage.md` §1.1 assumes under question
+  77.
+- **A batch of events** (`scheduler-and-serving-loop.md` §5.1, §5.2 and §5.4):
+  holds. Each event has a transaction, an event that a handler sends joins the
+  queue behind the queued ones, one derivation transaction runs behind the
+  batch, a body that throws aborts its transaction alone, and a batch that
+  changes nothing a reader sees writes no document.
+- **Before a handler body** (`execution-and-storage.md` §1.3): holds, with the
+  one case of question 276. A handler whose state names an output is handed the
+  value as of its event, evaluated once in its transaction and not again behind
+  the batch.
+- **The bound of ten** (`scheduler-and-serving-loop.md` §8.1 and §8.2): holds,
+  with questions 224, 284 and 286.
+- **An error state** (`plan-and-label-templates.md` §5.2 and §5.3): holds, with
+  questions 278, 285 and 287. A failed cone instance is not evaluated again by a
+  cause that changes nothing it read.
+- **A handler and a failed cone instance, and a refused write**
+  (`scheduler-and-serving-loop.md` §5.5, first row): holds for values. A handler
+  whose state names a failed output fails and stores nothing; the error state of
+  the cone instance is stored by the derivation transaction behind the batch,
+  from the memo, with no evaluation.
+- **An instance that a handler creates** (`execution-and-storage.md` §1.1):
+  holds. The event's transaction writes the documents of the new instance and
+  evaluates nothing, and the derivation transaction behind the batch evaluates
+  its result.
+- **The request and the completion of an effect**
+  (`scheduler-and-serving-loop.md` §6.2, §6.5 and §6.6): hold, with questions
+  279 to 281 and 283. An effect that nothing reads is not requested and has no
+  state document; the request is a derived write with a cell passed on as a
+  link; a change that leaves the request as it was requests nothing, and a
+  change behind a reference of the request requests again; the completion is a
+  transaction of its own that evaluates nothing; and a reader that fails cannot
+  lose the result.
+- **A request that a handler makes:** holds, as far as one process shows. It
+  leaves when the event commits, though nothing reads its result, and each event
+  names an operation of its own. That a requeued event names the same operations
+  was not tested, since the executor requeues nothing.
+- **The stream document** (`execution-and-storage.md` §4.7): holds. A stream has
+  a document from its first event and a row of the stream index before. The
+  executor moves the watermark past an entry when its event was handled,
+  whatever became of it, outside the event's transaction.
+- **The reference forms** (note 499). The crate writes the node that names an
+  output in every record that holds a template, an entry of `Plan.templates` for
+  a template at more than one position, and a member of `$defs` for a repeated
+  schema of a schema document. The label-flow checks of the crate and its list
+  of the bodies that an output is derived by, which were walks of a template,
+  follow a reference to the template it names and keep the result of each named
+  template. No rule of the documents was found that the reference forms conflict
+  with.
+
 ### Documents
 
 The executor stores an argument document, a result document, and one
@@ -3953,6 +4344,9 @@ from scratch that a per-element construct is over and per combination
 of the element keys around it. At commit `682b918ed1` it stores 814
 documents again. At commit `abd965cc37` it stores 887 documents, over
 212 modules and the scenarios of a fresh run that commits 531 events.
+At commit `a84264daf2` it stores 1,444 documents, over 214 modules and
+541 committed events: 552 of the 557 more are stream documents, one for
+each stream that received an event.
 The notes
 give no
 other row of the table for those six commits. The prototype's cost model
@@ -4853,6 +5247,17 @@ decides otherwise. The question stays in
 [Open, and needing the owner](#open-and-needing-the-owner) with a
 pointer to its entry.
 
+**To look at first.** P9 is flagged. With it a batch of events and the same
+events handled one at a time can store different values, and today's runtime,
+which runs the writer again, stores the same value in both. The coordinator
+adopted it only so that the work continues. After it: P18, which changes the
+records of a plan and is written in full into `plan-and-label-templates.md`
+§1.1, with one point at which the written-out form is not preserved outside the
+result (question 288); and question 285, which is no provisional decision: the
+documents said that today's runtime commits none of the writes of a node that
+throws, and it commits them, so the withdrawal of a failed cone's side-write is
+a difference from today.
+
 - **P1. A read gives the members of a stored record in the order of the
   `base/data-model` codec** (question 218). A read gives the members of
   a stored record in the order in which the serialization of a fabric
@@ -5040,6 +5445,215 @@ pointer to its entry.
   option that is not adopted; and the entries of a footprint, which are
   per position of the type written out (question 252). Not about a
   per-element construct.
+- **P8. A slot of a handler that observes the reference alone does not make the
+  cone that writes its cell run before the body** (question 276). The choice of
+  the prototype's author, adopted by the coordinator. *The case:* in
+  `fixtures/batch.tsx` the cone `_join` writes the cell `joined` from `items`,
+  an array of plain values in place, and the handler `overwrite` writes `joined`
+  and reads nothing, so it holds the handle through one slot of class
+  `identity`. In the batch `add`, `overwrite`, `_join` is not evaluated before
+  the body, is evaluated behind the batch, and writes over what the handler
+  wrote: `joined` holds `a`. *Alternative:* any bound slot counts; `_join` is
+  evaluated before the body, is current behind the batch, and `joined` holds
+  what the handler wrote. *Reason:* `execution-and-storage.md` §1.3 speaks of
+  what the handler reads, and today's runtime gives the value of the first
+  reading. *Tests:* the executor has one for each reading on that fixture, the
+  second under the option `beforeBody: "bound"`, and
+  `compare/test/batch.test.ts` has the batch on today's runtime. *If decided
+  otherwise:* the paragraph "A slot that observes the reference alone" of
+  `scheduler-and-serving-loop.md` §5.2 and the provisional sentence of
+  `execution-and-storage.md` §1.3; in the prototype the option's other value
+  becomes the default and one test changes its expectation. Not about a
+  per-element construct.
+- **P9. A cone that writes a cell is not stale when another writer writes that
+  cell** (question 277). **Flagged: the coordinator adopts it only so that work
+  continues, and asks the owner to look at it first.** The choice of the
+  prototype's author. *The case:* the same fixture. The events `add` and then
+  `overwrite`, each a batch of its own, leave `joined` holding what the handler
+  wrote: `_join` was evaluated behind `add`, and nothing it read changed. The
+  same two events in one batch leave `a` (P8). So a batch and the same events
+  one at a time store different values, and which of the two happens depends on
+  arrival times. Today's runtime stores `a` in both cases: it runs the writing
+  computation again behind the handler's write. By a reading of the source that
+  is not verified, that is because the `set` of a cell reads the cell to
+  compare, so the writing action has its target among its reads. *Alternative:*
+  a write to the target of a write edge makes the writing cone instance stale,
+  as today, and a batch and its events one at a time store the same value.
+  *Reason:* `execution-and-storage.md` §2.7 lists a write to a cell that a cone
+  instance read, and no staleness by a write to a cell that it writes. *Tests:*
+  the executor has a test of each outcome (one batch, and two), and the
+  comparison of values with today's runtime differs in 2 values of `batch` for
+  it. *If decided otherwise:* the third item of "Two things follow" in
+  `scheduler-and-serving-loop.md` §5.4, the provisional sentences of
+  `execution-and-storage.md` §2.7 and of `plan-and-label-templates.md` §5.5, and
+  in the prototype a write to the target of a write edge marks the writing cone
+  instance stale. The 2 values then equal today's. Not about a per-element
+  construct.
+- **P10. The memo entry of a cone instance that failed at the bound is current
+  against what is stored when its transaction ends** (question 224). The
+  assumption that question 224 already had, with the prototype's tests. *The
+  case:* `fixtures/bound.tsx`, a cycle of two cones that does not settle; both
+  fail at the bound and their side-writes are withdrawn, so the last reads of
+  each were of values that are no longer stored. *Alternative:* the entry is
+  current against what its last evaluation read, which is what the fingerprint
+  check of `execution-and-storage.md` §3.3 gives. *Reason:* the ruling's own
+  reason, that with the same inputs a later cause would reach the bound again.
+  *Tests:* one for each reading, for a later event that writes a cell no cone of
+  the cycle reads (options `afterBound: "stored"`, the default, and `"reads"`).
+  Under the first neither cone is evaluated and nothing fails. Under the second
+  each cause finds both stale, evaluates each ten times and fails them again:
+  twenty evaluations per cause, for every cause. *If decided otherwise:* the
+  provisional sentences of `execution-and-storage.md` §1.7, §2.7 and §3.3 and of
+  `scheduler-and-serving-loop.md` §8.1. The same is assumed for a body that
+  wrote a cell, read it, and threw, which no fixture has. An element cone has
+  one count for each key in both readings.
+- **P11. An error state is the record `{ $error: { message } }`, and a cone that
+  places a failed value without observing it does not fail** (question 278). The
+  choice of the prototype's author. *The case:* in
+  `patterns/dev/test/silent-computed-crash.tsx` a `computed` that throws is
+  placed among the children of the view. The view holds the error state at that
+  child and the rest of it is stored. *Alternative:* placing is reading, the
+  cone of `$UI` fails, and the whole view is an error state. *Reason:*
+  `plan-and-label-templates.md` §5.3 has a `map` pass an errored element on, and
+  today's runtime stores the rest of the view. *Tests:* `view` of
+  `fixtures/failing.tsx` shows the first reading, with the error state at two
+  child positions; no test shows the second, which the executor would give by
+  failing the cone in `Host.output` and `Host.slot`. *If decided otherwise:* the
+  paragraphs "The form of an error state" and "Placing is not reading" of
+  `plan-and-label-templates.md` §5.2 and §5.3 and the provisional sentence of
+  `execution-and-storage.md` §1.7. The one per-element construct tested is the
+  `map` of `failing.tsx`, over an array of plain values in place, where an
+  element whose body fails is one errored element; over an array of references
+  and over the result of another per-element construct it was not tried.
+- **P12. Before the first request transaction `pending` reads as nothing, and
+  while a newer request is outstanding the earlier result stays readable**
+  (question 279). The choice of the prototype's author. *The case:*
+  `fixtures/effects.tsx`, which has no per-element construct. The request
+  transaction runs behind the derivation transaction that staged the request, so
+  in that first derivation transaction a reader of `pending` reads a document
+  that holds the request alone. *Alternative:* `pending` is `true` from the
+  derivation transaction that staged the request, and a new request clears the
+  result. *Reason:* step 6 of `scheduler-and-serving-loop.md` §6.2 writes the
+  hash and the pending mark alone. *Tests:* the executor's tests of the request
+  and the completion show the first reading; none shows the second. *If decided
+  otherwise:* the paragraph "What a reader reads around a request" of that
+  section, the bullet "What a reader reads" of `execution-and-storage.md` §6.4
+  and the paragraph of `builtin-inventory.md` ("Effectful built-ins"); in the
+  prototype the staging evaluation writes the mark, or the request transaction
+  clears `result` and `error`.
+- **P13. A request that comes back while it is outstanding leaves a second
+  time** (question 280). The choice of the prototype's author:
+  `scheduler-and-serving-loop.md` §6.2 as its steps are written, against the
+  sentence of its §6.6. *The case:* with request A outstanding, a change to B
+  and back to A. The stored hash is B's, so A leaves again and the outbox holds
+  A, B, A; both completions of A are written. *Alternative:* the operation
+  remembers the hashes that are outstanding, and A is made once. *Reason:* steps
+  4 to 6 compare with the one hash the document holds. *Tests:* one test shows
+  the outbox holding A, B, A; none shows the other reading. *If decided
+  otherwise:* the paragraph "A request that comes back while it is outstanding"
+  of that section, the provisional sentence of its §6.6, and the state document
+  of `execution-and-storage.md` §6.4, which then holds a set of outstanding
+  hashes. Not about a per-element construct.
+- **P14. The state document of an operation holds `request`, `requestHash` and
+  `outcome`; a request is the single argument or the arguments in order; every
+  reference in a request is followed** (question 281). The choice of the
+  prototype's author. *The case:* `execution-and-storage.md` §6.4 lists what the
+  document holds and no layout. With `outcome` holding what a reader reads, the
+  link that a handler stores to an effect's result leads to `pending`, `result`
+  and `error` and not to the request. *Alternatives:* another layout; and for
+  the references, the depth that `builtin-inventory.md` gives each operand of
+  each built-in, which is narrower than "every reference" for a built-in with an
+  operand that leaves as a link. *Reason:* it is what the prototype built; the
+  documents state nothing on the layout. *Tests:* the tests of
+  `fixtures/effects.tsx` and `fixtures/handler-effect.tsx` read the three
+  members. *If decided otherwise:* the bullet "Layout" of
+  `execution-and-storage.md` §6.4 and the paragraph of `builtin-inventory.md`;
+  the prototype takes the layout and the depth of each entry. Open under it: the
+  schema that today's compiler adds to a `fetchJson` request, which
+  `builtin-inventory.md` has as part of the request and of its hash and the
+  prototype's request does not hold. Not about a per-element construct.
+- **P15. A `wish` is resolved in the evaluation that stages its operands, and
+  makes no request** (question 282). The choice of the prototype's author, and
+  what `plan-and-label-templates.md` §1.1 already says of an operation of kind
+  `wish`. *The case:* the overview has `wish` among the structural operations,
+  `builtin-inventory.md` has its entry under the effectful built-ins with class
+  A, "not an effect", and `execution-and-storage.md` §4.1 gives it a state
+  document with the stored operands. *Alternative:* a transaction of the
+  operation, with the request transaction and the outbox of an effect. *Reason:*
+  the class of the inventory. *Tests:* three on `fixtures/wishes.tsx`: a target
+  from a table that a test gives, stored in a document of its own with the
+  result a reference to it; no entry, where the result holds nothing and `error`
+  a text; and the clock, a document that a test writes. *If decided otherwise:*
+  the provisional sentences of `builtin-inventory.md` (`wish`) and of
+  `execution-and-storage.md` §6.4, and the comment of `Operation.kind` in
+  `plan-and-label-templates.md` §1.1. Not about a per-element construct.
+- **P16. A request whose cone failed holds one error state for the whole
+  request** (question 283). The choice of the prototype's author, narrower than
+  the documents, which have the error state at the path whose cone failed. *The
+  case:* the crate registers one function for the request of an operation, and
+  where it throws the executor stores an error state as the whole request. The
+  request is not made, and the readers of the operation's result fail in turn,
+  under both. *Alternative:* the request function is split by path, and the
+  other paths hold their values. *Reason:* one function per request is what the
+  crate emits. *Tests:* one on `fixtures/effects.tsx`. *If decided otherwise:*
+  the provisional sentences of `execution-and-storage.md` §6.4 and of
+  `scheduler-and-serving-loop.md` §6.2, step 1. Not about a per-element
+  construct.
+- **P17. The bound of ten is counted per value function of a cone instance**
+  (question 284). The choice of the prototype's author. *The case:* the executor
+  counts per memo entry, which is a value function of a cone instance, where the
+  documents count per cone instance; a cone with two value functions has two
+  counts. *Alternative:* one count per cone instance. *Reason:* it is what the
+  memo holds. *Tests:* those of `fixtures/bound.tsx`, whose cones have one value
+  function each, so no test tells the two counts apart, and it is not verified
+  that they agree on any module of the corpus. *If decided otherwise:* the
+  provisional sentences of `plan-and-label-templates.md` §5.2,
+  `execution-and-storage.md` §2.7 and `scheduler-and-serving-loop.md` §8.1. An
+  element cone has a count for each key under both, over an array of references,
+  over an array of plain values in place, and over the result of another
+  per-element construct.
+- **P18. A pattern compiled in is written once and named by its call sites**
+  (question 247). The coordinator's decision. *Measured:* with two call sites
+  per level, at a depth of 1 to 6, plans of 3,193, 7,746, 16,961, 35,665, 73,936
+  and 152,575 bytes and 5, 13, 29, 61, 125 and 253 cones, doubling with each
+  level; P6 does not help, because the copies differ in their slot indexes.
+  *Decision:* the plan holds each pattern that is compiled in once, as a callee
+  record with its slots, bodies, cones, outputs, edges and templates numbered
+  inside it, and each call site is a record that names the callee and binds its
+  argument to places of the caller. The meaning is that of the plan with the
+  callee written out at the site: labels, values, identifiers and stored
+  documents are the same, and the identifier of a cone instance holds the chain
+  of call sites. Value code is registered once per callee. *How it is written:*
+  `plan-and-label-templates.md` §1.1 has the records `Callee`, `CallSite`,
+  `SiteArgument` and `SiteResult`, the members `Plan.callees` and `sites`, and a
+  member `site` beside every `output` that names what a callee returns, and its
+  paragraph "A pattern compiled in is written once" goes through the scoping of
+  indexes, `within` and names, cone instances, a `Child`, a site in an element
+  body in each of the three cases, a construct of the callee over an argument,
+  `asScope`, templates across the call, schemas, defaults, value code, and a
+  table of the rules that are evaluated once for a callee and those that are
+  evaluated once for a site. The size of a plan is linear in the source for any
+  nesting. Cone instances, memo entries, labels, state cells, streams, children
+  and kept outputs stay per chain of sites at run time, as they are in the
+  written-out form. *Where the author could not determine a rule,* each is part
+  of a question: whether the compile-time checks on declared labels follow an
+  argument into the caller's template, which is per chain of sites, or stop at
+  the callee's annotation (question 288); and eight further points of the record
+  design, each with what is assumed (question 289). *Where the decision does not
+  preserve the written-out form,* neither in a label, a value, an identifier or
+  a stored document of a result: `Cone.code` of a callee's cone is the hash of
+  one function for every site, so what is keyed by it is keyed by another hash;
+  and the compile-time diagnostics of question 288. *Alternative:* the
+  written-out form as the format. *If decided otherwise:* those records and
+  members leave `plan-and-label-templates.md` §1.1, with the provisional
+  sentences of its §1.4, §3.2 and §4.4, of `execution-and-storage.md` §2.1 and
+  §4.5, of `scheduler-and-serving-loop.md` §10.2 and of the overview, and plans
+  return to `k` to the power `D` for nested calls at several sites. The
+  prototype's crate writes the written-out form. The record of a callee is the
+  same for a site in an element body over an array of references, over an array
+  of plain values in place, and over the result of another per-element
+  construct.
+
 
 ## Open, and needing the owner
 
@@ -7191,6 +7805,13 @@ that analysis that are no question are named after question 238.
      after the withdrawal, so that only a change after that transaction
      evaluates the cone instance again. Not about a per-element
      construct, except that an element cone has one count for each key.
+     The assumption is provisional decision P10. The prototype at commit
+     `a84264daf2` has a test for each reading on `fixtures/bound.tsx` (its note
+     484): with the entry current against what is stored, a later event that
+     writes a cell no cone of the cycle reads evaluates neither cone; with the
+     entry current against what its last evaluation read, each cause evaluates
+     each cone ten times and fails both again. The same is open for a body that
+     wrote a cell, read it, and threw, which no fixture has.
 225. **`asScope` on a call that is compiled into the surrounding
      instance** (PL question 161). The case is `savedRooms.map((entry)
      => FoundRoom.asScope("user")({...}))` in the pattern body of
@@ -7217,6 +7838,11 @@ that analysis that are no question are named after question 238.
      in an element body over an array of references, over an array of
      plain values in place, and over the result of another per-element
      construct, and for a call outside every element body.
+     Under provisional decision P18 the call-site record of such a call has a
+     member `scope` that holds the modifier, so a member of the plan says that
+     the call had it. The assumption on what the state cells of the callee then
+     have is unchanged, and is stated per site: the narrower of the cell's own
+     scope and the scope of each call site on its chain.
 226. **A `navigateTo` of the reactive tier behind a batch of events of
      several sessions** (SS question 44).
      `scheduler-and-serving-loop.md` §6.2 says that a `navigateTo`
@@ -7621,6 +8247,15 @@ decisions](#provisional-decisions-awaiting-the-owners-ratification)).
      references, over an array of plain values in place, and over the
      result of another per-element construct, and the membership of a
      `map` is an entry in the third case alone.
+     *Measured* at prototype commit `a84264daf2` (note 500): the template of a
+     chain of `&&` operands in one cone was 11,128 bytes for 4 operands, 165,732
+     for 8, 3,262,474 for 12 and 63,119,254 for 16, and with the table it is
+     12,701 for 12, 16,165 for 16 and 19,629 for 20; the templates of the write
+     edges of a handler with 16 reads and 16 writes were 18,944 bytes and are
+     one reference each; the plans of the corpus are 5,956,178 bytes with the
+     table and were 6,410,715 with the ruling on question 222 alone. The growth
+     is confirmed, and the table removes it. No row of the comparison of labels
+     changed its category.
 246. **A subschema that stands at more than one position of a schema**
      (PL question 169). `plan-and-label-templates.md` §1.5 wrote a type
      that is not recursive in place at each occurrence, which for `D`
@@ -7645,14 +8280,24 @@ decisions](#provisional-decisions-awaiting-the-owners-ratification)).
      two plans would not name one type by one hash. The entries of a
      footprint are not reached either (question 252). Not about a
      per-element construct.
+     *Measured* at prototype commit `a84264daf2`: a test of the crate bounds the
+     schema of a type that each level uses twice (`tests/schema.rs`); the notes
+     give no sizes. The growth is confirmed, and P7 removes it from the schema
+     documents. The schemas that the prototype's plan holds in place, the event
+     schema of a binding and the schema of an output, are not changed, and the
+     crate still cuts a type at a depth of twelve.
 
 **Sizes and costs that may grow faster than linearly.** Questions 247 to
 275 are the findings of two read-only lists of sizes and costs in the
 design that may grow faster than linearly in the size of the source or
 of the data, or that follow the number of paths: an audit of all seven
 documents, and a list made from `plan-and-label-templates.md` while the
-ruling on question 222 was written in. Each was found by reading and
-none was measured. They are in the order of the audit's ranking, in its
+ruling on question 222 was written in. Each was found by reading. The
+prototype at commit `a84264daf2` measured six of them (questions 247,
+256, 257, 259, 271 and 274), and each of those entries ends with the
+measurement and with whether the finding is confirmed, refuted or
+unchanged; the others were not measured and are unchanged. They are in the order
+of the audit's ranking, in its
 four groups, with the findings of the second list placed in the first
 group. Each entry quotes the rule with its section, says what grows and
 in what with a small example, gives the class (certain from the text, or
@@ -7660,8 +8305,9 @@ depending on a choice the text leaves open), says whether a fix would
 change a representation or an algorithm only or the meaning of a rule,
 names the measurement that the prototype should run, and says what
 today's runtime does where the lists establish it. Nothing is assumed
-for any of them beyond the text as it stands, none has a recommendation,
-and none has a provisional decision. "The audit's statement" marks a
+for any of them beyond the text as it stands, and none has a
+recommendation. One has a provisional decision: question 247 (P18). "The audit's
+statement" marks a
 claim about today's runtime that the audit made from source and that
 this pass did not check again; a function named with its file was found
 there.
@@ -7696,6 +8342,19 @@ there.
      counts of its slots, cones, outputs and bodies, the bytes of the
      value code, and the compile time. *Today:* a sub-pattern is one
      module, instantiated at run time (the audit's statement).
+     *Measured* at prototype commit `a84264daf2` (note 500), with two sites per
+     level and a depth of 1 to 6: plans of 3,193, 7,746, 16,961, 35,665, 73,936
+     and 152,575 bytes, 5, 13, 29, 61, 125 and 253 cones, and value code that
+     doubles as well, where the source grows by 148 bytes per level; with one
+     site per level the plan is linear. The compile time was not measured apart,
+     and depths 7 and 8 were not run. The finding is confirmed. *Assumed,*
+     provisional (P18): the plan holds each such pattern once, as a callee
+     record, and each call as a call-site record that binds the callee's
+     argument (`plan-and-label-templates.md` §1.1, "A pattern compiled in is
+     written once", and its question 170). The size of a plan is then linear in
+     the source for any nesting, and the cone instances and what they store stay
+     per chain of sites. Questions 288 and 289 hold what the record design could
+     not determine. The prototype does not have the decision.
 248. **A `Body` record is written per use, with the whole footprint.**
      `plan-and-label-templates.md` §1.1 describes `Body` as "One use of
      a sandboxed function body and the result of footprint analysis",
@@ -7754,6 +8413,10 @@ there.
      The steps of an element body are the same over an array of
      references, over an array of plain values in place, and over the
      result of another per-element construct. *Today:* no plan exists.
+     Not measured. Under provisional decision P18 no record holds a `site` step:
+     the steps of a call site are formed from the chain of sites, so the part of
+     this finding that is about compiled-in calls has no case. The `element`
+     steps and a `Name` that holds the name of its body stay as they are.
 251. **The reads of a unit are the reads of every cone upstream.**
      `execution-and-storage.md` §1.9: "What a derived write read from
      storage is the reads of the cone instance that computed it and of
@@ -7905,6 +8568,18 @@ rule of meaning.
      of references the order is the same; the hash of each whole value,
      and a pass for each edit, are new over an array of plain values in
      place.
+     *Measured* at prototype commit `a84264daf2` (note 501), at lengths of 1,000
+     and 10,000: over an array of plain values in place every array write forms
+     one salted hash for each position, for an append, an edit of one field and
+     a removal (1,001, 1,000 and 999 hashes at 1,000; 10,001, 10,000 and 9,999
+     at 10,000), with a declared key and without. With a declared key the edit
+     changes no key and the hashes are spent all the same. Over an array of
+     references no hash is formed. For a `map` over the result of a `filter`
+     over plain values in place the hashes are those of the source, the same
+     counts. The finding is confirmed for plain values in place. A key kept for
+     each position that a write did not touch is a change of the executor alone
+     and was not made. The chain of three constructs was not measured, and
+     neither were link resolutions or bytes hashed.
 257. **A reference by key is resolved by hashing every element where no
      element table exists.** `execution-and-storage.md` §2.5 ("Resolving
      a reference by key"): "Where it has none, because no loaded
@@ -7930,6 +8605,13 @@ rule of meaning.
      hashes. *Today:* a reference to a member of a record stored in
      place is a link to the position and resolves without a hash (the
      documents' statement).
+     *Measured* at prototype commit `a84264daf2` (note 500), for an array whose
+     keys the store had formed: a reference by key was resolved by a scan of the
+     keys of its array, and with 10,000 plain values in place a settle took 4.8
+     s and one change 5 to 11 s. The store now keeps an index from a key to its
+     position for each list of keys it formed. That confirms the cost of a scan
+     and removes it where a list of keys exists. The case of this entry, an
+     array that no loaded instance iterates, was not measured and is unchanged.
 258. **Equal plain values: an edit or a removal changes the key of the
      later equal elements.** `plan-and-label-templates.md` §1.3: "An
      edit that makes the value equal to that of another element, or ends
@@ -7989,6 +8671,20 @@ rule of meaning.
      the content of the elements out of its reads, so a change of one
      element does not run it again (the audit's reading of
      `runtime/runner/src/builtins/map.ts`).
+     *Measured* at prototype commit `a84264daf2` (notes 501 and 503), with one
+     `map` in the result and no enclosing JSX: a change of one element costs 2
+     to 5 evaluations at every length, which are the element, the assembly and
+     the result, so the `result` cone is evaluated, as the three rules give it
+     and against the worked example. The executor writes the result document
+     whole: 22,879 to 22,924 bytes for a change of a list of 1,000 and 238,879
+     to 238,925 for one of 10,000, in each of the three cases. Over the corpus
+     the derivation transactions wrote 31,642,734 bytes in 755 transactions, of
+     which 14,970,456 are of one module whose result document of about 140,000
+     bytes is written whole behind each event. The finding is confirmed for the
+     evaluations and for the bytes that the executor writes. The executor has no
+     patch, so the measurement does not show what a store step that writes the
+     changed paths would write, and the two levels of enclosing JSX were not
+     measured.
 260. **Labels, bindings and stored results are held at positions.**
      `builtin-inventory.md` ("Element keys"): aggregates and indexes
      "keep, as part of their state, the position of each element key".
@@ -8274,6 +8970,14 @@ rule of meaning.
      transaction, which should not grow with `N`. *Today:* a lookup in
      an index per changed address (`EntityTriggers.forEachMatching` in
      `runtime/runner/src/scheduler/entity-triggers.ts`).
+     *Measured* at prototype commit `a84264daf2` (note 501): for one change of
+     one element the executor checked 3,002 to 3,007 memo entries at a length of
+     1,000 and 30,002 to 30,007 at 10,000, and 7,002 to 7,014 and 70,002 to
+     70,014 for a `map` over the result of a `filter`: 3 `N` to 7 `N`, in each
+     of the three cases. The executor finds what is stale by checking each entry
+     that is demanded, which is the second of the two ways this entry names. The
+     finding is confirmed for that way: the checks grow with `N`. An index from
+     a write to its readers was not built, so the first way is not measured.
 272. **A withdrawal of demand derives the counts again over the upstream
      region, for each path released.** `scheduler-and-serving-loop.md`
      §4.3: "a withdrawal derives the counts again over the region
@@ -8342,6 +9046,16 @@ rule of meaning.
      references, over an array of plain values in place, and over the
      result of another per-element construct alike. *Today:* `MAX_ITERS`
      is 10 (`runtime/runner/src/scheduler/constants.ts`).
+     *Measured* at prototype commit `a84264daf2` (notes 480, 483 and 484), on
+     fixtures with no row: a cycle of two cones that does not settle evaluates
+     each ten times in one derivation transaction, a reader of both cells is
+     evaluated five times, and a later event that writes one of the cells
+     evaluates the two to the bound again. Under the reading of question 224
+     that provisional decision P10 does not take, every later cause costs twenty
+     evaluations per cone. A handler that reads a derivation behind two events
+     of one batch has it evaluated once, in its own transaction, and not again
+     behind the batch. The measurement of this entry, with `N` rows and `E`
+     events, was not run. The finding is unchanged.
 275. **Seven smaller sizes.** Each is from the audit's last finding or
      from the second list, and is certain from the text unless it says
      otherwise; none is measured. (a) The stream index holds a row per
@@ -8413,6 +9127,223 @@ are bounded by a rule and are entries all the same: the bound of ten
 inside one transaction (question 274), the bytes of rows stored in place
 that move with a position (question 260), and the depth of a
 witness-bearing atom (question 275).
+
+**From the prototype's notes 479 to 504.** At commit `a84264daf2` the
+prototype's executor has a queue of events and a batch, a transaction for each
+cause, the bound of ten, the error state and a stubbed effect layer. Questions
+276 to 287 are what those notes show the documents not to decide, or to state
+wrongly. Questions 276 to 284 each have a provisional decision, which is the
+choice of the prototype's author in its note 502, adopted by the coordinator of
+this work ([Provisional
+decisions](#provisional-decisions-awaiting-the-owners-ratification)); each is
+written into the documents as an assumption. Questions 288 and 289 are what the
+record design of provisional decision P18 could not determine. The fixtures of
+these notes hold one per-element construct, a `map` over an array of plain
+values in place, and no entry below was tried over an array of references or
+over the result of another per-element construct.
+
+276. **A slot of a handler that observes the reference alone, and the cone that
+     writes its cell** (SS question 54, ES question 98).
+     `execution-and-storage.md` §1.3 has "a slot of the handler" bound to the
+     target of a static side-write, and the writing cone instance evaluated
+     first. The plan gives a handle that the body reads through two slots, one
+     of class `identity` and one of class `value`, and a handle that the body
+     only writes through one slot of class `identity`. The case: the handler
+     `overwrite` of the prototype's `fixtures/batch.tsx` writes the cell
+     `joined` and reads nothing, and the cone `_join` writes `joined` from a
+     list. In the batch `add`, `overwrite`, under the reading that a slot of
+     class `identity` alone is no read, `_join` is not evaluated before the
+     body, is evaluated behind the batch, and writes over what the handler
+     wrote, so `joined` holds `a`. Under the reading that any bound slot counts,
+     `_join` is evaluated before the body and is current behind the batch, and
+     `joined` holds what the handler wrote. Today's runtime gives `a`.
+     *Assumed,* provisional (P8): the first reading. The prototype has a test
+     for each. Not about a per-element construct.
+277. **Whether a cone with a static side-write is evaluated again when another
+     writer writes its target** (SS question 55, ES question 99).
+     `execution-and-storage.md` §2.7 makes a cone instance stale by a write to a
+     cell that it read, and no rule makes it stale by a write to a cell that it
+     writes. `scheduler-and-serving-loop.md` §8.2 speaks of "a state cell that a
+     handler also writes" beside "a computation that normalizes it", which is
+     this case. In the prototype, the events `add` and then `overwrite` of
+     `fixtures/batch.tsx`, each a batch of its own, leave the cell holding what
+     the handler wrote, and the same two events in one batch leave what the cone
+     wrote (question 276). Today's runtime leaves what the cone wrote in both
+     cases: it runs the writer again behind the handler's write, by a reading of
+     the source that is not verified because the `set` of a cell reads the cell
+     to compare. *Assumed,* provisional (P9), and flagged for the owner to look
+     at first: the cone instance is not stale, and the size of a batch is among
+     what decides a stored value (`scheduler-and-serving-loop.md` §5.4). The
+     alternative is today's: a write to the target of a write edge makes the
+     writing cone instance stale, and a batch and its events one at a time store
+     the same value. 2 values of the fixture comparison differ from today's for
+     it. Not about a per-element construct.
+278. **The form of an error state, and whether placing a failed value is reading
+     it** (PL question 171). The documents give an error state no form.
+     `plan-and-label-templates.md` §5.3 says that a cone that reads an errored
+     slot fails in turn and that a `map` passes an errored element on. Value
+     code that places a value in a record or among the children of a view node
+     and observes nothing of it is not said to read it. In
+     `patterns/dev/test/silent-computed-crash.tsx` a `computed` that throws is
+     placed among the children of the view: if placing is reading, the cone of
+     `$UI` fails and the whole view is an error state, where today the view is
+     stored with nothing at that child. *Assumed,* provisional (P11): the record
+     `{ $error: { message } }`; a cone instance that fails in turn holds the
+     record of the failure it read; and a cone fails at an observation of the
+     value and passes an error state on where it places it. The second of the
+     three is the prototype's and is not in its list of choices. The prototype
+     tested an errored element of a `map` over an array of plain values in place
+     alone.
+279. **What `pending`, `result` and `error` read as before the first request
+     transaction, and while a newer request is outstanding** (SS question 56, BI
+     question 16). The request transaction runs behind the derivation
+     transaction that staged the request, so in that first derivation
+     transaction a reader reads a document that holds the request alone.
+     `builtin-inventory.md` says that the result is read as the three fields and
+     no more. *Assumed,* provisional (P12): nothing before the first request
+     transaction, `true` for `pending` in the derivation transaction behind it,
+     and the result of the earlier request readable while a newer one is
+     outstanding. The alternative: `pending` is `true` from the derivation that
+     staged the request, and a new request clears the result. Not about a
+     per-element construct.
+280. **A request that comes back while it is outstanding** (SS question 57).
+     `scheduler-and-serving-loop.md` §6.6 says that a request is made at most
+     once per distinct request hash and state document, and steps 4 to 6 of its
+     §6.2 compare the hash with the one hash that the document holds. With
+     request A outstanding, a change to B and back to A leaves A a second time.
+     *Assumed,* provisional (P13): the steps govern. The alternative: the
+     operation remembers the hashes that are outstanding. Not about a
+     per-element construct.
+281. **The layout of the state document of an operation, the shape of a request,
+     and how far a reference of a request is followed** (ES question 100, BI
+     question 17). `execution-and-storage.md` §6.4 lists what the document holds
+     and no layout, and does not say what a link to an effect's result names.
+     *Assumed,* provisional (P14): the members `request`, `requestHash` and
+     `outcome`, a link to the result that names `outcome`, a request that is the
+     one argument or the arguments in order, and every reference of the request
+     followed. Open under it, with nothing assumed: the schema that today's
+     compiler adds to a `fetchJson` request, which `builtin-inventory.md` has as
+     part of the request and of its hash; and the depth that the inventory gives
+     each operand, which the prototype does not follow. Not about a per-element
+     construct.
+282. **Which transaction resolves a `wish`** (BI question 18). The overview has
+     it among the structural operations, `builtin-inventory.md` under the
+     effectful built-ins as class A, and `execution-and-storage.md` §4.1 gives
+     it a state document with the stored operands. `plan-and-label-templates.md`
+     §1.1 says that it has no request transaction and is resolved in the
+     transaction that evaluates a reader of its result. *Assumed,* provisional
+     (P15): that sentence. Not decided by any document, and built by the
+     prototype in one way: what a resolved target is stored as (a document of
+     its own, with the result a reference to it), what the result holds where
+     nothing is found (nothing, and a text at `error`), and how the clock is
+     held (one document that the runtime writes, copied once for the one-shot
+     time and referenced for the ticking one, with the interval not read). Not
+     about a per-element construct.
+283. **A request one of whose paths has a failed cone** (ES question 101). The
+     documents have the error state at the path whose cone failed. The prototype
+     forms a request with one function and stores one error state as the whole
+     request. *Assumed,* provisional (P16): the whole request. Under both the
+     request is not made and the readers of the result fail in turn. Not about a
+     per-element construct.
+284. **Whether the bound of ten is counted per cone instance or per value
+     function of one** (PL question 173). *Assumed,* provisional (P17): per
+     value function. It is not verified that the two counts agree on any module
+     of the corpus. An element cone has a count for each key under both.
+285. **A side-write that a cone made before it failed is withdrawn, and today's
+     runtime commits it** (PL question 172). `plan-and-label-templates.md` §5.2
+     said: "Today a node that throws commits none of its writes, so the second
+     case is equal". That is wrong as a statement about today.
+     `finalizeSchedulerAction` in `runtime/runner/src/scheduler/run.ts` reports
+     the error and calls `finalizeReactiveActionCommit` in a `finally`, which
+     starts the commit of the run's transaction whether or not the action threw;
+     this was verified in the source for this plan. On the prototype's
+     `fixtures/failing.tsx` the cone `_try` writes the cell `log` and then
+     throws for a negative input: today's runtime stores `tried -4`, and the
+     design, which withdraws the write, stores `tried 4`. 4 of the 6 values of
+     the fixture that differ are this. The sentence is corrected, and the
+     withdrawal is recorded there as a difference from today in a stored value.
+     It is no difference in a label and none of the exceptions to "equal or
+     tighter". Whether the difference is intended is for the owner. *Assumed:*
+     the withdrawal stands. The alternative keeps the writes made before the
+     failure, as today, and a cell that other writers share then holds a value
+     of a computation that did not complete. Not about a per-element construct.
+286. **Which cone instances of a cycle fail depends on the order of evaluation**
+     (SS question 58). In the prototype's cycle of two, both cones had been
+     evaluated ten times when the first reached the bound, and the second failed
+     by its own count when the withdrawal made it stale. Had the second been
+     evaluated nine times, it would have been evaluated once more against the
+     earlier value and left its write, and one cell of the cycle would hold one
+     step of it. A reader of the cells is evaluated once for each state it is
+     pulled in, five or six times in the fixture, and under an order that pulls
+     it after every write it would reach the bound itself and fail, though it
+     writes nothing. `scheduler-and-serving-loop.md` §10.2 fixes the order of
+     the demanded outputs and has a client and the server evaluate in the same
+     order. No document fixes the order of the pulls inside a transaction, and
+     the outcome depends on it. Nothing is assumed. The executor's order is that
+     of its own pull, and no test compares two orders. An element cone has a
+     count for each key, over an array of references, over an array of plain
+     values in place, and over the result of another per-element construct.
+287. **A `select` one of whose operands failed, against today** (PL question
+     174). By `plan-and-label-templates.md` §5.3 a `select` whose unselected
+     branch is in an error state is unaffected. On `fixtures/failing.tsx` the
+     executor holds the selected branch at `chosen` and today's runtime holds
+     nothing there: 2 of the 6 values of the fixture that differ. The cause on
+     today's side is not established. *Assumed:* the rule of §5.3 stands, and
+     the difference is one from today. Not about a per-element construct.
+288. **Whether a compile-time check follows an argument of a compiled-in pattern
+     into the caller's template** (PL question 170, point a).
+     `cfc-flow:writer-fit`, `cfc-flow:write-floor`,
+     `cfc-flow:max-confidentiality` and `cfc-flow:required-integrity` evaluate a
+     template on declared labels. With a callee written out at each call, a path
+     of its argument that the call binds to an output of the caller is a node
+     that names that output, and the check follows it into the caller's
+     template, so it can be decided at one call and not at another. Under
+     provisional decision P18 the callee's record has a slot there, with the
+     declared label of the callee's own type. Two readings. Evaluated once per
+     callee, a check that the written-out form decides through a caller's output
+     is left to instantiation, or is decided on the callee's annotation alone:
+     fewer or other compile-time reports, and the same enforcement at run time.
+     Evaluated per chain of call sites, the reports are those of the written-out
+     form, and the work at compile time follows the number of chains, `k` to the
+     power `D`, which is the growth that P18 removes from the plan. No label and
+     no run-time decision differs between the two. Nothing is assumed, and the
+     table of `plan-and-label-templates.md` §1.1 has the rule as not determined.
+     This is the one place where P18 does not give exactly what the written-out
+     form gives without paying its cost. A path bound to a slot of the caller
+     has no such case: its declared label is that of the callee's type in both
+     forms. The same for a call site in an element body over an array of
+     references, over an array of plain values in place, and over the result of
+     another per-element construct.
+289. **Eight further points of the record of a compiled-in pattern** (PL
+     question 170, points b to i; SS question 59; ES question 102). Each is
+     assumed in `plan-and-label-templates.md` §1.1 as stated here. (a) What a
+     call site binds a path of the argument to: a slot, an output or a constant
+     by the text, and *assumed* also the stream of a binding and the result of
+     the instance. (b) A literal that the call writes above the paths that the
+     callee reads: *assumed* built by the runtime from the entries of the
+     binding. (c) Where the callee's result is held: the call-site record lists
+     the places that the source writes; an output that the written-out form
+     keeps because the result reaches it through a value, as through the
+     elements of a collection that hold the results of several calls, a branch
+     of a `select`, or what a body returns, is *assumed* kept where that value
+     is. (d) A construct of the callee over a path of its argument that the call
+     binds to the result of a per-element construct of the caller: *assumed* to
+     have the upstream keys and membership through the binding, as an output
+     that passes a collection on has, with no difference from the record that
+     the written-out form has when the compiler sees the caller's construct at
+     the call. The other two cases, over an array of references and over an
+     array of plain values in place, are a binding to a slot and have no
+     question. (e) The order of the demanded outputs "by instance identifier and
+     output index" (`scheduler-and-serving-loop.md` §10.2): *assumed* by the
+     chain of call sites and then the index. (f) A pattern with type parameters:
+     *assumed* one record for each set of type arguments. (g) Whether a plan
+     names a callee by the content address of that pattern's own plan: *assumed*
+     not, and the plan holds the record. (h) How a handler written in place in a
+     callee, which captures names of the callee's scope, is registered once for
+     all sites: not determined (`execution-and-storage.md` §2.1). Beside these,
+     `Cone.code` of a callee's cone is one hash for every site, which changes
+     the keys of the cache documents and the basis rows and no result.
+
 
 ## Open, and not needing the owner
 
@@ -8624,6 +9555,22 @@ witness-bearing atom (question 275).
   that is not handled has a class and a cause ([The corpus at commit
   `abd965cc37`](#the-corpus-at-commit-abd965cc37)). What the executor
   still lacks is under [Known limits](#known-limits-of-what-exists).
+  At commit `a84264daf2` the executor handles events in batches with a
+  transaction for each cause, bounds the evaluations of a cone instance, has the
+  error state, and requests and completes an effect with answers that a test
+  gives; it runs 214 of the 215 modules, and 44 of the 47 that need `wish` or an
+  effect with stubbed answers ([The corpus at commit
+  `a84264daf2`](#the-corpus-at-commit-a84264daf2)).
+- **Why the time of one change of a list grows faster than the list in the
+  prototype's executor.** On `fixtures/lists.tsx` the time of one change grows
+  20 to 35 times for 10 times the list, where every count that the executor
+  keeps grows 10 times (its note 501). Something in the executor is more than
+  linear, and it was not found. It is a question about the executor and not
+  about the design until it is found. Two changes of the executor that the
+  note names would remove the linear counts and were not made: an index from a
+  write to its readers, and a key kept for each position of an array that a
+  write did not touch. The lists are over an array of references, over an
+  array of plain values in place, and over the result of a `filter`.
 
 The open questions each document ends with stay where they are.
 
@@ -8891,6 +9838,58 @@ The open questions each document ends with stay where they are.
   today's runtime runs none of its forms in a pattern body. That today's
   runtime gives the members of every stored record in the order of their
   names rests on one module.
+- **At commit `a84264daf2` the prototype's executor has a serving loop for one
+  instance in one process, and does not have the rest** (its notes 490 and 493).
+  It instantiates no label, so no constraint of a plan is within its reach: an
+  option of a test stands for the check of what a handler writes. It stores the
+  result document whole when a derivation transaction ends, so a kept output of
+  a cone instance that was evaluated before a handler body is stored by the
+  derivation transaction behind the batch and not by the event's transaction,
+  and the withdrawal of such an output has nothing to withdraw and is not
+  tested. A cone that writes a position it read is still evaluated once:
+  following `execution-and-storage.md` §2.7 there was tried and put back,
+  because the executor makes a document for a held constant in every evaluation
+  and takes that write for a write of the cone. A materializer that reaches ten
+  evaluations has no test. Not built: a dropped derived write and what the memo
+  holds of it, the early step, a conflict at the commit and the requeue, the
+  receipt of a handling, demand as a cause, the promotion of a materializer, a
+  stream with no row in the stream index, and the budgets of time and memory of
+  a body. Of the effect layer, not built: the gates, the transaction that stores
+  a refusal, the send transaction of a language-model built-in, the budget of
+  request transactions per cycle, the claim, the recovery of a pending request,
+  and the rule that refuses a `navigateTo` which is no consequence of an event
+  of a client session. Of `wish`: hashtag search, the sidecars and the home
+  space. Of the storage layout the round built the stream document alone, and
+  its entries hold the event and no identifier, actor or attestation. An error
+  that says what the executor does not do, a name that the value code does not
+  bind, and a stack that ran out still stop the instance where the documents
+  have an error state. A `lift` or a `computed` that calls an effectful built-in
+  fails in the executor as something it does not do, and the crate does not
+  refuse it. Each of the missing parts needs labels, a second store with a
+  commit sequence, or instances that are not loaded.
+- **The provisional decisions P8 to P17 are the prototype's choices, and most
+  have a test of one reading alone.** P8, P9 and P10 have a test of each
+  reading. P11, P12, P13, P15 and P16 have a test of the reading taken, and P14
+  and P17 have no test that tells the readings apart. Every one of them was
+  tried on fixtures with no per-element construct, or with one `map` over an
+  array of plain values in place.
+- **The provisional decision P18 is written into the documents and built
+  nowhere.** The prototype's crate writes a pattern that is compiled in once for
+  each call site. The record design of `plan-and-label-templates.md` §1.1 was
+  checked by reading the rules of that document against it, and by no test. Its
+  worked example (§6.2) and the examples of the other documents show the
+  written-out form. `footprint-analysis.md` and `language-subset.md` were not
+  changed for it.
+- **The growth measurements at commit `a84264daf2` are of the prototype's
+  executor, one run each.** The executor writes a document whole and checks
+  every demanded memo entry, which the design does not prescribe, so the bytes
+  written and the checks per change are measurements of that executor. Today's
+  runtime was not measured on the same lists. Of the questions on growth, 248 to
+  255, 258, 260 to 270, 272, 273 and 275 have no measurement.
+- **The two sides of the stubbed comparison were not given the same answers,**
+  except for a fetch of JSON from an address outside `/api/` (its note 498), and
+  the 100 values that differ there were classed by a reading of the two values
+  and not verified one by one; 17 are not determined.
 - **Fifteen questions come from a reading of the documents, and no test
   of the prototype bears on them** (questions 224 to 238). They are
   about what the prototype's executor does not have: the bound of ten
@@ -9055,16 +10054,34 @@ The open questions each document ends with stay where they are.
    238 are about parts that the prototype's executor does not have,
    and each has to be ruled before a test of its part means anything.
 
-6. **In the prototype, the measurements of the questions on growth**
+6. **In the prototype, after commit `a84264daf2`.** Build provisional decision
+   P18: one record for each pattern that is compiled in, the call-site records,
+   value code registered once per callee, and the test of two sites per level
+   bounded as linear. Bring the two provisional choices that differ from the
+   documents in line once they are ruled: the request of an effect by path (P16)
+   and the depth to which each built-in follows its references (P14). Give the
+   executor a store step that writes the paths that changed and not the
+   document, an index from a write to its readers, and a key kept for each
+   position of an array that a write did not touch, and then measure the lists
+   of its note 501 again, with today's runtime beside them and with a `map` over
+   the result of a `filter` over an array of references. Find what makes the
+   time of one change grow faster than the list. Try every statement of its
+   notes 479 to 497 over an array of references and over the result of another
+   per-element construct, which the round did not. Compare two orders of
+   evaluation on the cycle of `fixtures/bound.tsx` (question 286). Make an error
+   state of a stack that ran out, which is a body that exceeds a budget. Stub
+   both sides of the comparison of the 47 modules equally. What stays out of
+   reach until labels, a second store and unloaded instances exist is under
+   [Known limits](#known-limits-of-what-exists).
+7. **In the prototype, the measurements of the questions on growth**
    (questions 243, 244 and 247 to 275, with the growth of questions 212,
    237 and 241). No test of the prototype bounds the size of a plan, the
    count of stored documents or the bytes written per change yet. Every
    fixture below reports those three counts beside its own, and a test
    holds each of them to a bound that is stated in the test. The
-   provisional decisions P6 and P7 are built first:
-   the crate writes `Plan.templates` and the `shared` node and names a
-   repeated subschema of a schema by `$ref`, and the executor forms
-   the label of an entry once for one set of inputs. The fixtures, in
+   provisional decisions P6 and P7 are built at commit `a84264daf2`,
+   and that commit ran the first fixture, the second to a depth of 6,
+   and a part of the third. The fixtures, in
    the order of the audit's ranking:
    1. The fixture of twenty-five values that each read the two before
       them, with sandboxed bodies and with a child's arguments, for the

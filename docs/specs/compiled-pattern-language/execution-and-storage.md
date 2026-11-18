@@ -218,6 +218,13 @@ ones an earlier event of the same batch made stale.
   edges name the writer (`ConeEdge.via` of kind `state` or `handle`). Across
   instances the writer is found from the bound addresses, which the
   scheduler's writer map holds.
+  Provisional (P8; section 11, question 98): the slot is one through which the
+  handler reads the cell, of class `value`, `shape` or `enumeration`. A slot of
+  class `identity` observes the reference and not the content, and where the
+  handler holds that slot alone, because its body only writes through the handle
+  or passes it on, the writing cone instance is not evaluated before the body on
+  its account (`scheduler-and-serving-loop.md` §5.2, "A slot that observes the
+  reference alone").
 - **A writer in an instance that is not loaded.** The writer map holds no
   entry for it. Where the document a slot is bound to names such an
   instance, the basis rows decide, by ruling
@@ -577,6 +584,12 @@ the label side of each.
   anchors document is withdrawn, and the target keeps the value and the
   label it had before the transaction. Every other cone instance evaluated
   for the cause commits normally.
+  Provisional (P11): an error state is the record `{ $error: { message } }`, and
+  a cone that places a failed value in what it returns and observes nothing of
+  it does not fail: the value it returns holds the error state at that position
+  (`plan-and-label-templates.md` §5.2 and §5.3). The withdrawal of a side-write
+  differs from today, where a node that throws commits the writes it made before
+  it threw (`plan-and-label-templates.md` §5.2 and its question 172).
 - **A handler body that throws aborts the event's transaction**, as it does
   today. Its staged writes and requests are discarded. A handler that
   receives an error state for one of its inputs, because a cone instance it
@@ -598,7 +611,14 @@ A failed cone instance is not evaluated again by the next cause. Its memo
 entry holds the error state and the reads made up to the failure, and it is
 current like any other entry: it is evaluated again when something it read
 changes. That holds for a cone instance that failed at the bound of section
-2.7, by ruling. *Assumed:* it holds as well for a body that exceeded its
+2.7, by ruling. Provisional (P10; `scheduler-and-serving-loop.md` §12,
+question 43): the entry of a cone instance that failed at the bound is
+current against what is stored when its transaction ends, after its
+side-writes are withdrawn, and not against the values that its last
+evaluation read, which the transaction staged and then withdrew. A cause
+that changes nothing the cone instance reads does not evaluate it again.
+The same is assumed for a body that wrote a cell, read it, and threw. *Assumed:*
+it holds as well for a body that exceeded its
 time or memory budget, although that failure is not a function of the
 inputs alone (section 11, question 34).
 
@@ -838,6 +858,17 @@ pattern compiled in are registered inside a function for that call,
 which is given the constants of the call's argument, so that they close
 over those constants and over the names of the scope a handler written
 in place captures.
+
+Provisional (P18; question 102). A pattern that is compiled in has one record in
+the plan, whatever the number of its call sites (`plan-and-label-templates.md`
+§1.1, "A pattern compiled in is written once"). The value function of each cone
+of that record is registered once, and not once per call. It closes over no
+constant of a call: a constant that a call writes at a path of the callee's
+argument is in the call-site record, and the runtime hands it to the function as
+the value of the slot at that path. The value code of a plan is then linear in
+the source, for any nesting of calls. A cone instance of such a cone is
+evaluated for one chain of call sites, and the runtime binds the slots of the
+function for that chain.
 
 ### 2.2 Invocation and inputs
 
@@ -2556,6 +2587,13 @@ transaction.
   handler wrote that a cone instance evaluated before the body had read
   makes that cone instance stale, for a later handler of the batch that
   reads it or for the derivation transaction.
+  Provisional (P9; section 11, question 99), and flagged for the owner: a write
+  to a cell does not make a cone instance stale that writes that cell and did
+  not read it. A cone instance with a static side-write is evaluated again when
+  something it read changes, and not because a handler or another cone wrote its
+  target. What a cell holds that a cone and a handler both write then depends on
+  which of them wrote last, and so on the batch (`scheduler-and-serving-loop.md`
+  §5.4). Today's runtime runs the writing computation again.
 - **Iteration.** The evaluation step repeats over the stale cone instances
   that are needed for a demanded output until none is left.
 - **The bound.** A cone instance is evaluated at most ten times in one
@@ -2565,7 +2603,10 @@ transaction.
   (`scheduler-and-serving-loop.md` §8.1). It is `MAX_ITERS` of
   [Scheduler v2](../scheduler-v2/README.md) (§7.7), the bound on the
   iterations of one pass today. Cone evaluation keeps the count, per cone
-  instance and transaction. The right value needs measurement on the corpus
+  instance and transaction. Provisional (P17): a cone with several value
+  functions has a count for each value function of a cone instance
+  (`plan-and-label-templates.md` §8, question 173). The right value needs
+  measurement on the corpus
   once the write-path analysis says which side-writes are static.
 - **Exhaustion.** A cone instance that would need an eleventh evaluation
   fails, with the error state and label of section 1.7. The rule is the one
@@ -2581,7 +2622,9 @@ transaction.
 - **After exhaustion.** A cone instance that failed at the bound is not
   evaluated again until one of its inputs changes, by ruling. Its memo
   entry and its basis rows record the failed evaluation as an evaluation
-  (section 3.3). This differs from today, where the remaining work is
+  (section 3.3). Provisional (P10): the entry is current against what
+  is stored when the transaction ends (section 1.7). This differs from today,
+  where the remaining work is
   deferred behind a backoff gate and tried again, so that a graph needing
   more than ten iterations still converges. How many patterns of the corpus
   need more than ten iterations today is part of the measurement above.
@@ -3038,6 +3081,9 @@ changes the fingerprint as well.
   states: the cone instance is current and its output is unstored).
 - **A failed cone instance.** Its entry holds the error state and the reads
   made up to the failure. It is current until one of those reads changes.
+  Provisional (P10): for a cone instance that failed at the bound, the
+  entry is current against what is stored when the transaction ends, after
+  the withdrawal of its side-writes (section 1.7).
   The failed evaluation advances the basis rows like any evaluation.
 - **Removal.** Entries are dropped when their element key leaves its
   collection (section 2.5), when the instance is released or torn down,
@@ -3486,6 +3532,19 @@ its own:
 If every output of such a sub-pattern is consumed by further computation
 and it declares no state and no operation, it adds no document and no path
 to anything stored.
+
+Provisional (P18). The plan holds a pattern that a call or a tag names once, and
+each call as a call-site record (`plan-and-label-templates.md` §1.1). Nothing
+above changes with it. What exists once for each chain of call sites, and for
+each combination of element keys on that chain, is what the list above names:
+the cone instances with their memo entries and basis rows, the kept outputs at
+the paths that the call-site records give, the state cell documents, the
+operation state documents, the streams and the children. The identifier of each
+holds the names of the call sites of its chain, as section 5.2 has it for one
+call site. That is the same for a call in an element body over an array of
+references, over an array of plain values in place, and over the result of
+another per-element construct: the three differ in how the key of an element is
+formed (section 2.5).
 
 ### 4.6 Child instances
 
@@ -4694,6 +4753,28 @@ document holds and which transaction writes each part.
   (`builtin-inventory.md` lists them per built-in). For `sqliteQuery` also
   the row documents, and for the language-model built-ins the conversation
   where a tool loop is to survive a restart.
+- **Layout.** Provisional (P14; section 11, question 100). The state document
+  has three members. `request` holds the stored request: the one argument of the
+  call, or, for a call with several arguments, the array of the arguments in the
+  order they are written, each as the call binds it, a cell that is passed on as
+  a link. `requestHash` holds the hash. `outcome` holds the record that a reader
+  reads, with `pending`, `result` and `error`. A link to the result of an
+  effect, as the one a handler stores, names `outcome`, so it leads to those
+  three members and not to the request. The request transaction follows every
+  reference of the stored request. Where `builtin-inventory.md` gives a built-in
+  an operand that is not followed, or followed to a depth, that entry governs,
+  and the prototype does not have it. The schema that today's compiler adds to a
+  `fetchJson` request is no part of `request` under this layout, which that
+  entry has as part of the request and of its hash.
+- **What a reader reads.** Provisional (P12): before the first request
+  transaction of the operation the document holds `request` alone, and
+  `pending`, `result` and `error` read as nothing. While a newer request is
+  outstanding, `outcome` holds the pending mark and the result or the error of
+  the request before it (`scheduler-and-serving-loop.md` §6.2).
+- **A `wish`.** Provisional (P15; `builtin-inventory.md`, open question 18). A
+  `wish` has no request transaction. The evaluation that stages its operands
+  resolves it, in the transaction of the reader, and nothing is handed to the
+  outbox.
 - **The request, in the reactive tier.** A cone computes the request. Each
   path of it is a write edge of that cone with target `request`, staged
   into the operation's state document in the derivation transaction that
@@ -4702,6 +4783,11 @@ document holds and which transaction writes each part.
   and not a kept output: nothing reaches it from the result cell. A
   request path whose cone failed holds the error state, and such a request
   is not made: the operation's result is that error state.
+  Provisional (P16; section 11, question 101): the request is formed by one
+  function of the cone, so where that function fails, the stored request holds
+  one error state for the whole request, and not an error state at the path
+  whose expression failed beside values at the other paths. The readers of the
+  operation's result fail in turn under both.
 - **The request transaction** is the operation's own. It reads the stored
   request, computes the hash, checks the gates, the egress ceiling among
   them, writes the hash and the pending mark, and hands the request to the
@@ -6283,6 +6369,56 @@ Added by the ruling that the scheduler is switched per space (section 9):
     of references, over an array of plain values in place, and over the
     result of another per-element construct. It is question 241 of the
     continuation plan.
+
+98. **A slot of a handler that observes the reference alone** (section 1.3). The
+    bullet "A cell that a cone writes statically" has a slot of the handler
+    bound to the target of a static side-write, and does not say whether a slot
+    of class `identity` counts. *Assumed,* provisional (P8 of the continuation
+    plan): it does not. The alternative, the tests and what changes are in
+    `scheduler-and-serving-loop.md` (its question 54). It is question 276 of the
+    continuation plan.
+99. **A cone instance that writes a cell which another writer writes** (section
+    2.7). "Staleness inside the transaction" makes a cone instance stale by a
+    write to a cell that it read. *Assumed,* provisional (P9 of the continuation
+    plan, flagged for the owner to look at first): a write to a cell that it
+    writes and did not read does not make it stale. A batch and the same events
+    one at a time can then store different values, and today's runtime stores
+    one. The alternative, the tests and what changes are in
+    `scheduler-and-serving-loop.md` (its question 55). It is question 277 of the
+    continuation plan.
+100. **The layout of an operation's state document, the shape of a request, and
+     how far a request's references are followed** (section 6.4). The section
+     lists what the document holds and no layout. *Assumed,* provisional (P14 of
+     the continuation plan, the prototype's layout): the members `request`,
+     `requestHash` and `outcome`; a request that is the one argument of the
+     call, or the arguments in order; and every reference of the request
+     followed. Three points are open under it. `builtin-inventory.md` says per
+     built-in which operands are read by value and how deep, and "every
+     reference" is wider than that for a built-in with a reference operand. That
+     document has the schema of a `fetchJson` request as part of the request and
+     its hash, and the layout has no place for it. And where the claim is held
+     is not said. If the owner decides otherwise, the bullet "Layout" changes,
+     and the prototype follows the depth of each built-in's entry. It is
+     question 281 of the continuation plan.
+101. **A request one of whose paths has a failed cone** (section 6.4). The
+     section has the error state at the path whose cone failed. *Assumed,*
+     provisional (P16 of the continuation plan): one error state for the whole
+     request, since the prototype forms the request with one function. The
+     alternative: the request function is split by path, and the stored request
+     holds the values of the other paths. Under both the request is not made and
+     the readers of the result fail in turn; the two differ in what the state
+     document holds and in the label of each path. The prototype tests the first
+     on `fixtures/effects.tsx`, which has no per-element construct. It is
+     question 283 of the continuation plan.
+102. **The value code of a pattern that is compiled in** (section 2.1).
+     *Assumed,* provisional (P18 of the continuation plan): one function per
+     cone of the pattern's record, registered once, and handed the constants of
+     a call as slot values. Question 81 has the text of the module, and its
+     sentence on a function for each call is superseded under this assumption.
+     Not determined: how a handler that is written in place in a callee, and
+     that captures names of the callee's scope, is registered once for all
+     sites. It is part of question 247 of the continuation plan.
+
 
 ### 11.2 For another document or the prototype
 

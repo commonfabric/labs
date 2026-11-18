@@ -117,7 +117,13 @@ export type Name =
  * first, are part of the cause its identifier derives from (section 1.3).
  */
 export type WithinStep =
-  /** A call, compiled into this plan, of a pattern the compiler can see. */
+  /**
+   * A call, compiled into this plan, of a pattern the compiler can see.
+   * Provisional (P18): no record of a plan holds this step. It is a step
+   * of the list that a record has at a call site, which the runtime
+   * forms from the chain of sites (section 1.1, "A pattern compiled in
+   * is written once").
+   */
   | { readonly site: Name }
   /** The body of an element construct over a collection. */
   | { readonly element: Index };
@@ -132,7 +138,11 @@ export type ObservationClass =
 
 /** Where a slot's data lives. */
 export type SlotRoot =
-  /** The instance's argument. */
+  /**
+   * The instance's argument. Provisional (P18): in the record of a
+   * pattern compiled in (`Plan.callees`), the argument of that pattern,
+   * which each call site binds (`CallSite.argument`).
+   */
   | { readonly kind: "argument" }
   /** A state cell of this instance (`Plan.stateCells`). */
   | { readonly kind: "state"; readonly cell: Index }
@@ -212,9 +222,14 @@ export type Template =
    * holds a copy of the template of another output. The node denotes the
    * label that the named output's `template` denotes, so a template with
    * each such node replaced by the template it names has the same label
-   * (section 3.2, "A reference to an output").
+   * (section 3.2, "A reference to an output"). Provisional (P18): with
+   * `site`, the node names an entry of the `outputs` of the callee of
+   * that call site (`sites` of the record that holds the node), and
+   * denotes the label of that entry for the cone instances of the site.
+   * Every other member of a record that names an output by `output`
+   * takes `site` in the same way.
    */
-  | { readonly op: "output"; readonly output: Index }
+  | { readonly op: "output"; readonly output: Index; readonly site?: Index }
   /**
    * An entry of the plan's template table (`Plan.templates`), named and
    * not written out. Provisional (P6): a template that is larger than
@@ -288,7 +303,7 @@ export type Template =
     readonly from:
       | { readonly collection: Index }
       | { readonly container: Index }
-      | { readonly output: Index };
+      | { readonly output: Index; readonly site?: Index };
     readonly choice: Template;
     readonly body: Template;
   }
@@ -379,7 +394,7 @@ export interface Collection {
     /** A bucket of a collection index (`Plan.operations`). */
     | { readonly operation: Index }
     /** An array the instance computed (`Plan.outputs`). */
-    | { readonly output: Index };
+    | { readonly output: Index; readonly site?: Index };
   /**
    * The key fields that the type of the receiver declares with
    * `ArrayByKey<T, "a" | "b">`, where it declares any: the names of
@@ -397,8 +412,10 @@ export interface Collection {
    * is compiled in, the member holds the key fields that the type of
    * the caller's place declares, or that the type of the argument
    * expression declares where the caller gives a computed value
-   * (*assumed*, section 8, question 149). Absent where none of these
-   * declares a key.
+   * (*assumed*, section 8, question 149). Provisional (P18): the
+   * record of a pattern compiled in then leaves the member absent, and
+   * the entry of `CallSite.argument` that binds the receiver holds the
+   * key fields of that call. Absent where none of these declares a key.
    * By ruling the runtime then forms the keys with the key fields of
    * the array that the receiver holds, where the schema that is
    * traversed while the link to that array is resolved declares any
@@ -767,7 +784,10 @@ export interface DynamicReads {
      */
     | {
       readonly kind: "link";
-      readonly through: Index | ComputedReference | { readonly output: Index };
+      readonly through:
+        | Index
+        | ComputedReference
+        | { readonly output: Index; readonly site?: Index };
     }
     /** Reads through an entry of that body's `handles`. */
     | { readonly kind: "handle"; readonly body: Index; readonly handle: Index }
@@ -780,7 +800,10 @@ export interface DynamicReads {
      */
     | {
       readonly kind: "space";
-      readonly of: Index | ComputedReference | { readonly output: Index };
+      readonly of:
+        | Index
+        | ComputedReference
+        | { readonly output: Index; readonly site?: Index };
     }
     /**
      * The reads a `wish` made of what no slot names while it resolved its
@@ -957,8 +980,15 @@ export interface ConeEdge {
   readonly from: Index;
   readonly to: Index;
   readonly via:
-    /** An output of `from` that the value function of `to` receives. */
-    | { readonly kind: "output"; readonly output: Index }
+    /**
+     * An output of `from` that the value function of `to` receives.
+     * Provisional (P18): with `site`, the output is an entry of the
+     * `outputs` of the callee of that call site, and `from` indexes the
+     * `cones` of that callee. No edge is written for an output of this
+     * record that a call site binds a path of its callee's argument to:
+     * the entry of `CallSite.argument` is that edge.
+     */
+    | { readonly kind: "output"; readonly output: Index; readonly site?: Index }
     | { readonly kind: "state"; readonly cell: Index; readonly path: Path }
     /**
      * A cell `from` writes through a handle (`WriteEdge` target `handle`),
@@ -1238,7 +1268,7 @@ export interface Binding {
      */
     readonly place?:
       | { readonly slot: Index }
-      | { readonly output: Index }
+      | { readonly output: Index; readonly site?: Index }
       | { readonly stream: Index }
       | { readonly constant: unknown }
       | { readonly result: true };
@@ -1306,6 +1336,108 @@ export interface Plan {
   readonly children: readonly Child[];
   readonly closures: readonly Closure[];
   readonly bindings: readonly Binding[];
+  /**
+   * Provisional (P18). The calls, written in this pattern body, of a
+   * pattern that is compiled in: a call in the reactive tier and a JSX
+   * tag that names a pattern the compiler can see. In source order.
+   */
+  readonly sites: readonly CallSite[];
+  /**
+   * Provisional (P18). The record of each pattern that is compiled into
+   * the plan, each once, whatever the number of its call sites and
+   * whichever record holds them: in the order of `patterns`, entry `i`
+   * for the pattern `patterns[i + 1]`.
+   */
+  readonly callees: readonly Callee[];
+}
+
+/**
+ * Provisional (P18). The records of one pattern that is compiled into a
+ * plan: every list of a `Plan` that holds what a pattern body declares,
+ * for the body of that pattern. An `Index` in an entry of these lists
+ * indexes the list of the same record, except `CallSite.callee` and
+ * `Callee.pattern`, which index lists of the plan. A slot of root
+ * `argument` is a path of this pattern's argument. A kept output is one
+ * that the result of this pattern reaches, with its path in that result.
+ */
+export interface Callee extends
+  Omit<
+    Plan,
+    "version" | "patterns" | "argumentSchema" | "resultSchema" | "callees"
+  > {
+  /** The pattern (`Plan.patterns`). */
+  readonly pattern: Index;
+}
+
+/**
+ * Provisional (P18). One call of a pattern that is compiled in. The
+ * record binds the argument of the callee to places of the record that
+ * holds the site, and says where that record holds the callee's result.
+ */
+export interface CallSite {
+  /** The callee (`Plan.callees`). */
+  readonly callee: Index;
+  /** The name of the call: what the `site` step of the call holds. */
+  readonly name: Name;
+  /**
+   * The element bodies of this record that the call is written in, as
+   * `element` steps, outermost first. The cones of the callee have an
+   * instance for each combination of the keys of these collections, of
+   * the collections of the sites that enclose this record, and of the
+   * `element` steps of their own `within`.
+   */
+  readonly within: readonly WithinStep[];
+  /** `asScope` on the call (section 8, question 161). */
+  readonly scope?: "space" | "user" | "session";
+  /** What the call writes at each path of the callee's argument. */
+  readonly argument: readonly SiteArgument[];
+  /** Where the record that holds the site has the callee's result. */
+  readonly result: readonly SiteResult[];
+}
+
+/** Provisional (P18). One path of a callee's argument, as a call binds it. */
+export interface SiteArgument {
+  /** The path of the callee's argument that the call writes. */
+  readonly path: Path;
+  /**
+   * What the call wrote there, in the record that holds the site: a
+   * slot, an output, the stream of a binding, a constant, or the result
+   * of the instance, as `Binding.state` has them for a path of a
+   * handler's state. A slot of root `argument` there is bound in turn by
+   * the site that calls that record. That the last two forms are needed
+   * is assumed (section 8, question 170).
+   */
+  readonly place:
+    | { readonly slot: Index }
+    | { readonly output: Index; readonly site?: Index }
+    | { readonly stream: Index }
+    | { readonly constant: unknown }
+    | { readonly result: true };
+  /**
+   * For a `place` that is a slot of root `argument` of the record that
+   * holds the site: the default which the pattern of that record
+   * declares for that path of its own argument, where it declares one.
+   * It is the default of a place on the chain of a read (section 2.5).
+   */
+  readonly default?: unknown;
+  /**
+   * The key fields that the type of the place, or of the argument
+   * expression, declares for an array at this path, where a construct
+   * of the callee iterates it (`Collection.keyFields`).
+   */
+  readonly keyFields?: readonly string[];
+}
+
+/** Provisional (P18). One place that holds a callee's result. */
+export interface SiteResult {
+  /** A path of what the callee returns: `["$UI"]` at a child position. */
+  readonly from: Path;
+  /**
+   * The path, in the result of the record that holds the site, at which
+   * the value at `from` stands, with `*` for each element step of
+   * `CallSite.within`.
+   */
+  readonly at: Path;
 }
 
 /** What the compiler emits, addressed as one thing. */
@@ -1336,7 +1468,11 @@ inline sub-pattern, and a call in the reactive tier of a pattern the compiler
 can see. Its slots, bodies and cones are entries of the enclosing plan, with
 `element` roots where it reads the element. A pattern the compiler cannot
 see at the call, and any pattern a function body instantiates, is a `Child`
-with a plan of its own (section 3.15).
+with a plan of its own (section 3.15). That sentence, and what this
+document says of the entries of a pattern compiled in, is about the
+written-out form of a plan. Provisional (P18): a plan holds a pattern
+that a call or a tag names once, as a record that its call sites name
+("A pattern compiled in is written once", below).
 
 A JSX tag that names a pattern is such a call: `<Row message={m} />` is
 `Row({ message: m })` (`language-subset.md` §4.5). Where the tag names a
@@ -1381,7 +1517,10 @@ refuses such a call.
 **A constant of the argument, and a path the call leaves out.** A
 constant that the call writes at a path of the callee's argument has no
 record. It is in the value code of the cones that read the path, which
-the compiler emits for that call. The callee can also declare a default
+the compiler emits for that call. Provisional (P18): the constant is
+the `place` of the call's entry of `CallSite.argument`, the runtime
+hands it to the cones that read the path, and the value code of the
+callee is emitted once. The callee can also declare a default
 for a path that the call does not write, as a callee that declares
 `symbol: Default<string, "$">` does where the call writes no `symbol`.
 A path the call leaves out resolves to no slot, and no record holds the
@@ -1448,6 +1587,10 @@ values in place, and over the result of another per-element construct.
   a default of its own (`execution-and-storage.md` §2.2). A `Body` has
   the `site` step of the call in its `within`, so two calls of one
   callee have two records, and each holds the default of its own call.
+  Provisional (P18): the body is one record of the callee, its entry
+  holds the callee's own default, and the default of an outer callee
+  is in the entry of `CallSite.argument` that binds the path ("A
+  pattern compiled in is written once", below).
   Where a callee calls another pattern that is compiled in, and both
   calls bind one slot of the outermost caller, the entry of a body of
   the inner callee holds the default of the outer callee where that
@@ -1501,6 +1644,333 @@ does. The prototype does the first and not the second, which is a
 defect of it. Both are the same in an element body over an array of
 references, over an array of plain values in place, and over the
 result of another per-element construct.
+
+**A pattern compiled in is written once.** Provisional (P18; section 8, question
+170). The paragraphs above, and every rule of this document that speaks of "the
+enclosing plan", describe a plan in which a pattern that is compiled in is
+written out at each call: its slots, bodies, cones, outputs, edges and templates
+stand among those of the caller once per call, with a `site` step in each
+`within`. This document calls that the **written-out form**. With a callee that
+is called at two sites and that calls another pattern at two sites in turn, the
+written-out form holds four copies of the innermost, and `D` such levels hold 2
+to the power `D`. The prototype measured it: 3,193, 7,746, 16,961, 35,665,
+73,936 and 152,575 bytes of plan, and 5, 13, 29, 61, 125 and 253 cones, for 1 to
+6 levels, where the source grows by 148 bytes for each level. The template table
+shares nothing between the copies, because their slot indexes differ.
+
+A plan therefore does not hold the written-out form. It holds each pattern that
+is compiled in once, as a **callee record** (`Plan.callees`), and each call as a
+**call-site record** (`sites` of the record whose pattern body the call is
+written in). The written-out form stays the definition of what a plan means: the
+labels, the values, the causal identifiers and the stored documents of an
+instance are those that the rules of this document give for the written-out form
+of its plan. The rest of this paragraph says how each record of that form is
+found from the two kinds of record, and which rules are evaluated once for a
+callee and which once for a site.
+
+*Which patterns have a callee record.* Every pattern that a call in the reactive
+tier or a JSX tag names and that the compiler can see, the one that is called at
+a single site included, so the compiler has no choice in it. The callback of an
+element construct and an inline pattern are written at one place, and stay
+entries of the record of the pattern body they are written in. A pattern has one
+callee record in a plan, whichever records hold its sites: the caller of a
+callee can be the pattern the plan is compiled from or another callee. The
+refusal of a cycle of such calls stands (question 45), so the callee records of
+a plan form no cycle.
+
+*The callee record.* A `Callee` has the lists that a `Plan` has for what a
+pattern body declares: `slots`, `selectors`, `picks`, `templates`,
+`collections`, `bodies`, `dynamicReads`, `constraints`, `outputs`, `cones`,
+`edges`, `stateCells`, `operations`, `children`, `closures`, `bindings` and
+`sites`. Each is formed by the rules of this document for a pattern body,
+applied to the body of the callee alone, as they would be applied if the callee
+had a plan of its own. Five things differ from an entry of the written-out form.
+
+- An `Index` indexes the list of the callee record. No entry of a callee names
+  an entry of a caller.
+- A path of the callee's argument is a slot of root `argument` with that path,
+  where the written-out form has the caller's slot or output. The sentence
+  above, that no slot with root `argument` stands for the callee's own argument,
+  holds for the written-out form and not for a callee record.
+- A `within` holds the `element` steps of the callee's own body and no `site`
+  step.
+- `Output.kept` and `Output.path` are relative to what the callee returns: an
+  output is kept where the callee's result reaches it, and its path is the path
+  in that result.
+- A member `pattern` of a `derive` or a `fold` is absent, because all code of a
+  callee record is written in the one pattern that `Callee.pattern` names. The
+  atom of the pattern (section 3.2) is that pattern's.
+
+A callee record depends on nothing of its call sites. What the written-out form
+takes from a call is held by the call-site record: the binding of the argument,
+the constants that the call writes, the key fields that the caller's types
+declare for an array which the callee iterates, the defaults of the places along
+the chain of a read, the scope of an `asScope` modifier, and the places of the
+result.
+
+*The call-site record.* A `CallSite` names its callee and has five further
+members.
+
+- `name` is the name of the call by the rules of section 1.3: it is what the
+  `site` step of the written-out form holds.
+- `within` has the `element` steps of the element bodies, of the record that
+  holds the site, that the call is written in.
+- `scope` is the scope of an `asScope` modifier on the call.
+- `argument` has an entry for each path of the callee's argument that the call
+  writes, as the source writes it: one entry for each property of an argument
+  object and each attribute of a tag, one at `children` for the children of a
+  tag, and one entry with the empty path for a call that passes one value for
+  the whole argument. A member of a nested object literal that the call writes
+  is an entry at the longer path. The entry's `place` is what the call wrote, in
+  the record that holds the site: a slot, an output, a constant, and, *assumed,*
+  the stream of a binding or the result of the instance, the five forms that
+  `Binding.state` has for a path of a handler's state. A path that the call
+  leaves out has no entry.
+- `result` has an entry for each place at which the record that holds the site
+  has what the callee returns: `from` is a path of the callee's result and `at`
+  the path in the result of the holding record. A tag, a call, or a variable
+  that holds the result of either, written at a child position of a view node,
+  is an entry with `from` equal to `$UI` and `at` the position, which is the
+  rule for a tag above. At every other place of the result, `from` is the path
+  that the caller wrote, the empty path for the whole result.
+
+*Indexes.* Every index is scoped to one record: the plan's own lists for the
+pattern the plan is compiled from, and the lists of one callee. Three members
+cross a record. `CallSite.callee` and `Callee.pattern` index `Plan.callees` and
+`Plan.patterns`. A member that names an output with `site` names an entry of the
+`outputs` of the callee of that site, which is how a record names what a callee
+returns. And a `place` of `CallSite.argument` names an entry of the record that
+holds the site, which is how a callee is given what its caller has. Nothing else
+crosses: a caller names no slot, cone, body, selector, state cell or template of
+a callee, and a callee names nothing of a caller. Where this or another document
+writes `Plan.slots`, `Plan.outputs` or another list for what an index names, it
+is the list of the record that holds the index.
+
+*A slot of root `argument` at a site.* For the cone instances of one site, a
+slot of root `argument` with path `p` of the callee is bound through the entries
+of `CallSite.argument`:
+
+- Where an entry has a `path` that is `p` or a prefix of `p`, the slot is the
+  entry's `place`, followed by the rest of `p`. A `place` that is a slot gives
+  the slot of the holding record with that root and the longer path, in the
+  class and under the schema of the callee's slot, as the written-out form has
+  it. A `place` that is an output gives the nearest entry of the holding
+  record's `outputs` at or above the longer path, as "Which entry is named" has
+  it (section 3.2). A constant gives the value at the rest of the path, with no
+  label.
+- Where `p` is a proper prefix of the paths of several entries, the call wrote a
+  literal there, and the slot observes a constructed value whose entries are
+  those entries (section 3.4). *Assumed:* the runtime builds the value from the
+  entries, as it builds the argument of a body from the entries of `Body.reads`
+  (`execution-and-storage.md` §2.4), and no cone of the caller computes it.
+- Where no entry is at, above or below `p`, the call left the path out, and the
+  slot reads the callee's declared default, as the ruling above has it.
+
+Where the `place` is itself a slot of root `argument`, because the record that
+holds the site is a callee, the binding continues at the site that calls that
+record, and ends at a place of the pattern the plan is compiled from. The chain
+of sites from the plan's own record down to a callee is what a cone instance of
+the callee is evaluated for.
+
+*What an argument slot stands for in a rule.* Several rules of this document
+state one thing for a slot and another for a value that the instance computed:
+an entry of `Body.reads` against an entry of `Body.computed`, a handle named by
+`slot` against one named by `computed` in a `WriteEdge`, a `WriteEnvelope`, a
+`HandleReads` and a `GivenReference`, a `ConeEdge` of kind `handle`, and the two
+lists of `ConstraintInputs`. In a callee record a path of the argument is always
+a slot. At a site that binds the path to a slot of the holding record, the rule
+for a slot applies. At a site that binds it to an output, the rule for a
+computed value applies, with the `output` node of the bound entry as the
+template: so a write through a handle that the caller computed has no cell that
+the plan can name, and no edge of kind `handle`, at that site, as section 3.11
+has it for a handle named by `computed`. At a site that binds it to a constant,
+the slot has the template `const`. The label of a `slot` node of root `argument`
+is in each case the label that the written-out form has at that position.
+
+*`within`, names and identifiers.* The `within` of an entry of a callee, for one
+chain of sites, is the list that the written-out form holds: for each site of
+the chain, outermost first, the `within` of the site and then the step `{ site:
+name }` with the site's `name`, and after the last site the `within` of the
+entry itself. That is the order section 1.4 gives: the `element` steps of the
+caller's element bodies, then the `site` step, then the steps of the callee's
+own body. An identifier derives from the instance, that list with the element
+keys, and the `name` of the entry (section 1.3), so the identifier of a state
+cell, an operation's state document, a child's result cell and a stream of a
+callee is the one that the written-out form gives. The index of an `element`
+step is an index of the record that holds the step; the cause holds the name of
+the collection and not the index. Names are unique within one pattern body,
+which is one record. Question 250 of the continuation plan, on the chain
+repeated in every record, has no case left for `site` steps: no record holds
+one.
+
+*Cone instances.* A cone of a callee has one cone instance for each chain of
+sites that reaches the callee, each combination of the element keys of the
+`element` steps on that chain and of the cone's own `within`, and each scope
+key. Its identifier is formed from the instance, the chain of site names with
+those keys, and the cone, as the written-out form names it by the cone's
+`within`. A selector and a choice point of a callee are reported per cone
+instance, so one entry of `selectors` holds one selection for each chain of
+sites and keys.
+
+*A `Child`.* A `Child` of a callee, for a call through `asInstance()` or
+`inSpace` or of a factory value, is an entry of the callee's `children`, and one
+child instance exists for each chain of sites and keys, named with the composed
+`within`. Its write edges of target `argument` hold templates of the callee
+record.
+
+*A site in an element body.* A site whose `within` has an `element` step is a
+call written in the callback of an element construct of the holding record. The
+callee's cones, state cells, operations, children and bindings then exist once
+per element key, as section 1.4 has it for a pattern compiled into a callback.
+The callee record is the same record in the three cases of section 1.3, and
+nothing in it says which case a site is in.
+
+- **Over an array of references.** The key of an element is its cell. The call
+  binds the callee's argument to slots of root `element` of the caller's
+  collection, or to outputs of the element body, and a slot of the callee is
+  bound, per key, at the cell that the element links to.
+- **Over an array of plain values in place.** The key is formed from the value,
+  or from the declared key fields. An edit that changes the key is a new
+  element: the cone instances of the callee for the old key are dropped and
+  those for the new key made, and what the callee stores under the key moves by
+  the rules of `execution-and-storage.md` §2.5, with the site's name in each
+  identifier as the written-out form has it.
+- **Over the result of another per-element construct.** An element has the
+  upstream key, and a slot of root `element` is resolved at the place that the
+  upstream element came from. The callee's entries are named with the caller's
+  own collection in the `element` step, and not the upstream one.
+
+*A construct of the callee over a path of its argument.* A `Collection` of a
+callee whose receiver is a path of the argument has `source: { slot }` with the
+`enumeration` slot of root `argument`, and no `keyFields`. What it iterates at a
+site follows from the binding. Bound to a slot of the caller, it iterates the
+array at that slot, over references or over plain values in place as the stored
+array holds them, with the `keyFields` of the entry of `CallSite.argument` where
+the caller's type declares any (question 149). Bound to an output of the caller
+that is the assembled result of a per-element construct, or that passes one on
+(`Output.collection` or `Output.passesCollection`), it is the case over the
+result of another per-element construct: the elements have the keys of that
+collection, by the ruling on a derived collection passed on, and the membership
+that the callee's record iterates is the membership template of that output,
+which is what the `slot` node of the `enumeration` slot denotes at that site.
+Bound to another output, it iterates an array that the instance computed, as a
+record with `source: { output }` does. The written-out form has `source: {
+collection, via }` where the compiler sees, at one call, that the receiver is
+the caller's construct. *Assumed:* no rule gives a different key, membership
+label or stored document for that form than for a record whose source is an
+output with `passesCollection`; it is part of question 170.
+
+*`asScope` on a call that is compiled in* (question 161). The call-site record
+holds the modifier in `scope`, which is the member that the written-out form
+lacks. *Assumed,* as that question has it: at a site, a state cell of the callee
+has the narrower of its own `StateCell.scope` and the `scope` of each site on
+its chain, so a chain with two modifiers gives the narrowest of them. The callee
+record holds the scope that the callee declares.
+
+*Templates across the call.* Two kinds of node cross.
+
+- **A caller's template names what the callee returns** with an `output` node
+  that has `site`: the entry of the callee's `outputs` nearest at or above the
+  path that the caller uses. It denotes the label of that entry's `template` for
+  the cone instances of the site, with the selections that those cone instances
+  reported. Where the callee's result at that path passes a path of its argument
+  on, the compiler resolves the name to the place that the site binds, as above
+  ("No record of the plan holds what such a reference carries"), and the
+  caller's template holds its own slot or output and no node with `site`.
+- **A callee's template names a path of its argument** with a `slot` node of a
+  slot of root `argument`. For the cone instances of a site it denotes the label
+  of what the site binds: the label of the caller's slot, the label of the
+  caller's output for the keys of the site, or the neutral label of a constant.
+
+A `shared` node names an entry of the `templates` of the record that holds the
+node, so the template table of P6 is formed per record: once for the plan's own
+lists and once for each callee. A template of a callee is hashed in slot-free
+form once (section 1.2), and the instantiation key and the memo key of P2 are
+formed per cone instance. The references among the outputs form no cycle across
+sites, because a callee is given its argument before it returns.
+
+*Schemas.* `Slot.schema` is the type that the reader has, which for a slot of a
+callee is a type of the callee, at every site. The schemas of state cells,
+children, bindings and closures are the callee's. A callee record holds no hash
+of the callee's argument type or result type, as the written-out form holds
+none.
+
+*Defaults.* `ReadInput.default` and the `default` of a path of `Binding.state`
+hold the default that the callee declares, once, in the callee record. The
+ruling on the order of defaults is applied along the chain of a read at each
+site: the place that the read ends at, then each entry of `CallSite.argument` on
+the chain that has a `default`, the outermost first, then the callee's own. The
+runtime hands a cone of a callee the first of these that exists where the slot
+yields nothing. The value code of a callee holds the callee's own defaults and
+no constant of a call.
+
+*Value code.* The value function of a cone of a callee is one function,
+registered once and addressed by one `Cone.code`, for every site. It is handed
+the slots of `Cone.slots` and the outputs of its incoming edges for the cone
+instance, a constant of the call among the slots as the value at its path. The
+function of a sandboxed body is registered once per `Body`, as it is for the
+pattern the plan is compiled from.
+
+*Which rules are evaluated once for a callee, and which once for a site.* A rule
+of compile time that reads nothing of a binding is evaluated once for the callee
+record. A rule that follows a `slot` node of root `argument` into what a site
+binds is evaluated for the site, and where the binding is itself a path of an
+argument, for the chain of sites. A rule of run time is evaluated for a cone
+instance, which is per chain of sites and keys in the written-out form as well.
+
+| Rule | Evaluated once per | Why |
+| --- | --- | --- |
+| The partition into cones, the order of `cones` and `outputs`, and the edges among the cones of one record (section 1.4) | Callee | The rules are over the declarations of one pattern body. An edge that crosses a site is the entry of `CallSite.argument`, or an edge with `site` |
+| Names and ordinals (section 1.3) | Callee | Names are unique within one pattern body |
+| The footprint of a body, and the record `Body` (`footprint-analysis.md`) | Callee | The analysis reads the body and the types of the callee |
+| `Slot.schema`, `Slot.declared`, and the hashes of section 1.5 | Callee | Each is formed from a type or from code of the callee |
+| The template table (section 3.2, "A template written once") and the slot-free hash of a template (section 1.2) | Callee | Both are over templates as they are written |
+| The constraints at a write target and at an input (section 1.5), as records | Callee | Each is formed from an annotation of a type of the callee |
+| `cfc-flow:write-policy` (section 1.5) | Callee | It compares two declarations |
+| `side-write:cycle` and `side-write:not-idempotent` among the cones of one record (`scheduler-and-serving-loop.md` §8.2) | Callee | They are over the edges of one record |
+| A cycle of side-writes through a cell that a site binds | Site | Whether two argument slots of a callee name one cell, or a cell that the caller writes, is a fact of the binding |
+| The keep set: which outputs are stored, and at which path (section 1.1) | Chain of sites | An output of a callee is kept, at a site, where an entry of `CallSite.result` covers its path and the holding record's result reaches that place |
+| `Output.scope` (section 1.4) | Callee for the record, and site for the value | The member holds what the callee's own state cells, children and operations give. At a site the scope is the narrowest among that member, the `scope` of the sites on the chain, and the scope of what each bound place holds. The runtime takes the narrowest scope of the addresses a cone instance is bound to in any case |
+| The evaluation of a template on declared labels (`cfc-flow:writer-fit`, `cfc-flow:write-floor`, `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity`; sections 1.5 and 4.4) | Not determined (section 8, question 170) | Bound to a slot, an argument slot has the `declared` member of the callee's type at every site. Bound to an output, the written-out form evaluates the caller's template there, which differs by site |
+| `cfc-flow:ui-contract` (section 4.4) | Site, for a callee compiled in by a tag; callee, for one compiled in by a call | The chain of an element continues at the position of a tag and ends at the root of the tree of a call |
+| `binding:write-to-computed` (`language-subset.md` §10.2) for a path of a callee's argument | Site | Whether the callee writes through the path is found once per callee, through the sites of the callee in turn. Whether the call binds the path to a value that can hold no reference is a fact of the site |
+| The input constraints that an output lists (section 1.5) | Callee for the list, cone instance for the check | A list holds the constraints of the bodies of its own record. The constraints of a body upstream across a site apply through the `output` node with `site`, or through the binding of the argument slot, and are checked at instantiation |
+| The label of a template, the instantiation key and the memo key (sections 4.1 to 4.3) | Cone instance | As in the written-out form. Two sites share a memo entry where the slot-free hashes and the labels of the inputs are equal |
+| What makes a demanded output due when a slot's label alone changed (section 4.1) | Cone instance | The slots that a template reaches are found once per callee, and each is bound per site |
+| The binding of slots to addresses, the element tables, the selections, the provenance records (`execution-and-storage.md`) | Cone instance | As in the written-out form |
+
+*The size that results.* A plan holds one record for each pattern whose code it
+holds, and one call-site record for each call that is written in source, with
+one entry for each path that the call writes and each place that holds the
+result. Its size is therefore linear in the size of the source of those patterns
+together, for any depth of nesting and any number of sites, where the
+written-out form grows with the number of chains of sites. The value code is
+linear in the same way.
+
+*What is still per site.* The cone instances, the memo entries, the bindings of
+slots to addresses, the instantiated labels, the selections, the state cells,
+the streams, the children, the operation state documents and the kept outputs
+with their provenance records exist once for each chain of sites and keys, as
+they do in the written-out form: `D` levels of two sites are 2 to the power `D`
+uses of the innermost pattern at run time, each with its own stored state. What
+a runtime derives from a plan when it loads it can be held per site and not per
+chain of sites, which is the number of sites times what a callee reads of its
+argument.
+
+*What is not the same as the written-out form.* Two things, neither a label, a
+value, a causal identifier or a document of the result. `Cone.code` of a callee
+is the hash of a function that is given the constants of a call, where the
+written-out form has a function per call that holds them, so what a store keys
+by `Cone.code` (the cache documents and the basis rows of
+`execution-and-storage.md` and `scheduler-and-serving-loop.md`) is keyed by
+another hash. And a compile-time diagnostic that follows an argument into the
+caller's template is either evaluated per chain of sites or not reported, which
+the table leaves not determined.
+
+The same holds for a site in an element body over an array of references, over
+an array of plain values in place, and over the result of another per-element
+construct, except where the paragraphs above name a case.
+
 
 **Where a slot of `Body.reads` sits in the body's argument.** By ruling
 each entry of `Body.reads` holds the path in the body's argument at
@@ -3313,7 +3783,11 @@ order among the events that invocation sends.
 
 ### 1.4 Order, the inputs of a cone, scope, and the cache directive
 
-**Order.** `Plan.cones` is listed so that every edge of `Plan.edges` that is
+**Order.** The order is that of one record: of the plan's own lists, and
+of each callee record by itself (provisional, P18). An edge with `site`
+orders nothing, and a call site has no place in the order of the record
+that holds it (section 8, question 170).
+`Plan.cones` is listed so that every edge of `Plan.edges` that is
 not on a cycle goes from a lower index to a higher one. `Plan.outputs` is
 listed by cone in that order, and within a cone in source order. An edge
 from a cone to itself or to a cone with a lower index is therefore on a
@@ -3354,7 +3828,11 @@ entry.
   tier for this rule. It is part of the initializer the `computed` is
   written in, and its value is a value of that one cone.
 - A pattern compiled into the instance is cones by these same rules, with
-  the `site` step in the `within` of what it declares.
+  the `site` step in the `within` of what it declares. Provisional
+  (P18): the cones are entries of the callee's record, formed once by
+  these rules, the cone of the callee's own result among them, and a
+  call adds no cone (section 1.1, "A pattern compiled in is written
+  once").
 - One cone, whose `entry` is `result`, computes the paths of the result
   that no other cone computes: an expression written in the returned
   object, and a path that passes an input through.
@@ -3450,7 +3928,11 @@ the member holds the steps of where the cone's code is written, as the
 `within` of a declaration does (section 1.3), so it also has a `site`
 step for each pattern compiled in that the code is written in. A `site`
 step names no collection and adds no key, so it changes neither of the
-two uses above. The prototype's plans hold both kinds of step: 1,336 of
+two uses above. Provisional (P18): a record holds no `site` step, the
+`within` of a cone of a callee has the `element` steps of the callee's
+own body, and the steps of the written-out form are formed from the
+chain of sites (section 1.1). The prototype's plans hold both kinds of
+step: 1,336 of
 the 3,717 cones have a `site` step. A cone written in the pattern body,
 outside every
 element body and every pattern compiled in, has the empty list.
@@ -5663,9 +6145,12 @@ member names are those of the provisional decision.
 - **What it does not reach.** Sharing is inside one plan and between
   equal templates. Two templates that differ in one index are two
   templates. The copies of a pattern that is compiled in at two sites
-  have slots, bodies and outputs of their own, so they share nothing by
-  this rule, and the records of a plan other than its templates are not
-  shared by it either (section 8, question 168).
+  have slots, bodies and outputs of their own in the written-out form,
+  so they share nothing by this rule, and the records of a plan other
+  than its templates are not shared by it either (section 8, question
+  168). Provisional (P18): a plan holds such a pattern once, and the
+  table is formed per record, for the plan's own lists and for each
+  callee (section 1.1, "A pattern compiled in is written once").
 
 With the table the templates of a plan together hold each distinct
 template once, and one node for each position that names it. A chain of
@@ -10064,7 +10549,13 @@ plan of its own or is compiled in by a call, although an event from the
 embedded tree satisfies the contract at run time. *Assumed* (section 8,
 question 61): it is reported, as the warning it is. The check is made
 once per plan. A pattern that has no plan of its own is checked in each
-plan it is compiled into, and nowhere else.
+plan it is compiled into, and nowhere else. Provisional (P18): for a
+callee that is compiled in by a tag the check is per call site, because
+the chain continues at the position of the tag. *Assumed:* it is
+computed once per record and site and not once per chain of sites:
+whether a chain is satisfied below the root of a callee's tree is found
+once for the callee, and whether it is satisfied from the position of a
+tag upward once for the site.
 
 A compile-time check does not replace the run-time one. Declared labels are a
 lower bound on what a slot carries: a derived component can add
@@ -10606,7 +11097,10 @@ normally.
   factory type declares (section 3.15).
 - **The bound.** A cone instance is evaluated at most ten times in one
   transaction. The bound is on a cone instance and not on a cone: an element
-  cone has one cone instance per key, and each has its own count. The number is
+  cone has one cone instance per key, and each has its own count.
+  Provisional (P17; section 8, question 173): where a cone has several
+  value functions, each value function of a cone instance has its own
+  count. The number is
   a placeholder. It is fixed with the plan version (`Plan.version`), so that a
   client and the server fail the same cone instances. A cone instance that
   failed at the bound keeps its error state and is not evaluated again until one
@@ -10663,9 +11157,25 @@ normally.
     normalizes it failed. A cone that reads the target reads the earlier
     value and does not fail on that account.
 
-  Today a node that throws commits none of its writes, so the second case
-  is **equal**. That the write did not happen is visible to readers of the
-  target, and section 5.5 lists it.
+  The second case **differs from today**. Today a node that throws
+  commits the writes it made before it threw: `finalizeSchedulerAction`
+  in `runtime/runner/src/scheduler/run.ts` reports the error and calls
+  `finalizeReactiveActionCommit` in a `finally`, which starts the commit
+  of the run's transaction whether or not the action threw. On the
+  prototype's fixture `failing.tsx`, a cone that writes the text
+  `tried` with its input to a cell and then throws for a negative input
+  leaves `tried -4` in the cell on today's runtime, and under this
+  section the cell keeps `tried 4`, which it held before the
+  transaction. The difference is in a stored value and in no
+  label. Whether it is intended is open (section 8, question 172).
+  *Assumed:* the rule of this section stands. That the write did not
+  happen is visible to readers of the target, and section 5.5 lists it.
+
+**The form of an error state.** Provisional (P11; section 8, question
+171). An error state is the record `{ $error: { message } }`, where
+`message` is the text of the failure. A cone instance that fails in turn
+holds the record of the failure that it read. The member names are the
+prototype's.
 
 ### 5.3 Propagation stops unless something reads the error
 
@@ -10674,7 +11184,23 @@ slot fails in turn, with its own template as the label, and that template
 already contains the errored slot. A `select` whose unselected branch is in
 an error state is unaffected, because it does not read it. A collection with
 one errored element has one errored element: a `map` passes it on per
-element, and a `fold` over it fails, since it reads every element.
+element, over an array of references, over an array of plain values in
+place, and over the result of another per-element construct alike, and
+a `fold` over it fails, since it reads every element.
+
+**Placing is not reading.** Provisional (P11; section 8, question 171).
+A cone reads an errored value where its value code observes it: the
+value itself, a path below it, or the value as the argument of a body.
+A cone that places an errored value in a record, in an array, or among
+the children of a view node, and observes nothing of it, does not fail.
+The value it returns holds the error state at that position, and the
+rest of the value is stored. In
+`patterns/dev/test/silent-computed-crash.tsx` a `computed` that throws
+is a child of the view: the view is stored with the error state at that
+child, where today's runtime stores the view with nothing there. Under
+the other reading the cone of the view fails and the whole view is an
+error state. The label of the position is that of the cone that failed,
+which the template of the placing cone names with an `output` node.
 
 So a failure reaches exactly the outputs whose template reaches it, and each
 carries a label that covers the failure's cause.
@@ -10859,11 +11385,14 @@ deployment documents:
 - **A withdrawn side-write.** The side-writes of a failed cone are
   withdrawn (section 5.2), so a reader of the target can see that the
   write did not happen. Whether the cone failed is a function of what the
-  cone read. Today a failing node leaves its targets as they were in the
-  same way.
+  cone read. Today a failing node commits the writes it made before it
+  threw (section 5.2), so what a reader sees after a failure differs
+  from today (section 8, question 172).
 - **The batch.** Derivations settle once behind a batch of events. How
   many events a batch holds decides which states are derived from, and it
-  depends on arrival times.
+  depends on arrival times. Provisional (P9): it also decides the value
+  that a cell holds which a cone and a handler both write
+  (`scheduler-and-serving-loop.md` §5.4).
 - **Cache promotion.** Whether the runtime stores a cone's interim outputs
   is a function of how long the cone takes and how often it is evaluated
   (`execution-and-storage.md`, section 8), and both can depend on data. An
@@ -11271,6 +11800,12 @@ into the plan (section 1.1), so the row has no plan of its own: what it
 declares has the `within` steps `{ element: c1 }` and
 `{ site: FabriChatMessageRow }`, and its argument path `message` is the
 element, which is why `m0` to `m6` have the root `element`.
+Provisional (P18): the listing shows the written-out form. In the plan
+the row is one entry of `Plan.callees`, in which those slots have the
+root `argument` and the path below `message`, and the tag is a call site
+of the plan's own record, with the `element` step of `c1` in its `within`
+and the path `message` of its argument bound to the element slot of
+`c1` (section 1.1, "A pattern compiled in is written once").
 
 The elements of `c1` are links to message cells, so each row's key is its
 message cell's identity (section 1.3), and a row keeps its cone instances
@@ -14560,3 +15095,137 @@ this document made.
      the sentences on such a member in "The documents" are removed. Not
      about a per-element construct. It is question 246 of the
      continuation plan.
+170. **A pattern compiled in is written once and named by its call sites** (for
+     the project owner). In the written-out form of section 1.1 the slots,
+     bodies and cones of a pattern compiled in are entries of the enclosing
+     plan, once per call, so a pattern used at `k` sites per level, `D` levels
+     deep, is written `k` to the power `D` times. The prototype measured
+     3,193 to 152,575 bytes of plan
+     and 5 to 253 cones for 1 to 6 levels of two sites, with the value code
+     doubling as well. *Assumed,* provisional (P18 of the continuation plan, the
+     coordinator's decision, and not ruled): the plan holds each such pattern
+     once, as an entry of `Plan.callees`, and each call as a `CallSite` of the
+     record it is written in, which binds the callee's argument and says where
+     the callee's result is held (section 1.1, "A pattern compiled in is written
+     once"). The written-out form defines the meaning, and no label, value,
+     causal identifier or stored document of a result differs from it. The size
+     of a plan is then linear in the source for any nesting. The alternative is
+     the written-out form as the format. If the owner decides for it, the
+     records `Callee`, `CallSite`, `SiteArgument` and `SiteResult`, the members
+     `Plan.sites` and `Plan.callees`, the member `site` beside `output`, and the
+     paragraph of section 1.1 are removed, with the provisional sentences of
+     sections 1.4, 3.2 and 4.4. The record design is this document's, and these
+     points of it are part of the question.
+     - **(a) Compile-time checks through an argument that a site binds to an
+       output.** `cfc-flow:writer-fit`, `cfc-flow:write-floor` and the two input
+       diagnostics evaluate a template on declared labels (sections 1.5 and
+       4.4). In the written-out form a path of the argument that the call binds
+       to an output of the caller is an `output` node, and the check follows it
+       into the caller's template, so it can be decided at one call and not at
+       another. In a callee record the path is a slot whose `declared` member is
+       the annotation of the callee's type. Evaluated once per callee, a check
+       that the written-out form decides through a caller's output is left to
+       instantiation, or decided on the callee's annotation alone. Evaluated per
+       chain of sites, the diagnostics are those of the written-out form, and
+       the compile-time work follows the number of chains, which is the growth
+       that the decision removes from the plan. No label and no run-time
+       decision differs between the two. Nothing is assumed. It is question 288
+       of the continuation plan.
+     - **(b) What a site binds a path to.** Section 1.1 names a slot, an output
+       and a constant. *Assumed:* also the stream of a binding of the holding
+       record and the result of the instance, as `Binding.state` has them,
+       because a callee is handed a handler of its caller in most trees of the
+       corpus.
+     - **(c) A literal that the call writes above the paths that the callee
+       reads.** *Assumed:* the runtime builds the value from the entries of
+       `CallSite.argument`, and no cone computes it.
+     - **(d) Where the callee's result is held.** `CallSite.result` lists the
+       places that the source writes. Not determined: an output of a callee that
+       the written-out form keeps because the result reaches it through a value
+       and not through a written place, as through the elements of a collection
+       that hold the results of several calls, a branch of a `select`, or what a
+       body returns. *Assumed:* such an output is kept where the value that
+       holds it is, and stored as part of that value.
+     - **(e) A construct of the callee over an argument that is a collection of
+       the caller.** *Assumed:* the source of the callee's record is the
+       argument slot at every site, and the keys and the membership follow the
+       binding, as for an output with `passesCollection`.
+     - **(f) An order over the cones of an instance.** The order of section 1.4
+       is per record. `scheduler-and-serving-loop.md` §10.2 orders the demanded
+       outputs "by instance identifier and output index", and an output index
+       names one output of an instance only in the written-out form. Nothing is
+       assumed; that document assumes an order by the chain of sites and then
+       the index (its question 59).
+     - **(g) A pattern with type parameters.** Whether two calls of one pattern
+       with two sets of type arguments are sites of one callee record or of two
+       is not determined. *Assumed:* a record per pattern and set of type
+       arguments, as section 1.5 has the unit of a recursive type.
+     - **(h) Whether a callee record is the plan of its pattern.** A callee
+       record is formed as the lists of a plan of the callee would be. Not
+       decided: whether a plan names a callee by the content address of that
+       pattern's own plan, in the place of holding the record. *Assumed:* it
+       holds the record, so that one hash covers what an instance runs.
+     - **(i) What is keyed by `Cone.code`.** The value function of a cone of a
+       callee is one function for every site, so its hash is no hash of the
+       written-out form. It changes no result.
+
+     The decision is the same for a site in an element body over an array of
+     references, over an array of plain values in place, and over the result of
+     another per-element construct. It is question 247 of the continuation plan,
+     with its question 288 for point (a) and its question 289 for points (b) to
+     (i), and it settles the `site` steps of question 250 there.
+171. **The form of an error state, and whether placing a failed value is reading
+     it** (for the project owner). Section 5.2 gives an error state a label and
+     a place and no form, and section 5.3 says that a cone that reads an errored
+     slot fails in turn. Value code that puts a value in a record or among the
+     children of a view node, and observes nothing of it, is not said to read
+     it. *Assumed,* provisional (P11 of the continuation plan, the choice of the
+     prototype's author, adopted by the coordinator of this work and not ruled):
+     an error state is the record `{ $error: { message } }`, a cone instance
+     that fails in turn holds the record that it read, and a cone that places a
+     failed value without observing it does not fail (section 5.3, "Placing is
+     not reading"). The alternative: placing is reading, and a view with one
+     failed child is an error state whole. The prototype has a test for the
+     first reading (`view` of `fixtures/failing.tsx`, with the error state at
+     two child positions) and none for the second, which its executor would give
+     by failing the cone in `Host.output` and `Host.slot`. Today's runtime
+     stores the view with nothing at the child. If the owner decides for the
+     alternative, the paragraph "Placing is not reading" changes. A `map` passes
+     an errored element on in both readings, over an array of references, over
+     an array of plain values in place, and over the result of another
+     per-element construct; the prototype tested the second case alone. It is
+     question 278 of the continuation plan.
+172. **A side-write that a cone made before it failed** (for the project owner).
+     Section 5.2 withdraws it. Today's runtime commits the writes that a node
+     made before it threw (`finalizeSchedulerAction` in
+     `runtime/runner/src/scheduler/run.ts`). So the withdrawal is a difference
+     from today in a stored value: on the prototype's fixture `failing.tsx`
+     today's runtime stores `tried -4` and this design `tried 4`, and 4 of the 6
+     values of that fixture that differ are this. It is not a difference in a
+     label, and it is not one of the exceptions to "equal or tighter" of section
+     3.1. *Assumed:* the withdrawal stands, because a cell that other writers
+     share would otherwise hold a value of a computation that did not complete,
+     with a label formed for the completed computation. The alternative keeps
+     the writes made before the failure, as today. Not about a per-element
+     construct. It is question 285 of the continuation plan.
+173. **Whether the bound of ten is counted per cone instance or per value
+     function** (for the project owner). The ruling counts evaluations of a cone
+     instance. A cone with more than one value function has a memo entry for
+     each. *Assumed,* provisional (P17 of the continuation plan, the choice of
+     the prototype's author, adopted by the coordinator and not ruled): the
+     count is per value function of a cone instance. The alternative is one
+     count per cone instance, under which a cone with two value functions fails
+     after ten evaluations of the two together. The prototype counts per memo
+     entry and has no module on which the two counts were compared. An element
+     cone has a count per key under both, over an array of references, over an
+     array of plain values in place, and over the result of another per-element
+     construct. It is question 284 of the continuation plan.
+174. **A `select` one of whose operands failed, against today** (for the project
+     owner). By section 5.3 a `select` whose unselected branch is in an error
+     state has the value of the selected branch. On the prototype's fixture
+     `failing.tsx` the output `chosen` holds the selected branch, and today's
+     runtime holds nothing at it: 2 of the 6 values of the fixture that differ.
+     The cause on today's side is not established. *Assumed:* section 5.3
+     stands. Not about a per-element construct. It is question 287 of the
+     continuation plan.
+

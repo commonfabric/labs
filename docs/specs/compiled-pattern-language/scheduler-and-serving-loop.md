@@ -1914,6 +1914,23 @@ Before the transaction opens:
 Then the transaction opens, and the `event`, `binding`, and `cause` slots
 are bound.
 
+**A slot that observes the reference alone.** Provisional (P8; open question
+54). A handle that a handler body reads through has two slots, one of class
+`identity` and one of class `value`, and a handle that the body only writes
+through, or only passes on, has the `identity` slot alone. A slot of class
+`identity` observes the reference and not the content of the cell. It does not
+make the cone instance that writes the cell be evaluated before the body: the
+cone instances evaluated before the body are those that compute a value the
+handler reads (`execution-and-storage.md` §1.3). In the prototype's fixture
+`batch.tsx` the cone `_join` writes the cell `joined` from the list `items`, an
+array of plain values in place, and the handler `overwrite` writes `joined` and
+reads nothing. In the batch `add`, `overwrite`, the cone `_join` is not
+evaluated before the body of `overwrite`. It is evaluated in the derivation
+transaction behind the batch and writes over what the handler wrote, so `joined`
+holds `a`, which is the value today's runtime stores. Under the other reading
+any bound slot counts: `_join` is evaluated before the body, is current behind
+the batch, and `joined` holds what the handler wrote.
+
 **What the `binding` root resolves to.** It depends on where the binding
 was made (`plan-and-label-templates.md` §3.14).
 
@@ -2164,6 +2181,23 @@ Two things follow for what is observable.
 - **How many events a batch holds depends on arrival times.** It decides
   which states are derived from, and `plan-and-label-templates.md` §5.5
   lists it with the residual channels.
+- **What a cell holds that a cone and a handler both write can depend on the
+  batch.** Provisional (P9; open question 55), and the first thing for the owner
+  to look at among the provisional decisions. A cone instance with a static
+  side-write is stale when something it read changed, and not when another
+  writer writes the cell that it writes (`execution-and-storage.md` §2.7). In
+  the prototype's fixture `batch.tsx`, the events `add` and `overwrite` in one
+  batch leave `joined` holding `a`: the cone `_join` is stale by the `add`, is
+  evaluated behind the batch, and writes over the handler's value. The same two
+  events, each a batch of its own, leave what the handler wrote: `_join` was
+  evaluated behind `add`, and nothing it read changed with `overwrite`. So the
+  stored value differs with the size of the batch, which depends on arrival
+  times. Today's runtime stores `a` in both cases: it runs the writing
+  computation again behind the handler's write. Under the other reading a write
+  to the target of a write edge makes the writing cone instance stale, as today,
+  and a batch and its events one at a time store the same value. The list
+  `items` of the fixture is an array of plain values in place, and the rule does
+  not depend on a per-element construct.
 
 ### 5.5 Rejection, failure, and conflict
 
@@ -2431,6 +2465,9 @@ followed below a reference changed.
 1. Read the stored request and its label. A request path whose cone failed
    holds an error state. Such a request is not made, and the operation's
    result is that error state (`plan-and-label-templates.md` §5.2).
+   Provisional (P16): where the cone that computes the request failed, the
+   stored request holds one error state for the whole request, and not one at
+   each path whose cone failed (`execution-and-storage.md` §6.4).
 2. Follow the references the request holds, as far as the built-in
    serializes or hashes them. The "Request operands" paragraph of the
    built-in's entry in `builtin-inventory.md` says which operands are read
@@ -2456,6 +2493,28 @@ followed below a reference changed.
 So a change of content behind a reference the request holds runs the
 request transaction again, and it requests the effect again exactly when
 the hash differs.
+
+**What a reader reads around a request.** Provisional (P12; open question 56).
+The request transaction runs behind the derivation transaction that staged the
+request (section 10.2). In that first derivation transaction the state document
+holds the request alone, and a reader of `pending`, of `result` or of `error`
+reads nothing. The derivation transaction behind the request transaction reads
+`pending` as `true`. Step 6 writes the hash and the pending mark and nothing
+else, so while a newer request is outstanding the result or the error of the
+request before it stays readable, beside `pending`. Under the other reading
+`pending` is `true` from the derivation transaction that staged the request, and
+a new request clears `result` and `error`.
+
+**A request that comes back while it is outstanding.** Provisional (P13; open
+question 57). Steps 4 to 6 compare the hash with the one hash that the state
+document holds. With a request A outstanding, a change of the request to B and
+back to A finds the stored hash to be B's, so A is handed to the outbox a second
+time: the outbox holds A, B, A. The completion of each A is then that of the
+selected request, and each is written. The sentence of section 6.6, that a
+request is made at most once per distinct request hash and state document, holds
+for the hash that the document holds and not for a hash it held before. Under
+the other reading the state document holds the set of the hashes that are
+outstanding, and A is not made again.
 
 **In a handler** the request is staged in the event's transaction. Each
 path of it is a write edge of the body with the target `request`, and it
@@ -2631,7 +2690,10 @@ after the request left (section 2.7).
 ### 6.6 One request across re-evaluations
 
 A request is made at most once per distinct request hash and state document,
-whatever is evaluated again.
+whatever is evaluated again. Provisional (P13): the state document holds
+one hash, so a request that is replaced while it is outstanding and then
+selected again is made a second time (section 6.2, "A request that comes
+back while it is outstanding").
 
 - A cone instance that computes a request is evaluated again whenever
   something it read changed. If the request's value is unchanged, nothing
@@ -2854,7 +2916,9 @@ The bound is one rule, and it is ruled:
   means and not a setting of a deployment. Changing it is a new version.
 - **Who counts.** Cone evaluation keeps the count, per cone instance and
   transaction (`execution-and-storage.md` §2.7). The instance record holds
-  no second count.
+  no second count. Provisional (P17): a cone with several value
+  functions has a count for each value function of a cone instance
+  (`plan-and-label-templates.md` §8, question 173).
 - **Why a count per cone instance.** A cycle within one plan is visible in
   `Plan.edges`, and a count per cycle would do for it. A cycle through links
   between instances exists only in data, and a count per cone instance
@@ -2874,7 +2938,10 @@ The bound is one rule, and it is ruled:
   inputs a later cause would reach the bound again. Its failed evaluation
   is an evaluation. Its memo entry holds the error state and the reads made
   up to the failure, its error state is stored, and its basis rows advance
-  (section 3.5). This differs from today, where the work that remains is
+  (section 3.5). Provisional (P10; open question 43): the entry is
+  current against what is stored when the transaction ends, after the
+  withdrawals of section 8.2, and not against what its last evaluation
+  read. This differs from today, where the work that remains is
   deferred behind a backoff gate and tried again
   (`planBudgetBackoff` in `scheduler/execution.ts`), so that a graph that
   needs more than ten iterations still converges. A cone instance has no
@@ -2905,6 +2972,17 @@ The bound is one rule, and it is ruled:
   This rule is the same for a cycle inside one instance and for one through
   links between instances, so that the server and a client fail the same
   cone instances.
+- **Which cone instances of a cycle fail depends on the order of evaluation**
+  (open question 58). In a cycle of two cone instances that does not settle,
+  both fail where both were evaluated ten times when the first reached the
+  bound. Had the second been evaluated nine times, it would be evaluated once
+  more against the earlier value and leave its write, and one cell of the cycle
+  would hold one step of the cycle. A reader of the cells is evaluated once for
+  each state it is pulled in, and under an order that pulls it after every write
+  it reaches the bound itself and fails, though it writes nothing. Section 10.2
+  fixes the order of the demanded outputs so that a client and the server
+  evaluate in one order. No section says that the order of the pulls inside one
+  transaction is fixed as well, which this outcome needs.
 - **The diagnostic.** For each evaluation after the first, the scheduler
   records which slot or registered address made the cone instance stale and
   which cone instance or body staged the write that changed it. When the
@@ -3354,7 +3432,11 @@ with its own context (section 10.3). Every write in it is a derived write,
 so no constraint rejects it.
 
 **Order across instances.** A derivation transaction evaluates the demanded
-stale outputs in a fixed order, by instance identifier and output index. A
+stale outputs in a fixed order, by instance identifier and output index.
+*Assumed,* with the provisional record of a pattern that is compiled in
+(P18; open question 59): an output of such a pattern is ordered by the
+chain of its call sites, each by its index in `sites`, and then by its
+index in the `outputs` of its record. A
 cone instance that reads a slot whose bound address a stale cone instance
 writes causes that one to be evaluated first, in the same transaction,
 whichever instance it belongs to. A cone instance that is read while it is
@@ -4254,8 +4336,16 @@ space, and no space runs the builder path beside the compiled path
     reasons. The ruling governs the outcome. *Assumed:* the entry of a
     cone instance that failed at the bound is kept, and it is taken as
     current against what is stored after the withdrawal, so that only a
-    change after that transaction evaluates the cone instance again. It
-    is question 224 of the continuation plan.
+    change after that transaction evaluates the cone instance again.
+    The assumption is provisional (P10 of the continuation plan, the
+    choice of the prototype's author, adopted by the coordinator of
+    this work and not ruled). The alternative: the entry is current
+    against what its last evaluation read, which is what the
+    fingerprint check gives. The prototype has a test for each reading
+    on `fixtures/bound.tsx`, for a later event that writes a cell no
+    cone of the cycle reads: under the first neither cone is evaluated,
+    and under the second each cause evaluates each cone ten times and
+    fails both again. It is question 224 of the continuation plan.
 44. **A `navigateTo` of the reactive tier behind a batch of events of
     several sessions** (section 6.2). Such a request is demanded
     whenever its instance is, and is refused where it is not a
@@ -4341,6 +4431,78 @@ space, and no space runs the builder path beside the compiled path
     then carries one batch for each principal for one target space, or
     in which order. Nothing is assumed. It is question 238 of the
     continuation plan, and extends question 34.
+
+54. **A slot of a handler that observes the reference alone, and the cone that
+    writes its cell** (section 5.2). `execution-and-storage.md` §1.3 has "a slot
+    of the handler" bound to the target of a static side-write, and the writing
+    cone instance evaluated first. The plan gives a handle that the body reads
+    through two slots, of class `identity` and of class `value`, and a handle
+    that the body only writes through the `identity` slot alone. *Assumed,*
+    provisional (P8 of the continuation plan, the choice of the prototype's
+    author, adopted by the coordinator of this work and not ruled): a slot of
+    class `identity` alone is no read, and the writing cone instance is not
+    evaluated before the body on its account. The alternative: any bound slot
+    counts. The prototype has a test for each reading on `fixtures/batch.tsx`
+    (the batch `add`, `overwrite`; the second reading under the option
+    `beforeBody: "bound"`), and today's runtime gives the value of the first. If
+    the owner decides for the alternative, the paragraph "A slot that observes
+    the reference alone" of section 5.2 and the bullet of
+    `execution-and-storage.md` §1.3 change. It is question 276 of the
+    continuation plan.
+55. **Whether a cone with a static side-write is stale when another writer
+    writes its target** (section 5.4). `execution-and-storage.md` §2.7 makes a
+    cone instance stale by a write to a cell that it read, and no rule makes it
+    stale by a write to a cell that it writes. Section 8.2 speaks of "a state
+    cell that a handler also writes" beside "a computation that normalizes it",
+    which is this case. *Assumed,* provisional (P9 of the continuation plan,
+    adopted by the coordinator so that the work continues, and flagged for the
+    owner to look at first): it is not stale. A batch and the same events one at
+    a time can then store different values, and today's runtime, which runs the
+    writer again, stores one value in both. By a reading of the source that is
+    not verified, today's `set` of a cell reads the cell to compare, so the
+    writing action has its target among its reads. The alternative: a write to
+    the target of a write edge makes the writing cone instance stale. The
+    prototype has a test for each outcome on `fixtures/batch.tsx` (`add` then
+    `overwrite`, in one batch and in two), and its comparison with today's
+    runtime differs in 2 values for it. If the owner decides for the
+    alternative, the third item of "Two things follow" in section 5.4 is
+    removed, and `execution-and-storage.md` §2.7 lists the staleness. It is
+    question 277 of the continuation plan.
+56. **What `pending`, `result` and `error` read as before the first request
+    transaction, and while a newer request is outstanding** (section 6.2).
+    *Assumed,* provisional (P12 of the continuation plan): nothing before the
+    first request transaction, and the earlier result stays readable while a
+    newer request is outstanding. The alternative: `pending` is `true` from the
+    derivation transaction that staged the request, and a new request clears the
+    result. The prototype tests the first reading on `fixtures/effects.tsx`,
+    which has no per-element construct. If the owner decides for the
+    alternative, the staging evaluation writes the pending mark, or the request
+    transaction clears `result` and `error`. It is question 279 of the
+    continuation plan.
+57. **A request that comes back while it is outstanding** (sections 6.2 and
+    6.6). Section 6.6 says that a request is made at most once per distinct
+    request hash and state document, and steps 4 to 6 of section 6.2 compare
+    with the one hash that the document holds. *Assumed,* provisional (P13 of
+    the continuation plan): the steps govern, and such a request is made a
+    second time. The alternative: the state document holds the set of the
+    outstanding hashes. The prototype has a test that shows the outbox holding
+    A, B, A. If the owner decides for the alternative, the state document of
+    `execution-and-storage.md` §6.4 gains that set, and step 5 compares with it.
+    It is question 280 of the continuation plan.
+58. **Whether the order of the pulls inside one transaction is fixed** (section
+    8.2). Which cone instances of a cycle fail at the bound, and whether a
+    reader of the cycle fails, depends on the order in which the cone instances
+    are evaluated. Section 10.2 fixes the order of the demanded outputs, and has
+    a client and the server evaluate in that order. Nothing is assumed for the
+    order of the pulls that one demanded output causes. The prototype's executor
+    has the order of its own pull, and no test compares two orders. It is
+    question 286 of the continuation plan.
+59. **The order of the outputs of a pattern that is compiled in** (section
+    10.2). With one record for each such pattern (`plan-and-label-templates.md`
+    §1.1, provisional, P18), an output index names an output of a record and not
+    of an instance. *Assumed:* the order is by the chain of call sites and then
+    the index. It is part of question 247 of the continuation plan.
+
 
 ### For another document or the prototype
 

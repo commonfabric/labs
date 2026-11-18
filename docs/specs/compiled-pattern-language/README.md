@@ -651,7 +651,11 @@ rule, and [plan format and label templates](plan-and-label-templates.md)
 A pattern compiled into another, such as the body of a `map` or an inline
 sub-pattern, is not instantiated in this sense. It has no result cell and no
 pattern metadata. If all its outputs are consumed by further computation it
-has no stored state at all.
+has no stored state at all. Provisional (P18 of the continuation plan): a
+plan holds a pattern that a call or a tag names once, as one record that
+each of its call sites names, so the size of a plan is linear in the source
+for any nesting of calls
+([plan format and label templates](plan-and-label-templates.md) §1.1).
 
 ### State cells
 

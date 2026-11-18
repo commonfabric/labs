@@ -1163,6 +1163,26 @@ These paragraphs state what is read when the request is made. The
 `streamData` and `llm` entries have no such paragraph, because both are
 removed.
 
+**The request, the state document, and what a reader reads.** Three points that
+the entries below leave open are provisional decisions of the continuation plan.
+
+- **The request and the state document** (provisional, P14; open question 17).
+  The stored request is the one argument of the call, or the arguments in the
+  order they are written. The state document of the operation holds it under
+  `request`, the hash under `requestHash`, and under `outcome` the record that a
+  reader reads (`execution-and-storage.md` §6.4). The prototype follows every
+  reference of the request. Where a **Request operands** paragraph declares an
+  operand a reference that is not followed, or followed to a depth, the
+  paragraph governs.
+- **`pending`, `result` and `error`** (provisional, P12; open question 16).
+  Before the first request transaction of an operation the three read as
+  nothing. From the request transaction on, `pending` is `true` until the
+  completion. While a newer request is outstanding, the result or the error of
+  the request before it stays readable (`scheduler-and-serving-loop.md` §6.2).
+- **A request whose cone failed** (provisional, P16). The stored request holds
+  one error state for the whole request, the request is not made, and the result
+  of the operation is that error state.
+
 **What a language-model built-in sends after its request.** A
 language-model built-in sends content that no request held: the result of
 a tool call, sent back to the model by the next model call of the tool
@@ -1940,7 +1960,11 @@ counterpart in this inventory.
 - **New design:** class A. `wish` is not an effect. Everything it creates is
   created idempotently under an identifier derived from its cause, so a
   reader cannot tell a target the wish created from one that already
-  existed. Its parts read as follows.
+  existed. Provisional (P15; open question 18): a `wish` is resolved in the
+  evaluation that stages its operands, in the derivation transaction of its
+  reader, and makes no request: it has no request transaction and nothing of it
+  is handed to the outbox, although its entry stands in this section. Its parts
+  read as follows.
   - Path and well-known-target resolution is a reference whose identity
     depends on the query and, for home targets, on the acting user.
   - Hashtag search is a filter over a collection that lives in another
@@ -3832,3 +3856,34 @@ with the project owner names its entry in the
     the prototype's artifact does in a member `dataFiles`. Nothing is
     assumed for the other two parts. It is question 223 of the
     continuation plan.
+16. **What `pending`, `result` and `error` read as before the first request
+    transaction, and while a newer request is outstanding.** This inventory says
+    that the result of an effect is read as those three fields and no more.
+    *Assumed,* provisional (P12 of the continuation plan): nothing before the
+    first request transaction, and the earlier result stays readable while a
+    newer request is outstanding. The alternative and the tests are in
+    `scheduler-and-serving-loop.md` (its question 56). It is question 279 of the
+    continuation plan.
+17. **The shape of a request with several arguments, the schema in a `fetchJson`
+    request, and how far a reference is followed.** *Assumed,* provisional (P14
+    of the continuation plan): a request is the one argument of the call or the
+    arguments in order, and the prototype follows every reference. The entry of
+    `fetchJson` has the schema that today's compiler adds as part of the request
+    and of its hash, and the request of the prototype holds no schema. The
+    **Request operands** paragraphs give a depth for each operand, which the
+    prototype does not have. Nothing is assumed for the schema. It is question
+    281 of the continuation plan.
+18. **Which transaction resolves a `wish`.** The overview has `wish` among the
+    structural operations, this inventory has its entry under the effectful
+    built-ins and classes it A, and `execution-and-storage.md` §4.1 gives it a
+    state document with the stored operands. `plan-and-label-templates.md` §1.1
+    says that it has no request transaction and is resolved in the transaction
+    that evaluates a reader of its result. *Assumed,* provisional (P15 of the
+    continuation plan): that sentence holds. The evaluation that stages the
+    operands resolves the wish and makes no request. The alternative: a
+    transaction of the operation, with the request transaction and the outbox of
+    an effect. The prototype has three tests of the first on
+    `fixtures/wishes.tsx`, with a target from a table and a clock that a test
+    writes; hashtag search, the sidecars and the home space are not built. It is
+    question 282 of the continuation plan.
+
