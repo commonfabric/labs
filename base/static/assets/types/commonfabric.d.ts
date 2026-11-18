@@ -4105,8 +4105,9 @@ export type CompileAndRunFunction = <T = any, S = any>(
  * cannot fail part-way, and it returns the same bytes on every load of a given
  * source revision. A path naming no attached data file throws.
  *
- * A binary media file (an image, a font, or a sound, by its extension) has no
- * text, and reading one this way throws; read it with `dataFile.url()`.
+ * A binary media file (an image other than SVG, a font, or a sound, by its
+ * extension) has no text, and reading one this way throws; read it with
+ * `dataFile.url()`. An SVG is text, and this returns its markup.
  */
 export interface DataFileFunction {
   /** Reads the text of the attached data file `path` names. */
