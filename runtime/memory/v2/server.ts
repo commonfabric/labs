@@ -1533,8 +1533,13 @@ class Connection {
       }
       const prepared = this.#prepare(message);
       const encodeStart = performance.now();
-      // A sync too long to encode whole is not yet undeliverable: its parts
-      // are encoded alone, below, and only an entry that cannot be is.
+      // A sync too long to encode whole is not yet undeliverable: it is
+      // split, and its parts are encoded alone. That relies on a part's bound
+      // sitting far below the engine's longest string (2^29 - 24 units), as
+      // every transport's does (1 MiB routed, 32 MiB direct): a part the
+      // split cuts then exceeds its bound only by its own tables, which hold
+      // each schema and label once. Only an entry, or a table, that the
+      // engine cannot encode fails, as it would whole.
       const payload = encodeUnlessTooLong(prepared);
       const fits = payload !== undefined &&
         payloadFits(payload, wholeLimits(limits));

@@ -88,8 +88,6 @@ type Size = { readonly bytes: number; readonly values: number };
 /** The wire tag every encoded message starts with. */
 const WIRE_TAG = "fvj1:";
 
-const TEXT_ENCODER = new TextEncoder();
-
 /** The sync a server message carries, if it carries one. */
 export function serverMessageSync(
   message: unknown,
@@ -108,10 +106,11 @@ export function serverMessageSync(
 /**
  * The encoding of `message`, or `undefined` when it would be longer than the
  * longest string the JavaScript engine makes: V8 refuses text of more than
- * 2^29 - 24 UTF-16 units (about 512 MiB) with a `RangeError`. A sync that
- * long can still go in parts, each encoded alone, so a sender that splits
- * takes `undefined` for a message that does not fit whole. Any other failure
- * is the message's own and is thrown.
+ * 2^29 - 24 UTF-16 units (about 512 MiB) with a `RangeError` whose message
+ * is "Invalid string length". A sync that long can still go in parts, each
+ * encoded alone, so a sender that splits takes `undefined` for a message that
+ * does not fit whole. Any other failure, another `RangeError` such as a stack
+ * overflow among them, is the message's own and is thrown.
  */
 export function encodeUnlessTooLong(
   message: ServerMessage,
@@ -121,7 +120,11 @@ export function encodeUnlessTooLong(
   try {
     return encode(message);
   } catch (error) {
-    if (error instanceof RangeError) return undefined;
+    if (
+      error instanceof RangeError && error.message === "Invalid string length"
+    ) {
+      return undefined;
+    }
     throw error;
   }
 }
@@ -564,10 +567,37 @@ function measure(value: unknown): Size {
   return { bytes: utf8Length(json), values: membersWritten(json) + 1 };
 }
 
+/**
+ * Runs of UTF-16 units that take more than one UTF-8 byte each, one width to
+ * a run: units below U+0800 take two bytes, surrogate pairs four for their two
+ * units, other units three, and a lone surrogate the three of the U+FFFD the
+ * encoder writes for it.
+ */
+const MULTIBYTE_RUNS =
+  /[\u0080-߿]+|(?:[\ud800-\udbff][\udc00-\udfff])+|[ࠀ-퟿-￿]+|[\ud800-\udfff]/g;
+
+/**
+ * The UTF-8 length of `text`, counted without encoding it. A message measured
+ * against a whole message's bound can be hundreds of megabytes, and the
+ * transport encodes it again to compress it; a copy here would double that.
+ */
 function utf8Length(text: string): number {
-  // Text that is ASCII throughout encodes to one byte a character.
-  // deno-lint-ignore no-control-regex
-  return /^[\x00-\x7f]*$/.test(text)
-    ? text.length
-    : TEXT_ENCODER.encode(text).length;
+  let length = text.length;
+  MULTIBYTE_RUNS.lastIndex = 0;
+  for (
+    let match = MULTIBYTE_RUNS.exec(text);
+    match !== null;
+    match = MULTIBYTE_RUNS.exec(text)
+  ) {
+    const run = match[0];
+    const unit = run.charCodeAt(0);
+    length += unit < 0x800
+      ? run.length
+      : unit < 0xd800 || unit > 0xdfff
+      ? 2 * run.length
+      : run.length === 1
+      ? 2
+      : run.length;
+  }
+  return length;
 }

@@ -293,11 +293,9 @@ describe("encodeUnlessTooLong()", () => {
   });
 
   it("returns `undefined` when the encoding is longer than the engine's longest string", () => {
-    // What V8 throws past 2^29 - 24 UTF-16 units, made here without
-    // building half a gigabyte of text.
-    const tooLong = () => {
-      throw new RangeError("Invalid string length");
-    };
+    // The engine's own refusal of text past 2^29 - 24 UTF-16 units, which
+    // it raises before building any of it.
+    const tooLong = () => "x".repeat(2 ** 29);
     assertEquals(encodeUnlessTooLong(message, tooLong), undefined);
   });
 
@@ -307,6 +305,36 @@ describe("encodeUnlessTooLong()", () => {
     };
     assertThrows(() => encodeUnlessTooLong(message, failing), TypeError);
   });
+
+  it("throws a stack overflow, which is a `RangeError` of another kind", () => {
+    // Nested deeper than the codec's recursion reaches.
+    let deep: unknown = 0;
+    for (let depth = 0; depth < 100_000; depth++) deep = [deep];
+    const nested = { ...message, ok: { deep } } as unknown as ServerMessage;
+    const error = assertThrows(() => encodeUnlessTooLong(nested), RangeError);
+    assertEquals(error.message, "Maximum call stack size exceeded");
+  });
+});
+
+Deno.test("payloadFits counts the UTF-8 bytes of characters of every width", () => {
+  // Two-, three- and four-byte characters, and lone surrogates, which the
+  // encoder writes as U+FFFD in three bytes, alone and among the others.
+  for (
+    const text of [
+      "é",
+      "中",
+      "😀",
+      "\ud800",
+      "\udc00",
+      "a\ud83d",
+      "é中😀\ud800x",
+    ]
+  ) {
+    const payload = `fvj1:"${text.repeat(50)}"`;
+    const bytes = new TextEncoder().encode(payload).length;
+    assert(payloadFits(payload, { bytes, values: null }), text);
+    assert(!payloadFits(payload, { bytes: bytes - 1, values: null }), text);
+  }
 });
 
 Deno.test("payloadFits counts the values of text long enough to exceed the bound", () => {
