@@ -1953,6 +1953,28 @@ export class StorageManager implements IStorageManager {
     (space: MemorySpace, addresses: readonly LocalDocAddress[]) => void
   >();
 
+  /** Observers of `subscribeSpacesReleased()`. */
+  readonly #spacesReleasedObservers = new Set<(space: MemorySpace) => void>();
+
+  /**
+   * The spaces opened since the release pass under way began, which that
+   * pass leaves open (`#releaseUnusedSpaces()`).
+   */
+  readonly #openedDuringPass = new Set<MemorySpace>();
+
+  /**
+   * The closing of each released space's session, which a session opened in
+   * the space again waits for, so that the two never overlap.
+   */
+  readonly #releasingSessions = new Map<MemorySpace, Promise<void>>();
+
+  /**
+   * The session each released space left, which the next session opened
+   * there resumes: the server keeps a closed session resumable for a while,
+   * and refuses to open its id again without its token.
+   */
+  readonly #releasedSessions = new Map<MemorySpace, ReleasedSession>();
+
   /**
    * Immutable documents whose linked targets this manager has already pulled, keyed by a
    * hash of the URI, schema, path, space, and scope. Per manager rather than
@@ -2895,6 +2917,7 @@ export class StorageManager implements IStorageManager {
     // A manager reused after close() starts a new session; retention
     // follows it.
     this.#schemaRegistryLease ??= acquireSchemaRegistryLease();
+    this.#openedDuringPass.add(space);
     let provider = this.#providers.get(space);
     const firstOpen = !provider;
     if (!provider) {
@@ -2950,20 +2973,38 @@ export class StorageManager implements IStorageManager {
         onDocumentsDropped: (addresses) =>
           this.#forgetDocuments(space, addresses),
         routeState,
+        // A session opened in a space released a moment ago waits for the
+        // released one to close.
         createSession: this.#sessionFactory.supportsAclBootstrap === true
-          ? (routeGeneration, routeSignal) =>
-            this.#createInitializedSession(
+          ? async (routeGeneration, routeSignal) => {
+            await this.#releasingSessions.get(space);
+            const resume = this.#takeReleasedSession(space);
+            if (resume !== undefined) {
+              this.#detachedSessionResumes.set(space, {
+                options: resume,
+                routeGeneration,
+              });
+            }
+            return await this.#createInitializedSession(
               space,
               signer,
               routeState,
               routeGeneration,
               routeSignal,
-            )
-          : (_routeGeneration, routeSignal) =>
-            this.#createSession(space, signer, {
-              sessionId: this.#sessionId,
-              ...this.#sessionDescriptorFields(),
-            }, routeSignal),
+            );
+          }
+          : async (_routeGeneration, routeSignal) => {
+            await this.#releasingSessions.get(space);
+            return await this.#createSession(
+              space,
+              signer,
+              this.#takeReleasedSession(space) ?? {
+                sessionId: this.#sessionId,
+                ...this.#sessionDescriptorFields(),
+              },
+              routeSignal,
+            );
+          },
         syncReplayDependencies: (document) =>
           this.#syncCfcSchemaDocument(space, document),
         getTelemetry: () => this.#telemetry,
@@ -3024,6 +3065,10 @@ export class StorageManager implements IStorageManager {
         eventAppendQueueStore: this.#eventAppendQueueStore,
         eventAppendPacing: this.#eventAppendPacing,
       });
+      const released = this.#releasedSessions.get(space);
+      if (released !== undefined) {
+        provider.replica.continueReleasedSession(released);
+      }
       this.#providers.set(space, provider);
     }
     if (firstOpen && this.spaceOpenObserver !== undefined) {
@@ -3235,9 +3280,13 @@ export class StorageManager implements IStorageManager {
 
   async close(): Promise<void> {
     this.#forgetFollowUps();
+    // A released space's session finishes closing before the factory's
+    // connections do.
+    await Promise.allSettled([...this.#releasingSessions.values()]);
     // A detached-session resume names the session id this close rotates;
     // presenting it afterwards would mount the OLD id under a stale token.
     this.#detachedSessionResumes.clear();
+    this.#releasedSessions.clear();
     // The lease releases AFTER teardown drains: a queued sync frame applied
     // during provider destruction still registers its schema documents
     // inside this session's epoch, not after the clear.
@@ -3271,7 +3320,11 @@ export class StorageManager implements IStorageManager {
 
   async closeNow(): Promise<void> {
     this.#forgetFollowUps();
+    // A released space's session finishes closing before the factory's
+    // connections do.
+    await Promise.allSettled([...this.#releasingSessions.values()]);
     this.#detachedSessionResumes.clear();
+    this.#releasedSessions.clear();
     try {
       if (this.#providers.size === 0) {
         return;
@@ -3689,6 +3742,7 @@ export class StorageManager implements IStorageManager {
   /** @inheritDoc */
   releaseUnreadDocuments(options: ReleaseOptions = {}): Promise<boolean> {
     const pass = this.#releasePass.catch(() => false).then(async () => {
+      this.#openedDuringPass.clear();
       for (const [key, hold] of this.#documentHolds) {
         if (hold.ref.deref() === undefined) this.#documentHolds.delete(key);
         else if (options.followUpOnCollection === true) hold.followsUp = true;
@@ -3698,10 +3752,117 @@ export class StorageManager implements IStorageManager {
           provider.replica.releaseUnread()
         ),
       );
+      this.#releaseUnusedSpaces();
       return results.some((result) => result.deferred);
     });
     this.#releasePass = pass;
     return pass;
+  }
+
+  /** @inheritDoc */
+  subscribeSpacesReleased(observer: (space: MemorySpace) => void): Cancel {
+    this.#spacesReleasedObservers.add(observer);
+    return () => this.#spacesReleasedObservers.delete(observer);
+  }
+
+  /**
+   * Helper for `releaseUnreadDocuments()`, which releases each space nothing
+   * uses, as "Releasing a space's session" in
+   * `docs/features/document-release.md` says: it forgets the space's
+   * provider and what this manager kept for the space alone, tells the
+   * observers of `subscribeSpacesReleased()`, and closes the space's
+   * session. The next use of the space opens it again, once that close has
+   * finished.
+   */
+  #releaseUnusedSpaces(): void {
+    if (this.#multiSpaceCommitsApplying.size > 0) return;
+    for (const [space, provider] of [...this.#providers]) {
+      if (!this.#isUnusedSpace(space, provider)) continue;
+      this.#providers.delete(space);
+      this.#forgetSpace(space);
+      const released = provider.replica.releasedSession();
+      if (released !== undefined) this.#releasedSessions.set(space, released);
+      const closing = provider.destroy().catch((error) => {
+        logger.warn("release-space-failed", () => [
+          `closing the session of the released space ${space}:`,
+          error,
+        ]);
+      }).finally(() => {
+        if (this.#releasingSessions.get(space) === closing) {
+          this.#releasingSessions.delete(space);
+        }
+      });
+      this.#releasingSessions.set(space, closing);
+      for (const observer of [...this.#spacesReleasedObservers]) {
+        try {
+          observer(space);
+        } catch (error) {
+          console.error("spaces-released subscriber threw:", error);
+        }
+      }
+    }
+  }
+
+  /**
+   * Helper for `#releaseUnusedSpaces()`, which says whether nothing uses
+   * `space`, whose provider is `provider`. This manager's own spaces, the
+   * signer's home and a serving manager's home, are always in use, and so
+   * is a space opened since the pass began, one whose session was refused,
+   * and one a load is pending in.
+   */
+  #isUnusedSpace(space: MemorySpace, provider: Provider): boolean {
+    if (
+      space === this.as.did() || space === this.#servingHomeSpace ||
+      this.#openedDuringPass.has(space) || this.#spaceAccessErrors.has(space)
+    ) {
+      return false;
+    }
+    for (const entry of this.#pendingLoads.values()) {
+      if (entry.address.space === space) return false;
+    }
+    for (const entry of this.#pendingCrossingLoads.values()) {
+      if (entry.address.space === space) return false;
+    }
+    return provider.isUnused();
+  }
+
+  /**
+   * Helper for `#releaseUnusedSpaces()`, which forgets what this manager kept
+   * for the released `space` alone: the kind it read afresh, a detached
+   * session it could resume, and the link-target and crossing loads it
+   * kicked there, which the next read takes again.
+   */
+  #forgetSpace(space: MemorySpace): void {
+    this.#spaceKindsReadAfresh.delete(space);
+    this.#detachedSessionResumes.delete(space);
+    const prefix = `${space}\0`;
+    for (const key of this.#docPullKicks) {
+      if (key.startsWith(prefix)) this.#docPullKicks.delete(key);
+    }
+    for (const key of this.#crossingKicks.keys()) {
+      if (key.startsWith(prefix)) this.#crossingKicks.delete(key);
+    }
+  }
+
+  /**
+   * Helper for opening a session in `space`, which returns how to resume the
+   * session a release of the space left, once, or `undefined` when none is
+   * left.
+   */
+  #takeReleasedSession(
+    space: MemorySpace,
+  ): MemoryV2Client.MountOptions | undefined {
+    const released = this.#releasedSessions.get(space);
+    if (released === undefined) return undefined;
+    this.#releasedSessions.delete(space);
+    return {
+      sessionId: released.sessionId,
+      seenSeq: released.seenSeq,
+      ...(released.sessionToken !== undefined
+        ? { sessionToken: released.sessionToken }
+        : {}),
+      ...this.#sessionDescriptorFields(),
+    };
   }
 
   /**
@@ -5545,6 +5706,16 @@ class Provider
     return this.replica.sessionAnswered();
   }
 
+  /**
+   * Whether nothing uses this provider: no operation subscription or
+   * presence membership is open through it, and nothing uses its replica
+   * (`SpaceReplica.isUnused()`).
+   */
+  isUnused(): boolean {
+    return !this.#destroyed && this.#operationSubscriptions.size === 0 &&
+      this.#presenceMemberships.size === 0 && this.replica.isUnused();
+  }
+
   ensureSession(): Promise<void> {
     return this.#followReplacement((replica) => replica.ensureSession());
   }
@@ -5698,6 +5869,24 @@ class Provider
     await this.replica.closeNow();
   }
 }
+
+/**
+ * The session a released replica left (`SpaceReplica.releasedSession()`),
+ * which the next replica of the space resumes.
+ */
+type ReleasedSession = {
+  /** The session's id. */
+  sessionId: string;
+
+  /** The session's latest token, which a resume presents. */
+  sessionToken?: string;
+
+  /** The server sequence the session had seen. */
+  seenSeq: number;
+
+  /** The local sequence the session's next commit takes. */
+  nextLocalSeq: number;
+};
 
 type WatchAddress = {
   id: URI;
@@ -8612,6 +8801,73 @@ export class SpaceReplica
   #holds(address: LocalDocAddress, key = this.#docKeyOf(address)): boolean {
     return (this.#docs.get(key)?.pending.length ?? 0) > 0 ||
       this.#sinks.has(key) || this.#isRead(address);
+  }
+
+  /**
+   * Whether nothing uses this replica, so that its space can be released
+   * ("Releasing a space's session" in `docs/features/document-release.md`):
+   * it keeps and watches no document, no write, load or watch change of its
+   * is under way, nothing subscribes through it, and its session is neither
+   * being opened nor refused. The watch of the space's access list that a
+   * gated replica keeps for itself, and the access list it keeps loaded, do
+   * not count.
+   */
+  isUnused(): boolean {
+    if (this.#closed) return false;
+    const own = this.#accessListWatch === undefined
+      ? undefined
+      : docKey(aclDocId(this.#space) as URI, "space");
+    const onlyOwn = (keys: Iterable<string>): boolean => {
+      for (const key of keys) if (key !== own) return false;
+      return true;
+    };
+    const ownSinks = own === undefined ? 0 : this.#sinks.get(own)?.size ?? 0;
+    return onlyOwn(this.#docs.keys()) &&
+      (own === undefined || (this.#docs.get(own)?.pending.length ?? 0) === 0) &&
+      onlyOwn(this.#rootWatches.keys()) && onlyOwn(this.#delivered.keys()) &&
+      this.#owedWatches.size === 0 && this.#retractedHeld.size === 0 &&
+      this.#quarantined.size === 0 && this.#sinkCount === ownSinks &&
+      this.#operationSinks.size === 0 && this.#syncTasks.size === 0 &&
+      this.#syncPromises.size === 0 && this.#commitPromises.size === 0 &&
+      this.#inFlightCommits.size === 0 && this.#suppressedVerdicts.size === 0 &&
+      this.#rejectedPendingLayers.size === 0 &&
+      this.#operationWatchRemovals.size === 0 &&
+      this.#parkedAccepts.size === 0 && this.#watchRefreshInFlight === 0 &&
+      this.#queuedWatchRefresh === null &&
+      (this.#eventAppendQueue?.pending.length ?? 0) === 0 &&
+      this.#viewOwnerRetired === undefined && this.#viewPlans.length === 0 &&
+      !(this.#sessionHandle !== undefined && !this.sessionAnswered()) &&
+      this.#sessionAdmissionError === undefined &&
+      this.authorizationError() === undefined;
+  }
+
+  /**
+   * What a replica opened in this space after it is released needs to carry
+   * on this one's session: the session's id, its latest token and the
+   * server sequence it has seen, which a resume presents, and the local
+   * sequence its next commit takes, since the session's commits never reuse
+   * one. Absent when no session was opened.
+   */
+  releasedSession(): ReleasedSession | undefined {
+    const session = this.#sessionSession;
+    if (session === undefined) return undefined;
+    return {
+      sessionId: session.sessionId,
+      seenSeq: session.serverSeq,
+      ...(session.sessionToken !== undefined
+        ? { sessionToken: session.sessionToken }
+        : {}),
+      nextLocalSeq: this.#nextLocalSeq,
+    };
+  }
+
+  /**
+   * Takes up `released`, the session a released replica of this space left
+   * (`releasedSession()`): this replica's commits go on from its local
+   * sequence.
+   */
+  continueReleasedSession(released: ReleasedSession): void {
+    this.#nextLocalSeq = Math.max(this.#nextLocalSeq, released.nextLocalSeq);
   }
 
   /**

@@ -152,6 +152,14 @@ export class EffectsChannel {
     return await this.#beginEnactment(nonce, work);
   }
 
+  /**
+   * Forgets that `space` is subscribed to, once the storage manager has
+   * released it, so that its next open subscribes to it again.
+   */
+  forgetSpace(space: MemorySpace): void {
+    this.#spaces.delete(space);
+  }
+
   /** Subscribe to this session's effects instance in `space` (idempotent
    * per space). The doc names scope "session" and NO key: the instance
    * resolves from the runtime's own authenticated session, and push
