@@ -248,3 +248,27 @@ Deno.test("oracle: does not certify a store when a forged commit's reads are sto
     await Deno.remove(path).catch(() => {});
   }
 });
+
+Deno.test("oracle: scans the log for unchecked commits once per report", async () => {
+  const { engine, path } = await seedContendedStore(true);
+  close(engine);
+
+  const space = openSpace(path);
+  try {
+    // Count the coverage scans the report prepares, whatever entities it
+    // analyzes.
+    let scans = 0;
+    const prepare = space.db.prepare.bind(space.db);
+    space.db.prepare = ((sql: string) => {
+      if (sql.includes(`'%"digest"%'`)) scans++;
+      return prepare(sql);
+    }) as typeof space.db.prepare;
+
+    readCoherence(space);
+
+    assertEquals(scans, 1);
+  } finally {
+    space.close();
+    await Deno.remove(path).catch(() => {});
+  }
+});

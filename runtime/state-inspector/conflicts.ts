@@ -31,6 +31,10 @@ import {
   patchOverlapsNonRecursiveRead,
   patchOverlapsRead,
 } from "@commonfabric/memory/v2/engine";
+import {
+  HOLLOWED_MARKER_PREFIX,
+  isHollowedPayload,
+} from "@commonfabric/memory/v2/compact";
 import { storedReadCounts } from "@commonfabric/memory/v2/stored-commit";
 import { utf8Compare } from "@commonfabric/text/utf8";
 
@@ -238,12 +242,117 @@ export interface EntityConflicts {
   staleReads: StaleRead[];
 
   /**
-   * Commits after this entity's first write that the log holds with a digest
-   * in place of their reads (02-storage.md §3.3). Any of them may have read
-   * the entity, and the scan cannot check what they read, so an empty
+   * Commits after this entity's first write, on any branch and in any scope,
+   * whose reads the scan could not check: stored with a digest in place of
+   * their reads (02-storage.md §3.3), hollowed by compaction, or mentioning
+   * the entity in a payload or read the scan could not decode or resolve.
+   * Any of them may have read the entity stale, so an empty
    * {@link staleReads} shows the entity coherent only when this is 0.
    */
   readSetsNotKept: number;
+}
+
+/**
+ * What the stale-read scan cannot see in a space, gathered once per report by
+ * {@link readCoverage} and shared by every entity's analysis in it.
+ */
+export interface ReadCoverage {
+  /**
+   * Seqs, ascending, of the commits whose reads the log does not hold: stored
+   * with a digest in their place, or hollowed by compaction, whose marker
+   * does not say whether the commit read anything.
+   */
+  unread: number[];
+
+  /** The branches that hold revisions, where an entity's writes are. */
+  branches: string[];
+
+  /**
+   * Seqs of the commits an analysis found mentioning its entity but could
+   * not read: an undecodable payload, or a read whose scope it could not
+   * resolve. Each analysis adds what it finds.
+   */
+  skipped: Set<number>;
+}
+
+/**
+ * Returns what the stale-read scan cannot see in `space`, from one pass over
+ * the commit log that holds one row at a time.
+ */
+export function readCoverage(space: SpaceDb): ReadCoverage {
+  const unread: number[] = [];
+  // Every digest-form row holds the text `"digest"` and every hollowed one
+  // starts with the marker prefix; the checks below decide, since a commit's
+  // operations may hold the same text.
+  const rows = space.db
+    .prepare(
+      `SELECT seq, original FROM "commit"
+       WHERE original LIKE '%"digest"%' OR substr(original, 1, ?) = ?
+       ORDER BY seq ASC`,
+    )
+    .iter(HOLLOWED_MARKER_PREFIX.length, HOLLOWED_MARKER_PREFIX) as Iterable<
+      { seq: number; original: string }
+    >;
+  for (const { seq, original } of rows) {
+    if (isHollowedPayload(original)) {
+      unread.push(seq);
+      continue;
+    }
+    let decoded: unknown;
+    try {
+      decoded = decodeStored(original);
+    } catch {
+      unread.push(seq);
+      continue;
+    }
+    if (storedReadCounts(decoded)?.kept === false) unread.push(seq);
+  }
+  const branches = space.db
+    .prepare(`SELECT DISTINCT branch FROM revision`)
+    .all<{ branch: string }>()
+    .map(({ branch }) => branch);
+  return { unread, branches, skipped: new Set() };
+}
+
+/** Returns how many commits {@link coverage} cannot see, in all. */
+export function readSetsNotKeptIn(coverage: ReadCoverage): number {
+  const all = new Set(coverage.unread);
+  for (const seq of coverage.skipped) all.add(seq);
+  return all.size;
+}
+
+/**
+ * Returns the seq of the first commit that wrote `id` on any of `branches`,
+ * in any scope, or undefined when none did. The stale-read scan looks for
+ * writes across branches and scopes, so no commit at or before this seq can
+ * have read `id` stale.
+ */
+function firstWriteSeq(
+  space: SpaceDb,
+  id: string,
+  branches: readonly string[],
+): number | undefined {
+  const first = space.db.prepare(
+    `SELECT min(commit_seq) AS seq FROM revision WHERE branch = ? AND id = ?`,
+  );
+  let seq: number | undefined;
+  for (const branch of branches) {
+    const found = first.get<{ seq: number | null }>(branch, id)?.seq;
+    if (found != null && (seq === undefined || found < seq)) seq = found;
+  }
+  return seq;
+}
+
+/** Returns how many of the ascending `seqs` are greater than `after`. */
+function countAfter(seqs: readonly number[], after: number): number {
+  let low = 0;
+  let high = seqs.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (seqs[mid] <= after) low = mid + 1;
+    else high = mid;
+  }
+  return seqs.length - low;
 }
 
 interface ConfirmedReadRef {
@@ -279,10 +388,12 @@ interface WriteRow {
 export function entityConflicts(
   space: SpaceDb,
   id: string,
-  opts: { branch?: string; scope?: string } = {},
+  opts: { branch?: string; scope?: string; coverage?: ReadCoverage } = {},
 ): EntityConflicts {
   const branch = opts.branch ?? "";
   const scope = opts.scope ?? "space";
+  const coverage = opts.coverage ?? readCoverage(space);
+  const skipped = new Set<number>();
 
   // Who wrote this entity, from the branch that OWNS its visible row — a child
   // branch inherits its parent's entities, and local rows only would report no
@@ -349,6 +460,7 @@ export function entityConflicts(
       };
       reads = (o.reads?.confirmed ?? []).filter((r) => r.id === id);
     } catch {
+      skipped.add(c.seq);
       continue;
     }
     // The reader's identity context, for scope resolution (same as the engine's
@@ -368,7 +480,9 @@ export function entityConflicts(
           sessionId: readerScope.sessionId,
         });
       } catch {
-        continue; // a user/session read with no principal context — skip
+        // A user/session read with no principal context: unchecked.
+        skipped.add(c.seq);
+        continue;
       }
       const conflict = writesStmt
         .all<WriteRow>(readBranch, id, readScopeKey, rd.seq)
@@ -402,35 +516,30 @@ export function entityConflicts(
     multiUser: writerPrincipals >= 2,
     interleaved: sessionSwitches(writers) >= 2,
     staleReads,
-    // Writers are seq-ordered, so the first is the entity's first write.
-    readSetsNotKept: readSetsNotKept(space, writers[0]?.commitSeq ?? 0),
+    readSetsNotKept: unchecked(
+      coverage,
+      firstWriteSeq(space, id, coverage.branches),
+      skipped,
+    ),
   };
 }
 
 /**
- * Returns how many commits after seq `afterSeq`, on any branch, the log holds
- * with a digest in place of their reads (02-storage.md §3.3). A read set
- * stored that way cannot be checked for stale reads, so a check that finds
- * none among the rest has not shown the store coherent unless this is 0.
+ * Returns how many commits after `firstWrite` the scan of one entity could
+ * not check: those {@link coverage} cannot see, and the entity's own
+ * `skipped` ones, which it adds to {@link coverage}. With no write, no read
+ * of the entity can be stale.
  */
-export function readSetsNotKept(space: SpaceDb, afterSeq = 0): number {
-  // The prefilter is a substring of every digest-form row; decoding what it
-  // finds decides, since a commit's operations may hold the same text.
-  const candidates = space.db
-    .prepare(
-      `SELECT original FROM "commit"
-       WHERE seq > ? AND original LIKE '%"digest"%'`,
-    )
-    .all<{ original: string }>(afterSeq);
-  let count = 0;
-  for (const { original } of candidates) {
-    let decoded: unknown;
-    try {
-      decoded = decodeStored(original);
-    } catch {
-      continue;
-    }
-    if (storedReadCounts(decoded)?.kept === false) count++;
+function unchecked(
+  coverage: ReadCoverage,
+  firstWrite: number | undefined,
+  skipped: ReadonlySet<number>,
+): number {
+  for (const seq of skipped) coverage.skipped.add(seq);
+  if (firstWrite === undefined) return 0;
+  let count = countAfter(coverage.unread, firstWrite);
+  for (const seq of skipped) {
+    if (seq > firstWrite && !coverage.unread.includes(seq)) count++;
   }
   return count;
 }

@@ -14,7 +14,8 @@
 import type { SpaceDb } from "./db.ts";
 import {
   entityConflicts,
-  readSetsNotKept,
+  readCoverage,
+  readSetsNotKeptIn,
   type StaleRead,
 } from "./conflicts.ts";
 
@@ -24,9 +25,10 @@ export interface ReadCoherence {
   anomalies: StaleRead[];
 
   /**
-   * Commits the log holds with a digest in place of their reads
-   * (02-storage.md §3.3), which the check cannot replay. Empty
-   * {@link anomalies} show the store coherent only when this is 0.
+   * Commits whose reads the check could not replay: stored with a digest in
+   * their place (02-storage.md §3.3), hollowed by compaction, or holding a
+   * payload or read it could not decode or resolve. Empty {@link anomalies}
+   * show the store coherent only when this is 0.
    */
   readSetsNotKept: number;
 }
@@ -44,11 +46,12 @@ export function readCoherence(
   const ids = space.db
     .prepare(`SELECT DISTINCT id FROM revision ORDER BY id ASC`)
     .all<{ id: string }>();
+  // One pass over the log for the whole report, shared by every entity.
+  const coverage = readCoverage(space);
   const anomalies: StaleRead[] = [];
   for (const { id } of ids) {
-    for (const staleRead of entityConflicts(space, id, opts).staleReads) {
-      anomalies.push(staleRead);
-    }
+    const { staleReads } = entityConflicts(space, id, { ...opts, coverage });
+    for (const staleRead of staleReads) anomalies.push(staleRead);
   }
-  return { anomalies, readSetsNotKept: readSetsNotKept(space) };
+  return { anomalies, readSetsNotKept: readSetsNotKeptIn(coverage) };
 }

@@ -1099,9 +1099,10 @@ export const inspect = new Command()
           }
           if (c.readSetsNotKept > 0) {
             console.log(
-              `\n? ${c.readSetsNotKept} later commit(s) keep only a digest ` +
-                `of their reads, so whether they read this entity stale was ` +
-                `not checked.`,
+              `\n? ${c.readSetsNotKept} later commit(s) hold no reads this ` +
+                `check can read (a digest, a compaction marker, or an ` +
+                `unreadable payload), so whether they read this entity stale ` +
+                `was not checked.`,
             );
           }
         });

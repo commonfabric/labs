@@ -32,6 +32,7 @@ import {
   contendedEntities,
   type ContendedEntity,
   entityConflicts,
+  readCoverage,
 } from "./conflicts.ts";
 
 export interface InspectorBundle {
@@ -125,11 +126,17 @@ function buildConflicts(
 ): ContendedEntity[] {
   const STALE_READ_ANALYSIS_CAP = 60;
   const contended = contendedEntities(space, { branch, scope, limit: 300 });
+  // One pass over the log for every cell analyzed here.
+  const coverage = readCoverage(space);
   let analyzed = 0;
   for (const c of contended) {
     if (c.multiUser && analyzed < STALE_READ_ANALYSIS_CAP) {
       analyzed++;
-      const analysis = entityConflicts(space, c.id, { branch, scope });
+      const analysis = entityConflicts(space, c.id, {
+        branch,
+        scope,
+        coverage,
+      });
       c.staleReads = analysis.staleReads;
       c.readSetsNotKept = analysis.readSetsNotKept;
       c.staleReadsAnalyzed = true;
@@ -467,7 +474,7 @@ function renderDetail(id){
     }
     // Analyzed, but over reads a later commit kept only as a digest: not clean.
     if(cf.readSetsNotKept){
-      body.push(el("div",{class:"muted",style:"margin-top:6px;font-size:12px",text:"? "+cf.readSetsNotKept+" later commit(s) keep only a digest of their reads — whether they read this cell stale was not checked"}));
+      body.push(el("div",{class:"muted",style:"margin-top:6px;font-size:12px",text:"? "+cf.readSetsNotKept+" later commit(s) hold no reads this check can read (a digest, a compaction marker, or an unreadable payload) — whether they read this cell stale was not checked"}));
     }
     const cfTag = (cf.staleReads&&cf.staleReads.length)?" · ⚠ anomaly":((cf.multiUser&&!cf.staleReadsAnalyzed)?" · ? not analyzed":(cf.readSetsNotKept?" · ? "+cf.readSetsNotKept+" unchecked":""));
     host.append(section("Contention"+(cf.multiUser?" ⚔ MULTI-USER":"")+cfTag, cf.multiUser, body));

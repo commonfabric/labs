@@ -16,10 +16,16 @@ import {
   open as openEngine,
 } from "@commonfabric/memory/v2/engine";
 import { type ClientCommit, toDocumentPath } from "@commonfabric/memory/v2";
+import {
+  compactStore,
+  isHollowedPayload,
+} from "@commonfabric/memory/v2/compact";
+import { encodeStoredCommit } from "@commonfabric/memory/v2/stored-commit";
 
 import { openSpace } from "../db.ts";
 import { contendedEntities, entityConflicts } from "../conflicts.ts";
 import { listCommits } from "../queries.ts";
+import { readCoherence } from "../oracle.ts";
 
 const SCHEMA = `
 CREATE TABLE "commit" (
@@ -344,9 +350,10 @@ Deno.test("conflicts: engine-faithful checks do NOT over-report", async (t) => {
       }
       const space = openSpace(p);
       try {
-        expect(
-          entityConflicts(space, X).staleReads.map((r) => r.readerCommitSeq),
-        ).toEqual([5]);
+        const c = entityConflicts(space, X);
+        expect(c.staleReads.map((r) => r.readerCommitSeq)).toEqual([5]);
+        // Commit 3's payload and commit 4's read went unchecked.
+        expect(c.readSetsNotKept).toBe(2);
       } finally {
         space.close();
       }
@@ -414,5 +421,119 @@ Deno.test("conflicts: counts the later commits whose reads it could not check", 
   } finally {
     space.close();
     await Deno.remove(path);
+  }
+});
+
+Deno.test("conflicts: counts an unchecked read of a write outside the selected scope", async () => {
+  // 1 Alice (s1) writes X in her user scope. 2 Alice (s9) commits a read of
+  // X in that scope at seq 0, missing write 1. 3 Bob writes X in the space
+  // scope, which the inspector selects by default.
+  const dir = await Deno.makeTempDir({ prefix: "state-inspector-conf-" });
+  const dbPath = `${dir}/space.sqlite`;
+  const SA9 = "session:did%3Akey%3AzAlice:s9";
+  try {
+    {
+      const { db, commit, setRev } = open(dbPath);
+      setRev(commit(SA, []), "user:did%3Akey%3AzAlice");
+      commit(SA9, [{ seq: 0, scope: "user" }]);
+      setRev(commit(SB, []));
+      db.close();
+    }
+    const read = () => {
+      const space = openSpace(dbPath);
+      try {
+        return entityConflicts(space, X);
+      } finally {
+        space.close();
+      }
+    };
+    expect(read().staleReads.map((r) => r.readerCommitSeq)).toEqual([2]);
+
+    // The same reader commit, stored with a digest in place of its reads.
+    const db = new Database(dbPath);
+    try {
+      const { original } = db.prepare(
+        `SELECT original FROM "commit" WHERE seq = 2`,
+      ).get<{ original: string }>()!;
+      db.prepare(`UPDATE "commit" SET original = ? WHERE seq = 2`).run(
+        encodeStoredCommit(JSON.parse(original) as ClientCommit, false),
+      );
+    } finally {
+      db.close();
+    }
+
+    const digested = read();
+    expect(digested.staleReads).toEqual([]);
+    expect(digested.readSetsNotKept).toBe(1);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("conflicts: counts commits compaction hollowed as unchecked", async () => {
+  // As above: a read before of:x is first written, and one after, each
+  // stored with a digest; then compaction hollows every payload but seq 1's.
+  const dir = await Deno.makeTempDir({ prefix: "state-inspector-conf-" });
+  const store = `${dir}/store.sqlite`;
+  const out = `${dir}/compacted.sqlite`;
+  const engine = await openEngine({
+    url: toFileUrl(store),
+    storeReadsDigest: true,
+  });
+  const reading = (
+    localSeq: number,
+    id: string,
+    seq: number,
+    write: string,
+  ): ClientCommit => ({
+    localSeq,
+    reads: {
+      confirmed: [{ id, path: toDocumentPath(["value"]), seq }],
+      pending: [],
+    },
+    operations: [{ op: "set", id: write, value: { value: localSeq } }],
+  });
+  const setting = (localSeq: number, id: string): ClientCommit => ({
+    localSeq,
+    reads: { confirmed: [], pending: [] },
+    operations: [{ op: "set", id, value: { value: localSeq } }],
+  });
+  try {
+    applyCommit(engine, { sessionId: "s:a", commit: setting(1, "of:y") });
+    applyCommit(engine, {
+      sessionId: "s:a",
+      commit: reading(2, "of:y", 1, "of:z"),
+    });
+    applyCommit(engine, { sessionId: "s:b", commit: setting(1, "of:x") });
+    applyCommit(engine, {
+      sessionId: "s:a",
+      commit: reading(3, "of:x", 3, "of:w"),
+    });
+  } finally {
+    close(engine);
+  }
+  try {
+    await compactStore({
+      store,
+      out,
+      selection: { prefixes: ["of:"] },
+      keepPayloadsMs: 0,
+      runId: "hollow",
+    });
+    const space = openSpace(out);
+    try {
+      const hollowed = space.db.prepare(
+        `SELECT seq, original FROM "commit" ORDER BY seq`,
+      ).all<{ seq: number; original: string }>()
+        .filter(({ original }) => isHollowedPayload(original))
+        .map(({ seq }) => seq);
+      expect(hollowed).toEqual([2, 3, 4]);
+      expect(entityConflicts(space, "of:x").readSetsNotKept).toBe(1);
+      expect(readCoherence(space).readSetsNotKept).toBe(3);
+    } finally {
+      space.close();
+    }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
   }
 });
