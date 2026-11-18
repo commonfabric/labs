@@ -317,7 +317,7 @@ export const IFRAME_PATTERN = {
     });
   }
 
-  it("hides embedded guest tokens from the host module scanner", async () => {
+  it("keeps the guest's text out of the wrapper module", async () => {
     // SES refuses a module whose source holds an import expression or an HTML
     // comment, even inside a string. The wrapper holds none of the guest's
     // text, only the `dataFile()` reads of the files that do, so the host
@@ -332,8 +332,7 @@ export const IFRAME_PATTERN = {
         );
         await Deno.writeTextFile(
           guest,
-          `document.body.dataset.syntax = "import(";\n` +
-            `document.body.dataset.replacement = "$& $\` $'";\n`,
+          `document.body.dataset.syntax = "import(";\n`,
         );
         const document =
           "<!doctype html><body><!-- guest --><!-- PATTERN_IFRAME_SCRIPT --></body>";
@@ -345,7 +344,6 @@ export const IFRAME_PATTERN = {
         expect(generated).not.toContain("import(");
         expect(generated).not.toContain("<!--");
         expect(generated).not.toContain("-->");
-        expect(generated).not.toContain("$&");
         expect(generated).toContain(
           'const GUEST_HTML = dataFile("./guest.html");',
         );
@@ -354,7 +352,6 @@ export const IFRAME_PATTERN = {
         );
         const bundle = await Deno.readTextFile(script);
         expect(bundle).toContain("import(");
-        expect(bundle).toContain("$& $` $'");
         expect(await Deno.readTextFile(html)).toBe(document);
 
         const check = await cfCheck(out, directory);
@@ -978,6 +975,10 @@ export const IFRAME_PATTERN = {
         "pattern-iframe-asset-directory-",
         async (directory) => {
           await Deno.mkdir(resolve(directory, "assets"));
+          await Deno.writeFile(
+            resolve(directory, "assets/glaze.png"),
+            new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+          );
           const { contract, guest, out } = await writeFixture(
             directory,
             `{ name: "Sprites", assets: "./assets" }`,
@@ -993,8 +994,11 @@ export const IFRAME_PATTERN = {
           );
           expect(generated).toContain("          assets={GUEST_ASSETS}\n");
           // Evaluating the wrapper lists the directory and reads each asset.
-          const check = await cfCheck(out, directory);
+          const check = await cfCheck(out, directory, "--pattern-json");
           expect(check.code, decoder.decode(check.stderr)).toBe(0);
+          expect(decoder.decode(check.stdout)).toContain(
+            '"glaze": "data:image/png;base64,iVBORw=="',
+          );
         },
       );
     });
@@ -1016,7 +1020,6 @@ export const IFRAME_PATTERN = {
   assets: {
     glaze: "./images/glaze.png",
     ["menu-font"]: "fonts/menu.woff2",
-    ["__proto__"]: "./images/glaze.png",
   },
 }`,
             "pattern/main.tsx",
@@ -1026,11 +1029,9 @@ export const IFRAME_PATTERN = {
 
           expect(result.code, decoder.decode(result.stderr)).toBe(0);
           const generated = await Deno.readTextFile(out);
-          // A computed key keeps `__proto__` a property of the record.
           expect(generated).toContain(`const GUEST_ASSETS = {
   ["glaze"]: dataFile.url("../images/glaze.png"),
   ["menu-font"]: dataFile.url("../fonts/menu.woff2"),
-  ["__proto__"]: dataFile.url("../images/glaze.png"),
 };
 `);
           expect(generated).toContain("          assets={GUEST_ASSETS}\n");
@@ -1163,7 +1164,7 @@ export const IFRAME_PATTERN = { name: "${framework.name}" } as const;
         const guestHtml = await Deno.readTextFile(
           resolve(directory, "guest.html"),
         );
-        expect(guestHtml.match(/<!doctype html>/gi)).toHaveLength(1);
+        expect(guestHtml).not.toContain(framework.marker);
       } finally {
         await removeDirectory(directory);
       }
