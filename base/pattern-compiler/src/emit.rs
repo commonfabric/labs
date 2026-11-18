@@ -1541,6 +1541,15 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                         let key = self.render(arguments[0], Want::Use);
                         self.member(&member.object, key, want)
                     }
+                    // `h.equals(x)` is the comparison that `equals(h, x)`
+                    // is (LS §6.1): each operand is passed as the
+                    // reference it is, and the host resolves the links.
+                    "equals" if arguments.len() == 1 => {
+                        self.place_of(&member.object)?;
+                        let left = self.render(&member.object, Want::Pass);
+                        let right = self.render(arguments[0], Want::Pass);
+                        Some(format!("$h.equals({left}, {right})"))
+                    }
                     _ => None,
                 }
             }

@@ -1163,3 +1163,24 @@ export const P = pattern<{ note: string; state: Writable<number> }>(({ note, sta
     );
     assert!(text.contains("\"label\": (\"l\")"), "{text}");
 }
+
+#[test]
+fn the_method_form_of_equals_compares_what_its_operands_name() {
+    let (_, code) = emitted(
+        r#"import { pattern, Writable } from "commonfabric";
+interface Room { name: string }
+export const P = pattern<{ selected: Writable<{ room: Room }>; rooms: Room[] }>(
+  ({ selected, rooms }) => {
+    const chosen = selected.key("room");
+    return { marks: rooms.map((room) => ({ on: chosen.equals(room) })) };
+  },
+);
+"#,
+        "P",
+    );
+    let text = source(&code);
+    // `h.equals(x)` is the comparison that `equals(h, x)` is (LS §6.1):
+    // each operand is passed as the reference it is.
+    assert!(text.contains("on: $h.equals($h.slot("), "{text}");
+    assert!(!text.contains(".equals($h.v("), "{text}");
+}
