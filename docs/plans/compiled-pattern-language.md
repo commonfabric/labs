@@ -132,15 +132,16 @@ next.
   yet emit `$defs` for a recursive type. The crate's `SPEC-NOTES.md`
   lists the places where it found the documents ambiguous. Its notes through
   272, notes 281 to 302, notes 307 to 320, notes 325 to 341, notes 344
-  to 363, notes 367 to 382, notes 387 to 402, and notes 406 to 414
-  are written into the documents.
+  to 363, notes 367 to 382, notes 387 to 402, notes 406 to 414, and
+  notes 419 to 426 are written into the documents.
   Notes 273 to 280, which measure cost, are written into
   [What compiling, running, and storing cost](#what-compiling-running-and-storing-cost)
   below, and notes 303 to 306, 321 to 324, 342 and 343, 364 to 366,
-  383 to 386, 403 to 405, and 415 to 418, the results of the value
-  comparison, into
+  383 to 386, 403 to 405, 415 to 418, and 427 to 431, the results of
+  the value comparison and the later runs of the label comparison and
+  the cost measurement, into
   [What the prototype's executor computes](#what-the-prototypes-executor-computes).
-  The latest prototype commit read is `a462df710a`. From commit
+  The latest prototype commit read is `7774ba208c`. From commit
   `3e518147df` on the crate also emits value code and an executor runs
   a plan with it. At `3e518147df`, in the fixtures 122 of 122 compared
   values equal those of today's runtime, and in the corpus 4,472 of
@@ -187,7 +188,20 @@ next.
   the array, with the array type `ArrayByKey`, in the place of
   `KeyedBy` on the element type, and that the element part of such a
   key holds the names of the fields and one salted hash of their
-  values. No
+  values. At `7774ba208c`, with the rulings that a key names its
+  declared fields, that it is resolved with no schema, and that the
+  declaration can name several fields implemented, they are 767 of
+  768 in the fixtures and, over the same 196 modules, 5,414 of 5,498
+  against a fresh seeded run, every figure of the corpus as at
+  `a462df710a`. That commit has the marker `KeyedBy` on the element
+  type and the plain form of the key: a string with separators and
+  an escaping of the prototype's own, which holds each field name
+  with the value of the field, with no salt and no hash. It does not
+  have the rulings that followed: `ArrayByKey` on the array, the
+  salted hash, a key that is a fabric value with no separators of
+  the design's own, the schema traversed at a link as the place a
+  reader learns the key fields from, and a reference by key to an
+  element of a plain array generated from scratch. No
   compared row of the
   corpus evaluates the label of an
   index: the 54 index slots of the corpus plans are read by outputs
@@ -219,8 +233,12 @@ executor of
 [What the prototype's executor computes](#what-the-prototypes-executor-computes)
 computes values and was not timed. The prototype's later commits, to
 `a462df710a`, measure no cost, and the figures of this section are not
-computed again for them. The one later figure that bears on storage is
-the count of documents the executor stores, under
+computed again for them. At commit `7774ba208c` every command of the
+measurement was run once more over the corpus, on a machine that was
+not idle; those figures are under
+[The comparison of labels and the cost measurement at commit `7774ba208c`](#the-comparison-of-labels-and-the-cost-measurement-at-commit-7774ba208c)
+and replace none of this section. The one other later figure that
+bears on storage is the count of documents the executor stores, under
 [Documents](#documents).
 
 ### What is measured and what is derived
@@ -585,7 +603,18 @@ the schema that the array is stored under, by a ruling that is
 withdrawn since ([Decided](#decided)). Those are notes 406 to 414,
 which are written into the documents, and notes 415 to 418, which
 explain a difference between the two forms of the comparison and run
-it again. Each
+it again. At commit `7774ba208c` the crate and the executor implement
+the rulings that a key names its declared key fields and is resolved
+from the key alone, and that the declaration can name several fields;
+the crate reports the two diagnostics of the declaration; a re-key
+removes the instance that a moved instance of a function body
+replaces; and a fixture compares a stream after a spread with today's
+runtime. The prototype at that commit has the marker `KeyedBy` on the
+element type and the plain form of the key, which the rulings since
+replace. Those are notes 419 to 426, which are written into the
+documents, and notes 427 to 431, which run the comparison of labels
+and the cost measurement over the corpus and the comparison of values
+again. Each
 part below gives the figures of each commit, the earliest first.
 
 Notes 281 to 302 say what the executor needed that the
@@ -649,13 +678,24 @@ and questions 194 to 198 are what it leaves undetermined. Three
 rulings after it settle questions 194 and 197, and put the
 declaration on the array: the array type `ArrayByKey<T, "field">`
 replaces `KeyedBy` on the element type ([Decided](#decided)).
-Questions 199 to 201 are what those leave undetermined. The parts
+Questions 199 to 201 are what those leave undetermined. Four later
+rulings settle questions 199 and 200: no key, identifier or stored
+string is built with separators of the design's own, a reader whose
+type declares no key learns the key fields from the schema traversed
+while the link to the array is resolved, an `asInstance()` instance
+that a re-key replaces stays in the store, and an element of a plain
+array generated from scratch has a reference by key. Questions 202 to
+205 are what those rulings and notes 419 to 426 leave undetermined,
+and entry 206 records the last of the four rulings with the owner's
+reservation. The parts
 below that name `KeyedBy`, a key field declared in the element type,
-or a key that holds the value of its field describe the prototype at
+a key that holds the value of its field, or a key written as a string
+with separators describe the prototype at
 the commit they name, and not the design.
 Notes 303 to 306, 321 to 323, 342, 364 and 365, 383 and 384, 403
-and 404, and 416 and 417 are the results here.
-Nothing was timed.
+and 404, 416 and 417, and 429 and 430 are the results here.
+The executor was not timed. Note 428 times today's runtime and the
+crate's compile again, on a machine that was not idle.
 
 Note 324 says what the later round did not keep to and did not verify.
 The tests of the five rulings were written before the code. Two fixes
@@ -758,6 +798,36 @@ with today's runtime. The replacement of a marker at a place other
 than the result is tested through the store's record and not for
 each place. The limits that notes 411 and 413 name rest on a reading
 of the code where they name no test.
+
+Note 431 says the same of the round of commit `7774ba208c`. Five of
+the six tests of the store for a key that names its fields were
+written and seen to fail first; the sixth, that a position that holds
+a link is keyed by its cell with or without a declared field, passed
+when it was written. The three tests of that ruling on the fixture
+were written after the store had changed and were then run on the
+store and the executor of commit `a462df710a`: two failed, and the
+third, that a handler over a plain array generated from scratch
+stores the value, passed, so it describes what the executor did. The
+test of the plan for several key fields failed first. The two tests
+of the diagnostic of a wrong declaration were written before the code
+and were not seen to fail. The executor's tests of several key fields
+failed first by not passing the type check, with no assertion
+reached. The tests of the diagnostic of a mismatch and of the removal
+of a replaced instance failed first. The test of a stream after a
+spread failed for the missing fixture and passed once the fixture
+existed, with no change to the code. The two diagnostics are tested
+on snippets alone, since no pattern of the corpus uses the marker.
+Nothing of a declared key is compared with today's runtime, which has
+none. The members of a segment of a `flatMap` are keyed with no
+declared field. A reference by key to an element of a plain array
+generated from scratch is not tested, because the executor makes
+none. The comparison of labels was not compared module by module with
+an earlier run. The limits that notes 424 and 426 name rest on a
+reading of the code where they name no test. The coordinator of this
+work ran the prototype's tests and fixtures at that commit and not
+the corpus, the comparison of labels, or the cost measurement: 468
+tests of the crate and 81 tests under Deno passed, and the fixtures
+gave 48 of 48 runs and 767 of 768 values.
 
 ### What is compared, and what is not
 
@@ -1266,6 +1336,83 @@ alone. Two of them are of this round, `rekey-made` and
   statement of the first case is of the ruling that is withdrawn: by
   the ruling that replaces it, a key that names `id` resolves by that
   field in any array.
+
+At commit `7774ba208c`, 41 of the 53 fixtures are run, in 48 runs, and
+767 of 768 compared values are equal. The added run is
+`fixtures/spread-stream.tsx` with 15 values. The one value that
+differs is the one that differed at the earlier commits. Twelve
+fixtures are not compared with today's runtime and are run by the
+executor's tests alone: the eleven of the earlier commit and
+`keyed-by-fields`, since today's runtime has no declared key.
+
+- **`spread-stream`.** Each form of a spread is written in a
+  `computed`, which today's runtime runs: an array value with a
+  spread and a stream at the member after it, twice, and a view node
+  with two JSX spread children and a stream at a child after them.
+  The arrays are plain values in place that each `computed` reads
+  whole, so no per-element construct of the plan is over them, and
+  the `map` in each is that of JavaScript. With an event for each of
+  the two streams, 15 of 15 values are equal, both events are
+  committed and handled, and the executor's result holds 3 links to
+  a stream. This is the function tier, where a view node flattens
+  the arrays it is handed in both runtimes.
+- **`member-kind` and `spread-child` stay with the executor's tests,**
+  because today's runtime runs neither where the pattern's body
+  writes the form. For an array literal with a spread of a pattern
+  value, written as a value, today's run stores 50 positions for the
+  spread operand, the two rows first and 48 that hold nothing after
+  them, and the member at position 51, where the executor stores the
+  two rows and the member at position 3. For the same literal among
+  the children of a view node, today's transformer stops with "Spread
+  traversal of opaque pattern values is not lowerable. Move this
+  expression into computed()". For a JSX spread child of a pattern
+  value, the evaluation of the pattern throws "object is not
+  iterable". So the ruling on a spread child, as one child at its
+  written position in the reactive tier, has no run of today's
+  runtime to be compared with there. The spread operand in these
+  fixtures is a pattern value; the prototype's note does not say for
+  each of the three cases of a source what today's runtime does.
+- **`keyed-by`.** The key of a declared key field names the field.
+  Over a plain array generated from scratch, with a `filter` and a
+  `map` after it, the state cells of the rows over elements whose
+  `id` are 1 and 2 have keys that name `id`, those of a body over the
+  result of a `filter` of the numbers 1 and 2 have keys of the whole
+  value, and the stream of a handler over the result of a `filter`
+  has the upstream key, which names the field. A handler over that
+  array is given the value, and what it sets stores the value and no
+  link, because the executor gives an element of such an array no
+  place; by the ruling since, the element has a reference by key.
+  Over an array of plain values in place, a handler of a row stores
+  `picked.set(repo)` as a link with the collection and the key, and
+  `owner.set(repo.owner)` as that link with `owner` after the key.
+  Readers of the two cells whose types declare no key, and a read
+  under a schema that declares another key, give the name and the
+  owner, also after the array is written whole in another order with
+  other values of both members. Over an array of references the key
+  is the cell.
+- **`keyed-by-fields`.** A key of two fields, declared as
+  `KeyedBy<Repo, "owner" | "name">`, with each row an instance of a
+  pattern called through `asInstance()` that has a state cell. Over a
+  plain array generated from scratch, with a `filter` and a `map`
+  after it: after an input gives every element another `stars` and
+  another input reverses the order, each row holds the note it was
+  given and the new `stars`, the two links of the result are those of
+  the same two instances in the other order, and the element that
+  now passes the `filter` has a third instance. Over an array of
+  plain values in place: two elements with one `name` and two `owner`
+  are two keys, a write through the reference by key to `stars`
+  re-keys nothing, a `set` of the whole array in the other order with
+  other `stars` leaves each instance with its element and its note,
+  an element with another `name` is another key, and the two
+  instances of the keys that left stay. It is not compared with
+  today's runtime.
+- **`rekey-made`,** one added test. Over an array of plain values in
+  place with no declared key, the instance that a `lift` made for a
+  key that left is in the store until a re-key moves another instance
+  to its name. After the re-key no document or declared place begins
+  with its name, the documents of the store are those of two rows,
+  and the instance that moved handles an event. Over an array of
+  references no key changes and nothing is replaced.
 
 ### The corpus
 
@@ -1835,6 +1982,159 @@ had, read again after the added events, and no new difference.
 - **No plan of the corpus** has a child with `asInstance` or a
   collection with `keyField`.
 
+### The corpus at commit `7774ba208c`
+
+The figures of this section are from the prototype author's run, as
+the prototype's note 430 gives them. They were not computed again for
+this plan; the coordinator of this work ran the prototype's tests and
+fixtures again and not the corpus. The run is a fresh seeded run of
+today's runtime over all 272 modules (`values-corpus.ts run`), with
+the crate and the executor of this commit, followed by the executor
+alone on the file of that run (`values-corpus.ts again`). The report
+of each command is, line for line, the report of the same command at
+commit `a462df710a`.
+
+| | `a462df710a` | `7774ba208c` |
+| --- | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 |
+| Executed | 196 | 196 |
+| Every value equal and every event handled | 171 | 171 |
+| Values compared | 5,498 | 5,498 |
+| Values equal | 5,414 | 5,414 |
+| Values that differ | 84 | 84 |
+| Modules with a difference | 22 | 22 |
+| Committed events the executor does not handle | 10 of 486 | 10 of 486 |
+| Positions of the results that hold a stream | 726 | 726 |
+| Documents the executor stored | 802 | 802 |
+
+Every figure is identical to that of commit `a462df710a`. The
+prototype's author read the two results files module by module, on
+every member of the comparison: the values compared and equal, each
+difference with its path and both values, the events that are not
+handled and not sent, the reason for not being executed, the
+executor's counts, its documents by kind, and the stored streams.
+
+- **One module has another record, `apps/base/contacts.tsx`,** and it
+  is better or worse in no figure. It has 17 differences in both
+  runs, and three of them, those of `$UI` after the first three
+  events, name another first path. The prototype's author traced that
+  to today's run and not to the crate or the executor. Today's run
+  stores the records of the rows of that `map`, which is over an
+  array of references, with their members in another order in the
+  runs of this round, `children` before `props` where the earlier run
+  had `props` first. The row differs at its `style` and at a child,
+  and the comparison names the first of the two that it reads. The
+  values that today's run recorded are the same in both files once
+  the members are put in one order, and a run of that module with the
+  executor of `a462df710a` gives the new order too. Why today's run
+  gives another order of the members was not examined.
+- **The executor alone on the earlier file** (`values-corpus.ts again`
+  with the crate and the executor of this commit, on the results file
+  of the run at `a462df710a`) gives every module the record it had
+  there, with no difference in any member.
+- **The rulings on a key that names its fields and on several key
+  fields, the two diagnostics, and the removal of a replaced instance
+  changed nothing in the corpus.** No plan of the corpus has a
+  collection with `keyFields` or a child with `asInstance`, and no
+  type of the corpus uses `KeyedBy`.
+- **Events and modules not executed** are those of the earlier
+  commits. `run` and `again` differ in the reason for which
+  `showcase/battleship/multiplayer/room.tsx` is not executed, as at
+  commit `a462df710a`.
+- **Two runs.** The first run of this round was made while the
+  comparison of labels ran in a second process, and a second run was
+  made alone. Both have the same report and the same record for every
+  module.
+
+### The comparison of labels and the cost measurement at commit `7774ba208c`
+
+Both were run once over the corpus at this commit, with the executor
+beside today's run so that the harness finds each stream (the
+prototype's notes 427 and 428). The figures are the prototype
+author's and were not computed again for this plan. In each table the
+left column is the last figure this plan held, which is of an earlier
+state of the corpus, the crate and the harness. The two columns are
+therefore no comparison module by module, none was made, and what
+each difference between the columns comes from was not examined.
+
+**The comparison of labels** (`compare/corpus.ts run` and `report`),
+in the default order of the events: 272 modules attempted and 215
+run, with 33 that need `wish`, 14 that request an effect, and 10
+whose run fails on a refusal of Contextual Flow Control. The left
+column is of prototype commit `4ca9fe56cb`
+([Where the work is](#where-the-work-is)).
+
+| | `4ca9fe56cb` | `7774ba208c` |
+| --- | ---: | ---: |
+| Outputs compared | 1,388, 125 bounds | 1,453, 156 bounds |
+| With the atom of a kept output: tighter | 1,267 | 1,330 |
+| With it: the atom names the pattern | 121 | 123 |
+| With it: looser, incomparable | 0, 0 | 0, 0 |
+| Write edges compared | 231, 1 bound | 224, 1 bound |
+| Equal | 219 | 214 |
+| Tighter | 12 | 10 |
+| Looser, incomparable | 0, 0 | 0, 0 |
+| Bindings of a handler: no step, `site`, `element` | 266, 314, 71 | 274, 314, 74 |
+| Events committed | 344 | 486 |
+| Events refused | 15 | 49 |
+| Bindings that got no event | 18 | 127 |
+
+No row is looser or incomparable. Of the 10 tighter write edges, 8
+are of handlers bound in no element body and 2 of handlers of an
+element body, by the join of the `map` coordinator's transaction. The
+127 bindings with no event are those whose stream the executor's
+result does not hold: 64 bound in no element body, 35 in a pattern
+compiled in, and 28 in an element body. The 49 refused events are in
+10 modules, 37 of them for a missing input of the trusted-event
+policy. No results file of this comparison at commit `a462df710a`
+exists. The plan does not tell an element body over an array of
+references from one over an array of plain values in place, so the
+counts of bindings with an `element` step are of both, and of bodies
+over the result of another per-element construct.
+
+**The cost measurement.** Every command of `compare/cost.ts` ran once
+over the corpus, and `compare/cost-report.ts` printed its tables:
+`run` (179 s), `scale` (48 s), `closures`, and the crate's `time`,
+`compile` and `processes`. The left column is of
+[What compiling, running, and storing cost](#what-compiling-running-and-storing-cost),
+at 270 modules compiled and 213 run. Times are wall time in
+milliseconds, totals over the modules.
+
+| | `4ca9fe56cb` | `7774ba208c` |
+| --- | ---: | ---: |
+| Modules compiled, and run | 270, 213 | 272, 215 |
+| Compile in one process: the crate, median of 20 | 5,104 | 4,833 |
+| Compile in one process: today, first compile | 91,115 | 102,945 |
+| Compile, one process per module: the crate | 6,651 | 7,010 |
+| Compile, one process per module: today | 381,950 | 436,953 |
+| To settle, today: milliseconds | 21,566 | 17,520 |
+| To settle, today: transactions committed | 1,461 | 1,480 |
+| To settle, today: runs of an action | 4,343 | 4,281 |
+| To settle, derived for the compiled path: transactions | 426 | 430 |
+| Committed events, and the modules that have one | 344, 104 | 486, 96 |
+| Per committed event, today: milliseconds, median | 26 | 57.3 |
+| Per committed event, today: transactions | 1,175 | 1,221 |
+| Per committed event, today: runs of an action | 1,605 | 1,609 |
+
+After the instance settled, today's run stored 5,926 documents of the
+instances and 9,848 label entries for the 215 modules. The derived
+count for the compiled path is 470 documents at least and 1,700 at
+most, with 215 label entries where every label is empty and 3,297 at
+most. The median ratio of today's later compiles to the crate's, per
+module, is 262.
+
+- **The times were taken on a machine that was not idle.** A session
+  that edits the documents worked in another tree of the repository
+  at the same time. So the times are no repeat of the earlier
+  measurement, and no conclusion about a change of a time is drawn
+  from them.
+- **The events are 486,** the number that the comparison of values
+  commits.
+- **`cost.ts` gives the executor no artifact for a pattern that a
+  function body instantiates,** so a module with such a call is run
+  beside an executor that cannot make the instance.
+- **No time of the compiled path is measured,** as before.
+
 ### What the run conformed to
 
 The executor counted where its run kept to the plan.
@@ -2349,6 +2649,176 @@ the run are from the prototype author's corpus run.
   elements and no links, which is a limit of the prototype.
   `deno lint` stops with an internal error at a JSX spread child, so
   the fixture is exempt from it.
+
+At commit `7774ba208c` the plan and the run have the following. The
+prototype at this commit has the marker `KeyedBy` on the element type
+and the plain form of the key, a string with separators and an
+escaping of its own; by the rulings since, the key is declared on the
+array with `ArrayByKey`, and a key is a fabric value that the helpers
+of `base/data-model` hash and write ([Decided](#decided)). Each
+statement about a key is about plain values: an array of plain values
+in place, a plain array generated from scratch, and the result of
+another per-element construct where the upstream position holds a
+value. Over an array of references the key is the cell, with or
+without declared key fields, which one test of the store and one of
+the fixture have.
+
+- **The key of a declared key field names the field.** The element
+  part of the key of a plain value that holds its declared key fields
+  is the prefix `fields:` and the fields, each as the name, `=` and
+  the value. A plain value with no declared key is keyed whole, as
+  `value:` and the canonical form of the value. So the key of a field
+  `id` that holds 7 is `fields:id=#7#0`, and the key of a whole value
+  7 is `value:7#0`. The prefixes, the separators and the count after
+  `#` are the prototype's, and none of them is the design: by ruling
+  the element part of the first is a record of the names and one
+  salted hash, that of the second is a hash, and the key is a record
+  of the element part and the occurrence count. What the withdrawn
+  ruling added is removed: the store keeps no schema for a document.
+- **A reference by key is resolved from the key alone.** The store
+  forms the keys of the array with the fields that the key names, and
+  with none for a key that names none, and takes the position whose
+  key is the key. It reads no schema: not that of the reference, not
+  that of a link on the way, and none of the document. A write
+  through a reference by key decides whether it re-keyed the element
+  with the fields of the key it went through. Forming a key uses a
+  declaration: an element table is made with `Collection.keyFields`,
+  and an array that is read whole gives each member that is a
+  container a reference by key formed with the key fields that the
+  schema of the read declares. By ruling since, a reader whose type
+  declares no key takes the fields from the schema that is traversed
+  while the link to the array is resolved; the executor forms the
+  keys of such a read from the whole value. By case:
+  - **An array of plain values in place.** A reference to the element
+    and one to a member below it resolve with no schema, after a
+    write to another member, which re-keys nothing, and after a move.
+    A stored link by key reads the same element through a reader
+    whose schema declares no key, the key `id`, the key `name`, and
+    both fields. The array read under each of those four declarations
+    gives its first member four addresses, and each resolves to that
+    member.
+  - **A plain array generated from scratch, with a `filter` and a
+    `map` after it.** The array is what a `lift` returns. Its
+    elements have no place in the executor, so a handler of a row is
+    given the value and stores the value and no link. The documents
+    have the result of `fetchJson` as one stored document whose
+    elements have an address, and the executor answers every effect
+    as pending, so it runs no such array. The note asks whether an
+    element of an array that a `lift` or a `computed` returns whole
+    has a reference by key with the address of the output as its
+    collection. By ruling since it has (question 206).
+  - **The result of another per-element construct.** An element has
+    the upstream key, so the key names the fields that the source
+    collection declares, and nothing is resolved by a key of the
+    result: the executor stores no assembled result at an address
+    that a reference could name.
+  - **An array of references.** A link to a cell holds no key.
+- **Several key fields in the front end and the plan.** The checker
+  reads the second argument of `KeyedBy` as a string literal type or
+  a union of them, and annotates `T` with the names, each once, in
+  the order of their code points. The schema of the items has the
+  keyword `keyFields`, an array of the names, in the place of
+  `keyField`: `["id"]` for one field and `["name", "owner"]` for
+  `KeyedBy<Repo, "owner" | "name">`. The record of a collection whose
+  source is a slot or an output has `keyFields` with the same array,
+  and one whose source is another collection has none. By ruling the
+  keyword is on the schema of the array and not of the items. The
+  type does not tell an array of plain values in place from an array
+  of references, and the crate accepts the marker on both. No type of
+  the corpus uses the marker.
+- **The diagnostic of a wrong declaration.** The crate reports
+  `keyed-by:declaration`, an error at the marker, where the second
+  argument is missing or has a member that is no string literal type,
+  and where a field names no property of `T`, an optional property,
+  or a property whose type is not `string`, `number`, a literal of
+  either, or a union of those. Nothing is reported where `T` or a
+  member of the union is a type the checker does not evaluate. The
+  documents name the diagnostic `array-by-key:declaration`, and
+  assume that a literal type counts.
+- **One key across the fields, and its written form.** The element
+  part is `fields:`, then the fields in the order of their names,
+  each as the name, `=` and the value, joined with `,`, and the
+  occurrence count after it: `fields:name=labs,owner=cf#0`. A `\`
+  stands before each `\`, `,` and `=` of a name and of a string
+  value, a number is `#` and its canonical form, and a string value
+  that starts with `#` has a `\` before it. That was the form the
+  documents proposed at the time, with values in the place of the
+  hash. By the ruling since, the design has no such form: no
+  separator and no escaping of its own (question 199). The names are
+  ordered by code point, as the documents have it. The tests of the
+  store, over arrays of plain values in place: three elements that
+  share `owner` or `name` have three keys; the order in which the
+  fields are given changes no key; each key resolves to its element
+  from the key alone; a write to a member that is no key field
+  re-keys nothing, and a write to one key field re-keys the element;
+  two elements with the same values of both fields are occurrences 0
+  and 1; and an element that lacks one field is keyed whole. Two
+  things are the executor's choice: an element is keyed whole where
+  a declared field holds a value that is neither a string nor a
+  number, which the documents assume as well, and the values are
+  held with no salt and no hash.
+- **A value that declares one key, given where another key is
+  declared.** The crate reports `keyed-by:mismatch`, an error at the
+  value, where a value is checked against a declared type: an
+  argument, an attribute of a tag that names a pattern, a returned
+  value under a written return type, and an initializer under an
+  annotation. The walk compares the two types through handles,
+  arrays, the properties that both declare, and the members of a
+  union, and reports the first position at which both declare key
+  fields and the two lists differ. A position at which one side
+  declares no key is no mismatch, in both directions, and the same
+  fields written in another order are one key. The documents name
+  the diagnostic `array-by-key:mismatch`. By case, as two tests have
+  it. An array of plain values in place, or of references, which the
+  type of a pattern input does not tell apart: an input declared with
+  the key `id`, given to a pattern whose input declares the key
+  `name` or both fields, to the state of a handler, to the argument
+  of a `lift` result, and to an authored function, is reported, and
+  given where a plain array type or the same key is declared it is
+  not. A plain array generated from scratch: the result of a `lift`
+  whose return type declares the key `id`, given where `name` is
+  declared, is reported. The result of another per-element construct:
+  the result of a `filter` has the element type of its source with
+  its key, and is reported the same way. Four limits: an object
+  literal or an array literal is checked member by member, so a
+  mismatch is reported at the member that is not a literal; an
+  assignment and the argument of a handle method are not checked; the
+  walk stops at depth 6; and both identifiers are provisional in the
+  crate's catalog. The note asks whether a value whose type declares
+  no key is accepted where a key is declared, as the crate has it
+  (question 205).
+- **A stream after a spread, compared with today's runtime.** Under
+  [The fixtures](#the-fixtures): today's runtime runs neither an
+  array literal with a spread among the children of a view node nor
+  a JSX spread child where a pattern's body writes it, so the ruling
+  on a spread child has no run of today's runtime to be compared
+  with in the reactive tier. In a `computed`, which today's runtime
+  runs, 15 of 15 values are equal.
+- **A re-key removes the instance that the moved one replaced.** The
+  case is an array of plain values in place with no declared key, and
+  an instance that a `lift` or a `computed` of the element body made.
+  Where the instance of the old key moves to a name that an instance
+  of a key that left has, the executor removes that instance: its
+  argument document, its result document and its state cells, the
+  record of its stream links, the instances and the bindings that its
+  own function bodies made, and the names that lead to them. A link
+  to one of its documents that is stored elsewhere reads as nothing,
+  and an event for one of its streams finds no instance. Two things
+  are not removed. An `asInstance()` instance that is named under the
+  new key is replaced in the table of the instances and stays in the
+  store, where a link that a handler stored elsewhere reads it; by
+  ruling since, that is the design ([Decided](#decided)). And the
+  stream of a binding that a function body made under the old key
+  stays. Whether the removal of the instance that a function body
+  made is the design is question 204. Over an array of references no
+  key changes and nothing is replaced.
+- **A `set` of a plain value on a cell that holds a link** writes
+  through the link in the executor: `picked.set(value)` after
+  `picked.set(reference)` wrote the value into the element that the
+  reference named. The prototype's author found it while testing keys
+  and did not examine it or compare it with today's runtime. The
+  reference there was a reference by key to an element of an array of
+  plain values in place.
 
 ### Documents
 
@@ -2878,6 +3348,20 @@ is relitigated.
   references, over an array of plain values in place, and over the
   result of another per-element construct. Reclaiming the storage
   would be a separate mechanism, and this design has none.
+- An element of a plain array generated from scratch, which a `lift`
+  or a `computed` returns whole and the instance stores as an output,
+  has a reference by key with the output's address as its collection,
+  by the same rule as an element of an array of plain values in
+  place, with or without a declared key. Without a declared key the
+  key is the whole value, so the reference reads as nothing once the
+  element changes, and no write repairs it, since a computed output
+  refuses writes. The owner gave the ruling weakly, with a
+  reservation: "if all that hashing gets too complex for little gain,
+  copies are fine". So storing a copy is acceptable if building the
+  reference proves complex for little gain. The prototype stores a
+  copy and is to report what the reference costs to build (question
+  206). The ruling is about a plain array generated from scratch
+  alone.
 - An element that is a plain value in place is named by its collection
   and its key, and a reference to it or to a member of it resolves to
   the current position at each read and write. So `equals`, two-way
@@ -2909,6 +3393,15 @@ is relitigated.
   plain values in place with no declared key field, and a body over
   the result of another per-element construct applied to it; nothing
   of it arises over an array of references.
+- On such a re-key, where a moved instance that was called through
+  `asInstance()` takes the name that another such instance holds, the
+  replaced instance is no longer named by the element table, and its
+  documents stay in the store. Nothing is cleaned up, as when an
+  element leaves, and a link to it that is stored elsewhere keeps
+  reading it. The case is an array of plain values in place with no
+  declared key; over an array of references no write changes a key.
+  The ruling does not cover a replaced instance that a `lift` or a
+  `computed` of the body made (question 204).
 - A function body that reads a plain value holds a copy, and writing
   it elsewhere stores the value, as today. References by key are for
   the nodes of the reactive tier that pass an element on. A handle
@@ -2997,8 +3490,8 @@ is relitigated.
   keyed by its cells.
 - The key of a plain value that has declared key fields names the
   fields: its element part holds the list of the field names and one
-  salted hash of the combined values of those fields, as
-  `name,owner:<hash>`. It does not hold the values. A reference by
+  salted hash of the combined values of those fields. It does not
+  hold the values. A reference by
   key is resolved from the key alone, with no schema: the resolver
   reads the names from the key, combines those fields of each
   element of the array, hashes, and compares. The salt is the one
@@ -3006,10 +3499,9 @@ is relitigated.
   client cannot read, so a client cannot form such a key before the
   server stores a link, and a stored reference does not show the
   values of the key fields. Two keys that share the value of one
-  field have nothing in common. The exact written form, with its
-  separators, the escaping of a field name, and how the values are
-  combined before they are hashed, is the documents' to define
-  (question 199). Resolving from the key alone holds for a
+  field have nothing in common. The key has no written form with
+  separators of the documents' own, by the ruling below on written
+  forms. Resolving from the key alone holds for a
   reference to a member below the element, as the one that
   `center.set(repo.position)` stores, and for every reader, whatever
   key the reader's type declares. A key formed from a field `id`
@@ -3029,6 +3521,47 @@ is relitigated.
   extends, and that part governs nothing: that the element part
   holds each field name with the canonical form of the field's
   value.
+- The design builds no key, no identifier and no other stored string
+  by joining parts with separators and an escaping of its own. The
+  owner gave the ruling for the element part of a key ("field names
+  can contain : as well") and for the design in general. Wherever the
+  design needs the written form of a structured thing, as the element
+  part of a key with its field names and hash, a whole key with its
+  element part and occurrence count, the key of a `flatMap` member
+  with the key of its source element, a name with its ordinal, or
+  the steps of a `within`, that form is the serialization of a fabric
+  value by the helpers of `base/data-model`: `hashOf` and
+  `taggedHashStringOf` (`base/data-model/src/value-hash/impl.ts`) for
+  a hash, and `jsonFromFabricValue` (`base/data-model/src/codecs.ts`)
+  for a string. The documents state the structure, for a key with
+  declared fields the names in the order of the names and one salted
+  hash, and name the helper; they define no separator. A hash is
+  written as the helpers write one, with its algorithm tag. This
+  replaces three things, which govern nothing: the assumed written
+  form `name,owner:<hash>` with its `\` escaping, the assumption of
+  a digest with no algorithm tag, and the separator `/` between the
+  key of a source element and the member part in the key of a
+  `flatMap` member, which the prototype writes under the ruling on
+  that key: this ruling replaces that part of it, and the rest of
+  that ruling stands. The record forms are the
+  documents' choice (question 202). The ruling covers every key: for
+  an array of references the element part is the record of the
+  address, for an array of plain values in place, a plain array
+  generated from scratch included, it is the hash or the record of
+  the names and the hash, and the result of another per-element
+  construct has the upstream key unchanged.
+- A reader whose type declares no key learns the key fields of an
+  array it is given from the schema that is traversed while the link
+  to the array is resolved: the keyword `keyFields` on the schema of
+  the array that is met on that traversal ("the keys should be picked
+  up while the schema is traversed while resolving the link"). No
+  separate record of the stored schema is kept. The case is an array
+  of plain values in place that the reader reaches through a link, a
+  plain array generated from scratch that an instance stored
+  included; the result of another per-element construct has the
+  upstream key, and an array of references is keyed by its cells.
+  What such a reader does where no schema with the keyword is met is
+  question 203.
 - The key of an element that a `flatMap` contributes is formed from
   the member itself, by the same rule as for any array, together with
   the source element's key: the cell identity for a member that is a
@@ -3037,7 +3570,9 @@ is relitigated.
   source element's segment. Two members of one segment that change
   places then evaluate nothing, as for `map`. The rule covers a
   segment of references and a segment of plain values, over a source
-  of any of the three cases.
+  of any of the three cases. The two parts are not joined with a
+  separator: by the ruling on written forms the key is a record of
+  the key of the source element and the key of the member.
 - An output that passes a derived collection on unchanged is the same
   collection for keying, and the plan marks that output as such
   (`Output.passesCollection`). The case is the result of another
@@ -4197,7 +4732,9 @@ undetermined, written into the documents as an assumption.
      the instance is re-keyed with the element (question 160), as the
      rest of what the old key holds is, and a link stored elsewhere
      to its result under the old key reads what it read before. The
-     owner did not object to this and did not rule it. No record maps
+     owner did not object to this and did not rule it. By a later
+     ruling an instance that such a re-key replaces under the new key
+     stays in the store ([Decided](#decided)). No record maps
      a key to an instance. The prototype's executor answers with the
      smaller mechanism (its note 397): it keeps a table from the
      child and the element keys to the instance, moves the table
@@ -4373,8 +4910,11 @@ assumption.
      under the new key; nothing moves for the other elements whose
      occurrence count changed; and a write that is not made through a
      reference by key re-keys nothing. The prototype's executor does the
-     last three, and does not move an instance that a function body
-     made. The case is an array of plain values in place with no
+     last three, and at commit `7774ba208c` moves an instance that a
+     function body made as well. What becomes of an instance that the
+     moved one replaces is ruled for an `asInstance()` instance and is
+     question 204 for one that a function body made. The case is an
+     array of plain values in place with no
      declared key field, and a body over the result of another
      per-element construct applied to it; nothing of it arises over an
      array of references. The entry keeps its number.
@@ -4483,11 +5023,11 @@ that followed are under the next heading.
 197. **What the element part of a key that names its fields holds**
      (PL question 140). Settled by ruling: the element part holds the
      list of the field names and one salted hash of the combined
-     values of those fields, as `name,owner:<hash>`, and does not
+     values of those fields, and does not
      hold the values ([Decided](#decided)). The documents' earlier
      assumption, the plain values written as
-     `name=labs,owner=commonfabric`, governs nothing. The exact
-     written form is question 199. The ruling is about plain values:
+     `name=labs,owner=commonfabric`, governs nothing. The form of the
+     element part is question 199. The ruling is about plain values:
      an array of plain values in place, a plain array generated from
      scratch included, and the result of another per-element
      construct where the upstream position holds a value. An array of
@@ -4514,50 +5054,49 @@ that followed are under the next heading.
 declared.** The rulings settle questions 194 and 197 and replace the
 syntax of the declaration: the key is declared on the array, with
 `ArrayByKey<T, "field">`. These three points they do not rule. The
-owner said yes to the coordinator's proposal for each, and each is
-written into the documents as an assumption.
+owner said yes to the coordinator's proposal for each, and each was
+written into the documents as an assumption. Questions 199 and 200
+are ruled since, and the rulings that followed are under the next
+heading.
 
 199. **The written form of the element part of a key that names its
-     fields** (PL question 142). By ruling the element part is the
-     list of the field names and one salted hash of the combined
-     values, as `name,owner:<hash>`, and the exact form is the
-     documents' to define. *Assumed:* the names in the order of the
-     names, joined with `,`, then `:`, then the hash, as `id:<hash>`
-     and `name,owner:<hash>`. A `\` stands before each `\`, `,` and
-     `:` of a name. The hash is of one value, the array of the values
-     of the key fields in the order of the names, as
-     `["labs", "commonfabric"]` and `[7]`, hashed as a whole value
-     is; the hasher puts a byte for the type in front of each part,
-     so the number 7 and the string `7` have two keys, and two
-     different lists of values never combine to one input. The salt
-     is the secret of the space that the element key of a whole value
-     is hashed with. Also assumed, because no document fixes how the
-     hash of an element part is written: the digest in base64url with
-     no algorithm tag in front, so that an element part with a `:`
-     names fields and one without is formed from a whole value. The
-     alternatives put the names into the hashed value as well, or
-     hash a list of name and value pairs. The question is about plain
-     values: an array of plain values in place, a plain array
-     generated from scratch included, and the result of another
-     per-element construct where the upstream position holds a value.
-     An array of references is keyed by its cells and is not
-     affected.
+     fields** (PL question 142). Settled by ruling: the element part
+     has no written form that the documents define with separators
+     or an escaping of their own. It is a fabric value, and the
+     helpers of `base/data-model` hash it and write it
+     ([Decided](#decided)). The documents' assumption, the names
+     joined with `,`, then `:`, then a digest with no algorithm tag,
+     with a `\` before a `\`, `,` or `:` of a name, governs nothing.
+     The structure is the names of the key fields in the order of the
+     names, and one salted hash of the array of the values of those
+     fields in the same order, as `["labs", "commonfabric"]` and
+     `[7]`; the hasher puts a byte for the type in front of each
+     part, so the number 7 and the string `7` have two keys. The
+     record forms are question 202. The ruling is about plain values
+     where it concerns this element part: an array of plain values in
+     place, a plain array generated from scratch included, and the
+     result of another per-element construct where the upstream
+     position holds a value. An array of references is keyed by its
+     cells and is not affected. The entry keeps its number.
 200. **A reader whose type is a plain array type, given an array with
      a declared key** (PL question 143). By ruling
      `ArrayByKey<Repo, "id">` is a `Repo[]`, so a parameter typed
-     `Repo[]` accepts it.
-     *Assumed:* the reader forms keys with the key fields of the
-     array it is given, so the key is carried forward. It takes the
-     fields from the schema that the array is stored under, for an
-     array of plain values in place, and from the upstream
-     collection, for a plain array generated from scratch and for the
-     result of another per-element construct. For an array in place
-     that needs the stored schema of the array where a key is formed.
-     *Assumed* with it: the link through which the reader reaches
-     the array holds that schema. Resolving a key reads no schema
-     under either answer. The alternative forms the keys of such a
-     reader from the whole value. Over an array of references nothing
-     of it arises.
+     `Repo[]` accepts it. Settled by ruling: the reader learns the
+     key fields from the schema that is traversed while the link to
+     the array is resolved, which is the keyword `keyFields` on the
+     schema of the array met on that traversal, and forms keys with
+     them, so the key is carried forward. No separate record of the
+     stored schema is kept ([Decided](#decided)). The documents'
+     assumption that the link holds the schema that the array is
+     stored under is replaced by the ruling. A collection of the plan
+     that declares the key has `Collection.keyFields`, and the result
+     of another per-element construct has the upstream key. Resolving
+     a key reads no schema. The ruling is about an array of plain
+     values in place that the reader reaches through a link, a plain
+     array generated from scratch that an instance stored included.
+     Over an array of references nothing of it arises. What the
+     reader does where no schema with the keyword is met is question
+     203. The entry keeps its number.
 201. **The diagnostics of `ArrayByKey`** (LS question 44). *Assumed:*
      a declaration whose second argument does not name required
      top-level properties of type `string` or `number` is an error
@@ -4571,6 +5110,111 @@ written into the documents as an assumption.
      per-element construct where the upstream position holds a value.
      On an array of references the declaration has no effect
      (question 186).
+
+**From the later rulings of 2026-11-17 and the prototype's notes 419
+to 426.** Four rulings settle questions 199 and 200 and what notes
+420 and 426 asked: on written forms, on the schema that a reader
+learns the key fields from, on an `asInstance()` instance that a
+re-key replaces, and on a reference by key to an element of a plain
+array generated from scratch ([Decided](#decided)). Questions 202 to
+205 are what they and the notes leave undetermined, each written
+into the documents as an assumption. Entry 206 is ruled and records
+the owner's reservation.
+
+202. **The record forms of a key and of a name** (PL question 144).
+     By ruling the documents state the structure of each thing that
+     has a written form, and the helpers of `base/data-model` hash
+     and write it. The ruling gives the structure of a key with
+     declared fields and leaves the record forms to the documents.
+     *Assumed:* a key is a record with the members `element` and
+     `occurrence`; the element part of a key that names fields is a
+     record with the members `fields` and `hash`, that of a key
+     formed from a whole value is the hash alone, and that of a
+     position that holds a link is the record of the address; the
+     key of a `flatMap` member is a record with the members `source`
+     and `member`; the salted hash of a value is `hashOf` of the
+     record with the members `salt` and `value`; a key that stands
+     in a stored path is the text that `jsonFromFabricValue` returns
+     for it; and a name of several parts in a plan record is a
+     record, as `{ name: "save", ordinal: 1 }` for a name with its
+     ordinal, in the place of the strings `save#1` and `make#1/n0`
+     that the documents had. The alternatives use arrays in the place
+     of records, give the salt to the hasher in another way, or hold
+     a name as the text of the codec. The parts on a key are about
+     each case: the address record for an array of references, the
+     hash and the record with `fields` for an array of plain values
+     in place, a plain array generated from scratch included, and
+     the upstream key unchanged for the result of another
+     per-element construct. The part on a name is not about a
+     per-element construct.
+203. **A reader whose type declares no key, where no schema with the
+     keyword is met** (PL question 145). By ruling such a reader
+     learns the key fields from the schema that is traversed while
+     the link to the array is resolved. The coordinator of this work
+     named the case that the ruling leaves: a link that holds no
+     schema, or one written by a party whose type declares no key.
+     *Assumed:* the reader then forms keys from the whole value.
+     References by key still resolve, since a key names its fields.
+     The alternatives fail the read, or keep the record of the
+     stored schema that the ruling says is not kept. The case is an
+     array of plain values in place that the reader reaches through
+     a link, a plain array generated from scratch that an instance
+     stored included; the result of another per-element construct
+     has the upstream key, and over an array of references nothing
+     of it arises.
+204. **An instance that a function body made, replaced on a re-key**
+     (PL question 146; note 426). By ruling an `asInstance()`
+     instance that a re-key replaces under the new key stays in the
+     store, and a link stored elsewhere keeps reading it. The ruling
+     does not cover a replaced instance that a `lift` or a `computed`
+     of the element body made. *Assumed:* it is removed with its
+     documents, and with the instances and bindings that its own
+     function bodies made, as the prototype's executor does at
+     commit `7774ba208c`; a link to one of its documents that is
+     stored elsewhere reads as nothing. The alternative leaves it in
+     the store, by the rule that a removal deletes nothing. The case
+     is an array of plain values in place with no declared key, and
+     a body over the result of another per-element construct applied
+     to it; nothing of it arises over an array of references.
+205. **An array whose type declares no key, given where a key is
+     declared** (PL question 147; note 424). The assumed error
+     `array-by-key:mismatch` is for two declared keys that differ
+     (question 198), and a reader whose type declares no key accepts
+     an array with a declared key (question 200). *Assumed:* an
+     array whose type declares no key is accepted where a key is
+     declared, as the prototype's crate has it, and the reader forms
+     keys with the fields that its own type declares. Two readers of
+     one program can then form two keys for one stored array; both
+     resolve to the element, and what each reader keeps under its
+     key is its own. The alternative refuses it as a mismatch. The
+     case is an array of plain values in place and a plain array
+     generated from scratch; the result of another per-element
+     construct has the element type of its source with the key of
+     the source, which is the case of question 198, and on an array
+     of references the declaration has no effect.
+206. **A reference by key to an element of a plain array generated
+     from scratch** (PL question 148; note 420). Settled by ruling:
+     an element of an array that a `lift` or a `computed` returns
+     whole, stored as an output, has a reference by key with the
+     output's address as its collection, by the same rule as an
+     element of an array of plain values in place
+     ([Decided](#decided)). The two sub-cases. With a declared key
+     the reference stays with the element while the values of its
+     key fields stay, across each new array that the computation
+     returns. Without a declared key the key is the whole value, so
+     the reference reads as nothing once the element changes, and no
+     write repairs it, since a computed output refuses writes. The
+     owner's reservation stands with the ruling: "if all that
+     hashing gets too complex for little gain, copies are fine". The
+     prototype's executor gives such an element no place: a handler
+     of a body over the array is given the value and stores a copy,
+     with a declared key and without one. The prototype is to build
+     the reference and report what it costs. The ruling is about a
+     plain array generated from scratch alone: an array of plain
+     values that is stored in place has its reference by key by the
+     earlier ruling, an element of the result of another per-element
+     construct has the upstream key, and an element of an array of
+     references is the link to its cell. The entry keeps its number.
 
 One question above is restated by the notes 307 to 320. For the
 assumption of ES question 83, in which transaction a first value that is not a
@@ -4738,7 +5382,32 @@ is when the key enters the element table, in all three cases.
   value code reads the spread of an array of
   references as values, so a spread child over such an array holds
   no links; and nothing removes an instance that a re-key replaced,
-  or the stream of a binding that the run of the old key made.
+  or the stream of a binding that the run of the old key made. At
+  commit `7774ba208c` the key names its declared fields, a reference
+  by key is resolved from the key alone, the store keeps no schema
+  for a document, the declaration can name several fields with the
+  keyword `keyFields`, the crate reports the two diagnostics of the
+  declaration, and a re-key removes the instance of a function body
+  that a moved one replaces. Against the rulings: the crate reads
+  the key from the marker `KeyedBy` on the element type and writes
+  the keyword into the schema of the items, where the key is
+  declared on the array with `ArrayByKey`; the executor writes a key
+  as a string with the prefixes `fields:`, `value:` and `cell:`, the
+  separators `=`, `,`, `#` and `/`, and an escaping with `\`, where
+  a key is a fabric value that the helpers of `base/data-model` hash
+  and write; the key holds the values of the fields with no salt and
+  no hash; a read of a whole array under a type that declares no key
+  forms the keys from the whole value, where the reader takes the
+  key fields from the schema traversed while the link is resolved;
+  and an element of a plain array generated from scratch has no
+  place, so a handler over it stores a copy, where it has a
+  reference by key. The two diagnostics have the names
+  `keyed-by:declaration` and `keyed-by:mismatch` and are provisional
+  in the crate's catalog; the mismatch is not checked at an
+  assignment or at the argument of a handle method, and its walk
+  stops at depth 6. The members of a segment of a `flatMap` are
+  keyed with no declared field. A `set` of a plain value on a cell
+  that holds a link writes through the link, which is not examined.
 
 The open questions each document ends with stay where they are.
 
@@ -4803,8 +5472,21 @@ The open questions each document ends with stay where they are.
   compared with today's runtime through the paths that the events
   take, and not as stored values. The label comparison has not been
   run over the corpus with the nested paths.
-- **The prototype does not follow the rulings on a key that names
-  its fields.** At commit `a462df710a` its executor forms the key of
+- **The prototype follows the rulings on a key in part.** At commit
+  `7774ba208c` the key names its declared key fields, a reference by
+  key is resolved from the key alone with no schema, and the
+  declaration can name several fields. It has the marker `KeyedBy`
+  on the element type and the plain form of the key: a string with
+  separators and an escaping of its own that holds each field name
+  with the value of the field. It does not have the rulings since:
+  `ArrayByKey` on the array with the keyword on the array schema,
+  one salted hash in the place of the values, a key and a name as
+  fabric values with no separators of the design's own, the schema
+  traversed at a link as the place a reader whose type declares no
+  key learns the key fields from, and a reference by key to an
+  element of a plain array generated from scratch. The rest of this
+  item is of the earlier commit. At commit `a462df710a` its executor
+  forms the key of
   a declared key field with no field name, so a key formed from a
   field `id` with the value 7 is the key of a whole value that is 7.
   It resolves a reference by key through the schema that the array
@@ -4826,13 +5508,32 @@ The open questions each document ends with stay where they are.
   the rulings on a spread child, on a state path of plain type, and
   on what a re-key moves. The figures of this plan that count listed
   paths or failed checks are of commit `e4f2fb3431` and earlier.
-- **The comparison of labels and the cost measurement were not run
-  over the corpus at commit `a462df710a`.** Both read the crate's
-  `emit` output at that commit and run the executor beside today's
-  run to find the streams. The comparison of labels was run on one
-  module, and the cost measurement gives the executor no artifact
-  for a pattern that a function body instantiates. A module that the
-  executor does not run gets no event in today's run.
+- **The comparison of labels and the cost measurement were run over
+  the corpus once, at commit `7774ba208c`, and not compared with an
+  earlier run.** Both read the crate's `emit` output and run the
+  executor beside today's run to find the streams. No results file
+  of either at commit `a462df710a` exists, the figures this plan
+  held before are of an earlier corpus, crate and harness, and no
+  difference between the two sets of figures was examined. The times
+  were taken on a machine that was not idle. The cost measurement
+  gives the executor no artifact for a pattern that a function body
+  instantiates. A module that the executor does not run gets no
+  event in today's run.
+- **The ruling on a spread child is compared with nothing in the
+  reactive tier.** Today's runtime runs neither an array literal
+  with a spread among the children of a view node nor a JSX spread
+  child where a pattern's body writes it: the transformer refuses
+  the first, and the evaluation of the pattern throws at the second.
+  The forms are compared in a `computed`, where 15 of 15 values are
+  equal. The prototype tried a spread of a pattern value and does
+  not say what today's runtime does for each of the three cases of
+  a source.
+- **One module of the corpus has another record at commit
+  `7774ba208c` with no change of a figure.** In
+  `apps/base/contacts.tsx` three of the 17 differences name another
+  first path, because today's run stores the members of the rows of
+  a `map` over an array of references in another order than in the
+  earlier run. The cause of the other order was not examined.
 - **One difference between the two forms of the value comparison is
   not examined.** At commit `a462df710a` the two forms give the same
   figure in every row. `showcase/battleship/multiplayer/room.tsx` is
@@ -4852,9 +5553,10 @@ The open questions each document ends with stay where they are.
    the rule.
 3. **Post the drafted description to specs pull request #91** and ask for
    its review, when the owner decides it leaves draft.
-4. **In the prototype:** run the label comparison and the cost
-   measurement over the corpus, with the nested paths of the children
-   of a view node and with the executor beside today's run; bring the
+4. **In the prototype:** compare the label comparison and the cost
+   measurement over the corpus, which ran once at commit
+   `7774ba208c`, module by module with a run of the same crate and
+   corpus, and take the times on an idle machine; bring the
    crate's diagnostic catalog to that of `language-subset.md`, which
    has `element-body:result-stored-outside`,
    `array-by-key:declaration` and `array-by-key:mismatch`; give the
@@ -4863,25 +5565,38 @@ The open questions each document ends with stay where they are.
    links of an array of references that is spread among the children
    of a view node.
 5. **In the prototype, for the rulings of 2026-11-17 on keys.** The
-   prototype at commit `a462df710a` and after has `KeyedBy` on the
-   element type and the plain form of the key. To do: replace the
+   prototype at commit `7774ba208c` names the declared fields in the
+   key, resolves a reference by key from the key alone, keeps no
+   record of a stored schema, and accepts several fields. It has
+   `KeyedBy` on the element type and the plain form of the key. To
+   do: replace the
    marker `KeyedBy` on the element type by the array type
    `ArrayByKey<T, "field">`, accept a union of field names in it,
    and write the keyword into the schema of the array in the place
    of the schema of the items; write the names of the declared key
    fields, ordered by name, and one salted hash of their combined
    values into the element part of the key, in the place of the
-   value of the field; resolve a reference by key from the key
-   alone, by reading the names, combining those fields of each
-   element, hashing, and comparing, and remove the record of the
-   schema that each document is stored under; key an element that is
-   put into a second array by the key of that array, or by its whole
-   value; and, under the assumptions of questions 195, 196 and 198
-   to 201, write the keyword as `keyFields` with
-   `Collection.keyFields`, write the element part in the assumed
-   form, form the keys of a reader of plain array type with the key
-   fields of the array it is given, and report
-   `array-by-key:declaration` and `array-by-key:mismatch`.
+   values of the fields; hold a key, the key of a `flatMap` member
+   and a name of several parts as fabric values, hashed with
+   `hashOf` and written with `jsonFromFabricValue` where a string is
+   needed, and remove the prefixes, the separators and the escaping
+   of its own; resolve a reference by key by reading the names from
+   the key, combining those fields of each element, hashing, and
+   comparing; have a reader whose type declares no key take the key
+   fields from the schema that is traversed while the link to the
+   array is resolved; give an element of a plain array generated
+   from scratch a reference by key with the output's address as its
+   collection, and report what that costs to build, since the owner
+   accepts a copy if it is complex for little gain; key an element
+   that is put into a second array by the key of that array, or by
+   its whole value; and, under the assumptions of questions 195,
+   196, 198 and 201 to 205, write the keyword as `keyFields` with
+   `Collection.keyFields`, use the assumed record forms, form keys
+   from the whole value where no schema with the keyword is met,
+   accept an array whose type declares no key where a key is
+   declared, and report `array-by-key:declaration` and
+   `array-by-key:mismatch` under those names. Also examine what a
+   `set` of a plain value does on a cell that holds a link.
 
 ### Briefing an author
 

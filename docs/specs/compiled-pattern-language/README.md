@@ -1238,29 +1238,45 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   the declaration names several fields as a union of their names,
   that the fields enter the key in the order of their names, that the
   schema keyword is on the schema of the array, that the element part
-  holds the names and one salted hash of the combined values, as
-  `name,owner:<hash>`, and that an element put into a second array
-  has that array's key, or none. Nine things about it are assumed.
-  Five are about the declaration and the form of the key: each field
-  is a required top-level property of type `string` or `number`, with
-  a key field that holds a reference deferred; the schema keyword is
-  named `keyFields`; an array whose type declares one key is not
-  accepted where the compiler sees that another key is declared; the
-  exact written form of the element part, with its escaping and how
-  the values are combined; and a reader whose type is a plain array
-  type forms keys with the key fields of the array it is given
+  holds the names and one salted hash of the combined values, and
+  that an element put into a second array has that array's key, or
+  none. Three further things are ruled. No key, identifier or stored
+  string of the design is built by joining parts with separators and
+  an escaping of its own: each is a fabric value that the helpers of
+  `base/data-model` hash and write. A reader whose type declares no
+  key learns the key fields from the schema that is traversed while
+  the link to the array is resolved. And an element of a plain array
+  generated from scratch, which a `lift` or a `computed` returns
+  whole, has a reference by key as an element of a stored array of
+  plain values has, where the owner accepts a copy if the reference
+  proves complex to build for little gain. Eleven things about a
+  declared key are assumed. Six are about the declaration and the
+  form of the key: each field is a required top-level property of
+  type `string` or `number`, with a key field that holds a reference
+  deferred; the schema keyword is named `keyFields`; an array whose
+  type declares one key is not accepted where the compiler sees that
+  another key is declared; the names of the members of the records
+  that a key and a name are; a reader whose type declares no key
+  forms keys from the whole value where it meets no schema with the
+  keyword; and an array whose type declares no key is accepted where
+  a key is declared
   ([plan format and label templates](plan-and-label-templates.md), §8,
-  questions 138, 139 and 141 to 143; the names of the two diagnostics
-  are question 44 of [language subset](language-subset.md), §13). The
-  other four follow. Over an array of
+  questions 138, 139, 141, 144, 145 and 147; the names of the two
+  diagnostics are question 44 of
+  [language subset](language-subset.md), §13). The other five
+  follow. Over an array of
   plain values in place with no declared
   key, an instance called through `asInstance()` is re-keyed with its
   element when a write through a reference by key changes the value;
   over an array of references no edit changes a key, and a declared
   key avoids the case
   ([plan format and label templates](plan-and-label-templates.md), §8,
-  question 123). A write to the key field itself is the same re-key
-  (its question 129). A plain value of a keyed array that a function
+  question 123). By ruling an `asInstance()` instance that such a
+  re-key replaces under the new key stays in the store, and a link
+  stored elsewhere keeps reading it; an instance that a `lift` or a
+  `computed` of the body made and that is replaced is assumed to be
+  removed (its question 146). A write to the key field itself is the
+  same re-key (its question 129). A plain value of a keyed array that a function
   body pushes to another list is stored in a document whose identity does not
   derive from the key
   ([execution and storage](execution-and-storage.md), §11, question

@@ -97,12 +97,28 @@ export interface SourcePosition {
 }
 
 /**
+ * The name of a record (section 1.3). A name of one part is a string. A
+ * name of several parts is a record of its parts, and no string joins
+ * them (section 1.2, "Written forms"). The member names are assumed.
+ */
+export type Name =
+  | string
+  /** One of several declarations of one name, by its ordinal from 1. */
+  | { readonly name: string; readonly ordinal: number }
+  /** A child that the site `site` of `Body.calls` of a body makes. */
+  | { readonly body: Name; readonly site: Index }
+  /** A cell that a body creates under a constant cause, with the cause. */
+  | { readonly body: Name; readonly cause: unknown }
+  /** A sidecar of a `wish` operation (section 3.19). */
+  | { readonly operation: Name; readonly sidecar: string };
+
+/**
  * One step of where a declaration sits. The steps of a declaration, outermost
  * first, are part of the cause its identifier derives from (section 1.3).
  */
 export type WithinStep =
   /** A call, compiled into this plan, of a pattern the compiler can see. */
-  | { readonly site: string }
+  | { readonly site: Name }
   /** The body of an element construct over a collection. */
   | { readonly element: Index };
 
@@ -299,7 +315,7 @@ export interface Pick {
  */
 export interface Collection {
   /** The name an `element` step refers to it by (section 1.3). */
-  readonly name: string;
+  readonly name: Name;
   readonly within: readonly WithinStep[];
   /**
    * The construct the record is of. It says what the runtime does with
@@ -355,9 +371,10 @@ export interface Collection {
    * cell (section 1.3, "A declared key field"). Absent where `source`
    * names a collection: an element then has the upstream key. Absent
    * as well where the type of the receiver is a plain array type.
-   * *Assumed* (section 8, question 143): the runtime then forms the
-   * keys with the key fields of the array that the receiver holds,
-   * where that array declares any.
+   * By ruling the runtime then forms the keys with the key fields of
+   * the array that the receiver holds, where the schema that is
+   * traversed while the link to that array is resolved declares any
+   * (section 8, questions 143 and 145).
    */
   readonly keyFields?: readonly string[];
   /**
@@ -377,7 +394,7 @@ export interface Body {
   /** Content address of the body's source as the loader receives it. */
   readonly code: Hash;
   /** The name of this use, and where it sits (section 1.3). */
-  readonly name: string;
+  readonly name: Name;
   readonly within: readonly WithinStep[];
   readonly kind:
     | "lift"
@@ -912,7 +929,7 @@ export interface StateCell {
    * cause, or under the element key, the name is formed from the body's
    * `name` and the cause, and `within` is the body's (section 3.14).
    */
-  readonly name: string;
+  readonly name: Name;
   readonly scope: "space" | "user" | "session";
   /**
    * Where the cell is declared. Each `element` step adds that element's key
@@ -999,7 +1016,7 @@ export interface Operation {
    */
   readonly tables?: unknown;
   /** The cause its state document's identifier derives from. */
-  readonly name: string;
+  readonly name: Name;
   readonly within: readonly WithinStep[];
 }
 
@@ -1025,7 +1042,7 @@ export interface Child {
   readonly argumentSchema: Hash;
   readonly resultSchema: Hash;
   /** The cause the instance's identifier derives from. */
-  readonly name: string;
+  readonly name: Name;
   readonly within: readonly WithinStep[];
   /**
    * `asInstance()`: the call is an instance of its own by the author's
@@ -1193,7 +1210,7 @@ export interface Binding {
    * `bind` site's body sits, and it does not enter the identifier of the
    * stream (section 3.14).
    */
-  readonly name?: string;
+  readonly name?: Name;
   readonly within: readonly WithinStep[];
 }
 
@@ -1595,8 +1612,8 @@ the positions of a stream.
 - **The result of a `flatMap`.** Each stored position holds the link
   that value code placed in the member, and no rule beyond the
   replacement is needed. For a handler bound in the body of the
-  callback, the key of a position is the source element's key followed
-  by a member part (section 1.3), and every member of a source element's
+  callback, the key of a position is the record of the source element's
+  key and a member part (section 1.3), and every member of a source element's
   segment that the callback writes holds the link to the one stream of
   that source key. Where the callback returns the result of an inner
   per-element construct and the handler is bound in the inner body, as
@@ -1733,6 +1750,47 @@ analysis that fills it in is specified in `footprint-analysis.md`.
   for the hash) are today. *Assumed* (section 8, question 63): no member
   and no prefix says which kind of record was hashed. Section 1.5 says
   which record each member is the hash of.
+- **Written forms.** By ruling this design builds no key, no identifier
+  and no other stored string by joining parts with separators and an
+  escaping of its own. A thing of several parts is a fabric value, a
+  record or an array of its parts. A document of this design states the
+  parts and their order, and the helpers of `base/data-model` do the
+  rest.
+  - Where the thing enters a hash, it enters as the value. `hashOf`
+    (`base/data-model/src/value-hash/impl.ts`) hashes a fabric value,
+    and `createRef` (`runtime/runner/src/create-ref.ts`) calls it to
+    form an identifier. So a cause that holds a name, the steps of
+    `within` and a key needs no written form
+    (`execution-and-storage.md` §5).
+  - Where a string is needed, as for a segment of a stored path or the
+    name of a member of a state document, the string is what
+    `jsonFromFabricValue` (`base/data-model/src/codecs.ts`) returns for
+    the value. That is the text of the JSON codec (`JsonCodecEngine` in
+    `base/data-model/src/codec-json/JsonCodecEngine.ts`). It starts with
+    `fvj1:`, and it writes the members of a record in the order of the
+    UTF-8 bytes of their names (`encodePlainObject` of `JsonEncodeAct`
+    in `base/data-model/src/codec-json/JsonEncodeAct.ts`), so one value
+    has one text. That method does not yet write that order for a
+    member whose name reads as an integer, and no record of this
+    design has such a member. The codec does all the quoting, so a
+    part can hold any character. `fabricFromJsonValue` of the same file
+    reads the text back.
+  - A hash that is a part of such a value is a `FabricHash`
+    (`base/data-model/src/fabric-primitives/FabricHash.ts`), as `hashOf`
+    returns it, and the codec writes it with its algorithm tag. A hash
+    that stands alone as a string is what `taggedHashStringOf` returns
+    ("The hash", above).
+
+  A reader tells two forms of a thing apart by the value it decodes,
+  as a hash from a record, and never by a character of a string. The
+  ruling covers what this design defines: the name of a record
+  (section 1.1, `Name`), an element key with its element part, its
+  occurrence count and the key of a `flatMap` member (section 1.3), a
+  reference by key, and the steps of `within` in an identifier. It
+  does not change a form that the runtime of today defines, as the
+  written form of an entity identifier or of a schema reference.
+  *Assumed* (section 8, question 144): the names of the members of
+  each record.
 - **Plan identity** is the hash of the canonical `Plan`. The identity of a
   compiled pattern is the hash of the canonical `CompiledPattern`, so value
   code and plan cannot be exchanged separately.
@@ -1808,23 +1866,30 @@ adding or removing a declaration does not rename another one's stored state.
   rules, each takes the name and its ordinal among them, in source order.
   Adding a declaration with another name moves no ordinal. Adding one with
   the same name before an existing one moves the ordinals after it. The
-  name with its ordinal is written `name#n`, with `n` counted from 1:
-  two bindings of a handler `save` are `save#1` and `save#2`. A
+  name with its ordinal is a record of the two, with the ordinal counted
+  from 1 (`Name`, section 1.1): two bindings of a handler `save` are
+  `{ name: "save", ordinal: 1 }` and `{ name: "save", ordinal: 2 }`. A
   declaration whose name no other declaration of the body has takes no
-  ordinal. The names of `Plan.bodies` are counted apart from the names of
-  the other records: a handler is one `Body` named `save`, and it is not
-  one more declaration of the name its bindings have. The name of a body
-  enters an identifier only as the first part of the name of a thing the
-  body makes (next rule), which has a `/` that no other name has, so the
-  two sets of names cannot collide.
+  ordinal, and its name is the string. The names of `Plan.bodies` are
+  counted apart from the names of the other records: a handler is one
+  `Body` named `save`, and it is not one more declaration of the name
+  its bindings have. The name of a body enters an identifier only as
+  the member `body` of the name of a thing the body makes (next rule).
+  Such a name is a record with that member, which no other name is, so
+  the two sets of names cannot collide.
 - A thing a site of a function body makes, where the plan has a record
-  for it, is named from the body. A `Child` that a site of `Body.calls`
-  instantiates has the body's `name`, `/n`, and the index of the site in
-  `Body.calls`: `openRoom/n0`. A `StateCell` a body creates under a
-  constant cause has the body's `name`, `/`, and the cause (section
-  3.14). Both have the `within` of the body. The body's `name` is taken
-  with its ordinal, so the name is formed after the ordinals are given:
-  `make#1/n0`.
+  for it, is named from the body. The name of a `Child` that a site of
+  `Body.calls` instantiates is the record of the body's `name` and the
+  index of the site in `Body.calls`: `{ body: "openRoom", site: 0 }`.
+  The name of a `StateCell` a body creates under a constant cause is
+  the record of the body's `name` and the cause (section 3.14). Both
+  have the `within` of the body. The body's `name` is taken with its
+  ordinal, so the name is formed after the ordinals are given:
+  `{ body: { name: "make", ordinal: 1 }, site: 0 }`.
+- By ruling no name is a string that joins parts with a separator
+  (section 1.2, "Written forms"). A cause that the author writes with
+  `.for(...)` is a string and can hold any character, and it is equal
+  to no name of several parts, because such a name is a record.
 
 Names are unique within one pattern body, and the steps of `within` tell two
 bodies apart. The records that hold a name are `StateCell`, `Operation`,
@@ -1853,6 +1918,45 @@ Two positions that hold equal plain values, or links to one cell, have
 the same element part and different counts, so they have two keys. No
 two positions of a collection have one key, and a key stands at one
 position. The position is not in the key.
+
+**The structure of a key.** By ruling a key has no written form that
+this document defines (section 1.2, "Written forms"). A key is a
+fabric value, a record of two members: `element`, the element part,
+and `occurrence`, the occurrence count, a number from 0. The element
+part is one of four values, by what the position holds.
+
+- **A link**, which is the case of an array of references: the record
+  of the address that the link resolves to, with one member for each
+  part that this section names for that identity.
+- **A plain value of an array with no declared key:** the salted hash
+  of the value, a `FabricHash`.
+- **A plain value of an array that declares key fields:** a record of
+  two members. `fields` is the array of the names of the key fields,
+  in the order of the names. `hash` is the salted hash of the array of
+  the values that the element holds at those fields, in the same order
+  ("A declared key field", below).
+- **A reference by key:** the record of that reference ("A plain value
+  in place has an identity", below).
+
+The second and the third are the case of an array of plain values in
+place, a plain array generated from scratch included. An element of
+the result of another per-element construct has the upstream key, which
+is one of these records unchanged. The key of an element that a
+`flatMap` contributes is a record of two members: `source`, the key of
+the source element, and `member`, the key that the member has in its
+segment ("The key of an element that a `flatMap` contributes", below).
+
+The **salted hash** of a value is what `hashOf` returns for the record
+of two members `salt`, the secret of the space (below), and `value`,
+the value. Where a key enters an identifier it enters as this record,
+in the `element` step of `within`. Where a key stands at a place that
+holds a string, it is the text that `jsonFromFabricValue` returns for
+the record. A resolver tells a key that names fields from one that is
+formed from a whole value by the element part: a record with `fields`,
+or a hash. *Assumed* (section 8, question 144): the names of the
+members, and the record that the salted hash is formed from. That a
+key is a fabric value which the helpers of `base/data-model` hash and
+write is ruled.
 
 By ruling an element of a collection that is the result of a per-element
 construct has the key of the upstream element it came from, in the
@@ -1947,8 +2051,9 @@ and the position is keyed by its cell.
 **What a key with declared fields holds, and how it is resolved.** By
 ruling the key of a plain value in an array that declares key fields
 names the fields. By ruling its element part holds the list of the
-field names and one salted hash of the combined values of those fields,
-as in `name,owner:<hash>`. It does not hold the values. A key that is
+field names and one salted hash of the combined values of those fields:
+for a key of `owner` and `name`, the names `name` and `owner` and one
+hash. It does not hold the values. A key that is
 formed from the whole value, where the array declares no key, names no
 field. So a key formed from a field `id` with the value 7 is not the key
 of an element whose whole value is 7. Two keys of two elements that
@@ -1995,10 +2100,13 @@ and none of it applies there.
 The rulings give the array type, the union form for several fields, the
 place of the schema keyword on the array schema, the order of the
 fields, what the key holds, that it is resolved with no schema, and
-that the key belongs to the array. The record form beyond that is this
-document's choice, the smallest that serves every reader that forms a
-key. Six points are ruled in part or *assumed*, and each is a question
-of section 8.
+that the key belongs to the array. So are two things about the form:
+that the key is a fabric value with no separators of this document's
+own, and where a reader whose type declares no key learns the key
+fields. The record form beyond that is this document's choice, the
+smallest that serves every reader that forms a key. Of the six points
+below each says what is ruled and what is *assumed*, and each is a
+question of section 8.
 
 - **The schema keyword** (question 139). By ruling the keyword is on
   the schema of the array. Its name and its value are *assumed*: the
@@ -2022,48 +2130,63 @@ of section 8.
   `number` (`language-subset.md` §7.2). The owner deferred one
   extension, with priority 2: a key field that holds a reference, whose
   identity enters the hash in the place of a value. *Assumed:* an
-  element that lacks one of the fields at run time, which a validated
-  array cannot hold, is keyed by its whole value.
-- **The written form of the element part** (question 142). The ruling
-  gives the form `name,owner:<hash>` and leaves the exact form to the
-  documents. *Assumed:* the names of the key fields stand in the order
-  of their names, joined with `,`. A `:` follows them, and the hash
-  follows the `:`. The element part of a key of the field `id` is
-  `id:<hash>`, and that of a key of `owner` and `name` is
-  `name,owner:<hash>`. In a name each `\`, `,` and `:` is written with a
-  `\` before it. Read from the left, a `\` makes the character after it
-  a character of a name, and the first `:` that no `\` does so for ends
-  the names. The hash is formed as the element part of a whole value is:
-  it is the salted hash of one value, and that value is the array of
-  the values of the key fields, in the order of the names. For a `Repo`
-  whose `owner` is `commonfabric` and whose `name` is `labs` it is the
-  salted hash of the array `["labs", "commonfabric"]`, and for a `Repo`
-  whose `id` is 7 it is that of the array `[7]`. The combination has to
-  tell a number from a string and keep the values apart, and an array
-  hashed by the hasher of section 1.2 does both: that hasher puts a
-  byte for the type in front of each part of a value. So the number 7
-  and the string `7` have two keys, and two different lists of values
-  never give one input. The names are in the key and are not in the
-  hashed value. The salt is the secret of the space that the hash of
-  a whole value is formed with (below). No document fixes how the hash
-  of an element part is written. *Assumed:* in both forms of an element
-  part it is the digest in base64url with no algorithm tag in front, so
-  it holds no `:`, `,` or `\`. An element part that holds a `:` then
-  names fields, and one that holds none is formed from a whole value.
-  The occurrence count follows the element part as in any key.
-- **A reader whose type is a plain array type** (question 143).
-  *Assumed:* a reader whose parameter is typed as a plain array, as
-  `Repo[]`, and that receives an array with a declared key, forms keys
-  with the key fields of that array, so the key is carried forward to a
-  reader that does not repeat the declaration. Where the reader gets
-  the fields from differs by case. For an array of plain values in
-  place it is the schema that the array is stored under, which holds
-  the keyword. For a plain array generated from scratch, and for the
-  result of another per-element construct, it is the upstream
-  collection: the record of the collection that declares the key
-  (`Collection.keyFields`), and for a derived collection the upstream
-  keys themselves. That is about forming a key. Resolving one reads no
-  schema, as ruled. Over an array of references nothing of it arises.
+  element that lacks one of the fields at run time, or holds there a
+  value that is neither a string nor a number, which a validated array
+  cannot hold, is keyed by its whole value. The prototype's executor
+  does so. *Assumed* as well: a property whose type is a literal type
+  of a string or of a number, or a union of such types, is of type
+  `string` or `number` for this rule, as the prototype's compiler has
+  it.
+- **The form of the element part** (question 142). By ruling the
+  element part has no written form of this document's own: it is a
+  fabric value, and the helpers of `base/data-model` hash it and write
+  it (section 1.2, "Written forms"). Its structure is the names of the
+  key fields, in the order of the names, and one salted hash ("The
+  structure of a key", above). The element part of a key of the field
+  `id` is the record `{ fields: ["id"], hash }`, and that of a key of
+  `owner` and `name` is `{ fields: ["name", "owner"], hash }`. A name
+  is a string of that array and can hold any character, a `:` or a `,`
+  included, because the codec writes the string and no separator of
+  this document stands beside it. The hash is formed as the element
+  part of a whole value is: it is the salted hash of one value, and
+  that value is the array of the values of the key fields, in the
+  order of the names. For a `Repo` whose `owner` is `commonfabric` and
+  whose `name` is `labs` the value is the array
+  `["labs", "commonfabric"]`, and for a `Repo` whose `id` is 7 it is
+  the array `[7]`. The combination has to tell a number from a string
+  and keep the values apart, and an array hashed by the hasher of
+  section 1.2 does both: that hasher puts a byte for the type in front
+  of each part of a value. So the number 7 and the string `7` have two
+  keys, and two different lists of values never give one input. The
+  names are in the key and are not in the hashed value. The salt is
+  the secret of the space that the hash of a whole value is formed
+  with (below). The hash is a `FabricHash` in both forms of an element
+  part, written as the codec writes one, with its algorithm tag. An
+  element part that is a record with `fields` names fields, and one
+  that is a hash is formed from a whole value. The occurrence count is
+  the member `occurrence` of the key, as in any key. *Assumed*
+  (question 144): the names of the members.
+- **A reader whose type declares no key** (question 143). A reader
+  whose parameter is typed as a plain array, as `Repo[]`, accepts an
+  array with a declared key. By ruling such a reader learns the key
+  fields of the array it is given from the schema that is traversed
+  while the link to the array is resolved: the keyword `keyFields` on
+  the schema of the array that is met on that traversal. It forms keys
+  with those fields, so the key is carried forward to a reader that
+  does not repeat the declaration. No separate record of the schema
+  that an array is stored under is kept for it. That is the case of an
+  array of plain values in place that the reader reaches through a
+  link, a plain array generated from scratch that another instance
+  stored included. A collection of the plan that declares the key
+  reaches its source through no such link: it has
+  `Collection.keyFields`, and an element of the result of another
+  per-element construct has the upstream key already. *Assumed*
+  (question 145): where no schema with the keyword is met on the way,
+  as with a link that holds no schema or one that a party wrote whose
+  type declares no key, the reader forms keys from the whole value. A
+  reference by key resolves all the same, because a key names its
+  fields. That is about forming a key. Resolving one reads no schema,
+  as ruled. Over an array of references nothing of it arises.
 - **Two declared keys for one array** (question 141). *Assumed:* the
   compiler reports an error where an array whose type declares one key
   is passed to a parameter whose type declares another key, where it
@@ -2071,15 +2194,24 @@ of section 8.
   §4.4.1). A parameter whose type declares no key accepts the array.
   The rule keeps one stored array from being keyed in two ways by two
   readers of one program; it is not needed for resolving, which uses no
-  declaration.
+  declaration. *Assumed* (question 147): an array whose type declares
+  no key is accepted where a key is declared, and the reader forms
+  keys with the fields that its own type declares. Two readers of one
+  program can then still form two keys for one stored array of plain
+  values in place, one from the whole value and one from the fields.
+  Both keys resolve to the element, and what each reader keeps under
+  its key is its own. The prototype's compiler accepts such an array.
 
-The prototype's executor reads the declaration of a key from the type of
-the element, forms the key from the value of the field with no field
-name and no hash, and resolves a reference by key through the schema
-that the array is stored under. The rulings allow none of the three.
-Three points that the rulings leave open beside these six are question
-129 of section 8, question 93 of `execution-and-storage.md` §11, and
-question 43 of `language-subset.md` §13.
+The prototype's executor reads the declaration of a key from a marker
+on the type of the element, and its compiler writes the keyword into
+the schema of the items. The executor forms the element part as a
+string of its own, with each field name beside the value of the field,
+separators and an escaping, and with no salt and no hash. The rulings
+allow none of the three. It resolves a reference by key from the key
+alone, as ruled. Three points that the rulings leave open beside these
+six are question 129 of section 8, question 93 of
+`execution-and-storage.md` §11, and question 43 of `language-subset.md`
+§13.
 
 `ArrayByKey` is not the collection method `keyBy`. `keyBy` builds an
 index of a collection by a key function (section 3.17) and changes
@@ -2205,7 +2337,23 @@ holds a value. Over an array of references nothing changes: a reference
 to an element is the link to its cell, which a move does not change.
 
 - **Which collection is named.** For an element of an array of plain
-  values in place it is the array, at its address. An element that a
+  values in place it is the array, at its address. By ruling that
+  holds for a plain array generated from scratch as well: an element
+  of an array that a `lift` or a `computed` returns whole, and that
+  the instance stores as an output, has a reference by key whose
+  collection is the output, at its address, by the same rule and with
+  or without a declared key. With no declared key the key is formed
+  from the whole value, so such a reference reads as nothing once the
+  computation returns the element with another value, and no write
+  repairs it, because a write through a handle to a value the
+  instance computes is refused ("A write", below). With a declared key
+  the reference stays with the element while the values of its key
+  fields stay. The owner holds this ruling weakly: if forming these
+  references proves complex for little gain, storing a copy of the
+  value is acceptable. The prototype's executor gives such an element
+  no place, so a handler of a body over the array is given the value
+  and stores a copy; the prototype is to report what the reference
+  costs to build (section 8, question 148). An element that a
   `filter` passes on is the element of the source, so a reference to it
   names the source and the key the element has there, which is also
   its key in the result. For an element of a `map` or `flatMap` result
@@ -2388,13 +2536,28 @@ references.
     under the key (`execution-and-storage.md` §2.5) and is moved with
     the children. A binding that a function body made is named by
     what it holds and not by the key (section 3.14), and nothing is
-    moved for it. The prototype's executor names both by the run and
-    its element keys and moves neither, which the ruling does not
-    allow for the instance.
+    moved for it. The prototype's executor holds such an instance by
+    its name and gives it the name of the new key, so the instance
+    keeps its documents and its streams, and it moves nothing for the
+    binding.
   - **Something is stored under the new key already,** from an
     element that left the collection earlier, since a removal deletes
     nothing. What is moved replaces it. The prototype's executor does
-    so.
+    so. By ruling, where a moved instance that was called through
+    `asInstance()` takes the name that another such instance holds,
+    the replaced instance is no longer named by the element table and
+    its documents stay in the store. Nothing is cleaned up, as when an
+    element leaves, and a link to the replaced instance that is stored
+    elsewhere keeps reading it. The prototype's executor does so. The
+    ruling does not cover an instance that a `lift` or a `computed` of
+    the body made and that a moved one replaces. *Assumed* (section 8,
+    question 146): that instance is removed with its documents, the
+    instances and bindings that its own function bodies made included,
+    so a link to one of its documents that is stored elsewhere reads
+    as nothing and an event for one of its streams finds no instance.
+    The prototype's executor does so. The stream of a binding that a
+    function body made under the old key stays, since nothing is
+    moved or removed for it.
   - **The occurrence count of other elements.** An edit that makes
     the value equal to that of another element, or ends such an
     equality, changes the count of elements that the write did not
@@ -2420,11 +2583,14 @@ references.
   (`execution-and-storage.md` §2.5).
 - **How the reference is stored.** *Assumed* (section 8, question
   113): as a link whose target is the address of the collection, with
-  the key in the place of a position, followed by the path. The key is
-  the salted hash with the occurrence count, behind the names of the
-  key fields where the array declares any, so the stored reference
-  reveals the value to no one who cannot read the salt, as an
-  identifier formed from the key does. Resolving the key to a position
+  the key in the place of a position, followed by the path. A segment
+  of a stored path is a string, so the key stands there as the text
+  that `jsonFromFabricValue` returns for it (section 1.2, "Written
+  forms"; "The structure of a key", above). The key holds a salted
+  hash and the occurrence count, and the names of the key fields where
+  the array declares any, so the stored reference reveals the value to
+  no one who cannot read the salt, as an identifier formed from the
+  key does. Resolving the key to a position
   computes the keys of the positions, which needs the salt. A client
   cannot read the salt, so it cannot resolve such a reference from the
   array alone. *Assumed* with the same question: a read through one is
@@ -2824,7 +2990,11 @@ Consequences, which later sections rely on:
   count as well, and the count is among the members of that source
   element's segment: the number of earlier members of the same
   segment with the same identity or value. The position in the
-  segment is not in the key. Four things follow.
+  segment is not in the key. The key is the record of the two, the
+  key of the source element and the key of the member ("The structure
+  of a key", above). By ruling no separator joins them (section 1.2,
+  "Written forms"), and a reader that needs the key of the source
+  element takes the member `source`. Four things follow.
   - Two members of one segment that change places change no key, and
     nothing is evaluated for them in a body over the result, except
     the nodes that read the index, as for a `map`.
@@ -5413,7 +5583,21 @@ JSX factory of today writes the members out when the tree is built,
 for what is an array at that time. An expression of array type that
 is no collection, as an input written `{items}`, is one child that
 holds the reference, by the rule for any child. The prototype's
-compiler makes each of these one child.
+compiler makes each of these one child. The runtime of today runs
+neither ruled form where a pattern's body writes it over a pattern
+value, so the two rules have no run of today's runtime to be compared
+with in the reactive tier. For an array literal with a spread among
+the children, today's transformer reports that the spread is not
+lowerable (`rewriteTrackedOpaquePatternBody` in
+`base/ts-transformers/src/transformers/pattern-body-reactive-root-lowering.ts`).
+For a JSX spread child of a pattern value, by the prototype's run the
+evaluation of the pattern throws. In a function body both forms run
+today, a view node flattens the arrays it is handed in both runtimes,
+and the prototype's comparison finds the values equal there. The
+prototype tried the spread of a pattern value, and its notes do not
+say what the runtime of today does for each of the three cases of a
+source: an array of references, an array of plain values in place,
+and the result of another per-element construct.
 A fragment is the same record with the fragment's
 name. The rendered tree under `$UI` is such a construction, and its paths
 are these.
@@ -7341,7 +7525,8 @@ key, the plan records the cell as follows.
 
 - The `StateCell` has the site's `schema` and `scope`, the `within` of the
   body, and a `name` formed from the body's `name` and the cause: the
-  body's name, a `/`, and the canonical form of the constant. Where the
+  record of the body's name and the constant (`Name`, section 1.1;
+  section 1.3). Where the
   cause is the element key, the name is the body's name alone, and the
   `element` step of `within` contributes the key. The identifier is the
   one a cell created under an explicit cause has
@@ -8495,8 +8680,8 @@ pattern, the profile-creation pattern, and the profile picker
 (`launchSuggestionPattern`, `launchProfileCreatePattern` and
 `launchProfilePickerPattern` in `wish.ts`). The sidecars' names are
 `suggestion`, `profileCreate` and `profilePicker`. The `name` of the
-`Child` is the operation's
-`name`, `/`, and the sidecar's name, with the operation's `within`, so its
+`Child` is the record of the operation's `name` and the sidecar's name
+(`Name`, section 1.1), with the operation's `within`, so its
 identifier derives from the wish's cause. The built-in instantiates it on
 the runs that need it, writes its argument under the label of the result,
 and stores a link to its result at `[UI]`, or at `result` for a
@@ -10138,14 +10323,14 @@ B0  handler   commitSend
                  w6  handle b2  */replyTo/thread  passes e5
                  w7  handle b2  */replyTo/quotes  passes e6
       envelopes  handle b3  *
-B1  function  threadTitles#1
+B1  function  threadTitles, ordinal 1
       reads      s2 s3 s4 s5
 B2  function  messageFacts
       reads      s0
       computed   titles/* : value   T_titles
       handles    h0  slot s0   messages
-B3  function  bodyText#1     reads m0 m1 m2 m4
-B4  function  viewKeyOf#1    reads m6
+B3  function  bodyText, ordinal 1     reads m0 m1 m2 m4
+B4  function  viewKeyOf, ordinal 1    reads m6
 ```
 
 The name of a body is the name of its use (section 1.3). `room.tsx`
@@ -10842,9 +11027,11 @@ this document made.
     name apart by their order among declarations of that name. Adding one
     before another renames the later ones, and state stored under them is
     not found again. *Assumed:* accepted. The prototype measures how many
-    declarations of the corpus take an ordinal. The written form is
-    `name#n` (section 1.3). A cause the author writes with `.for(...)`
-    takes the place of a name and can be equal to a name so formed.
+    declarations of the corpus take an ordinal. A name with its
+    ordinal is a record of the two (section 1.3), which no cause is
+    equal to. A cause the author writes with `.for(...)` takes the
+    place of a name and can be equal to the name of another
+    declaration that has no ordinal.
     *Assumed:* the compiler refuses a pattern body in which two
     declarations have one name after the ordinals are given, and
     `language-subset.md` has no diagnostic for it.
@@ -12648,14 +12835,16 @@ this document made.
      a child under the key and is moved, and nothing is moved for a
      binding that a function body made, which is named by what it holds.
      What is moved replaces what is stored under the new key from a key
-     that left earlier. Nothing is moved for the other elements whose
+     that left earlier; by ruling an `asInstance()` instance that is so
+     replaced stays in the store, and what holds for a replaced instance
+     that a function body made is question 146. Nothing is moved for the
+     other elements whose
      occurrence count the edit changed: each reads what is stored under
      the key that its value and its new count give. And a write that is
      not made through a reference by key, as a `set` of the whole array,
      re-keys nothing, and the element is another element. The
-     prototype's executor does the last three; it names an instance that
-     a function body made by the run with its element keys and does not
-     move it. The case is an array of plain values in place with no
+     prototype's executor does all four. The case is an array of
+     plain values in place with no
      declared key field, and a body over the result of another
      per-element construct applied to it; nothing of it arises over an
      array of references. The entry keeps its number.
@@ -12757,16 +12946,16 @@ this document made.
 140. **What the element part of a key that names its fields holds** (for
      the project owner). Not open, by ruling: the element part holds the
      list of the field names and one salted hash of the combined values
-     of those fields, as `name,owner:<hash>`, and does not hold the
-     values. The resolver reads the names from the key, combines those
+     of those fields, and does not hold the values. The resolver reads
+     the names from the key, combines those
      fields of each element of the array, hashes, and compares, with no
      schema. The salt is the one that the element part of a whole value
      is hashed with, which a client cannot read, so a client cannot form
      such a key before the server stores a link, and a stored reference
      does not show the values of the key fields. Two keys that share the
      value of one field have no hash in common (section 1.3, "A declared
-     key field"). The exact written form is question 142. The ruling is
-     about plain values: an array of plain values in place, a plain
+     key field"). The form of the element part is question 142. The
+     ruling is about plain values: an array of plain values in place, a plain
      array generated from scratch included, and the result of another
      per-element construct where the upstream position holds a value. An
      array of references is keyed by its cells and is not affected. The
@@ -12789,53 +12978,151 @@ this document made.
      construct where the upstream position holds a value. An array of
      references is keyed by its cells and is not affected.
 142. **The written form of the element part of a key that names its
-     fields** (for the project owner). By ruling the element part is the
-     list of the field names and one salted hash of the combined values,
-     as `name,owner:<hash>`, and the exact form is the documents' to
-     define. *Assumed* (section 1.3, "A declared key field"), in four
-     parts. The separator: the names in the order of their names, joined
-     with `,`, then `:`, then the hash. The escaping of a name: a `\`
-     before each `\`, `,` and `:` of a name. The combination: the hash
-     is of one value, the array of the values of the key fields in the
-     order of the names, as `["labs", "commonfabric"]` and `[7]`, hashed
-     as a whole value is; the hasher puts a byte for the type in front
-     of each part, so a number and a string differ, and two different
-     lists of values never give one input. The salt: the secret of the
-     space that the hash of a whole value is formed with. Also assumed,
-     because no document fixes how the hash of an element part is
-     written: it is the digest in base64url with no algorithm tag in
-     front, in both forms of an element part, so that an element part
-     with a `:` names fields and one without is formed from a whole
-     value. The alternatives put the names into the hashed value as
-     well, so that two keys of equal values under two lists of names
-     have two hashes, or hash a list of name and value pairs. The
-     question is about plain values: an array of plain values in place,
-     a plain array generated from scratch included, and the result of
-     another per-element construct where the upstream position holds a
-     value. An array of references is keyed by its cells and is not
-     affected.
+     fields** (for the project owner). Not open, by ruling: the element
+     part has no written form that the documents define, with
+     separators or an escaping of their own. It is a fabric value, and
+     the helpers of `base/data-model` hash it and write it: `hashOf`
+     for a hash, and `jsonFromFabricValue` where a string is needed
+     (section 1.2, "Written forms"). The ruling was given because a
+     field name can hold a `:`, and it holds for every key, identifier
+     and stored string of this design, and not for this element part
+     alone. Its structure is the names of the key fields in the order
+     of the names, and one salted hash of the array of the values of
+     those fields in the same order (section 1.3, "The structure of a
+     key" and "A declared key field"). A hash is written as the
+     helpers write one, with its algorithm tag. The names of the
+     members of the record are question 144. The ruling is about plain
+     values where it concerns this element part: an array of plain
+     values in place, a plain array generated from scratch included,
+     and the result of another per-element construct where the
+     upstream position holds a value. An array of references is keyed
+     by its cells, and the element part there is the record of the
+     address. The entry keeps its number.
 143. **A reader whose type is a plain array type, given an array with a
      declared key** (for the project owner). By ruling the key is
-     declared on the array, and `ArrayByKey<Repo, "id">` is a `Repo[]`.
-     A reader whose parameter is typed `Repo[]` then accepts such an
-     array, and the ruling does not say with which fields that reader
-     forms keys. *Assumed:* with the key fields of the array it
-     receives, so the key is carried forward and a reader does not have
-     to repeat the declaration. The owner agreed to the proposal and did
-     not rule it. Where the reader gets the fields from, by case: for an
-     array of plain values in place, from the schema that the array is
-     stored under; for a plain array generated from scratch, and for the
-     result of another per-element construct, from the upstream
-     collection, which is the record `Collection.keyFields` of the
-     collection that declares the key and, for a derived collection, the
-     upstream keys that its elements have already. For an array in place
-     this needs the stored schema of the array where a key is formed,
-     and no document says which record gives it to the reader.
-     *Assumed:* the link through which the reader reaches the array
-     holds the schema of the array with the keyword, as a link holds the
-     schema that a default is read through (section 2.5). Resolving a
-     key reads no schema under either answer. The alternative forms the
-     keys of such a reader from the whole value, and an element then has
-     two keys for two readers of one program. Over an array of
-     references nothing of this arises: a position that holds a link is
-     keyed by its cell.
+     declared on the array, and `ArrayByKey<Repo, "id">` is a `Repo[]`,
+     so a reader whose parameter is typed `Repo[]` accepts such an
+     array. Not open, by ruling: such a reader learns the key fields of
+     the array it is given from the schema that is traversed while the
+     link to the array is resolved, which is the keyword `keyFields` on
+     the schema of the array that is met on that traversal, and no
+     separate record of the schema that the array is stored under is
+     kept (section 1.3, "A declared key field"). So the key is carried
+     forward and a reader does not have to repeat the declaration. The
+     ruling is about an array of plain values in place that the reader
+     reaches through a link, a plain array generated from scratch that
+     an instance stored included. A collection of the plan that
+     declares the key has `Collection.keyFields`, and an element of the
+     result of another per-element construct has the upstream key.
+     Resolving a key reads no schema. Over an array of references
+     nothing of this arises: a position that holds a link is keyed by
+     its cell. What the reader does where no such schema is met is
+     question 145. The entry keeps its number.
+144. **The record forms of a key and of a name** (for the project
+     owner). By ruling the design builds no key, identifier or stored
+     string by joining parts with separators and an escaping of its
+     own; the documents state the structure, and the helpers of
+     `base/data-model` hash and write the fabric value. The ruling
+     names the structure of a key with declared fields, the names in
+     the order of the names and one salted hash, and leaves the record
+     forms to the documents. *Assumed* (section 1.1, `Name`; section
+     1.2, "Written forms"; section 1.3, "The structure of a key"), in
+     five parts. A key is a record with the members `element` and
+     `occurrence`. The element part of a key that names fields is a
+     record with the members `fields` and `hash`, that of a key formed
+     from a whole value is the hash alone, and that of a position that
+     holds a link is the record of the address. The key of a `flatMap`
+     member is a record with the members `source` and `member`, in the
+     place of the two keys joined with a separator. The salted hash of
+     a value is `hashOf` of the record with the members `salt` and
+     `value`. And a name of several parts is one of the records of
+     `Name`: a name with its ordinal, a thing that a site of a body
+     makes, a cell under a constant cause, and a sidecar. Where a key
+     stands in a stored path it is the text that `jsonFromFabricValue`
+     returns for the record. The alternatives use arrays in the place
+     of records, give the salt to the hasher in another way, or hold
+     a name as the text of the codec in a member of type string. The
+     parts on a key are about each case as section 1.3 has it: the
+     address record for an array of references, the hash and the
+     record with `fields` for an array of plain values in place, a
+     plain array generated from scratch included, and the upstream key
+     unchanged for the result of another per-element construct. The
+     part on a name is not about a per-element construct.
+145. **A reader whose type declares no key, where no schema with the
+     keyword is met** (for the project owner). By ruling such a reader
+     learns the key fields from the schema that is traversed while the
+     link to the array is resolved (question 143). A link can hold no
+     schema, and a link that a party wrote whose type declares no key
+     holds a schema without the keyword. *Assumed:* the reader then
+     forms keys from the whole value. A reference by key that another
+     reader stored still resolves, because a key names its fields. An
+     element then has two keys for two readers, and what each keeps
+     under its key is its own. The alternatives fail the read, or look
+     for the keyword in a record of the schema that the array is
+     stored under, which the ruling says is not kept. The case is an
+     array of plain values in place that the reader reaches through a
+     link, a plain array generated from scratch that an instance
+     stored included. Over the result of another per-element construct
+     the elements have the upstream key, and over an array of
+     references nothing of it arises.
+146. **An instance that a function body made, replaced on a re-key**
+     (for the project owner; from the prototype). By ruling a re-key
+     moves an instance that a `lift` or a `computed` of the element
+     body made, and what is moved replaces what is stored under the
+     new key from a key that left earlier. By ruling an instance that
+     was called through `asInstance()` and that a moved one replaces
+     stays in the store, no longer named by the element table, and a
+     link stored elsewhere keeps reading it. That ruling does not
+     cover a replaced instance that a `lift` or a `computed` made.
+     *Assumed:* it is removed with its argument document, its result
+     document, its state cells, and the instances and bindings that
+     its own function bodies made, as the prototype's executor does;
+     a link to one of its documents that is stored elsewhere reads as
+     nothing, and an event for one of its streams finds no instance.
+     The alternative leaves it in the store as an `asInstance()`
+     instance is left, by the rule that a removal deletes nothing. The
+     case is an array of plain values in place with no declared key
+     field, and a body over the result of another per-element
+     construct applied to it; nothing of it arises over an array of
+     references, where no write changes a key.
+147. **An array whose type declares no key, given where a key is
+     declared** (for the project owner; from the prototype). The
+     assumed error `array-by-key:mismatch` is for two declared keys
+     that differ (question 141), and a reader whose type declares no
+     key accepts an array with a declared key (question 143). The
+     third combination is an array whose type declares no key, given
+     to a parameter whose type declares one. *Assumed:* it is
+     accepted, as the prototype's compiler has it, and the reader
+     forms keys with the fields that its own type declares. Two
+     readers of one program can then form two keys for one stored
+     array, one from the whole value and one from the fields; both
+     resolve to the element, and what each reader keeps under its key
+     is its own. The alternative refuses it as a mismatch, which would
+     refuse a plain array literal given to such a parameter unless the
+     literal takes the type of the parameter. The case is an array of
+     plain values in place and a plain array generated from scratch.
+     The result of another per-element construct has the element type
+     of its source with the key of the source, so it is the case of
+     question 141, and on an array of references the declaration has
+     no effect.
+148. **A reference by key to an element of a plain array generated
+     from scratch** (for the project owner; from the prototype). Not
+     open, by ruling: an element of an array that a `lift` or a
+     `computed` returns whole, stored as an output, has a reference by
+     key with the output's address as its collection, by the same rule
+     as an element of an array of plain values in place, with or
+     without a declared key (section 1.3, "A plain value in place has
+     an identity"). Without a declared key the key is the whole value,
+     so the reference reads as nothing once the element changes, and
+     no write repairs it, since a computed output refuses writes. The
+     owner gave the ruling with a reservation: "if all that hashing
+     gets too complex for little gain, copies are fine". So storing a
+     copy is acceptable if building the reference proves complex for
+     little gain. The prototype's executor gives such an element no
+     place and stores a copy, and the prototype is to report what the
+     reference costs to build. The ruling is about a plain array
+     generated from scratch alone. An array of plain values that is
+     stored in place has its reference by key by the earlier ruling,
+     an element of the result of another per-element construct has
+     the upstream key, and an element of an array of references is
+     the link to its cell. The entry keeps its number.

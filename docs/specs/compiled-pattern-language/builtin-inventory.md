@@ -484,7 +484,13 @@ be recomputed, and that its state moves with it.
   array type `ArrayByKey<T, "field">`, or several as a union of
   their names, and the key of an element of it then names the fields
   and holds one salted hash of their values. A reference that holds
-  such a key is resolved from the key alone, with no schema. The key
+  such a key is resolved from the key alone, with no schema. By ruling
+  a key is a fabric value, a record of its parts, and nothing in it is
+  joined with separators of this design; `hashOf`
+  (`base/data-model/src/value-hash/impl.ts`) hashes it and
+  `jsonFromFabricValue` (`base/data-model/src/codecs.ts`) writes it
+  where a string is needed (`plan-and-label-templates.md` §1.2,
+  "Written forms"). The key
   belongs to the array, so an element put into a second array has
   that array's key, or none. The declaration is for an
   array of

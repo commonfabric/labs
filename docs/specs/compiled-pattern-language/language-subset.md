@@ -609,13 +609,19 @@ constructor, in the declared result type of a `computed` or a `lift`.
 The array type, the union form for several fields, and the order of the
 fields are ruled. So is that the key belongs to the array and not to
 the element. Each point below says what of it is ruled and what is
-*assumed*; the assumed ones are questions 138, 141 and 143 of
+*assumed*; the assumed ones are questions 138, 141, 145 and 147 of
 `plan-and-label-templates.md` §8 and question 44 of
 [§13](#13-open-questions).
 
 - **The fields.** The second argument is a string literal type, or a
   union of string literal types, and each names a required property
   of `T` at the top level whose type is `string` or `number`.
+  *Assumed:* a literal type of a string or of a number, and a union
+  of such types, count as `string` or `number` here, as the
+  prototype's compiler has it. A name can hold any character, a `:`
+  included, because the key holds the names as strings of a fabric
+  value and joins them with no separator
+  (`plan-and-label-templates.md` §1.2, "Written forms").
   Anything else is refused (`array-by-key:declaration`). The name of
   the diagnostic is *assumed*. The owner deferred one extension, with
   priority 2: a key field that holds a reference, whose identity
@@ -633,19 +639,30 @@ the element. Each point below says what of it is ruled and what is
   whole value where it declares none. The two arrays hold two copies.
   The result of another per-element construct is not such a second
   array: its elements have the upstream key.
-- **A reader whose type is a plain array type.** *Assumed:* a
-  parameter that is typed `Repo[]` accepts an `ArrayByKey<Repo, "id">`,
-  and the reader forms keys with the key fields of the array it is
-  given, so the key is carried forward and the reader does not repeat
-  the declaration. That holds for an array of plain values in place,
-  for a plain array generated from scratch, and for the result of
-  another per-element construct; `plan-and-label-templates.md` §1.3
-  says where the reader takes the fields from in each case.
+- **A reader whose type is a plain array type.** A parameter that is
+  typed `Repo[]` accepts an `ArrayByKey<Repo, "id">`. By ruling the
+  reader learns the key fields of the array it is given from the
+  schema that is traversed while the link to the array is resolved,
+  where that schema has the keyword of the declaration, and forms
+  keys with them. So the key is carried forward and the reader does
+  not repeat the declaration. That is for an array of plain values in
+  place, a plain array generated from scratch included; an element of
+  the result of another per-element construct has the upstream key
+  already. *Assumed* (`plan-and-label-templates.md` §8, question
+  145): where no schema with the keyword is met on the way, the
+  reader forms keys from the whole value.
 - **Two declared keys for one array.** *Assumed:* an array whose type
   declares one key is not assignable to a parameter whose type
   declares another key, and the compiler reports it where it sees both
   types (`array-by-key:mismatch`). A parameter whose type declares no
-  key accepts the array. The rule is for plain values, in an array of
+  key accepts the array. *Assumed* as well
+  (`plan-and-label-templates.md` §8, question 147): an array whose
+  type declares no key is accepted where a key is declared, and
+  nothing is reported for it. The prototype's compiler checks an
+  argument, an attribute of a tag that names a pattern, a returned
+  value under a written return type, and an initializer under an
+  annotation, and does not check an assignment or the argument of a
+  handle method. The rule is for plain values, in an array of
   plain values in place and in the result of another per-element
   construct where the upstream position holds a value; on an array of
   references the declaration has no effect, and nothing is reported.
@@ -656,6 +673,11 @@ member below the element, still resolves it
 (`plan-and-label-templates.md` §1.3, "A declared key field"). By ruling
 the key holds the names of the fields and one salted hash of their
 values, and not the values, so a stored reference does not show them.
+By ruling an element of a plain array generated from scratch, which a
+`lift` or a `computed` returns whole, has a reference by key as an
+element of a stored array of plain values has, with or without a
+declared key; the owner accepts a copy there if the reference proves
+complex to build for little gain (its §8, question 148).
 `ArrayByKey` is unrelated
 to the method `keyBy` ([§4.7](#47-cell-and-handle-methods)), which
 builds an index of a collection and declares the key of no element.
@@ -3997,7 +4019,7 @@ none of the other eight.
 | `default:not-static` | error | A `Default` value that is neither a literal-like type nor `typeof` of a module-scope constant with a static initializer (§8.8), or that is not assignable to its type. A constant whose initializer is a call or a `new` expression is such a value: `Default<typeof INITIAL>` with `const INITIAL = createInitial()` | Write the value as a literal of the declared type, in the type or as the initializer of the constant | changes (was the warning `schema-default:unresolved`) |
 | `scope:union-member` | error | A scope wrapper on a member of a union that has a member other than `null` and `undefined` | Put the scope around the union: `PerUser<A \| B>` | new |
 | `array-by-key:declaration` | error | *Assumed*, the name included (§4.4.1, "A declared key"; §13, question 44; `plan-and-label-templates.md` §8, question 138). An `ArrayByKey<T, "field">` whose second argument is not a string literal type, or a union of string literal types, each of which names a required top-level property of `T` of type `string` or `number`. The declaration concerns an array of plain values in place, a plain array generated from scratch included; on an array of references it is accepted and has no effect (§13, question 43) | Name required `string` or `number` properties of the element: `ArrayByKey<Repo, "id">`, or `ArrayByKey<Repo, "owner" \| "name">` | new |
-| `array-by-key:mismatch` | error | *Assumed*, the name included (§4.4.1, "A declared key"; §13, question 44; `plan-and-label-templates.md` §8, question 141). An array whose type declares one key with `ArrayByKey` is passed to a parameter, or assigned to a place, whose type declares another key, where the compiler sees both types. A place whose type is a plain array type accepts the array, and *assumed* forms keys with the key fields of the array it is given (`plan-and-label-templates.md` §8, question 143). The rule concerns plain values, in an array of plain values in place and in the result of another per-element construct where the upstream position holds a value; on an array of references nothing is reported | Declare the same key fields on both types, or declare a plain array type on the receiving side | new |
+| `array-by-key:mismatch` | error | *Assumed*, the name included (§4.4.1, "A declared key"; §13, question 44; `plan-and-label-templates.md` §8, question 141). An array whose type declares one key with `ArrayByKey` is passed to a parameter, or assigned to a place, whose type declares another key, where the compiler sees both types. A place whose type is a plain array type accepts the array, and by ruling forms keys with the key fields that the schema traversed while the link to the array is resolved declares (`plan-and-label-templates.md` §8, questions 143 and 145). *Assumed:* an array whose type declares no key is accepted where a key is declared (its question 147). The rule concerns plain values, in an array of plain values in place and in the result of another per-element construct where the upstream position holds a value; on an array of references nothing is reported | Declare the same key fields on both types, or declare a plain array type on the receiving side | new |
 
 ## 11. Corpus evidence
 

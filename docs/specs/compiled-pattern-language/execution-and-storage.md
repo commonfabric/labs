@@ -1622,7 +1622,15 @@ read the results of the upstream body for the same key ("A chain of
 per-element constructs", section 2.6). Where the upstream result holds
 a link at the position, the element is the cell it links to. Where it
 holds a value, the element is named by the upstream result and the
-key, and its reference is by key as well.
+key, and its reference is by key as well. By ruling an element of a
+plain array generated from scratch, which a `lift` or a `computed`
+returns whole and the instance stores as an output, is named the same
+way: by the output, at its address, and its key, with or without a
+declared key. With no declared key such a reference reads as nothing
+once the computation returns the element with another value. The owner
+gave that ruling with the reservation that a copy is acceptable where
+the reference proves complex to build for little gain
+(`plan-and-label-templates.md` §8, question 148).
 
 **Resolving a reference by key.** A reference by key that is stored
 outside the element body, as in a cell a handler wrote, is resolved by
@@ -1666,7 +1674,14 @@ key from an element that left earlier; and an element whose
 occurrence count the edit changed has nothing moved and reads what is
 stored under the key of its new count. A write that is not made
 through a reference by key, as a `set` of the whole array, re-keys
-nothing.
+nothing. By ruling, where an instance that was called through
+`asInstance()` moves to a key under which another such instance is
+named, the replaced instance is no longer named by the element table
+and its documents stay in the store: nothing is cleaned up, as when
+an element leaves, and a link to it that is stored elsewhere keeps
+reading it. *Assumed* (`plan-and-label-templates.md` §8, question
+146): a replaced instance that a `lift` or a `computed` of the body
+made is removed with its documents.
 
 The prototype's executor re-keys when the handler returns, or at its
 next settling for a write from outside a handler, as through a member
@@ -1675,9 +1690,11 @@ transaction ends it finds a key that was changed under the key the
 element has now, so the handler's second write succeeds. It moves
 the state cells of the old key, in the body over the array and in the
 bodies over the results of the constructs applied to it, and drops
-the cone instances of the old key. It does not move an instance or a
-binding that a function body made in the element body, which it names
-by the run and its element keys. The ruling has the instance moved.
+the cone instances of the old key. It moves an instance that a
+function body made in the element body, as ruled, and removes the
+instance that the moved one replaces, with its documents. It leaves a
+replaced `asInstance()` instance in the store, and moves nothing for a
+binding that a function body made.
 
 **Which cones are the body's.** The cones of a collection's body are the
 cones of the plan whose `Cone.within` has the `element` step that names
@@ -2313,11 +2330,16 @@ const RepoSearch = pattern<{ url: string; minStars: number }>(
 - **The key** of an element of `response.result.items` names the
   field `id` and holds one salted hash of its value, with the
   occurrence count, which is 0 unless a response holds one `id`
-  twice. For the repository whose `id` is 7 the element part is
-  written `id:<hash>`, where the hash is the salted hash of the array
-  `[7]`; the exact written form is *assumed* (its question 142). The
-  key does not hold the 7. It is not the key of an element whose
-  whole value is 7, which names no field.
+  twice. For the repository whose `id` is 7 the element part is the
+  record `{ fields: ["id"], hash }`, where the hash is the salted
+  hash of the array `[7]`. By ruling the key is that fabric value,
+  with no separators of this design: it is hashed with `hashOf`
+  (`base/data-model/src/value-hash/impl.ts`) where it enters an
+  identifier, and written with `jsonFromFabricValue`
+  (`base/data-model/src/codecs.ts`) where a string is needed. The
+  names of the members are *assumed* (its question 144). The key does
+  not hold the 7. It is not the key of an element whose whole value
+  is 7, whose element part is a hash and names no field.
 - **What a link shows, and what a client can form.** A stored
   reference by key to a repository shows the name `id` and a hash. It
   does not show the value of `id` to a reader of the link who cannot
@@ -2364,11 +2386,15 @@ const RepoSearch = pattern<{ url: string; minStars: number }>(
   by its whole value. Declared as `ArrayByKey<Repo, "id">`, the new
   array has a key of its own. The result of the `filter` above is
   not such an array: it has the upstream keys.
-- **A reader typed `Repo[]`.** *Assumed*
-  (`plan-and-label-templates.md` §8, question 143): a pattern whose
-  input is typed `repos: Repo[]`, given `response.result.items`,
-  forms the keys of a `map` over `repos` with the key field `id` of
-  the array it is given, so a row there has the key it has here.
+- **A reader typed `Repo[]`.** By ruling a pattern whose input is
+  typed `repos: Repo[]`, given `response.result.items`, forms the
+  keys of a `map` over `repos` with the key field `id` of the array
+  it is given, so a row there has the key it has here. It learns the
+  field from the keyword `keyFields` of the schema of the array, which
+  is met on the schema that is traversed while the link to the array
+  is resolved. *Assumed* (`plan-and-label-templates.md` §8, question
+  145): where no schema with the keyword is met on the way, the reader
+  forms the keys from the whole value.
 - **Without the declaration** the key of an element is the hash of its
   whole value. A response in which `stars` changed is then a new key
   and a new instance, and the instance of the old key stays with the
@@ -2403,9 +2429,10 @@ const RepoSearch = pattern<{ url: string; minStars: number }>(
   (`plan-and-label-templates.md` §8, question 139).
 - **The key** of an element is one key, formed across the two fields.
   For the repository `labs` of the owner `commonfabric` the element
-  part is written `name,owner:<hash>`, where the hash is the salted
-  hash of the array `["labs", "commonfabric"]`, the values in the
-  order of the names (the exact form is *assumed*, its question 142).
+  part is the record `{ fields: ["name", "owner"], hash }`, where the
+  hash is the salted hash of the array `["labs", "commonfabric"]`,
+  the values in the order of the names (the names of the members are
+  *assumed*, its question 144).
   Two repositories named `labs` of two owners have two keys with the
   occurrence count 0, and two rows. The two keys have the names in
   common and two unrelated hashes, so neither a link nor a pair of
@@ -2429,30 +2456,37 @@ The prototype's executor has the second case in a fixture, with a
 `id`, a state cell of its row stays when every element has another
 `stars`, and the instance of a row is the same when its element has
 another `stars`, leaves the result of the `filter`, and enters it
-again. It reads the declaration of the key from the type of the
-element. Its key holds the value of the field with no salt and no
-hash, and no name of the field, and its store resolves a reference by
-key through the schema that the array is stored under. By ruling the
-key is declared on the array, names its fields, holds one salted hash
-of their values and is resolved with no schema, so the prototype does
-not follow the rulings there, and it has no key of several fields
-(`plan-and-label-templates.md` §1.3, "A declared key field"). The
-runtime of today has no such declaration, so nothing of this is
-compared with it.
+again. A second fixture has a key of two fields. The prototype reads
+the declaration of the key from a marker on the type
+of the element. Its key names the fields and holds the value of each
+with no salt and no hash, as a string with separators and an escaping
+of its own, and its store resolves a reference by key from the key
+alone. By ruling the key is declared on the array, holds one salted
+hash of the values, and is a fabric value that the helpers of
+`base/data-model` write, so the prototype does not follow the rulings
+in those three points (`plan-and-label-templates.md` §1.3, "A declared
+key field"). In the fixtures the array is what a `lift` returns, and
+the executor gives its elements no place, so a handler over it stores
+a copy where by ruling it stores a reference by key. The runtime of
+today has no such declaration, so nothing of this is compared with
+it.
 
 Three points are open for a declared key: a write to the key field
 itself (`plan-and-label-templates.md` §8, question 129), the document
 of a plain value of a keyed array that a body pushes elsewhere
 (section 11, question 93), and the declaration on an array of
 references (`language-subset.md` §13, question 43). The order of the
-fields and what the element part holds are ruled. Five points about
-the declaration and the form of a key that names its fields are
-assumed: which properties can be key fields beyond the deferred
-extension, the name of the schema keyword, an array passed where
-another key is declared, the exact written form of the element part,
-and a reader whose type is a plain array type
-(`plan-and-label-templates.md` §8, questions 138, 139 and 141 to
-143).
+fields, what the element part holds, that a key is a fabric value with
+no separators of this design, and where a reader whose type declares
+no key learns the key fields are ruled. Six points about the
+declaration and the form of a key that names its fields are assumed:
+which properties can be key fields beyond the deferred extension, the
+name of the schema keyword, an array passed where another key is
+declared, the names of the members of the record of a key, what a
+reader whose type declares no key does where it meets no schema with
+the keyword, and an array whose type declares no key given where a
+key is declared (`plan-and-label-templates.md` §8, questions 138,
+139, 141, 144, 145 and 147).
 
 ### 2.7 Side-writes and bounded iteration
 
@@ -3860,6 +3894,11 @@ createRef({}, {
 step = { element: <collection name>, key: <hashed key> }
 ```
 
+The record is a fabric value that `createRef` hashes, and each step and
+each key in it is a record or a hash, by the ruling that this design
+joins no parts with separators of its own
+(`plan-and-label-templates.md` §1.2, "Written forms").
+
 - `within` has one step per kept collection whose position the path passes
   through. `key` is the hash of the secret of the space and the element
   key of section 5.3, for every key: a cell's identity is hashed under the
@@ -4080,6 +4119,13 @@ step = { site: <call-site name> }                       a compiled-in call
      | { element: <collection name>, key: <element key> }  an element body
 ```
 
+By ruling the cause is this fabric value as it stands. `createRef`
+hashes it with `hashOf` (`base/data-model/src/value-hash/impl.ts`), and
+nothing in it is a string that joins parts: a `<name>` of several
+parts is the record that `plan-and-label-templates.md` §1.1 gives it
+(`Name`), each step of `within` is a record, and an `<element key>` is
+the record of section 5.3.
+
 The record has a `type` and a `within` member no preimage of today has, so
 it cannot equal one. These identifiers are new. Section 9 says what happens
 to state stored under today's identifiers for the same declarations.
@@ -4118,25 +4164,34 @@ space (section 4.10).
 ### 5.3 Element keys and the salt
 
 The `key` of an `element` step has an element part and an occurrence
-count.
+count. By ruling it is a fabric value and has no written form of this
+design: a record of the members `element` and `occurrence`, which
+`createRef` hashes with the rest of the cause, and which
+`jsonFromFabricValue` (`base/data-model/src/codecs.ts`) writes where a
+key has to stand as a string, as in the stored path of a reference by
+key (`plan-and-label-templates.md` §1.2, "Written forms", and §1.3,
+"The structure of a key"). The names of the members are *assumed*
+(its §8, question 144).
 
-- The element part for a position that holds a link is the space and
-  identifier of the cell the link resolves to, and its path, without the
-  link's scope.
-- The element part for a position that holds a plain value is the hash of
-  a secret of the space and the canonical form of the value. Where the
+- The element part for a position that holds a link is the record of
+  the space and identifier of the cell the link resolves to, and its
+  path, without the link's scope.
+- The element part for a position that holds a plain value is the hash
+  of a secret of the space and the value: what `hashOf` returns for the
+  record of the two, a `FabricHash`. Where the
   array declares key fields with the array type
   `ArrayByKey<T, "field">`, by ruling the element part holds the list
   of the field names and one hash of the same secret and the combined
-  values of those fields, as `name,owner:<hash>`. It does not hold the
+  values of those fields: a record whose member `fields` is the array
+  of the names, in the order of the names, and whose member `hash` is
+  the hash of the secret and the array of the values of the fields in
+  that order. It does not hold the
   values, and a reference by key that holds it is resolved from the
   key alone: the resolver reads the names, combines those fields of
   each element of the array, hashes, and compares
-  (`plan-and-label-templates.md` §1.3, "A declared key field").
-  *Assumed* (its §8, question 142): the names are joined with `,` in
-  the order of the names, with a `\` before a `\`, `,` or `:` of a
-  name, and the hashed value is the array of the values of the fields
-  in that order. The case is an array of plain values in place, a
+  (`plan-and-label-templates.md` §1.3, "A declared key field"). A hash
+  in an element part is written as the helpers write one, with its
+  algorithm tag. The case is an array of plain values in place, a
   plain array generated from scratch included.
 - The occurrence count is the number of earlier positions of the
   collection that have the same element part. It is in every key, so no
