@@ -12,7 +12,10 @@ import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";
 import { cfcConfidentialityForObservationNode } from "../src/cfc/observation.ts";
 import { Runtime } from "../src/runtime.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
-import { sqliteQueryStateNodeFactory } from "../src/builtins/sqlite/query-node.ts";
+import {
+  sqliteQueryNodeFactory,
+  sqliteQueryStateNodeFactory,
+} from "../src/builtins/sqlite/query-node.ts";
 
 const signer = await Identity.fromPassphrase("sqlite request correlation");
 const space = signer.did();
@@ -31,7 +34,7 @@ describe("sqlite query request keys", () => {
     await storageManager.close();
   });
 
-  it("preserves legacy request correlation when a returned row violates its schema", async () => {
+  it("preserves request correlation when native row validation fails", async () => {
     const provider = storageManager.open(space);
     const original = provider.sqliteQuery?.bind(provider);
     if (!original) throw new Error("SQLite query provider is required");
@@ -42,7 +45,7 @@ describe("sqlite query request keys", () => {
       const db = cf.sqliteDatabase({
         tables: { notes: cf.table({ id: "integer" }) },
       });
-      return sqliteQueryStateNodeFactory({
+      const inputs = {
         db,
         sql: "SELECT id FROM notes",
         requestKey: "invalid-row-search",
@@ -51,7 +54,11 @@ describe("sqlite query request keys", () => {
           properties: { id: { type: "number" } },
           required: ["id"],
         },
-      });
+      };
+      return {
+        native: sqliteQueryNodeFactory(inputs),
+        legacy: sqliteQueryStateNodeFactory(inputs),
+      };
     });
     const tx = runtime.edit();
     const result = runtime.run(
@@ -64,10 +71,30 @@ describe("sqlite query request keys", () => {
     const cancel = result.sink(() => {});
     try {
       await runtime.settled();
-      expect(result.key("pending").get()).toBe(false);
-      expect(result.key("requestKey").get()).toBe("invalid-row-search");
-      expect(typeof result.key("error").get()).toBe("string");
-      expect(result.key("result").get()).toBeUndefined();
+      const native = result.key("native").resolveAsCell();
+      expect(native.getRaw()).toMatchObject({
+        reason: "error",
+        errorKind: "schemaMismatch",
+      });
+      // The native adapter exposes the compatibility state's value child.
+      const link = native.getAsNormalizedFullLink();
+      expect(link.path.at(-1)).toBe("value");
+      const state = runtime.getCellFromLink({
+        ...link,
+        path: link.path.slice(0, -1),
+        schema: undefined,
+      });
+      expect(state.key("pending").get()).toBe(false);
+      expect(state.key("requestKey").get()).toBe("invalid-row-search");
+      expect(typeof state.key("error").get()).toBe("string");
+      expect(state.key("result").get()).toBeUndefined();
+
+      // Persisted raw nodes keep rowSchema's projection/link-metadata role.
+      const legacy = result.key("legacy");
+      expect(legacy.key("pending").get()).toBe(false);
+      expect(legacy.key("requestKey").get()).toBe("invalid-row-search");
+      expect(legacy.key("error").get()).toBeUndefined();
+      expect(legacy.key("result").get()).toEqual([{ id: "not a number" }]);
     } finally {
       cancel();
       provider.sqliteQuery = original;

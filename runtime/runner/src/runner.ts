@@ -167,6 +167,7 @@ import {
   MAX_PATH_RESOLUTION_LENGTH,
   readStoredReference,
   resolveLink,
+  unlessCyclic,
 } from "./link-resolution.ts";
 import { FILTER_INPUT_SCHEMA } from "./builtins/filter.ts";
 import { FLATMAP_INPUT_SCHEMA } from "./builtins/flatmap.ts";
@@ -892,14 +893,20 @@ function scanUnavailableInputs(
       const source = sourcePath.length === 0
         ? sourceRoot
         : sourceRoot.key(...sourcePath);
-      const target = runtime.getCellFromLink(
+      const resolved = unlessCyclic(() =>
         resolveLink(
           runtime,
           tx,
           parseLink(value, source),
           "value",
           observeReadiness ? {} : { kickCrossSpaceTargets: false },
-        ),
+        )
+      );
+      // A cycle names no value to classify. Ordinary argument reads retain
+      // their own handling of that cycle, including lazy unused captures.
+      if (resolved === undefined) return;
+      const target = runtime.getCellFromLink(
+        resolved,
         undefined,
         tx,
       );
@@ -14148,7 +14155,11 @@ export class Runner {
           ]);
         }
       }
-      this.#runtime.getCellFromLink(target, target.schema, depTx)?.get();
+      // A cyclic static target names no dependency. The handler's own read
+      // still decides whether that capture is needed and can be resolved.
+      unlessCyclic(() =>
+        this.#runtime.getCellFromLink(target, target.schema, depTx)?.get()
+      );
     }
   }
 
