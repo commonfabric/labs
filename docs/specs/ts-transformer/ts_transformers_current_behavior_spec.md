@@ -901,8 +901,11 @@ Diagnostics emitted in all modes:
   - a method call on a pattern input's value in the pattern body, such as
     `user.tags.push("y")`, under every spelling of its callee: a string key
     (`user.tags["push"]`), a `const` key of a literal type
-    (`const K = "push"; user.tags[K]`), or either behind a transparent wrapper
-    (`(user.tags["push"])("y")`)
+    (`const K = "push"; user.tags[K]`), either behind a transparent wrapper
+    (`(user.tags["push"])("y")`), or a receiver behind one
+    (`(user.tags).push("y")`). A key that is more than a name, such as a call
+    whose return type is the literal `"set"`, is reported whatever the method,
+    since naming the method in its place would skip evaluating the key
     (`test/transformers/pattern-body-reactive-root-lowering.test.ts`)
 - **Error** `pattern-context:callback-container`
   - a callback passed to an **unsupported container** in pattern-facing JSX

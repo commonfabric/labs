@@ -31,6 +31,7 @@ import {
 import {
   addBindingTargetSymbols,
   collectLocalOpaqueRootSymbols,
+  constantMethodKeyName,
   getOpaqueAccessInfo,
   isOpaqueOriginCall,
   isOpaqueRootInfo,
@@ -154,20 +155,26 @@ function registerReplacement(
 }
 
 /**
- * The name of the method a member access in callee position calls: the last
- * segment of its path, or, for a key the path keeps as written, the string a
- * key of a literal type names, as `K` does in `const K = "push"; x[K]()`.
+ * The method a member access in callee position calls: the last segment of
+ * its path, or, for a key the path keeps as written, the string a key of a
+ * literal type names. `evaluatesKey` marks a key that is more than a name,
+ * such as `chooseKey()` in `user.name[chooseKey()]("x")`, whose evaluation a
+ * rewrite naming the method in its place would drop.
  */
-function calledMethodName(
+function calledMethod(
   access: ts.Node,
   path: readonly (string | ts.Expression)[],
   checker: ts.TypeChecker,
-): string | undefined {
+): { readonly name: string; readonly evaluatesKey: boolean } | undefined {
   const last = path[path.length - 1];
-  if (typeof last === "string") return last;
+  if (typeof last === "string") return { name: last, evaluatesKey: false };
   if (!ts.isElementAccessExpression(access)) return undefined;
+  const name = constantMethodKeyName(access, checker);
+  if (name !== undefined) return { name, evaluatesKey: false };
   const key = getComputedPropertyKeyInfo(access.argumentExpression, checker);
-  return key?.kind === "literal" ? key.text : undefined;
+  return key?.kind === "literal"
+    ? { name: key.text, evaluatesKey: true }
+    : undefined;
 }
 
 export function reportComputationError(
@@ -871,8 +878,19 @@ function rewriteTrackedOpaquePatternBody(
       // A member access in callee position is a method call, whether the
       // method is named with a property access or a static element key.
       const parentCall = callTargetParents.get(node);
-      const methodName = calledMethodName(node, info.path, context.checker);
+      const method = calledMethod(node, info.path, context.checker);
+      const methodName = method?.name;
       if (parentCall && methodName !== undefined) {
+        if (method?.evaluatesKey) {
+          // Naming the method in place of the key would skip evaluating it.
+          reportOnce(
+            visited,
+            "computation",
+            "Method calls on opaque pattern values are not lowerable. " +
+              notLowerableMethodRemedy(methodName),
+          );
+          return visited;
+        }
         if (KNOWN_PATH_TERMINAL_METHODS.has(methodName)) {
           if (info.path.length <= 1) {
             return visited;

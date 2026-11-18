@@ -73,11 +73,15 @@ export function getCalleeReceiver(
     : undefined;
 }
 
-/** The receiver of a `.get()` call, or `undefined` for any other call. */
+/**
+ * The receiver of a `.get()` call, or `undefined` for any other call. With a
+ * checker, a key written as a name of the literal type `"get"` counts too.
+ */
 export function getGetCallReceiver(
   expression: ts.CallExpression,
+  checker?: ts.TypeChecker,
 ): ts.Expression | undefined {
-  return classifyOpaquePathTerminalCall(expression) === "get"
+  return classifyOpaquePathTerminalCall(expression, checker) === "get"
     ? getCalleeReceiver(expression)
     : undefined;
 }
@@ -96,7 +100,7 @@ export function isCellReadTerminalCall(
   expression: ts.CallExpression,
   context: TransformationContext,
 ): boolean {
-  const receiver = getGetCallReceiver(expression);
+  const receiver = getGetCallReceiver(expression, context.checker);
   if (!receiver) {
     return false;
   }
@@ -117,7 +121,7 @@ export function classifyCallRootPolicy(
     return { kind: "none" };
   }
 
-  if (classifyOpaquePathTerminalCall(expression) === "get") {
+  if (classifyOpaquePathTerminalCall(expression, context.checker) === "get") {
     if (
       siteInfo.helperBoundaryKind &&
       isCellReadTerminalCall(expression, context)
