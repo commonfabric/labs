@@ -6,7 +6,7 @@
  * reader passes through for one row of the result and for its first 20
  * rows, the documents stored in all, and the time.
  *
- * `deno run -A --no-check base/pattern-compiler/compare/parts-growth.ts [--counts=none] [--identity=minted] [--wide] [lengths]`
+ * `deno run -A --no-check base/pattern-compiler/compare/parts-growth.ts [--counts=none] [--identity=minted] [--max=bytes] [--min=bytes] [--wide] [lengths]`
  *
  * The cases are a `map` over an array of references, each to a cell that
  * is a document of its own; over an array of plain values in place with
@@ -53,6 +53,12 @@ export type PartsMeasured = {
   /** The part documents written, and the bytes that they hold. */
   documents: number;
   bytes: number;
+  /**
+   * The bytes that the change put into the documents: what the writer
+   * of the argument wrote, and what the derivation wrote of the result.
+   * It is what a store that takes a patch below a path would be sent.
+   */
+  patchBytes: number;
   created: number;
   deleted: number;
   /** The documents read for row `length / 2` of the result, and for its
@@ -110,7 +116,8 @@ export const change = (
   length: number,
   wide: boolean,
   turn: number,
-): void => {
+): number => {
+  const bytes = (value: unknown) => JSON.stringify(value).length;
   const added = () => {
     const index = length + turn;
     if (!references) return item(index, wide);
@@ -121,9 +128,13 @@ export const change = (
     const { items } = instance.store.docs.get(ARGUMENT)?.value as {
       items: unknown[];
     };
-    instance.spliceArgument(["items"], items.length, 0, [added()]);
+    const member = added();
+    instance.spliceArgument(["items"], items.length, 0, [member]);
+    return bytes(member);
   } else if (operation === "prepend") {
-    instance.spliceArgument(["items"], 0, 0, [added()]);
+    const member = added();
+    instance.spliceArgument(["items"], 0, 0, [member]);
+    return bytes(member);
   } else if (operation === "edit one field") {
     const at = (length >> 1) + turn;
     if (references) {
@@ -132,13 +143,16 @@ export const change = (
     } else {
       instance.writeArgument(["items", `${at}`, "title"], `edited${turn}`);
     }
+    return bytes(`edited${turn}`);
   } else if (operation === "remove first") {
     instance.spliceArgument(["items"], 0, 1, []);
+    return 0;
   } else {
     const { items } = instance.store.docs.get(ARGUMENT)?.value as {
       items: unknown[];
     };
     instance.spliceArgument(["items"], items.length - 1, 1, []);
+    return 0;
   }
 };
 
@@ -154,11 +168,14 @@ export const measure = (
     const instance = start(artifact, one, length, wide, parts);
     const stored = instance.store.parts!;
     const before = instance.transactions.length;
-    change(instance, one, operation, length, wide, 0);
+    let patchBytes = change(instance, one, operation, length, wide, 0);
     const written = new Map<string, number>();
     let created = 0;
     let deleted = 0;
-    for (const { parted } of instance.transactions.slice(before)) {
+    for (
+      const { parted, patchBytes: put } of instance.transactions.slice(before)
+    ) {
+      patchBytes += put;
       for (const { id, bytes } of parted?.written ?? []) written.set(id, bytes);
       created += parted?.created ?? 0;
       deleted += parted?.deleted ?? 0;
@@ -176,6 +193,7 @@ export const measure = (
       operation,
       documents: written.size,
       bytes: [...written.values()].reduce((sum, bytes) => sum + bytes, 0),
+      patchBytes,
       created,
       deleted,
       readOne: stored.counting(() =>
@@ -211,6 +229,11 @@ if (import.meta.main) {
     counts: flags.includes("--counts=none") ? "none" : "stored",
     identity: flags.includes("--identity=minted") ? "minted" : "key",
   };
+  for (const flag of flags) {
+    const [name, value] = flag.split("=");
+    if (name === "--max") parts.documentMaxBytes = Number(value);
+    if (name === "--min") parts.partMinBytes = Number(value);
+  }
   const patterns = await artifactsOf();
   for (const one of CASES) {
     const artifact = patterns.find(({ name }) => name === one.pattern)!;
