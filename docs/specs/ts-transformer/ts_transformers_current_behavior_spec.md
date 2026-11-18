@@ -1681,6 +1681,12 @@ rather than capture-rewritten here.
 Capture analysis:
 
 - captures identifiers/property chains declared outside callback scope
+- captures a method call's receiver rather than its method: `c.get()` captures
+  `c`, and `state.counter.set(x)` captures `state.counter`. A transparent
+  wrapper around the callee keeps the reference, so `(c.get)()` and
+  `c.get!()` are method calls on `c` and capture `c` too, in a `computed()`
+  callback and in a pattern-body expression alike
+  (`test/transparent-wrapper-consistency.test.ts`, "method call captures")
 - excludes imports, module-scoped declarations, function declarations, type
   parameters, JSX tag names, property keys
 - skips syntax that is erased at emit, since no name in it is a runtime value:
