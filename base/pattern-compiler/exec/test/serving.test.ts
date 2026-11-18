@@ -12,12 +12,17 @@ import {
 // the transactions of `execution-and-storage.md` (ES) §1, on the
 // artifacts of the fixtures of the comparison.
 
-const artifactOf = async (name: string): Promise<Artifact> => {
+const patternsOf = async (name: string): Promise<Artifact[]> => {
   const [{ patterns }] = JSON.parse(
     await Deno.readTextFile(
       new URL(`../../compare/fixtures/${name}.emit.json`, import.meta.url),
     ),
   ) as { patterns: Artifact[] }[];
+  return patterns;
+};
+
+const artifactOf = async (name: string): Promise<Artifact> => {
+  const patterns = await patternsOf(name);
   return patterns.find((pattern) => pattern.name === "default") ??
     patterns[patterns.length - 1];
 };
@@ -637,6 +642,47 @@ describe("a refused write of a handler", () => {
       items: ["a", "b"],
       copied: "",
       joined: "a,b",
+    });
+  });
+});
+
+// `fixtures/instantiate.tsx`: the handler `add` instantiates the pattern
+// `Row` and pushes the reference to its result onto `rows`, which is then
+// an array of references. No per-element construct is over it.
+describe("an instance that a handler creates", () => {
+  it("gets its documents in the event's transaction and is evaluated behind the batch", async () => {
+    const patterns = await patternsOf("instantiate");
+    const instance = new Instance(await artifactOf("instantiate"), {
+      note: "n",
+    }, {
+      artifacts: (id) =>
+        patterns.find((pattern) => pattern.plan.patterns?.[0] === id),
+    });
+    const kindsOf = (documents: string[]) =>
+      documents.map((id) => instance.store.docs.get(id)?.kind).sort();
+
+    const transactions = during(instance, () => {
+      instance.send(bindingOf(instance, "add"), { title: "first" });
+    });
+
+    // Two transactions, from the creation to the settled result
+    // (ES §1.1).
+    expect(causes(transactions)).toEqual(["event", "derivation"]);
+    const [event, derivation] = transactions;
+    expect(event.evaluated).toEqual([]);
+    expect(kindsOf(event.written)).toEqual([
+      "argument",
+      "result",
+      "state cell",
+    ]);
+    // The result of the new instance is computed and stored behind the
+    // batch. The result of the instance that made it holds the cell
+    // `rows` by reference, and is not evaluated.
+    expect(derivation.evaluated).toEqual(["result"]);
+    expect(kindsOf(derivation.written)).toEqual(["result"]);
+    expect(derivation.written).not.toContain(instance.id);
+    expect(instance.result()).toMatchObject({
+      rows: [{ title: "first", count: 0 }],
     });
   });
 });
