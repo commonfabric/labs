@@ -411,15 +411,6 @@ confirmed READ-only space membership can resume persisted output without
 writing the viewer's absent scoped defaults. Their schema defaults remain
 readable; an explicit write still requires write access.
 
-Every actor instance of a pattern-owned cell carries the `result` back-link to
-its owning result cell, as the cell's other instances do. A setup writes it onto
-the instances it runs under. A serving runtime, when a viewer's demand for the
-piece arrives, writes it onto the viewer's instance of each such cell narrower
-than its result that lacks it, whether or not the cell declares a default, in
-the transaction that seeds the viewer's defaults. A computation's first write
-into the viewer's instance then lands beside the back-link, and the viewer's
-own later start of the piece finds nothing of it to write.
-
 Pattern argument setup materializes missing declared scoped properties even
 when the caller supplies the argument object through a Cell reference. The
 redirect stays at the input slot so existing child bindings follow subsequent
@@ -593,6 +584,14 @@ while each reader follows that link to a different scoped instance.
 The narrower scoped result is a separate storage instance for the same causal
 id. The broader output document stores a scoped link to that instance rather
 than copying the narrower value into the broader document.
+
+An instance of a pattern-owned derived cell carries the `result` back-link to
+its owning result cell, as the cell's other instances do. A setup writes it onto
+the instances it runs under. A serving runtime's computation for a demander
+writes the demander's instance, which no setup may have run under, so where that
+instance holds no back-link, the computation's write carries one with the value.
+The serving runtime so never leaves a demander's instance holding the back-link
+alone, which would read as an instance already produced.
 
 This applies to auxiliary result cells created to represent structured or
 captured reactive outputs as well as direct scalar outputs. Any intermediate or
