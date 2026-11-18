@@ -1162,6 +1162,69 @@ describe("CFCellLink in a document", () => {
       expect(reads.resolutions).toBe(1);
     });
 
+    it("asks the worker for where the links end, loading what they pass through", async () => {
+      const target = pieceCell("of:fid1:topic-111111");
+      const asked: unknown[] = [];
+      const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+        resolveAsCell: (options?: unknown) => {
+          asked.push(options);
+          return Promise.resolve(target);
+        },
+      });
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+
+      expect(await navigatedToOnceSettled(() => chip(element).click()))
+        .toEqual(["of:fid1:topic-111111"]);
+      expect(asked).toEqual([{ loaded: true }]);
+    });
+
+    it("resolves again for a click after a press was let go", async () => {
+      const cell = linkTo(
+        pieceCell("of:fid1:topic-111111"),
+        pieceCell("of:fid1:topic-222222"),
+      );
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
+      document.dispatchEvent(pointer("pointercancel", 10, 10));
+      await settle();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // The keyboard's click, with no press of its own: where the link
+      // points now, not where the cancelled press found it.
+      expect(await navigatedToOnceSettled(() => chip(element).click()))
+        .toEqual(["of:fid1:topic-222222"]);
+    });
+
+    it("drags only what its current press resolved, once that lands", async () => {
+      const first = draggableCell({ $NAME: "First" });
+      const second = draggableCell({ $NAME: "Second" });
+      const pending = deferred<CellHandle>();
+      const answers: Promise<CellHandle>[] = [
+        Promise.resolve(first),
+        pending.promise,
+      ];
+      const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+        resolveAsCell: () => answers.shift()!,
+      });
+      const element = await cellLink({ label: "Open", cell });
+      await shownText(element);
+      expect(await element.resolveTarget()).toBe(first);
+
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
+      document.dispatchEvent(pointer("pointermove", 30, 30));
+      expect(isDragging()).toBe(false);
+
+      pending.resolve(second);
+      await settle();
+      document.dispatchEvent(pointer("pointermove", 40, 40));
+
+      expect(isDragging()).toBe(true);
+      expect(getCurrentDrag()!.cell).toBe(second);
+    });
+
     it("never asks for its target's name, even once resolved", async () => {
       const target = pieceCell("of:fid1:topic-111111", "Inbox");
       const targetReads = countReads(target);

@@ -166,6 +166,69 @@ describe("topics-navigation-helpers", () => {
       expect(result.requests).toBeGreaterThanOrEqual(1);
     });
 
+    it("asks no other labelled link to resolve, through the click and its revalidation", async () => {
+      await page.evaluate(() => {
+        document.body.replaceChildren();
+        const clicks: string[] = [];
+        const requests: Record<string, number> = {};
+        const buildLink = (label: string, pieceId: string) => {
+          requests[pieceId] = 0;
+          const link = Object.assign(document.createElement("cf-cell-link"), {
+            label,
+            _resolvedCell: undefined as unknown,
+            resolveTarget() {
+              requests[pieceId]++;
+              return new Promise((resolve) =>
+                setTimeout(() => {
+                  link._resolvedCell = {
+                    space: () => "did:key:space",
+                    id: () => pieceId,
+                    ref: () => ({ scope: "space", path: [] }),
+                  };
+                  resolve(link._resolvedCell);
+                }, 5)
+              );
+            },
+          });
+          const linkRoot = link.attachShadow({ mode: "open" });
+          const chip = document.createElement("cf-chip");
+          const chipRoot = chip.attachShadow({ mode: "open" });
+          const button = document.createElement("button");
+          button.textContent = label;
+          button.addEventListener("click", () => clicks.push(pieceId));
+          chipRoot.append(button);
+          linkRoot.append(chip);
+          return link;
+        };
+        for (let index = 0; index < 10; index++) {
+          document.body.append(buildLink("Other", `of:fid1:other-${index}`));
+        }
+        document.body.append(buildLink("Open", "of:fid1:selected"));
+
+        Object.assign(globalThis, {
+          commonfabric: { viewSettled: () => Promise.resolve() },
+          __topicsNavigationResult: () => ({ clicks, requests }),
+        });
+      });
+
+      const returned = await clickCellLink(page, "Open");
+      const result = await page.evaluate(() =>
+        (globalThis as typeof globalThis & {
+          __topicsNavigationResult: () => {
+            clicks: string[];
+            requests: Record<string, number>;
+          };
+        }).__topicsNavigationResult()
+      );
+
+      expect(returned).toBe("of:fid1:selected");
+      expect(result.clicks).toEqual(["of:fid1:selected"]);
+      expect(
+        Object.entries(result.requests)
+          .filter(([id, count]) => id !== "of:fid1:selected" && count > 0),
+      ).toEqual([]);
+    });
+
     it("revalidates after a surviving link's box settles", async () => {
       await page.evaluate(() => {
         document.body.replaceChildren();

@@ -28,6 +28,12 @@ import {
 import { LinkTargetWatch } from "../../core/link-target-watch.ts";
 import { runtimeContext, spaceContext } from "../../runtime-context.ts";
 
+/** A press on a labelled link: what it resolves, and what it resolved. */
+type LinkPress = {
+  readonly resolution: Promise<CellHandle | undefined>;
+  target?: CellHandle;
+};
+
 /**
  * CFCellLink - Renders a link or cell as a clickable, draggable pill
  *
@@ -119,11 +125,12 @@ export class CFCellLink extends BaseElement {
   private _resolveCellGeneration = 0;
 
   /**
-   * The resolution a press started on a labelled link, which the click that
-   * follows the press uses. A press that ends in a drag drops it.
+   * The press in progress on a labelled link: the resolution it started, and
+   * its target once that lands. Only the click that ends the press uses the
+   * resolution, and a drag moves only its target. A press that ends without
+   * a click, cancelled or released elsewhere, leaves nothing for a later one.
    */
-  private _pressResolution: Promise<CellHandle | undefined> | undefined =
-    undefined;
+  private _press: LinkPress | undefined = undefined;
 
   /**
    * Whether the link resolves only when acted on: a labelled link shows its
@@ -154,7 +161,9 @@ export class CFCellLink extends BaseElement {
     }
     if (!source) return Promise.resolve(undefined);
     const resolving = source;
-    return resolving.resolveAsCell().then(
+    // A click navigates to the answer at once, so it waits for the documents
+    // the links pass through rather than take the first one still to arrive.
+    return resolving.resolveAsCell({ loaded: true }).then(
       (resolved) => {
         if (superseded()) return undefined;
         this._setResolvedCell(resolved);
@@ -234,7 +243,7 @@ export class CFCellLink extends BaseElement {
       this.classList.remove("dragging");
       suppressClickAfterDrag(this);
       // The press ended in a drag, so no click will use what it resolved.
-      this._pressResolution = undefined;
+      this._press = undefined;
     }
 
     this._isDragging = false;
@@ -281,7 +290,7 @@ export class CFCellLink extends BaseElement {
     if (this._resolvesOnDemand) {
       // A labelled link reads nothing until it is acted on; whatever an
       // earlier input resolved or followed no longer applies.
-      this._pressResolution = undefined;
+      this._press = undefined;
       this.#linkTarget.cancel();
       this._prepareSubscriptionTarget(undefined);
       this._setResolvedCell(undefined);
@@ -450,7 +459,7 @@ export class CFCellLink extends BaseElement {
   private _onPointerDown(e: PointerEvent) {
     // A press is the first sign of intent, so a labelled link starts resolving
     // here, for the click or the drag that follows.
-    if (this._resolvesOnDemand) this._pressResolution = this.resolveTarget();
+    if (this._resolvesOnDemand) this._beginPress();
     if (this.isStatic || (!this._resolvedCell && !this._resolvesOnDemand)) {
       return;
     }
@@ -468,15 +477,43 @@ export class CFCellLink extends BaseElement {
     document.addEventListener("pointercancel", this._boundPointerUp);
   }
 
+  /**
+   * Helper for `_onPointerDown()`, which starts resolving a labelled link's
+   * target for the press that has begun, and lets the press go once it ends.
+   * The click that ends a press is dispatched after its `pointerup`, in the
+   * same task, so the press is let go a task later: a click that follows
+   * finds it, and a click that comes later does not.
+   */
+  private _beginPress() {
+    const press: LinkPress = {
+      resolution: this.resolveTarget().then((target) => {
+        if (this._press === press) press.target = target;
+        return target;
+      }),
+    };
+    this._press = press;
+    const end = () => {
+      document.removeEventListener("pointerup", end);
+      document.removeEventListener("pointercancel", end);
+      setTimeout(() => {
+        if (this._press === press) this._press = undefined;
+      }, 0);
+    };
+    document.addEventListener("pointerup", end);
+    document.addEventListener("pointercancel", end);
+  }
+
   private _onPointerMove(e: PointerEvent) {
     if (!this._isTracking || e.pointerId !== this._pointerId) return;
 
     const dx = e.clientX - this._dragStartX;
     const dy = e.clientY - this._dragStartY;
 
-    // A labelled link's press may still be resolving its target; the drag
-    // starts on the first move after it lands.
-    const target = this._resolvedCell;
+    // A labelled link drags only what this press resolved, which may still be
+    // on its way; the drag starts on the first move after it lands.
+    const target = this._resolvesOnDemand
+      ? this._press?.target
+      : this._resolvedCell;
     if (!this._isDragging && target && Math.sqrt(dx * dx + dy * dy) > 5) {
       this._isDragging = true;
       this._beginDrag(e, target);
@@ -520,10 +557,11 @@ export class CFCellLink extends BaseElement {
     e.stopPropagation();
     const newTab = e.metaKey || e.ctrlKey;
     if (this._resolvesOnDemand) {
-      // Where the link points at the click: what this click's press resolved,
-      // or, for a click with no press (the keyboard), a resolution now.
-      const resolving = this._pressResolution ?? this.resolveTarget();
-      this._pressResolution = undefined;
+      // Where the link points at the click: what the press this click ends is
+      // resolving, or, for a click with no press of its own (the keyboard's,
+      // or one after a press was let go), a resolution now.
+      const resolving = this._press?.resolution ?? this.resolveTarget();
+      this._press = undefined;
       void resolving.then((target) => {
         // A link taken off the page before its target arrived was cancelled,
         // not left unfollowable, so it neither opens nor warns.

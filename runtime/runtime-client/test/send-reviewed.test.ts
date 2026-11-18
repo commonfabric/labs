@@ -368,7 +368,8 @@ const relayPatternSource = `
  * over the same memory server, which has loaded none of it. `save` names the
  * outermost result's `save` as a host's handle on the stream does, `items`
  * names that result's `items`, and `markStream` names the document of the
- * stream that result's `mark` leads to. With `serverExecution`, both
+ * stream that result's `mark` leads to; `saveEnd` is where `save`'s links end,
+ * as the runtime that ran the pattern resolves it. With `serverExecution`, both
  * runtimes are clients of a serving memory server, which runs the handlers.
  */
 async function coldRelay(options: { serverExecution?: boolean } = {}) {
@@ -421,6 +422,7 @@ async function coldRelay(options: { serverExecution?: boolean } = {}) {
         ...createCellRef(root.key("mark").resolveAsCell()),
         schema: STREAM,
       },
+      saveEnd: root.key("save").resolveAsCell().getAsNormalizedFullLink(),
     };
   }
   const cold = connect();
@@ -736,6 +738,48 @@ describe("send-reviewed", () => {
         ]);
       } finally {
         await processor.dispose();
+      }
+    });
+  });
+
+  describe("resolving a handle through an unloaded result", () => {
+    // `resolveAsCell()` answers from what the worker's replica holds, so on a
+    // runtime that has loaded none of the pattern a plain resolution can stop
+    // at a document still to arrive. A caller that acts on the address at
+    // once asks with `loaded`.
+
+    it("answers where the links end when asked with `loaded`", async () => {
+      await using relay = await coldRelay();
+      const client = await attachClient(relay.runtime);
+      try {
+        const resolved = await client.getCellFromRef(relay.save).resolveAsCell(
+          { loaded: true },
+        );
+        const ref = resolved.ref();
+        expect({ id: ref.id, scope: ref.scope ?? "space", path: ref.path })
+          .toEqual({
+            id: relay.saveEnd.id,
+            scope: relay.saveEnd.scope,
+            path: relay.saveEnd.path,
+          });
+      } finally {
+        await client.dispose();
+      }
+    });
+
+    it("gives a plain request and a `loaded` one answers of their own", async () => {
+      await using relay = await coldRelay();
+      const client = await attachClient(relay.runtime);
+      try {
+        const handle = client.getCellFromRef(relay.save);
+        const [plain, loaded] = await Promise.all([
+          handle.resolveAsCell(),
+          handle.resolveAsCell({ loaded: true }),
+        ]);
+        expect(plain.ref().id).not.toBe(relay.saveEnd.id);
+        expect(loaded.ref().id).toBe(relay.saveEnd.id);
+      } finally {
+        await client.dispose();
       }
     });
   });

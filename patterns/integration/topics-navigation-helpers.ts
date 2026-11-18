@@ -151,9 +151,17 @@ const markCardOpenLink: MarkLinkPredicate = (
  * `targetId`, and tags it the way {@link markCellLink} does. The complete cell
  * address keeps replacement marking bound to the link already chosen: one
  * piece id can name documents in several spaces and scopes.
+ *
+ * A link that has resolved nothing is asked to resolve only when it is one
+ * the first pass could have chosen: showing `targetLabel` and, with a
+ * `cardTitle`, inside the `cf-card` showing it. Any other labelled link on
+ * the page is left unresolved, since on a board asking it would start the
+ * piece behind it. A link already resolved is matched on its address alone.
  */
 const markResolvedCellLink = (
   probe: ProbeApi,
+  targetLabel: string,
+  cardTitle: string,
   targetSpace: string,
   targetScope: string,
   targetId: string,
@@ -163,6 +171,8 @@ const markResolvedCellLink = (
 ) => {
   for (const element of probe.collect("cf-cell-link")) {
     const link = element as HTMLElement & {
+      label?: string;
+      _name?: string;
       _resolvedCell?: {
         space(): string;
         id(): string;
@@ -173,6 +183,21 @@ const markResolvedCellLink = (
     };
     const cell = link._resolvedCell;
     if (!cell) {
+      if ((link.label ?? link._name) !== targetLabel) continue;
+      if (cardTitle !== "") {
+        let card: Element | undefined;
+        let current: Node | null = link;
+        while (current) {
+          if (current instanceof Element && current.matches("cf-card")) {
+            card = current;
+            break;
+          }
+          const root = current.getRootNode();
+          current = current.parentNode ??
+            (root instanceof ShadowRoot ? root.host : null);
+        }
+        if (!card || !probe.deepText(card).includes(cardTitle)) continue;
+      }
       // A labelled link resolves nothing until it is acted on (see
       // `cf-cell-link`'s `resolveTarget()`). Ask it to, as a press would, and
       // find it resolved on a later pass.
@@ -214,12 +239,17 @@ const markResolvedCellLink = (
  * rebuilt link is tagged again and a surviving link is revalidated without
  * selecting a different cell carrying the same label or id.
  *
+ * `selection` is what `predicate` chose the link by: the label it shows and,
+ * for a card's link, the card's title, empty otherwise. Revalidation asks
+ * only a link it could match to resolve.
+ *
  * `description` names the link in a failure, as the caller would describe it.
  */
 async function markResolveAndClick(
   page: Page,
   predicate: MarkLinkPredicate,
   target: string,
+  selection: { label: string; cardTitle: string },
   description: string,
 ): Promise<string> {
   await settleView(page);
@@ -279,7 +309,18 @@ async function markResolveAndClick(
     );
   }
 
-  const remarkArgs: [string, string, string, string, string, string] = [
+  const remarkArgs: [
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+  ] = [
+    selection.label,
+    selection.cardTitle,
     resolved.space,
     resolved.scope,
     resolved.id,
@@ -306,6 +347,7 @@ export function clickCellLink(page: Page, label: string): Promise<string> {
     page,
     markCellLink,
     label,
+    { label, cardTitle: "" },
     `Cell link "${label}"`,
   );
 }
@@ -325,6 +367,7 @@ export function clickCardOpenLink(
     page,
     markCardOpenLink,
     title,
+    { label: "Open", cardTitle: title },
     `The Open link on the card titled "${title}"`,
   );
 }
