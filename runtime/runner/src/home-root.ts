@@ -1,10 +1,11 @@
-import { loadDocument } from "./document-readiness.ts";
-import { ensureSpaceRootPattern } from "./ensure-space-root.ts";
+import {
+  ensureSpaceRootPattern,
+  spaceRootLinked,
+} from "./ensure-space-root.ts";
 import type { Runtime } from "./runtime.ts";
 import { SpaceRootMissingError } from "./space-root-slot.ts";
 import type {
   IExtendedStorageTransaction,
-  IStorageNotification,
   MemorySpace,
 } from "./storage/interface.ts";
 
@@ -40,43 +41,6 @@ function createHomeRoot(runtime: Runtime, home: MemorySpace): Promise<void> {
 }
 
 /**
- * Helper for {@link bringUpHomeRootForRefusedWrite}, which resolves once the
- * space cell of `home` links a root, whoever links it, and rejects with the
- * `DocumentLoadError` when that cell does not load. It waits on the storage
- * manager's notifications, so a root linked later is noticed when its commit
- * arrives.
- */
-function homeRootLinked(runtime: Runtime, home: MemorySpace): Promise<void> {
-  const spaceCell = runtime.getSpaceCell(home);
-  const slot = spaceCell.key("defaultPattern");
-  const { promise, resolve, reject } = Promise.withResolvers<void>();
-  let waiting = true;
-  const subscription: IStorageNotification = {
-    next() {
-      if (waiting && slot.getRaw() !== undefined) {
-        waiting = false;
-        resolve();
-      }
-      return waiting ? undefined : { done: true };
-    },
-  };
-  const stop = (settle: () => void): void => {
-    if (!waiting) return;
-    waiting = false;
-    runtime.storageManager.unsubscribe?.(subscription);
-    settle();
-  };
-  runtime.storageManager.subscribe(subscription);
-  loadDocument(runtime, spaceCell).then(
-    () => {
-      if (slot.getRaw() !== undefined) stop(resolve);
-    },
-    (failure: unknown) => stop(() => reject(failure)),
-  );
-  return promise;
-}
-
-/**
  * Brings the user's Home root into being for a handler whose write beneath the
  * Home's empty `defaultPattern` slot was refused with `error`, so that the
  * handler can run again and its write land under the root. The user is the one
@@ -102,6 +66,6 @@ export function bringUpHomeRootForRefusedWrite(
   const home = runtime.actingPrincipalFor(tx) as MemorySpace | undefined;
   if (home === undefined || error.rootlessSpace !== home) return undefined;
   return runtime.servingPosture
-    ? homeRootLinked(runtime, home)
+    ? spaceRootLinked(runtime, home)
     : createHomeRoot(runtime, home);
 }

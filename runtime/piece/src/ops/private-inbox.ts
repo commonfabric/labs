@@ -28,6 +28,7 @@ import {
 } from "@commonfabric/runner";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { sendHandled } from "./send-handled.ts";
 import { accessRefused } from "./space-access.ts";
 
 const logger = getLogger("piece.private-inbox");
@@ -180,10 +181,10 @@ export async function ensurePrivateInboxOf(
     await needsOwnInbox(home, found);
   if (stopped(runtime, signal)) return { outcome: "abandoned" };
   if (createFirst) {
-    await handled(createOwn, {});
+    await sendHandled(createOwn, {});
     if (stopped(runtime, signal)) return { outcome: "abandoned" };
   }
-  await handled(ensure, ensureEventOf(found));
+  await sendHandled(ensure, ensureEventOf(found));
   return found;
 }
 
@@ -193,22 +194,6 @@ export async function ensurePrivateInboxOf(
  */
 function stopped(runtime: Runtime, signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true || runtime.writeTeardownSignal.aborted;
-}
-
-/**
- * Sends `event` to `stream`, and resolves once the handler's run has
- * committed, on the server that runs it under server execution; rejects when
- * that run fails.
- */
-function handled(stream: Cell<unknown>, event: unknown): Promise<void> {
-  return new Promise<void>((resolve, reject) =>
-    sendEvent(stream, event, (tx) => {
-      const status = tx.status();
-      if (status.status === "error") {
-        reject(new Error(transactionFailureMessage(status.error)));
-      } else resolve();
-    })
-  );
 }
 
 /**
