@@ -32,7 +32,8 @@ import {
   generateETag,
 } from "@commonfabric/static/etag";
 import { LRUCache } from "@commonfabric/collections/cache";
-import { decode, decodeDataFile } from "@commonfabric/text/utf8";
+import { decodeDataFile } from "@commonfabric/text/data-file";
+import { decode } from "@commonfabric/text/utf8";
 import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
 
 import {

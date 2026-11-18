@@ -44,6 +44,20 @@ export class FabricAwareResolver implements ProgramResolver {
     this.#ctx = ctx;
   }
 
+  /**
+   * The wrapped resolver's directory listing, or `undefined` where it lists
+   * none, so that a build sees the same lack the wrapped resolver has and
+   * refuses a declared directory, naming the module.
+   */
+  get listDataFiles():
+    | ((directory: string) => Promise<readonly string[] | undefined>)
+    | undefined {
+    const inner = this.#inner;
+    return inner.listDataFiles === undefined
+      ? undefined
+      : (directory) => inner.listDataFiles!(directory);
+  }
+
   main(): Promise<Source> {
     return this.#inner.main();
   }

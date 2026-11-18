@@ -211,10 +211,12 @@ keeps beside the pattern source and its tests — a fixture, a table, a list of
 names — and wants deployed with them so that every checkout of the piece
 receives the same bytes.
 
-The bytes are stored verbatim. They are never scanned for imports, never
-transformed, never type-checked, and never compiled or executed, so a data file
-may hold anything a source package can carry. A source package holds text, so a
-data file must be valid UTF-8; the CLI refuses one that is not, by name, rather
+A data file is never scanned for imports, never transformed, never
+type-checked, and never compiled or executed. A source package holds text, so a
+binary media file — an image, a font, or a sound, decided by its extension — is
+stored as a base64 `data:` URL, and `cf piece getsrc` writes it back as its
+bytes (`base/text/src/data-file.ts`). Any other data file must be valid UTF-8
+and is stored as its text; the CLI refuses one that is not, by name, rather
 than storing replacement characters. Nothing imports a data file: an import
 specifier that would land on one does not resolve, and fails the compile.
 

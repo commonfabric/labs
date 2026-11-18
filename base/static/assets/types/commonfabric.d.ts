@@ -3447,7 +3447,9 @@ export interface BuiltInCompileAndRunParams<T> {
 
   /**
    * Names of entries in `files` that carry data rather than code. A pattern
-   * reads one with `dataFile()`; nothing compiles, imports, or transforms it.
+   * reads a text file with `dataFile()`, and an image, a font, or a sound with
+   * `dataFile.url()` or `dataFile.urls()`; nothing compiles, imports, or
+   * transforms one.
    */
   dataFiles?: string[];
 
@@ -4102,8 +4104,41 @@ export type CompileAndRunFunction = <T = any, S = any>(
  * closure, so this reads memory rather than storage: it is synchronous, it
  * cannot fail part-way, and it returns the same bytes on every load of a given
  * source revision. A path naming no attached data file throws.
+ *
+ * A binary media file (an image, a font, or a sound, by its extension) has no
+ * text, and reading one this way throws; read it with `dataFile.url()`.
  */
-export type DataFileFunction = (path: string) => string;
+export interface DataFileFunction {
+  /** Reads the text of the attached data file `path` names. */
+  (path: string): string;
+
+  /**
+   * Reads an attached data file as a base64 `data:` URL carrying its media
+   * type, such as `data:image/png;base64,…`: the form an image, a font, or a
+   * sound takes in an iframe guest, since `data:` URLs are the one image source
+   * every embedding's Content Security Policy admits (see `cf-iframe`'s
+   * `assets`). `path` resolves as for `dataFile()`.
+   *
+   * The media type comes from the file's extension: `.png`, `.jpg`, `.jpeg`,
+   * `.gif`, `.webp`, `.avif`, `.svg`, `.woff2`, `.woff`, `.ttf`, `.otf`,
+   * `.mp3`, `.ogg`, and `.wav`. Any other extension throws.
+   */
+  url(path: string): string;
+
+  /**
+   * Reads every asset in an attached directory as a `data:` URL, keyed by its
+   * file name without the extension, so `assets/glaze.png` is `glaze` in
+   * `dataFile.urls("./assets")`. An asset is a file directly inside the
+   * directory whose extension `dataFile.url()` reads; other files and
+   * subdirectories are left out. `path` resolves as for `dataFile()`.
+   *
+   * Building the program attaches the directory's assets by listing it, which
+   * a program read over HTTP cannot do. A file whose name without the
+   * extension holds characters other than letters, digits, `_`, and `-`, or
+   * two files that would share a name, throw.
+   */
+  urls(path: string): Readonly<Record<string, string>>;
+}
 
 //
 // SQLite builtins (docs/specs/sqlite-builtin)

@@ -3623,6 +3623,14 @@ interface CFFileDownloadAttributes<T> extends CFHTMLAttributes<T> {
 interface CFIframeAttributes<T> extends CFHTMLAttributes<T> {
   "src": string;
   "script"?: string;
+
+  /**
+   * Static assets, from a name matching `[A-Za-z0-9_-]+` to a base64 `data:`
+   * URL. The guest's document refers to one as `cf-asset:<name>`, and its
+   * script reads one with `fabric.asset(name)`.
+   */
+  "assets"?: Readonly<Record<string, string>>;
+
   "bridge"?: {
     readonly resources: Readonly<Record<string, object>>;
   };

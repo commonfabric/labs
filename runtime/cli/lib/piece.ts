@@ -140,6 +140,7 @@ import {
   isObjectOrArray,
   isPlainObject,
 } from "@commonfabric/js-values/types";
+import { encodeDataFile } from "@commonfabric/text/data-file";
 import { caseFold } from "unicode-case-folding";
 
 import { isHandlerCell } from "../../fuse/callables.ts";
@@ -2894,18 +2895,29 @@ async function recordSavedIndexSource(
  * layout it comes back to, and a `setsrc` from here resolves the same imports
  * and the same data files. A name that is not grounded belongs to no layout
  * and is refused rather than written somewhere arbitrary.
+ *
+ * Each file is written as the bytes it was stored from, so a binary media
+ * file, which the package holds as a `data:` URL, comes back as the image,
+ * font, or sound it was read from. Every name is checked and every file
+ * encoded before the first is written, so a package that cannot be written
+ * writes nothing.
  */
 export async function writeSourcePackage(
   program: RuntimeProgram,
   outPath: string,
 ): Promise<void> {
-  for (const { name, contents } of program.files) {
+  const files = program.files.map(({ name, contents }) => {
     if (name[0] !== "/") {
       throw new Error("Ungrounded file in pattern.");
     }
-    const outFilePath = join(outPath, name.substring(1));
-    await Deno.mkdir(dirname(outFilePath), { recursive: true });
-    await Deno.writeTextFile(outFilePath, contents);
+    return {
+      path: join(outPath, name.substring(1)),
+      bytes: encodeDataFile(contents, name),
+    };
+  });
+  for (const { path, bytes } of files) {
+    await Deno.mkdir(dirname(path), { recursive: true });
+    await Deno.writeFile(path, bytes);
   }
 }
 

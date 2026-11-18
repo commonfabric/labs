@@ -137,6 +137,8 @@ blob store, cells hold descriptors), `apps/habit-tracker/`,
 `examples/iframe-cursor-canvas/` (a shared board in a sandboxed iframe: shapes
 are stored, while each viewer's pointer and a shape held mid-drag or mid-resize
 travel through a presence room and are stored nowhere),
+`examples/iframe-donut-menu/` (a menu in a sandboxed iframe whose pictures the
+pattern ships as files and hands its guest as `assets`),
 `examples/iframe-verb-list/` (a list in a sandboxed iframe whose guest adds an
 item only by sending the pattern's `addItem` verb, which writes the pattern's
 own state), `product/lobby/`, `apps/lunch-poll/`, `examples/math-note/`,
