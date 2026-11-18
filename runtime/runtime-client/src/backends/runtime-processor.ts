@@ -2768,6 +2768,12 @@ export class RuntimeProcessor {
    *   fails.
    */
   handleCellResolveAsCell(
+    request: CellResolveAsCellRequest & { loaded?: undefined },
+  ): CellResponse;
+  handleCellResolveAsCell(
+    request: CellResolveAsCellRequest,
+  ): CellResponse | Promise<CellResponse>;
+  handleCellResolveAsCell(
     request: CellResolveAsCellRequest,
   ): CellResponse | Promise<CellResponse> {
     const target = getCell(this.#runtime, request.cell);

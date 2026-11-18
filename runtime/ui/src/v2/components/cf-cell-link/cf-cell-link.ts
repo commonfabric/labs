@@ -8,7 +8,12 @@ import "../cf-chip/index.ts";
 
 import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import type { DID } from "@commonfabric/identity/did";
-import { navigate, openInNewTab } from "@commonfabric/navigation";
+import {
+  navigate,
+  type NavigationCommand,
+  openInNewTab,
+  openInNewTabWhenReady,
+} from "@commonfabric/navigation";
 import {
   type CellHandle,
   CellRef,
@@ -459,7 +464,7 @@ export class CFCellLink extends BaseElement {
   private _onPointerDown(e: PointerEvent) {
     // A press is the first sign of intent, so a labelled link starts resolving
     // here, for the click or the drag that follows.
-    if (this._resolvesOnDemand) this._beginPress();
+    if (this._resolvesOnDemand) this._beginPress(e.pointerId);
     if (this.isStatic || (!this._resolvedCell && !this._resolvesOnDemand)) {
       return;
     }
@@ -482,9 +487,10 @@ export class CFCellLink extends BaseElement {
    * target for the press that has begun, and lets the press go once it ends.
    * The click that ends a press is dispatched after its `pointerup`, in the
    * same task, so the press is let go a task later: a click that follows
-   * finds it, and a click that comes later does not.
+   * finds it, and a click that comes later does not. Only the pointer that
+   * began the press, `pointerId`, ends it.
    */
-  private _beginPress() {
+  private _beginPress(pointerId: number) {
     const press: LinkPress = {
       resolution: this.resolveTarget().then((target) => {
         if (this._press === press) press.target = target;
@@ -492,7 +498,8 @@ export class CFCellLink extends BaseElement {
       }),
     };
     this._press = press;
-    const end = () => {
+    const end = (event: PointerEvent) => {
+      if (event.pointerId !== pointerId) return;
       document.removeEventListener("pointerup", end);
       document.removeEventListener("pointercancel", end);
       setTimeout(() => {
@@ -557,16 +564,33 @@ export class CFCellLink extends BaseElement {
     e.stopPropagation();
     const newTab = e.metaKey || e.ctrlKey;
     if (this._resolvesOnDemand) {
-      // Where the link points at the click: what the press this click ends is
-      // resolving, or, for a click with no press of its own (the keyboard's,
-      // or one after a press was let go), a resolution now.
-      const resolving = this._press?.resolution ?? this.resolveTarget();
+      const press = this._press;
       this._press = undefined;
+      // A target the press this click ends has already resolved opens now,
+      // within the click.
+      if (press?.target !== undefined) {
+        this._open(press.target, newTab);
+        return;
+      }
+      // Otherwise where the link points at the click: what that press is
+      // resolving, or, for a click with no press of its own (the keyboard's,
+      // or one after a press was let go), a resolution now. A link taken off
+      // the page before its target arrived was cancelled, not left
+      // unfollowable, so it neither opens nor warns.
+      const resolving = press?.resolution ?? this.resolveTarget();
+      if (newTab) {
+        // A browser opens a tab only close to the gesture that asked for it,
+        // so the tab is reserved now and pointed at the target once it lands.
+        void openInNewTabWhenReady(resolving.then((target) => {
+          if (!this.isConnected) return undefined;
+          if (!target) this._warnUnfollowed();
+          return target && this._viewOf(target);
+        }));
+        return;
+      }
       void resolving.then((target) => {
-        // A link taken off the page before its target arrived was cancelled,
-        // not left unfollowable, so it neither opens nor warns.
         if (!this.isConnected) return;
-        this._open(target, newTab);
+        this._open(target, false);
       });
       return;
     }
@@ -580,28 +604,38 @@ export class CFCellLink extends BaseElement {
    */
   private _open(target: CellHandle | undefined, newTab: boolean) {
     if (!target) {
-      // The pill shows its label whether or not the link resolved, so a click
-      // that opens nothing says which link it could not follow.
-      console.warn(
-        "cf-cell-link: the click opens nothing: the link names no cell to open.",
-        this._unfollowedLinkSummary(),
-      );
+      this._warnUnfollowed();
       return;
     }
-    const { scope, path } = target.ref();
-    const view = {
-      spaceDid: target.space(),
-      pieceId: target.id(),
-      ...(scope === "space" ? {} : { pieceScope: scope }),
-      ...(path.length === 0 ? {} : { piecePath: [...path] }),
-    };
-
+    const view = this._viewOf(target);
     // Cmd (Mac) or Ctrl (Windows/Linux) opens in new tab
     if (newTab) {
       openInNewTab(view);
     } else {
       navigate(view);
     }
+  }
+
+  /** The view a click on a link that lands on `target` navigates to. */
+  private _viewOf(target: CellHandle): NavigationCommand {
+    const { scope, path } = target.ref();
+    return {
+      spaceDid: target.space(),
+      pieceId: target.id(),
+      ...(scope === "space" ? {} : { pieceScope: scope }),
+      ...(path.length === 0 ? {} : { piecePath: [...path] }),
+    };
+  }
+
+  /**
+   * Says which link a click could not follow. The pill shows its label
+   * whether or not the link resolved, so a click that opens nothing says so.
+   */
+  private _warnUnfollowed() {
+    console.warn(
+      "cf-cell-link: the click opens nothing: the link names no cell to open.",
+      this._unfollowedLinkSummary(),
+    );
   }
 
   /**

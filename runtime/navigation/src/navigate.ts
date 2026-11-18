@@ -45,18 +45,64 @@ export function updatePageTitle(title: string) {
 // `globalThis.open`, so plain and modifier clicks are both interceptable from
 // one well-known event surface.
 export function openInNewTab(command: NavigationCommand) {
-  const proceed = globalThis.dispatchEvent(
+  if (!proceedToOpenExternally(command)) return;
+  globalThis.open(fabricUrlOf(command), "_blank", "noopener");
+}
+
+// Open in a new tab a navigation target that is still being found, keeping
+// the user activation of the click that asked for it. A browser opens a tab
+// only within a short time of a user's gesture, so a target that takes longer
+// to find than that would open nothing. A tab is reserved now, within the
+// gesture, and pointed at the target once `target` settles:
+// - the same cancellable `cf-open-external` event `openInNewTab` dispatches
+//   is dispatched then, and a host that cancels it owns the navigation, so
+//   the reserved tab is closed;
+// - a target of `undefined`, or a rejection, closes the reserved tab.
+// Where the browser opens no tab here (a blocked popup, or no window), the
+// target is handed to `openInNewTab` once it is known.
+export async function openInNewTabWhenReady(
+  target: Promise<NavigationCommand | undefined>,
+): Promise<void> {
+  const reserved = globalThis.open?.("", "_blank") ?? null;
+  let command: NavigationCommand | undefined;
+  try {
+    command = await target;
+  } catch (error) {
+    reserved?.close();
+    throw error;
+  }
+  if (command === undefined) {
+    reserved?.close();
+    return;
+  }
+  if (reserved === null) return openInNewTab(command);
+  if (!proceedToOpenExternally(command)) {
+    reserved.close();
+    return;
+  }
+  // `noopener` cannot be asked for on a tab whose handle is kept, so the
+  // reserved tab is cut from this page before it navigates.
+  reserved.opener = null;
+  reserved.location.href = fabricUrlOf(command);
+}
+
+// Dispatch the cancellable `cf-open-external` event for `command`; false when
+// a host cancelled it and so owns the new-tab navigation.
+function proceedToOpenExternally(command: NavigationCommand): boolean {
+  return globalThis.dispatchEvent(
     new CustomEvent(OPEN_EXTERNAL_EVENT, {
       detail: command,
       cancelable: true,
     }),
   );
-  if (!proceed) return;
-  const url = appViewToUrlPath(
+}
+
+// The fabric URL for `command`, built from the current location.
+function fabricUrlOf(command: NavigationCommand): string {
+  return appViewToUrlPath(
     preserveAppViewMode(
       urlToAppView(new URL(globalThis.location.href)),
       command,
     ),
   );
-  globalThis.open(url, "_blank", "noopener");
 }

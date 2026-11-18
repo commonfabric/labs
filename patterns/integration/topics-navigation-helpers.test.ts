@@ -229,6 +229,121 @@ describe("topics-navigation-helpers", () => {
       ).toEqual([]);
     });
 
+    it("asks only the first of several links with the same label to resolve", async () => {
+      await page.evaluate(() => {
+        document.body.replaceChildren();
+        const clicks: string[] = [];
+        const requests: Record<string, number> = {};
+        for (let index = 0; index < 10; index++) {
+          const pieceId = `of:fid1:open-${index}`;
+          requests[pieceId] = 0;
+          const link = Object.assign(document.createElement("cf-cell-link"), {
+            label: "Open",
+            _resolvedCell: undefined as unknown,
+            resolveTarget() {
+              requests[pieceId]++;
+              return new Promise((resolve) =>
+                setTimeout(() => {
+                  link._resolvedCell = {
+                    space: () => "did:key:space",
+                    id: () => pieceId,
+                    ref: () => ({ scope: "space", path: [] }),
+                  };
+                  resolve(link._resolvedCell);
+                }, 5)
+              );
+            },
+          });
+          const linkRoot = link.attachShadow({ mode: "open" });
+          const chip = document.createElement("cf-chip");
+          const chipRoot = chip.attachShadow({ mode: "open" });
+          const button = document.createElement("button");
+          button.textContent = "Open";
+          button.addEventListener("click", () => clicks.push(pieceId));
+          chipRoot.append(button);
+          linkRoot.append(chip);
+          document.body.append(link);
+        }
+
+        Object.assign(globalThis, {
+          commonfabric: { viewSettled: () => Promise.resolve() },
+          __topicsNavigationResult: () => ({ clicks, requests }),
+        });
+      });
+
+      const returned = await clickCellLink(page, "Open");
+      const result = await page.evaluate(() =>
+        (globalThis as typeof globalThis & {
+          __topicsNavigationResult: () => {
+            clicks: string[];
+            requests: Record<string, number>;
+          };
+        }).__topicsNavigationResult()
+      );
+
+      expect(returned).toBe("of:fid1:open-0");
+      expect(result.clicks).toEqual(["of:fid1:open-0"]);
+      expect(
+        Object.entries(result.requests)
+          .filter(([id, count]) => id !== "of:fid1:open-0" && count > 0),
+      ).toEqual([]);
+    });
+
+    it("returns the destination resolved for this click, not one an earlier interaction left", async () => {
+      await page.evaluate(() => {
+        document.body.replaceChildren();
+        const clicks: string[] = [];
+        const destination = (pieceId: string) => ({
+          space: () => "did:key:space",
+          id: () => pieceId,
+          ref: () => ({ scope: "space", path: [] }),
+        });
+        const link = Object.assign(document.createElement("cf-cell-link"), {
+          label: "Open",
+          // Where an earlier press found the link, before its slot moved on.
+          _resolvedCell: destination("of:fid1:earlier") as unknown,
+          resolveTarget() {
+            return new Promise((resolve) =>
+              setTimeout(() => {
+                link._resolvedCell = destination("of:fid1:current");
+                resolve(link._resolvedCell);
+              }, 5)
+            );
+          },
+        });
+        const linkRoot = link.attachShadow({ mode: "open" });
+        const chip = document.createElement("cf-chip");
+        const chipRoot = chip.attachShadow({ mode: "open" });
+        const button = document.createElement("button");
+        button.textContent = "Open";
+        button.addEventListener(
+          "click",
+          () =>
+            clicks.push(
+              (link._resolvedCell as { id(): string }).id(),
+            ),
+        );
+        chipRoot.append(button);
+        linkRoot.append(chip);
+        document.body.append(link);
+
+        Object.assign(globalThis, {
+          commonfabric: { viewSettled: () => Promise.resolve() },
+          __topicsNavigationResult: () => ({ clicks }),
+        });
+      });
+
+      const returned = await clickCellLink(page, "Open");
+      const result = await page.evaluate(() =>
+        (globalThis as typeof globalThis & {
+          __topicsNavigationResult: () => { clicks: string[] };
+        }).__topicsNavigationResult()
+      );
+
+      expect(returned).toBe("of:fid1:current");
+      expect(result.clicks).toEqual(["of:fid1:current"]);
+    });
+
     it("revalidates after a surviving link's box settles", async () => {
       await page.evaluate(() => {
         document.body.replaceChildren();
