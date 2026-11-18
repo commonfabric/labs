@@ -15,11 +15,11 @@ export type Schema = boolean | {
   items?: Schema;
   asCell?: unknown;
   /**
-   * In the schema of the items of an array: the key field that the
-   * element type declares with `KeyedBy<T, "field">`
+   * In the schema of the items of an array: the key fields that the
+   * element type declares with `KeyedBy`, in the order of their names
    * (`plan-and-label-templates.md` §1.3, "A declared key field").
    */
-  keyField?: string;
+  keyFields?: string[];
 };
 
 /** The schema of a member of what a schema describes. */
@@ -111,43 +111,97 @@ const FIELDS = "fields:";
 const isKeyValue = (value: unknown): value is string | number =>
   typeof value === "string" || typeof value === "number";
 
+/** A name or a string value with a `\` before each `\`, `,` and `=`. */
+const escaped = (text: string): string => text.replace(/[\\,=]/g, "\\$&");
+
 /**
- * The value of a key field as a key holds it: a number as `#` and its
- * canonical form, and a string as it is, so the number 7 and the string
- * `7` are two keys.
+ * The value of a key field as a key holds it. A number is `#` and its
+ * canonical form. A string is written with its separators escaped, and
+ * with a `\` before a `#` that it starts with, so the number 7 and the
+ * strings `7` and `#7` are three keys.
  */
 const written = (value: string | number): string =>
-  typeof value === "number" ? `#${canonical(value)}` : value;
+  typeof value === "number"
+    ? `#${canonical(value)}`
+    : escaped(value).replace(/^#/, "\\#");
+
+/** Compares two strings by their code points, as the compiler orders names. */
+const byCodePoint = (a: string, b: string): number => {
+  const [left, right] = [Array.from(a), Array.from(b)];
+  for (let index = 0; index < left.length && index < right.length; index++) {
+    const difference = left[index].codePointAt(0)! -
+      right[index].codePointAt(0)!;
+    if (difference !== 0) return difference;
+  }
+  return left.length - right.length;
+};
+
+/** Names in the order a key holds them: by code point, each once. */
+const ordered = (names: readonly string[]): string[] =>
+  [...new Set(names)].sort(byCodePoint);
 
 /**
  * The element part of the key of a plain value
- * (`plan-and-label-templates.md` §1.3). With `field`, the key field the
- * element type declares, and a value that is a record whose field holds
- * a string or a number, the part names the field: `fields:`, the name,
- * `=`, and the value of the field (ruling Z44). Any
+ * (`plan-and-label-templates.md` §1.3). With `fields`, the key fields
+ * the element type declares, and a value that is a record that holds a
+ * string or a number at each of them, the part names the fields
+ * (rulings Z44 and Z45): `fields:`, and for each field in the order of
+ * the names the name, `=`, and the value, joined with `,`. A `\` stands
+ * before each `\`, `,` and `=` of a name and of a string value. Any
  * other value is keyed whole, as `value:` and its canonical form, which
  * names no field. So a key formed from a field `id` that holds 7 is not
  * the key of a whole value 7.
  */
-export const valuePart = (value: unknown, field?: string): string =>
-  field !== undefined && isPlainRecord(value) && isKeyValue(value[field])
-    ? `${FIELDS}${field}=${written(value[field])}`
-    : `value:${canonical(value)}`;
-
-/**
- * The key field that a key names, where it was formed from one: a key
- * is resolved from this alone, with no schema (ruling Z44).
- */
-export const fieldOfKey = (key: string): string | undefined => {
-  if (!key.startsWith(FIELDS)) return undefined;
-  const end = key.indexOf("=");
-  return end < 0 ? undefined : key.slice(FIELDS.length, end);
+export const valuePart = (
+  value: unknown,
+  fields: readonly string[] = [],
+): string => {
+  if (fields.length === 0 || !isPlainRecord(value)) {
+    return `value:${canonical(value)}`;
+  }
+  const parts: string[] = [];
+  for (const field of ordered(fields)) {
+    const held = Object.hasOwn(value, field) ? value[field] : undefined;
+    if (!isKeyValue(held)) return `value:${canonical(value)}`;
+    parts.push(`${escaped(field)}=${written(held)}`);
+  }
+  return `${FIELDS}${parts.join(",")}`;
 };
 
-/** The key field that the schema of an array declares for its items. */
-export const keyFieldOf = (schema: Schema | undefined): string | undefined => {
+/**
+ * The key fields that a key names, and none for a key that was formed
+ * from a whole value or from a cell: a key is resolved from these alone,
+ * with no schema (ruling Z44).
+ */
+export const fieldsOfKey = (key: string): string[] => {
+  if (!key.startsWith(FIELDS)) return [];
+  const names: string[] = [];
+  let name = "";
+  // Whether the walk is in a name, and not in the value after its `=`.
+  let naming = true;
+  const part = key.slice(FIELDS.length).replace(/#\d+$/, "");
+  for (let index = 0; index < part.length; index++) {
+    const char = part[index];
+    if (char === "\\") {
+      index += 1;
+      if (naming) name += part[index] ?? "";
+    } else if (naming && char === "=") {
+      names.push(name);
+      name = "";
+      naming = false;
+    } else if (!naming && char === ",") {
+      naming = true;
+    } else if (naming) {
+      name += char;
+    }
+  }
+  return names;
+};
+
+/** The key fields that the schema of an array declares for its items. */
+export const keyFieldsOf = (schema: Schema | undefined): string[] => {
   const items = typeof schema === "object" ? schema.items : undefined;
-  return typeof items === "object" ? items.keyField : undefined;
+  return typeof items === "object" ? items.keyFields ?? [] : [];
 };
 
 /** A reference to a position of a document. */
@@ -430,18 +484,18 @@ export class Store {
    * the cell where the position holds a link, the value where it holds
    * one, and the count of the earlier positions with the same element
    * part. `copies` gives the values of the positions where the caller has
-   * read them. With `field`, the key field that the collection or the
+   * read them. With `fields`, the key fields that the collection or the
    * read declares, or that a key to resolve names, a plain value that
-   * holds the field is keyed by the field and not by its whole value: a
-   * change of another member changes no key (rulings Z38 and Z44). A
-   * position that holds a link is keyed by its cell with or without a
-   * declared field.
+   * holds the fields is keyed by them and not by its whole value: a
+   * change of another member changes no key (rulings Z38, Z44 and Z45).
+   * A position that holds a link is keyed by its cell with or without
+   * declared fields.
    */
   keysOf(
     held: readonly unknown[],
     at: Ref,
     copies?: readonly unknown[],
-    field?: string,
+    fields: readonly string[] = [],
   ): string[] {
     const id = `${at.doc}:${canonical(at.path)}`;
     // An element that holds a reference by key into its own array is
@@ -469,7 +523,7 @@ export class Store {
             copies === undefined
               ? this.read(at.key(`${index}`))
               : copies[index],
-            field,
+            fields,
           );
         }
         const count = seen.get(part) ?? 0;
@@ -492,7 +546,7 @@ export class Store {
    * position where a link was crossed, and the last one, is added to
    * `reads`; from a key on, the one read by key stands for them. A key
    * is resolved from the key alone (ruling Z44): the element is the one
-   * whose key, formed with the field that the key names, is the key.
+   * whose key, formed with the fields that the key names, is the key.
    */
   locate(
     ref: Ref,
@@ -576,7 +630,7 @@ export class Store {
         const here = new Ref(doc, at);
         const indexOf = (key: string) =>
           Array.isArray(held)
-            ? this.keysOf(held, here, undefined, fieldOfKey(key)).indexOf(key)
+            ? this.keysOf(held, here, undefined, fieldsOfKey(key)).indexOf(key)
             : -1;
         let index = indexOf(key);
         for (let hops = 0; index < 0 && hops < MAX_LINKS; hops++) {
@@ -766,7 +820,7 @@ export class Store {
     copied: boolean,
     /**
      * The schema the read is made under at the position: the keys of an
-     * array are formed with the key field it declares (ruling Z44).
+     * array are formed with the key fields it declares (ruling Z44).
      */
     shape?: Schema,
   ): unknown {
@@ -798,7 +852,7 @@ export class Store {
         )
       );
       if (containers) {
-        const keys = this.keysOf(value, here, copy, keyFieldOf(shape));
+        const keys = this.keysOf(value, here, copy, keyFieldsOf(shape));
         copy.forEach((member, index) => {
           if (isLink(value[index])) return;
           this.#readdress(
@@ -925,7 +979,7 @@ export class Store {
         holder.value,
         holder.ref,
         undefined,
-        fieldOfKey(key),
+        fieldsOfKey(key),
       )[index];
       if (now !== undefined && now !== key) {
         this.rekeys.push({ doc, array, from: key, to: now });

@@ -1246,12 +1246,28 @@ impl<'a> Resolver<'_, 'a> {
                 )
             }
             "KeyedBy" => {
-                // `KeyedBy<T, "field">`: `T` with a key annotation, whose
-                // argument is the name of the property (§7.2; ruling
-                // Z38). For assignability it is `T`.
-                let field = argument_text(1);
-                let field = field.trim().trim_matches(['"', '\'', '`']).to_string();
-                self.annotate_once(module, reference.span, first(), "keyField", field)
+                // `KeyedBy<T, "field">` or `KeyedBy<T, "a" | "b">`: `T`
+                // with a key annotation, whose value is the names of the
+                // key fields in the order of the names (§7.2; rulings Z38
+                // and Z45). For assignability it is `T`.
+                let fields = self.key_fields(module, reference.span, first(), arguments.get(1));
+                let ty = self.annotate_once(
+                    module,
+                    reference.span,
+                    first(),
+                    "keyFields",
+                    serde_json::to_string(&fields).unwrap_or_default(),
+                );
+                if let Some(annotation) = self
+                    .types
+                    .borrow_mut()
+                    .annotations
+                    .get_mut(&ty)
+                    .and_then(|annotations| annotations.last_mut())
+                {
+                    annotation.value = Some(serde_json::json!(fields));
+                }
+                ty
             }
             "PerSpace" | "PerUser" | "PerSession" | "PerAny" | "Scoped" => {
                 let scope = match name {
@@ -2377,6 +2393,79 @@ impl<'a> Resolver<'_, 'a> {
         self.annotate(ty, key, argument)
     }
 
+    /// The names of the key fields that the second argument of a
+    /// `KeyedBy` declares, in the order of the names. The argument is a
+    /// string literal type or a union of them, and each names a required
+    /// top-level property of `value` whose type is `string` or `number`:
+    /// anything else is reported as `keyed-by:declaration` (§4.4.1,
+    /// assumed there). Nothing is reported for a part that is not
+    /// evaluated.
+    fn key_fields(
+        &self,
+        module: usize,
+        span: Span,
+        value: TypeId,
+        declared: Option<&TypeId>,
+    ) -> Vec<String> {
+        let refuse = |found: String| self.report(module, "keyed-by:declaration", span, found);
+        let Some(declared) = declared else {
+            refuse("A `KeyedBy` that names no key field".to_string());
+            return Vec::new();
+        };
+        let members = match self.shape(*declared) {
+            Shape::Union(members) => members,
+            _ => vec![*declared],
+        };
+        let mut fields = Vec::new();
+        for member in members {
+            match self.shape(member) {
+                Shape::Literal(text) if is_string_literal(&text) => {
+                    fields.push(text[1..text.len() - 1].to_string());
+                }
+                Shape::Unresolved(_) | Shape::Parameter(_) => {}
+                _ => {
+                    refuse("A key field of `KeyedBy` that is not a string literal type".to_string())
+                }
+            }
+        }
+        fields.sort();
+        fields.dedup();
+        if let Shape::Object(properties, _) = self.shape(value) {
+            for field in &fields {
+                match properties.iter().find(|property| &property.name == field) {
+                    None => refuse(format!(
+                        "A key field `{field}` that is no property of the type"
+                    )),
+                    Some(property) if property.optional => refuse(format!(
+                        "A key field `{field}` that is an optional property"
+                    )),
+                    Some(property) if self.key_value(property.ty) == Some(false) => {
+                        refuse(format!(
+                            "A key field `{field}` whose type is neither `string` nor `number`"
+                        ))
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        fields
+    }
+
+    /// Whether every value of a type is a string or a number, and `None`
+    /// where the type is not evaluated.
+    fn key_value(&self, ty: TypeId) -> Option<bool> {
+        match self.shape(ty) {
+            Shape::String | Shape::Number => Some(true),
+            Shape::Literal(text) => Some(is_string_literal(&text) || text.parse::<f64>().is_ok()),
+            Shape::Union(members) => members
+                .iter()
+                .map(|member| self.key_value(*member))
+                .try_fold(true, |all, member| member.map(|member| all && member)),
+            Shape::Unresolved(_) | Shape::Parameter(_) => None,
+            _ => Some(false),
+        }
+    }
+
     /// The writer binding of `WriteAuthorizedBy` is `typeof` of a
     /// module-scope `handler(...)` definition or a function declaration.
     fn writer_binding(&self, module: usize, binding: &TSType<'a>, alias: Span) {
@@ -3381,4 +3470,10 @@ fn number_value(value: f64) -> serde_json::Value {
     } else {
         serde_json::json!(value)
     }
+}
+
+/// Whether the source text of a literal type is that of a string literal.
+fn is_string_literal(text: &str) -> bool {
+    let quoted = |quote: char| text.len() >= 2 && text.starts_with(quote) && text.ends_with(quote);
+    quoted('"') || quoted('\'') || quoted('`')
 }

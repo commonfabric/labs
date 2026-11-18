@@ -1508,3 +1508,62 @@ fn keyed_by_is_its_first_argument_with_a_key_annotation() {
         Vec::<&str>::new()
     );
 }
+
+/// Ruling Z45 and `language-subset.md` §4.4.1 (assumed there): the second
+/// argument of `KeyedBy` is a string literal type or a union of them, and
+/// each names a required top-level property of the first argument whose
+/// type is `string` or `number`. Anything else is `keyed-by:declaration`,
+/// reported at the marker. The element type is that of a pattern input,
+/// an array of plain values in place or of references, which the type
+/// does not tell apart.
+#[test]
+fn keyed_by_names_required_top_level_string_or_number_properties() {
+    let declaration = |fields: &str| {
+        ids(&check(&format!(
+            "interface Owner {{ login: string }}\n\
+             interface Repo {{ id: number; name: string; owner: Owner; note?: string; open: boolean; tag: \"a\" | \"b\" }}\n\
+             export default pattern<{{ saved: KeyedBy<Repo, {fields}>[] }}>(({{ saved }}) => ({{\n\
+               rows: saved.map((repo) => repo.name),\n\
+             }}));"
+        )))
+    };
+    let none = Vec::<&str>::new();
+    assert_eq!(declaration("\"id\""), none);
+    assert_eq!(declaration("\"name\" | \"id\""), none);
+    // A property whose type is a union of string literals is a string.
+    assert_eq!(declaration("\"tag\""), none);
+    for refused in [
+        // No property of the type.
+        "\"missing\"",
+        // One of two names no property.
+        "\"id\" | \"missing\"",
+        // An optional property.
+        "\"note\"",
+        // A property that is neither a string nor a number.
+        "\"owner\"",
+        "\"open\"",
+        // No string literal type.
+        "string",
+        "7",
+    ] {
+        assert_eq!(declaration(refused), ["keyed-by:declaration"], "{refused}");
+    }
+}
+
+/// The report of `keyed-by:declaration` is at the marker, and is an error.
+#[test]
+fn keyed_by_declaration_is_reported_at_the_marker_as_an_error() {
+    let (position, snippet) = marked(
+        "interface Repo { id: number; name?: string }\n\
+         export default pattern<{ saved: /*!*/KeyedBy<Repo, \"name\">[] }>(({ saved }) => ({\n\
+           rows: saved.map((repo) => repo.id),\n\
+         }));",
+    );
+    let found: Vec<_> = check(&snippet)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.id == "keyed-by:declaration")
+        .collect();
+    assert_eq!(found.len(), 1);
+    assert_eq!((found[0].line, found[0].column), position);
+    assert_eq!(found[0].severity, Severity::Error);
+}

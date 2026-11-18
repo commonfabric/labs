@@ -3606,11 +3606,11 @@ describe("a key formed from a declared key field", () => {
     name,
     position: { lat: id, lng: 0 },
   });
-  const keyedBy = (field?: string) => ({
+  const keyedBy = (...fields: string[]) => ({
     type: "array",
     items: {
       type: "object",
-      ...(field === undefined ? {} : { keyField: field }),
+      ...(fields.length === 0 ? {} : { keyFields: fields }),
     },
   });
   const start = () => {
@@ -3631,7 +3631,7 @@ describe("a key formed from a declared key field", () => {
         [repo(7, "s"), repo(8, "t")],
         new Ref("d", ["saved"]),
         undefined,
-        "id",
+        ["id"],
       ),
     ).toEqual(["fields:id=#7#0", "fields:id=#8#0"]);
     expect(store.keysOf([7, 8], new Ref("d", ["numbers"]), [7, 8])).toEqual([
@@ -3675,22 +3675,22 @@ describe("a key formed from a declared key field", () => {
       picked: { $link: { doc: "d", path: ["saved", SEVEN] } },
       center: { $link: { doc: "d", path: ["saved", SEVEN, "position"] } },
     });
-    const reader = (field?: string) =>
+    const reader = (fields: string[]) =>
       new Ref("holder", [], {
         properties: {
           picked: { type: "object" },
           center: { type: "object" },
-          list: keyedBy(field),
+          list: keyedBy(...fields),
         },
       });
 
-    for (const field of [undefined, "id", "name"]) {
-      expect(store.read(reader(field).key("picked", "name"))).toBe("s");
-      expect(store.read(reader(field).key("center", "lat"))).toBe(7);
+    for (const fields of [[], ["id"], ["name"], ["id", "name"]]) {
+      expect(store.read(reader(fields).key("picked", "name"))).toBe("s");
+      expect(store.read(reader(fields).key("center", "lat"))).toBe(7);
     }
     // The same through the array, read under each declaration.
-    for (const field of [undefined, "id", "name"]) {
-      const saved = new Ref("d", ["saved"], keyedBy(field));
+    for (const fields of [[], ["id"], ["name"], ["id", "name"]]) {
+      const saved = new Ref("d", ["saved"], keyedBy(...fields));
       expect(
         store.read(new Ref(saved.doc, [...saved.path, SEVEN], saved.schema)),
       ).toMatchObject({ id: 7, name: "s" });
@@ -3699,9 +3699,11 @@ describe("a key formed from a declared key field", () => {
 
   it("forms the keys of an array that is read whole with the key field that the read declares", () => {
     const store = start();
-    const first = (field?: string) =>
+    const first = (...fields: string[]) =>
       store.addresses.get(
-        (store.read(new Ref("d", ["saved"], keyedBy(field))) as object[])[0],
+        (store.read(new Ref("d", ["saved"], keyedBy(...fields))) as object[])[
+          0
+        ],
       )!;
 
     expect(first("id").path).toEqual(["saved", SEVEN]);
@@ -3713,11 +3715,112 @@ describe("a key formed from a declared key field", () => {
       "saved",
       keySegment(`value:${JSON.stringify(repo(7, "s"))}#0`),
     ]);
-    // Each of the three names the one element, whatever the array was
-    // read under before.
-    for (const field of ["id", "name", undefined]) {
-      expect(store.read(first(field).key("name"))).toBe("s");
+    expect(first("name", "id").path).toEqual([
+      "saved",
+      keySegment("fields:id=#7,name=s#0"),
+    ]);
+    // Each of these names the one element, whatever the array was read
+    // under before.
+    for (const fields of [["id"], ["name"], [], ["id", "name"]]) {
+      expect(store.read(first(...fields).key("name"))).toBe("s");
     }
+  });
+
+  // Ruling Z45: one key across several fields.
+  it("is one key across several declared fields, in the order of their names", () => {
+    const store = new Store();
+    const pair = (owner: string, name: string, stars = 0) => ({
+      owner,
+      name,
+      stars,
+    });
+    const held = [pair("cf", "labs"), pair("cf", "specs"), pair("x", "labs")];
+    store.create("d", "argument", { pairs: held });
+    const at = new Ref("d", ["pairs"]);
+
+    const keys = store.keysOf(held, at, undefined, ["owner", "name"]);
+
+    expect(keys).toEqual([
+      "fields:name=labs,owner=cf#0",
+      "fields:name=specs,owner=cf#0",
+      "fields:name=labs,owner=x#0",
+    ]);
+    // The order in which the fields are given changes no key.
+    expect(store.keysOf(held, at, undefined, ["name", "owner"])).toEqual(keys);
+    // The names are ordered by code point: a name that starts above the
+    // surrogates stands before one outside the basic plane.
+    expect(
+      store.keysOf([{ "\u{1F600}": 1, "\uFF21": 2 }], at, [
+        { "\u{1F600}": 1, "\uFF21": 2 },
+      ], ["\u{1F600}", "\uFF21"]),
+    ).toEqual(["fields:\uFF21=#2,\u{1F600}=#1#0"]);
+    // Each key is resolved from the key alone.
+    expect(
+      keys.map((key) => store.read(at.key(keySegment(key), "owner"))),
+    ).toEqual(["cf", "cf", "x"]);
+    // A write to a member that is no key field re-keys nothing, and a
+    // write to one of the key fields re-keys the element.
+    store.write(at.key(keySegment(keys[1]), "stars"), 5);
+    expect(store.rekeys).toEqual([]);
+    store.write(at.key(keySegment(keys[1]), "owner"), "y");
+    expect(store.rekeys).toEqual([{
+      doc: "d",
+      array: ["pairs"],
+      from: keys[1],
+      to: "fields:name=specs,owner=y#0",
+    }]);
+    // Two elements with the same values of every field have two keys,
+    // and an element that lacks one of the fields is keyed whole.
+    expect(
+      store.keysOf(
+        [pair("cf", "labs"), pair("cf", "labs", 1), { owner: "cf" }],
+        at,
+        [pair("cf", "labs"), pair("cf", "labs", 1), { owner: "cf" }],
+        ["owner", "name"],
+      ),
+    ).toEqual([
+      "fields:name=labs,owner=cf#0",
+      "fields:name=labs,owner=cf#1",
+      'value:{"owner":"cf"}#0',
+    ]);
+  });
+
+  it("writes each separator in a name and in a value with a `\\` before it, and a number with a `#` before it", () => {
+    const store = new Store();
+    const held = [
+      // Values that hold the separators of the written form.
+      { owner: "a,name=b", name: "c" },
+      { owner: "a", name: "b,owner=c" },
+      { owner: "back\\slash", name: "#7" },
+      { owner: "7", name: "x#1" },
+      { owner: 7, name: "x" },
+    ];
+    store.create("d", "argument", { pairs: held, odd: [{ "a=b,c": 1, d: 2 }] });
+    const at = new Ref("d", ["pairs"]);
+
+    const keys = store.keysOf(held, at, undefined, ["owner", "name"]);
+
+    expect(keys).toEqual([
+      "fields:name=c,owner=a\\,name\\=b#0",
+      "fields:name=b\\,owner\\=c,owner=a#0",
+      "fields:name=\\#7,owner=back\\\\slash#0",
+      "fields:name=x#1,owner=7#0",
+      "fields:name=x,owner=#7#0",
+    ]);
+    expect(new Set(keys).size).toBe(held.length);
+    // Each key names its own element.
+    expect(
+      keys.map((key) => store.read(at.key(keySegment(key), "owner"))),
+    ).toEqual(held.map(({ owner }) => owner));
+    // A name that holds the separators.
+    const odd = store.keysOf(
+      [{ "a=b,c": 1, d: 2 }],
+      new Ref("d", ["odd"]),
+      undefined,
+      ["a=b,c", "d"],
+    );
+    expect(odd).toEqual(["fields:a\\=b\\,c=#1,d=#2#0"]);
+    expect(store.read(new Ref("d", ["odd", keySegment(odd[0]), "d"]))).toBe(2);
   });
 
   it("re-keys the element on a write to the field that the key names", () => {
@@ -3738,7 +3841,7 @@ describe("a key formed from a declared key field", () => {
     const links = [{ $link: { doc: "d", path: ["saved", "0"] } }];
     store.create("refs", "created cell", links);
 
-    expect(store.keysOf(links, new Ref("refs", []), undefined, "id")).toEqual(
+    expect(store.keysOf(links, new Ref("refs", []), undefined, ["id"])).toEqual(
       store.keysOf(links, new Ref("refs", [])),
     );
     expect(store.keysOf(links, new Ref("refs", []))[0]).toMatch(/^cell:d:/);
@@ -4232,22 +4335,22 @@ describe("a key field declared with `KeyedBy`", () => {
     return instance.dispatch();
   };
 
-  it("is in the plan as `Collection.keyField`, for a source that is an output or a slot", async () => {
+  it("is in the plan as `Collection.keyFields`, for a source that is an output or a slot", async () => {
     const instance = await start();
 
     expect(
-      instance.plan.collections.map(({ construct, keyField }) => [
+      instance.plan.collections.map(({ construct, keyFields }) => [
         construct,
-        keyField,
+        keyFields,
       ]),
     ).toEqual([
-      ["map", "id"],
-      ["filter", "id"],
+      ["map", ["id"]],
+      ["filter", ["id"]],
       ["map", undefined],
-      ["map", "id"],
+      ["map", ["id"]],
       ["filter", undefined],
       ["map", undefined],
-      ["filter", "id"],
+      ["filter", ["id"]],
       ["map", undefined],
     ]);
   });
@@ -4468,7 +4571,7 @@ describe("a key field declared with `KeyedBy`", () => {
     });
     // A reader whose type declares another key resolves the stored
     // references to the same element.
-    const byName = { type: "object", items: { keyField: "name" } };
+    const byName = { type: "object", items: { keyFields: ["name"] } };
     expect(
       instance.store.read(
         new Ref("state:0:[]", [], byName).key("name"),
@@ -4503,6 +4606,165 @@ describe("a key field declared with `KeyedBy`", () => {
     expect(keysOf(instance, KEPT_CELL)).toEqual([
       'cell:argument:["pool","a"]#0',
       'cell:argument:["pool","b"]#0',
+    ]);
+  });
+});
+
+// Ruling Z45 on `fixtures/keyed-by-fields.tsx`: the element type
+// `KeyedBy<Repo, "owner" | "name">` declares two key fields, and an
+// element has one key across them. Today's runtime has no such marker,
+// so these tests are of the executor alone.
+describe("several key fields declared with `KeyedBy`", () => {
+  const repo = (owner: string, name: string, stars: number) => ({
+    owner,
+    name,
+    stars,
+  });
+  const start = async (
+    saved: unknown[] = [repo("cf", "labs", 1), repo("x", "labs", 2)],
+  ) => {
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL(
+          "../../compare/fixtures/keyed-by-fields.emit.json",
+          import.meta.url,
+        ),
+      ),
+    ) as { patterns: Artifact[] }[];
+    const artifacts = (id: string) =>
+      patterns.find((pattern) => pattern.plan.patterns?.[0] === id);
+    const main = patterns.find((pattern) => pattern.name === "default")!;
+    return new Instance(main, {
+      names: ["ab", "cde", "fghi"],
+      bonus: 0,
+      reversed: false,
+      minStars: 3,
+      saved,
+    }, { artifacts });
+  };
+  type Row = { owner: string; name: string; stars: number; noted: string };
+  type Result = { starred: Row[]; kept: Row[] };
+  const result = (instance: Instance) => instance.result() as Result;
+  const [STARRED, KEPT] = [0, 1];
+  type Link = { $link: { doc: string; path: string[] } };
+  const rows = (instance: Instance, list: "starred" | "kept") =>
+    (instance.store.docs.get("result")?.value as Record<string, Link[]>)[list];
+  const note = (instance: Instance, row: Link, text: string) => {
+    new Handle(
+      instance,
+      new Ref(row.$link.doc, ["note"]),
+      undefined,
+      undefined,
+      [],
+    ).send({ text });
+    return instance.dispatch();
+  };
+  /** The keys of the instances of one `asInstance()` call. */
+  const keysOf = (instance: Instance, child: number) =>
+    instance.childInstances().filter((made) => made.child === child)
+      .map(({ keys }) => keys[0]);
+
+  it("is in the plan as `Collection.keyFields`, in the order of the names", async () => {
+    const instance = await start();
+
+    expect(
+      instance.plan.collections.map(({ construct, keyFields }) => [
+        construct,
+        keyFields,
+      ]),
+    ).toEqual([
+      ["filter", ["name", "owner"]],
+      ["map", undefined],
+      ["map", ["name", "owner"]],
+    ]);
+  });
+
+  it("gives an element one key across the fields, over the result of a `filter` of a plain array generated from scratch and over plain values in place", async () => {
+    const instance = await start();
+
+    expect(keysOf(instance, STARRED)).toEqual([
+      "fields:name=cde,owner=x#0",
+      "fields:name=fghi,owner=cf#0",
+    ]);
+    // Two elements with one `name` and two `owner` are two keys.
+    expect(keysOf(instance, KEPT)).toEqual([
+      "fields:name=labs,owner=cf#0",
+      "fields:name=labs,owner=x#0",
+    ]);
+  });
+
+  it("keeps the state of an `asInstance()` row over a plain array generated from scratch when a field that is no key and the order change", async () => {
+    const instance = await start();
+    const [cde, fghi] = rows(instance, "starred");
+    note(instance, cde, "first");
+    note(instance, fghi, "second");
+
+    // A new array: every element has another `stars`, `ab` passes the
+    // `filter` now, and the elements are in the reverse order.
+    instance.writeArgument(["bonus"], 1);
+    instance.writeArgument(["reversed"], true);
+
+    expect(result(instance).starred).toEqual([
+      { ...repo("cf", "fghi", 5), noted: "second", note: { $stream: true } },
+      { ...repo("x", "cde", 4), noted: "first", note: { $stream: true } },
+      { ...repo("cf", "ab", 3), noted: "", note: { $stream: true } },
+    ]);
+    expect(rows(instance, "starred").slice(0, 2)).toEqual([fghi, cde]);
+    expect(keysOf(instance, STARRED).length).toBe(3);
+  });
+
+  it("keeps the state of an `asInstance()` row over plain values in place when a field that is no key and the order change", async () => {
+    const instance = await start();
+    const [cf, x] = rows(instance, "kept");
+    note(instance, cf, "first");
+    note(instance, x, "second");
+
+    // A write through the reference by key of the element, to a member
+    // that is no key field.
+    instance.store.write(
+      new Ref("argument", [
+        "saved",
+        keySegment("fields:name=labs,owner=cf#0"),
+        "stars",
+      ]),
+      9,
+    );
+    expect(instance.store.rekeys).toEqual([]);
+    instance.settle();
+    expect(result(instance).kept).toMatchObject([
+      { owner: "cf", stars: 9, noted: "first" },
+      { owner: "x", stars: 2, noted: "second" },
+    ]);
+
+    // The array is written whole, in another order and with other
+    // `stars`.
+    instance.writeArgument(["saved"], [
+      repo("x", "labs", 7),
+      repo("cf", "labs", 8),
+    ]);
+
+    expect(result(instance).kept).toMatchObject([
+      { owner: "x", stars: 7, noted: "second" },
+      { owner: "cf", stars: 8, noted: "first" },
+    ]);
+    expect(rows(instance, "kept")).toEqual([x, cf]);
+    expect(keysOf(instance, KEPT).length).toBe(2);
+  });
+
+  it("makes an element with another value of one key field another element", async () => {
+    const instance = await start();
+    const [cf] = rows(instance, "kept");
+    note(instance, cf, "first");
+
+    instance.writeArgument(["saved"], [repo("cf", "specs", 1)]);
+
+    expect(result(instance).kept).toMatchObject([
+      { owner: "cf", name: "specs", noted: "" },
+    ]);
+    expect(keysOf(instance, KEPT)).toEqual([
+      "fields:name=labs,owner=cf#0",
+      "fields:name=labs,owner=x#0",
+      "fields:name=specs,owner=cf#0",
     ]);
   });
 });

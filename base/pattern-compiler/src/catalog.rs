@@ -504,7 +504,12 @@ pub const CATALOG: &[Entry] = &[
 /// Entries the front end reports under an identifier the specification has
 /// not named yet. `tests/catalog.rs` fails once the specification has one of
 /// these, so that it moves into [`CATALOG`].
-pub const PROVISIONAL: &[Entry] = &[];
+pub const PROVISIONAL: &[Entry] = &[part(
+    "keyed-by:declaration",
+    Error,
+    "nothing is reported where the first argument or a key field is a type the checker \
+     does not evaluate",
+)];
 
 /// The entry for `id`, if the catalog has one.
 pub fn entry(id: &str) -> Option<&'static Entry> {

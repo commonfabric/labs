@@ -345,11 +345,12 @@ impl Resolver<'_, '_> {
             for annotation in &annotations {
                 if annotation.key == "default" {
                     schema.insert("default".to_string(), annotation_value(annotation));
-                } else if annotation.key == "keyField" {
-                    // The key field that `KeyedBy<T, "field">` declares:
-                    // the keyword `keyField` of the schema of the items
-                    // (PL §1.3, "A declared key field").
-                    schema.insert("keyField".to_string(), json!(annotation.argument));
+                } else if annotation.key == "keyFields" {
+                    // The key fields that `KeyedBy` declares: the keyword
+                    // `keyFields` of the schema of the items, the names in
+                    // the order of the names (PL §1.3, "A declared key
+                    // field").
+                    schema.insert("keyFields".to_string(), annotation_value(annotation));
                 } else if LABEL_KEYS.contains(&annotation.key) {
                     ifc.insert(annotation.key.to_string(), annotation_value(annotation));
                 }

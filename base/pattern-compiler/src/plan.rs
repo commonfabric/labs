@@ -3348,11 +3348,11 @@ impl<'a> Emitter<'_, '_, 'a> {
         let parameters = &function.params().items;
         if let Some(element) = parameters.first() {
             self.root_type(self.module, Root::Element(collection), element);
-            // `Collection.keyField`: a copy of the key field that the
-            // element type of the receiver declares with
-            // `KeyedBy<T, "field">`, for a source that is a slot or an
-            // output. A construct over another collection has none: its
-            // elements have the upstream key (PL §1.1; ruling Z38).
+            // `Collection.keyFields`: a copy of the key fields that the
+            // element type of the receiver declares with `KeyedBy`, for
+            // a source that is a slot or an output. A construct over
+            // another collection has none: its elements have the
+            // upstream key (PL §1.1; rulings Z38 and Z45).
             let declared = self
                 .root_types
                 .get(&Root::Element(collection))
@@ -3360,14 +3360,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                     self.resolver
                         .annotations_of(*ty)
                         .into_iter()
-                        .find(|annotation| annotation.key == "keyField")
+                        .find(|annotation| annotation.key == "keyFields")
                 })
-                .map(|annotation| annotation.argument);
+                .and_then(|annotation| annotation.value);
             let derived = self.collections[collection]["source"]
                 .get("collection")
                 .is_some();
-            if let (Some(field), false) = (declared, derived) {
-                self.collections[collection]["keyField"] = json!(field);
+            if let (Some(fields), false) = (declared, derived) {
+                self.collections[collection]["keyFields"] = fields;
             }
             self.bind_pattern(
                 &element.pattern,

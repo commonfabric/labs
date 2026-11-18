@@ -3781,28 +3781,36 @@ export const P = pattern<{ items: Item[]; first: Item }>(({ items, first }) => {
     );
 }
 
-/// Rulings Z37 and Z38 (PL §1.1, `Collection.keyField`; §1.3, "A declared
-/// key field"): the element type `KeyedBy<T, "field">` writes the keyword
-/// `keyField` into the schema of the array's items, and the record of a
-/// collection over the array holds a copy. The source is a slot in
-/// `saved`, an array of plain values in place, and an output in `repos`,
-/// a plain array generated from scratch. A construct over the result of
-/// another construct names that collection and has no copy: its elements
-/// have the upstream key.
+/// Rulings Z37, Z38 and Z45 (PL §1.1, `Collection.keyFields`; §1.3, "A
+/// declared key field"): the element type `KeyedBy<T, "field">` writes
+/// the keyword `keyFields` into the schema of the array's items, and the
+/// record of a collection over the array holds a copy. A union of field
+/// names declares several fields, which the keyword holds in the order of
+/// their names. The source is a slot in `saved` and in `pairs`, arrays of
+/// plain values in place, and an output in `repos`, a plain array
+/// generated from scratch. A construct over the result of another
+/// construct names that collection and has no copy: its elements have the
+/// upstream key.
 #[test]
-fn a_declared_key_field_is_in_the_items_schema_and_the_collection_record() {
+fn declared_key_fields_are_in_the_items_schema_and_the_collection_record() {
     let analysis = program(
         r#"import { lift, pattern, type KeyedBy } from "commonfabric";
-interface Repo { id: number; name: string; stars: number }
+interface Repo { id: number; name: string; owner: string; stars: number }
 const fetched = lift((input: { names: string[] }): KeyedBy<Repo, "id">[] =>
-  input.names.map((name, index) => ({ id: index, name, stars: 1 })));
-export const P = pattern<{ names: string[]; saved: KeyedBy<Repo, "id">[]; plain: Repo[] }>(
-  ({ names, saved, plain }) => {
+  input.names.map((name, index) => ({ id: index, name, owner: "o", stars: 1 })));
+export const P = pattern<{
+  names: string[];
+  saved: KeyedBy<Repo, "id">[];
+  pairs: KeyedBy<Repo, "owner" | "name">[];
+  plain: Repo[];
+}>(
+  ({ names, saved, pairs, plain }) => {
     const repos = fetched({ names });
     return {
       rows: repos.map((repo) => repo.name),
       starred: repos.filter((repo) => repo.stars > 0).map((repo) => repo.name),
       kept: saved.map((repo) => repo.name),
+      paired: pairs.map((repo) => repo.name),
       other: plain.map((repo) => repo.name),
     };
   },
@@ -3829,7 +3837,7 @@ export const P = pattern<{ names: string[]; saved: KeyedBy<Repo, "id">[]; plain:
             (
                 collection["construct"].as_str().unwrap_or("").to_string(),
                 source,
-                collection["keyField"].to_string(),
+                collection["keyFields"].to_string(),
             )
         })
         .collect();
@@ -3837,10 +3845,11 @@ export const P = pattern<{ names: string[]; saved: KeyedBy<Repo, "id">[]; plain:
     assert_eq!(
         collections,
         [
-            text("map", "output", "\"id\""),
-            text("filter", "output", "\"id\""),
+            text("map", "output", r#"["id"]"#),
+            text("filter", "output", r#"["id"]"#),
             text("map", "collection", "null"),
-            text("map", "slot", "\"id\""),
+            text("map", "slot", r#"["id"]"#),
+            text("map", "slot", r#"["name","owner"]"#),
             text("map", "slot", "null"),
         ]
     );
@@ -3862,12 +3871,13 @@ export const P = pattern<{ names: string[]; saved: KeyedBy<Repo, "id">[]; plain:
             .map(|schema| schema[1]["items"].clone())
             .expect("the schema of the slot")
     };
-    assert_eq!(items_of("saved")["keyField"], json!("id"));
+    assert_eq!(items_of("saved")["keyFields"], json!(["id"]));
+    assert_eq!(items_of("pairs")["keyFields"], json!(["name", "owner"]));
     assert_eq!(
         items_of("saved")["properties"]["name"]["type"],
         json!("string")
     );
-    assert_eq!(items_of("plain")["keyField"], Value::Null);
+    assert_eq!(items_of("plain")["keyFields"], Value::Null);
 }
 
 /// PL §1.1, `Binding.state`: a state path of a binding of a pattern

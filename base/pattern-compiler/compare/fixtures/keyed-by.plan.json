@@ -806,7 +806,9 @@
           "collections": [
             {
               "construct": "map",
-              "keyField": "id",
+              "keyFields": [
+                "id"
+              ],
               "membership": {
                 "by": {
                   "body": 0
@@ -835,7 +837,9 @@
             },
             {
               "construct": "filter",
-              "keyField": "id",
+              "keyFields": [
+                "id"
+              ],
               "membership": {
                 "body": {
                   "by": {
@@ -893,7 +897,9 @@
             },
             {
               "construct": "map",
-              "keyField": "id",
+              "keyFields": [
+                "id"
+              ],
               "membership": {
                 "op": "slot",
                 "slot": 13
@@ -961,7 +967,9 @@
             },
             {
               "construct": "filter",
-              "keyField": "id",
+              "keyFields": [
+                "id"
+              ],
               "membership": {
                 "body": {
                   "by": {
@@ -2215,7 +2223,9 @@
                     "cell"
                   ],
                   "items": {
-                    "keyField": "id",
+                    "keyFields": [
+                      "id"
+                    ],
                     "properties": {
                       "id": {
                         "type": "number"
@@ -2291,7 +2301,9 @@
           {
             "id": "unhashed:schema/5",
             "schema": {
-              "keyField": "id",
+              "keyFields": [
+                "id"
+              ],
               "properties": {
                 "id": {
                   "type": "number"
@@ -2330,7 +2342,9 @@
                 "cell"
               ],
               "items": {
-                "keyField": "id",
+                "keyFields": [
+                  "id"
+                ],
                 "properties": {
                   "id": {
                     "type": "number"

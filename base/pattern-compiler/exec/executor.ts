@@ -18,7 +18,7 @@ import {
   isLink,
   isStream,
   isStreamSchema,
-  keyFieldOf,
+  keyFieldsOf,
   keySegment,
   markerOf,
   type Position,
@@ -91,11 +91,12 @@ export type Plan = {
     within: { element?: number; site?: string }[];
     source: { slot?: number; collection?: number; output?: number };
     /**
-     * The key field that the element type of the receiver declares with
-     * `KeyedBy<T, "field">`, for a source that is a slot or an output
-     * (PL §1.1, `Collection.keyField`; ruling Z38).
+     * The key fields that the element type of the receiver declares
+     * with `KeyedBy`, in the order of their names, for a source that is
+     * a slot or an output (PL §1.1, `Collection.keyFields`; rulings Z38
+     * and Z45).
      */
-    keyField?: string;
+    keyFields?: string[];
   }[];
   bodies: {
     kind: string;
@@ -394,7 +395,7 @@ export class Handle {
         located.value,
         located.ref,
         undefined,
-        keyFieldOf(schema),
+        keyFieldsOf(schema),
       );
       return located.value.map((held, index) =>
         member(
@@ -2502,13 +2503,13 @@ export class Instance {
    * in no key (PL §1.3).
    */
   #table(collection: number, host: Host): Element[] {
-    const { source, keyField } = this.plan.collections[collection];
+    const { source, keyFields } = this.plan.collections[collection];
     let members: (Ref | { value: unknown })[] = [];
     if (source.slot !== undefined) {
       const slot = this.plan.slots[source.slot];
       host.demand(slot.root, slot.path);
       const base = host.at(this.rootOf(slot.root, host), slot.path);
-      if (base instanceof Ref) return this.#stored(base, host, keyField);
+      if (base instanceof Ref) return this.#stored(base, host, keyFields);
       if (Array.isArray(base)) {
         members = base.map((member) =>
           member instanceof Ref ? member : { value: member }
@@ -2549,7 +2550,7 @@ export class Instance {
           }));
         }
       }
-      if (held instanceof Ref) return this.#stored(held, host, keyField);
+      if (held instanceof Ref) return this.#stored(held, host, keyFields);
       members = (Array.isArray(held) ? held : []).map((member) =>
         member instanceof Ref ? member : { value: member }
       );
@@ -2562,9 +2563,9 @@ export class Instance {
         const { named } = this.store.locate(member, true);
         part = `cell:${named.doc}:${canonical(named.path)}`;
       } else {
-        // The value of the declared key field, where the collection has
-        // one, and otherwise the whole value.
-        part = valuePart(host.v(member.value), keyField);
+        // The declared key fields, where the collection has them, and
+        // otherwise the whole value.
+        part = valuePart(host.v(member.value), keyFields);
       }
       const count = seen.get(part) ?? 0;
       seen.set(part, count + 1);
@@ -2576,14 +2577,14 @@ export class Instance {
    * The elements of a stored array. An element whose position holds a
    * link is the cell the link leads to. An element that is a plain value
    * in place is named by the array and its key, and its `source` is that
-   * reference by key (ruling Z12). With `field`, the key field that the
-   * collection's record holds, the key of a plain value is formed from
-   * the field and names it (ruling Z44).
+   * reference by key (ruling Z12). With `fields`, the key fields that
+   * the collection's record holds, the key of a plain value is formed
+   * from the fields and names them (rulings Z44 and Z45).
    */
-  #stored(array: Ref, host: Host, field?: string): Element[] {
+  #stored(array: Ref, host: Host, fields?: readonly string[]): Element[] {
     const located = this.store.locate(array, true, host.reads);
     const held = Array.isArray(located.value) ? located.value : [];
-    const keys = this.store.keysOf(held, located.ref, undefined, field);
+    const keys = this.store.keysOf(held, located.ref, undefined, fields);
     return held.map((member, index) => ({
       key: keys[index],
       index,

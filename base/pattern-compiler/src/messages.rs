@@ -337,6 +337,10 @@ pub fn rewrite(id: &str) -> &'static str {
             "Bind the handler on an element inside the surface the contract names, or name in \
              the policy the handler that the surface's control does bind."
         }
+        "keyed-by:declaration" => {
+            "Name one required top-level property of type `string` or `number`, or a union \
+             of such names, as in `KeyedBy<Repo, \"owner\" | \"name\">`."
+        }
         _ => "",
     }
 }
