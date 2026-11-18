@@ -47,7 +47,7 @@ function refusingManager() {
   const refusal = {
     name: "AuthorizationError",
     message: `Not authorized for ${target}`,
-    permanentEvidence: true,
+    permanentEvidence: true as const,
     aclRevision: 2,
   };
   const clients: { close(): Promise<void> }[] = [];
@@ -220,12 +220,7 @@ describe("space-session-release", () => {
     expect(isOpen(space)).toBe(false);
     await write(space, 2);
 
-    const counter = reader.getCellFromLink({
-      space,
-      id,
-      path: [],
-      type: "application/json",
-    }, counterSchema);
+    const counter = reader.getCell(space, "counter", counterSchema);
     const value = await counter.pull();
 
     expect(isOpen(space)).toBe(true);
@@ -244,12 +239,7 @@ describe("space-session-release", () => {
     expect(written.error).toBeUndefined();
     await readerStorage.synced();
     await server.flushSessions();
-    const seen = writer.getCellFromLink({
-      space,
-      id,
-      path: [],
-      type: "application/json",
-    }, counterSchema);
+    const seen = writer.getCell(space, "counter", counterSchema);
 
     expect(await seen.pull()).toEqual({ n: 5 });
   });
@@ -265,13 +255,12 @@ describe("space-session-release", () => {
     });
 
     it("keeps a space whose document a cell holds", async () => {
-      const { space, id } = await spaceWith(1);
-      const counter: Cell<unknown> = reader.getCellFromLink({
+      const { space } = await spaceWith(1);
+      const counter: Cell<unknown> = reader.getCell(
         space,
-        id,
-        path: [],
-        type: "application/json",
-      }, counterSchema);
+        "counter",
+        counterSchema,
+      );
       await counter.pull();
 
       await releaseTwice();
@@ -282,7 +271,11 @@ describe("space-session-release", () => {
 
     it("keeps a space a sink on its replica names", async () => {
       const { space, id } = await spaceWith(1);
-      const cancel = readerStorage.open(space).sink(id, () => {});
+      // `sink()` is the provider's own, which the interface leaves out.
+      const provider = readerStorage.open(space) as unknown as {
+        sink(uri: URI, callback: () => void): () => void;
+      };
+      const cancel = provider.sink(id, () => {});
       await readerStorage.synced();
 
       await releaseTwice();
