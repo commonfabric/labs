@@ -1,5 +1,5 @@
 import { getLogger } from "@commonfabric/logger";
-import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import type { ScopeKey, ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { entityKey } from "./keys.ts";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
@@ -42,6 +42,7 @@ import {
 import type {
   CommitError,
   IExtendedStorageTransaction,
+  IMemorySpaceAddress,
   IPreconditionFailedError,
   IReadActivity,
   IStorageManager,
@@ -180,6 +181,36 @@ export class EventHandlerRegistry {
 }
 
 const guardedImplementations = Symbol("guarded event implementations");
+
+/**
+ * The scoped instance a served handler's withdrawn run waits on, if any: the
+ * one link resolution found unproduced on the run's reads
+ * (`unproducedScopedInstance`), when a writer that owes it will still run
+ * (`Scheduler.comingOwedScopedInstance()`), as its document and its instance's
+ * scope key. Undefined when the run read no such instance, or when no writer
+ * that owes it is coming to produce it, so that nothing the drain could wait
+ * on will change what the argument reads.
+ */
+function servedNotRunWait(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+): { space: MemorySpace; id: string; scopeKey: ScopeKey } | undefined {
+  const unproduced = tx.tx.unproducedScopedInstance;
+  if (unproduced === undefined) return undefined;
+  // Recorded as `<space>/<scope>/<id>`; neither a space DID nor a scope holds
+  // a slash.
+  const [space, scope, ...rest] = unproduced.split("/");
+  if (scope !== "user" && scope !== "session") return undefined;
+  const address = {
+    space: space as MemorySpace,
+    id: rest.join("/") as IMemorySpaceAddress["id"],
+    scope: scope as "user" | "session",
+  };
+  const scopeKey = runtime.scheduler.comingOwedScopedInstance(address, tx);
+  return scopeKey === undefined
+    ? undefined
+    : { space: address.space, id: address.id, scopeKey };
+}
 
 type GuardedDispatcher = EventHandler & {
   [guardedImplementations]: {
@@ -3137,6 +3168,12 @@ export async function dispatchQueuedEvent(state: {
         const notRunMessage = withheld
           ? "the handler did not run, and its outcome is withheld"
           : reason;
+        // What a served withdrawal waits on, decided from the run's own reads
+        // before the abort: a scoped instance a writer that will still run
+        // owes it (events.md §5).
+        const waitsOn = served === undefined
+          ? undefined
+          : servedNotRunWait(state.runtime, tx);
         if (tx.status().status === "ready") {
           tx.abort(
             new Error(
@@ -3165,6 +3202,7 @@ export async function dispatchQueuedEvent(state: {
             kind: "deferred",
             cause: "handler-not-run",
             message: notRunMessage,
+            ...(waitsOn !== undefined ? { waitsOn } : {}),
           });
           // The withdrawal is a deferral, and a deferral carries the
           // drain's arrival-order BARRIER (events.md §2; review-6459 F1):

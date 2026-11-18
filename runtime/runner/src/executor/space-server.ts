@@ -1654,6 +1654,23 @@ export class SpaceServer implements TransactionSealDestination {
    * the document arrives or the event is covered by a terminal notice. */
   readonly #programClosureWaits = new Map<string, Set<string>>();
 
+  /** The scoped instances events whose served handler did not run wait on
+   * (events.md §5): each one the handler's run read while the serving loop had
+   * not produced it, and a writer that owes it will still run. Keyed by
+   * `toDirtyKey()` (document id and instance scope key), each with the
+   * events waiting on it; a commit writing that instance wakes them, and a
+   * write to another instance of the document does not. */
+  readonly #notRunWaits = new Map<string, Set<string>>();
+
+  /** The cancels of the scheduler watches (`watchProducedDocument()`) each
+   * entry of `#notRunWaits` holds, by the same key. */
+  readonly #notRunWatchCancels = new Map<string, () => void>();
+
+  /** The events in `#notRunWaits` that no commit has woken yet. The drain
+   * dispatches none of them, and stops its pass at one, as at any other
+   * barrier, so that no later arrival in the space overtakes it. */
+  readonly #notRunWaiting = new Set<string>();
+
   /** The deferral backstop timer (see EVENT_DEFERRAL_REARM_MS): armed
    * when a drain pass left deferred/transient work behind, so the scan
    * re-arms after a REAL wait even when no input ever arrives. Input
@@ -3840,6 +3857,20 @@ export class SpaceServer implements TransactionSealDestination {
     this.#retireWave(wave);
   }
 
+  /** Wakes the events waiting on the instance `waitKey` names (events.md §5):
+   * a commit wrote it, or a writer of its document finished a run or stopped
+   * writing it. The entries are dispatched again, and judged afresh. */
+  #wakeNotRunWait(waitKey: string): void {
+    const woken = this.#notRunWaits.get(waitKey);
+    if (woken === undefined) return;
+    this.#notRunWaits.delete(waitKey);
+    this.#notRunWatchCancels.get(waitKey)?.();
+    this.#notRunWatchCancels.delete(waitKey);
+    for (const eventId of woken) this.#notRunWaiting.delete(eventId);
+    this.#eventScanOwed = true;
+    this.#feedArrived?.resolve();
+  }
+
   /** Re-arm the event scan for DEFERRED (transient) drain outcomes —
    * never synchronously (verdict blocker, 2026-08-12): an immediate
    * `#eventScanOwed = true` makes `#hasWork()` spin the next wave at
@@ -4562,6 +4593,13 @@ export class SpaceServer implements TransactionSealDestination {
           });
         }
       }
+      // A commit writing a document an event whose handler did not run waits
+      // on re-drains it (events.md §5).
+      if (this.#notRunWaits.size > 0) {
+        for (const write of record.writes) {
+          this.#wakeNotRunWait(toDirtyKey(write.id, write.scopeKey));
+        }
+      }
       // Deferred events re-try on NEW INPUT (the creation-race arm:
       // the piece's pattern-run commit is exactly such a record) —
       // this is the input signal the deferral budget counts, not a
@@ -4794,7 +4832,14 @@ export class SpaceServer implements TransactionSealDestination {
           candidate?.eventId === entry.eventId &&
           candidate?.seq === entry.seq
         );
-        if (index < 0 || stored[index].consequenced === true) continue;
+        if (index < 0 || stored[index].consequenced === true) {
+          this.#notRunWaiting.delete(entry.eventId);
+          continue;
+        }
+        // An entry whose handler did not run, waiting on a document no commit
+        // has written since (events.md §5), is a barrier: it is not
+        // dispatched, and everything behind it in the space waits with it.
+        if (this.#notRunWaiting.has(entry.eventId)) break;
         // The mark every arm below writes (the handler tx's, the
         // skip/error/drop notices') is INDEX-ADDRESSED against the
         // REPLICA view: verify the view holds this entry at this index
@@ -5377,6 +5422,48 @@ export class SpaceServer implements TransactionSealDestination {
                     if (originPending) {
                       this.#options.stats.events.originPendingDeferrals += 1;
                       this.#options.onEventDeferred?.();
+                    }
+                    // A handler that did not run because it read a scoped
+                    // instance a writer here will still produce waits on
+                    // that document (events.md §5): settlement, which spends
+                    // no budget and arms no backstop, since a commit writing
+                    // the document is what re-drains it. A document in
+                    // another space is one this loop sees no commit for, so
+                    // that withdrawal spends the budget as any other does.
+                    const waitsOn = "cause" in outcome &&
+                        outcome.cause === "handler-not-run" &&
+                        outcome.waitsOn?.space === this.#options.space
+                      ? outcome.waitsOn
+                      : undefined;
+                    if (waitsOn !== undefined) {
+                      // Out of the deferral count altogether: an entry held
+                      // there re-drains on every commit, and this one waits
+                      // for one commit only. Should it withdraw again with
+                      // nothing owed, it spends the budget from the start.
+                      this.#options.stats.events.handlerNotRunWaits += 1;
+                      this.#eventDeferrals.delete(entry.eventId);
+                      const waitKey = toDirtyKey(waitsOn.id, waitsOn.scopeKey);
+                      let waiting = this.#notRunWaits.get(waitKey);
+                      if (waiting === undefined) {
+                        waiting = new Set();
+                        this.#notRunWaits.set(waitKey, waiting);
+                        // A writer that runs and leaves the instance absent
+                        // commits no write to it, so its run wakes the wait
+                        // too, as does a writer that stops writing the
+                        // document.
+                        this.#notRunWatchCancels.set(
+                          waitKey,
+                          runtime.scheduler.watchProducedDocument(
+                            waitsOn,
+                            () => this.#wakeNotRunWait(waitKey),
+                          ),
+                        );
+                      }
+                      waiting.add(entry.eventId);
+                      this.#notRunWaiting.add(entry.eventId);
+                      this.#drainInFlight.delete(eventId);
+                      this.#loadParkDeferredInPass = true;
+                      return;
                     }
                     const deferrals =
                       (this.#eventDeferrals.get(entry.eventId) ?? 0) +
@@ -8685,6 +8772,13 @@ export class SpaceServer implements TransactionSealDestination {
       this.#endProgramClosureGrace(eventId);
     }
     this.#programClosureWaits.clear();
+    // A waiting entry is dispatched afresh by the next tenure, which judges
+    // it against the state it finds: the commit that would have woken it can
+    // land while no tenure is watching.
+    for (const cancel of this.#notRunWatchCancels.values()) cancel();
+    this.#notRunWatchCancels.clear();
+    this.#notRunWaits.clear();
+    this.#notRunWaiting.clear();
     for (const eventId of [...this.#deliveryCheckpoints.keys()]) {
       this.#setActiveDeliveryCheckpoint(eventId, undefined);
     }
