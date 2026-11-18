@@ -75,6 +75,7 @@ import {
   preservedWrapperFor,
   printTypeNode,
   scopedCellParts,
+  scopedCellPartsOfType,
   validateShrinkCoverage,
   wrapScopedCell,
 } from "./type-shrinking.ts";
@@ -402,7 +403,16 @@ function shrinkAndWrapParameterType(
     factory,
     typeRegistry,
     context.state,
-  );
+  ) ?? (type &&
+    scopedCellPartsOfType(
+      type,
+      false,
+      checker,
+      sourceFile,
+      factory,
+      typeRegistry,
+      context.state,
+    ));
   const cellNode = scoped?.cell ?? node;
   const cellType = scoped
     ? getTypeFromTypeNodeWithFallback(cellNode, checker, typeRegistry)
@@ -433,9 +443,16 @@ function shrinkAndWrapParameterType(
     fn,
     shouldWrap ? preservedWrapperFor(cellNode, cellType, checker) : undefined,
   );
-  return scoped
+  const rewrapped = scoped
     ? wrapScopedCell(narrowed, scoped, factory, typeRegistry)
     : narrowed;
+  // A cell rewrapped in the capability its callback earns keeps the labels its
+  // own type attaches, such as a `Confidential` handle's, which a wrapper
+  // built around its value leaves out (`SchemaHint.narrowedFrom`).
+  if (shouldWrap && type) {
+    context.state.recordNarrowedFrom(rewrapped, { type, typeNode: node });
+  }
+  return rewrapped;
 }
 
 function applyCapabilitySummaryToArgument(
