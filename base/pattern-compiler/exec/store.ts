@@ -476,7 +476,15 @@ export const isStreamSchema = (schema: Schema | undefined): boolean =>
 export type Position = {
   doc: string;
   path: readonly string[];
-  keyed?: { ref: Ref; seen: string };
+  keyed?: {
+    ref: Ref;
+    seen: string;
+    /** The key, and the array that the read found it in. */
+    key: string;
+    array?: object;
+    /** The positions outside the array that the read went through. */
+    others: Position[];
+  };
 };
 
 /** What `Store.locate` found. */
@@ -595,6 +603,49 @@ export class ComputedOutput extends Error {
 /** The kind of the document that holds what a computed output returned. */
 export const OUTPUT = "output";
 
+/**
+ * What one change of a document replaced: the whole document, what a
+ * path held, or the members that a splice of an array removed and how
+ * many it put in their place. A value in it is the one the document
+ * held, and no copy: a change replaces a value and mutates none.
+ */
+export type Undo =
+  | { doc: string; whole: true; old: { kind: string; value: unknown } | undefined }
+  | { doc: string; path: readonly string[]; old: unknown }
+  | {
+    doc: string;
+    path: readonly string[];
+    splice: { start: number; inserted: number; removed: unknown[] };
+  };
+
+/**
+ * A change of the keys of a stored array: the positions from `start`
+ * on that held the keys `removed` hold the keys `inserted`.
+ */
+export type KeyOp = { start: number; removed: string[]; inserted: string[] };
+
+/** The keys of one stored array, formed with one list of key fields. */
+type KeyState = {
+  /** The reference that the keys were formed through. */
+  at: Ref;
+  fields: readonly string[];
+  held: readonly unknown[];
+  keys: string[];
+  /** The element part of each position, and its text. */
+  parts: ElementPart[];
+  texts: string[];
+  /** How many positions have each part, by its text. */
+  counts: Map<string, number>;
+  /** The clock when the keys were last known to stand. */
+  clock: number;
+  /** The other documents that forming the keys read, each whole. */
+  others: Position[];
+  /** How many times the keys were formed whole. */
+  formed: number;
+  /** The changes since the keys were last formed whole. */
+  ops: KeyOp[];
+};
+
 /** The longest chain of links a read follows before it gives up. */
 const MAX_LINKS = 64;
 
@@ -615,10 +666,23 @@ export class Store {
    * space that the documents are in, which the element part of a
    * position that holds a link names.
    */
-  constructor(options: { secret?: string; space?: string } = {}) {
+  constructor(
+    options: { secret?: string; space?: string; keys?: "kept" | "formed" } = {},
+  ) {
     this.#secret = options.secret ?? crypto.randomUUID();
     this.#space = options.space;
+    this.#kept = (options.keys ?? "kept") === "kept";
   }
+
+  /**
+   * Whether the key of a position that a write did not touch is kept
+   * across the write (`keys: "kept"`, the default), or the key of every
+   * position is formed again after each write to the array
+   * (`keys: "formed"`, as `execution-and-storage.md` §2.5, step 2, words
+   * it: "Compute the key of every position"). The keys are the same
+   * either way: a key is a function of what its position holds.
+   */
+  readonly #kept: boolean;
 
   readonly docs = new Map<string, { kind: string; value: unknown }>();
   /**
@@ -645,36 +709,29 @@ export class Store {
    */
   readonly copies = new WeakSet<object>();
   /**
-   * The link to a stream at each position that holds one, by document:
-   * a write records the position of each such link in the value it
-   * stores, and drops the record of a position it stores another value
-   * at (ruling Z43). The entries of a document are in no stated order.
+   * The link to a stream at each position of a document that holds one
+   * (ruling Z43), found by a walk of what the document holds now. The
+   * entries of a document are in the order of the stored value.
    */
-  readonly streams = new Map<string, StreamPosition[]>();
-
-  /**
-   * Records the stream links of a value stored at a path of a document,
-   * in place of what the record has at that path and below it.
-   */
-  #record(doc: string, path: readonly string[], value: unknown): void {
-    const kept = (this.streams.get(doc) ?? []).filter((entry) =>
-      !isPrefix(path, entry.path)
-    );
-    const walk = (held: unknown, at: string[]) => {
-      if (isStream(held)) {
-        kept.push({ path: at, stream: structuredClone(held.$stream) });
-      } else if (Array.isArray(held)) {
-        held.forEach((member, index) => walk(member, [...at, `${index}`]));
-      } else if (isRecord(held)) {
-        for (const [name, member] of Object.entries(held)) {
-          walk(member, [...at, name]);
+  readonly streams = {
+    get: (doc: string): StreamPosition[] | undefined => {
+      const found: StreamPosition[] = [];
+      const walk = (held: unknown, at: string[]) => {
+        if (isStream(held)) {
+          found.push({ path: at, stream: structuredClone(held.$stream) });
+        } else if (Array.isArray(held)) {
+          held.forEach((member, index) => walk(member, [...at, `${index}`]));
+        } else if (isRecord(held)) {
+          for (const [name, member] of Object.entries(held)) {
+            walk(member, [...at, name]);
+          }
         }
-      }
-    };
-    walk(value, [...path]);
-    if (kept.length === 0) this.streams.delete(doc);
-    else this.streams.set(doc, kept);
-  }
+      };
+      walk(this.docs.get(doc)?.value, []);
+      return found.length === 0 ? undefined : found;
+    },
+    has: (doc: string): boolean => this.streams.get(doc) !== undefined,
+  };
 
   /**
    * For the document of a computed output: what brings the output up to
@@ -702,37 +759,156 @@ export class Store {
 
   /**
    * Called before each change of a document, with the document and the
-   * path that changes: a transaction keeps what the document held.
+   * path that changes: a transaction notes which documents it wrote, and
+   * which evaluation wrote them.
    */
   onWrite: ((doc: string, path: readonly string[]) => void) | undefined;
 
   /**
-   * Puts back what a document held: the whole document, or what it held
-   * at a path, from the copy `before` that was taken of it. With no
-   * copy, the document did not exist and is deleted, and a read of its
-   * place reads what the place was declared with.
+   * Called after each change of a document, with what changed: whoever
+   * keeps an index from a position to its readers marks them
+   * (`scheduler-and-serving-loop.md` §3.1). `keyed` is absent where the
+   * change is in no array, and otherwise says, for each array on the way
+   * to the path and for an array at it, which keys changed what they
+   * hold or whether a position holds them: `keys` is absent where every
+   * key may have, and `now` is the array that replaced `array`.
    */
-  revert(
+  onChange:
+    | ((
+      change: {
+        doc: string;
+        path: readonly string[];
+        /** What the path held, or the members that a splice removed. */
+        old: unknown;
+        splice?: { start: number; removed: number; inserted: number };
+        keyed: { array: object; keys?: readonly string[]; now?: object }[];
+      },
+    ) => void)
+    | undefined;
+
+  /**
+   * What each change of a transaction in progress replaced, in order,
+   * while a transaction keeps one: enough to put back what a path held
+   * before the transaction, without a copy of its document.
+   */
+  journal: Undo[] | undefined;
+
+  /** A change was made: the clock, the log, the keys, and the readers. */
+  #changed(
     doc: string,
     path: readonly string[],
-    before: { kind: string; value: unknown } | undefined,
+    old: unknown,
+    splice?: { start: number; removed: number; inserted: number },
   ): void {
+    this.clock += 1;
+    this.log.push({ doc, path, at: this.clock });
+    const keyed = this.#touch(doc, path, splice, old);
+    this.onChange?.({
+      doc,
+      path,
+      old,
+      ...(splice === undefined ? {} : { splice }),
+      keyed,
+    });
+  }
+
+  /**
+   * What a path of a document held before the changes of `journal`: the
+   * value there now with those changes undone, as a copy.
+   */
+  before(doc: string, path: readonly string[], journal: readonly Undo[]) {
+    // The changes at, above or below the path, and the shortest path
+    // among them: the changes below that one are undone on a copy.
+    let top = path;
+    for (const undo of journal) {
+      if (undo.doc !== doc) continue;
+      if ("whole" in undo) {
+        top = [];
+      } else if (isPrefix(undo.path, top)) {
+        top = undo.path;
+      }
+    }
+    let copy: { value: unknown } | undefined = {
+      value: structuredClone(
+        top.reduce(
+          (value: unknown, segment) => child(value, segment),
+          this.docs.get(doc)?.value,
+        ),
+      ),
+    };
+    for (let index = journal.length - 1; index >= 0; index--) {
+      const undo = journal[index];
+      if (undo.doc !== doc) continue;
+      if ("whole" in undo) {
+        copy = undo.old === undefined
+          ? undefined
+          : { value: structuredClone(undo.old.value) };
+        continue;
+      }
+      if (copy === undefined || !isPrefix(top, undo.path)) continue;
+      const rest = undo.path.slice(top.length);
+      if (rest.length === 0 && !("splice" in undo)) {
+        copy.value = structuredClone(undo.old);
+        continue;
+      }
+      let holder = copy as unknown as Record<string, unknown>;
+      let name = "value";
+      for (const segment of rest) {
+        const next = holder?.[name];
+        if (typeof next !== "object" || next === null) break;
+        holder = next as Record<string, unknown>;
+        name = segment;
+      }
+      if ("splice" in undo) {
+        const array = holder[name];
+        if (Array.isArray(array)) {
+          array.splice(
+            undo.splice.start,
+            undo.splice.inserted,
+            ...structuredClone(undo.splice.removed),
+          );
+        }
+      } else if (undo.old === undefined && !Array.isArray(holder)) {
+        delete holder[name];
+      } else {
+        holder[name] = structuredClone(undo.old);
+      }
+    }
+    if (copy === undefined) return { existed: false, value: undefined };
+    return {
+      existed: true,
+      value: path.slice(top.length).reduce(
+        (value: unknown, segment) => child(value, segment),
+        copy.value,
+      ),
+    };
+  }
+
+  /**
+   * Puts back what a path of a document held before the changes of
+   * `journal`. A document that did not exist then is deleted, and a read
+   * of its place reads what the place was declared with.
+   */
+  revert(doc: string, path: readonly string[], journal: readonly Undo[]) {
+    const { existed, value } = this.before(doc, path, journal);
     const held = this.docs.get(doc);
-    if (before === undefined) {
+    const old = path.reduce(
+      (below: unknown, segment) => child(below, segment),
+      held?.value,
+    );
+    if (!existed) {
       if (held === undefined) return;
       this.docs.delete(doc);
-      this.streams.delete(doc);
     } else if (held === undefined || path.length === 0) {
-      const restored = structuredClone(before);
-      this.docs.set(doc, restored);
-      this.#record(doc, [], restored.value);
+      let kind = held?.kind ?? "";
+      for (const undo of journal) {
+        if (undo.doc === doc && "whole" in undo && undo.old !== undefined) {
+          kind = held?.kind ?? undo.old.kind;
+          break;
+        }
+      }
+      this.docs.set(doc, { kind, value });
     } else {
-      const earlier = structuredClone(
-        path.reduce(
-          (value: unknown, segment) => child(value, segment),
-          before.value,
-        ),
-      );
       let holder = held.value as Record<string, unknown>;
       for (const segment of path.slice(0, -1)) {
         const next = holder?.[segment];
@@ -741,20 +917,71 @@ export class Store {
       }
       const last = path[path.length - 1];
       if (typeof holder !== "object" || holder === null) return;
-      if (earlier === undefined && !Array.isArray(holder)) delete holder[last];
-      else holder[last] = earlier;
-      this.#record(doc, path, earlier);
+      if (value === undefined && !Array.isArray(holder)) delete holder[last];
+      else holder[last] = value;
     }
-    this.clock += 1;
-    this.log.push({ doc, path: [...path], at: this.clock });
+    this.#changed(doc, [...path], old);
+  }
+
+  /** Undoes every change of `journal`, the last one first. */
+  undo(journal: readonly Undo[]): void {
+    for (let index = journal.length - 1; index >= 0; index--) {
+      const undo = journal[index];
+      if ("whole" in undo) {
+        const now = this.docs.get(undo.doc)?.value;
+        if (undo.old === undefined) this.docs.delete(undo.doc);
+        else this.docs.set(undo.doc, undo.old);
+        this.#changed(undo.doc, [], now);
+        continue;
+      }
+      const held = this.docs.get(undo.doc);
+      if (held === undefined) continue;
+      if (undo.path.length === 0 && !("splice" in undo)) {
+        const now = held.value;
+        held.value = undo.old;
+        this.#changed(undo.doc, [], now);
+        continue;
+      }
+      let holder = held as unknown as Record<string, unknown>;
+      let name = "value";
+      for (const segment of undo.path) {
+        const next = holder?.[name];
+        if (typeof next !== "object" || next === null) break;
+        holder = next as Record<string, unknown>;
+        name = segment;
+      }
+      if ("splice" in undo) {
+        const array = holder[name];
+        if (Array.isArray(array)) {
+          const taken = array.splice(
+            undo.splice.start,
+            undo.splice.inserted,
+            ...undo.splice.removed,
+          );
+          this.#changed(undo.doc, undo.path, taken, {
+            start: undo.splice.start,
+            removed: taken.length,
+            inserted: undo.splice.removed.length,
+          });
+        }
+        continue;
+      }
+      const now = holder[name];
+      if (undo.old === undefined && !Array.isArray(holder)) {
+        delete holder[name];
+      } else {
+        holder[name] = undo.old;
+      }
+      this.#changed(undo.doc, undo.path, now);
+    }
   }
 
   create(id: string, kind: string, value: unknown): void {
     this.onWrite?.(id, []);
+    const old = this.docs.get(id);
+    this.journal?.push({ doc: id, whole: true, old });
     this.docs.set(id, { kind, value });
-    this.#record(id, [], value);
-    this.clock += 1;
-    this.log.push({ doc: id, path: [], at: this.clock });
+    this.#changed(id, [], old?.value);
   }
 
   /** Names a place that gets its document with the first write. */
@@ -776,15 +1003,16 @@ export class Store {
   /**
    * The position that holds `key` among `keys`, or -1: a lookup in an
    * index that is built once for each list of keys, so that resolving a
-   * reference by key does not scan the keys of its array.
+   * reference by key does not scan the keys of its array. The index of
+   * a list that a splice changed is built again.
    */
   #positionOf(keys: readonly string[], key: string): number {
     let positions = this.#positions.get(keys);
     if (positions === undefined) {
       positions = new Map();
-      keys.forEach((held, index) => {
-        if (!positions?.has(held)) positions?.set(held, index);
-      });
+      for (let index = keys.length - 1; index >= 0; index--) {
+        positions.set(keys[index], index);
+      }
       this.#positions.set(keys, positions);
     }
     return positions.get(key) ?? -1;
@@ -793,23 +1021,247 @@ export class Store {
   /** The arrays whose keys are being formed. */
   readonly #keying = new Set<string>();
 
-  /** How many times the keys of an array were formed. */
+  /** How many times the keys of an array were formed whole. */
   keyings = 0;
 
   /**
-   * The keys last formed for a stored array, by its address and the key
-   * fields: the array they were formed for, the clock then, and the
-   * documents that forming them read.
+   * The keys of each stored array whose keys were formed, by the array
+   * and the key fields. An array is changed in place by a write below
+   * it and by a splice, and its keys are then brought up to date for
+   * the positions that the change touched (`#touch`).
    */
-  readonly #keys = new Map<
-    string,
-    {
-      clock: number;
-      held: readonly unknown[];
-      keys: string[];
-      documents: Position[];
+  readonly #states = new WeakMap<object, Map<string, KeyState>>();
+
+  /**
+   * The keys of a stored array as the store holds them, where it holds
+   * them: the list, which changes in place, the count of the times it
+   * was formed whole, and the changes since. A reader that kept the
+   * count and the number of changes it has seen brings what it derived
+   * from the keys up to date from the changes after that number, and
+   * derives it whole where the count moved.
+   */
+  keyState(
+    held: readonly unknown[],
+    fields: readonly string[] = [],
+  ): { keys: readonly string[]; formed: number; ops: readonly KeyOp[] } | undefined {
+    return this.#states.get(held)?.get(JSON.stringify(fields));
+  }
+
+  /** The element part of a position of an array whose keys are held. */
+  #partAt(state: KeyState, index: number, reads: Position[]): ElementPart {
+    const member = state.held[index];
+    if (isLink(member)) {
+      const { named } = this.locate(
+        new Ref(member.$link.doc, member.$link.path),
+        true,
+        reads,
+        true,
+      );
+      return this.addressOf(named);
     }
-  >();
+    return this.partOf(this.read(state.at.key(`${index}`), reads), state.fields);
+  }
+
+  /**
+   * Whether the reference that the keys of an array were formed through
+   * still names the array, so that a position can be read through it.
+   */
+  #stands(state: KeyState): boolean {
+    return this.#kept && this.locate(state.at, true).value === state.held;
+  }
+
+  /** Notes what forming a part read of other documents. */
+  #others(state: KeyState, reads: readonly Position[]): void {
+    const array = this.locate(state.at, true).ref;
+    for (const { doc, path } of reads) {
+      if (doc === array.doc && isPrefix(array.path, path)) continue;
+      if (!state.others.some((known) => known.doc === doc)) {
+        state.others.push({ doc, path: [] });
+      }
+    }
+  }
+
+  /**
+   * The keys of the held arrays after a splice of `array`, or after a
+   * write of a member: the positions from `start` on that held
+   * `removed` members hold `inserted` now. A key of another position
+   * stays as it is, unless a part that left or entered is one that
+   * another position has: the occurrence counts are then formed again
+   * from the parts, with no hash. Returns the keys that changed what
+   * they hold or whether a position holds them, or nothing where every
+   * key may have.
+   */
+  #respliced(
+    array: readonly unknown[],
+    start: number,
+    removed: number,
+    inserted: number,
+  ): string[] | undefined {
+    const states = this.#states.get(array);
+    if (states === undefined) return undefined;
+    const affected: string[] = [];
+    let all = false;
+    for (const [fields, state] of [...states]) {
+      if (!this.#stands(state)) {
+        states.delete(fields);
+        all = true;
+        continue;
+      }
+      const id = this.addressText(state.at);
+      const reads: Position[] = [];
+      let parts: ElementPart[];
+      this.#keying.add(id);
+      try {
+        parts = Array.from(
+          { length: inserted },
+          (_, offset) => this.#partAt(state, start + offset, reads),
+        );
+      } finally {
+        this.#keying.delete(id);
+      }
+      this.#others(state, reads);
+      state.clock = this.clock;
+      const texts = parts.map(textOf);
+      const left = state.texts.slice(start, start + removed);
+      const before = state.keys.slice(start, start + removed);
+      // Whether another position has a part that left or entered.
+      const counts = new Map<string, number>();
+      for (const text of left) counts.set(text, (counts.get(text) ?? 0) - 1);
+      for (const text of texts) counts.set(text, (counts.get(text) ?? 0) + 1);
+      let shared = false;
+      for (const text of new Set([...left, ...texts])) {
+        const others = (state.counts.get(text) ?? 0) -
+          left.filter((one) => one === text).length;
+        const here = texts.filter((one) => one === text).length;
+        if (others > 0 || here > 1) shared = true;
+      }
+      state.parts.splice(start, removed, ...parts);
+      state.texts.splice(start, removed, ...texts);
+      for (const [text, change] of counts) {
+        const now = (state.counts.get(text) ?? 0) + change;
+        if (now === 0) state.counts.delete(text);
+        else state.counts.set(text, now);
+      }
+      if (shared) {
+        // The occurrence counts of the positions with those parts are
+        // formed again, and every reader of the keys starts over.
+        state.keys.splice(0, state.keys.length, ...keysOfParts(state.parts));
+        this.#positions.delete(state.keys);
+        state.formed += 1;
+        state.ops.length = 0;
+        all = true;
+        continue;
+      }
+      const keys = parts.map((element) => textOf({ element, occurrence: 0 }));
+      const index = this.#positions.get(state.keys);
+      if (index !== undefined) {
+        if (removed === inserted) {
+          before.forEach((key) => index.delete(key));
+          keys.forEach((key, offset) => index.set(key, start + offset));
+        } else if (start + removed === state.keys.length) {
+          before.forEach((key) => index.delete(key));
+          keys.forEach((key, offset) => index.set(key, start + offset));
+        } else {
+          this.#positions.delete(state.keys);
+        }
+      }
+      state.keys.splice(start, removed, ...keys);
+      state.ops.push({ start, removed: before, inserted: keys });
+      affected.push(...before, ...keys);
+    }
+    return all ? undefined : affected;
+  }
+
+  /**
+   * Brings the held keys up to date with a change of a document, and
+   * says which keys of which arrays changed: of each array on the way
+   * to the path, the keys of the position the path goes through, and
+   * of an array at the path, those of the members that the change
+   * replaced. `old` is what the path held, where the change replaced
+   * it whole.
+   */
+  #touch(
+    doc: string,
+    path: readonly string[],
+    splice: { start: number; removed: number; inserted: number } | undefined,
+    old: unknown,
+  ): { array: object; keys?: readonly string[]; now?: object }[] {
+    const keyed: { array: object; keys?: readonly string[]; now?: object }[] =
+      [];
+    let value = this.docs.get(doc)?.value;
+    for (const segment of path) {
+      if (Array.isArray(value)) {
+        keyed.push({
+          array: value,
+          keys: /^\d+$/.test(segment)
+            ? this.#memberSet(value, Number(segment))
+            : this.#dropped(value),
+        });
+      }
+      value = child(value, segment);
+    }
+    if (splice !== undefined) {
+      if (Array.isArray(value)) {
+        keyed.push({
+          array: value,
+          keys: this.#respliced(
+            value,
+            splice.start,
+            splice.removed,
+            splice.inserted,
+          ),
+        });
+      }
+      return keyed;
+    }
+    if (!Array.isArray(old) || old === value) return keyed;
+    // An array that was replaced whole: the members that both hold at
+    // the start and at the end keep their keys.
+    const states = this.#states.get(old);
+    if (states === undefined || !Array.isArray(value) || !this.#kept) {
+      keyed.push({ array: old, ...(Array.isArray(value) ? { now: value } : {}) });
+      return keyed;
+    }
+    const same = (a: unknown, b: unknown) =>
+      a === b || JSON.stringify(a) === JSON.stringify(b);
+    let head = 0;
+    while (
+      head < old.length && head < value.length && same(old[head], value[head])
+    ) head += 1;
+    let tail = 0;
+    while (
+      tail < old.length - head && tail < value.length - head &&
+      same(old[old.length - 1 - tail], value[value.length - 1 - tail])
+    ) tail += 1;
+    this.#states.delete(old);
+    this.#states.set(value, states);
+    for (const state of states.values()) state.held = value;
+    keyed.push({
+      array: old,
+      now: value,
+      keys: this.#respliced(
+        value,
+        head,
+        old.length - head - tail,
+        value.length - head - tail,
+      ),
+    });
+    return keyed;
+  }
+
+  /** The keys of an array after a write of the member at `index`. */
+  #memberSet(array: readonly unknown[], index: number): string[] | undefined {
+    for (const state of this.#states.get(array)?.values() ?? []) {
+      if (state.keys.length !== array.length) return this.#dropped(array);
+    }
+    return this.#respliced(array, index, 1, 1);
+  }
+
+  /** Forgets the keys of an array: every key may have changed. */
+  #dropped(array: readonly unknown[]): undefined {
+    this.#states.delete(array);
+    return undefined;
+  }
 
   /**
    * The element part of the key of a plain value
@@ -903,28 +1355,42 @@ export class Store {
     copies?: readonly unknown[],
     fields: readonly string[] = [],
   ): string[] {
+    return [...this.#keysOf(held, at, copies, fields)];
+  }
+
+  /**
+   * The keys of `keysOf`, as the list that the store holds and changes
+   * in place with the array.
+   */
+  #keysOf(
+    held: readonly unknown[],
+    at: Ref,
+    copies?: readonly unknown[],
+    fields: readonly string[] = [],
+  ): string[] {
     const id = this.addressText(at);
     // An element that holds a reference by key into its own array is
     // keyed by its position while the keys of that array are formed.
     const reentered = this.#keying.has(id);
-    // The keys of a stored array are a function of what is stored, so
-    // they stand until a document that forming them read is written. An
-    // evaluation that writes nothing moves the clock and no key.
+    // The keys of a stored array are a function of what is stored. The
+    // store brings them up to date with each change of the array, so
+    // they stand until another document that forming them read is
+    // written.
     const clock = this.clock;
-    const formed = `${id} ${JSON.stringify(fields)}`;
-    const known = this.#keys.get(formed);
+    const named = JSON.stringify(fields);
+    const known = this.#states.get(held)?.get(named);
     if (
-      !reentered && known !== undefined && known.held === held &&
-      (known.clock === clock ||
-        !this.changedSince(known.clock, known.documents))
+      !reentered && known !== undefined && this.#kept &&
+      (known.clock === clock || !this.changedSince(known.clock, known.others))
     ) {
+      known.clock = clock;
       return known.keys;
     }
     this.#keying.add(id);
     this.keyings += 1;
     const reads: Position[] = [];
     try {
-      const keys = keysOfParts(held.map((member, index): ElementPart => {
+      const parts = held.map((member, index): ElementPart => {
         if (isLink(member)) {
           // What the link names, with no key resolved: a link to an
           // element by key is keyed by that reference.
@@ -943,23 +1409,31 @@ export class Store {
             : copies[index],
           fields,
         );
-      }));
+      });
+      const keys = keysOfParts(parts);
       if (!reentered && copies === undefined && this.clock === clock) {
-        // What was read: the array, and each other document whole. A
+        // What was read beside the array: each other document whole. A
         // write to one of them forms the keys again.
-        const array = this.locate(at, true).ref;
-        const documents: Position[] = [{ doc: array.doc, path: array.path }];
-        for (const { doc, path } of reads) {
-          if (doc === array.doc && isPrefix(array.path, path)) continue;
-          if (
-            !documents.some((known) =>
-              known.doc === doc && known !== documents[0]
-            )
-          ) {
-            documents.push({ doc, path: [] });
-          }
-        }
-        this.#keys.set(formed, { clock, held, keys, documents });
+        const texts = parts.map(textOf);
+        const counts = new Map<string, number>();
+        for (const text of texts) counts.set(text, (counts.get(text) ?? 0) + 1);
+        const state: KeyState = {
+          at,
+          fields: [...fields],
+          held,
+          keys,
+          parts,
+          texts,
+          counts,
+          clock,
+          others: [],
+          formed: (known?.formed ?? 0) + 1,
+          ops: [],
+        };
+        this.#others(state, reads);
+        const states = this.#states.get(held) ?? new Map<string, KeyState>();
+        states.set(named, state);
+        this.#states.set(held, states);
       }
       return keys;
     } finally {
@@ -1057,12 +1531,23 @@ export class Store {
             fallback,
           };
         }
-        if (reads !== undefined) {
+        if (reads !== undefined && !this.#plain.has(reads)) {
           const keyed = new Ref(doc, [...named_, segment, ...rest]);
+          const inner: Position[] = [];
+          this.#plain.add(inner);
+          const seen = canonical(this.read(keyed, inner));
           reads.push({
             doc,
             path: at,
-            keyed: { ref: keyed, seen: canonical(this.read(keyed)) },
+            keyed: {
+              ref: keyed,
+              seen,
+              key: segment,
+              ...(Array.isArray(value) ? { array: value } : {}),
+              others: inner.filter((read) =>
+                read.doc !== doc || !isPrefix(at, read.path)
+              ),
+            },
           });
           reads = undefined;
         }
@@ -1074,7 +1559,7 @@ export class Store {
         const indexOf = (key: string) =>
           Array.isArray(held)
             ? this.#positionOf(
-              this.keysOf(held, here, undefined, fieldsOfKey(key)),
+              this.#keysOf(held, here, undefined, fieldsOfKey(key)),
               key,
             )
             : -1;
@@ -1114,6 +1599,21 @@ export class Store {
       given,
       fallback,
     };
+  }
+
+  /**
+   * The lists of reads that take each position a read went through, a
+   * position inside an array that a key named included, and no read by
+   * key in their place.
+   */
+  readonly #plain = new WeakSet<Position[]>();
+
+  /** What a document holds at a path, with no link followed. */
+  peek(doc: string, path: readonly string[]): unknown {
+    return path.reduce(
+      (value: unknown, segment) => child(value, segment),
+      this.docs.get(doc)?.value,
+    );
   }
 
   /**
@@ -1176,36 +1676,36 @@ export class Store {
     this.onWrite?.(to, []);
     const document = this.docs.get(from);
     const declared = this.declared.get(from);
+    this.journal?.push({ doc: from, whole: true, old: document });
+    this.journal?.push({ doc: to, whole: true, old: this.docs.get(to) });
+    const replaced = this.docs.get(to)?.value;
     this.docs.delete(to);
     this.declared.delete(to);
     if (document !== undefined) {
       this.docs.delete(from);
       this.docs.set(to, document);
     }
-    const streams = this.streams.get(from);
-    this.streams.delete(from);
-    this.streams.delete(to);
-    if (streams !== undefined) this.streams.set(to, streams);
     if (declared !== undefined) {
       this.declared.delete(from);
       this.declared.set(to, declared);
     }
-    this.clock += 1;
-    this.log.push({ doc: from, path: [], at: this.clock });
-    this.log.push({ doc: to, path: [], at: this.clock });
+    this.#changed(from, [], undefined);
+    // The two changes are one step of the clock.
+    this.clock -= 1;
+    this.#changed(to, [], replaced);
   }
 
   /**
-   * Removes a document, with what the place was declared as and the
-   * record of its stream links. A link to it reads as nothing.
+   * Removes a document, with what the place was declared as. A link to
+   * it reads as nothing.
    */
   remove(id: string): void {
     this.onWrite?.(id, []);
+    const old = this.docs.get(id);
+    this.journal?.push({ doc: id, whole: true, old });
     this.docs.delete(id);
     this.declared.delete(id);
-    this.streams.delete(id);
-    this.clock += 1;
-    this.log.push({ doc: id, path: [], at: this.clock });
+    this.#changed(id, [], old?.value);
   }
 
   /**
@@ -1410,6 +1910,7 @@ export class Store {
       const declared = this.declared.get(doc);
       if (declared === undefined) return;
       this.onWrite?.(doc, path);
+      this.journal?.push({ doc, whole: true, old: undefined });
       document = {
         kind: declared.kind,
         value: path.length === 0
@@ -1422,17 +1923,21 @@ export class Store {
     } else {
       this.onWrite?.(doc, path);
     }
+    let old: unknown;
     if (path.length === 0) {
+      old = document.value;
+      this.journal?.push({ doc, path, old });
       document.value = value;
-      this.#record(doc, path, value);
     } else {
       if (!isRecord(document.value) && !Array.isArray(document.value)) {
+        this.journal?.push({ doc, path: [], old: document.value });
         document.value = {};
       }
       let holder = document.value as Record<string, unknown>;
       for (let index = 0; index < path.length - 1; index++) {
         const next = (holder as Record<string, unknown>)[path[index]];
         if (typeof next !== "object" || next === null) {
+          this.journal?.push({ doc, path: path.slice(0, index + 1), old: next });
           holder[path[index]] = /^\d+$/.test(path[index + 1]) ? [] : {};
         }
         holder = holder[path[index]] as Record<string, unknown>;
@@ -1440,15 +1945,30 @@ export class Store {
       const last = path[path.length - 1];
       if (Array.isArray(holder) && last === "length") {
         // The array is stored without the positions past the length.
-        (holder as unknown[]).length = value as number;
-        this.#record(doc, path.slice(0, -1), holder);
+        const length = value as number;
+        this.journal?.push({
+          doc,
+          path: path.slice(0, -1),
+          splice: {
+            start: length,
+            inserted: 0,
+            removed: (holder as unknown[]).slice(length),
+          },
+        });
+        const taken = (holder as unknown[]).splice(length);
+        this.#changed(doc, path.slice(0, -1), taken, {
+          start: length,
+          removed: taken.length,
+          inserted: 0,
+        });
       } else {
+        old = holder[last];
+        this.journal?.push({ doc, path, old });
         holder[last] = value;
-        this.#record(doc, path, value);
+        this.#changed(doc, path, old);
       }
     }
-    this.clock += 1;
-    this.log.push({ doc, path, at: this.clock });
+    if (path.length === 0) this.#changed(doc, path, old);
     // A position the write went through by key that holds another key
     // now is re-keyed (ruling Z24).
     for (const { array, key, position } of located.crossed) {
@@ -1465,6 +1985,49 @@ export class Store {
         this.rekeys.push({ doc, array, from: key, to: now });
       }
     }
+  }
+
+  /**
+   * Changes the members of a stored array in place: removes `removed`
+   * members from `start` on and puts `members`, in stored form, in
+   * their place, as one change of the array (`PatchOp` in
+   * `runtime/memory/v2.ts`; `execution-and-storage.md` §4.2). Where the
+   * reference names no stored array, the whole value is written.
+   */
+  splice(
+    ref: Ref,
+    start: number,
+    removed: number,
+    members: readonly unknown[],
+  ): void {
+    const located = this.locate(ref, true);
+    if (located.missing) throw new MissingKey();
+    const { doc, path } = located.ref;
+    const document = this.docs.get(doc);
+    if (document?.kind === OUTPUT) throw new ComputedOutput();
+    const held = located.value;
+    if (document === undefined || !Array.isArray(held)) {
+      const before = Array.isArray(held) ? held : [];
+      this.write(ref, [
+        ...before.slice(0, start),
+        ...members,
+        ...before.slice(start + removed),
+      ]);
+      return;
+    }
+    if (removed === 0 && members.length === 0) return;
+    this.onWrite?.(doc, path);
+    const taken = held.splice(start, removed, ...members);
+    this.journal?.push({
+      doc,
+      path,
+      splice: { start, inserted: members.length, removed: taken },
+    });
+    this.#changed(doc, path, taken, {
+      start,
+      removed: taken.length,
+      inserted: members.length,
+    });
   }
 
   /**

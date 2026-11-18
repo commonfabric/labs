@@ -54,6 +54,7 @@ import {
   streamOf,
   StreamRef,
   textOf,
+  type Undo,
   withDefaults,
 } from "./store.ts";
 
@@ -287,9 +288,63 @@ type Lazy = (context: Context) => Entry;
  * Something an evaluation used of another entry, and what it was then:
  * when the entry had last changed, or the value at a path of it.
  */
-type Dependency = { stamp: (context: Context) => unknown; seen: unknown };
+type Dependency = {
+  stamp: (context: Context) => unknown;
+  seen: unknown;
+  /**
+   * What the stamp is of, where a change of it marks the entries that
+   * used it: the name of a memo entry of the same instance, or the name
+   * that stands for the element table of a collection. A dependency
+   * with none is compared on every pull.
+   */
+  on?: string;
+};
+
+/** The name that stands for the element table of an assembly. */
+const tableName = (assembly: string): string => `table ${assembly}`;
+
+/** One registration of a reader: at a position, or under a key. */
+type Reg = { slot: Slot; position: Position };
+
+/** The readers registered at one path of a document, and below it. */
+type Readers = { regs?: Set<Reg>; below?: Map<string, Readers> };
+
+/**
+ * What is known of whether the memo entry of one name is current
+ * (`scheduler-and-serving-loop.md` §3, "Dirty slots from the change
+ * channel"): a write marks the entries that read what it changed, and a
+ * mark passes on to the entries that used a marked one. An entry that
+ * is not marked is current, and is not compared with anything.
+ */
+type Slot = {
+  instance: Instance;
+  key: string;
+  marked: boolean;
+  /** Moves with each mark. */
+  serial: number;
+  /** The names that it used and that may have changed. */
+  suspects: Set<string>;
+  /** The positions it read that may have changed. */
+  reads: Set<Position>;
+  /** Anything that it read or used may have changed. */
+  all: boolean;
+  /** Each set that holds a registration of the entry. */
+  regs: { set: Set<Reg>; reg: Reg; keyed: boolean }[];
+  /** The names that it is registered as a user of. */
+  uses: Set<string>;
+  /** The entry is compared on every pull. */
+  always: boolean;
+};
 
 type Entry = {
+  /** The name of the entry in the memo of its instance. */
+  key?: string;
+  owner?: Instance;
+  /**
+   * The entry is compared with what it read on every pull, and no mark
+   * stands for that: something it depends on has no place in an index.
+   */
+  always?: boolean;
   value: unknown;
   stored: string;
   reads: Position[];
@@ -758,6 +813,8 @@ export class Host {
     readonly context: Context,
     /** The cone of the code being evaluated, where it belongs to one. */
     readonly cone: number | undefined,
+    /** The name of the memo entry being evaluated, where it is one. */
+    readonly key?: string,
   ) {}
 
   /** The value of a slot, or its reference for an `identity` slot. */
@@ -886,10 +943,15 @@ export class Host {
 
   dependEntry(entry: Lazy, path?: readonly string[]): Entry {
     const used = entry(this.context);
+    const on = used.owner === this.instance ? used.key : undefined;
+    if (on !== undefined && this.key !== undefined) {
+      this.instance.uses(this.key, on);
+    }
     if (path === undefined) {
       this.dependencies.push({
         stamp: (context) => entry(context).changedAt,
         seen: used.changedAt,
+        ...(on === undefined ? {} : { on }),
       });
     } else {
       const held = (from: Entry) =>
@@ -897,6 +959,7 @@ export class Host {
       this.dependencies.push({
         stamp: (context) => held(entry(context)),
         seen: held(used),
+        ...(on === undefined ? {} : { on }),
       });
     }
     return used;
@@ -1299,8 +1362,10 @@ type Open = {
   record: Transaction;
   /** How many times each cone instance was evaluated, by its name. */
   counts: Map<string, number>;
-  /** What each document held before the first write to it. */
-  before: Map<string, { kind: string; value: unknown } | undefined>;
+  /** What each change of a document replaced, in order. */
+  journal: Undo[];
+  /** The documents written. */
+  touched: Set<string>;
   /** The writes each evaluation made, by the name of its entry. */
   writes: Map<
     string,
@@ -1455,8 +1520,299 @@ export class Instance {
    */
   readonly #tables = new Map<
     string,
-    { collection: number; around: readonly string[]; elements: Element[] }
+    {
+      collection: number;
+      around: readonly string[];
+      elements: Element[];
+      /** The element of each key. */
+      byKey: Map<string, Element>;
+    }
   >();
+
+  /** Holds the element table of an assembly, with its index by key. */
+  #setTable(
+    name: string,
+    collection: number,
+    around: readonly string[],
+    elements: Element[],
+  ): void {
+    const byKey = new Map<string, Element>();
+    for (const element of elements) byKey.set(element.key, element);
+    this.#tables.set(name, { collection, around, elements, byKey });
+  }
+
+  /** What is known of whether each memo entry is current, by its name. */
+  readonly #slots = new Map<string, Slot>();
+  /** The names of the entries that used each name. */
+  readonly #users = new Map<string, Set<string>>();
+  /**
+   * The entries that read the position of an element, by the name of
+   * what is kept under the element's key.
+   */
+  readonly #indexReaders = new Map<string, Set<string>>();
+  /** On the root: the readers of each document, by path. */
+  readonly #readers = new Map<string, Readers>();
+  /**
+   * On the root: the readers through a reference by key, by the array
+   * that the key was found in and the key.
+   */
+  #keyedReaders = new WeakMap<object, Map<string, Set<Reg>>>();
+  /** On the root: how many registrations `#keyedReaders` holds. */
+  #keyedCount = 0;
+  /** Something of the instance is marked, or was never evaluated. */
+  #due = true;
+  /** Something of an instance that this one made is marked. */
+  #dueBelow = false;
+  /** How many entries of the instance are compared on every pull. */
+  #alwaysCount = 0;
+  /** The entries that were marked while they were being evaluated. */
+  readonly #markedDuring = new Set<string>();
+
+  #slot(key: string): Slot {
+    let slot = this.#slots.get(key);
+    if (slot === undefined) {
+      slot = {
+        instance: this,
+        key,
+        marked: false,
+        serial: 0,
+        suspects: new Set(),
+        reads: new Set(),
+        all: false,
+        regs: [],
+        uses: new Set(),
+        always: false,
+      };
+      this.#slots.set(key, slot);
+    }
+    return slot;
+  }
+
+  /** Notes that the entry `user` used what `used` names. */
+  uses(user: string, used: string): void {
+    const slot = this.#slot(user);
+    if (slot.uses.has(used)) return;
+    slot.uses.add(used);
+    const users = this.#users.get(used) ?? new Set();
+    users.add(user);
+    this.#users.set(used, users);
+  }
+
+  /** Something of the instance has to be brought up to date. */
+  #nowDue(): void {
+    if (this.#due) return;
+    this.#due = true;
+    for (let above = this.options.parent; above; above = above.options.parent) {
+      if (above.#dueBelow) break;
+      above.#dueBelow = true;
+    }
+  }
+
+  /**
+   * Marks an entry: a position it read, or something it used, may have
+   * changed. The mark passes on to the entries that used this one.
+   */
+  #mark(slot: Slot, position?: Position, used?: string): void {
+    slot.serial += 1;
+    if (position !== undefined) slot.reads.add(position);
+    else if (used !== undefined) slot.suspects.add(used);
+    else slot.all = true;
+    if (this.#open.has(slot.key)) this.#markedDuring.add(slot.key);
+    const entry = this.#memo.get(slot.key);
+    if (entry !== undefined) entry.checkedAt = undefined;
+    if (slot.marked) return;
+    slot.marked = true;
+    this.#nowDue();
+    this.#markUsers(slot.key);
+  }
+
+  /** Marks the entries that used what `used` names. */
+  #markUsers(used: string): void {
+    const users = this.#users.get(used);
+    if (users === undefined) return;
+    for (const user of users) {
+      const slot = this.#slots.get(user);
+      if (slot !== undefined) this.#mark(slot, undefined, used);
+    }
+  }
+
+  /** Removes every registration of an entry. */
+  #unregister(slot: Slot): void {
+    const { root } = this;
+    for (const { set, reg, keyed } of slot.regs) {
+      set.delete(reg);
+      if (keyed) root.#keyedCount -= 1;
+    }
+    slot.regs.length = 0;
+    for (const used of slot.uses) this.#users.get(used)?.delete(slot.key);
+    slot.uses.clear();
+  }
+
+  /** On the root: the readers registered at a path of a document. */
+  #readersAt(doc: string, path: readonly string[]): Set<Reg> {
+    let node = this.#readers.get(doc);
+    if (node === undefined) {
+      node = {};
+      this.#readers.set(doc, node);
+    }
+    for (const segment of path) {
+      node.below ??= new Map();
+      let next = node.below.get(segment);
+      if (next === undefined) {
+        next = {};
+        node.below.set(segment, next);
+      }
+      node = next;
+    }
+    node.regs ??= new Set();
+    return node.regs;
+  }
+
+  /**
+   * Registers an entry as a reader of what it read and a user of what
+   * it used, so that a change marks it. Returns whether everything it
+   * depends on has a place in an index: an entry for which it does not
+   * is compared on every pull.
+   */
+  #register(slot: Slot, entry: Entry): boolean {
+    const { root, store } = this;
+    let indexed = entry.writers.length === 0;
+    const seen = new Set<string>();
+    const add = (set: Set<Reg>, position: Position, keyed: boolean) => {
+      const reg = { slot, position };
+      set.add(reg);
+      slot.regs.push({ set, reg, keyed });
+      if (keyed) root.#keyedCount += 1;
+    };
+    for (const position of entry.reads) {
+      const { keyed } = position;
+      if (keyed === undefined) {
+        const id = `${position.doc}\n${position.path.join("\n")}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        add(root.#readersAt(position.doc, position.path), position, false);
+        continue;
+      }
+      // A read through a reference by key into the document of a
+      // computed output brings the output up to date, which no write
+      // announces (ruling Z53).
+      if (keyed.array === undefined || store.sources.has(position.doc)) {
+        indexed = false;
+        continue;
+      }
+      let keys = root.#keyedReaders.get(keyed.array);
+      if (keys === undefined) {
+        keys = new Map();
+        root.#keyedReaders.set(keyed.array, keys);
+      }
+      let set = keys.get(keyed.key);
+      if (set === undefined) {
+        set = new Set();
+        keys.set(keyed.key, set);
+      }
+      add(set, position, true);
+      for (const other of keyed.others) {
+        if (store.sources.has(other.doc)) indexed = false;
+        add(root.#readersAt(other.doc, other.path), position, false);
+      }
+    }
+    for (const { on } of entry.dependencies) {
+      if (on === undefined || this.#slots.get(on)?.always) indexed = false;
+      else this.uses(slot.key, on);
+    }
+    for (const used of slot.uses) {
+      if (this.#slots.get(used)?.always) indexed = false;
+    }
+    return indexed;
+  }
+
+  /**
+   * On the root: marks the readers of what a change of a document
+   * changed (`Store.onChange`).
+   */
+  #changed(
+    change: {
+      doc: string;
+      path: readonly string[];
+      old: unknown;
+      splice?: { start: number; removed: number; inserted: number };
+      keyed: { array: object; keys?: readonly string[]; now?: object }[];
+    },
+  ): void {
+    const mark = (regs: Iterable<Reg> | undefined) => {
+      if (regs === undefined) return;
+      for (const reg of [...regs]) reg.slot.instance.#mark(reg.slot, reg.position);
+    };
+    const below = (node: Readers) => {
+      mark(node.regs);
+      for (const next of node.below?.values() ?? []) below(next);
+    };
+    let node = this.#readers.get(change.doc);
+    for (const segment of change.path) {
+      if (node === undefined) break;
+      mark(node.regs);
+      node = node.below?.get(segment);
+    }
+    if (node !== undefined) {
+      const { splice } = change;
+      if (splice === undefined) {
+        below(node);
+      } else {
+        // The positions before the splice hold what they held.
+        mark(node.regs);
+        for (const [segment, next] of node.below ?? []) {
+          if (/^\d+$/.test(segment) && Number(segment) < splice.start) continue;
+          below(next);
+        }
+      }
+    }
+    const moved = new Set<object>();
+    for (const { array, keys, now } of change.keyed) {
+      const readers = this.#keyedReaders.get(array);
+      if (readers === undefined) continue;
+      if (now !== undefined) {
+        this.#keyedReaders.delete(array);
+        this.#keyedReaders.set(now, readers);
+        moved.add(array);
+      }
+      if (keys === undefined) {
+        for (const set of readers.values()) mark(set);
+      } else {
+        for (const key of keys) mark(readers.get(key));
+      }
+    }
+    if (this.#keyedCount === 0) return;
+    // An array that the change removed from its document is one that no
+    // later change names: a reader through a key of it is compared on
+    // every pull from here on.
+    const detach = (value: unknown, top: boolean) => {
+      if (typeof value !== "object" || value === null || isLink(value)) return;
+      if (Array.isArray(value)) {
+        const readers = top && moved.has(value)
+          ? undefined
+          : this.#keyedReaders.get(value);
+        if (readers !== undefined) {
+          this.#keyedReaders.delete(value);
+          for (const set of readers.values()) {
+            for (const reg of [...set]) {
+              const { slot } = reg;
+              slot.instance.#setAlways(slot);
+              slot.instance.#mark(slot, reg.position);
+            }
+          }
+        }
+        for (const member of value) detach(member, false);
+        return;
+      }
+      for (const member of Object.values(value)) detach(member, false);
+    };
+    if (change.splice !== undefined && Array.isArray(change.old)) {
+      for (const member of change.old) detach(member, false);
+    } else {
+      detach(change.old, true);
+    }
+  }
+
   /** The record of each key that a name of the memo holds, by its text. */
   readonly #keyRecords = new Map<string, FabricValue>();
   /** The state cells that exist, by the identifier of their document. */
@@ -1586,6 +1942,7 @@ export class Instance {
     this.#documents.add(this.argument).add(this.id);
     if (this.root === this) {
       this.store.onWrite = (doc, path) => this.#wrote(doc, path);
+      this.store.onChange = (change) => this.#changed(change);
     }
     // The creation of an instance by something that is no handler is a
     // transaction that writes its two documents and evaluates nothing
@@ -1628,11 +1985,13 @@ export class Instance {
         committed: false,
       },
       counts: new Map(),
-      before: new Map(),
+      journal: [],
+      touched: new Set(),
       writes: new Map(),
       exhausted: [],
     };
     this.#tx = open;
+    this.store.journal = open.journal;
     return open;
   }
 
@@ -1649,6 +2008,15 @@ export class Instance {
         for (const dependency of entry.dependencies) {
           dependency.seen = dependency.stamp(context);
         }
+        const slot = entry.key === undefined || entry.owner === undefined
+          ? undefined
+          : entry.owner.#slots.get(entry.key);
+        if (slot !== undefined) {
+          slot.marked = false;
+          slot.all = false;
+          slot.suspects.clear();
+          slot.reads.clear();
+        }
       }
     }
     open.record.committed = committed;
@@ -1659,6 +2027,7 @@ export class Instance {
         (JSON.stringify(this.store.docs.get(id)?.value) ?? "").length;
     }
     this.#tx = undefined;
+    this.store.journal = undefined;
     this.#transactions.push(open.record);
   }
 
@@ -1683,12 +2052,8 @@ export class Instance {
   #wrote(doc: string, path: readonly string[]): void {
     const open = this.#tx;
     if (open === undefined) return;
-    if (!open.before.has(doc)) {
-      const held = this.store.docs.get(doc);
-      open.before.set(
-        doc,
-        held === undefined ? undefined : structuredClone(held),
-      );
+    if (!open.touched.has(doc)) {
+      open.touched.add(doc);
       open.record.written.push(doc);
     }
     const writer = this.#evaluating[this.#evaluating.length - 1];
@@ -1709,7 +2074,7 @@ export class Instance {
     if (written === undefined) return;
     open.writes.delete(name);
     for (const { doc, path } of [...written.at].reverse()) {
-      this.store.revert(doc, path, open.before.get(doc));
+      this.store.revert(doc, path, open.journal);
     }
   }
 
@@ -1720,11 +2085,11 @@ export class Instance {
    * (ES §1.6).
    */
   #abort(open: Open): void {
-    for (const [doc, before] of [...open.before].reverse()) {
-      this.store.revert(doc, [], before);
-    }
+    this.store.undo(open.journal);
+    open.journal.length = 0;
     for (const { instance, key } of open.writes.values()) {
       instance.#memo.delete(key);
+      instance.#markUsers(key);
     }
     open.writes.clear();
   }
@@ -2146,15 +2511,15 @@ export class Instance {
           this.#keysIn(this.#outerOf(collection), host.context),
         );
         const held = () => {
-          const now =
-            this.#tables.get(table)?.elements.find((member) =>
-              member.key === element.key
-            )?.source ?? source;
+          const now = this.#tables.get(table)?.byKey.get(element.key)?.source ??
+            source;
           return now instanceof Ref || !("value" in now)
             ? undefined
             : canonical(this.stored(host.at(now.value, path)));
         };
-        host.dependencies.push({ stamp: held, seen: held() });
+        const on = tableName(table);
+        if (host.key !== undefined) this.uses(host.key, on);
+        host.dependencies.push({ stamp: held, seen: held(), on });
         return source.value;
       }
       case "index": {
@@ -2976,6 +3341,18 @@ export class Instance {
     around: readonly string[],
     key?: string,
   ): string {
+    // The names are formed once: a name is looked up for every pull of
+    // its entry.
+    const outer = around.length === 0
+      ? `${kind} ${index}`
+      : `${kind} ${index} ${around.join("\n")}`;
+    let names = this.#names.get(outer);
+    if (names === undefined) {
+      names = new Map();
+      this.#names.set(outer, names);
+    }
+    const known = names.get(key ?? "");
+    if (known !== undefined) return known;
     const record = (text: string): FabricValue => {
       if (text === "?") return null;
       let found = this.#keyRecords.get(text);
@@ -2985,12 +3362,17 @@ export class Instance {
       }
       return found;
     };
-    return textOf({
+    const name = textOf({
       [kind]: index,
       around: around.map(record),
       ...(key === undefined ? {} : { key: record(key) }),
     });
+    names.set(key ?? "", name);
+    return name;
   }
+
+  /** The names that `#name` formed, by what they are of and by key. */
+  readonly #names = new Map<string, Map<string, string>>();
 
   /** The element table of a collection for the keys of a context. */
   #tableOf(collection: number, context: Context): Element[] | undefined {
@@ -3004,8 +3386,9 @@ export class Instance {
   }
 
   /** The entry of a computation that has not been evaluated. */
-  #none(): Entry {
+  #none(key?: string): Entry {
     return {
+      ...(key === undefined ? {} : { key, owner: this }),
       value: undefined,
       stored: "undefined",
       reads: [],
@@ -3048,7 +3431,7 @@ export class Instance {
     if (this.#open.has(key)) {
       // A pull that reaches an evaluation in progress gets what it last
       // had (ES §2.7, "Detection").
-      return held ?? this.#none();
+      return held ?? this.#none(key);
     }
     const { root } = this;
     const open = root.#tx;
@@ -3062,7 +3445,7 @@ export class Instance {
         // A materializer that reaches its budget stays as it is and
         // takes no error state (SS §8.3).
         if (this.plan.cones[cone].sideWrites === "materializer") {
-          return held ?? this.#none();
+          return held ?? this.#none(key);
         }
         return this.#exhausted(open, key, name, held, context, cone, within);
       }
@@ -3070,7 +3453,10 @@ export class Instance {
     }
     this.#open.add(key);
     root.#evaluating.push({ instance: this, key });
-    const host = new Host(this, context, cone);
+    const slot = this.#slot(key);
+    this.#unregister(slot);
+    this.#markedDuring.delete(key);
+    const host = new Host(this, context, cone, key);
     const evaluatedAt = this.store.clock;
     let value: unknown;
     let failure: string | undefined;
@@ -3127,6 +3513,8 @@ export class Instance {
     if (ownWrite) this.counts.staleByOwnWrite += 1;
     if (changed) this.store.clock += 1;
     const entry: Entry = {
+      key,
+      owner: this,
       value,
       stored,
       reads: host.reads,
@@ -3140,7 +3528,83 @@ export class Instance {
     };
     this.#memo.set(key, entry);
     this.#keep(key, cone, within, context);
+    this.#evaluated(slot, entry, host, changed);
     return entry;
+  }
+
+  /**
+   * Ends the evaluation of an entry: registers what it read and used,
+   * so that a change marks it, and marks the entries that used it where
+   * its value changed.
+   */
+  #evaluated(slot: Slot, entry: Entry, host: Host, changed: boolean): void {
+    const key = slot.key;
+    slot.marked = false;
+    slot.all = false;
+    slot.suspects.clear();
+    slot.reads.clear();
+    const always = !this.#register(slot, entry);
+    if (slot.always && !always) {
+      slot.always = false;
+      this.#alwaysCount -= 1;
+    }
+    if (always) this.#setAlways(slot);
+    for (const collection of host.indexes.keys()) {
+      const element = host.context.get(collection);
+      if (element === undefined) continue;
+      const under = this.#name(
+        "under",
+        collection,
+        this.#keysIn(this.#outerOf(collection), host.context),
+        element.key,
+      );
+      const readers = this.#indexReaders.get(under) ?? new Set();
+      readers.add(key);
+      this.#indexReaders.set(under, readers);
+    }
+    // A write to something that the evaluation had read, and a change
+    // of something it had used, while it ran.
+    if (
+      this.#markedDuring.delete(key) ||
+      this.store.changedSince(entry.evaluatedAt, entry.reads)
+    ) {
+      slot.marked = true;
+      slot.all = true;
+      slot.serial += 1;
+      this.#nowDue();
+    }
+    if (changed) this.#markUsers(key);
+  }
+
+  /**
+   * Has an entry compared on every pull, and with it every entry that
+   * used it: nothing marks them when what the entry depends on changes.
+   */
+  #setAlways(slot: Slot): void {
+    const entry = this.#memo.get(slot.key);
+    if (entry !== undefined) entry.always = true;
+    if (slot.always) return;
+    slot.always = true;
+    this.#alwaysCount += 1;
+    for (const user of this.#users.get(slot.key) ?? []) {
+      const other = this.#slots.get(user);
+      if (other !== undefined) this.#setAlways(other);
+    }
+  }
+
+  /**
+   * Marks what read the position of an element whose position changed
+   * (`execution-and-storage.md` §2.5, step 4).
+   */
+  #moved(collection: number, around: readonly string[], key: string): void {
+    const readers = this.#indexReaders.get(
+      this.#name("under", collection, around, key),
+    );
+    if (readers === undefined) return;
+    for (const reader of readers) {
+      const slot = this.#slots.get(reader);
+      if (slot !== undefined) this.#mark(slot);
+    }
   }
 
   /**
@@ -3170,7 +3634,7 @@ export class Instance {
     this.root.#withdraw(open, name);
     this.store.clock += 1;
     const entry: Entry = {
-      ...(held ?? this.#none()),
+      ...(held ?? this.#none(key)),
       value,
       stored: canonical(value),
       error: message,
@@ -3181,6 +3645,7 @@ export class Instance {
     delete entry.pending;
     this.#memo.set(key, entry);
     this.#keep(key, cone, within, context);
+    this.#markUsers(key);
     open.exhausted.push({ entry, context });
     return entry;
   }
@@ -3225,8 +3690,17 @@ export class Instance {
       this.#memo.delete(entry);
       this.#kept.delete(entry);
       this.#tables.delete(entry);
+      const slot = this.#slots.get(entry);
+      if (slot !== undefined) {
+        this.#unregister(slot);
+        if (slot.always) this.#alwaysCount -= 1;
+        this.#slots.delete(entry);
+      }
+      this.#markUsers(entry);
+      this.#markUsers(tableName(entry));
     }
     this.#underKey.delete(id);
+    this.#indexReaders.delete(id);
   }
 
   /**
@@ -3255,21 +3729,45 @@ export class Instance {
     for (const [collection, index] of entry.indexes) {
       if (context.get(collection)?.index !== index) return false;
     }
+    // An entry that no change marked is current: a write marks what
+    // read the position, and a mark passes on to what used the entry
+    // (SS §3).
+    const slot = entry.key === undefined || entry.owner !== this
+      ? undefined
+      : this.#slots.get(entry.key);
+    if (slot !== undefined && !slot.marked && !entry.always) return true;
     const clock = this.store.clock;
     if (entry.checkedAt === clock) return true;
     // The cones whose write target the entry read or passed on are
     // brought up to date first, as an upstream output is (ES §2.3).
     for (const writer of entry.writers) writer(context);
     this.checks += 1;
+    const serial = slot?.serial;
+    // What is compared: what the marks name, and everything where a
+    // mark names nothing.
+    const all = slot === undefined || entry.always === true || slot.all;
+    const reads = all ? entry.reads : [...slot.reads];
     // A key that moved keeps its entries: nothing of an element is
     // evaluated on a move but what read the index (ES §2.6).
-    if (this.store.changedSince(entry.evaluatedAt, entry.reads)) return false;
+    if (
+      reads.length > 0 && this.store.changedSince(entry.evaluatedAt, reads)
+    ) {
+      return false;
+    }
     const current = entry.dependencies.every((dependency) =>
+      (!all && dependency.on !== undefined &&
+        !slot.suspects.has(dependency.on)) ||
       dependency.stamp(context) === dependency.seen
     );
     // A check that evaluated something that wrote is no check at the
     // clock it ended at.
     if (current && this.store.clock === clock) entry.checkedAt = clock;
+    if (current && slot !== undefined && slot.serial === serial) {
+      slot.marked = false;
+      slot.all = false;
+      slot.suspects.clear();
+      slot.reads.clear();
+    }
     return current;
   }
 
@@ -3287,7 +3785,8 @@ export class Instance {
       // A materializer is evaluated after the rest of a wave, and a
       // reader of its value in the wave gets what it last returned.
       if (materializer && !this.#afterWave) {
-        const held = this.#memo.get(key) ?? { ...this.#none(), pending: true };
+        const held = this.#memo.get(key) ??
+          { ...this.#none(key), pending: true };
         this.#memo.set(key, held);
         return held;
       }
@@ -3382,10 +3881,10 @@ export class Instance {
       const name = this.#name("element", collection, around, key);
       const element = this.#tables.get(
         this.#name("assembly", collection, around),
-      )?.elements.find((member) => member.key === key);
+      )?.byKey.get(key);
       const run = this.#elements.get(collection);
       if (element === undefined || run === undefined) {
-        return this.#memo.get(name) ?? this.#none();
+        return this.#memo.get(name) ?? this.#none(name);
       }
       const inner = new Map<number, Element>();
       for (const step of outer) {
@@ -3420,12 +3919,19 @@ export class Instance {
         // The instances of a key that left the collection are dropped,
         // and those of a key that entered are made when they are first
         // evaluated (ruling Z10).
-        for (const { key: left } of this.#tables.get(key)?.elements ?? []) {
-          if (!elements.some((element) => element.key === left)) {
+        const before = this.#tables.get(key);
+        this.#setTable(key, collection, around, elements);
+        const now = this.#tables.get(key)?.byKey;
+        for (const { key: left, index } of before?.elements ?? []) {
+          const stays = now?.get(left);
+          if (stays === undefined) {
             this.#drop(collection, around, left);
+          } else if (stays.index !== index) {
+            this.#moved(collection, around, left);
           }
         }
-        this.#tables.set(key, { collection, around, elements });
+        // What reads the value of an element from the table.
+        this.#markUsers(tableName(key));
         if (!this.#elements.has(collection)) {
           throw new Unsupported("an element construct that has no function");
         }
@@ -3987,12 +4493,6 @@ export class Instance {
     const walk = (value: unknown, path: string[], at: Ref) => {
       if (isStream(value)) {
         const { binding, keys, instance } = value.$stream;
-        const recorded = this.store.streams.get(at.doc)?.some((entry) =>
-          canonical(entry.path) === canonical(at.path)
-        );
-        if (!recorded) {
-          throw new Error("a stream link the store did not record");
-        }
         const elements = (instance ?? "") === this.#owner
           ? this.#positionsOf(binding, keys)
           : undefined;
@@ -4455,7 +4955,7 @@ export class Instance {
       step += 1;
       for (const table of this.#tables.values()) {
         if (table.collection !== element) continue;
-        const found = table.elements.find((member) => member.key === key);
+        const found = table.byKey.get(key);
         if (found !== undefined) context.set(element, found);
       }
     }
@@ -4483,6 +4983,7 @@ export class Instance {
       outcome = this.#attempt(stream, event, context);
     } catch (error) {
       root.#tx = undefined;
+      this.store.journal = undefined;
       throw error;
     }
     if (outcome.committed) {
@@ -4773,10 +5274,11 @@ export class Instance {
     for (const [name, table] of [...this.#tables]) {
       const { collection, around } = table;
       if (!over.has(collection)) continue;
-      this.#tables.set(name, {
+      this.#setTable(
+        name,
         collection,
         around,
-        elements: table.elements.map((member) => {
+        table.elements.map((member) => {
           const key = renamed(member.key);
           if (key === member.key) return member;
           this.#drop(collection, around, member.key);
@@ -4789,7 +5291,7 @@ export class Instance {
               : member.source,
           };
         }),
-      });
+      );
     }
     // An instance called through `asInstance()` is re-keyed with the
     // element, as the rest of what the old key holds is (PL §3.15,
