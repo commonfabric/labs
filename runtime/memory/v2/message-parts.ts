@@ -304,6 +304,68 @@ export function halveTooLong(
 }
 
 /**
+ * Divides `message`, a sync too large for one message within `limits`, into
+ * parts and returns each in order, prepared by `prepare` and encoded by
+ * `encode`. `prepared` and `payload` are the whole message's, `payload`
+ * absent when the whole is too long for the engine to encode
+ * (`encodeUnlessTooLong()`).
+ *
+ * A part cut to its bounds by its entries can exceed them once it carries its
+ * own tables, as can the whole message when its entries fit one part, so a
+ * part that does is halved until its halves fit, or a half is one entry,
+ * which goes as it is. A whole with no `payload` is halved until each half
+ * encodes before anything measures it (`halveTooLong()`), and each half then
+ * goes as it is or is divided in turn.
+ */
+export function encodeSyncParts(
+  message: ServerMessage,
+  prepared: ServerMessage,
+  payload: string | undefined,
+  session: SyncPartSession,
+  limits: PartLimits,
+  prepare: (message: ServerMessage) => ServerMessage,
+  encode: (message: ServerMessage) => string = (value) =>
+    encodeMemoryBoundary(value as never),
+): [ServerMessage, string][] {
+  if (payload === undefined) {
+    return halveTooLong(message, session, prepare, encode)
+      .flatMap((half): [ServerMessage, string][] =>
+        payloadFits(half.payload, limits)
+          ? [[half.prepared, half.payload]]
+          : encodeSyncParts(
+            half.part,
+            half.prepared,
+            half.payload,
+            session,
+            limits,
+            prepare,
+            encode,
+          )
+      );
+  }
+  const split = splitSyncMessage(message, session, limits, prepared);
+  const queue: {
+    part: ServerMessage;
+    prepared?: ServerMessage;
+    payload?: string;
+  }[] = split.length === 1
+    ? [{ part: message, prepared, payload }]
+    : split.map((part) => ({ part })).reverse();
+  const ready: [ServerMessage, string][] = [];
+  while (queue.length > 0) {
+    const item = queue.pop()!;
+    const partPrepared = item.prepared ?? prepare(item.part);
+    const partPayload = item.payload ?? encode(partPrepared);
+    const halves = payloadFits(partPayload, limits)
+      ? undefined
+      : halveSyncPart(item.part, session);
+    if (halves === undefined) ready.push([partPrepared, partPayload]);
+    else queue.push({ part: halves[1] }, { part: halves[0] });
+  }
+  return ready;
+}
+
+/**
  * Collects the parts of the syncs split across a connection's messages, by
  * session, and hands back each sync whole once its last part arrives. A
  * message for a session whose sync is incomplete that carries no sync is

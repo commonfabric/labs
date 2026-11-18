@@ -195,11 +195,12 @@ const frameSizeLogger = getLogger("memory-socket", {
   level: "warn",
 });
 
-// Deno's WebSocket client rejects a wire frame over 64 MiB ("Frame too large")
-// and closes the connection. Compression raises the logical message ceiling to
-// 256 MiB only when its actual binary frame remains below that transport cap.
-// Warning at a quarter of the cap surfaces uncompressed or poorly-compressing
-// payload growth while every client still loads (labs#6319).
+// Deno's own WebSocket client rejects a wire frame over 64 MiB ("Frame too
+// large") and closes the connection. The Deno memory client no longer uses it:
+// it opens its socket with `ws` and no frame cap (`maxPayload: 0`, in
+// `memory-socket.deno.ts`), but an older client still has the cap. Warning at a
+// quarter of it surfaces uncompressed or poorly-compressing payload growth
+// while every client still loads (labs#6319).
 const OUTBOUND_FRAME_WARN_BYTES = 16 * 1024 * 1024;
 
 export const warnOnOversizedOutboundFrame = (
@@ -237,13 +238,14 @@ type SyncPartLimits = NonNullable<
  * takes a sync in parts (`syncPartsV1`); a client that does not is sent every
  * sync whole, as before.
  *
- * A sync goes whole up to `whole`, the most the compression encoder still
- * compresses (`MAX_DECOMPRESSED_MEMORY_MESSAGE_BYTES`, in the same UTF-8
- * bytes): past that the encoder sends text, and the frame grows several times
- * over at once. One longer is split into parts of at most `bytes`, each
+ * A sync goes whole up to `whole`, the largest message the compression
+ * encoder still compresses (`MAX_DECOMPRESSED_MEMORY_MESSAGE_BYTES`, in the
+ * same UTF-8 bytes): past that the encoder sends text, and the frame grows
+ * several times over at once. One longer is split into parts of at most `bytes`, each
  * compressed on its own, and a sync too long for the engine to encode whole
- * still goes, in parts. Splitting costs the server a second encode, so a sync
- * that would go compressed whole is never split.
+ * still goes, in parts. Splitting costs the server two more passes over the
+ * entries, one to measure them and one to prepare and encode each part, so a
+ * sync that would go compressed whole is never split.
  */
 export const MEMORY_SOCKET_SYNC_PARTS: SyncPartLimits = {
   bytes: 32 * 1024 * 1024,
