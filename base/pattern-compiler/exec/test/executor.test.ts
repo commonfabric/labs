@@ -44,9 +44,20 @@ const byFields = (
 ): string =>
   (at instanceof Store ? at : at.store).keyOf(value, Object.keys(value), count);
 
-/** The key of a position that holds a link to a path of a document. */
-const cellKey = (doc: string, path: string[], count = 0): string =>
-  jsonFromFabricValue({ cell: { doc, path }, count });
+/**
+ * The key of a position that holds a link to a path of a document: the
+ * record of the address, with the space where the store was given one.
+ */
+const cellKey = (
+  document: string,
+  path: string[],
+  occurrence = 0,
+  space?: string,
+): string =>
+  jsonFromFabricValue({
+    element: { ...(space === undefined ? {} : { space }), document, path },
+    occurrence,
+  });
 
 /** Keys in the order of their text, as a helper that sorts keys gives them. */
 const sorted = (keys: string[]): string[] => [...keys].sort();
@@ -3609,7 +3620,7 @@ describe("the stream of a binding of an inner `map` that a `flatMap` callback re
     expect(a[0]).toBe(b[0]);
     expect(c[0]).not.toBe(a[0]);
     expect(new Set([a[1], b[1], c[1]]).size).toBe(3);
-    for (const key of [...a, ...b, ...c]) expect(key).toContain('"cell"');
+    for (const key of [...a, ...b, ...c]) expect(key).toContain('"document"');
 
     // An event for the stream of each position reads its group and its
     // part.
@@ -3716,13 +3727,21 @@ describe("the key of a plain value", () => {
     return store;
   };
   // What the documents state, formed with the helpers of the data model
-  // and not with the store: the hash of the secret and the value, and
-  // the record of the parts of a key as the JSON codec writes it.
-  const salted = (value: FabricValue) => hashOf([SECRET, value]);
-  const keyOfFields = (fields: string[], values: FabricValue[], count = 0) =>
-    jsonFromFabricValue({ fields, hash: salted(values), count });
-  const keyOfWhole = (value: FabricValue, count = 0) =>
-    jsonFromFabricValue({ hash: salted(value), count });
+  // and not with the store: the hash of the record of the secret and the
+  // value (ruling Z57), and the record of the element part and the
+  // occurrence count of a key as the JSON codec writes it.
+  const salted = (value: FabricValue) => hashOf({ salt: SECRET, value });
+  const keyOfFields = (
+    fields: string[],
+    values: FabricValue[],
+    occurrence = 0,
+  ) =>
+    jsonFromFabricValue({
+      element: { fields, hash: salted(values) },
+      occurrence,
+    });
+  const keyOfWhole = (value: FabricValue, occurrence = 0) =>
+    jsonFromFabricValue({ element: salted(value), occurrence });
   const SEVEN = keySegment(keyOfFields(["id"], [7]));
   const pair = (owner: string | number, name: string, stars = 0) => ({
     owner,
@@ -3747,9 +3766,8 @@ describe("the key of a plain value", () => {
     // the key holds the names and no value of a field.
     expect(keys[0].startsWith("fvj1:")).toBe(true);
     expect(fabricFromJsonValue(keys[0])).toEqual({
-      fields: ["name", "owner"],
-      hash: salted(["labs", "cf"]),
-      count: 0,
+      element: { fields: ["name", "owner"], hash: salted(["labs", "cf"]) },
+      occurrence: 0,
     });
     expect(keys[0]).not.toContain("labs");
     expect(keys[0]).not.toContain("cf");
@@ -3809,14 +3827,20 @@ describe("the key of a plain value", () => {
       new Ref("d", ["pairs"]),
       held,
       ["owner", "name"],
-    ).map((key) => fabricFromJsonValue(key) as Record<string, FabricValue>);
-
-    expect(first.fields).toEqual(second.fields);
-    expect(first.count).toBe(second.count);
-    expect(jsonFromFabricValue(first.hash)).not.toBe(
-      jsonFromFabricValue(second.hash),
+    ).map((key) =>
+      fabricFromJsonValue(key) as {
+        element: Record<string, FabricValue>;
+        occurrence: number;
+      }
     );
-    expect(Object.keys(first).sort()).toEqual(["count", "fields", "hash"]);
+
+    expect(first.element.fields).toEqual(second.element.fields);
+    expect(first.occurrence).toBe(second.occurrence);
+    expect(jsonFromFabricValue(first.element.hash)).not.toBe(
+      jsonFromFabricValue(second.element.hash),
+    );
+    expect(Object.keys(first).sort()).toEqual(["element", "occurrence"]);
+    expect(Object.keys(first.element).sort()).toEqual(["fields", "hash"]);
   });
 
   it("names a field whose name holds `:`, `,`, `\\`, `#` or a quote as it is, and resolves by it", () => {
@@ -4053,6 +4077,90 @@ describe("the key of a plain value", () => {
       from: keyOfFields(["id"], [7]),
       to: keyOfFields(["id"], [9]),
     }]);
+  });
+
+  it("is the salted hash of the value as the fabric value it is, and not of its JSON text", () => {
+    const store = new Store({ secret: SECRET });
+    const sparse: unknown[] = [];
+    sparse[1] = 2;
+    const held = [{ a: 1, b: undefined }, { a: 1 }, sparse, [null, 2]];
+
+    const keys = store.keysOf(held, new Ref("d", ["held"]), held);
+
+    // A member that is `undefined` and a member that is absent are two
+    // values, and so are a hole of an array and a `null`.
+    expect(keys[0]).toBe(keyOfWhole({ a: 1, b: undefined }));
+    expect(keys[1]).toBe(keyOfWhole({ a: 1 }));
+    expect(keys[2]).toBe(keyOfWhole(sparse as FabricValue));
+    expect(keys[3]).toBe(keyOfWhole([null, 2]));
+    expect(new Set(keys).size).toBe(4);
+  });
+
+  it("is the record of the source key and the member key for a member of a `flatMap` segment", () => {
+    const [source, member] = [keyOfFields(["id"], [7]), keyOfWhole("a", 1)];
+
+    expect(fabricFromJsonValue(memberKey(source, member))).toEqual({
+      source: fabricFromJsonValue(source),
+      member: fabricFromJsonValue(member),
+    });
+  });
+
+  it("is one text for one record, whatever the order its members were written in", () => {
+    // The store compares two keys as their texts, so the codec has to
+    // write the members of a record in one order.
+    const hash = salted([7]);
+    expect(
+      jsonFromFabricValue({ occurrence: 0, element: { hash, fields: [] } }),
+    )
+      .toBe(
+        jsonFromFabricValue({ element: { fields: [], hash }, occurrence: 0 }),
+      );
+    expect(
+      jsonFromFabricValue({
+        member: { occurrence: 1, element: hash },
+        source: { occurrence: 0, element: { path: [], document: "d" } },
+      }),
+    ).toBe(
+      jsonFromFabricValue({
+        source: { element: { document: "d", path: [] }, occurrence: 0 },
+        member: { element: hash, occurrence: 1 },
+      }),
+    );
+    // A key that the store forms is the text of the record that is
+    // read back from it.
+    const store = new Store({ secret: SECRET });
+    for (
+      const key of store.keysOf([{ id: 7 }, 7], new Ref("d", []), [
+        { id: 7 },
+        7,
+      ], ["id"])
+    ) {
+      expect(jsonFromFabricValue(fabricFromJsonValue(key))).toBe(key);
+    }
+  });
+
+  it("holds the space in the element part of a position that holds a link", () => {
+    const store = new Store({ secret: SECRET, space: "did:key:space" });
+    store.create("d", "argument", { saved: [repo(7, "s")] });
+    const links = [
+      { $link: { doc: "d", path: ["saved", "0"] } },
+      { $link: { doc: "d", path: ["saved", SEVEN, "position"] } },
+    ];
+    store.create("refs", "created cell", links);
+
+    const keys = store.keysOf(links, new Ref("refs", []));
+
+    expect(keys[0]).toBe(cellKey("d", ["saved", "0"], 0, "did:key:space"));
+    // A link to an element by key is keyed by the record of that
+    // reference: the collection, the key, and the path below the element.
+    expect(fabricFromJsonValue(keys[1])).toEqual({
+      element: {
+        collection: { space: "did:key:space", document: "d", path: ["saved"] },
+        key: fabricFromJsonValue(keyOfFields(["id"], [7])),
+        path: ["position"],
+      },
+      occurrence: 0,
+    });
   });
 
   it("keys a position that holds a link by its cell, with or without a declared field", () => {
@@ -5440,9 +5548,11 @@ describe("the form of a key with declared fields, over a `filter` and a `map`", 
   };
   const keyOf = (code: string | number, tag: string) =>
     jsonFromFabricValue({
-      fields: ["a:b", "tag"],
-      hash: hashOf([SECRET, [code, tag]]),
-      count: 0,
+      element: {
+        fields: ["a:b", "tag"],
+        hash: hashOf({ salt: SECRET, value: [code, tag] }),
+      },
+      occurrence: 0,
     });
   const expected = () =>
     sorted([keyOf(7, "x"), keyOf("7", "x"), keyOf(8, "x"), keyOf(7, "y")]);
@@ -5483,11 +5593,15 @@ describe("the form of a key with declared fields, over a `filter` and a `map`", 
       // Two keys that share the value of one field have the names and
       // the count in common, and no part of the hash.
       const parts = (key: string) => {
-        const { fields, count, hash } = fabricFromJsonValue(key) as Record<
-          string,
-          FabricValue
-        >;
-        return { fields, count, hash: jsonFromFabricValue(hash) };
+        const { element, occurrence } = fabricFromJsonValue(key) as {
+          element: Record<string, FabricValue>;
+          occurrence: number;
+        };
+        return {
+          fields: element.fields,
+          count: occurrence,
+          hash: jsonFromFabricValue(element.hash),
+        };
       };
       const [first, second] = [parts(keyOf(7, "x")), parts(keyOf(8, "x"))];
       expect(first.fields).toEqual(second.fields);

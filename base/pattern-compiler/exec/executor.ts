@@ -1131,6 +1131,7 @@ export class Instance {
     argument: unknown,
     /**
      * `space`: the space the instance is in, which `spaceOf` gives.
+     * The element part of a position that holds a link names it.
      * `secret`: the secret of that space, which the keys of plain
      * values are salted with; the store mints one where none is given.
      * `artifacts`: the artifact of a pattern, by the identity its plan
@@ -1147,7 +1148,7 @@ export class Instance {
     } = {},
   ) {
     this.store = options.parent?.store ??
-      new Store({ secret: options.secret });
+      new Store({ secret: options.secret, space: options.space });
     this.prefix = options.prefix ?? "";
     this.root = options.parent?.root ?? this;
     this.plan = artifact.plan;
@@ -2494,7 +2495,7 @@ export class Instance {
     return keysOfParts(members.map((member): ElementPart => {
       if (member instanceof Ref) {
         const { named } = this.store.locate(member, true, undefined, true);
-        return { cell: { doc: named.doc, path: [...named.path] } };
+        return this.store.partOfReference(named);
       }
       return this.store.partOf(this.stored(member));
     }));
@@ -2573,9 +2574,9 @@ export class Instance {
     const keys = keysOfParts(members.map((member): ElementPart => {
       if (member instanceof Ref) {
         const { named } = this.store.locate(member, true);
-        return { cell: { doc: named.doc, path: [...named.path] } };
+        return this.store.partOfReference(named);
       }
-      return this.store.partOf(host.v(member.value), keyFields);
+      return this.store.partOf(this.stored(host.v(member.value)), keyFields);
     }));
     return members.map((member, index) => ({
       key: keys[index],

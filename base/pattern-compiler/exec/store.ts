@@ -8,9 +8,11 @@
  */
 
 import {
+  debugStr,
   type FabricHash,
   type FabricValue,
   hashOf,
+  isValidFabricValue,
 } from "@commonfabric/data-model";
 import {
   fabricFromJsonValue,
@@ -135,25 +137,26 @@ const ordered = (names: readonly string[]): string[] =>
   [...new Set(names)].sort(byCodePoint);
 
 /**
- * The element part of a key (`plan-and-label-templates.md` §1.3;
- * `execution-and-storage.md` §5.3): what a key holds beside its
- * occurrence count.
+ * The element part of a key (`plan-and-label-templates.md` §1.3, "The
+ * structure of a key"; `execution-and-storage.md` §5.3): what a key
+ * holds beside its occurrence count. It is a fabric value, one of the
+ * following by what the position holds.
+ *
+ * - A plain value of an array with no declared key: the salted hash of
+ *   the value.
+ * - A plain value of an array that declares key fields:
+ *   `{ fields, hash }`, the names of the key fields in the order of the
+ *   names and the salted hash of the array of the values that the
+ *   element holds at them, in that order (rulings Z47 and Z48).
+ * - A link to a cell: the record of the address that the link resolves
+ *   to, `{ space, document, path }`, without `space` in a store that was
+ *   given none.
+ * - A link to an element by key: the record of that reference,
+ *   `{ collection, key, path }`.
+ * - An element that holds a reference by key into its own array, while
+ *   the keys of that array are formed: `{ position }`.
  */
-export type ElementPart =
-  /**
-   * For a plain value: the salted hash of the whole value. With
-   * `fields`, the names of the declared key fields in the order of the
-   * names, and the hash is that of the array of the values the element
-   * holds at them, in that order (rulings Z47 and Z48).
-   */
-  | { hash: FabricHash; fields?: string[] }
-  /** For a position that holds a link: what the link names. */
-  | { cell: { doc: string; path: string[] } }
-  /**
-   * For an element that holds a reference by key into its own array,
-   * while the keys of that array are formed: its position.
-   */
-  | { position: number };
+export type ElementPart = FabricValue;
 
 /** Whether a fabric value is a record of fabric values. */
 const isValueRecord = (
@@ -161,50 +164,51 @@ const isValueRecord = (
 ): value is Record<string, FabricValue> => isPlainRecord(value);
 
 /**
- * The written form of a key: the serialization of the record of its
- * parts by the JSON codec of fabric values (`jsonFromFabricValue()` in
+ * The written form of a fabric value where a string is needed: the text
+ * of the JSON codec of fabric values (`jsonFromFabricValue()` in
  * `base/data-model/src/codecs.ts`), which writes a hash as the codec
  * does and needs no separator between the parts (ruling Z51).
  */
-const written = (parts: Record<string, FabricValue>): string =>
-  jsonFromFabricValue(parts);
+const written = (value: FabricValue): string => jsonFromFabricValue(value);
 
 /**
- * The record of the parts that a key holds. Throws for a text that is
- * not the serialization of a record.
+ * The record that a key is the text of. Throws for a text that is not
+ * the serialization of a record.
  */
-const partsOf = (key: string): Record<string, FabricValue> => {
+export const recordOfKey = (key: string): Record<string, FabricValue> => {
   const parts = fabricFromJsonValue(key);
   if (!isValueRecord(parts)) {
-    throw new Error(`Not an element key: \`${key}\``);
+    throw new Error(debugStr`Not an element key: $quote${key}`);
   }
   return parts;
 };
 
 /**
  * The keys of the positions of one array, from the element part of
- * each: a key holds the part and the occurrence count, the number of
- * earlier positions with the same part, so no two positions have one
- * key (`execution-and-storage.md` §5.3).
+ * each: a key is the record of the element part, `element`, and the
+ * occurrence count, `occurrence`, the number of earlier positions with
+ * the same part, so no two positions have one key
+ * (`execution-and-storage.md` §5.3).
  */
 export const keysOfParts = (parts: readonly ElementPart[]): string[] => {
   const seen = new Map<string, number>();
-  return parts.map((part) => {
-    const text = written(part);
-    const count = seen.get(text) ?? 0;
-    seen.set(text, count + 1);
-    return written({ ...part, count });
+  return parts.map((element) => {
+    const text = written(element);
+    const occurrence = seen.get(text) ?? 0;
+    seen.set(text, occurrence + 1);
+    return written({ element, occurrence });
   });
 };
 
 /**
  * The key of a member of the segment that a `flatMap` gave an element:
- * the key of the upstream element, and the key of the member among the
- * members of the segment (`plan-and-label-templates.md` §1.3, "The key
- * of an element that a `flatMap` contributes").
+ * the record of the key of the upstream element, `source`, and the key
+ * of the member among the members of the segment, `member`
+ * (`plan-and-label-templates.md` §1.3, "The key of an element that a
+ * `flatMap` contributes").
  */
 export const memberKey = (upstream: string, member: string): string =>
-  written({ of: partsOf(upstream), member: partsOf(member) });
+  written({ source: recordOfKey(upstream), member: recordOfKey(member) });
 
 /**
  * A key with the upstream key `from` in it replaced by `to`: the key
@@ -213,9 +217,9 @@ export const memberKey = (upstream: string, member: string): string =>
  */
 export const rekeyed = (key: string, from: string, to: string): string => {
   if (key === from) return to;
-  const { of, member } = partsOf(key);
-  if (!isValueRecord(of) || !isValueRecord(member)) return key;
-  const upstream = written(of);
+  const { source, member } = recordOfKey(key);
+  if (!isValueRecord(source) || !isValueRecord(member)) return key;
+  const upstream = written(source);
   const moved = rekeyed(upstream, from, to);
   return moved === upstream ? key : memberKey(moved, written(member));
 };
@@ -226,10 +230,9 @@ export const rekeyed = (key: string, from: string, to: string): string => {
  * with no schema (ruling Z44).
  */
 export const fieldsOfKey = (key: string): string[] => {
-  const { fields } = partsOf(key);
-  return Array.isArray(fields)
-    ? fields.filter((field) => typeof field === "string")
-    : [];
+  const { element } = recordOfKey(key);
+  if (!isValueRecord(element) || !Array.isArray(element.fields)) return [];
+  return element.fields.filter((field) => typeof field === "string");
 };
 
 /**
@@ -459,13 +462,19 @@ export class Store {
    */
   readonly #secret: string;
 
+  /** The space that the documents are in, where the store was given one. */
+  readonly #space: string | undefined;
+
   /**
    * Constructs an instance with no document. `secret` is the secret of
    * the space; without it the store mints one, and its keys of plain
-   * values then differ from those of every other store.
+   * values then differ from those of every other store. `space` is the
+   * space that the documents are in, which the element part of a
+   * position that holds a link names.
    */
-  constructor(options: { secret?: string } = {}) {
+  constructor(options: { secret?: string; space?: string } = {}) {
     this.#secret = options.secret ?? crypto.randomUUID();
+    this.#space = options.space;
   }
 
   readonly docs = new Map<string, { kind: string; value: unknown }>();
@@ -578,12 +587,9 @@ export class Store {
    * string or a number at each of them, the part names the fields in
    * the order of their names and holds one salted hash of the array of
    * their values in that order (rulings Z47 and Z48). Any other value
-   * is keyed whole: the part holds the salted hash of the value and
-   * names no field. So a key formed from a field `id` that holds 7 is
-   * not the key of a whole value 7. The hash is that of the value
-   * hasher (`hashOf()` in `base/data-model/src/value-hash/impl.ts`)
-   * over the array of the secret and the value, where the value is
-   * what its JSON text holds.
+   * is keyed whole: the part is the salted hash of the value and names
+   * no field. So a key formed from a field `id` that holds 7 is not the
+   * key of a whole value 7.
    */
   partOf(value: unknown, fields: readonly string[] = []): ElementPart {
     if (fields.length > 0 && isPlainRecord(value)) {
@@ -595,25 +601,56 @@ export class Store {
         return { fields: names, hash: this.#salted(values) };
       }
     }
-    return { hash: this.#salted(value) };
+    return this.#salted(value);
   }
 
   /** The key of a plain value at an occurrence count. */
   keyOf(value: unknown, fields: readonly string[] = [], count = 0): string {
-    return written({ ...this.partOf(value, fields), count });
+    return written({ element: this.partOf(value, fields), occurrence: count });
   }
 
-  /** The hash of a value with the secret of the space. */
+  /**
+   * The salted hash of a value (ruling Z57): what the value hasher
+   * (`hashOf()` in `base/data-model/src/value-hash/impl.ts`) returns for
+   * the record of `salt`, the secret of the space, and `value`, the
+   * value as the fabric value it is. Throws for a value that is no
+   * fabric value.
+   */
   #salted(value: unknown): FabricHash {
-    const held: FabricValue = value === undefined
-      ? undefined
-      : JSON.parse(canonical(value));
-    return hashOf([this.#secret, held]);
+    if (!isValidFabricValue(value)) {
+      throw new Error(debugStr`Not a fabric value: $quote${value}`);
+    }
+    return hashOf({ salt: this.#secret, value });
+  }
+
+  /**
+   * The element part of a position that holds a link, from what the
+   * link names: the record of the address of the cell, and for a link to
+   * an element by key the record of that reference, with the address of
+   * the collection, the key, and the path below the element
+   * (`plan-and-label-templates.md` §1.3, "The structure of a key").
+   */
+  partOfReference(named: Ref): ElementPart {
+    const at = named.path.findLastIndex(isKeySegment);
+    if (at < 0) {
+      return {
+        ...(this.#space === undefined ? {} : { space: this.#space }),
+        document: named.doc,
+        path: [...named.path],
+      };
+    }
+    return {
+      collection: this.partOfReference(
+        new Ref(named.doc, named.path.slice(0, at)),
+      ),
+      key: recordOfKey(named.path[at].slice(KEY.length)),
+      path: named.path.slice(at + 1),
+    };
   }
 
   /**
    * The key of each position of a stored array
-   * (`plan-and-label-templates.md` §1.3, "Element keys"): the identity of
+   * (`plan-and-label-templates.md` §1.3, "Element keys"): the address of
    * the cell where the position holds a link, the salted hash of the
    * value where it holds one, and the count of the earlier positions
    * with the same element part. `copies` gives the values of the
@@ -646,7 +683,7 @@ export class Store {
             undefined,
             true,
           );
-          return { cell: { doc: named.doc, path: [...named.path] } };
+          return this.partOfReference(named);
         }
         if (reentered) return { position: index };
         return this.partOf(
