@@ -6502,12 +6502,14 @@ export class Instance {
       : undefined;
     hooks?.begin(cause);
     this.#outside = hooks !== undefined;
+    let committed = false;
     try {
       write();
+      committed = true;
     } finally {
       this.#outside = false;
+      hooks?.end({ committed, changes: [], store: this.store });
     }
-    hooks?.end({ committed: true, changes: [], store: this.store });
   }
 
   /** On the root: moves the watermark of a stream past one entry. */
@@ -6737,6 +6739,11 @@ export class Instance {
     } catch (error) {
       root.#tx = undefined;
       this.store.journal = undefined;
+      root.options.transactions?.end({
+        committed: false,
+        changes: [],
+        store: this.store,
+      });
       throw error;
     }
     if (outcome.committed) {

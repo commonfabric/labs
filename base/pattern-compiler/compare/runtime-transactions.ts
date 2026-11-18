@@ -21,7 +21,11 @@
  * an array by key holds the key's text, which the runtime does not resolve:
  * nothing but the executor reads these documents.
  */
-import { debugStr, type FabricValue } from "@commonfabric/data-model";
+import {
+  debugStr,
+  type FabricValue,
+  isWalkableObjectNotArray,
+} from "@commonfabric/data-model";
 
 import {
   createSigilLinkFromParsedLink,
@@ -55,9 +59,6 @@ export type RuntimeCounts = {
   /** Writes staged, one for each change of the executor. */
   writes: number;
 };
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** Keeps the documents of one executor in one space of a runtime. */
 export class RuntimeTransactions implements TransactionHooks {
@@ -126,11 +127,21 @@ export class RuntimeTransactions implements TransactionHooks {
       });
       return;
     }
-    this.#documents.add(doc);
+    // A document the storage does not hold yet is written whole: the first
+    // write below the root of a declared place makes the document from the
+    // place's default, and the change names only the path written.
+    if (!this.#documents.has(doc)) {
+      this.#documents.add(doc);
+      tx.writeValueOrThrow(
+        this.#address(doc, []),
+        this.#encode(document.value),
+      );
+      return;
+    }
     const parent = path.length === 0
       ? undefined
       : store.peek(doc, path.slice(0, -1));
-    const absent = path.length > 0 && isRecord(parent) &&
+    const absent = path.length > 0 && isWalkableObjectNotArray(parent) &&
       !Object.hasOwn(parent, path[path.length - 1]);
     if (absent) {
       tx.writeValueOrThrow(this.#address(doc, path), undefined, {
@@ -247,7 +258,7 @@ export class RuntimeTransactions implements TransactionHooks {
     if (Array.isArray(value)) {
       return value.map((member) => this.#encode(member));
     }
-    if (isRecord(value)) {
+    if (isWalkableObjectNotArray(value)) {
       return Object.fromEntries(
         Object.entries(value).map(([name, member]) => [
           name,
@@ -281,7 +292,7 @@ export class RuntimeTransactions implements TransactionHooks {
     if (Array.isArray(value)) {
       return value.map((member) => this.#decode(member));
     }
-    if (isRecord(value)) {
+    if (isWalkableObjectNotArray(value)) {
       return Object.fromEntries(
         Object.entries(value).map(([name, member]) => [
           name,

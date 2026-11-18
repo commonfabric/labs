@@ -109,6 +109,35 @@ describe("RuntimeTransactions", () => {
     }
   });
 
+  it("holds the whole default of a state cell that a write below its root created", async () => {
+    // `fixtures/state-below.tsx`: `retitle` writes `draft/text` of a cell
+    // whose default is `{ text: "", tags: ["new"] }` and which has no
+    // document before the write.
+    const hooks = new RuntimeTransactions(runtime, space);
+    const instance = new Instance(
+      await artifactOf("state-below"),
+      { items: [], words: [] },
+      {
+        space,
+        id: identifierOf({ test: "runtime-transactions" }),
+        transactions: hooks,
+      },
+    );
+    const retitle = instance.plan.bindings.findIndex((binding) =>
+      binding.name === "retitle" &&
+      binding.within.every((step) => step.element === undefined)
+    );
+    instance.send(retitle, { text: "t" });
+    expect(await hooks.settled()).toEqual([]);
+
+    const draft = instance.stateCells().find(({ name }) => name === "draft");
+    expect(draft?.value).toEqual({ text: "t", tags: ["new"] });
+    expect(hooks.stored().get(draft!.id)).toEqual({
+      text: "t",
+      tags: ["new"],
+    });
+  });
+
   it("commits one transaction of the runtime for each transaction the executor commits", async () => {
     const { hooks, instance } = await started({ secret: "s", note: "n" });
     instance.send(bindingOf(instance, "record"), { text: "t", extra: "e" });
