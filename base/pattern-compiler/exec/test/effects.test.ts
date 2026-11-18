@@ -101,12 +101,13 @@ describe("an effect of the reactive tier", () => {
     const stored = state?.value as {
       request: { url: unknown; options: { method: unknown; body: unknown } };
       requestHash: unknown;
-      pending: unknown;
+      outcome: { pending: unknown };
     };
     expect(stored.request.url).toBe("https://example.test/a");
     expect(stored.request.options.method).toBe("POST");
     expect(isLink(stored.request.options.body)).toBe(true);
-    expect(stored.pending).toBe(true);
+    // What a reader of the result reads is apart from the request.
+    expect(stored.outcome).toEqual({ pending: true });
     expect(stored.requestHash).toBe(fetchedOf(instance)[0].hash);
   });
 
@@ -277,8 +278,8 @@ describe("an effect of the reactive tier", () => {
     });
     expect(
       (instance.store.docs.get(request.operation)?.value as {
-        result: unknown;
-      }).result,
+        outcome: { result: unknown };
+      }).outcome.result,
     ).toEqual({ title: "" });
   });
 
@@ -370,5 +371,104 @@ describe("a `wish` of the reactive tier", () => {
     // A tick is a change from storage: one derivation transaction.
     expect(causes(transactions)).toEqual(["derivation"]);
     expect(instance.result()).toMatchObject({ started: 1_000, time: 2_000 });
+  });
+});
+
+// `fixtures/handler-effect.tsx`. `loaded` is an array that a handler
+// pushes links onto, and no per-element construct is over it.
+describe("an effect that a handler requests", () => {
+  const start = async () =>
+    new Instance(await artifactOf("handler-effect"), {
+      target: { name: "there" },
+    });
+  const fetches = (instance: Instance) =>
+    instance.outbox.filter(({ builtin }) => builtin === "fetchJson");
+
+  it("leaves when the event's transaction commits, with nothing demanding its result", async () => {
+    const instance = await start();
+
+    const transactions = during(instance, () => {
+      instance.send(bindingOf(instance, "load"), { url: "https://a.test" });
+    });
+
+    // The event's transaction stages the request, its hash and the
+    // pending mark, and no request transaction follows.
+    expect(causes(transactions)).toEqual(["event", "derivation"]);
+    const [request] = fetches(instance);
+    expect(request).toMatchObject({
+      request: { url: "https://a.test", options: { body: { id: 1 } } },
+    });
+    expect(transactions[0].written).toContain(request.operation);
+    expect(instance.store.docs.get(request.operation)).toMatchObject({
+      kind: "operation state",
+      value: { outcome: { pending: true }, requestHash: request.hash },
+    });
+    expect(instance.result()).toMatchObject({
+      loaded: [{ pending: true }],
+    });
+  });
+
+  it("is made once: a change behind a reference of its request does not request it again", async () => {
+    const instance = await start();
+    instance.send(bindingOf(instance, "load"), { url: "https://a.test" });
+
+    const transactions = during(instance, () => {
+      instance.send(bindingOf(instance, "setBody"), { id: 2 });
+    });
+
+    expect(causes(transactions)).not.toContain("request");
+    expect(fetches(instance).length).toBe(1);
+  });
+
+  it("is a request of its own for each event", async () => {
+    const instance = await start();
+    const load = bindingOf(instance, "load");
+
+    instance.send(load, { url: "https://a.test" });
+    instance.send(load, { url: "https://a.test" });
+
+    const [first, second] = fetches(instance);
+    expect(first.hash).toBe(second.hash);
+    expect(first.operation).not.toBe(second.operation);
+  });
+
+  it("does not leave where the body throws", async () => {
+    const instance = await start();
+    const documents = instance.documents()["operation state"];
+
+    const outcome = instance.send(bindingOf(instance, "loadAndFail"), {
+      url: "https://a.test",
+    });
+
+    expect(outcome.committed).toBe(false);
+    expect(fetches(instance)).toEqual([]);
+    expect(instance.documents()["operation state"]).toBe(documents);
+  });
+
+  it("gets its completion as an effect of the reactive tier does", async () => {
+    const instance = await start();
+    instance.send(bindingOf(instance, "load"), { url: "https://a.test" });
+    const [request] = fetches(instance);
+
+    expect(instance.complete(request.id, { result: { title: "T" } })).toBe(
+      true,
+    );
+    instance.settle();
+
+    expect(instance.result()).toMatchObject({
+      loaded: [{ pending: false, result: { title: "T" } }],
+    });
+  });
+});
+
+describe("a `navigateTo` of the reactive tier", () => {
+  it("is requested with its instance, with nothing reading its result", async () => {
+    const instance = new Instance(await artifactOf("handler-effect"), {
+      target: { name: "there" },
+    });
+
+    expect(instance.outbox).toMatchObject([
+      { builtin: "navigateTo", request: { name: "there" } },
+    ]);
   });
 });

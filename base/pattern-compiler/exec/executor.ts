@@ -1217,6 +1217,29 @@ export type Completion = { result?: unknown; error?: unknown };
  */
 const FAILED = "failed";
 
+/**
+ * The member of the state document of an operation that holds what a
+ * reader of the operation's result reads: `pending`, `result` and
+ * `error` (BI, "The refused globals").
+ */
+const OUTCOME = "outcome";
+
+/**
+ * The built-ins that request an effect and that a handler body may call
+ * (SS §6.1).
+ */
+const EFFECTS = [
+  "fetchBinary",
+  "fetchText",
+  "fetchJson",
+  "fetchJsonUnchecked",
+  "fetchProgram",
+  "generateText",
+  "generateObject",
+  "sqliteQuery",
+  "compileAndRun",
+];
+
 /** The identifier of the document of the clock (BI, `wish`). */
 const CLOCK = "clock";
 
@@ -1370,7 +1393,13 @@ export class Instance {
    */
   readonly #operations = new Map<
     string,
-    { instance: Instance; builtin: string; read?: string }
+    {
+      instance: Instance;
+      builtin: string;
+      read?: string;
+      /** A request of a handler, which is made once (SS §6.2). */
+      once?: true;
+    }
   >();
   /** On the root: how many requests left the executor. */
   #sent = 0;
@@ -2108,7 +2137,7 @@ export class Instance {
           // state has that error state as its result.
           const state = host.depend(this.#operationState(operation)) as Ref;
           const failed = this.store.read(state.key(FAILED), host.reads);
-          return isErrorState(failed) ? failed : state;
+          return isErrorState(failed) ? failed : state.key(OUTCOME);
         }
         // An operation with no function of its request: its result is
         // pending.
@@ -2401,12 +2430,13 @@ export class Instance {
       if (!store.docs.has(CLOCK)) {
         store.create(CLOCK, "clock", this.root.options.now ?? 0);
       }
+      const result = state.key(OUTCOME, "result");
       if (query === "#now") {
-        if (store.read(state.key("result")) === undefined) {
-          store.write(state.key("result"), store.read(new Ref(CLOCK, [])));
+        if (store.read(result) === undefined) {
+          store.write(result, store.read(new Ref(CLOCK, [])));
         }
       } else {
-        store.write(state.key("result"), this.stored(new Ref(CLOCK, [])));
+        store.write(result, this.stored(new Ref(CLOCK, [])));
       }
       return;
     }
@@ -2415,7 +2445,7 @@ export class Instance {
     );
     if (answer?.result === undefined) {
       store.write(
-        state.key("error"),
+        state.key(OUTCOME, "error"),
         this.stored(answer?.error ?? `no target for \`${query}\``),
       );
       return;
@@ -2424,7 +2454,57 @@ export class Instance {
     if (!store.docs.has(target)) {
       store.create(target, "wish target", this.stored(answer.result));
     }
-    store.write(state.key("result"), this.stored(new Ref(target, [])));
+    store.write(
+      state.key(OUTCOME, "result"),
+      this.stored(new Ref(target, [])),
+    );
+  }
+
+  /**
+   * Requests an effect for a handler body (SS §6.2, "In a handler"): the
+   * event's transaction stages the request, its hash and the pending
+   * mark in a state document named by the handling and the ordinal of
+   * the request, with a link back to the result of the instance, and the
+   * request leaves when the transaction commits, whatever reads its
+   * result. It is made once. The body gets a handle to the result.
+   */
+  requestEffect(builtin: string, given: unknown[]): Handle {
+    const { root, store } = this;
+    const writer = root.#evaluating[root.#evaluating.length - 1];
+    if (writer?.key !== HANDLER) {
+      // A `lift` or a `computed` requests no effect itself (SS §6.1).
+      throw new Unsupported(
+        `the built-in \`${builtin}\` in a function body that is no handler`,
+      );
+    }
+    const { cause, ordinal } = this.#next();
+    const id = identifierOf(cause, { effect: ordinal });
+    this.#documents.add(id);
+    store.declare(id, "operation state", undefined);
+    const state = new Ref(id, []);
+    store.write(
+      state.key("request"),
+      this.stored(this.returned(given.length === 1 ? given[0] : given)),
+    );
+    store.write(state.key("of"), this.stored(new Ref(this.id, [])));
+    const request = store.read(state.key("request"));
+    const read = canonical(request);
+    const hash = identifierOf({
+      builtin,
+      request: JSON.parse(read) as FabricValue,
+    });
+    store.write(state.key("requestHash"), hash);
+    store.write(state.key(OUTCOME, "pending"), true);
+    root.#operations.set(id, { instance: this, builtin, read, once: true });
+    root.#sent += 1;
+    root.#outbox.push({
+      id: root.#sent,
+      builtin,
+      request,
+      hash,
+      operation: id,
+    });
+    return new Handle(this, state.key(OUTCOME), undefined, undefined, []);
   }
 
   /**
@@ -2436,6 +2516,7 @@ export class Instance {
   #requestTransactions(): boolean {
     let wrote = false;
     for (const [doc, operation] of this.#operations) {
+      if (operation.once) continue;
       const held = this.store.docs.get(doc)?.value;
       if (!isRecord(held) || !("request" in held)) continue;
       const state = new Ref(doc, []);
@@ -2452,7 +2533,7 @@ export class Instance {
         // A request that holds an error state is not made, and the
         // operation's result is that error state.
         this.store.write(state.key(FAILED), failed);
-        this.store.write(state.key("pending"), false);
+        this.store.write(state.key(OUTCOME, "pending"), false);
       } else {
         const hash = identifierOf({
           builtin: operation.builtin,
@@ -2464,7 +2545,7 @@ export class Instance {
           // outstanding: the hash and the pending mark are written, and
           // the request leaves.
           this.store.write(state.key("requestHash"), hash);
-          this.store.write(state.key("pending"), true);
+          this.store.write(state.key(OUTCOME, "pending"), true);
           this.#sent += 1;
           this.#outbox.push({
             id: this.#sent,
@@ -3739,6 +3820,17 @@ export class Instance {
           this.evaluated(value)(none);
         }
       });
+      // A `navigateTo` of the reactive tier is made in order to act, and
+      // is demanded whenever its instance is (SS §6.2).
+      this.plan.operations.forEach((operation, index) => {
+        if (
+          operation.implementation?.builtin === "navigateTo" &&
+          (operation.within ?? []).length === 0 &&
+          this.#requestFunctions.has(index)
+        ) {
+          this.#operationState(index)(none);
+        }
+      });
       const entry = this.#ensure(
         "result",
         none,
@@ -3954,9 +4046,10 @@ export class Instance {
       (operation.instance === root ||
         root.#instances.has(operation.instance.id));
     if (selected) {
-      store.write(state.key("result"), this.stored(completion.result));
-      store.write(state.key("error"), this.stored(completion.error));
-      store.write(state.key("pending"), false);
+      const outcome = state.key(OUTCOME);
+      store.write(outcome.key("result"), this.stored(completion.result));
+      store.write(outcome.key("error"), this.stored(completion.error));
+      store.write(outcome.key("pending"), false);
     }
     root.#end(open, true);
     return selected;
@@ -4253,6 +4346,7 @@ export class Instance {
     const open = root.#begin("event", stream.binding);
     const queued = root.#queue.length;
     const requested = root.requests.length;
+    const sent = root.#outbox.length;
     const instances = new Set(root.#instances.keys());
     const bound = new Map(root.#bound);
     const children = this.#children.length;
@@ -4281,6 +4375,10 @@ export class Instance {
       root.#abort(open);
       root.#queue.length = queued;
       root.requests.length = requested;
+      // A request of the body does not leave.
+      for (const { operation } of root.#outbox.splice(sent)) {
+        root.#operations.delete(operation);
+      }
       for (const id of [...root.#instances.keys()]) {
         if (!instances.has(id)) root.#instances.delete(id);
       }
@@ -4779,6 +4877,14 @@ const commonfabric = (instance: Instance): unknown => {
       });
       return undefined;
     },
+    // A request of another effect (SS §6.2, "In a handler").
+    ...Object.fromEntries(EFFECTS.map((builtin) => [
+      builtin,
+      (...given: unknown[]) =>
+        instance.loading
+          ? absent(instance, builtin)
+          : instance.requestEffect(builtin, given),
+    ])),
     // The debug renderers are conversions to a string (FA §3.3).
     debugStr,
     toCompactDebugString,
