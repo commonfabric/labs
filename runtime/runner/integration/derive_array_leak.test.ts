@@ -237,6 +237,9 @@ async function runTest() {
           // Capture demand and pending work before diagnostic cell reads
           // can start loading documents. Nothing here waits for settlement.
           const scheduler = readDiagnostic(() => runtime.scheduler.getStats());
+          const schedulerSizes = readDiagnostic(() =>
+            runtime.scheduler.getSizes()
+          );
           const graph = readDiagnostic(() =>
             runtime.scheduler.getGraphSnapshot()
           );
@@ -295,6 +298,7 @@ async function runTest() {
             ),
             notifications,
             scheduler,
+            schedulerSizes,
             storage,
           });
           console.error("Mapped items:", snapshot(mappedItems, 16_384));
