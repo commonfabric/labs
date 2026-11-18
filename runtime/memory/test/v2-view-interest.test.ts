@@ -1486,6 +1486,26 @@ describe("view interests", () => {
     expect(ids).toEqual(["of:render"]);
   });
 
+  it("removes an ordinary watch from a view session without walking the rendered demand", async () => {
+    await set([watch("of:ordinary")], [view()]);
+    using evaluations = spy(server, "evaluateWatchSet");
+    const removed = await server.watchRemove({
+      type: "session.watch.remove",
+      requestId: "remove-ordinary",
+      space,
+      sessionId,
+      watchIds: ["of:ordinary"],
+    });
+    expect(removed.error).toBeUndefined();
+    expect(evaluations.calls).toHaveLength(0);
+    expect(removed.ok?.sync.removes.map((entry) => entry.id)).toEqual([
+      "of:ordinary",
+    ]);
+    expect(removed.ok?.sync.upserts).toEqual([]);
+    expect(server.demandedInstancesForSpace(space).map((row) => row.id))
+      .toEqual(["of:render"]);
+  });
+
   it("reuses an ordinary query under another watch ID while retaining visible demand", async () => {
     await set([watch("of:ordinary")], [view()]);
     const [session] = server.accessForTestingOnly.sessionsForSpace(space);
