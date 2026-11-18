@@ -3,7 +3,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { connect, loopback } from "@commonfabric/memory/v2/client";
-import { Server } from "@commonfabric/memory/v2/server";
+import { Server, SessionRegistry } from "@commonfabric/memory/v2/server";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -111,13 +111,15 @@ const counterSchema = {
 
 describe("space-session-release", () => {
   let server: MemoryV2Server.Server;
+  let sessions: SessionRegistry;
   let writerStorage: EmulatedStorageManager;
   let readerStorage: EmulatedStorageManager;
   let writer: Runtime;
   let reader: Runtime;
 
   beforeEach(() => {
-    server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
+    sessions = new SessionRegistry();
+    server = newSharedServer({ subscriptionRefreshDelayMs: 0, sessions });
     writerStorage = EmulatedStorageManager.connectTo(server, { as: signer });
     readerStorage = EmulatedStorageManager.connectTo(server, { as: signer });
     writer = new Runtime({
@@ -242,6 +244,40 @@ describe("space-session-release", () => {
     const seen = writer.getCell(space, "counter", counterSchema);
 
     expect(await seen.pull()).toEqual({ n: 5 });
+  });
+
+  it("opens a released space again once the server has forgotten the closed session, and takes a write there", async () => {
+    // The server keeps a closed session resumable for a while; removing it
+    // stands for that while running out, and for a server restarted since.
+
+    const { space, id } = await spaceWith(1);
+    await load(space, id);
+    await releaseTwice();
+    expect(isOpen(space)).toBe(false);
+    // The reader's closed session is detached, as the one the space's
+    // creation opened is; the writer's stays attached.
+    const closed = () =>
+      sessions.sessionsForSpace(space).filter((session) =>
+        session.expiresAt !== null
+      );
+    expect(closed().length).toBeGreaterThan(0);
+    for (const session of closed()) sessions.remove(space, session.id);
+    expect(closed()).toEqual([]);
+    await write(space, 2);
+
+    const counter = reader.getCell(space, "counter", counterSchema);
+    expect(await counter.pull()).toEqual({ n: 2 });
+    const written = await reader.editWithRetry((tx) => {
+      reader.getCell(space, "counter", counterSchema, tx).set({ n: 3 });
+    });
+    expect(written.error).toBeUndefined();
+    await readerStorage.synced();
+    await server.flushSessions();
+
+    expect(readerStorage.spaceAccessError(space)).toBeUndefined();
+    expect(
+      await writer.getCell(space, "counter", counterSchema).pull(),
+    ).toEqual({ n: 3 });
   });
 
   describe("a space in use", () => {

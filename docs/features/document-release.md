@@ -244,15 +244,25 @@ runtime forgets the loads it kicked there, and the effects channel forgets
 that it subscribed to the space.
 
 Nothing about a released space is remembered as a refusal or an absence. The
-next read, write, sync or subscription in it opens it again, exactly as a first
-open does: a new session, a new replica that loads what that read reaches, and
-the first-open work, the effects channel's subscription included. Its documents
-come back as they now stand on the server, as a dropped document's do. The new
-session resumes the closed one, which the memory server keeps resumable for a
-while after it closes, and opens only once the closing has finished. The
-session is the same one, so the runtime's session-scoped documents in the space
-are the same instances, and its commits there go on from the local sequence the
-closed session reached.
+next read, write, sync or subscription in it opens it again, as a first open
+does in every respect but the session: a new provider, a new replica that loads
+what that read reaches, and the first-open work, the effects channel's
+subscription included. Its documents come back as they now stand on the
+server, as a dropped document's do.
+
+The session is not a new one. The storage manager opens every space's session
+under one session id, which is also the instance its session-scoped documents
+resolve to, so the reopened space keeps that id. The memory server keeps a
+closed session resumable for a while, and while it does, it refuses an open of
+the same id that does not present the session's latest token. So the manager
+keeps what the closed session needs to be resumed: its token, the server
+sequence it had seen, and the local sequence its next commit takes: the
+server takes a commit under a local sequence the session has used already for
+a replay of the commit it stored there, and a new replica would otherwise
+start that sequence again. The next session opened in the
+space presents them, once the closing has finished. A server that no longer
+holds the session, because the while has run out or because it restarted,
+opens the id as a new session, and the reopened space works the same way.
 
 ## Reading a released document again
 
