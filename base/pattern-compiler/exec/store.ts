@@ -509,6 +509,23 @@ const child = (value: unknown, segment: string): unknown => {
     : undefined;
 };
 
+/**
+ * An error state as a value (`plan-and-label-templates.md` §5.2, "An
+ * error is a value with a label"): the record that stands for the
+ * failure of the cone instance that computes the position. The
+ * documents give an error state no form, and this one is the
+ * executor's.
+ */
+export type ErrorState = { $error: { message: string } };
+
+export const errorState = (message: string): ErrorState => ({
+  $error: { message },
+});
+
+export const isErrorState = (value: unknown): value is ErrorState =>
+  isRecord(value) && isRecord(value.$error) &&
+  Object.keys(value).length === 1;
+
 /** A write through a reference by key whose key no position holds. */
 export class MissingKey extends Error {
   constructor() {
@@ -631,7 +648,57 @@ export class Store {
     }
   }
 
+  /**
+   * Called before each change of a document, with the document and the
+   * path that changes: a transaction keeps what the document held.
+   */
+  onWrite: ((doc: string, path: readonly string[]) => void) | undefined;
+
+  /**
+   * Puts back what a document held: the whole document, or what it held
+   * at a path, from the copy `before` that was taken of it. With no
+   * copy, the document did not exist and is deleted, and a read of its
+   * place reads what the place was declared with.
+   */
+  revert(
+    doc: string,
+    path: readonly string[],
+    before: { kind: string; value: unknown } | undefined,
+  ): void {
+    const held = this.docs.get(doc);
+    if (before === undefined) {
+      if (held === undefined) return;
+      this.docs.delete(doc);
+      this.streams.delete(doc);
+    } else if (held === undefined || path.length === 0) {
+      const restored = structuredClone(before);
+      this.docs.set(doc, restored);
+      this.#record(doc, [], restored.value);
+    } else {
+      const earlier = structuredClone(
+        path.reduce(
+          (value: unknown, segment) => child(value, segment),
+          before.value,
+        ),
+      );
+      let holder = held.value as Record<string, unknown>;
+      for (const segment of path.slice(0, -1)) {
+        const next = holder?.[segment];
+        if (typeof next !== "object" || next === null) return;
+        holder = next as Record<string, unknown>;
+      }
+      const last = path[path.length - 1];
+      if (typeof holder !== "object" || holder === null) return;
+      if (earlier === undefined && !Array.isArray(holder)) delete holder[last];
+      else holder[last] = earlier;
+      this.#record(doc, path, earlier);
+    }
+    this.clock += 1;
+    this.log.push({ doc, path: [...path], at: this.clock });
+  }
+
   create(id: string, kind: string, value: unknown): void {
+    this.onWrite?.(id, []);
     this.docs.set(id, { kind, value });
     this.#record(id, [], value);
     this.clock += 1;
@@ -1001,6 +1068,8 @@ export class Store {
 
   /** Gives a document another identifier, with what it was declared as. */
   move(from: string, to: string): void {
+    this.onWrite?.(from, []);
+    this.onWrite?.(to, []);
     const document = this.docs.get(from);
     const declared = this.declared.get(from);
     this.docs.delete(to);
@@ -1027,6 +1096,7 @@ export class Store {
    * record of its stream links. A link to it reads as nothing.
    */
   remove(id: string): void {
+    this.onWrite?.(id, []);
     this.docs.delete(id);
     this.declared.delete(id);
     this.streams.delete(id);
@@ -1235,6 +1305,7 @@ export class Store {
       // below the root starts from the default the place read as.
       const declared = this.declared.get(doc);
       if (declared === undefined) return;
+      this.onWrite?.(doc, path);
       document = {
         kind: declared.kind,
         value: path.length === 0
@@ -1244,6 +1315,8 @@ export class Store {
       this.docs.set(doc, document);
     } else if (JSON.stringify(located.value) === JSON.stringify(value)) {
       return;
+    } else {
+      this.onWrite?.(doc, path);
     }
     if (path.length === 0) {
       document.value = value;

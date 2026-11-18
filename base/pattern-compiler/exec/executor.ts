@@ -23,7 +23,10 @@ import {
   argumentOf,
   canonical,
   type ElementPart,
+  type ErrorState,
+  errorState,
   identifierOf,
+  isErrorState,
   isKeySegment,
   isLink,
   isStream,
@@ -299,6 +302,13 @@ type Entry = {
   writers: Writer[];
   /** The value of a materializer that has not been evaluated yet. */
   pending?: boolean;
+  /**
+   * Where the cone instance failed: `value` is then the error state
+   * (PL §5.2).
+   */
+  error?: string;
+  /** The transaction in which the entry failed at the bound. */
+  exhausted?: Transaction;
   evaluatedAt: number;
   changedAt: number;
   /**
@@ -360,6 +370,8 @@ export type Counts = {
    * cone instance stale again; the executor evaluates it once.
    */
   staleByOwnWrite: number;
+  /** Evaluations that ended in an error state (PL §5.2). */
+  failures: number;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -368,11 +380,35 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
     Object.getPrototypeOf(value) === null);
 
 /**
- * How often the cones of an instance are brought up to date before the
- * executor stops: the bound on the evaluations of a cone instance in one
- * transaction (ES §2.7, "The bound").
+ * How many times one cone instance is evaluated in one transaction
+ * (ES §2.7, "The bound"; SS §8.1). An evaluation that would be one more
+ * does not run, and the cone instance fails.
  */
-const MAX_PASSES = 10;
+export const MAX_EVALUATIONS = 10;
+
+/**
+ * Thrown where a cone reads a value that is in an error state: the
+ * reader fails in turn (PL §5.2, "What fails a cone").
+ */
+class ReadsFailure extends Error {
+  constructor(readonly state: ErrorState) {
+    super(state.$error.message);
+  }
+}
+
+/**
+ * Whether an error that value code threw is the failure of its cone
+ * instance. An error that says what the executor does not do, a name
+ * that the value code does not bind, and a stack that ran out stop the
+ * instance: they are limits of the prototype and no behavior of the
+ * pattern.
+ */
+const failsCone = (error: unknown): boolean =>
+  !(error instanceof Unsupported) && !(error instanceof ReferenceError) &&
+  !(error instanceof SyntaxError) && !(error instanceof RangeError);
+
+const messageOf = (error: unknown): string =>
+  `${(error as Error)?.message ?? error}`.split("\n")[0];
 
 /** Whether a schema declares a handle at a position below its own. */
 const declaresHandle = (schema: Schema | undefined, depth: number): boolean => {
@@ -742,7 +778,13 @@ export class Host {
       // stream that is an input of the pattern").
       return found instanceof Ref ? found.withSchema(schema) : found;
     }
-    return withDefaults(this.v(found), schema);
+    const read = this.v(found);
+    // A slot that is itself in an error state fails the cone that reads
+    // it (PL §5.2).
+    if (this.cone !== undefined && isErrorState(read)) {
+      throw new ReadsFailure(read);
+    }
+    return withDefaults(read, schema);
   }
 
   /** A read of a place that the value code names no slot for. */
@@ -823,6 +865,16 @@ export class Host {
 
   dependEntry(entry: Lazy, path?: readonly string[]): Entry {
     const used = entry(this.context);
+    // A cone that reads a value in an error state fails in turn. What
+    // belongs to no cone, as the assembly of a collection and the record
+    // of the result, passes the error state on at its position (PL §5.3).
+    if (this.cone !== undefined && isErrorState(used.value)) {
+      this.dependencies.push({
+        stamp: (context) => entry(context).changedAt,
+        seen: used.changedAt,
+      });
+      throw new ReadsFailure(used.value);
+    }
     if (path === undefined) {
       this.dependencies.push({
         stamp: (context) => entry(context).changedAt,
@@ -1107,6 +1159,56 @@ export type Outcome = {
   error?: string;
 };
 
+/**
+ * One transaction of an executor (ES §1.1): what opened it, the cones
+ * whose value functions it evaluated, in the order the evaluations
+ * ended, and the documents it wrote.
+ */
+export type Transaction = {
+  /**
+   * `creation` writes the argument document and the result document of
+   * the instance the executor was started with and evaluates nothing
+   * (ES §1.1, assumed there under question 77). `event` is the
+   * transaction of one event, and `derivation` the one behind a batch or
+   * for a set of changes.
+   */
+  cause: "creation" | "event" | "derivation";
+  /** For an event: the binding of its stream. */
+  binding?: number;
+  evaluated: string[];
+  /** The identifiers of the documents written, in the order of the
+   * first write to each. */
+  written: string[];
+  /** The cones that took an error state, by their `entry`. */
+  failed: string[];
+  /** Whether what the transaction staged is stored. */
+  committed: boolean;
+  error?: string;
+};
+
+/** The name that the writes of a handler body are kept under. */
+const HANDLER = "handler";
+
+/** A transaction in progress. */
+type Open = {
+  record: Transaction;
+  /** How many times each cone instance was evaluated, by its name. */
+  counts: Map<string, number>;
+  /** What each document held before the first write to it. */
+  before: Map<string, { kind: string; value: unknown } | undefined>;
+  /** The writes each evaluation made, by the name of its entry. */
+  writes: Map<
+    string,
+    {
+      instance: Instance;
+      key: string;
+      at: { doc: string; path: readonly string[] }[];
+    }
+  >;
+  /** The entries that failed at the bound, each with its context. */
+  exhausted: { entry: Entry; context: Context }[];
+};
+
 /** One instance of a compiled pattern. */
 export class Instance {
   readonly store: Store;
@@ -1149,6 +1251,10 @@ export class Instance {
     string,
     { instance: Instance; keyed?: KeyedRun; ordinal: number }
   >();
+  /** On the root: the transaction in progress. */
+  #tx: Open | undefined;
+  /** On the root: the entries being evaluated, innermost last. */
+  readonly #evaluating: { instance: Instance; key: string }[] = [];
   /** The run of a function body in progress (ES §2.8, "Identity"). */
   #running: Running | undefined;
   /** The events handled, which name the run of a handler. */
@@ -1166,6 +1272,7 @@ export class Instance {
     writesNotCovered: 0,
     pendingOperations: 0,
     staleByOwnWrite: 0,
+    failures: 0,
   };
   readonly valueOfOutput = new Map<number, number>();
   readonly bodies = new Map<number, (...given: unknown[]) => unknown>();
@@ -1226,7 +1333,12 @@ export class Instance {
   readonly #keyRecords = new Map<string, FabricValue>();
   /** The state cells that exist, by the identifier of their document. */
   readonly #cells = new Map<string, { cell: number; keys: string[] }>();
-  readonly #queue: { stream: StreamRef; event: unknown }[] = [];
+  readonly #queue: {
+    stream: StreamRef;
+    event: unknown;
+    /** The elements the event was queued for, where the sender chose. */
+    context?: Context;
+  }[] = [];
   #result: Thunk | undefined;
   #created = 0;
   /** The body whose writes are being counted, while a handler runs. */
@@ -1280,6 +1392,26 @@ export class Instance {
       artifacts?: (id: string) => Artifact | undefined;
       parent?: Instance;
       id?: string;
+      /**
+       * What the memo entry of a cone instance that failed at the bound
+       * is current against in a later transaction. `stored`: what is
+       * stored when the transaction ends, after the withdrawals, so the
+       * cone instance is evaluated again when something it read changes
+       * after that. `reads`: what its last evaluation read, so a
+       * withdrawal of something it read makes it stale. The default is
+       * `stored`.
+       */
+      afterBound?: "stored" | "reads";
+      /**
+       * A stand-in for the constraints on what a handler itself writes
+       * (PL §4.4): called when a handler body returned, with each write
+       * the body made, and a text it returns is the refusal that rejects
+       * the event's transaction. The executor instantiates no label, so
+       * it checks no constraint of a plan.
+       */
+      refuses?: (
+        write: { binding: number; doc: string; path: readonly string[] },
+      ) => string | undefined;
     } = {},
   ) {
     this.store = options.parent?.store ??
@@ -1298,14 +1430,143 @@ export class Instance {
       }
     });
     this.#documents.add(this.argument).add(this.id);
+    if (this.root === this) {
+      this.store.onWrite = (doc, path) => this.#wrote(doc, path);
+    }
+    // The creation of an instance by something that is no handler is a
+    // transaction that writes its two documents and evaluates nothing
+    // (ES §1.1, assumed there under question 77). An instance that a
+    // body makes gets them in the transaction the body runs in.
+    const creation = this.root.#tx === undefined
+      ? this.root.#begin("creation")
+      : undefined;
     this.store.create(this.argument, "argument", this.stored(argument));
     this.store.create(this.id, "result", undefined);
+    if (creation !== undefined) this.root.#end(creation, true);
     this.#load();
     this.#sideWriters();
-    // A state cell of the pattern's own body exists from the start, and
-    // one of an element body from when its key enters the element table.
-    this.#declare(new Map());
-    this.settle();
+    // An instance that a handler makes is evaluated in the derivation
+    // transaction behind the batch, and not in the event's transaction
+    // (ES §1.1, "From the creation of an instance to its settled
+    // result").
+    if (this.root.#tx?.record.cause === "event") return;
+    this.root.#within("derivation", () => {
+      // A state cell of the pattern's own body exists from the start,
+      // and one of an element body from when its key enters the element
+      // table.
+      this.#declare(new Map());
+      this.#settle();
+    });
+  }
+
+  // ----- transactions -----
+
+  #begin(cause: Transaction["cause"], binding?: number): Open {
+    const open: Open = {
+      record: {
+        cause,
+        ...(binding === undefined ? {} : { binding }),
+        evaluated: [],
+        written: [],
+        failed: [],
+        committed: false,
+      },
+      counts: new Map(),
+      before: new Map(),
+      writes: new Map(),
+      exhausted: [],
+    };
+    this.#tx = open;
+    return open;
+  }
+
+  #end(open: Open, committed: boolean, error?: string): void {
+    // A cone instance that failed at the bound is not evaluated again
+    // until one of its inputs changes (SS §8.1, "After the bound"). Its
+    // side-writes were withdrawn, so what its last evaluation read is no
+    // longer what is stored. Under `stored` the entry is current against
+    // what is stored now.
+    if ((this.options.afterBound ?? "stored") === "stored") {
+      for (const { entry, context } of open.exhausted) {
+        entry.evaluatedAt = this.store.clock;
+        entry.checkedAt = undefined;
+        for (const dependency of entry.dependencies) {
+          dependency.seen = dependency.stamp(context);
+        }
+      }
+    }
+    open.record.committed = committed;
+    if (error !== undefined) open.record.error = error;
+    if (!committed) open.record.written = [];
+    this.#tx = undefined;
+    this.#transactions.push(open.record);
+  }
+
+  /**
+   * Runs `run` in the transaction in progress, or in one of its own of
+   * the cause given where none is.
+   */
+  #within(cause: Transaction["cause"], run: () => void): void {
+    if (this.#tx !== undefined) {
+      run();
+      return;
+    }
+    const open = this.#begin(cause);
+    try {
+      run();
+    } finally {
+      this.#end(open, true);
+    }
+  }
+
+  /** Keeps what a document held before a transaction first wrote it. */
+  #wrote(doc: string, path: readonly string[]): void {
+    const open = this.#tx;
+    if (open === undefined) return;
+    if (!open.before.has(doc)) {
+      const held = this.store.docs.get(doc);
+      open.before.set(
+        doc,
+        held === undefined ? undefined : structuredClone(held),
+      );
+      open.record.written.push(doc);
+    }
+    const writer = this.#evaluating[this.#evaluating.length - 1];
+    if (writer === undefined) return;
+    const name = `${writer.instance.id}\n${writer.key}`;
+    const held = open.writes.get(name) ?? { ...writer, at: [] };
+    held.at.push({ doc, path: [...path] });
+    open.writes.set(name, held);
+  }
+
+  /**
+   * Withdraws the side-writes of a failed cone instance: each target
+   * keeps what it had before the transaction (PL §5.2, "The write edges
+   * of a failed cone").
+   */
+  #withdraw(open: Open, name: string): void {
+    const written = open.writes.get(name);
+    if (written === undefined) return;
+    open.writes.delete(name);
+    for (const { doc, path } of [...written.at].reverse()) {
+      this.store.revert(doc, path, open.before.get(doc));
+    }
+  }
+
+  /**
+   * Undoes a transaction that does not commit: every document is as it
+   * was, and the memo entry of each cone instance whose side-write is
+   * undone is dropped, so a later evaluation performs the write
+   * (ES §1.6).
+   */
+  #abort(open: Open): void {
+    for (const [doc, before] of [...open.before].reverse()) {
+      this.store.revert(doc, [], before);
+    }
+    for (const { instance, key } of open.writes.values()) {
+      instance.#memo.delete(key);
+    }
+    open.writes.clear();
   }
 
   /**
@@ -2372,22 +2633,58 @@ export class Instance {
       // had (ES §2.7, "Detection").
       return held ?? this.#none();
     }
+    const { root } = this;
+    const open = root.#tx;
+    const name = `${this.id}\n${key}`;
+    // The bound is on a cone instance (PL §5.2, "The bound"). The
+    // assembly of a collection and the record of the result belong to no
+    // cone.
+    if (open !== undefined && cone !== undefined) {
+      const times = open.counts.get(name) ?? 0;
+      if (times >= MAX_EVALUATIONS) {
+        // A materializer that reaches its budget stays as it is and
+        // takes no error state (SS §8.3).
+        if (this.plan.cones[cone].sideWrites === "materializer") {
+          return held ?? this.#none();
+        }
+        return this.#exhausted(open, key, name, held, context, cone, within);
+      }
+      open.counts.set(name, times + 1);
+    }
     this.#open.add(key);
+    root.#evaluating.push({ instance: this, key });
     const host = new Host(this, context, cone);
     const evaluatedAt = this.store.clock;
     let value: unknown;
+    let failure: string | undefined;
     try {
       value = compute(host);
+    } catch (error) {
+      // A cone instance whose code throws, or reads a value in an error
+      // state, takes an error state, and the rest of the transaction goes
+      // on (PL §5.2).
+      if (cone === undefined || !failsCone(error)) throw error;
+      failure = messageOf(error);
+      value = error instanceof ReadsFailure ? error.state : errorState(failure);
     } finally {
       this.#open.delete(key);
+      root.#evaluating.pop();
     }
     this.counts.evaluations += 1;
     if (kind === "element") this.counts.elementEvaluations += 1;
     if (kind === "assembly") this.counts.assemblies += 1;
-    if (kind === "value") {
-      this.trace.push(
-        cone === undefined ? "result" : this.plan.cones[cone].entry,
-      );
+    const entryName = cone === undefined
+      ? "result"
+      : this.plan.cones[cone].entry;
+    if (kind === "value") this.trace.push(entryName);
+    if (kind !== "assembly") open?.record.evaluated.push(entryName);
+    if (failure !== undefined) {
+      this.counts.failures += 1;
+      if (open !== undefined) {
+        open.record.failed.push(entryName);
+        // Its side-writes are withdrawn (PL §5.2).
+        root.#withdraw(open, name);
+      }
     }
     const stored = canonical(this.stored(value));
     const changed = held === undefined || held.pending === true ||
@@ -2419,11 +2716,53 @@ export class Instance {
       indexes: host.indexes,
       members: host.members,
       writers: host.writers,
+      ...(failure === undefined ? {} : { error: failure }),
       evaluatedAt: ownWrite ? this.store.clock : readAt,
       changedAt: changed ? this.store.clock : held.changedAt,
     };
     this.#memo.set(key, entry);
     this.#keep(key, cone, within, context);
+    return entry;
+  }
+
+  /**
+   * Fails a cone instance whose next evaluation would be one more than
+   * the bound allows (SS §8.1 and §8.2): the evaluation does not run, the
+   * entry takes the error state, and the side-writes the cone instance
+   * staged in the transaction are withdrawn. The entry keeps the reads of
+   * its last evaluation.
+   */
+  #exhausted(
+    open: Open,
+    key: string,
+    name: string,
+    held: Entry | undefined,
+    context: Context,
+    cone: number,
+    within: readonly number[],
+  ): Entry {
+    if (held !== undefined && held.exhausted === open.record) return held;
+    const message = `the cone \`${
+      this.plan.cones[cone].entry
+    }\` did not settle within ${MAX_EVALUATIONS} evaluations`;
+    const value = errorState(message);
+    this.counts.failures += 1;
+    open.record.failed.push(this.plan.cones[cone].entry);
+    this.root.#withdraw(open, name);
+    this.store.clock += 1;
+    const entry: Entry = {
+      ...(held ?? this.#none()),
+      value,
+      stored: canonical(value),
+      error: message,
+      exhausted: open.record,
+      changedAt: this.store.clock,
+      checkedAt: undefined,
+    };
+    delete entry.pending;
+    this.#memo.set(key, entry);
+    this.#keep(key, cone, within, context);
+    open.exhausted.push({ entry, context });
     return entry;
   }
 
@@ -3063,13 +3402,28 @@ export class Instance {
    * cone instance is evaluated in one transaction (ES §2.7).
    */
   settle(): void {
+    this.root.#within("derivation", () => this.#settle());
+  }
+
+  /**
+   * The evaluation step of a derivation transaction (ES §1.2): it
+   * repeats while an evaluation wrote something, to a fixed point that
+   * the bound on the evaluations of a cone instance ends (ES §2.7).
+   */
+  #settle(): void {
     const none: Context = new Map();
     const result = this.#result;
     if (result === undefined) return;
     // A write from outside a handler, as through a member bound both
     // ways, is a transaction of its own.
     this.root.#rekey();
-    for (let pass = 0; pass < MAX_PASSES; pass++) {
+    for (let pass = 0;; pass++) {
+      // The bound ends every cycle through a cone instance, so the
+      // passes end. A count far past what the bound allows says that
+      // something that is no cone instance keeps writing.
+      if (pass > 10_000) {
+        throw new RangeError("a derivation transaction that does not end");
+      }
       const before = this.store.clock;
       this.plan.outputs.forEach((output, index) => {
         if (!output.kept || output.path.includes("*")) return;
@@ -3094,7 +3448,7 @@ export class Instance {
         this.stored(entry.value),
       );
       // The instances that function bodies of this one made.
-      for (const child of this.#children) child.settle();
+      for (const child of this.#children) child.#settle();
       this.#afterWave = true;
       try {
         for (const materializer of this.#materializers) materializer(none);
@@ -3262,6 +3616,62 @@ export class Instance {
 
   // ----- events -----
 
+  /**
+   * The transactions of the executor that this instance was started
+   * with, in the order they ended.
+   */
+  get transactions(): readonly Transaction[] {
+    return this.root.#transactions;
+  }
+
+  readonly #transactions: Transaction[] = [];
+
+  /**
+   * Puts an event for the stream of a binding of the reactive tier into
+   * the queue and handles nothing (SS §5.1). For a binding of an element
+   * body, `positions` gives the position of the element in each
+   * enclosing collection, outermost first, and the last element where it
+   * gives none. Returns why the event has no stream, where it has none.
+   */
+  enqueue(
+    binding: number,
+    event: unknown,
+    positions: number[] = [],
+  ): string | undefined {
+    const record = this.plan.bindings[binding];
+    const context = new Map<number, Element>();
+    const keys: string[] = [];
+    let step = 0;
+    for (const { element } of record.within) {
+      if (element === undefined) continue;
+      const table = this.#tableOf(element, context) ?? [];
+      const chosen = table[positions[step] ?? table.length - 1];
+      step += 1;
+      if (chosen === undefined) return "no element holds the stream";
+      context.set(element, chosen);
+      keys.push(chosen.key);
+    }
+    this.root.#queue.push({
+      stream: new StreamRef(binding, keys, this.#owner),
+      event,
+      context,
+    });
+    return undefined;
+  }
+
+  /**
+   * Handles the queued events as one batch (SS §5.1): each in a
+   * transaction of its own, with the events that their handlers send to
+   * streams of the executor, in the order they joined the queue, and one
+   * derivation transaction behind them. Returns how each ended.
+   */
+  batch(): Outcome[] {
+    const outcomes: Outcome[] = [];
+    this.root.#drain(outcomes);
+    this.root.settle();
+    return outcomes;
+  }
+
   queue(stream: StreamRef, event: unknown): void {
     this.root.#queue.push({ stream, event });
   }
@@ -3395,28 +3805,11 @@ export class Instance {
    * element where it gives none.
    */
   send(binding: number, event: unknown, positions: number[] = []): Outcome {
-    const record = this.plan.bindings[binding];
-    const context = new Map<number, Element>();
-    const keys: string[] = [];
-    let step = 0;
-    for (const { element } of record.within) {
-      if (element === undefined) continue;
-      const table = this.#tableOf(element, context) ?? [];
-      const chosen = table[positions[step] ?? table.length - 1];
-      step += 1;
-      if (chosen === undefined) {
-        return {
-          binding,
-          committed: false,
-          error: "no element holds the stream",
-        };
-      }
-      context.set(element, chosen);
-      keys.push(chosen.key);
+    const refused = this.enqueue(binding, event, positions);
+    if (refused !== undefined) {
+      return { binding, committed: false, error: refused };
     }
-    this.queue(new StreamRef(binding, keys, this.#owner), event);
-    const outcome = this.root.#drain(context, binding);
-    this.root.settle();
+    const [outcome] = this.batch();
     return outcome;
   }
 
@@ -3426,20 +3819,11 @@ export class Instance {
    * read a position their handlers wrote. Returns how each ended.
    */
   dispatch(): Outcome[] {
-    const outcomes: Outcome[] = [];
-    this.root.#drain(undefined, -1, outcomes);
-    this.root.settle();
-    return outcomes;
+    return this.batch();
   }
 
   /** Handles the queued events, each in the instance its stream is of. */
-  #drain(
-    first: Context | undefined,
-    binding: number,
-    outcomes?: Outcome[],
-  ): Outcome {
-    let outcome: Outcome = { binding, committed: true };
-    let context: Context | undefined = first;
+  #drain(outcomes: Outcome[]): void {
     for (let next = this.#queue.shift(); next; next = this.#queue.shift()) {
       const target = next.stream.instance === ""
         ? this
@@ -3453,13 +3837,10 @@ export class Instance {
         : target.#handle(
           next.stream,
           next.event,
-          context ?? target.#contextOf(next.stream),
+          next.context ?? target.#contextOf(next.stream),
         );
-      outcomes?.push(handled);
-      if (context !== undefined) outcome = handled;
-      context = undefined;
+      outcomes.push(handled);
     }
-    return outcome;
   }
 
   /** The elements a stream's keys name, from the element tables. */
@@ -3481,7 +3862,62 @@ export class Instance {
     return context;
   }
 
+  /**
+   * Handles one event in a transaction of its own (SS §5.2): the stale
+   * cone instances that compute what the handler reads, and then the
+   * body. An event whose handler does not run to its end, or whose
+   * write the stand-in for the constraints refuses, stores nothing
+   * (SS §5.5).
+   */
   #handle(stream: StreamRef, event: unknown, context: Context): Outcome {
+    const { root } = this;
+    const open = root.#begin("event", stream.binding);
+    const queued = root.#queue.length;
+    const requested = root.requests.length;
+    const instances = new Set(root.#instances.keys());
+    const bound = new Map(root.#bound);
+    const children = this.#children.length;
+    let outcome: Outcome;
+    try {
+      outcome = this.#attempt(stream, event, context);
+    } catch (error) {
+      root.#tx = undefined;
+      throw error;
+    }
+    if (outcome.committed) {
+      const { refuses } = root.options;
+      const own = refuses === undefined
+        ? []
+        : open.writes.get(`${this.id}\n${HANDLER}`)?.at ?? [];
+      for (const write of own) {
+        const refusal = refuses?.({ binding: stream.binding, ...write });
+        if (refusal === undefined) continue;
+        outcome = { binding: stream.binding, committed: false, error: refusal };
+        break;
+      }
+    }
+    if (outcome.committed) {
+      root.#rekey();
+    } else {
+      root.#abort(open);
+      root.#queue.length = queued;
+      root.requests.length = requested;
+      for (const id of [...root.#instances.keys()]) {
+        if (!instances.has(id)) root.#instances.delete(id);
+      }
+      for (const [name, { instance }] of [...root.#made]) {
+        if (!root.#instances.has(instance.id)) root.#made.delete(name);
+      }
+      root.#bound.clear();
+      for (const [key, held] of bound) root.#bound.set(key, held);
+      this.#children.length = children;
+      this.store.rekeys.length = 0;
+    }
+    root.#end(open, outcome.committed, outcome.error);
+    return outcome;
+  }
+
+  #attempt(stream: StreamRef, event: unknown, context: Context): Outcome {
     const binding = stream.binding;
     const record = this.plan.bindings[binding];
     if (record === undefined) {
@@ -3541,6 +3977,9 @@ export class Instance {
       let found: unknown;
       if (place.slot !== undefined) {
         const bound = this.plan.slots[place.slot];
+        // A cell that a cone writes statically: the writing cone
+        // instance is evaluated first where it is stale (ES §1.3).
+        host.demand(bound.root, [...bound.path, ...rest]);
         found = host.at(this.rootOf(bound.root, host), [
           ...bound.path,
           ...rest,
@@ -3577,6 +4016,15 @@ export class Instance {
       } else {
         found = host.at(place.constant, rest);
       }
+      // A handler that receives an error state for one of its inputs
+      // fails (SS §5.5).
+      if (isErrorState(found)) {
+        return {
+          binding,
+          committed: false,
+          error: `the handler reads a failed value: ${found.$error.message}`,
+        };
+      }
       const given = read.observes === "identity"
         ? this.handleOf(found, undefined, slot)
         : host.v(found);
@@ -3591,9 +4039,8 @@ export class Instance {
   }
 
   /**
-   * Runs a handler for an event. A handler that throws commits nothing
-   * (PL §5.4): the documents are as they were, and what the run queued,
-   * instantiated and bound is gone.
+   * Runs the body of a handler for an event, and says whether it ran to
+   * its end.
    */
   #run(
     binding: number,
@@ -3603,49 +4050,22 @@ export class Instance {
     state: unknown,
   ): Outcome {
     const { root } = this;
-    const before = [...this.store.docs].map((
-      [id, document],
-    ) => [id, structuredClone(document)] as const);
-    const queued = root.#queue.length;
-    const requested = root.requests.length;
-    const instances = new Set(root.#instances.keys());
-    const bound = new Map(root.#bound);
-    const children = this.#children.length;
     root.#events += 1;
     this.#handling = body;
+    // What the body writes is the handler's own (SS §5.6).
+    root.#evaluating.push({ instance: this, key: HANDLER });
     try {
       this.during(
         { handling: { parent: root.id, event: root.#events } },
         () => run(event, state),
       );
     } catch (error) {
-      this.store.docs.clear();
-      for (const [id, document] of before) this.store.docs.set(id, document);
-      this.store.clock += 1;
-      for (const [id] of before) {
-        this.store.log.push({ doc: id, path: [], at: this.store.clock });
-      }
-      root.#queue.length = queued;
-      root.requests.length = requested;
-      for (const id of [...root.#instances.keys()]) {
-        if (!instances.has(id)) root.#instances.delete(id);
-      }
-      for (const [name, { instance }] of [...root.#made]) {
-        if (!root.#instances.has(instance.id)) root.#made.delete(name);
-      }
-      root.#bound.clear();
-      for (const [key, held] of bound) root.#bound.set(key, held);
-      this.#children.length = children;
-      this.store.rekeys.length = 0;
-      return {
-        binding,
-        committed: false,
-        error: `${(error as Error)?.message ?? error}`.split("\n")[0],
-      };
+      if (error instanceof RangeError) throw error;
+      return { binding, committed: false, error: messageOf(error) };
     } finally {
       this.#handling = undefined;
+      root.#evaluating.pop();
     }
-    root.#rekey();
     return { binding, committed: true };
   }
 

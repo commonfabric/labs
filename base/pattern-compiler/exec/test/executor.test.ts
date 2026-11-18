@@ -733,13 +733,25 @@ describe("a pattern compiled in", () => {
     for (const body of artifact.plan.bodies) {
       for (const entry of body.reads) delete entry.default;
     }
-    const start = () =>
-      new Instance(artifact, { amount: 420, rows: [], words: [] });
+    const instance = new Instance(artifact, {
+      amount: 420,
+      rows: [],
+      words: [],
+    });
 
     // Expression code has the default as a constant still. The
     // sandboxed body is handed nothing at the path: `x.symbol.split`
-    // throws, and the result that reads its value is not stored.
-    expect(start).toThrow(TypeError);
+    // throws, and the output that its cone computes holds the error
+    // state (PL §5.2).
+    expect(instance.result()).toMatchObject({
+      bound: "$420",
+      boundSpelled: {
+        $error: {
+          message: "Cannot read properties of undefined (reading 'split')",
+        },
+      },
+    });
+    expect(instance.counts.failures).toBe(1);
   });
 
   it("reads the default of the caller's place before the callee's", async () => {
