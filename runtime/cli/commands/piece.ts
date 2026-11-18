@@ -1495,6 +1495,9 @@ const EX_COMP_PIECE = `${EX_COMP} --cell ${EX_PIECE}`;
  */
 const CELL_FLAG = `"--cell" (or "--piece")`;
 
+const NO_INDEX_VERSION_HELP =
+  "Keep no version of this deploy in the pattern index, and do not wait on it.";
+
 const PIECE_OPTION_HELP =
   "The target cell: an id, slug, or reference (/tracker, /of:fid1:.../). A " +
   "space embedded in the reference (//my-space/tracker) supplies --space " +
@@ -2542,10 +2545,7 @@ export const piece = targetOptions(
     "--pattern-index-url <url:string>",
     "Base URL of the pattern index --from-index reads.",
   )
-  .option(
-    "--index-version <mode:string>",
-    "How the deploy is kept in the pattern index: auto (a version, shared as your sharing setting says), private (a version kept private whatever the setting says), or none (no version, and no wait on the index).",
-  )
+  .option("--no-index-version", NO_INDEX_VERSION_HELP)
   .option(
     "--request-key <key:string>",
     "Reuse a creation request after an uncertain result without creating another piece.",
@@ -2708,10 +2708,7 @@ export const piece = targetOptions(
     "--origin <origin:string>",
     "Record this origin (a system: ref or fabric URL) with the revision, so the piece follows it from then on. Without it, setsrc detaches the piece.",
   )
-  .option(
-    "--index-version <mode:string>",
-    "How the deploy is kept in the pattern index: auto (a version, shared as your sharing setting says), private (a version kept private whatever the setting says), or none (no version, and no wait on the index).",
-  )
+  .option("--no-index-version", NO_INDEX_VERSION_HELP)
   .option(
     "--check",
     "Report whether the source could replace the piece's current one, without issuing storage writes. Exits non-zero when it could not.",
@@ -3613,8 +3610,8 @@ export interface PieceCLIOptions {
   /** `setsrc`: the origin the piece follows from then on. */
   origin?: string;
 
-  /** `setsrc` and `new`: how the deploy is kept in the pattern index. */
-  indexVersion?: string;
+  /** `setsrc` and `new`: `false` under `--no-index-version`. */
+  indexVersion?: boolean;
   json?: boolean;
 }
 
@@ -5314,30 +5311,11 @@ export async function recordVersionInIndex(
 }
 
 /**
- * How `--index-version` keeps a deploy: `auto` records a version the
- * sharing setting may share, `private` records one it never shares on its
- * own, and `none` records nothing, so a deploy in a tight edit loop never
- * waits on the index.
+ * Records no version, for `--no-index-version`: a deploy in a tight edit
+ * loop makes no index call and never waits on the index.
  */
-export type IndexVersionMode = "auto" | "private" | "none";
-
-/**
- * Parses `--index-version`; `auto` when it is not given.
- *
- * @throws ValidationError for any other value.
- */
-export function parseIndexVersionMode(
-  value: string | undefined,
-): IndexVersionMode {
-  if (value === undefined || value === "auto") return "auto";
-  if (value === "private" || value === "none") return value;
-  throw new ValidationError(
-    `--index-version takes auto, private or none, not ${
-      JSON.stringify(value)
-    }.`,
-    { exitCode: 1 },
-  );
-}
+const skipIndexVersion = (): Promise<VersionOutcome> =>
+  Promise.resolve({ status: "skipped", reason: "--no-index-version" });
 
 /**
  * The version a deploy is recording, started from `onDeployed` once the
@@ -5352,7 +5330,6 @@ function versionRecorder(
   entry: string,
   origin: string | undefined,
   print: (line: string) => void,
-  mode: IndexVersionMode = "auto",
 ): {
   onDeployed: (deployed: DeployedProgram) => void;
   settle: () => Promise<VersionOutcome | undefined>;
@@ -5360,12 +5337,10 @@ function versionRecorder(
   let pending: Promise<VersionOutcome> | undefined;
   return {
     onDeployed: (deployed) => {
-      if (mode === "none") return;
       pending = record({
         entry,
         ...deployed,
         ...(origin === undefined ? {} : { origin }),
-        ...(mode === "private" ? { keepPrivate: true } : {}),
       });
     },
     settle: async () => {
@@ -5517,14 +5492,12 @@ export async function newPieceFromCommand(
   ) {
     throw new Error("`--input-file` must contain a JSON object.");
   }
-  const versionMode = parseIndexVersionMode(options.indexVersion);
   const version = main === undefined ? undefined : versionRecorder(
-    deps.recordVersion ??
+    options.indexVersion === false ? skipIndexVersion : deps.recordVersion ??
       ((deployed) => recordVersionInIndex(spaceConfig.identity, deployed)),
     absPath(main),
     undefined,
     deps.note ?? note,
-    versionMode,
   );
   const { pieceId, name } = await (deps.newPiece ?? newPieceWithReceipt)(
     spaceConfig,
@@ -5913,13 +5886,12 @@ export async function applyPieceSourceCommandAction(
   deps: ApplyPieceSourceCommandDependencies = {},
 ): Promise<void> {
   const version = versionRecorder(
-    deps.recordVersion ??
+    options.indexVersion === false ? skipIndexVersion : deps.recordVersion ??
       ((deployed) =>
         recordVersionInIndex(parseSpaceOptions(options).identity, deployed)),
     absPath(mainPath),
     options.origin,
     deps.warn ?? note,
-    parseIndexVersionMode(options.indexVersion),
   );
   const { config, update } = await (
     deps.setPieceSourceFromCommand ?? setPieceSourceFromCommand

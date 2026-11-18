@@ -179,27 +179,6 @@ describe("pattern-versions", () => {
       );
     });
 
-    it("asks the index to keep a checkpoint private, and does not say the sharing setting will share it", async () => {
-      await joinIndex();
-      const { client, published } = stubClient({
-        publish: () =>
-          Promise.resolve({ ...RECORDED, autoShare: "when_used" as const }),
-      });
-      const { deps } = depsWith(client);
-
-      const kept = await recordDeployedVersion(
-        deployed({ keepPrivate: true }),
-        deps,
-      );
-      const shared = await recordDeployedVersion(deployed(), deps);
-
-      expect(published.map((r) => r.keepPrivate)).toEqual([true, undefined]);
-      expect(versionLine(kept)).toBe(
-        "Kept as private version 3; cf pattern history lists them.",
-      );
-      expect(versionLine(shared)).toMatch(/shares it anonymously/);
-    });
-
     it("makes no index call and reads no pattern id on a machine that never joined, and says so only the first time", async () => {
       const { client, published } = stubClient();
       const { deps, opened } = depsWith(client);
@@ -558,10 +537,10 @@ describe("pattern-versions", () => {
       ]);
     });
 
-    it("keeps no version with --index-version none, a private one with private, and refuses anything else", async () => {
-      const recorded: (boolean | undefined)[] = [];
+    it("makes no index call under --no-index-version, so the deploy never waits on the index", async () => {
+      const recorded: DeployedSource[] = [];
       const lines: string[] = [];
-      const run = (indexVersion: string | undefined) =>
+      const run = (indexVersion: boolean | undefined) =>
         applyPieceSourceCommandAction(
           {
             identity: "/unused/test.key",
@@ -587,12 +566,11 @@ describe("pattern-versions", () => {
                 },
               } as never);
             },
+            // An index that never answers: a deploy that waited on it
+            // would never return.
             recordVersion: (deployed) => {
-              recorded.push(deployed.keepPrivate);
-              return Promise.resolve({
-                status: "failed",
-                reason: "index down",
-              });
+              recorded.push(deployed);
+              return new Promise<VersionOutcome>(() => {});
             },
             render: () => {},
             warn: (line) => lines.push(line),
@@ -600,17 +578,15 @@ describe("pattern-versions", () => {
           },
         );
 
-      await run("none");
+      await run(false);
       expect(recorded).toEqual([]);
       expect(lines).toEqual([]);
 
-      await run("private");
-      await run("auto");
-      await run(undefined);
-      expect(recorded).toEqual([true, undefined, undefined]);
-
-      await expect(run("off")).rejects.toThrow(/--index-version takes/);
-      expect(recorded).toHaveLength(3);
+      // The same deploy without the flag goes to the index.
+      void run(true);
+      void run(undefined);
+      await Promise.resolve();
+      expect(recorded.map((d) => d.entry)).toEqual([entry, entry]);
     });
   });
 
@@ -713,25 +689,50 @@ describe("pattern-versions", () => {
       );
 
       expect(recorded.map((d) => d.entry)).toEqual([entry]);
+    });
 
+    it("reports a deploy under --no-index-version as skipped in its --json receipt, with no index call", async () => {
+      const printed: unknown[] = [];
+      let calls = 0;
       await captureStderr(() =>
         newPieceFromCommand(
-          { ...config, indexVersion: "none" },
+          {
+            apiUrl: "https://cf.dev",
+            space: "s",
+            identity: "/unused/test.key",
+            quiet: true,
+            json: true,
+            indexVersion: false,
+          },
           entry,
-          deps as never,
+          {
+            newPiece: (_config, _entry, options) => {
+              options?.onDeployed?.({
+                program: PROGRAM,
+                patternId: () => Promise.resolve("pat-1"),
+                piece: { space: "did:key:z6Mkspace", id: "fid1:created" },
+              });
+              return Promise.resolve({ pieceId: "fid1:created" });
+            },
+            recordVersion: () => {
+              calls += 1;
+              return Promise.resolve({
+                status: "recorded",
+                created: true,
+                response: RECORDED,
+              });
+            },
+            render: (value) => printed.push(value),
+            note: () => {},
+          },
         )
       );
-      await captureStderr(() =>
-        newPieceFromCommand(
-          { ...config, indexVersion: "private" },
-          entry,
-          deps as never,
-        )
-      );
-      expect(recorded.map((d) => [d.entry, d.keepPrivate])).toEqual([
-        [entry, undefined],
-        [entry, true],
-      ]);
+
+      expect(calls).toBe(0);
+      expect(printed).toEqual([{
+        pieceId: "fid1:created",
+        version: { status: "skipped", reason: "--no-index-version" },
+      }]);
     });
   });
 });

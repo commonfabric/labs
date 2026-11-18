@@ -72,10 +72,8 @@ Deploys never share by themselves. When the person's sharing setting covers what
 they build, the index shares a version anonymously once they open it in a loom,
 and the deploy line says so (`version.autoShare: "when_used"` under `--json`).
 Run `cf pattern share` only when the person asks to share it sooner, or to share
-it with the setting off. When iterating many times a minute, deploy with
-`--index-version none` (no version, no wait on the index) and keep one with
-`--index-version private` when a change is finished: that version stays private
-until `cf pattern share`.
+it with the setting off. In a tight edit loop, pass `--no-index-version` so
+deploys do not wait on the index.
 
 **Sharing**, so others can find it, takes the same identity, API URL, space and
 packaging flags (`--test`, `--datafile`) it was deployed with, so the shared id
